@@ -3,7 +3,7 @@ type: question
 version: 18
 pinned_commit: 6cb307251c5c6261286c1566496920976640108e
 verified: false
-verified_by_agent: not yet
+verified_by_agent: Opus 4.7 | 2026-05-18 22:08
 ---
 
 # Computing and Storing avg_leaf_density During (Auto)VACUUM of a B-Tree Index (unverified)
@@ -341,6 +341,100 @@ of a metapage write whenever a completed scan refreshes density but
 | Durable across crash/restart | yes (WAL-logged) | best-effort (stats file; reset on crash) |
 | Directly queryable | needs accessor function | yes, via `pg_stat_all_indexes` |
 | Replicated to standbys | yes | no |
+
+## Cons Evidence
+
+The strongest con is that "after every successful VACUUM/autovacuum" conflicts
+with PostgreSQL 18 paths that intentionally avoid index scans. Manual
+`INDEX_CLEANUP off` disables both index vacuuming and index cleanup, the
+wraparound failsafe disables further index vacuuming and cleanup, and B-tree
+cleanup can return `NULL` without `btvacuumscan` when no bulk-delete scan ran
+and `_bt_vacuum_needs_cleanup` says cleanup is unnecessary
+([[raw/postgres-18/src/backend/access/heap/vacuumlazy.c#heap_vacuum_rel|vacuumlazy.c#heap_vacuum_rel]],
+[[raw/postgres-18/src/backend/access/heap/vacuumlazy.c#lazy_check_wraparound_failsafe|vacuumlazy.c#lazy_check_wraparound_failsafe]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtree.c#btvacuumcleanup|nbtree.c#btvacuumcleanup]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_vacuum_needs_cleanup|nbtpage.c#_bt_vacuum_needs_cleanup]]).
+Refreshing density in those cases would require a physical B-tree scan that
+PostgreSQL 18 currently avoids, so the feature cannot both refresh after every
+successful VACUUM and preserve the existing no-scan behavior.
+
+Durable metapage storage is not write-free. `_bt_set_cleanup_info` takes the
+metapage read lock, returns early when the metapage version is new enough and
+`btm_last_cleanup_num_delpages` is unchanged, and otherwise upgrades to a write
+lock, marks the metapage dirty, and emits `XLOG_BTREE_META_CLEANUP` when the
+relation needs WAL
+([[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_set_cleanup_info|nbtpage.c#_bt_set_cleanup_info]]).
+Storing density durably means a changed density can turn that early return into
+one metapage write plus one WAL record even when the existing cleanup field did
+not change
+([[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_set_cleanup_info|nbtpage.c#_bt_set_cleanup_info]],
+[[raw/postgres-18/src/include/access/nbtxlog.h#xl_btree_metadata|nbtxlog.h#xl_btree_metadata]]).
+
+Reusing the deprecated metapage `float8` slot reduces layout churn, but it is
+still an on-disk and extension-visible behavior change. PostgreSQL 18 still has
+`btm_last_cleanup_num_heap_tuples` in `BTMetaPageData`, `_bt_set_cleanup_info`
+sets it to `-1.0`, WAL redo reconstructs it as `-1.0`, and `pageinspect`
+exposes it from `bt_metap`
+([[raw/postgres-18/src/include/access/nbtree.h#BTMetaPageData|nbtree.h#BTMetaPageData]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_set_cleanup_info|nbtpage.c#_bt_set_cleanup_info]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtxlog.c#_bt_restore_meta|nbtxlog.c#_bt_restore_meta]],
+[[raw/postgres-18/contrib/pageinspect/btreefuncs.c#bt_metap|btreefuncs.c#bt_metap]]).
+Preserving a density value through crash recovery therefore requires changing
+the metadata WAL record and redo path, and exposing or hiding the changed field
+requires `pageinspect` API decisions
+([[raw/postgres-18/src/include/access/nbtxlog.h#xl_btree_metadata|nbtxlog.h#xl_btree_metadata]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtxlog.c#_bt_restore_meta|nbtxlog.c#_bt_restore_meta]],
+[[raw/postgres-18/contrib/pageinspect/btreefuncs.c#bt_metap|btreefuncs.c#bt_metap]]).
+
+The cumulative statistics path is queryable, but it is not a durable source of
+truth. PostgreSQL 18 loads cumulative stats from the filesystem at startup
+unless startup follows a crash, discards all stats after crash, and writes stats
+before clean shutdown only for stats kinds that allow it
+([[raw/postgres-18/src/backend/utils/activity/pgstat.c|pgstat.c]]).
+Relation stats reset by zeroing the `PgStat_StatTabEntry`, so a B-tree density
+field in that struct needs an explicit validity bit or it cannot distinguish
+"no value" from real `0.0` density
+([[raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#shared_stat_reset_contents|pgstat_shmem.c#shared_stat_reset_contents]],
+[[raw/postgres-18/src/include/pgstat.h#PgStat_StatTabEntry|pgstat.h#PgStat_StatTabEntry]]).
+
+Exact `pgstatindex` parity is harder than a per-live-leaf counter. `pgstatindex`
+counts live leaf pages, counts half-dead pages separately as empty pages, and
+counts fully deleted pages separately
+([[raw/postgres-18/contrib/pgstattuple/pgstatindex.c#pgstatindex_impl|pgstatindex.c#pgstatindex_impl]]).
+During B-tree VACUUM, an empty leaf enters `_bt_pagedel`, but `_bt_pagedel` can
+return without deleting the page when the page is rightmost, root, no longer
+empty after relocking, or part of an incomplete split; it also can delete a
+right sibling in passing after deleting the original leaf page
+([[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_pagedel|nbtpage.c#_bt_pagedel]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtree.c#btvacuumpage|nbtree.c#btvacuumpage]]).
+An exact post-VACUUM density therefore needs deletion-aware accounting across
+`btvacuumpage`, `_bt_pagedel`, and `_bt_unlink_halfdead_page`, not just a single
+counter in the `P_ISLEAF` branch
+([[raw/postgres-18/src/backend/access/nbtree/nbtree.c#btvacuumpage|nbtree.c#btvacuumpage]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_pagedel|nbtpage.c#_bt_pagedel]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtpage.c#_bt_unlink_halfdead_page|nbtpage.c#_bt_unlink_halfdead_page]]).
+
+The value may need to be documented as an estimate under concurrent structural
+changes. `btvacuumscan` repeatedly rechecks relation length so it can visit leaf
+pages added after the scan starts, `btvacuumpage` backtracks for pages moved by
+splits, and `btvacuumcleanup` already treats tuple counts as suspect because
+concurrent page splits can double-count index tuples
+([[raw/postgres-18/src/backend/access/nbtree/nbtree.c#btvacuumscan|nbtree.c#btvacuumscan]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtree.c#btvacuumpage|nbtree.c#btvacuumpage]],
+[[raw/postgres-18/src/backend/access/nbtree/nbtree.c#btvacuumcleanup|nbtree.c#btvacuumcleanup]]).
+
+Parallel VACUUM adds another integration surface. Manual parallel VACUUM stores
+each index's `IndexBulkDeleteResult` in dynamic shared memory, copies it with
+`sizeof(IndexBulkDeleteResult)`, and runs index bulk-delete/cleanup in leader or
+worker processes; PostgreSQL 18 does not use parallel VACUUM workers for
+autovacuum
+([[raw/postgres-18/src/backend/commands/vacuumparallel.c#parallel_vacuum_end|vacuumparallel.c#parallel_vacuum_end]],
+[[raw/postgres-18/src/backend/commands/vacuumparallel.c#parallel_vacuum_process_one_index|vacuumparallel.c#parallel_vacuum_process_one_index]],
+[[raw/postgres-18/src/backend/commands/vacuumparallel.c#parallel_vacuum_main|vacuumparallel.c#parallel_vacuum_main]]).
+Any density result added to the AM result contract must stay correct in that DSM
+copy path, not just in the serial lazy VACUUM path
+([[raw/postgres-18/src/include/access/genam.h#IndexBulkDeleteResult|genam.h#IndexBulkDeleteResult]],
+[[raw/postgres-18/src/backend/commands/vacuumparallel.c#parallel_vacuum_end|vacuumparallel.c#parallel_vacuum_end]]).
 
 ## When the Value Will *Not* Refresh (coverage caveats)
 
