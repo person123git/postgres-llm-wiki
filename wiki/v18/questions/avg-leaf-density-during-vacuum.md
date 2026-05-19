@@ -3,7 +3,7 @@ type: question
 version: 18
 pinned_commit: 6cb307251c5c6261286c1566496920976640108e
 verified: false
-verified_by_agent: Opus 4.7 | 2026-05-18 22:08
+verified_by_agent: Qwen36-35B-A3B 2026-05-19T14:00:00Z
 ---
 
 # Computing and Storing avg_leaf_density During (Auto)VACUUM of a B-Tree Index (unverified)
