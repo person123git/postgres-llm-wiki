@@ -18,6 +18,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 - [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](v18/questions/custom-cumulative-statistics.md) - Explains custom cumulative statistics registration, variable and fixed custom stat storage, flushing, snapshots, reset/drop behavior, and clean-shutdown persistence in PostgreSQL 18.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)](v18/questions/explain-analyze-buffers-output.md) - Detailed field-by-field explanation of `EXPLAIN (ANALYZE, BUFFERS)` shared, local, temp, planning, serialization, parallel-worker, and I/O timing output in PostgreSQL 18.
 - [Extension Hooks for VACUUM and Autovacuum in PostgreSQL 18 (unverified)](v18/questions/extension-hooks-vacuum-autovacuum.md) - Catalogs every extension point on the VACUUM/ANALYZE and autovacuum paths: in-process hook variables, table and index AM and FDW callbacks, and adjacent surfaces (background workers, custom cumulative statistics), with manual-vs-autovacuum coverage.
+- [Usage of NUM_BUFFER_PARTITIONS in PostgreSQL 18 (unverified)](v18/questions/num-buffer-partitions.md) - Explains the shared buffer mapping hash partition count, `BufferMapping` LWLocks, normal lookup/allocation and invalidation paths, relation extension, wait events, and test-coverage gap in PostgreSQL 18.
 
 
 
