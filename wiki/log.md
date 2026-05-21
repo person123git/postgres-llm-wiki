@@ -2,6 +2,54 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-05-21] review-fix | make remaining question source links VS Code-openable
+
+- Converted the remaining managed question pages' raw PostgreSQL source citations from legacy `[[raw/postgres-NN/...]]` form to page-relative Markdown links (`../../../raw/postgres-NN/...`) so VS Code opens them from each page.
+- Normalized all converted source fragments to line anchors and fixed two stale v12 citation targets while preserving wiki navigation links in Obsidian form.
+- Checked 836 question-page raw Markdown links for local file resolution and in-range line fragments. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-05-21] tooling v18 | make Markdown source links VS Code-openable
+
+- Converted source citations in [[v18/questions/explain-analyze-buffers-output|EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)]] from repo-relative `raw/postgres-18/...` Markdown URLs to page-relative `../../../raw/postgres-18/...` URLs so VS Code opens them from the wiki page.
+- Updated `scripts/wiki_tooling.py` and `scripts/wiki_lint` to normalize page-relative Markdown raw-source links before checking existence and matching-version citations.
+- Updated `AGENTS.md` citation examples to prefer page-relative Markdown source links.
+
+## [2026-05-20] review-fix v18 | explain analyze buffers source links
+
+- Reviewed source links in [[v18/questions/explain-analyze-buffers-output|EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)]] after the Markdown citation convention change.
+- Converted the page's raw PostgreSQL source citations from `[[raw/...#symbol|label]]` form to Markdown links with pinned `raw/postgres-18/` line ranges.
+- Kept wiki navigation links in Obsidian form and left the existing content claims unchanged.
+
+## [2026-05-20] convention | source citations switch to Markdown links
+
+- Updated `AGENTS.md` "MANDATORY Citations" to require Markdown-form source citations: `[file.c#Symbol](raw/postgres-NN/path/file.c#L42-L58)`. Page-to-page nav links remain Obsidian wikilinks (`[[v18/index]]`).
+- Existing pages on the legacy `[[raw/postgres-NN/...]]` wikilink citation form remain valid; conversion happens lazily on next edit. AGENTS.md keeps the "one citation style per page" rule.
+- Updated `scripts/wiki_tooling.py` with `extract_markdown_raw_citations` and `scripts/wiki_lint` to validate Markdown `raw/...` citations for file existence and matching-version checkout. `[[raw/...]]` form remains supported for back-compat.
+- `scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-05-20] review v18 | explain analyze buffers output verification
+
+- Re-checked every behavioral claim in [[v18/questions/explain-analyze-buffers-output|EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)]] against pinned `raw/postgres-18/` commit `6cb307251c5c6261286c1566496920976640108e`.
+- Confirmed: `ParseExplainOptionList` default `es->buffers = es->analyze` (no rejection without `ANALYZE`), `ExplainOnePlan` -> `INSTRUMENT_BUFFERS` -> `CreateQueryDesc`, full `BufferUsage` field set including split shared/local/temp timing, `peek_buffer_usage`/`show_buffer_usage` text-vs-non-text rules, shared/local hit/read counter sites in `PinBufferForBlock` / `ReadRecentBuffer` / `AsyncReadBuffers`, shared dirty/extend/flush sites in `MarkBufferDirty`, `MarkBufferDirtyHint`, `ExtendBufferedRelShared`, `FlushBuffer`, local sites in `MarkLocalBufferDirty`, `ExtendBufferedRelLocal`, `FlushLocalBuffer`, temp work-file counters and timings in `BufFileLoadBuffer`/`BufFileDumpBuffer`, shared/local I/O timing via `pgstat_count_io_op_time`, `InstrStartNode`/`InstrStopNode`/`BufferUsageAccumDiff` delta accounting, parallel-worker accumulation via `InstrStartParallelQuery`/`InstrEndParallelQuery`/`InstrAccumParallelQuery` and `ParallelQueryMain`/`ExecParallelFinish`, planning-buffer capture in `standard_ExplainOneQuery` and `Planning:` section printing, `SerializeMetrics` capture in `serializeAnalyzeReceive` and `ExplainPrintSerialize`, GUC contexts (`track_io_timing` `PGC_SUSET`, `statement_timeout`/`lock_timeout` `PGC_USERSET`), regression coverage (`buffers off`, `buffers`, JSON/XML/YAML, `BUFFERS` without `ANALYZE`, `SERIALIZE BUFFERS`), and same-checkout `ref/explain.sgml` BUFFERS definition plus `EXPLAIN-EXECUTE-example` `Buffers: shared hit=4`.
+- No factual corrections needed. Open Question on `written` doc-vs-source phrasing remains correctly scoped.
+- Advanced `verified_by_agent` to the timestamp form; `verified:` stays human-only `false`, so the title keeps `(unverified)`. `scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-05-20] answer v12 | explain analyze buffers output
+
+- Filed [[v12/questions/explain-analyze-buffers-output|EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)]].
+- Traced `EXPLAIN` option parsing, `INSTRUMENT_BUFFERS` setup, per-node `pgBufferUsage` delta accounting, shared/local/temp counter increment paths, `track_io_timing`, parallel-worker accumulation, trigger-report boundaries, and same-version documentation examples in pinned `raw/postgres-12/`.
+- Noted the source-vs-doc wording gap for `written`: docs describe dirty-buffer eviction, while `ReadBuffer_common` also increments written counters for relation extension.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-05-20] answer v18 | explain analyze buffers output
+
+- Filed [[v18/questions/explain-analyze-buffers-output|EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)]].
+- Traced `BUFFERS` option defaults, `INSTRUMENT_BUFFERS`, plan-node `pgBufferUsage` delta accounting, shared/local/temp counter increment paths, split shared/local/temp I/O timing, planning and serialization buffer sections, parallel-worker accumulation, trigger-report boundaries, and same-version regression coverage in pinned `raw/postgres-18/`.
+- Noted the source-vs-doc wording gap for `written`: docs describe dirty-buffer eviction, while shared and local relation extension paths also increment written counters.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v18/index.md`.
+- `scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-05-19] answer v18 | extension hooks for vacuum and autovacuum
 
 - Filed [[v18/questions/extension-hooks-vacuum-autovacuum|Extension Hooks for VACUUM and Autovacuum in PostgreSQL 18 (unverified)]].

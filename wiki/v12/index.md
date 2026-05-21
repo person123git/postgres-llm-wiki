@@ -15,3 +15,4 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 ## Pages
 
 - [[v12/questions/fk-join-optimization-two-tables|Foreign-Key Join Optimization for Two-Table Joins (unverified)]]
+- [[v12/questions/explain-analyze-buffers-output|EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)]]
