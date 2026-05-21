@@ -155,5 +155,5 @@ The same-checkout documentation includes a worked `EXPLAIN (ANALYZE, BUFFERS)` e
 
 ## Related Pages
 
-- [[v12/index]]
-- [[versions]]
+- [v12/index](../index.md)
+- [versions](../../versions.md)

@@ -6,7 +6,7 @@ It is source-backed: durable claims should cite PostgreSQL source files, functio
 
 ## Current Status
 
-PostgreSQL 18 is the current primary version. Use [[versions]] as the main version index, then enter the PG 18 wiki through [[v18/index]].
+PostgreSQL 18 is the current primary version. Use [versions](versions.md) as the main version index, then enter the PG 18 wiki through [v18/index](v18/index.md).
 
 ## Source Evidence
 

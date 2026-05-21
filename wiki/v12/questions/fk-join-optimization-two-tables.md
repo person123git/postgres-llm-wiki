@@ -178,5 +178,5 @@ Multi-column FKs traverse the same code; multiple per-column matches are require
 
 ## Related Pages
 
-- [[v12/index]]
-- [[versions]]
+- [v12/index](../index.md)
+- [versions](../../versions.md)

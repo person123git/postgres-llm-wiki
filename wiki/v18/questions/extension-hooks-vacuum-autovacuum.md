@@ -422,7 +422,7 @@ read these views instead of installing a hook
   [bgworker.h](../../../raw/postgres-18/src/include/postmaster/bgworker.h),
   [bgworker.c#RegisterBackgroundWorker](../../../raw/postgres-18/src/backend/postmaster/bgworker.c#L940),
   [progress.h](../../../raw/postgres-18/src/include/commands/progress.h),
-  [[v18/questions/custom-cumulative-statistics|How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)]].
+  [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](custom-cumulative-statistics.md).
 - Documentation cross-checks:
   [xfunc.sgml](../../../raw/postgres-18/doc/src/sgml/xfunc.sgml),
   [fdwhandler.sgml#fdw-callbacks-analyze](../../../raw/postgres-18/doc/src/sgml/fdwhandler.sgml#L1367),
@@ -446,7 +446,7 @@ read these views instead of installing a hook
 | `AnalyzeForeignTable` is the FDW ANALYZE entry; no FDW hook for VACUUM | [fdwapi.h](../../../raw/postgres-18/src/include/foreign/fdwapi.h), [analyze.c#analyze_rel](../../../raw/postgres-18/src/backend/commands/analyze.c#L109) |
 | `pg_type.typanalyze` is invoked per attribute during ANALYZE | [analyze.c#examine_attribute](../../../raw/postgres-18/src/backend/commands/analyze.c#L1036) |
 | `RegisterBackgroundWorker` is only valid in `shared_preload_libraries` | [bgworker.c#RegisterBackgroundWorker](../../../raw/postgres-18/src/backend/postmaster/bgworker.c#L940) |
-| Custom cumulative statistics already covered in another page | [[v18/questions/custom-cumulative-statistics|How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)]] |
+| Custom cumulative statistics already covered in another page | [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](custom-cumulative-statistics.md) |
 
 ## Source References
 
@@ -474,7 +474,7 @@ read these views instead of installing a hook
 - [progress.h](../../../raw/postgres-18/src/include/commands/progress.h) - vacuum/analyze progress field constants.
 - [guc_tables.c](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927) - `shared_preload_libraries` GUC context.
 - [xfunc.sgml](../../../raw/postgres-18/doc/src/sgml/xfunc.sgml) - documentation pattern for `shmem_request_hook` and `shmem_startup_hook`.
-- [[v18/questions/custom-cumulative-statistics|How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)]] - companion page for the cumulative-stats extension surface.
+- [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](custom-cumulative-statistics.md) - companion page for the cumulative-stats extension surface.
 
 ## Open Questions
 

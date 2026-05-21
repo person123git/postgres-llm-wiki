@@ -65,7 +65,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
 - Cite from the `raw/postgres-NN/` checkout matching the page `version:`. Never cite across versions.
 - Use one citation style per page. Don't mix Markdown citations with the old `[[raw/...]]` wikilink form on the same page.
-- Page-to-page wiki navigation still uses Obsidian wikilinks: `[[v18/index]]`, `[[v18/questions/foo|Display Text]]`. Only source citations move to Markdown form.
+- Page-to-page wiki navigation uses page-relative Markdown links so it opens in plain VS Code Markdown preview. Do not use Obsidian wikilinks for wiki page navigation.
 - Do not state a claim as fact unless it is backed by a source file, symbol, test file, documentation page, commit, or saved design discussion.
 - Put uncertainty under `## Open Questions`.
 
@@ -168,7 +168,7 @@ Use the exact current model name and timestamp when filing an agent-verified pag
   - `wiki/vNN/answers/` for `type: answer` pages.
   - `wiki/vNN/concepts/` for `type: concept` pages.
 - The version landing page `wiki/vNN/index.md` stays at the version root and is the only page allowed there.
-- Use Obsidian links, e.g. `[[versions]]`, `[[v18/index]]`, `[[v12/questions/fk-join-optimization-two-tables]]`.
+- Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../index.md)` and `[versions](../../versions.md)` from a `wiki/v18/questions/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
 - Include the version segment and the type subdirectory in links into per-version directories.
 - Create a page only when the work justifies it.
 - Do not create standalone call-chain or source-trace document families.

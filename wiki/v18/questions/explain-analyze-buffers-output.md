@@ -178,5 +178,5 @@ The PostgreSQL 18 regression tests cover `EXPLAIN (ANALYZE, BUFFERS, FORMAT xml)
 
 ## Related Pages
 
-- [[v18/index]]
-- [[versions]]
+- [v18/index](../index.md)
+- [versions](../../versions.md)

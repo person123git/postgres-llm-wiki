@@ -6,9 +6,9 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 | Version | Status | Wiki Home | Branch | Pinned Commit | Coverage |
 |---|---|---|---|---|---|
-| 18 | primary | [[v18/index]] | `REL_18_STABLE` | `6cb307251c5c6261286c1566496920976640108e` | Behavioral claims cite the matching pinned checkout under `raw/postgres-18/`; filed coverage includes B-tree VACUUM density design, custom cumulative statistics, extension hooks for VACUUM/autovacuum, and `EXPLAIN (ANALYZE, BUFFERS)` output. |
-| 17 | active | [[v17/index]] | `REL_17_STABLE` | `54eeefaedbee0385529f3edf321bb99e49232aaa` | Behavioral claims cite the matching pinned checkout under `raw/postgres-17/`. |
-| 12 | legacy | [[v12/index]] | `REL_12_STABLE` | `45b88269a353ad93744772791feb6d01bc7e1e42` | Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`; filed coverage includes foreign-key join selectivity and `EXPLAIN (ANALYZE, BUFFERS)` output. |
+| 18 | primary | [v18/index](v18/index.md) | `REL_18_STABLE` | `6cb307251c5c6261286c1566496920976640108e` | Behavioral claims cite the matching pinned checkout under `raw/postgres-18/`; filed coverage includes B-tree VACUUM density design, custom cumulative statistics, extension hooks for VACUUM/autovacuum, and `EXPLAIN (ANALYZE, BUFFERS)` output. |
+| 17 | active | [v17/index](v17/index.md) | `REL_17_STABLE` | `54eeefaedbee0385529f3edf321bb99e49232aaa` | Behavioral claims cite the matching pinned checkout under `raw/postgres-17/`. |
+| 12 | legacy | [v12/index](v12/index.md) | `REL_12_STABLE` | `45b88269a353ad93744772791feb6d01bc7e1e42` | Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`; filed coverage includes foreign-key join selectivity and `EXPLAIN (ANALYZE, BUFFERS)` output. |
 
 ## Archived Versions
 
