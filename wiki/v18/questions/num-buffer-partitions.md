@@ -3,7 +3,7 @@ type: question
 version: 18
 pinned_commit: 6cb307251c5c6261286c1566496920976640108e
 verified: false
-verified_by_agent: claude-opus-4-7 2026-05-21T15:34:52Z
+verified_by_agent: claude-opus-4-7 2026-05-21T15:48:33Z
 ---
 
 # Usage of NUM_BUFFER_PARTITIONS in PostgreSQL 18 (unverified)
@@ -79,6 +79,165 @@ Changing the partition count is a source-code change, not a runtime setting: `NU
 
 The same-checkout buffer-manager README is the direct design documentation for `NUM_BUFFER_PARTITIONS`, including its purpose, low-order-hash partition choice, and multi-partition lock-order rule [README#partitioned-BufMappingLock](../../../raw/postgres-18/src/backend/storage/buffer/README#L122-L128). I found no direct PostgreSQL 18 regression or TAP test that names `NUM_BUFFER_PARTITIONS`, `BufMappingPartitionLock`, `Shared Buffer Lookup Table`, or `BufferMapping`; the behavior is covered by the buffer manager source paths above rather than by a narrow symbol-named test.
 
+## Source Commit History
+
+Every commit reachable from the pinned `raw/postgres-18/` checkout (HEAD `6cb30725`) whose diff touches `NUM_BUFFER_PARTITIONS`, oldest first. These are PostgreSQL source-tree commits in the same checkout's git history; reproduce any of them with `git show <hash>` (or `git log -G 'NUM_BUFFER_PARTITIONS'`) inside `raw/postgres-18/`. The macro was born at `16` and is `128` in v18.
+
+| Commit | Date | Author (committer) | Subject |
+|---|---|---|---|
+| `10b9ca3d` | 2006-07-23 | Tom Lane | Split the buffer mapping table into multiple separately lockable partitions |
+| `b25dc481` | 2006-07-23 | Tom Lane | Fix oversight in sizing of shared buffer lookup hashtable |
+| `f99a569a` | 2006-10-04 | Bruce Momjian | pgindent run for 8.2 |
+| `2a275e6d` | 2007-07-16 | Tom Lane | Fix pg_buffercache to release buffer partition locks in reverse order |
+| `ea9df812` | 2014-01-27 | Robert Haas | Relax the requirement that all lwlocks be stored in a single array |
+| `3acc10c9` | 2014-10-02 | Robert Haas | Increase the number of buffer mapping partitions to 128 |
+| `c319991b` | 2016-02-11 | Robert Haas | Use separate lwlock tranches for buffer, lock, and predicate lock managers |
+| `6e654546` | 2016-09-29 | Heikki Linnakangas | Don't bother to lock bufmgr partitions in pg_buffercache |
+| `3761fe3c` | 2016-12-16 | Robert Haas | Simplify LWLock tranche machinery by removing array_base/array_stride |
+| `8c0d7baf` | 2017-08-22 | Andres Freund (patch: Thomas Munro) | Hash tables backed by DSA shared memory |
+| `d03d7549` | 2020-11-24 | Michael Paquier (patch: Japin Li) | Use macros instead of hardcoded offsets for LWLock initialization |
+| `3ac88fdd` | 2022-07-27 | Robert Haas (patch: Dilip Kumar) | Convert macros to static inline functions (buf_internals.h) |
+
+### `10b9ca3d` — Split the buffer mapping table into partitions (2006-07-23, Tom Lane)
+
+**What it did:** Created `NUM_BUFFER_PARTITIONS` with the initial value `16` and split the single system-wide `BufMappingLock` into that many separately lockable partitions, choosing a partition from the buffer tag's hash. This is the origin of everything the rest of this page describes; the buffer README still narrates this design (see [README#partitioned-BufMappingLock](../../../raw/postgres-18/src/backend/storage/buffer/README#L122-L128)).
+
+> Split the buffer mapping table into multiple separately lockable
+> partitions, as per discussion.  Passes functionality checks, but
+> I don't have any performance data yet.
+
+### `b25dc481` — Size the lookup table with partition headroom (2006-07-23, Tom Lane)
+
+**What it did:** Fixed the shared buffer lookup hashtable to be sized for `NBuffers + NUM_BUFFER_PARTITIONS` entries, because `BufferAlloc()` inserts a new mapping before deleting the old one and so transiently needs up to one extra entry per partition. This is the origin of the sizing the page documents at [freelist.c#StrategyInitialize](../../../raw/postgres-18/src/backend/storage/buffer/freelist.c#L478-L489).
+
+> Fix oversight in sizing of shared buffer lookup hashtable.  Because
+> BufferAlloc tries to insert a new mapping entry before deleting the old one
+> for a buffer, we have a transient need for more than NBuffers entries ---
+> one more in 8.1, and as many as NUM_BUFFER_PARTITIONS more in CVS HEAD.
+> In theory this could lead to an "out of shared memory" failure if shmem
+> had already been completely claimed by the time the extra entries were
+> needed.
+
+### `f99a569a` — pgindent run for 8.2 (2006-10-04, Bruce Momjian)
+
+**What it did:** Cosmetic only. The tree-wide reindent reflowed lines that mention the macro; no behavior or value changed. Included here for completeness because it appears in the macro's diff history.
+
+> pgindent run for 8.2.
+
+### `2a275e6d` — Release partition locks in reverse order in pg_buffercache (2007-07-16, Tom Lane)
+
+**What it did:** Made `pg_buffercache` release the `NUM_BUFFER_PARTITIONS` partition locks in reverse acquisition order and documented why, anticipating a larger partition count. It is the early expression of the deadlock-avoidance lock-ordering rule the page covers under [Locking Contract](#locking-contract).
+
+> Fix pg_buffercache to release buffer partition locks in reverse order,
+> and add a note about why.  This is not tremendously important right now,
+> probably, but it will get more urgent if NUM_BUFFER_PARTITIONS is increased
+> as much as proposed.
+
+### `ea9df812` — Stop assuming all lwlocks live in one array (2014-01-27, Robert Haas)
+
+**What it did:** Changed `BufMappingPartitionLock()` from `FirstBufMappingLock + partition` (an id into one array) to `&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + partition].lock`, and added `BufMappingPartitionLockByIndex()`. This is the direct ancestor of the accessors the page cites at [buf_internals.h#BufTableHashPartition](../../../raw/postgres-18/src/include/storage/buf_internals.h#L186-L209).
+
+> Relax the requirement that all lwlocks be stored in a single array.
+>
+> This makes it possible to store lwlocks as part of some other data
+> structure in the main shared memory segment, or in a dynamic shared
+> memory segment.  There is still a main LWLock array and this patch does
+> not move anything out of it, but it provides necessary infrastructure
+> for doing that in the future.
+>
+> This change is likely to increase the size of LWLockPadded on some
+> platforms, especially 32-bit platforms where it was previously only
+> 16 bytes.
+>
+> Patch by me.  Review by Andres Freund and KaiGai Kohei.
+
+### `3acc10c9` — Increase partitions from 16 to 128 (2014-10-02, Robert Haas)
+
+**What it did:** Changed `#define NUM_BUFFER_PARTITIONS` from `16` to `128`, the value v18 still uses ([lwlock.h#NUM_BUFFER_PARTITIONS](../../../raw/postgres-18/src/include/storage/lwlock.h#L92-L93)). The message records that scalability testing favored 128 over 64 and smaller values.
+
+> Increase the number of buffer mapping partitions to 128.
+>
+> Testing by Amit Kapila, Andres Freund, and myself, with and without
+> other patches that also aim to improve scalability, seems to indicate
+> that this change is a significant win over the current value and over
+> smaller values such as 64.  It's not clear how high we can push this
+> value before it starts to have negative side-effects elsewhere, but
+> going this far looks OK.
+
+### `c319991b` — Give buffer-mapping locks their own tranche (2016-02-11, Robert Haas)
+
+**What it did:** Put the `NUM_BUFFER_PARTITIONS` buffer-mapping locks into a dedicated `LWTRANCHE_BUFFER_MAPPING` tranche. This is the origin of the tranche behind the `BufferMapping` wait event the page documents at [wait_event_names.txt#BufferMapping](../../../raw/postgres-18/src/backend/utils/activity/wait_event_names.txt#L371-L378).
+
+> Use separate lwlock tranches for buffer, lock, and predicate lock managers.
+>
+> This finishes the work - spread across many commits over the last
+> several months - of putting each type of lock other than the named
+> individual locks into a separate tranche.
+>
+> Amit Kapila
+
+### `6e654546` — Stop locking the partitions in pg_buffercache (2016-09-29, Heikki Linnakangas)
+
+**What it did:** Removed the loop that acquired and released all `NUM_BUFFER_PARTITIONS` partition locks while scanning `pg_buffercache`, accepting a non-atomic snapshot in exchange for not disrupting production traffic. It effectively retired the lock-ordering concern that `2a275e6d` had addressed for that view.
+
+> Don't bother to lock bufmgr partitions in pg_buffercache.
+>
+> That makes the view a lot less disruptive to use on a production system.
+> Without the locks, you don't get a consistent snapshot across all buffers,
+> but that's OK. It wasn't a very useful guarantee in practice.
+>
+> Ivan Kartyshov, reviewed by Tomas Vondra and Robert Haas.
+
+### `3761fe3c` — Simplify the tranche machinery (2016-12-16, Robert Haas)
+
+**What it did:** Removed `array_base`/`array_stride` and re-registered the buffer-mapping tranche by the name `"buffer_mapping"`. The user-visible effect is that LWLock waits, including buffer-mapping waits, all report as `LWLock` rather than the older `LWLockTranche`/`LWLockNamed` split — context for how the `BufferMapping` wait event surfaces today.
+
+> Simplify LWLock tranche machinery by removing array_base/array_stride.
+>
+> array_base and array_stride were added so that we could identify the
+> offset of an LWLock within a tranche, but this facility is only very
+> marginally used apart from the main tranche.  So, give every lock in
+> the main tranche its own tranche ID and get rid of array_base,
+> array_stride, and all that's attached. [...]
+>
+> The main user-visible impact of this change is that pg_stat_activity
+> will now report all waits for LWLocks as "LWLock" rather than
+> reporting some as "LWLockTranche" and others as "LWLockNamed".
+
+### `8c0d7baf` — DSA-backed hash tables borrow the partition count (2017-08-22, Andres Freund; patch by Thomas Munro)
+
+**What it did:** Added `dshash`, whose `DSHASH_NUM_PARTITIONS` is defined as `1 << 7` (128) with a comment that it is "set to match `NUM_BUFFER_PARTITIONS` for now." This is the origin of the separate constant the page notes at [dshash.c#DSHASH_NUM_PARTITIONS](../../../raw/postgres-18/src/backend/lib/dshash.c#L53-L60); it is a deliberate parallel value, not a use of the buffer-manager macro.
+
+> Hash tables backed by DSA shared memory.
+>
+> Add general purpose chaining hash tables for DSA memory.  Unlike
+> DynaHash in shared memory mode, these hash tables can grow as
+> required, and cope with being mapped into different addresses in
+> different backends. [...]
+>
+> Author: Thomas Munro
+> Reviewed-By: John Gorman, Andres Freund, Dilip Kumar, Robert Haas
+
+### `d03d7549` — Use offset macros for LWLock initialization (2020-11-24, Michael Paquier; patch by Japin Li)
+
+**What it did:** Replaced hardcoded `NUM_INDIVIDUAL_LWLOCKS + NUM_BUFFER_PARTITIONS` offset arithmetic in LWLock setup with the existing `BUFFER_MAPPING_LWLOCK_OFFSET`-style macros. This is the form the page cites at [lwlock.c#InitializeLWLocks](../../../raw/postgres-18/src/backend/storage/lmgr/lwlock.c#L498-L522) and the offset macros at [lwlock.h#fixed-lwlock-offsets](../../../raw/postgres-18/src/include/storage/lwlock.h#L103-L110).
+
+> Use macros instead of hardcoded offsets for LWLock initialization
+>
+> This makes the code slightly easier to follow, as the initialization
+> relies on an offset that overlapped with an equivalent set of macros
+> defined, which are used in other places already.
+>
+> Author: Japin Li
+
+### `3ac88fdd` — Convert the partition macros to static inline functions (2022-07-27, Robert Haas; patch by Dilip Kumar)
+
+**What it did:** Converted `BufTableHashPartition`, `BufMappingPartitionLock`, and `BufMappingPartitionLockByIndex` from preprocessor macros to `static inline` functions in `buf_internals.h`. This is the exact form the page cites today at [buf_internals.h#BufTableHashPartition](../../../raw/postgres-18/src/include/storage/buf_internals.h#L186-L209).
+
+> Convert macros to static inline functions (buf_internals.h)
+>
+> Dilip Kumar, reviewed by Vignesh C, Ashutosh Sharma, and me.
+
 ## Context Reviewed
 
 - [lwlock.h#NUM_BUFFER_PARTITIONS](../../../raw/postgres-18/src/include/storage/lwlock.h#L86-L110)
@@ -121,6 +280,7 @@ The same-checkout buffer-manager README is the direct design documentation for `
 | Reuse and relation-drop paths delete old mappings under the old tag's partition lock | [bufmgr.c#InvalidateVictimBuffer](../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2276-L2341) [bufmgr.c#InvalidateBuffer](../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2160-L2265) |
 | Relation extension inserts new block mappings under the matching partition lock | [bufmgr.c#ExtendBufferedRelShared-insert](../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2707-L2733) |
 | Waits on these locks report as the `BufferMapping` LWLock wait event | [lwlock.c#InitializeLWLocks](../../../raw/postgres-18/src/backend/storage/lmgr/lwlock.c#L514-L522) [lwlock.c#LWLockReportWaitStart](../../../raw/postgres-18/src/backend/storage/lmgr/lwlock.c#L732-L740) [wait_event_names.txt#BufferMapping](../../../raw/postgres-18/src/backend/utils/activity/wait_event_names.txt#L371-L378) |
+| The macro was introduced at `16` (2006) and raised to `128` (2014); accessors and offsets were later refactored | pinned `raw/postgres-18/` git history commits `10b9ca3d`, `3acc10c9`, `ea9df812`, `d03d7549`, `3ac88fdd` (see [Source Commit History](#source-commit-history)) |
 
 ## Source References
 

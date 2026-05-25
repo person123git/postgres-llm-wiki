@@ -342,6 +342,83 @@ of a metapage write whenever a completed scan refreshes density but
 | Directly queryable | needs accessor function | yes, via `pg_stat_all_indexes` |
 | Replicated to standbys | yes | no |
 
+## Pros and Cons
+
+This question proposes a code modification, so the points below weigh that
+proposed design rather than existing behavior. Each con is a summary; the
+detailed, fully cited version follows in the Cons Evidence section below.
+
+### Pros
+
+- **Effectively zero extra read I/O.** When the B-tree scan runs, every leaf
+  page is already pinned and cleanup-locked in `btvacuumpage`, so the numerator
+  and denominator are accumulated from bytes already in hand
+  ([nbtree.c#btvacuumpage](../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1361),
+  [nbtree.c#btvacuumscan](../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1186)).
+- **Negligible CPU cost.** The per-leaf work is one subtraction and two adds, and
+  the whole statistic collapses to two scalars per index (`nleaf`,
+  `sum_free_space`), because `max_avail` is a per-build constant
+  ([pgstatindex.c#pgstatindex_impl](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L213),
+  [bufpage.c#PageGetExactFreeSpace](../../../raw/postgres-18/src/backend/storage/page/bufpage.c#L957)).
+- **Post-compaction accuracy.** Accumulating after `_bt_delitems_vacuum` reflects
+  the item deletion and posting-list compaction this VACUUM performed, not the
+  pre-VACUUM state
+  ([nbtree.c#btvacuumpage](../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1361)).
+- **No autovacuum-specific code.** Autovacuum workers run the same
+  `vacuum_rel` -> lazy VACUUM -> `index_bulk_delete`/`index_vacuum_cleanup`
+  path, and the cleanup-only (`callback == NULL`) scan is covered too
+  ([autovacuum.c#autovacuum_do_vac_analyze](../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L3173),
+  [nbtree.c#btvacuumcleanup](../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1098)).
+- **Choice of durability vs. queryability.** The metapage gives a crash-durable,
+  WAL-replicated value; cumulative stats give a cheap `pg_stat_all_indexes`
+  surface with no VACUUM-time disk write. The two can be combined
+  ([nbtpage.c#_bt_set_cleanup_info](../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L232),
+  [pgstat_relation.c#pgstat_report_vacuum](../../../raw/postgres-18/src/backend/utils/activity/pgstat_relation.c#L210)).
+- **Optional byte-for-byte parity.** Summing real per-leaf `max_avail` instead of
+  `nleaf * C` matches `pgstatindex` exactly at no extra cost
+  ([pgstatindex.c#pgstatindex_impl](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L213)).
+
+### Cons
+
+- **Cannot refresh after *every* successful VACUUM.** `INDEX_CLEANUP off`, the
+  wraparound failsafe, and `btvacuumcleanup`'s early return all skip the index
+  scan by design, leaving no leaf pages in hand
+  ([vacuumlazy.c#heap_vacuum_rel](../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L615),
+  [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2950),
+  [nbtpage.c#_bt_vacuum_needs_cleanup](../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L179)).
+- **Durable metapage storage is not write-free.** A changed density can turn
+  `_bt_set_cleanup_info`'s early return into one metapage write plus one
+  `XLOG_BTREE_META_CLEANUP` record
+  ([nbtpage.c#_bt_set_cleanup_info](../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L232)).
+- **On-disk and extension-visible change.** Reusing the deprecated
+  `btm_last_cleanup_num_heap_tuples` slot still requires `xl_btree_metadata`,
+  `_bt_restore_meta`, and `pageinspect` updates; a brand-new field needs a
+  metapage version and pg_upgrade story
+  ([nbtxlog.c#_bt_restore_meta](../../../raw/postgres-18/src/backend/access/nbtree/nbtxlog.c#L82),
+  [btreefuncs.c#bt_metap](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L838)).
+- **Cumulative stats are not durable.** They reset on crash and persist only on
+  clean shutdown, and the new field needs an explicit validity bit to tell "no
+  value" from a real `0.0`
+  ([pgstat.c](../../../raw/postgres-18/src/backend/utils/activity/pgstat.c),
+  [pgstat_shmem.c#shared_stat_reset_contents](../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085)).
+- **Exact parity needs deletion-aware accounting.** Empty leaves entering
+  `_bt_pagedel` may survive or be deleted (with right siblings deleted in
+  passing), so a single `P_ISLEAF` counter is not exact across
+  `btvacuumpage`/`_bt_pagedel`/`_bt_unlink_halfdead_page`
+  ([nbtpage.c#_bt_pagedel](../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L1802),
+  [nbtpage.c#_bt_unlink_halfdead_page](../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L2314)).
+- **Estimate under concurrency.** Concurrent page splits can make `btvacuumscan`
+  visit a moved page twice, the same double-counting class already acknowledged
+  for `num_index_tuples`
+  ([nbtree.c#btvacuumcleanup](../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1098)).
+- **Extra integration surface for parallel VACUUM.** A density field added to
+  `IndexBulkDeleteResult` must stay correct in the DSM copy path, not just the
+  serial lazy VACUUM path
+  ([vacuumparallel.c#parallel_vacuum_end](../../../raw/postgres-18/src/backend/commands/vacuumparallel.c#L436)).
+- **Wasted bytes in shared stats.** A B-tree-only field in the shared
+  `PgStat_StatTabEntry` costs bytes for every table and non-B-tree index entry
+  ([pgstat.h#PgStat_StatTabEntry](../../../raw/postgres-18/src/include/pgstat.h#L422)).
+
 ## Cons Evidence
 
 The strongest con is that "after every successful VACUUM/autovacuum" conflicts
