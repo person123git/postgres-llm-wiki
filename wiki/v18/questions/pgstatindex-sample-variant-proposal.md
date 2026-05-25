@@ -113,12 +113,17 @@ and no neighbor reads
 
 Draw a uniform random sample of distinct block numbers from `[1, nblocks - 1]`,
 either Bernoulli (each block included with a target probability) or a fixed
-target count without replacement. Let `f = sampled_blocks / (nblocks - 1)` be
-the realized fraction reported as `scanned_percent`. This mirrors how
-`pgstattuple_approx` reports `scanned_percent = 100 * scanned / nblocks`
+target count without replacement. Then visit the selected block numbers in
+ascending order. Selection randomness gives the estimator its statistical
+meaning; ordered visitation keeps the access pattern closer to today's physical
+scan, which already walks `blkno` upward with a `BAS_BULKREAD` strategy
+([pgstatindex.c#scan-loop](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L278-L328)).
+Let `f = sampled_blocks / (nblocks - 1)` be the realized fraction reported as
+`scanned_percent`. This mirrors how `pgstattuple_approx` reports
+`scanned_percent = 100 * scanned / nblocks`
 ([pgstatapprox.c#scanned_percent](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L191-L197)).
-Per sampled block, reuse the existing classification and accumulation verbatim,
-keep `CHECK_FOR_INTERRUPTS`, and keep the `BAS_BULKREAD` ring
+Per sampled block, reuse the existing classification and accumulation verbatim
+and keep `CHECK_FOR_INTERRUPTS`
 ([pgstatindex.c#scan-loop](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L286-L327)).
 
 No tree traversal is required: B-tree leaves are reached by reading physical
@@ -180,6 +185,169 @@ REVOKE EXECUTE ON FUNCTION pgstatindex_approx(regclass, FLOAT8) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pgstatindex_approx(regclass, FLOAT8) TO pg_stat_scan_tables;
 ```
 
+## SQL Prototype Using pageinspect
+
+A useful prototype can be written in SQL on top of `pageinspect`, without adding
+new C code. This should be treated as a diagnostic sketch, not the preferred
+extension implementation: `pageinspect` is documented as a low-level debugging
+module whose functions may be used only by superusers, and its B-tree page
+helpers also perform their own page reads and share locks
+([pageinspect.sgml#overview](../../../raw/postgres-18/doc/src/sgml/pageinspect.sgml#L1-L13),
+[btreefuncs.c#bt_page_stats_internal](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L260-L304)).
+
+The building blocks are available in contrib:
+
+- `bt_metap(text)` returns the metapage fields, including `version`, `root`, and
+  `level`
+  ([pageinspect--1.8--1.9.sql#bt_metap](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.8--1.9.sql#L51-L63),
+  [btreefuncs.c#bt_metap](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L838-L930)).
+- `bt_page_stats(text, bigint)` returns one B-tree data page's `type`,
+  `btpo_next`, and related counters; pageinspect maps deleted pages to `d`/`D`,
+  half-dead ignored pages to `e`, live leaf pages to `l`, root pages above the
+  leaf level to `r`, and other internal pages to `i`
+  ([pageinspect--1.8--1.9.sql#bt_page_stats](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.8--1.9.sql#L65-L78),
+  [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L91-L191)).
+- `get_raw_page(text, bigint)` plus `page_header(bytea)` can expose `lower`,
+  `upper`, and `special` for the same sampled block
+  ([pageinspect--1.8--1.9.sql#get_raw_page](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.8--1.9.sql#L33-L41),
+  [pageinspect--1.9--1.10.sql#page_header](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.9--1.10.sql#L7-L19)).
+
+The raw page header matters because `bt_page_stats.free_size` uses
+`PageGetFreeSpace`, which subtracts space for one new line pointer, while
+`pgstatindex_impl` uses `PageGetExactFreeSpace`, which returns `pd_upper -
+pd_lower` without that subtraction
+([btreefuncs.c#free_size](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L184-L191),
+[bufpage.c#free-space-functions](../../../raw/postgres-18/src/backend/storage/page/bufpage.c#L900-L972)).
+For a closer SQL match to `pgstatindex`, compute sampled leaf free space as
+`upper - lower` from `page_header`, and compute sampled leaf capacity as
+`special - 24`, because v18's `SizeOfPageHeaderData` is the offset of
+`pd_linp` in `PageHeaderData`
+([bufpage.h#PageHeaderData](../../../raw/postgres-18/src/include/storage/bufpage.h#L163-L185),
+[bufpage.h#SizeOfPageHeaderData](../../../raw/postgres-18/src/include/storage/bufpage.h#L235-L238)).
+
+Run a production diagnostic with session timeouts, for example:
+
+```sql
+SET /* wiki_pgstatindex_pageinspect_timeout */ statement_timeout = '5min';
+SET /* wiki_pgstatindex_pageinspect_timeout */ lock_timeout = '2s';
+CREATE /* wiki_pgstatindex_pageinspect_setup */ EXTENSION IF NOT EXISTS pageinspect;
+```
+
+This fixed-count sample query chooses random non-metapage block numbers, then
+computes the same estimator split as the proposed C function. It avoids reading
+all index pages, but it still enumerates all block numbers in SQL and reads each
+sampled block through both `bt_page_stats` and `get_raw_page`:
+
+```sql
+WITH /* wiki_pgstatindex_pageinspect_sample */ params AS (
+  SELECT 'my_index'::regclass AS idx, 0.01::float8 AS sample_fraction
+),
+bounds AS (
+  SELECT idx,
+       sample_fraction,
+       pg_relation_size(idx) AS index_size,
+       pg_relation_size(idx) / current_setting('block_size')::int AS nblocks
+  FROM params
+  WHERE sample_fraction > 0 AND sample_fraction <= 1
+),
+target AS (
+  SELECT *,
+       CASE
+         WHEN nblocks <= 1 THEN 0::bigint
+         ELSE least(nblocks - 1,
+              greatest(1::bigint,
+                   ceil((nblocks - 1) * sample_fraction)::bigint))
+       END AS sample_target
+  FROM bounds
+),
+candidate_blocks AS MATERIALIZED (
+  SELECT t.idx, t.nblocks, t.index_size, t.sample_target, b.blkno
+  FROM target AS t
+  CROSS JOIN LATERAL generate_series(1::bigint, t.nblocks - 1) AS b(blkno)
+  ORDER BY random()
+  LIMIT (SELECT sample_target FROM target)
+),
+sample_blocks AS MATERIALIZED (
+  SELECT *
+  FROM candidate_blocks
+  ORDER BY blkno
+),
+page_sample AS (
+  SELECT s.blkno,
+       ps.type,
+       ps.btpo_next,
+       h.lower,
+       h.upper,
+       h.special
+  FROM sample_blocks AS s
+  CROSS JOIN LATERAL bt_page_stats(s.idx::text, s.blkno) AS ps
+  CROSS JOIN LATERAL page_header(get_raw_page(s.idx::text, s.blkno)) AS h
+),
+agg AS (
+  SELECT count(*)::bigint AS sampled_blocks,
+       count(*) FILTER (WHERE type IN ('i', 'r'))::bigint AS internal_sample,
+       count(*) FILTER (WHERE type = 'l')::bigint AS leaf_sample,
+       count(*) FILTER (WHERE type = 'e')::bigint AS empty_sample,
+       count(*) FILTER (WHERE type IN ('d', 'D'))::bigint AS deleted_sample,
+       coalesce(sum(greatest(special - 24, 0)) FILTER (WHERE type = 'l'), 0)::numeric AS leaf_max_avail,
+       coalesce(sum(greatest(upper - lower, 0)) FILTER (WHERE type = 'l'), 0)::numeric AS leaf_free_space,
+       count(*) FILTER (WHERE type = 'l' AND btpo_next <> 0 AND btpo_next < blkno)::bigint AS fragments_sample
+  FROM page_sample
+)
+SELECT m.version,
+     m.level AS tree_level,
+     t.index_size,
+     m.root AS root_block_no,
+     CASE WHEN t.nblocks > 1
+      THEN 100.0 * a.sampled_blocks / (t.nblocks - 1)
+      ELSE 0.0
+     END AS scanned_percent,
+     CASE WHEN a.sampled_blocks > 0
+      THEN round(a.internal_sample::numeric * (t.nblocks - 1) / a.sampled_blocks)::bigint
+      ELSE 0
+     END AS approx_internal_pages,
+     CASE WHEN a.sampled_blocks > 0
+      THEN round(a.leaf_sample::numeric * (t.nblocks - 1) / a.sampled_blocks)::bigint
+      ELSE 0
+     END AS approx_leaf_pages,
+     CASE WHEN a.sampled_blocks > 0
+      THEN round(a.empty_sample::numeric * (t.nblocks - 1) / a.sampled_blocks)::bigint
+      ELSE 0
+     END AS approx_empty_pages,
+     CASE WHEN a.sampled_blocks > 0
+      THEN round(a.deleted_sample::numeric * (t.nblocks - 1) / a.sampled_blocks)::bigint
+      ELSE 0
+     END AS approx_deleted_pages,
+     CASE WHEN a.leaf_max_avail > 0
+      THEN round((100.0 - a.leaf_free_space / a.leaf_max_avail * 100.0)::numeric, 2)::float8
+      ELSE 'NaN'::float8
+     END AS approx_avg_leaf_density,
+     CASE WHEN a.leaf_sample > 0
+      THEN round((100.0 * a.fragments_sample / a.leaf_sample)::numeric, 2)::float8
+      ELSE 'NaN'::float8
+     END AS approx_leaf_fragmentation
+FROM target AS t
+CROSS JOIN LATERAL bt_metap(t.idx::text) AS m
+CROSS JOIN agg AS a;
+```
+
+`pg_relation_size(regclass)` supplies the exact main-fork byte size used here to
+derive `nblocks` and `index_size`
+([pg_proc.dat#pg_relation_size](../../../raw/postgres-18/src/include/catalog/pg_proc.dat#L7743-L7751),
+[system_functions.sql#pg_relation_size](../../../raw/postgres-18/src/backend/catalog/system_functions.sql#L285-L289)).
+If the prototype needs lower SQL-call overhead and can tolerate sampling
+contiguous ranges instead of individual blocks, `bt_multi_page_stats(text,
+bigint, bigint)` exposes the same per-page fields for a range, with negative
+`blk_count` meaning all remaining pages
+([pageinspect--1.11--1.12.sql#bt_multi_page_stats](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.11--1.12.sql#L7-L24),
+[pageinspect.sgml#bt_multi_page_stats](../../../raw/postgres-18/doc/src/sgml/pageinspect.sgml#L318-L349)).
+
+The limits are important. This SQL sketch cannot share a single C helper for
+classification and accumulation, cannot expose a polished extension API, and
+cannot guarantee the same physical read scheduling that a C loop can. It is best
+used to validate estimator behavior and expected error before implementing
+`pgstatindex_approx` inside `pgstattuple`.
+
 ## Pros
 
 - **It actually reads fewer pages.** At fraction `f`, it reads about `f *
@@ -227,11 +395,12 @@ GRANT EXECUTE ON FUNCTION pgstatindex_approx(regclass, FLOAT8) TO pg_stat_scan_t
   bulk-loaded region next to a churned region), a small sample can be biased.
   Systematic (every k-th block) sampling would be worse under any periodic
   layout.
-- **Random I/O loses sequential readahead.** The current scan reads blocks in
-  ascending order through a `BAS_BULKREAD` ring, which the OS prefetches well
-  ([pgstatindex.c#bstrategy](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L219)).
-  Random block access trades fewer total reads for more expensive per-read I/O;
-  the break-even fraction is higher on spinning disks than on SSDs.
+- **Sparse sampling still weakens sequential readahead.** Even if the sampler
+  sorts selected blocks before reading them, it skips over most blocks instead
+  of reading one dense ascending run like the current `BAS_BULKREAD` scan
+  ([pgstatindex.c#scan-loop](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L278-L328)).
+  The break-even fraction depends on storage: sparse reads are costlier on
+  spinning disks than on SSDs.
 - **Still not a consistent snapshot.** Like `pgstatindex` today, it share-locks
   one page at a time, so concurrent splits, deletions, and page recycling during
   sampling perturb the estimate; a sampled block may be concurrently recycled
@@ -293,7 +462,15 @@ A sampling function would need new tests:
 - [pgstatindex.c#registration](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L52-L64)
 - [pgstatapprox.c#statapprox_heap](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L48-L204)
 - [pgstatapprox.c#output_type](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L32-L44)
+- [pageinspect.sgml#pageinspect](../../../raw/postgres-18/doc/src/sgml/pageinspect.sgml#L1-L13)
+- [pageinspect.sgml#btree-functions](../../../raw/postgres-18/doc/src/sgml/pageinspect.sgml#L284-L349)
+- [pageinspect--1.8--1.9.sql](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.8--1.9.sql#L33-L78)
+- [pageinspect--1.11--1.12.sql](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.11--1.12.sql#L7-L24)
+- [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L91-L191)
+- [btreefuncs.c#bt_page_stats_internal](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L260-L304)
 - [bufpage.c#PageGetExactFreeSpace](../../../raw/postgres-18/src/backend/storage/page/bufpage.c#L951-L972)
+- [bufpage.c#free-space-functions](../../../raw/postgres-18/src/backend/storage/page/bufpage.c#L900-L972)
+- [bufpage.h#PageHeaderData](../../../raw/postgres-18/src/include/storage/bufpage.h#L163-L185)
 - [nbtree.h#BTPageOpaqueData](../../../raw/postgres-18/src/include/access/nbtree.h#L63-L85)
 - [nbtree.h#BTMetaPageData](../../../raw/postgres-18/src/include/access/nbtree.h#L104-L123)
 - [nbtree.h#page-macros](../../../raw/postgres-18/src/include/access/nbtree.h#L149-L226)
@@ -314,6 +491,8 @@ A sampling function would need new tests:
 | `pgstattuple_approx` is the precedent output shape (`scanned_percent`, `approx_` columns) | [pgstatapprox.c#output_type](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L32-L44), [pgstattuple--1.4--1.5.sql#pgstattuple_approx](../../../raw/postgres-18/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L104-L119) |
 | `pgstattuple_approx` still iterates every block and avoids linear extrapolation because it is not a random sample | [pgstatapprox.c#statapprox_heap](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L74-L94), [pgstatapprox.c#extrapolation-note](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L174-L186) |
 | Adding a function follows the `PG_FUNCTION_INFO_V1` + upgrade-script + control-bump pattern | [pgstatindex.c#registration](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L52-L64), [pgstattuple--1.4--1.5.sql#pgstathashindex](../../../raw/postgres-18/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L123-L136), [pgstattuple.control#default_version](../../../raw/postgres-18/contrib/pgstattuple/pgstattuple.control#L3) |
+| A SQL prototype can use pageinspect's B-tree metapage and page-stat functions, but those functions are superuser/debugging tools | [pageinspect.sgml#pageinspect](../../../raw/postgres-18/doc/src/sgml/pageinspect.sgml#L1-L13), [pageinspect--1.8--1.9.sql#btree-functions](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.8--1.9.sql#L51-L78), [btreefuncs.c#bt_page_stats_internal](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L260-L304) |
+| pageinspect's `free_size` is not the exact free-space value used by `pgstatindex`, so a closer SQL prototype reads the raw page header | [btreefuncs.c#free_size](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L184-L191), [bufpage.c#free-space-functions](../../../raw/postgres-18/src/backend/storage/page/bufpage.c#L900-L972), [pageinspect--1.9--1.10.sql#page_header](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.9--1.10.sql#L7-L19) |
 | `pgstatindex` is already documented as non-instantaneous page-by-page accumulation | [pgstattuple.sgml#pgstatindex-note](../../../raw/postgres-18/doc/src/sgml/pgstattuple.sgml#L275-L279) |
 | Current regression coverage never populates a B-tree to check density | [pgstattuple.sql](../../../raw/postgres-18/contrib/pgstattuple/sql/pgstattuple.sql#L18-L131), [pgstattuple.out](../../../raw/postgres-18/contrib/pgstattuple/expected/pgstattuple.out#L44-L299) |
 
@@ -324,7 +503,13 @@ A sampling function would need new tests:
 - [pgstatindex.c#v1_5-note](../../../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L159-L177) - why v1.5 functions drop the `superuser()` check in favor of `REVOKE`/`GRANT`.
 - [pgstatapprox.c#statapprox_heap](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L48-L204) - heap approximate scan, including the non-random-sample extrapolation note and `scanned_percent`.
 - [pgstatapprox.c#output_type](../../../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L32-L44) - the approximate result struct copied as a precedent.
+- [pageinspect.sgml](../../../raw/postgres-18/doc/src/sgml/pageinspect.sgml#L1-L349) - pageinspect superuser/debugging scope and B-tree helper documentation.
+- [pageinspect--1.8--1.9.sql](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.8--1.9.sql#L33-L78) - current `get_raw_page`, `bt_metap`, and `bt_page_stats` SQL signatures after the int8 upgrade.
+- [pageinspect--1.11--1.12.sql](../../../raw/postgres-18/contrib/pageinspect/pageinspect--1.11--1.12.sql#L7-L24) - `bt_multi_page_stats` range helper signature.
+- [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L91-L191) - pageinspect B-tree page type mapping and `free_size` calculation.
+- [btreefuncs.c#bt_page_stats_internal](../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L260-L304) - pageinspect per-page read, share lock, and superuser check.
 - [bufpage.c#PageGetExactFreeSpace](../../../raw/postgres-18/src/backend/storage/page/bufpage.c#L951-L972) - exact per-page free space used by leaf density.
+- [bufpage.h#PageHeaderData](../../../raw/postgres-18/src/include/storage/bufpage.h#L163-L238) - page header fields and `SizeOfPageHeaderData` used by the SQL prototype.
 - [nbtree.h#BTPageOpaqueData](../../../raw/postgres-18/src/include/access/nbtree.h#L63-L85) - leaf right link `btpo_next` and page flag bits.
 - [nbtree.h#BTMetaPageData](../../../raw/postgres-18/src/include/access/nbtree.h#L104-L123) - metapage fields (`btm_version`, `btm_root`, `btm_level`) read exactly.
 - [nbtree.h#page-macros](../../../raw/postgres-18/src/include/access/nbtree.h#L149-L226) - `BTREE_METAPAGE`, `P_NONE`, `P_ISLEAF`, `P_ISDELETED`, `P_IGNORE`.

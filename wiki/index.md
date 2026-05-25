@@ -19,7 +19,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)](v18/questions/explain-analyze-buffers-output.md) - Detailed field-by-field explanation of `EXPLAIN (ANALYZE, BUFFERS)` shared, local, temp, planning, serialization, parallel-worker, and I/O timing output in PostgreSQL 18.
 - [Extension Hooks for VACUUM and Autovacuum in PostgreSQL 18 (unverified)](v18/questions/extension-hooks-vacuum-autovacuum.md) - Catalogs every extension point on the VACUUM/ANALYZE and autovacuum paths: in-process hook variables, table and index AM and FDW callbacks, and adjacent surfaces (background workers, custom cumulative statistics), with manual-vs-autovacuum coverage.
 - [Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified)](v18/questions/pgstatindex-approx-sampling.md) - Explains why `pgstattuple_approx`'s heap visibility-map/FSM shortcut does not transfer to B-tree `pgstatindex`, scopes a separate approximate diagnostic, and catalogs current `pgstatindex` regression coverage.
-- [Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified)](v18/questions/pgstatindex-sample-variant-proposal.md) - Designs a `pgstatindex_approx` that random-samples physical index blocks instead of reading all of them; covers the exact-vs-estimated field split, the ratio-vs-count estimator, extension wiring (new function, 1.5->1.6 upgrade, control bump), and a pros and cons section.
+- [Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified)](v18/questions/pgstatindex-sample-variant-proposal.md) - Designs a `pgstatindex_approx` that random-samples physical index blocks instead of reading all of them; covers the exact-vs-estimated field split, the ratio-vs-count estimator, extension wiring, a `pageinspect` SQL prototype, and pros/cons.
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 18 (unverified)](v18/questions/pg-stat-statements.md) - Explains the shared-preload extension's query-ID, normalization, hook, shared-hash, query-text file, readout, reset/save, permissions, and configuration behavior in PostgreSQL 18.
 - [Limiting Query Text Size in pg_stat_statements in PostgreSQL 18 (unverified)](v18/questions/pg-stat-statements-query-text-size.md) - There is no v18 GUC to cap individual query-text length; `track_activity_query_size` does not apply, texts store full-length in the external file, and the only levers are `pg_stat_statements.max`, the wholesale-discard garbage collector, and read-time `showtext`/`left()`.
 - [How track_activity_query_size Is Used in PostgreSQL 18 (unverified)](v18/questions/track-activity-query-size.md) - Explains how the postmaster-context GUC sizes backend activity-string shared memory, caps `pg_stat_activity.query`, interacts with `track_activities`, feeds deadlock/crash activity reporting, and does not truncate `pg_stat_statements.query`.
@@ -30,6 +30,8 @@ This is the global catalog for the PostgreSQL engine wiki.
 ### PostgreSQL 17.10
 
 - [v17/index](v17/index.md) - Active version landing page. Source checkout pinned to `REL_17_STABLE` commit `54eeefaedbee0385529f3edf321bb99e49232aaa`.
+- [PostgreSQL 17 Contrib Extensions (unverified)](v17/questions/contrib-extensions.md) - Lists all 53 control-file-backed contrib extensions in PostgreSQL 17, with cited explanations covering install scope, data types, index/search helpers, diagnostics, FDWs, procedural-language transforms, and SPI trigger examples.
+- [Proposing a Sampling pgstatindex Variant for PostgreSQL 17 (unverified)](v17/questions/pgstatindex-sample-variant-proposal.md) - Designs a `pgstatindex_approx` that random-samples physical B-tree blocks; covers exact-vs-estimated fields, pros/cons, extension wiring, and a `pageinspect` SQL prototype using PostgreSQL 17 source behavior.
 
 
 
@@ -39,6 +41,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 - [Foreign-Key Join Optimization for Two-Table Joins (unverified)](v12/questions/fk-join-optimization-two-tables.md) - How the v12 planner uses foreign-key constraints when joining two tables.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](v12/questions/explain-analyze-buffers-output.md) - Detailed field-by-field explanation of `EXPLAIN (ANALYZE, BUFFERS)` shared, local, temp, and I/O timing output in PostgreSQL 12.
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 12 (unverified)](v12/questions/pg-stat-statements.md) - Explains the v12 extension's in-extension query jumbling, hooks, shared-hash and external query-text storage, readout, permissions, persistence, and its four GUCs (`max`, `track`, `track_utility`, `save`) plus `shared_preload_libraries` and `track_io_timing`.
+- [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) - Designs a `pgstatindex_approx` that random-samples physical B-tree blocks in PostgreSQL 12; covers exact-vs-estimated fields, pros/cons, extension wiring, and a contrib `pageinspect` SQL prototype.
 
 
 
