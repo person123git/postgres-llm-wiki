@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: claude-opus-4-7 2026-05-25T17:36:44Z
 ---
 
 # Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)
@@ -73,7 +73,7 @@ the v12 `pgstattuple_approx` precedent, which exposes `scanned_percent` and
    counts the page as a leaf, and increments `fragments` if `btpo_next` is not
    `P_NONE` and is less than the current physical block number
    ([pgstatindex.c#leaf-accumulation](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L307),
-   [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L63-L68)).
+   [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L55-L68)).
 5. Computes `avg_leaf_density = 100 - free_space / max_avail * 100` and
    `leaf_fragmentation = fragments / leaf_pages * 100`, returning `NaN` when a
    denominator is zero
@@ -442,7 +442,7 @@ $function$;
 - Empty B-trees should return `NaN` for both ratio fields, following the current
   denominator guards
   ([pgstatindex.c#result-ratios](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L356),
-  [pgstattuple.sql#empty-index-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L37)).
+  [pgstattuple.sql#pgstatindex-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L45)).
 - Wrong access methods and unsupported relation kinds should error like current
   `pgstatindex`
   ([pgstatindex.c#guards](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L224-L238),
@@ -471,7 +471,7 @@ $function$;
 - [rawpage.c#page_header](../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L218-L287)
 - [bufpage.c#PageGetFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L573-L596)
 - [bufpage.h#PageHeaderData](../../../raw/postgres-12/src/include/storage/bufpage.h#L163-L216)
-- [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L63-L68)
+- [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L55-L68)
 - [nbtree.h#BTMetaPageData](../../../raw/postgres-12/src/include/access/nbtree.h#L97-L113)
 - [nbtree.h#page-macros](../../../raw/postgres-12/src/include/access/nbtree.h#L131-L196)
 - [pgstattuple.sql#pgstatindex-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L113)
@@ -507,7 +507,7 @@ $function$;
 - [rawpage.c#page_header](../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L218-L287) - raw page header fields exposed to SQL.
 - [bufpage.c#PageGetFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L573-L596) - index-page free-space routine used by v12 `pgstatindex`.
 - [bufpage.h#PageHeaderData](../../../raw/postgres-12/src/include/storage/bufpage.h#L163-L216) - page header layout and `SizeOfPageHeaderData`.
-- [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L63-L68) - B-tree right-link and flag fields.
+- [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L55-L68) - B-tree right-link and flag fields.
 - [nbtree.h#BTMetaPageData](../../../raw/postgres-12/src/include/access/nbtree.h#L97-L113) - metapage fields read exactly.
 - [nbtree.h#page-macros](../../../raw/postgres-12/src/include/access/nbtree.h#L131-L196) - metapage constant and B-tree page-state macros.
 - [guc.c#diagnostic-timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2397) - `statement_timeout` and `lock_timeout` contexts.
