@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: claude-opus-4-7 2026-05-25T17:36:44Z
+verified_by_agent: not yet
 ---
 
 # Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)
@@ -247,10 +247,15 @@ low-level page debugging and its functions are superuser-only in v12
 ([pageinspect.sgml#overview](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml#L10-L13)).
 The required building blocks are available:
 
-- `bt_metap(text)` reads B-tree metapage fields including `version`, `root`, and
-  `level`
+- The `bt_metap` C symbol reads B-tree metapage fields including `version`,
+  `root`, and `level`, but the v12 pageinspect 1.7 SQL wrapper also declares
+  `oldest_xact` as `int4` while `btreefuncs.c` formats the underlying
+  `TransactionId` as an unsigned decimal string. The prototype below uses a
+  six-column compatibility wrapper around the same C symbol so tuple conversion
+  stops before `oldest_xact`
   ([pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26),
-  [btreefuncs.c#bt_metap-output](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L542-L575)).
+  [btreefuncs.c#bt_metap-output](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L542-L575),
+  [execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2144)).
 - `bt_page_stats(text, int4)` reads one non-metapage B-tree block, share-locks
   it, returns its `type`, `free_size`, `btpo_next`, and other fields, and errors
   on block 0
@@ -276,12 +281,44 @@ reload is required for a session-local diagnostic setting
 its script to create SQL objects
 ([create_extension.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_extension.sgml#L24-L29),
 [create_extension.sgml#description](../../../raw/postgres-12/doc/src/sgml/ref/create_extension.sgml#L35-L55)).
+If the wrapper errors with `function bt_page_stats(text, integer) does not
+exist`, that is not a v12 argument-type mismatch: v12 documents
+`bt_page_stats(relname text, blkno int)` and the extension script creates
+`bt_page_stats(text, int4)`. The usual cause is that `pageinspect` is not
+installed in the current database, or its schema is not visible through the
+wrapper's `search_path`
+([pageinspect.sgml#bt_page_stats](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml#L270-L293),
+[pageinspect--1.5.sql#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L162-L175)).
+`pg_extension.extnamespace` records the extension schema, and the v12
+`CREATE FUNCTION` syntax can save the current `search_path` for execution with
+`SET search_path FROM CURRENT`
+([pg_extension.h#FormData_pg_extension](../../../raw/postgres-12/src/include/catalog/pg_extension.h#L30-L45),
+[create_function.sgml#configuration-parameter](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L484-L493)).
 
 ```sql
 SET /* wiki_pgstatindex_pageinspect_timeout */ statement_timeout = '5min';
 SET /* wiki_pgstatindex_pageinspect_timeout */ lock_timeout = '2s';
 CREATE /* wiki_pgstatindex_pageinspect_setup */ EXTENSION IF NOT EXISTS pageinspect;
+
+SELECT /* wiki_pgstatindex_pageinspect_schema */ n.nspname AS pageinspect_schema
+FROM pg_extension AS e
+JOIN pg_namespace AS n ON n.oid = e.extnamespace
+WHERE e.extname = 'pageinspect';
+
+-- Replace public with the schema returned above if pageinspect lives elsewhere.
+SET /* wiki_pgstatindex_pageinspect_path */ search_path = public, pg_catalog;
 ```
+
+If the wrapper errors with `value "4145147631" is out of range for type
+integer`, the likely v12-specific cause is `bt_metap`, not the estimator math:
+pageinspect 1.7 declares `oldest_xact int4`, but the C function supplies the
+unsigned `btm_oldest_btpo_xact` string. PostgreSQL converts every declared
+output column in the tuple descriptor, so the conversion can fail even though
+the outer query only needs `version`, `level`, and `root`
+([pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26),
+[btreefuncs.c#bt_metap-output](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L564-L575),
+[nbtree.h#BTMetaPageData](../../../raw/postgres-12/src/include/access/nbtree.h#L97-L113),
+[execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2144)).
 
 The SQL wrapper uses v12-supported `CREATE FUNCTION` syntax for default input
 arguments, `RETURNS TABLE`, and `PARALLEL` marking; its query uses v12 `WITH ...
@@ -305,6 +342,17 @@ reading all index pages, but it still enumerates all candidate block numbers and
 sorts them by `random()` before reading the sampled blocks.
 
 ```sql
+CREATE /* wiki_pgstatindex_pageinspect_metap_compat */ OR REPLACE FUNCTION pgstatindex_pageinspect_bt_metap_compat(
+  relname text,
+  OUT magic int4,
+  OUT version int4,
+  OUT root int4,
+  OUT level int4,
+  OUT fastroot int4,
+  OUT fastlevel int4)
+AS '$libdir/pageinspect', 'bt_metap'
+LANGUAGE C STRICT PARALLEL SAFE;
+
 CREATE /* wiki_pgstatindex_pageinspect_function */ OR REPLACE FUNCTION pgstatindex_approx_pageinspect(
     idx regclass,
     sample_fraction float8 DEFAULT 0.01)
@@ -323,6 +371,7 @@ RETURNS TABLE (
 LANGUAGE sql
 VOLATILE
 PARALLEL RESTRICTED
+SET search_path FROM CURRENT
 AS $function$
 WITH params AS (
   SELECT $1 AS idx, $2::float8 AS sample_fraction
@@ -396,8 +445,8 @@ SELECT m.version,
      p.index_size,
      m.root::bigint AS root_block_no,
      CASE WHEN p.nblocks > 1
-      THEN 100.0 * a.sampled_blocks / (p.nblocks - 1)
-      ELSE 0.0
+      THEN 100.0::float8 * a.sampled_blocks::float8 / (p.nblocks - 1)::float8
+      ELSE 0.0::float8
      END AS scanned_percent,
      CASE WHEN a.sampled_blocks > 0
       THEN round(a.internal_sample::numeric * (p.nblocks - 1) / a.sampled_blocks)::bigint
@@ -424,7 +473,7 @@ SELECT m.version,
       ELSE 'NaN'::float8
      END AS approx_leaf_fragmentation
 FROM sample_plan AS p
-CROSS JOIN LATERAL bt_metap(p.idx::text) AS m
+    CROSS JOIN LATERAL pgstatindex_pageinspect_bt_metap_compat(p.idx::text) AS m
 CROSS JOIN agg AS a;
 $function$;
 ```
@@ -464,6 +513,7 @@ $function$;
 - [pageinspect--1.5.sql#raw-page-header](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L7-L33)
 - [pageinspect--1.5.sql#btree-functions](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L146-L175)
 - [pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26)
+- [execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2144)
 - [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L90-L153)
 - [btreefuncs.c#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L161-L237)
 - [btreefuncs.c#bt_metap](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L505-L575)
@@ -485,6 +535,8 @@ $function$;
 | v12 leaf density uses `PageGetFreeSpace`, and fragmentation uses `btpo_next < blkno` | [pgstatindex.c#leaf-accumulation](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L307), [bufpage.c#PageGetFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L573-L596) |
 | `pgstattuple_approx` is the local approximate-output precedent | [pgstatapprox.c#output_type](../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L38-L52), [pgstattuple--1.4--1.5.sql#pgstattuple_approx](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L104-L119) |
 | `pageinspect` can prototype sampled B-tree page reads, but it is superuser/debugging-oriented | [pageinspect.sgml#overview](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml#L10-L13), [pageinspect--1.5.sql#btree-functions](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L146-L175), [btreefuncs.c#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L161-L213) |
+| The v12 `bt_metap` SQL wrapper can raise `integer` overflow on unsigned `oldest_xact`; the compatibility helper avoids converting that output column | [pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26), [btreefuncs.c#bt_metap-output](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L564-L575), [execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2144) |
+| The `bt_page_stats(text, integer)` error is a setup or `search_path` problem, not a v12 signature mismatch | [pageinspect.sgml#bt_page_stats](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml#L270-L293), [pageinspect--1.5.sql#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L162-L175), [pg_extension.h#FormData_pg_extension](../../../raw/postgres-12/src/include/catalog/pg_extension.h#L30-L45) |
 | v12 SQL syntax and built-ins used by the wrapper exist in the pinned checkout | [create_function.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L23-L39), [select.sgml#with-materialized](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L75-L98), [syntax.sgml#aggregate-filter](../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L1563-L1580), [pg_proc.dat#prototype-builtins](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5758-L5764) |
 
 ## Source References
@@ -500,6 +552,7 @@ $function$;
 - [pageinspect.sgml](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml#L10-L305) - pageinspect superuser/debugging scope and B-tree helper documentation.
 - [pageinspect--1.5.sql](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L7-L175) - `get_raw_page`, `page_header`, `bt_metap`, and `bt_page_stats` SQL signatures.
 - [pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26) - v12 pageinspect 1.7 `bt_metap` output shape.
+- [execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2144) - tuple conversion loop for C-string result fields.
 - [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L90-L153) - pageinspect B-tree page type mapping, `max_avail`, and `free_size` calculation.
 - [btreefuncs.c#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L161-L237) - single-page pageinspect read, share lock, superuser check, and output tuple.
 - [btreefuncs.c#bt_metap](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L505-L575) - pageinspect metapage readout.
@@ -512,7 +565,8 @@ $function$;
 - [nbtree.h#page-macros](../../../raw/postgres-12/src/include/access/nbtree.h#L131-L196) - metapage constant and B-tree page-state macros.
 - [guc.c#diagnostic-timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2397) - `statement_timeout` and `lock_timeout` contexts.
 - [create_extension.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_extension.sgml#L24-L55) - `CREATE EXTENSION IF NOT EXISTS` syntax and extension loading behavior.
-- [create_function.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L23-L39) - SQL function syntax used by the wrapper.
+- [pg_extension.h#FormData_pg_extension](../../../raw/postgres-12/src/include/catalog/pg_extension.h#L30-L45) - extension schema catalog field used to find where `pageinspect` installed its helper functions.
+- [create_function.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L23-L39) and [create_function.sgml#configuration-parameter](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L484-L493) - SQL function syntax and `SET search_path FROM CURRENT` behavior used by the wrapper.
 - [select.sgml#with-materialized](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L75-L98) and [select.sgml#materialized-note](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L292-L328) - v12 CTE materialization syntax and semantics.
 - [syntax.sgml#aggregate-filter](../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L1563-L1580) and [syntax.sgml#filter-semantics](../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L1727-L1738) - aggregate `FILTER` syntax and behavior.
 - [pg_proc.dat#prototype-builtins](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5758-L5764), [pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6891), [pg_proc.dat#generate_series-int8](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L7634-L7645), [pg_proc.dat#random](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L3223-L3225), and [pg_proc.dat#ceil](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L637-L642) - built-in functions used by the SQL wrapper.

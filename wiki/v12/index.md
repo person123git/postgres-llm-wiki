@@ -17,4 +17,4 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 - [Foreign-Key Join Optimization for Two-Table Joins (unverified)](questions/fk-join-optimization-two-tables.md)
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](questions/explain-analyze-buffers-output.md)
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 12 (unverified)](questions/pg-stat-statements.md)
-- [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](questions/pgstatindex-sample-variant-proposal.md)
+- [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](questions/pgstatindex-sample-variant-proposal.md) - Includes a contrib `pageinspect` diagnostic SQL prototype and a v12 `bt_metap` unsigned-`oldest_xact` overflow workaround.
