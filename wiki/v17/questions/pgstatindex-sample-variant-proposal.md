@@ -10,8 +10,10 @@ verified_by_agent: not yet
 
 ## Question
 
-in postgresql 17 , question : propose a pgstatindex variant that will sample
-the index and not read all index , and a pros and cons section. also provide a proposal of a sql implementation using available extesions on the contrib
+In PostgreSQL 17, propose a `pgstatindex` variant that samples the index
+instead of reading the whole index, include a pros and cons section, and
+provide a proposal for a SQL implementation using available extensions in
+contrib.
 
 ## Answer Up Front
 

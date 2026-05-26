@@ -10,8 +10,8 @@ verified_by_agent: claude-opus-4-7 2026-05-19T17:30:00Z
 
 ## Question
 
-> follow AGENTS.md.
->   in PostgreSQL 18,  question: how Custom Cumulative Statistics works?
+> Follow AGENTS.md.
+> In PostgreSQL 18, how do custom cumulative statistics work?
 
 ## Answer Up Front
 

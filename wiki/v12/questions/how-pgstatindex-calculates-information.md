@@ -10,7 +10,7 @@ verified_by_agent: not yet
 
 ## Question
 
-in PostgreSQL 12, question: provide a comprehensive explanation how pgstatindex calculates its information.
+In PostgreSQL 12, provide a comprehensive explanation of how `pgstatindex` calculates its information.
 
 ## Answer Up Front
 

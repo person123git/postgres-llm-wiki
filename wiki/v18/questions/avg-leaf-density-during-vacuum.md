@@ -36,12 +36,12 @@ leaf pages that `_bt_pagedel` successfully deletes or fails to delete.
 
 ## Question
 
-> in PostgreSQL 18, create a detailed analysis on how to modify vacuum and
-> autovacuum to calculate avg_leaf_density for an index like pgstatindex and
-> store it the a stat table, so after each successful vacuum or autovacuum of
-> an index the information would be available, this solution should minimize to
-> the max any extra I/O so the calculation should try to use all the current
-> data during the vacuum to calculate the avg_leaf_density
+> In PostgreSQL 18, create a detailed analysis of how to modify vacuum and
+> autovacuum to calculate `avg_leaf_density` for an index like `pgstatindex` and
+> store it in a statistics table. After each successful vacuum or autovacuum of
+> an index, the information should be available. This solution should minimize
+> extra I/O as much as possible, so the calculation should try to use all current
+> data available during vacuum to calculate `avg_leaf_density`.
 
 ## What avg_leaf_density Is
 

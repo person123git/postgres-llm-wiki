@@ -10,8 +10,8 @@ verified_by_agent: not yet
 
 ## Question
 
-> follow AGENTS.md.
->   in PostgreSQL 18,  question : in pg_stat_statements is there a way to limit the size of query texts?
+> Follow AGENTS.md.
+> In PostgreSQL 18, is there a way to limit the size of query texts in `pg_stat_statements`?
 
 ## Short Answer
 

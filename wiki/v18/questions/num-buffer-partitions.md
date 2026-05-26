@@ -10,8 +10,8 @@ verified_by_agent: claude-opus-4-7 2026-05-21T15:48:33Z
 
 ## Question
 
-follow AGENTS.md.
-  in PostgreSQL 18,  question : give a comprehensive explatation of  usage of num_buffer_partitions
+Follow AGENTS.md.
+In PostgreSQL 18, give a comprehensive explanation of the usage of `NUM_BUFFER_PARTITIONS`.
 
 ## Short Answer
 

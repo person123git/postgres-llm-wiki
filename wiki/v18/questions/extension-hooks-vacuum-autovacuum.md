@@ -10,9 +10,9 @@ verified_by_agent: not yet
 
 ## Question
 
-> follow AGENTS.md.
-> in PostgreSQL 18, Question:  provide a comprehensive documentation of all
-> hooks for an extession on vacuum and autovacuum ?
+> Follow AGENTS.md.
+> In PostgreSQL 18, provide comprehensive documentation of all hooks available
+> to an extension in the vacuum and autovacuum paths.
 
 ## Answer Up Front
 

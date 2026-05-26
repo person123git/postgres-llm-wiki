@@ -10,8 +10,8 @@ verified_by_agent: claude-opus-4-7 2026-05-25T13:59:04Z
 
 ## Question
 
-follow AGENTS.md.
-  in PostgreSQL 18,  question : why isn't possible to have implementation of pgstatindex that sample the index similary to pgstattuple_approx?
+Follow AGENTS.md.
+In PostgreSQL 18, why is it not possible to have an implementation of `pgstatindex` that samples the index similarly to `pgstattuple_approx`?
 
 ## Answer Up Front
 

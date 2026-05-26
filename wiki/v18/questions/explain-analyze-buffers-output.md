@@ -10,7 +10,7 @@ verified_by_agent: claude-opus-4-7 2026-05-20T15:00:00Z
 
 ## Question
 
-when a query execution of explain analyze buffers describe in details all the buffers informations output
+In PostgreSQL 18, when a query uses `EXPLAIN (ANALYZE, BUFFERS)`, describe in detail all buffer information in the output.
 
 ## Short Answer
 

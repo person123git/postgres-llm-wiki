@@ -10,7 +10,7 @@ verified_by_agent: not yet
 
 ## Question
 
-in postgresql 17 , list all contrib extensions with comprehensive explaination of each extenssion.
+In PostgreSQL 17, list all contrib extensions with a comprehensive explanation of each extension.
 
 ## Answer Up Front
 

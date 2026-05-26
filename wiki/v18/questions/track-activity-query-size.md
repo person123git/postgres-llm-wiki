@@ -10,8 +10,8 @@ verified_by_agent: not yet
 
 ## Question
 
-follow AGENTS.md.
-  in PostgreSQL 18,  question : how track_activity_query_size is used ?
+Follow AGENTS.md.
+In PostgreSQL 18, how is `track_activity_query_size` used?
 
 ## Short Answer
 

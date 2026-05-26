@@ -10,8 +10,8 @@ verified_by_agent: not yet
 
 ## Question
 
-> follow AGENTS.md.
->   in PostgreSQL 18,  question : explain how pg_stat_statements works and give a comprenhensive explainantion of all configs that affects pg_stat_statements
+> Follow AGENTS.md.
+> In PostgreSQL 18, explain how `pg_stat_statements` works and give a comprehensive explanation of all configuration settings that affect `pg_stat_statements`.
 
 ## Short Answer
 

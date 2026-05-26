@@ -10,7 +10,7 @@ verified_by_agent: not yet
 
 ## Question
 
-In PostgreSQL 12, produce a comprehensive analysis on how foreign key joins are optimized by the query planner in cases of SQL that joins two tables.
+In PostgreSQL 12, produce a comprehensive analysis of how the query planner optimizes foreign-key joins in SQL queries that join two tables.
 
 ## Short Answer
 

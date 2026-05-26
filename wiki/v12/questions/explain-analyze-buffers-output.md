@@ -10,7 +10,7 @@ verified_by_agent: not yet
 
 ## Question
 
-when a query execution of explain analyze buffers describe in details all the buffers informations output
+In PostgreSQL 12, when a query uses `EXPLAIN (ANALYZE, BUFFERS)`, describe in detail all buffer information in the output.
 
 ## Short Answer
 
