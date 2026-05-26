@@ -130,6 +130,10 @@ Before writing or editing wiki content, the agent must:
 
 Treat `wiki/versions.md`, `wiki/index.md`, `wiki/log.md`, and version landing pages as navigation and bookkeeping context only.
 
+## Prompt Hygiene
+
+If a user question or any prompt that drives document generation contains typos or grammatical errors, the agent must pause before drafting and ask the user whether to correct the prompt issues or keep them as written. This applies to filed `## Question` text, ingest prompts, and any prompt that will be restated verbatim in a wiki page. The agent waits for the user's answer before drafting and does not silently rewrite the prompt.
+
 ## Deep Inquiry Default
 
 All user requests, reports, and filed answers run in deep-inquiry mode unless the user explicitly asks for a quick answer.

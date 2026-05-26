@@ -34,6 +34,12 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - If implementation source conflicts with docs or tests, source wins. Put the discrepancy under `## Open Questions`.
 - Never answer one PostgreSQL version with evidence from another version.
 
+## MANDATORY Prompt Hygiene
+
+- If a user question or any prompt that drives document generation contains typos or grammatical errors, stop before generating and ask the user whether to correct the prompt issues or keep them as written.
+- Apply this to filed `## Question` text, ingest prompts, and any prompt that will be restated verbatim in a wiki page.
+- Wait for the user's answer before drafting. Do not silently rewrite the prompt.
+
 ## MANDATORY Deep Inquiry
 
 Deep inquiry is the default unless the user explicitly asks for a quick answer.
