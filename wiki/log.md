@@ -2,6 +2,12 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-05-26] source-fetch v17 | restore raw checkout
+
+- Cloned PostgreSQL `REL_17_STABLE` into `raw/postgres-17/` and checked out the existing v17 pin `54eeefaedbee0385529f3edf321bb99e49232aaa`.
+- Confirmed `raw/postgres-17/` now contains the pinned source files used by the v17 wiki citations.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-05-25] fix v12 | pageinspect bt_metap integer overflow
 
 - Reviewed `ERROR: value "4145147631" is out of range for type integer` from the diagnostic `pgstatindex_approx_pageinspect` wrapper in PostgreSQL 12.
@@ -43,6 +49,14 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Noted the v17-specific density detail: `pgstatindex_impl` uses `PageGetFreeSpace(page)`, so a `pageinspect` SQL prototype can use `bt_page_stats.free_size` directly while reading `page_header(get_raw_page(...))` only for the page `special` offset used in `max_avail`.
 - Added a diagnostic SQL-language wrapper using contrib `pageinspect` helpers (`bt_metap`, `bt_page_stats`, `get_raw_page`, and `page_header`) plus session-scoped `statement_timeout` and `lock_timeout` examples.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v17/index.md`.
+- Filed `verified_by_agent: not yet`; title carries `(unverified)`.
+
+## [2026-05-26] answer v12 | pgstatindex calculation behavior
+
+- Filed [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](v12/questions/how-pgstatindex-calculates-information.md).
+- Traced the exact v12 `pgstatindex_impl` path against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`: extension SQL entry points and grants, physical B-tree checks, other-session temp rejection, metapage read, `RelationGetNumberOfBlocks` main-fork scan, `BAS_BULKREAD` page reads, share buffer locks, B-tree opaque flag classification, `PageGetFreeSpace` leaf-density math, backward-right-link fragmentation, result tuple construction, and empty-index/error regression coverage.
+- Noted the v12-specific density detail that `pgstatindex` uses `PageGetFreeSpace`, which subtracts one line-pointer slot, not `PageGetExactFreeSpace`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
 - Filed `verified_by_agent: not yet`; title carries `(unverified)`.
 
 ## [2026-05-25] answer v17 | contrib extension inventory
