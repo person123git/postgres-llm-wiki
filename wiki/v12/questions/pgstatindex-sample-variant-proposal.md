@@ -341,6 +341,16 @@ This is diagnostic SQL, not the preferred extension implementation. It avoids
 reading all index pages, but it still enumerates all candidate block numbers and
 sorts them by `random()` before reading the sampled blocks.
 
+The prototype also floors the effective sample fraction at `0.10` when
+`pg_relation_size(idx) < 100 MiB`. The default `sample_fraction = 0.01` would
+otherwise draw only a handful of blocks from a small index, which makes
+`approx_leaf_pages`, `approx_avg_leaf_density`, and `approx_leaf_fragmentation`
+very noisy and can produce `NaN` ratios when the sample happens to miss every
+leaf page. The 100 MiB threshold and the 10% floor are policy choices, not
+derivations from the v12 source; they are applied only inside this prototype's
+`bounds` CTE and do not change the user-supplied `sample_fraction` argument or
+the validation in the same CTE's `WHERE` clause.
+
 ```sql
 CREATE /* wiki_pgstatindex_pageinspect_metap_compat */ OR REPLACE FUNCTION pgstatindex_pageinspect_bt_metap_compat(
   relname text,
@@ -380,7 +390,12 @@ bounds AS (
   SELECT idx,
        sample_fraction,
        pg_relation_size(idx) AS index_size,
-       pg_relation_size(idx) / current_setting('block_size')::int AS nblocks
+       pg_relation_size(idx) / current_setting('block_size')::int AS nblocks,
+       CASE
+         WHEN pg_relation_size(idx) < (100 * 1024 * 1024)::bigint
+              THEN GREATEST(sample_fraction, 0.10::float8)
+         ELSE sample_fraction
+       END AS effective_sample_fraction
   FROM params
   WHERE sample_fraction > 0
     AND sample_fraction <= 1
@@ -390,7 +405,7 @@ target AS (
   SELECT *,
        CASE
          WHEN nblocks <= 1 THEN 0::bigint
-         ELSE ceil((nblocks - 1)::float8 * sample_fraction)::bigint
+         ELSE ceil((nblocks - 1)::float8 * effective_sample_fraction)::bigint
        END AS raw_sample_target
   FROM bounds
 ),
