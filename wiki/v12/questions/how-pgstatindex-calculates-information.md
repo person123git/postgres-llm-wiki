@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: grok-4-3 2026-05-27T12:15:35Z
 ---
 
 # How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)
