@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: GPT-5-Codex 2026-05-27T13:20:15Z
+verified_by_agent: claude-opus-4-8 2026-05-28T19:03:01Z
 ---
 
 # Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12 (unverified)
@@ -66,7 +66,7 @@ Result: when two otherwise similar indexes are viable, the planner should cost t
 
 ## Executor Scan Path Impact (More Real Work per Qualifying Tuple)
 
-All B-tree scan variants use the B-tree access method callbacks registered in `btreehandler`: `btgettuple` for plain and index-only scans, and `btgetbitmap` for bitmap index scans ([nbtree.c#btreehandler-callbacks](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L128-L148)).
+All B-tree scan variants use the B-tree access method callbacks registered in `bthandler`: `btgettuple` for plain and index-only scans, and `btgetbitmap` for bitmap index scans ([nbtree.c#bthandler-callbacks](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L128-L148)).
 
 1. `btgettuple` calls `_bt_first` for the first item, then `_bt_next` for later items ([nbtree.c#btgettuple](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L213-L284)).
 2. `_bt_first` descends with `_bt_search`, positions precisely on the first leaf with `_bt_binsrch`, then loads matching items from that leaf with `_bt_readpage` ([nbtsearch.c#_bt_first-position](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1245-L1328)).

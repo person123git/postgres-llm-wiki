@@ -295,7 +295,7 @@ wrapper's `search_path`
 `CREATE FUNCTION` syntax can save the current `search_path` for execution with
 `SET search_path FROM CURRENT`
 ([pg_extension.h#FormData_pg_extension](../../../raw/postgres-12/src/include/catalog/pg_extension.h#L30-L45),
-[create_function.sgml#configuration-parameter](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L484-L493)).
+[create_function.sgml#configuration-parameter](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L494-L505)).
 
 ```sql
 SET /* wiki_pgstatindex_pageinspect_timeout */ statement_timeout = '5min';
@@ -583,7 +583,7 @@ $function$;
 - [guc.c#diagnostic-timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2397) - `statement_timeout` and `lock_timeout` contexts.
 - [create_extension.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_extension.sgml#L24-L55) - `CREATE EXTENSION IF NOT EXISTS` syntax and extension loading behavior.
 - [pg_extension.h#FormData_pg_extension](../../../raw/postgres-12/src/include/catalog/pg_extension.h#L30-L45) - extension schema catalog field used to find where `pageinspect` installed its helper functions.
-- [create_function.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L23-L39) and [create_function.sgml#configuration-parameter](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L484-L493) - SQL function syntax and `SET search_path FROM CURRENT` behavior used by the wrapper.
+- [create_function.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L23-L39) and [create_function.sgml#configuration-parameter](../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L494-L505) - SQL function syntax and `SET search_path FROM CURRENT` behavior used by the wrapper.
 - [select.sgml#with-materialized](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L75-L98) and [select.sgml#materialized-note](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L292-L328) - v12 CTE materialization syntax and semantics.
 - [syntax.sgml#aggregate-filter](../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L1563-L1580) and [syntax.sgml#filter-semantics](../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L1727-L1738) - aggregate `FILTER` syntax and behavior.
 - [pg_proc.dat#prototype-builtins](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5758-L5764), [pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6891), [pg_proc.dat#generate_series-int8](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L7634-L7645), [pg_proc.dat#random](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L3223-L3225), and [pg_proc.dat#ceil](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L637-L642) - built-in functions used by the SQL wrapper.
