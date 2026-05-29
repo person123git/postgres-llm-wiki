@@ -10,12 +10,13 @@ This wiki is based on the LLM wiki concept from [Andrej Karpathy's gist](https:/
 
 ## Supported Versions
 
-| Version | Status | Branch |
-|---------|--------|--------|
-| 18 | Primary | `REL_18_STABLE` |
-| 12 | Legacy | `REL_12_STABLE` |
+| Version | Status | Pinned Commit |
+|---------|--------|---|
+| 18 | Primary | `6cb307251c5c6261286c1566496920976640108e` |
+| 17 | Active | `54eeefaedbee0385529f3edf321bb99e49232aaa` |
+| 12 | Legacy | `45b88269a353ad93744772791feb6d01bc7e1e42` |
 
-See [[wiki/versions]] for exact pinned commits.
+See [versions](wiki/versions.md) for full version index.
 
 ## Getting Started
 
@@ -31,13 +32,20 @@ See [[wiki/versions]] for exact pinned commits.
 - `scripts/`: Tooling scripts
 - `.wiki-runtime/`: Generated artifacts and venv
 
+## Coverage Summary
+
+**PostgreSQL 18** (Primary): 10 filed questions covering buffer partitioning, statistics, vacuum hooks, custom stats, pgstatindex sampling, and query analysis.
+
+**PostgreSQL 17** (Active): 2 filed questions covering contrib extensions and pgstatindex sampling.
+
+**PostgreSQL 12** (Legacy): 6 filed questions covering foreign-key optimization, pgstatindex, index density, query analysis, and statistics.
+
+All pages are source-backed with citations to the pinned PostgreSQL checkouts. Recent work includes comprehensive behavioral verification and citation precision audits. See [log](wiki/log.md) for recent activity.
+
 ## More Information
 
 - [The Idea](idea.md): The core concept behind LLM-maintained wikis
 - [Implementation Plan](postgresql-engine-wiki-plan.md): Detailed technical specifications and setup
+- [AGENTS.md](AGENTS.md): Instructions for contributing to the wiki
 
-Agents should read [AGENTS.md](AGENTS.md) before making wiki changes.
-
-## Question in Focus
-
-follow AGENTS.md. Question: in PostgreSQL 12, produce a comprehensive  analysis  on how foreign key joins are optimized by  query planner in cases of sql that joins two tables.
+For detailed coverage, start with [versions](wiki/versions.md) or the version-specific landing pages: [v18/index](wiki/v18/index.md), [v17/index](wiki/v17/index.md), [v12/index](wiki/v12/index.md).
