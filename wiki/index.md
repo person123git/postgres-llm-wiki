@@ -11,6 +11,14 @@ This is the global catalog for the PostgreSQL engine wiki.
 
 ## Version-Specific Pages
 
+### PostgreSQL 19
+
+- [v19/index](v19/index.md) - Active version landing page. Source checkout pinned to `master` (`19devel`) commit `db5ed03217b9c238703df8b4b286115d6e940488`.
+- [How pg_plan_advice Works in PostgreSQL 19, and All Its Commits (unverified)](v19/questions/pg-plan-advice.md) - Comprehensive explanation of the new `pg_plan_advice` contrib module: the core `pgs_mask` strategy-mask and five planner hooks, per-index disabling for index-specific advice, the advice mini-language (tags, relation identifiers), plan-to-advice generation, advice enforcement, feedback/EXPLAIN output, the five `PGC_USERSET` GUCs, prepared-statement and plan-cache interaction (advice frozen at plan time; `always_store_advice_details` and `choose_custom_plan` re-plan policy), the round-trip `test_plan_advice` harness, and the full scoped source history: core planner-enabling commits, 22 direct module commits, and test/doc/build support commits.
+- [How the REPACK Command Works in PostgreSQL 19, and Its 40 Feature-Scope Commits (unverified)](v19/questions/repack-command.md) - Comprehensive walkthrough of the new in-core `REPACK` / `REPACK (CONCURRENTLY)` command that absorbs `VACUUM FULL` and `CLUSTER`: the blocking new-heap rewrite/swap path, the concurrent online rewrite via logical decoding (decoding background worker, `pgrepack` output plugin, temporary replication slot, change spill/replay through the identity index, lock upgrade and relfilenode swap), CONCURRENTLY restrictions, the `PGC_POSTMASTER` `max_repack_replication_slots` GUC, `pg_stat_progress_repack`, I/O impact (no cost-based delay applies; automatic BULKREAD/BULKWRITE ring buffers), the `test_decoding`/injection-point tests, and 40 feature-scope commits.
+
+
+
 ### PostgreSQL 18
 
 - [v18/index](v18/index.md) - Primary version landing page. Source checkout pinned to `REL_18_STABLE` commit `6cb307251c5c6261286c1566496920976640108e`.
@@ -32,6 +40,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 - [v17/index](v17/index.md) - Active version landing page. Source checkout pinned to `REL_17_STABLE` commit `54eeefaedbee0385529f3edf321bb99e49232aaa`.
 - [PostgreSQL 17 Contrib Extensions (unverified)](v17/questions/contrib-extensions.md) - Lists all 53 control-file-backed contrib extensions in PostgreSQL 17, with cited explanations covering install scope, data types, index/search helpers, diagnostics, FDWs, procedural-language transforms, and SPI trigger examples.
 - [Proposing a Sampling pgstatindex Variant for PostgreSQL 17 (unverified)](v17/questions/pgstatindex-sample-variant-proposal.md) - Designs a `pgstatindex_approx` that random-samples physical B-tree blocks; covers exact-vs-estimated fields, pros/cons, extension wiring, and a `pageinspect` SQL prototype using PostgreSQL 17 source behavior.
+- [GUC Default-Value Changes Since PostgreSQL 12 (unverified)](v17/questions/guc-default-changes-since-v12.md) - Summarizes the seven GUCs present in both v12 and v17 whose built-in default changed (with old/new value, introducing major version, and restart/reload/session apply scope), verified against v17 `guc_tables.c`/`config.sgml`/`postgresql.conf.sample` and pinned to introducing versions via the v17 checkout's own commit history; separates out sample-only, type, added/removed-setting, and range-only changes that are not default-value changes, with explicit test-coverage notes.
 
 
 
