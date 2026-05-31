@@ -3,11 +3,11 @@
 ## Source Pin
 
 - Branch: `master` (`19devel`)
-- Commit: `db5ed03217b9c238703df8b4b286115d6e940488`
+- Commit: `21298c2cd0cd8fe83e567f3f3f16475bd3934124`
 - Status: `active`
 - Source path: `raw/postgres-19/`
 - Added: 2026-05-30
-- Repinned: 2026-05-30
+- Repinned: 2026-05-31
 
 ## Coverage
 

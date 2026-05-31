@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: db5ed03217b9c238703df8b4b286115d6e940488
+pinned_commit: 21298c2cd0cd8fe83e567f3f3f16475bd3934124
 verified: false
 verified_by_agent: not yet
 ---
@@ -316,7 +316,7 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 - `src/test/modules/test_plan_advice/test_plan_advice.c`, the `contrib` `sql/` and `expected/` regression files (including `prepared`), and the `Makefile` `REGRESS` list.
 - Core plan-cache policy in `src/backend/utils/cache/plancache.c` (`choose_custom_plan`) for the prepared-statement interaction.
 - Same-checkout docs in `doc/src/sgml/pgplanadvice.sgml`.
-- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned commit `db5ed03217b9c238703df8b4b286115d6e940488`.
+- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned commit `21298c2cd0cd8fe83e567f3f3f16475bd3934124`. Re-checked 2026-05-31: this page was re-pinned from `db5ed03` to the then-current `master` tip `21298c2c`; the two intervening commits are out of scope (an `array_append` doc clarification and an io_uring AIO fix), so no new `contrib/pg_plan_advice/` commit exists and the newest module commit remains `b1901e28` (2026-05-29).
 
 ## Evidence Map
 

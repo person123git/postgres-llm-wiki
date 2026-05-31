@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: db5ed03217b9c238703df8b4b286115d6e940488
+pinned_commit: 21298c2cd0cd8fe83e567f3f3f16475bd3934124
 verified: false
 verified_by_agent: not yet
 ---
@@ -162,7 +162,7 @@ Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tes
 
 ## Feature-Scope Commits
 
-These are the 40 REPACK feature-scope commits in the pinned `master` checkout (`db5ed032`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
+These are the 40 REPACK feature-scope commits in the pinned `master` checkout (`21298c2c`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
 
 ### Foundational
 
