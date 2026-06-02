@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: claude-opus-4-8 2026-05-28T19:03:01Z
+verified_by_agent: GitHub-Copilot 2026-06-02T15:27:25Z
 ---
 
 # Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12 (unverified)
@@ -97,7 +97,7 @@ Index-only scans still walk the same index pages through `index_getnext_tid`; th
 
 ## Buffer Manager and Caching Effects
 
-- More leaf pages enlarge the working set competing for cache space; the planner's cache model explicitly counts index pages as part of the cache competition term ([costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L754-L811)).
+- More leaf pages enlarge the working set competing for cache space; the planner's cache model explicitly counts index pages as part of the cache competition term ([costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L877)).
 - A freshly built B-tree usually has logically adjacent pages physically adjacent too; the PostgreSQL 12 manual explicitly says an updated B-tree can become slower to access for that reason and that periodic reindexing can improve speed ([maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L852-L889)).
 - Each new shared-buffer page access goes through the buffer mapping hash. Even a buffer hit takes the partition lock, performs `BufTableLookup`, pins the buffer, and releases the lock. In v12 the mapping table has `NUM_BUFFER_PARTITIONS = 128` ([bufmgr.c#BufferAlloc-hit](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1011-L1035), [buf_internals.h#BufMappingPartitionLock](../../../raw/postgres-12/src/include/storage/buf_internals.h#L120-L131), [lwlock.h#NUM_BUFFER_PARTITIONS](../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L114)).
 
@@ -135,7 +135,7 @@ The core `btree_index` regression test creates a deliberately tall B-tree with `
 | `avg_leaf_density` formula and `PageGetFreeSpace` usage (reserves one line pointer) | [pgstatindex.c#leaf-accumulation and result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L356), [bufpage.c#PageGetFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L581-L597) |
 | Planner page and tuple inputs for ordinary and partial indexes | [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L998) |
 | Planner scales `numIndexPages` directly from `index->pages / index->tuples` | [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815) |
-| Explicit bloat penalty comment and 50× cpu_operator_cost descent charge | [selfuncs.c#btcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6105-L6116) |
+| Explicit bloat penalty comment and 50× cpu_operator_cost descent charge | [selfuncs.c#btcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116) |
 | B-tree `btgettuple` uses `_bt_first` then `_bt_next`; `btgetbitmap` uses `_bt_first` and `_bt_next` too | [nbtree.c#btgettuple](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L213-L284), [nbtree.c#btgetbitmap](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L287-L340) |
 | Forward leaf walking uses `_bt_steppage` / `_bt_readnextpage` / `_bt_getbuf`; backward walking uses `_bt_walk_left` | [nbtsearch.c#_bt_steppage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1618-L1724), [nbtsearch.c#forward-readnextpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800), [nbtsearch.c#backward-readnextpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1813-L1905), [nbtsearch.c#_bt_walk_left](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1930-L2007) |
 | `_bt_readpage` checks page items and saves matching TIDs into `BTScanPos` | [nbtsearch.c#_bt_readpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1383-L1616) |
@@ -168,7 +168,8 @@ The core `btree_index` regression test creates a deliberately tall B-tree with `
 - [plancat.c#get_relation_info index sizing](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407)
 - [plancat.c#estimate_rel_size index sizing](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L998)
 - [selfuncs.c#btcostestimate and genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5919-L6267)
-- [costsize.c#cost_index and index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L490-L694, L825-L860)
+- [costsize.c#cost_index](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L490-L694)
+- [costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L877)
 - [bufpage.c#PageGetFreeSpace / PageGetExactFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L581-L647)
 - [pgstatindex.c#pgstatindex_impl (density math)](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L365)
 - [bufmgr.c#ReleaseAndReadBuffer / LockBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3400-L3607)
