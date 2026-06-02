@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: gpt-5 2026-06-02T17:37:56Z
 ---
 
 # B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)
@@ -54,7 +54,7 @@ For forward scans, `_bt_steppage` uses the saved `nextPage` right link, and `_bt
 
 For backward scans, `_bt_readnextpage` uses `_bt_walk_left`, which is more complex because it must handle concurrent splits and deletion cases while walking the left-link direction ([nbtsearch.c#backward-readnextpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1813-L1905), [nbtsearch.c#_bt_walk_left](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1930-L2007)).
 
-`EXPLAIN (ANALYZE, BUFFERS)` prints node-level shared, local, and temp hit/read/dirtied/written counters from `Instrumentation.bufusage`. It does not split a node's buffers into index pages versus heap pages, and it does not label sequential versus nonsequential reads ([explain.c#plan-buffer-usage](../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978), [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L24-L45)).
+`EXPLAIN (ANALYZE, BUFFERS)` prints node-level shared, local, and temp hit/read/dirtied/written counters from `Instrumentation.bufusage`. It does not split a node's buffers into index pages versus heap pages, and it does not label sequential versus nonsequential reads ([explain.c#plan-buffer-usage](../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978), [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)).
 
 ## Density Impact Estimates
 
@@ -71,7 +71,7 @@ These estimates assume the same live index tuple count, the same average tuple w
 | 40% | 2.25x | 125.0% more | More than doubles leaf-page work for the same logical key volume. |
 | 30% | 3.00x | 200.0% more | Severe density loss; index-side page count can dominate. |
 
-The planner path matches this page-count model. For ordinary non-partial indexes, `get_relation_info` sets `IndexOptInfo.pages` from `RelationGetNumberOfBlocks(indexRelation)` and sets `IndexOptInfo.tuples` from the parent relation estimate; for partial indexes it calls `estimate_rel_size`, which still reports current blocks as pages. `genericcostestimate` then computes `numIndexPages = ceil(numIndexTuples * index->pages / index->tuples)` when both page and tuple counts are greater than one ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815)).
+The planner path matches this page-count model. For ordinary non-partial indexes, `get_relation_info` sets `IndexOptInfo.pages` from `RelationGetNumberOfBlocks(indexRelation)` and sets `IndexOptInfo.tuples` from the parent relation estimate; for partial indexes it calls `estimate_rel_size`, whose index case reports current blocks as pages. `genericcostestimate` then computes `numIndexPages = ceil(numIndexTuples * index->pages / index->tuples)` when both page and tuple counts are greater than one ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L972), [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815)).
 
 For a one-leaf point probe, density often does not change the number of leaf pages visited. PostgreSQL 12 still adds an explicit B-tree descent CPU charge of `(tree_height + 1) * 50.0 * cpu_operator_cost`, and the comment says this prevents bloated indexes from appearing to have the same search cost as unbloated ones when only one leaf page is expected ([selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116), [plancat.c#get_relation_info-tree-height](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L417)).
 
@@ -88,7 +88,7 @@ S = cost of a sequential page fetch
 R = cost of a nonsequential page fetch
 ```
 
-`pgstatindex`'s `F` implies about `F * L` right-link steps where the next logical leaf page has a lower physical block number than the current page. It does not tell how far those jumps go, whether later pages form short or long runs, or whether the operating system or storage device can prefetch them ([pgstatindex.c#fragmentation-count](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L300-L307), [pgstatindex.c#result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L352-L356)).
+`pgstatindex`'s `F` is an index-wide ratio. For a representative many-page scan, it implies roughly `F * (L - 1)` right-link transitions where the next logical leaf page has a lower physical block number than the current page. It does not tell how far those jumps go, whether later pages form short or long runs, or whether the operating system or storage device can prefetch them ([pgstatindex.c#fragmentation-count](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L300-L307), [pgstatindex.c#result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L352-L356)).
 
 A simple storage-order model is:
 
@@ -98,16 +98,16 @@ order_cost_multiplier = 1 + F * (R / S - 1)
 
 This is not PostgreSQL 12 planner output. It is a sensitivity model based on v12's documented distinction between sequential and nonsequential page-fetch costs. The docs define `seq_page_cost` as the cost of a sequential disk page fetch and `random_page_cost` as the cost of a nonsequential disk page fetch, with defaults of 1.0 and 4.0 ([config.sgml#seq-random-page-cost](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4696-L4765), [cost.h#default-costs](../../../raw/postgres-12/src/include/optimizer/cost.h#L20-L35)).
 
-Using the default `R / S = 4` as a cold, nonsequential-sensitive model:
+Using the default `R / S = 4` as a nonsequential-sensitive model:
 
-| `leaf_fragmentation` | Approx. backward right-link steps in an `L`-page forward scan | Order-cost multiplier at `R / S = 4` | PostgreSQL buffer counter expectation |
+| `leaf_fragmentation` | Approx. backward right-link transitions in a representative `L`-page scan | Order-cost multiplier at `R / S = 4` | PostgreSQL buffer counter expectation |
 |---:|---:|---:|---|
 | 0% | `0` | 1.00x | Same leaf-page count as density predicts; best physical locality. |
-| 10% | `0.10 * L` | 1.30x | Same distinct leaf pages, but some order breaks. |
-| 25% | `0.25 * L` | 1.75x | Same distinct leaf pages; cold storage latency can become visible. |
-| 50% | `0.50 * L` | 2.50x | Same distinct leaf pages; order cost can exceed a 60%-vs-90% density penalty in cold-storage latency. |
-| 75% | `0.75 * L` | 3.25x | Same distinct leaf pages; physical-order cost can dominate elapsed time. |
-| 100% | `1.00 * L` | 4.00x | Worst-case by this model, though the metric still lacks jump-distance and run-length information. |
+| 10% | `0.10 * (L - 1)` | 1.30x | Same distinct leaf pages, but some order breaks. |
+| 25% | `0.25 * (L - 1)` | 1.75x | Same distinct leaf pages; cold storage latency can become visible. |
+| 50% | `0.50 * (L - 1)` | 2.50x | Same distinct leaf pages; order cost can exceed a 60%-vs-90% density penalty in cold-storage latency. |
+| 75% | `0.75 * (L - 1)` | 3.25x | Same distinct leaf pages; physical-order cost can dominate elapsed time. |
+| 100% | `1.00 * (L - 1)` | 4.00x | Worst-case sensitivity endpoint, though the metric still lacks jump-distance and run-length information. |
 
 When pages are already cached, the docs say setting `random_page_cost` equal to `seq_page_cost` makes sense because there is no penalty for touching pages out of sequence. Under `R / S = 1`, the order-cost multiplier is 1.00x at every fragmentation level, so density dominates the PostgreSQL-visible buffer work ([config.sgml#cached-random-page-cost](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4748-L4765)).
 
@@ -151,7 +151,7 @@ These tables estimate index-side leaf-page I/O pressure only. They do not estima
 
 During retail insertion, `_bt_insertonpg` splits a page when `PageGetFreeSpace(page) < itemsz`. `_bt_split` obtains a new right page with `_bt_getbuf(rel, P_NEW, BT_WRITE)`, then updates the left page's `btpo_next` to the new page and sets the new page's `btpo_prev` and `btpo_next` fields ([nbtinsert.c#split-needed](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L945-L1005), [nbtinsert.c#split-new-right-page](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1408-L1437)).
 
-When `_bt_getbuf` is asked for `P_NEW`, it first asks `GetFreeIndexPage` for a reusable page. If it finds a recyclable page, it reinitializes and returns that block; if not, it extends the relation by one page with `ReadBuffer(rel, P_NEW)`. Reuse can place a new logical neighbor at an older physical block, while extension places it at the end of the relation ([nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L744-L850)).
+When `_bt_getbuf` is asked for `P_NEW`, it first asks `GetFreeIndexPage` for a reusable page. If it finds a recyclable page, it reinitializes and returns that block; if not, it extends the relation by one page with `ReadBuffer(rel, P_NEW)`. Reuse can place a new logical neighbor at an older physical block, while extension places it at the end of the relation ([nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L747-L879)).
 
 VACUUM can record recyclable index pages with `RecordFreeIndexPage` when the B-tree page is recyclable. That supplies the free-page source that later `P_NEW` allocations may reuse ([nbtree.c#btvacuumpage-recycle](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1120-L1180), [nbtpage.c#_bt_getbuf-free-page](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L790-L825)).
 
@@ -183,7 +183,7 @@ For maintenance decisions, PostgreSQL 12 source and docs do not define a univers
 
 The v12 `pgstattuple` regression test checks empty B-tree `pgstatindex` output and error paths for unsupported relation kinds and access methods, but it does not create populated B-trees with non-`NaN` density or nonzero fragmentation assertions ([pgstattuple.sql#pgstatindex-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L113), [pgstattuple.out#pgstatindex-output](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L236)).
 
-The core `btree_index` regression test creates a deliberately tall B-tree with `fillfactor = 10` and later covers page deletion and FSM page recycling, but it does not compare planner or executor I/O at different `avg_leaf_density` and `leaf_fragmentation` levels ([btree_index.sql#tall-fillfactor](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L119-L123), [btree_index.sql#page-recycling](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L147-L161)).
+The core `btree_index` regression test creates a deliberately tall B-tree with `fillfactor = 10` and later covers page deletion and FSM page recycling, but it does not compare planner or executor I/O at different `avg_leaf_density` and `leaf_fragmentation` levels ([btree_index.sql#tall-fillfactor](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L110-L123), [btree_index.sql#page-recycling](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L147-L162)).
 
 ## Open Questions
 
@@ -206,13 +206,13 @@ The core `btree_index` regression test creates a deliberately tall B-tree with `
 | `avg_leaf_density` is computed from leaf free space and available capacity | [pgstatindex.c#leaf-density](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L356), [bufpage.c#PageGetFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L581-L597) |
 | `leaf_fragmentation` counts live leaf pages whose right link points backward in physical block order | [pgstatindex.c#fragmentation-count](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L300-L307), [pgstatindex.c#result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L352-L356), [nbtree.h#BTPageOpaqueData](../../../raw/postgres-12/src/include/access/nbtree.h#L55-L68) |
 | Default leaf fillfactor is 90%, and split behavior differs for rightmost, non-rightmost, and duplicate-heavy pages | [nbtree.h#fillfactor](../../../raw/postgres-12/src/include/access/nbtree.h#L159-L171), [nbtsplitloc.c#fillfactor-selection](../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L277-L330) |
-| Planner B-tree I/O costing uses physical index pages and tuple estimates, not `leaf_fragmentation` | [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815), [costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L754-L877) |
-| B-tree scans position once and then walk leaf pages through `_bt_next`, `_bt_steppage`, `_bt_readnextpage`, and `_bt_getbuf` | [nbtsearch.c#_bt_first-position](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1245-L1328), [nbtsearch.c#_bt_next](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381), [nbtsearch.c#forward-readnextpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800), [nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L744-L850) |
+| Planner B-tree I/O costing uses physical index pages and tuple estimates, not `leaf_fragmentation` | [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L972), [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815), [costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L878) |
+| B-tree scans position once and then walk leaf pages through `_bt_next`, `_bt_steppage`, `_bt_readnextpage`, and `_bt_getbuf` | [nbtsearch.c#_bt_first-position](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1245-L1328), [nbtsearch.c#_bt_next](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381), [nbtsearch.c#forward-readnextpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800), [nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L747-L879) |
 | Fresh B-tree indexes are usually physically ordered better than indexes updated many times | [maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L852-L889) |
 | v12 cost constants distinguish sequential and nonsequential page fetches | [config.sgml#planner-cost-constants](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4670-L4765), [cost.h#default-costs](../../../raw/postgres-12/src/include/optimizer/cost.h#L20-L35), [indexam.sgml#index-costs](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L1276-L1290) |
-| Page splits allocate a new right page through `_bt_getbuf(P_NEW)`, which may reuse FSM pages or extend the relation | [nbtinsert.c#split-new-right-page](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1408-L1437), [nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L744-L850), [nbtree.c#btvacuumpage-recycle](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1120-L1180) |
-| `EXPLAIN BUFFERS` reports node-level buffer counters, not relation-kind or physical-order counters | [explain.c#plan-buffer-usage](../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978), [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L24-L45) |
-| Existing tests do not compare density and fragmentation I/O levels | [pgstattuple.sql#pgstatindex-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L113), [btree_index.sql#tall-fillfactor](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L119-L123), [btree_index.sql#page-recycling](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L147-L161) |
+| Page splits allocate a new right page through `_bt_getbuf(P_NEW)`, which may reuse FSM pages or extend the relation | [nbtinsert.c#split-new-right-page](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1408-L1437), [nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L747-L879), [nbtree.c#btvacuumpage-recycle](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1120-L1180) |
+| `EXPLAIN BUFFERS` reports node-level buffer counters, not relation-kind or physical-order counters | [explain.c#plan-buffer-usage](../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978), [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33) |
+| Existing tests do not compare density and fragmentation I/O levels | [pgstattuple.sql#pgstatindex-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L113), [btree_index.sql#tall-fillfactor](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L110-L123), [btree_index.sql#page-recycling](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L147-L162) |
 
 ## Context Reviewed
 
@@ -240,24 +240,25 @@ The core `btree_index` regression test creates a deliberately tall B-tree with `
 - [nbtsearch.c#_bt_endpoint](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L2137-L2228)
 - [nbtinsert.c#_bt_insertonpg](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L945-L1005)
 - [nbtinsert.c#split-new-right-page](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1408-L1437)
-- [nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L744-L850)
+- [nbtpage.c#_bt_getbuf](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L747-L879)
 - [nbtree.c#btvacuumpage-recycle](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1120-L1180)
 - [nbtree.c#btgetbitmap](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L287-L340)
 - [indexam.c#index_getnext_tid](../../../raw/postgres-12/src/backend/access/index/indexam.c#L502-L545)
 - [nodeIndexonlyscan.c#visibility-map-check](../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L121-L170)
 - [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L417)
+- [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L972)
 - [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815)
 - [selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116)
-- [costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L754-L877)
+- [costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L878)
 - [config.sgml#planner-cost-constants](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4670-L4765)
 - [cost.h#default-costs](../../../raw/postgres-12/src/include/optimizer/cost.h#L20-L35)
 - [indexam.sgml#index-costs](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L1276-L1290)
 - [explain.c#plan-buffer-usage](../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866)
 - [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978)
-- [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L24-L45)
+- [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)
 - [maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L852-L889)
 - [ref/reindex.sgml#bloat](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L49-L55)
 - [pgstattuple.sql#pgstatindex-tests](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L18-L113)
 - [pgstattuple.out#pgstatindex-output](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L236)
-- [btree_index.sql#tall-fillfactor](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L119-L123)
-- [btree_index.sql#page-recycling](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L147-L161)
+- [btree_index.sql#tall-fillfactor](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L110-L123)
+- [btree_index.sql#page-recycling](../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L147-L162)
