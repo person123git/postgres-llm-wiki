@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: 4b0bf0788b066a4ca1d4f959566678e44ec93422
+pinned_commit: 298bdd379552148f6043b4595374a7a6fbdd13c3
 verified: false
 verified_by_agent: not yet
 ---
@@ -316,7 +316,7 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 - `src/test/modules/test_plan_advice/test_plan_advice.c`, the `contrib` `sql/` and `expected/` regression files (including `prepared`), and the `Makefile` `REGRESS` list.
 - Core plan-cache policy in `src/backend/utils/cache/plancache.c` (`choose_custom_plan`) for the prepared-statement interaction.
 - Same-checkout docs in `doc/src/sgml/pgplanadvice.sgml`.
-- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned commit `4b0bf0788b066a4ca1d4f959566678e44ec93422`. Re-checked 2026-06-02: this page was re-pinned from `21298c2c` to the current `master` tip `4b0bf078` (`19beta1`); the five intervening commits are release-note/docs, translation, and version-stamp commits outside this feature scope, and no cited `pg_plan_advice` or core planner file changed. No new `contrib/pg_plan_advice/` commit exists, so the newest module commit remains `b1901e28` (2026-05-29).
+- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned commit `298bdd379552148f6043b4595374a7a6fbdd13c3`. Re-checked 2026-06-03: this page was re-pinned from `4b0bf078` to the current `master` tip `298bdd37` (`19beta1`). The ten intervening commits are outside `pg_plan_advice` scope: pg_dump, replication-slot, statistical-aggregate, vacuumdb, rowtype hash, planner eager-aggregation/subquery-pushdown, psql pipeline, and xml2 fixes. The one changed cited planner file, `relnode.c`, still assigns `root->glob->default_pgs_mask` at base-relation and join-relation initialization [relnode.c#baserel-init](../../../raw/postgres-19/src/backend/optimizer/util/relnode.c#L234) [relnode.c#joinrel-init](../../../raw/postgres-19/src/backend/optimizer/util/relnode.c#L840). No new `contrib/pg_plan_advice/` commit exists, so the newest module commit remains `b1901e28` (2026-05-29).
 
 ## Evidence Map
 

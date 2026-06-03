@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: 4b0bf0788b066a4ca1d4f959566678e44ec93422
+pinned_commit: 298bdd379552148f6043b4595374a7a6fbdd13c3
 verified: false
 verified_by_agent: not yet
 ---
@@ -162,7 +162,7 @@ Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tes
 
 ## Feature-Scope Commits
 
-These are the 40 REPACK feature-scope commits in the pinned `master` checkout (`4b0bf078`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here. The 2026-06-02 repin from `21298c2c` added only release-note/docs, translation, and version-stamp commits outside this REPACK scope; no cited REPACK file changed.
+These are the 40 REPACK feature-scope commits in the pinned `master` checkout (`298bdd37`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here. The 2026-06-03 repin from `4b0bf078` added ten upstream commits but no new REPACK feature-scope commit. The closest commit, `f2081a78`, changes `ReplicationSlotRelease()` for `RS_EPHEMERAL` slots [slot.c#ephemeral-release](../../../raw/postgres-19/src/backend/replication/slot.c#L783-L790); REPACK's worker creates an `RS_TEMPORARY` slot and drops it directly with `ReplicationSlotDropAcquired(true)` [repack_worker.c#slot](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L215-L225) [repack_worker.c#cleanup](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L311-L322).
 
 ### Foundational
 
@@ -240,7 +240,7 @@ These are the 40 REPACK feature-scope commits in the pinned `master` checkout (`
 - GUC/slot pool — `guc_parameters.dat`, `slot.c` [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 - Observability — `system_views.sql`, `progress.h`, `wait_event_names.txt`.
 - Tests — `contrib/test_decoding/sql/repack.sql`, `src/test/modules/injection_points` repack specs.
-- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned checkout for the 40 feature-scope commits. Re-checked 2026-06-02 after repinning from `21298c2c` to `4b0bf078`: no file cited by this page changed.
+- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned checkout for the 40 feature-scope commits. Re-checked 2026-06-03 after repinning from `4b0bf078` to `298bdd37`: the new upstream commits do not touch REPACK-specific code or docs. `slot.c` changed in the `RS_EPHEMERAL` release path, while the cited REPACK slot-pool ranges remain valid [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 
 ## Evidence Map
 
