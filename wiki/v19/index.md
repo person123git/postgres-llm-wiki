@@ -2,16 +2,16 @@
 
 ## Source Pin
 
-- Branch: `master` (`19beta1`)
-- Commit: `298bdd379552148f6043b4595374a7a6fbdd13c3`
+- Branch/tag: `REL_19_BETA1`
+- Commit: `4b0bf0788b066a4ca1d4f959566678e44ec93422`
 - Status: `active`
 - Source path: `raw/postgres-19/`
 - Added: 2026-05-30
-- Repinned: 2026-06-03
+- Repinned: 2026-06-04
 
 ## Coverage
 
-Behavioral claims cite the matching pinned checkout under `raw/postgres-19/`. This is the beta branch state on `master` (`19beta1`); there is no `REL_19_STABLE` branch yet, so the pin tracks an exact `master` commit. Filed coverage includes comprehensive walkthroughs of the new `pg_plan_advice` contrib module and the new in-core `REPACK` / `REPACK (CONCURRENTLY)` command, each with scoped source history checked through `298bdd37`.
+Behavioral claims cite the matching pinned checkout under `raw/postgres-19/`. This is the official PostgreSQL 19 beta 1 tag; there is no `REL_19_STABLE` branch yet. Filed coverage includes comprehensive walkthroughs of the new `pg_plan_advice` contrib module and the new in-core `REPACK` / `REPACK (CONCURRENTLY)` command, each with scoped source history pinned to `4b0bf078`.
 
 ## Questions
 
