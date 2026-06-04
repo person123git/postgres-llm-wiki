@@ -16,6 +16,8 @@ In PostgreSQL 12, are there mechanisms to penalize bloated indexes in the query 
 
 Yes, but the mechanism is indirect. PostgreSQL 12 does not store or cost a planner field named `bloat`, `avg_leaf_density`, or `leaf_fragmentation`. It penalizes a bloated B-tree when the bloat appears as more physical index pages, a higher B-tree level, or a larger cache footprint. `get_relation_info()` fills `IndexOptInfo.pages` from the current index block count for ordinary non-partial indexes and records B-tree height with `_bt_getrootheight()`; `btcostestimate()` and `genericcostestimate()` then turn those values into index scan cost ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L417), [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815), [selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116)). The block-count read itself is not a B-tree page scan: `RelationGetNumberOfBlocks()` asks the storage manager for the main-fork relation length, and the magnetic-disk storage manager computes that from segment file sizes through `FileSize()` / `lseek(SEEK_END)` ([bufmgr.h#RelationGetNumberOfBlocks](../../../raw/postgres-12/src/include/storage/bufmgr.h#L188-L199), [bufmgr.c#RelationGetNumberOfBlocksInFork](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2791-L2811), [md.c#mdnblocks](../../../raw/postgres-12/src/backend/storage/smgr/md.c#L698-L755), [fd.c#FileSize](../../../raw/postgres-12/src/backend/storage/file/fd.c#L2039-L2050)).
 
+Two of these effects are not unique to B-trees. The physical-page-count penalty flows through the shared `genericcostestimate()` helper, so it also covers hash, GiST, and SP-GiST indexes; GIN and BRIN use separate cost models. The explicit height penalty and every `pgstatindex` metric in this page are B-tree-only ([selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815), [selfuncs.c#gincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6672), [selfuncs.c#brincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6985)).
+
 The important distinction is this:
 
 | Condition | Planner-visible in v12? | Effect |
@@ -29,6 +31,12 @@ The important distinction is this:
 The PostgreSQL 12 manual describes B-tree bloat operationally as indexes with many empty or nearly empty pages and recommends `REINDEX` to reduce that space consumption. It separately says freshly constructed B-tree indexes are slightly faster because logically adjacent pages are usually physically adjacent, which is the runtime issue that `leaf_fragmentation` tries to expose ([ref/reindex.sgml#bloat](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L49-L55), [maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L861-L889)).
 
 ## Planner Mechanisms
+
+The planner reaches every index cost estimate through the index access method's `amcostestimate` support function. `get_relation_info()` copies `amcostestimate` from the AM handler into the `IndexOptInfo`, and `cost_index()` casts and calls it for each candidate index scan. PostgreSQL 12's B-tree handler points `amcostestimate` at `btcostestimate`, which is where the height-based charge in section 2 lives ([nbtree.c#bthandler](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L134), [plancat.c#amcostestimate](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L276-L277), [costsize.c#cost_index-amcostestimate](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L544-L548)).
+
+Only the physical-page-count penalty generalizes across index types. `btcostestimate()`, `hashcostestimate()`, `gistcostestimate()`, and `spgcostestimate()` all delegate to the shared `genericcostestimate()` helper, so the `index->pages / index->tuples` page-count effect in section 1 applies to B-tree, hash, GiST, and SP-GiST indexes alike. `gincostestimate()` and `brincostestimate()` compute cost with their own models and never call `genericcostestimate()`, so this page's page-count formula does not describe GIN or BRIN bloat ([selfuncs.c#btcostestimate-genericcost](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6084), [selfuncs.c#hashcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6226-L6235), [selfuncs.c#gistcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6270-L6281), [selfuncs.c#spgcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6327-L6338), [selfuncs.c#gincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6672), [selfuncs.c#brincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6985)).
+
+The height charge in section 2 is B-tree-only. It lives inside `btcostestimate()`, and `get_relation_info()` records a real `tree_height` only for B-tree indexes, setting `tree_height = -1` for every other access method ([selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116), [plancat.c#get_relation_info-tree-height](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L417)). Every `pgstatindex` metric discussed below is likewise B-tree-only, since `pgstatindex()` reads B-tree page structures.
 
 ### 1. Physical page count enters index cost
 
@@ -65,13 +73,13 @@ This means an ordinary non-partial B-tree with twice as many physical pages for 
 
 ### 2. B-tree height has an explicit bloat charge
 
-After `genericcostestimate()`, `btcostestimate()` adds a B-tree descent CPU charge. It first charges about `log2(index->tuples) * cpu_operator_cost` for comparisons, then adds:
+After `genericcostestimate()`, `btcostestimate()` adds a B-tree descent CPU charge. It first charges about `log2(index->tuples) * cpu_operator_cost` for comparisons ([selfuncs.c#btcostestimate-descent-comparisons](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6097-L6102)), then adds:
 
 ```c
 descentCost = (index->tree_height + 1) * 50.0 * cpu_operator_cost;
 ```
 
-The comment says this prevents bloated indexes from appearing to have the same search cost as unbloated ones when only a single leaf page is expected. `get_relation_info()` records `tree_height` from `_bt_getrootheight()` while it has the B-tree open ([selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6092-L6116), [plancat.c#get_relation_info-tree-height](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L417)).
+The comment says this prevents bloated indexes from appearing to have the same search cost as unbloated ones when only a single leaf page is expected. `get_relation_info()` records `tree_height` from `_bt_getrootheight()` while it has the B-tree open ([selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116), [plancat.c#get_relation_info-tree-height](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L417)).
 
 The planner height is the fast-root height. `_bt_getrootheight()` returns the cached metapage's `btm_fastlevel`, and its comment says this represents the levels a search descends through. `pgstatindex()` reports `btm_level` as `tree_level`, so after B-tree page deletion creates a fast root, `pgstatindex.tree_level` and planner `tree_height` need not be the same number ([nbtpage.c#_bt_getrootheight](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L575-L626), [nbtree.h#BTMetaPageData](../../../raw/postgres-12/src/include/access/nbtree.h#L90-L110), [pgstatindex.c#metapage-read](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L239-L249)).
 
@@ -79,7 +87,7 @@ This is the most explicit planner-side bloat penalty in the v12 B-tree code. It 
 
 ### 3. Index size participates in cache modeling
 
-`index_pages_fetched()` estimates cache effects with the Mackert-Lohman formula. It adds the caller's `index_pages` to `root->total_table_pages` when prorating `effective_cache_size`, so a larger index increases the estimated cache competition term used in both index page costing and heap page costing around index scans ([costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L878), [costsize.c#cost_index](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L541-L665)).
+`index_pages_fetched()` estimates cache effects with the Mackert-Lohman formula. It adds the caller's `index_pages` to `root->total_table_pages` when prorating `effective_cache_size`, so a larger index increases the estimated cache competition term used in both index page costing and heap page costing around index scans ([costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L878), [costsize.c#cost_index](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L470-L665)).
 
 The page-cost constants are global or tablespace-level estimates. `seq_page_cost` defaults to 1.0, and `random_page_cost` defaults to 4.0; lowering `random_page_cost` makes index scans look cheaper, raising it makes them look more expensive, but this is not a per-index bloat signal ([config.sgml#seq-random-page-cost](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4696-L4765)). `seq_page_cost`, `random_page_cost`, and `effective_cache_size` are all `PGC_USERSET` (`user`-context) GUCs, so a session can change them with `SET` for the current session or transaction; none needs a server restart or a config reload ([guc.c#seq-random-page-cost](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3207-L3227), [guc.c#effective-cache-size](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3108-L3113)).
 
@@ -113,7 +121,9 @@ At execution, B-tree scans position once and then walk leaf pages. `btgettuple()
 
 The planner's physical page count does not subtract those diagnostic categories. For ordinary non-partial indexes, it reads the index relation's current block count; for partial indexes, the index branch of `estimate_rel_size()` reports current blocks as pages ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L972)).
 
-This can make a bloated index look more expensive even when many extra pages are not useful scan pages. The model is deliberately coarse: `genericcostestimate()` treats touched index pages as a pro-rata fraction of total pages and says this simplistic method effectively counts leaf pages while ignoring metapage and upper-level overhead ([selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5750-L5815)).
+This can make a bloated index look more expensive even when many extra pages are not useful scan pages. The model is deliberately coarse: `genericcostestimate()` treats touched index pages as a pro-rata fraction of total pages and says this simplistic method effectively counts leaf pages while ignoring metapage and upper-level overhead ([selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815)).
+
+This page-count inflation is not always permanent. A deleted B-tree page that has aged past its recyclable horizon can be handed back out by a later page split, because `_bt_getbuf(rel, P_NEW)` asks `GetFreeIndexPage()` for a free page before extending the relation. So under ongoing insert load some deleted pages are reused rather than left as permanent dead weight in `index->pages` — the same FSM reuse described in the fragmented leaf-chains example below ([nbtpage.c#_bt_getbuf-new-page](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L748-L820)).
 
 ### Taller B-trees
 
@@ -197,6 +207,7 @@ The core `btree_index` regression test is present in the v12 regression schedule
 | Claim | Evidence |
 |---|---|
 | Planner B-tree bloat penalties are page-count and height based, not direct `pgstatindex` metrics | [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L417), [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5815), [selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116) |
+| The planner calls each index's `amcostestimate`; the page-count penalty is shared by B-tree, hash, GiST, and SP-GiST via `genericcostestimate()`, while GIN and BRIN use separate cost models and the height charge is B-tree-only | [nbtree.c#bthandler](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L134), [plancat.c#amcostestimate](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L276-L277), [costsize.c#cost_index-amcostestimate](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L544-L548), [selfuncs.c#btcostestimate-genericcost](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6084), [selfuncs.c#gincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6672), [selfuncs.c#brincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6985), [plancat.c#get_relation_info-tree-height](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L417) |
 | B-tree page count is read from the current index relation for ordinary indexes and from `estimate_rel_size()` for partial indexes | [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L407), [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L1018) |
 | Planner B-tree height uses `_bt_getrootheight()` / `btm_fastlevel`; `pgstatindex.tree_level` reports `btm_level` | [nbtpage.c#_bt_getrootheight](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L575-L626), [nbtree.h#BTMetaPageData](../../../raw/postgres-12/src/include/access/nbtree.h#L90-L110), [pgstatindex.c#metapage-read](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L239-L249) |
 | `RelationGetNumberOfBlocks()` obtains the main-fork length through storage-manager segment size checks, not a B-tree page scan | [bufmgr.h#RelationGetNumberOfBlocks](../../../raw/postgres-12/src/include/storage/bufmgr.h#L188-L199), [bufmgr.c#RelationGetNumberOfBlocksInFork](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2791-L2811), [smgr.c#smgrnblocks](../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L630-L640), [md.c#mdnblocks](../../../raw/postgres-12/src/backend/storage/smgr/md.c#L698-L755), [md.c#_mdnblocks](../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1229-L1242), [fd.c#FileSize](../../../raw/postgres-12/src/backend/storage/file/fd.c#L2039-L2050) |
@@ -211,6 +222,7 @@ The core `btree_index` regression test is present in the v12 regression schedule
 
 - Required wiki navigation: [versions](../../versions.md), [wiki index](../../index.md), [v12/index](../index.md), and recent [log](../../log.md).
 - PostgreSQL 12 planner, costing, and block-count sources: `plancat.c`, `selfuncs.c`, `costsize.c`, `bufmgr.h`, `bufmgr.c`, `rel.h`, `relpath.h`, `smgr.c`, `md.c`, `fd.c`, `pg_config.h.in`, and `config.sgml`.
+- Index access method cost-estimate dispatch and per-AM cost functions: the `amcostestimate` wiring in `plancat.c` and `costsize.c`, the B-tree handler in `nbtree.c`, and `btcostestimate`, `hashcostestimate`, `gistcostestimate`, `spgcostestimate`, `gincostestimate`, and `brincostestimate` in `selfuncs.c` to confirm which cost functions delegate to `genericcostestimate()`.
 - PostgreSQL 12 B-tree sources: `nbtree.c`, `nbtsearch.c`, `nbtpage.c`, `nbtinsert.c`, and `nbtree.h`.
 - PostgreSQL 12 diagnostics, docs, and tests: `pgstatindex.c`, `pgstattuple--1.4.sql`, `pgstattuple.sql`, `pgstattuple.out`, `maintenance.sgml`, `ref/reindex.sgml`, `ref/create_index.sgml`, `serial_schedule`, and `parallel_schedule`.
 
@@ -218,6 +230,7 @@ The core `btree_index` regression test is present in the v12 regression schedule
 
 - [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L388-L417)
 - [plancat.c#estimate_rel_size-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L1018)
+- [plancat.c#amcostestimate](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L276-L277)
 - [bufmgr.h#RelationGetNumberOfBlocks](../../../raw/postgres-12/src/include/storage/bufmgr.h#L188-L199)
 - [bufmgr.c#RelationGetNumberOfBlocksInFork](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2791-L2811)
 - [relpath.h#ForkNumber](../../../raw/postgres-12/src/include/common/relpath.h#L40-L46)
@@ -233,6 +246,11 @@ The core `btree_index` regression test is present in the v12 regression schedule
 - [pg_config.h.in#RELSEG_SIZE](../../../raw/postgres-12/src/include/pg_config.h.in#L853-L864)
 - [selfuncs.c#genericcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5680-L5815)
 - [selfuncs.c#btcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5920-L6116)
+- [selfuncs.c#hashcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6226-L6235)
+- [selfuncs.c#gistcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6270-L6281)
+- [selfuncs.c#spgcostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6327-L6338)
+- [selfuncs.c#gincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6672)
+- [selfuncs.c#brincostestimate](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6985)
 - [costsize.c#cost_index](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L470-L665)
 - [costsize.c#index_pages_fetched](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L787-L878)
 - [pgstattuple--1.4.sql#pgstatindex-regclass](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L62-L73)
@@ -241,6 +259,7 @@ The core `btree_index` regression test is present in the v12 regression schedule
 - [nbtree.h#BTMetaPageData](../../../raw/postgres-12/src/include/access/nbtree.h#L90-L110)
 - [nbtree.h#P_IGNORE](../../../raw/postgres-12/src/include/access/nbtree.h#L186-L195)
 - [nbtree.h#fillfactor](../../../raw/postgres-12/src/include/access/nbtree.h#L159-L171)
+- [nbtree.c#bthandler](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L134)
 - [nbtree.c#btgettuple](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L213-L284)
 - [nbtree.c#btgetbitmap](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L287-L335)
 - [nbtpage.c#_bt_getrootheight](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L575-L626)
