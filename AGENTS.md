@@ -120,17 +120,7 @@ UPDATE /* wiki_backfill_user_email */ users SET ...;
 
 - `verified:` is human-only. Agents must not set, change, or remove it.
 - `verified_by_agent:` records agent verification. Use `not yet` for drafts. Use the timestamp form only after re-checking every claim against pinned raw source.
-- New filed answer pages use this exact front matter order:
-
-```yaml
-type: answer
-version: NN
-pinned_commit: abc123...
-verified: false
-verified_by_agent: not yet
-```
-
-- New filed question pages use the same field order with `type: question`, and must include a `## Question` section that restates the user prompt verbatim:
+- New filed question pages use this exact front matter order, and must include a `## Question` section that restates the user prompt verbatim plus an inline `## Answer` section:
 
 ```yaml
 type: question
@@ -139,6 +129,8 @@ pinned_commit: abc123...
 verified: false
 verified_by_agent: not yet
 ```
+
+- Legacy `type: answer` pages use the same field order with `type: answer`. Do not file new answer pages; see `MANDATORY Question Documents`.
 
 - Do not set the timestamp form if any claim is unverified. Fix it, move it under `## Open Questions`, or leave `verified_by_agent: not yet`.
 - Unverified managed pages must show `(unverified)` in the visible title and in index/landing-page link text until `verified: true`.
@@ -166,13 +158,30 @@ Use the exact current model name and timestamp when filing an agent-verified pag
 - Every source citation must use the matching `raw/postgres-NN/` checkout.
 - Never use citations from another PostgreSQL version.
 
+## MANDATORY Question Documents
+
+When a user asks a question, the deliverable is a single `type: question` page that holds both the question and its answer. Do not spin off a separate answer document.
+
+- File the page under `wiki/vNN/questions/`.
+- Restate the user prompt verbatim under `## Question`.
+- Put the full answer, with matching-version raw citations, inline under `## Answer`.
+- Keep `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` on the same page when gaps exist.
+
+Why one document per question, not a question page plus an answer page:
+
+- A user's question is the canonical entry point. The answer belongs with the question that motivated it, so a reader sees both without a second hop.
+- One page per Q&A removes duplicate, drifting pages. A separate answer document forces two titles, two `(unverified)` hints, two `pinned_commit:` values, and two index entries to keep in sync.
+- It keeps verification honest. One page carries one `verified:` / `verified_by_agent:` state over one claim-to-source map, instead of a question page that silently goes stale against its answer page.
+
+Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not create new ones. Leave existing answer pages in place until they are next substantially revised, then fold them back into their question page.
+
 ## MANDATORY Wiki Structure
 
 - Keep version-specific pages under `wiki/vNN/`.
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
-  - `wiki/vNN/questions/` for `type: question` pages.
-  - `wiki/vNN/answers/` for `type: answer` pages.
+  - `wiki/vNN/questions/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`.
   - `wiki/vNN/concepts/` for `type: concept` pages.
+  - `wiki/vNN/answers/` holds legacy `type: answer` pages only. Do not file new answer pages there.
 - The version landing page `wiki/vNN/index.md` stays at the version root and is the only page allowed there.
 - Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../index.md)` and `[versions](../../versions.md)` from a `wiki/v18/questions/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
 - Include the version segment and the type subdirectory in links into per-version directories.
@@ -216,7 +225,7 @@ Log heading format:
 4. Draft a claim-to-source map.
 5. Move unverified claims to `## Open Questions`.
 6. Answer with matching-version raw citations.
-7. File durable answers as version-local pages or fold them into existing pages.
+7. File the answer inline in the question page under `wiki/vNN/questions/` (`type: question`). Do not create a separate answer page; see `MANDATORY Question Documents`.
 8. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
 9. Update indexes and log.
 

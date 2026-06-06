@@ -569,3 +569,32 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 - Simplified version coverage and landing pages to point only at pinned raw checkouts.
 - Removed generated navigation artifact wording from wiki overview and indexes.
+
+## [2026-06-05] ingest v12 | plan_cache_mode analysis
+
+
+## [2026-06-06] answer v12 | plan_cache_mode analysis
+- Filed [plan_cache_mode analysis](../answers/plan_cache_mode.md).
+- Analyzed  implementation in PostgreSQL 12, covering  (heuristic-based), , and  modes.
+- Traced decision logic in  and cost estimation in  within .
+- Updated , , and .
+## [2026-06-06] answer v12 | plan_cache_mode analysis
+- Filed [plan_cache_mode analysis](../answers/plan_cache_mode.md).
+- Analyzed plan_cache_mode implementation in PostgreSQL 12, covering auto (heuristic-based), force_generic_plan, and force_custom_plan modes.
+- Traced decision logic in choose_custom_plan and cost estimation in cached_plan_cost within src/backend/utils/cache/plancache.c.
+- Updated wiki/index.md, wiki/v12/index.md, and wiki/v12/questions/plan_cache_mode_analysis.md.
+## [2026-06-06] review-fix v12 | comprehensive plan_cache_mode analysis
+
+- Expanded [plan_cache_mode analysis](../answers/plan_cache_mode.md) with a comprehensive review against the pinned `45b88269` checkout.
+- Added GUC context (`PGC_USERSET`), detailed decision hierarchy (oneshots, no-params, transaction stmts, cursor options), and the `GetCachedPlan` correction step.
+- Normalized all citations to the relative Markdown format.
+- Updated `verified_by_agent` and removed redundant entries in `wiki/v12/index.md`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/log.md`.
+
+## [2026-06-06] cleanup v12 | folded plan_cache_mode answer into its question page
+
+- Adopted the single-question-document model from `AGENTS.md`: each question page now carries its answer inline.
+- Folded the full plan_cache_mode answer into `## Answer` in `wiki/v12/questions/plan_cache_mode_analysis.md`, preserving all citations. Reset `verified_by_agent` to `not yet` because the page was restructured and its claims were not re-checked against the pinned checkout in this pass.
+- Removed `wiki/v12/answers/plan_cache_mode.md` and the now-empty `wiki/v12/answers/` directory.
+- Removed the `## Answers` section from `wiki/v12/index.md`, which also cleared the pre-existing broken `answers/plan_cache_mode` link.
+- Updated `wiki/v12/questions/plan_cache_mode_analysis.md`, `wiki/v12/index.md`, and `wiki/log.md`.

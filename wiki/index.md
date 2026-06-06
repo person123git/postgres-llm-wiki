@@ -58,6 +58,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 - [Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12 (unverified)](v12/questions/leaf-density-60-vs-90-query-impact.md) - Planner page-count scaling via `index->pages`, executor leaf walking through `_bt_steppage` / `_bt_readnextpage` / `_bt_getbuf`, buffer effects, test coverage gaps, and point-vs-range query impact for 60% vs 90% `avg_leaf_density`.
 - [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)](v12/questions/leaf-density-vs-fragmentation-index-scan-io.md) - Comprehensive comparison of density-driven leaf-page count growth versus fragmentation-driven physical-order penalties, with density/fragmentation level estimates, combined I/O multipliers, planner visibility, executor leaf walking, and cache/storage sensitivity.
 - [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) - Designs a `pgstatindex_approx` that random-samples physical B-tree blocks in PostgreSQL 12; covers exact-vs-estimated fields, pros/cons, extension wiring, and a contrib `pageinspect` SQL prototype with a v12 `bt_metap` unsigned-`oldest_xact` overflow workaround.
+- [Comprehensive plan_cache_mode Analysis in PostgreSQL 12 (unverified)](v12/questions/plan_cache_mode_analysis.md) - Detailed analysis of the `plan_cache_mode` GUC, including the cost-based heuristic for generic vs custom plans, decision hierarchy, and planning cost estimation in PostgreSQL 12.
 
 
 
