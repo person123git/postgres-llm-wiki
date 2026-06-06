@@ -144,10 +144,10 @@ Title rule before creating, editing, or filing any wiki page:
 
 ```yaml
 verified_by_agent: not yet
-verified_by_agent: <LLM-model-name> | YYYY-MM-DD HH:MM
+verified_by_agent: <model-name> YYYY-MM-DDTHH:MM:SSZ
 ```
 
-Use the exact current model name and timestamp when filing an agent-verified page.
+The timestamp form is `<model-name> <ISO-8601-UTC>`: a single space separator, then a UTC timestamp ending in `Z`, e.g. `claude-opus-4-8 2026-06-06T14:30:00Z`. The model name must match `[a-zA-Z0-9_-]+` (no spaces or dots). `scripts/wiki_lint` enforces exactly this shape. Use the exact current model name and the real verification time when filing an agent-verified page.
 
 ## MANDATORY Version Awareness
 

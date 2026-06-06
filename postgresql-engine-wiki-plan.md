@@ -171,7 +171,7 @@ Rules:
 - New filed answer pages set `verified: false` and `verified_by_agent: not yet`.
 - Do not set `verified_by_agent:` if any claim cannot be verified.
 - Unverified managed wiki documents must show `(unverified)` until a human sets `verified: true`.
-- `verified_by_agent` must be either `not yet` or `<LLM-model-name> | YYYY-MM-DD HH:MM`.
+- `verified_by_agent` must be either `not yet` or `<model-name> YYYY-MM-DDTHH:MM:SSZ` (ISO 8601 UTC, e.g. `claude-opus-4-8 2026-06-06T14:30:00Z`), the shape `scripts/wiki_lint` enforces.
 
 ## GUC Configuration Changes
 
