@@ -57,21 +57,22 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 ## MANDATORY Citations
 
 - Cite every behavioral claim.
-- Use Markdown links for source citations, not Obsidian wikilinks. Canonical shape:
+- Use page-relative Markdown links for source citations, not Obsidian wikilinks or bare raw-file links. Canonical shapes:
 
   ```md
   [file.c#Symbol](../../../raw/postgres-NN/path/file.c#L42-L58)
+  [file.c:42](../../../raw/postgres-NN/path/file.c#L42)
   ```
 
-  - Link text: short human label, typically `file.ext#Symbol` (function, struct, macro, GUC, or doc-section name).
-  - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment when a meaningful range exists. Single-line citations use `#L42`.
+  - Link text: short human label, typically `file.ext#Symbol` (function, struct, macro, GUC, or doc-section name). Use `file.ext:line` for a single-line citation.
+  - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment. Single-line citations use `#L42`.
   - Use enough `../` segments to make the link open from the current wiki page in VS Code. For pages under `wiki/vNN/questions/`, that prefix is `../../../raw/postgres-NN/...`.
-  - `scripts/wiki_lint` normalizes both page-relative `../.../raw/postgres-NN/...` URLs and repo-relative `raw/postgres-NN/...` URLs before validating file existence and version matching.
+  - New or edited source citations must use this page-relative format. `scripts/wiki_lint` may normalize repo-relative `raw/postgres-NN/...` URLs for validation, but that is compatibility behavior, not the citation style for new work.
   - Line numbers are stable because every page pins an exact commit via `pinned_commit:`; they jump correctly in VS Code and editors that understand Markdown line fragments.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
 - Cite from the `raw/postgres-NN/` checkout matching the page `version:`. Never cite across versions.
 - Use one citation style per page. Don't mix Markdown citations with the old `[[raw/...]]` wikilink form on the same page.
-- Page-to-page wiki navigation uses page-relative Markdown links so it opens in plain VS Code Markdown preview. Do not use Obsidian wikilinks for wiki page navigation.
+- Page-to-page wiki navigation uses the same page-relative Markdown link syntax so it opens in plain VS Code Markdown preview. Do not use Obsidian wikilinks for wiki page navigation.
 - Do not state a claim as fact unless it is backed by a source file, symbol, test file, documentation page, commit, or saved design discussion.
 - Put uncertainty under `## Open Questions`.
 
