@@ -13,7 +13,7 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 
 ## Pages
 - [Foreign-Key Join Optimization for Two-Table Joins (unverified)](questions/fk-join-optimization-two-tables.md)
-- [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](questions/query-planner-statistics-sources.md) - Explains that the v12 planner does not use `pg_stat_all_tables`; it uses `pg_class`, `pg_statistic`, `pg_statistic_ext`, `pg_statistic_ext_data`, index metadata, FK metadata, constraints, and explicit planner statistics hooks.
+- [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](questions/query-planner-statistics-sources.md) - Explains that the v12 planner does not use `pg_stat_all_tables`, `pg_stats`, or `pg_stats_ext` directly; it uses `pg_class`, `pg_statistic`, `pg_statistic_ext`, `pg_statistic_ext_data`, index metadata, FK metadata, constraints, and explicit planner statistics hooks, with regression coverage notes.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](questions/explain-analyze-buffers-output.md)
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 12 (unverified)](questions/pg-stat-statements.md)
 - [psql Environment Variables and Timeout Settings in PostgreSQL 12 (unverified)](questions/psql-environment-variables-and-timeouts.md) - Lists psql-specific frontend variables, libpq connection/session environment variables inherited by `psql`, and the session impact of `statement_timeout` and `lock_timeout` via `SET`, `SET LOCAL`, and `PGOPTIONS`.

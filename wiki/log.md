@@ -598,3 +598,11 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Removed `wiki/v12/answers/plan_cache_mode.md` and the now-empty `wiki/v12/answers/` directory.
 - Removed the `## Answers` section from `wiki/v12/index.md`, which also cleared the pre-existing broken `answers/plan_cache_mode` link.
 - Updated `wiki/v12/questions/plan_cache_mode_analysis.md`, `wiki/v12/index.md`, and `wiki/log.md`.
+
+## [2026-06-09] review-fix v12 | query planner statistics sources
+
+- Reviewed [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](v12/questions/query-planner-statistics-sources.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed that `pg_stat_all_tables` is a cumulative monitoring view and is not used as a core planner input; clarified that `pg_stats` and `pg_stats_ext` are also user-facing views over the underlying statistics catalogs, not direct planner inputs.
+- Tightened relation-size wording for heap and index fallback paths, corrected index-list wording around `indislive` versus planner-usable `indisvalid` filtering, and narrowed constraint wording to relation exclusion.
+- Added regression coverage notes for extended statistics, FK join estimation, and cumulative monitoring counters.
+- Advanced `verified_by_agent`; `verified:` stays human-only `false`, so the title keeps `(unverified)`.
