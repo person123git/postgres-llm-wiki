@@ -606,3 +606,10 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Tightened relation-size wording for heap and index fallback paths, corrected index-list wording around `indislive` versus planner-usable `indisvalid` filtering, and narrowed constraint wording to relation exclusion.
 - Added regression coverage notes for extended statistics, FK join estimation, and cumulative monitoring counters.
 - Advanced `verified_by_agent`; `verified:` stays human-only `false`, so the title keeps `(unverified)`.
+
+## [2026-06-09] review-fix v12 | query planner statistics sources citation ranges
+
+- Re-reviewed [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](v12/questions/query-planner-statistics-sources.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed the core planner does not reference `pg_stat_all_tables`, `PgStat_StatTabEntry`, or `pg_stat_get_*()` in `src/backend/optimizer/`; planner-source claims still match the cited v12 source.
+- Corrected citation ranges for `pg_stats`, `pg_stats_ext`, extended-statistics MCV coverage, and the statistics-collector test setup.
+- Refreshed `verified_by_agent`; `verified:` remains human-only `false`, so the title keeps `(unverified)`.
