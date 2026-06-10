@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: claude-fable-5 2026-06-10T18:35:24Z
 ---
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -12,6 +12,13 @@ verified_by_agent: not yet
 
 give a comprehensive explanation of how create index concurrently is
 implemented, add a section with all steps and locks required on the table.
+
+Follow-up (2026-06-10): also add all the possible operations that could block
+a `CREATE INDEX CONCURRENTLY`.
+
+Follow-up (2026-06-10): does a running `pg_dump` block it? How about another
+open transaction that will not commit for 1 hour? How about a session that is
+idle in transaction?
 
 ## Answer
 
@@ -196,6 +203,234 @@ Throughout, the **only** lock the table ever carries is
 across the gaps). DML conflicts with none of these, which is the whole point of
 CIC.
 
+### All operations that can block CREATE INDEX CONCURRENTLY
+
+CIC itself can be made to wait at four points: the initial table-lock
+acquisition, the two `WaitForLockers(ShareLock)` waits, and the
+`WaitForOlderSnapshots` wait. Each point has a different set of blockers.
+
+#### Point 1 — acquiring `ShareUpdateExclusiveLock` at command start
+
+The command's first action is to look up and lock the table in
+`ShareUpdateExclusiveLock` mode
+([utility.c#CIC-lockmode](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326)).
+CIC queues until every holder of a conflicting mode —
+`ShareUpdateExclusiveLock`, `ShareLock`, `ShareRowExclusiveLock`,
+`ExclusiveLock`, or `AccessExclusiveLock`
+([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81))
+— ends its transaction. The v12 operations that take those modes on a table:
+
+| Lock mode held by another session | Operations (v12) |
+|---|---|
+| `ShareUpdateExclusiveLock` | `VACUUM` (non-FULL), autovacuum, `ANALYZE`, another `CREATE INDEX CONCURRENTLY`, `REINDEX CONCURRENTLY`, `CREATE STATISTICS`, certain `ALTER TABLE`/`ALTER INDEX` variants ([mvcc.sgml#SHARE-UPDATE-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L912-L936)) |
+| `ShareLock` | plain `CREATE INDEX` ([mvcc.sgml#SHARE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L938-L956)) |
+| `ShareRowExclusiveLock` | `CREATE TRIGGER`, some `ALTER TABLE` forms ([mvcc.sgml#SHARE-ROW-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L958-L978)) |
+| `ExclusiveLock` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` ([mvcc.sgml#EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L980-L1000)) |
+| `AccessExclusiveLock` | `DROP TABLE`, `TRUNCATE`, `REINDEX`, `CLUSTER`, `VACUUM FULL`, `REFRESH MATERIALIZED VIEW` (non-concurrent), many `ALTER TABLE`/`ALTER INDEX` forms, and `LOCK TABLE` without an explicit mode ([mvcc.sgml#ACCESS-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1002-L1030)) |
+
+`LOCK TABLE` naming any of these five modes explicitly blocks the acquisition
+the same way, per the conflict table
+([lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L105)).
+Plain reads and writes never block this point: `AccessShareLock`,
+`RowShareLock`, and `RowExclusiveLock` are absent from
+`ShareUpdateExclusiveLock`'s conflict mask
+([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81)).
+
+Two special blockers at this point:
+
+- **Autovacuum** holding the table's `ShareUpdateExclusiveLock` normally
+  yields: after CIC has waited `deadlock_timeout`, the lock manager detects
+  `DS_BLOCKED_BY_AUTOVACUUM` and sends the worker `SIGINT`
+  ([proc.c#autovacuum-cancel](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375)).
+  The exception is an anti-wraparound autovacuum
+  (`PROC_VACUUM_FOR_WRAPAROUND`), which is never cancelled and must finish
+  ([proc.c#wraparound-exception](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1319-L1324)).
+- **Prepared transactions** keep their locks after `PREPARE TRANSACTION`; the
+  locks are transferred to the primary lock table and stay held until
+  `COMMIT PREPARED` / `ROLLBACK PREPARED`
+  ([lock.c#prepared-locks](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)).
+  A prepared transaction holding a conflicting mode blocks CIC indefinitely.
+
+The session-level lock taken just before commit 1 never blocks, because the
+same lock is already held at transaction level
+([indexcmds.c#session-lock-noblock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1310)).
+
+#### Points 2 and 3 — Wait 1 (before build) and Wait 2 (before validation)
+
+`WaitForLockers(heaplocktag, ShareLock, true)` collects the virtual
+transaction IDs of transactions **currently holding** table locks that
+conflict with `ShareLock`, then sleeps on each one until its whole transaction
+ends ([lmgr.c#wait-loop](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L896-L918)).
+`ShareLock` conflicts with `RowExclusiveLock` plus every mode from
+`ShareUpdateExclusiveLock` up
+([lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)),
+but CIC's own `ShareUpdateExclusiveLock` already keeps out every holder at
+that level or above, so in practice these waits block on one thing: **open
+transactions that hold `RowExclusiveLock`**, i.e. any transaction that ran
+`INSERT`, `UPDATE`, `DELETE`, or any other data-modifying command on the table
+([mvcc.sgml#ROW-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L910)).
+The wait is for the transaction, not the statement: a session that wrote one
+row and then sits idle in transaction blocks CIC until it commits or rolls
+back.
+
+Not waited for at these two points:
+
+- Plain `SELECT` (`AccessShareLock`) and `SELECT FOR UPDATE/SHARE`
+  (`RowShareLock`) — neither mode is in `ShareLock`'s conflict mask
+  ([lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)).
+- Transactions merely **waiting** for a conflicting lock; only current
+  holders are reported
+  ([lock.c#GetLockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2818)).
+- Writers that start after the holder list is collected; they already see the
+  index ([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L855-L860)).
+- **Prepared transactions**: `GetLockConflicts` ignores them
+  ([lock.c#GetLockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2815-L2818)),
+  and `WaitForLockersMultiple` states this is fine "since they certainly
+  aren't going to do anything anymore"
+  ([lmgr.c#prepared-comment](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894)).
+  See `## Open Questions`.
+
+These waits use real lock acquisition on each holder's virtual transaction ID
+precisely so that deadlock detection applies; a cycle errors out instead of
+hanging forever
+([indexcmds.c#wait-deadlock-note](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1338-L1342)).
+
+#### Point 4 — Wait 3 (before marking valid): old snapshot holders
+
+`WaitForOlderSnapshots(limitXmin, true)` is the broadest wait. It blocks on
+every backend **in the same database** whose advertised `xmin` is at or below
+the reference snapshot's `xmin` — regardless of which tables that backend
+touches
+([indexcmds.c#wait3-filter](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L348),
+[procarray.c#GetCurrentVirtualXIDs](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2467-L2548)).
+Operations that block here:
+
+- Any long-running query in the same database, even a single-statement
+  `SELECT` against an unrelated table — the filter is "oldest live snapshot
+  older than ours", not "uses this table"
+  ([procarray.c#xmin-filter](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2480-L2482),
+  and the docs describe the phase as waiting for "transactions that can
+  potentially see the table to release their snapshots"
+  ([monitoring.sgml#wait-old-snapshots](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3699-L3708))).
+- Open `REPEATABLE READ` / `SERIALIZABLE` transactions whose first snapshot
+  predates the reference snapshot: the first snapshot "must live until end of
+  xact"
+  ([snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L336-L356)).
+- `READ COMMITTED` sessions idle in transaction while still holding a
+  registered snapshot (for example an open cursor); only backends whose
+  `xmin` is zero are skipped
+  ([procarray.c#xmin0-skip](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2526)).
+- Manual `ANALYZE`, which the wait explicitly cannot exclude because it may
+  run inside a transaction that does arbitrary work later
+  ([indexcmds.c#analyze-not-excluded](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L322-L326)).
+- Another `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` in the same
+  database while it holds a snapshot (its build or validation scan): the v12
+  exclusion mask covers only vacuum flags, not other index builds
+  ([indexcmds.c#wait3-filter](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L348)).
+- A running `pg_dump` of the same database — see the worked example below.
+
+Not waited for at this point:
+
+- Autovacuum workers and backends running manual lazy `VACUUM`
+  (`PROC_IS_AUTOVACUUM | PROC_IN_VACUUM`
+  [proc.h#vacuumFlags](../../../raw/postgres-12/src/include/storage/proc.h#L53-L56),
+  filtered at
+  [indexcmds.c#wait3-filter](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L348)).
+- Sessions attached to **other databases**, which can never see the index
+  ([indexcmds.c#other-dbs](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L318-L320),
+  [procarray.c#same-db](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520)).
+- Backends with no live snapshot (`xmin` = 0). The wait also re-checks the
+  list between sleeps and drops any backend whose `xmin` has since cleared
+  ([indexcmds.c#idle-recheck](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L331-L338),
+  [indexcmds.c#recheck-loop](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L357-L383)).
+- Backends whose `xmin` is newer than `limitXmin`
+  ([procarray.c#limitXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2532-L2533)).
+- **Prepared transactions**: their dummy `PGPROC` carries
+  `xmin = InvalidTransactionId` and `backendId = InvalidBackendId`
+  ([twophase.c#MarkAsPreparingGuts](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472)),
+  so both the xmin filter and the virtual-transaction-ID validity check skip
+  them
+  ([procarray.c#vxid-check](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539)).
+
+#### Worked example: a running pg_dump
+
+A `pg_dump` of the **same database** blocks CIC at exactly one point — Wait 3
+— but reliably, and for the dump's entire remaining duration. `pg_dump` wraps
+the whole dump in a single transaction: `BEGIN` followed by
+`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY` (or
+`SERIALIZABLE, READ ONLY, DEFERRABLE` under `--serializable-deferrable`)
+([pg_dump.c#dump-transaction](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1166-L1194)),
+so its advertised `xmin` stays pinned from start to finish
+([snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L336-L356)).
+It also disables `statement_timeout`, `lock_timeout`, and
+`idle_in_transaction_session_timeout` on its connection, so no timeout will
+end it early
+([pg_dump.c#disable-timeouts](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1147)).
+
+The other three points never see it: the only table locks `pg_dump` takes are
+`ACCESS SHARE`
+([pg_dump.c#lock-table](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671)),
+which is in neither `ShareUpdateExclusiveLock`'s nor `ShareLock`'s conflict
+mask ([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81),
+[lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86))
+— even when it is dumping the very table being indexed. Two boundary cases
+follow from the Wait 3 filters above: a dump of **another database** is
+skipped entirely, and a dump that **starts after** CIC's reference snapshot
+has a newer `xmin` than `limitXmin` and is skipped too. The blocking is also
+one-way: CIC never blocks `pg_dump`, since `ShareUpdateExclusiveLock` does not
+conflict with `AccessShareLock`.
+
+#### Worked example: a transaction held open for an hour (idle in transaction)
+
+An open transaction — including a session sitting `idle in transaction` —
+blocks CIC only through what it has already done, never through its age:
+
+| What the open transaction did | Blocks CIC at | For how long |
+|---|---|---|
+| `BEGIN;` only, no statements yet | nothing | — |
+| Wrote the **target table** (`INSERT`/`UPDATE`/`DELETE`), now idle | Wait 1 (or 2) | until it commits or rolls back ([mvcc.sgml#ROW-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L910), [lmgr.c#wait-loop](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L896-L918)) |
+| `REPEATABLE READ`/`SERIALIZABLE`, snapshot taken before the reference snapshot, same database | Wait 3 | until transaction end ([snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L336-L356)) |
+| `READ COMMITTED`, only reads (or writes to **other** tables), idle, no open cursors | nothing | — ([snapmgr.c#SnapshotResetXmin](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028)) |
+| `READ COMMITTED` holding an open cursor, or mid-statement on an old snapshot | Wait 3 | until the cursor closes / the snapshot is released |
+| Took a conflicting lock on the target table (DDL, `LOCK TABLE`) | initial acquisition | until transaction end |
+
+The writer row is the operationally painful one. A transaction that touched
+even one row of the target table holds `RowExclusiveLock` until transaction
+end, and `WaitForLockers` sleeps on its virtual transaction ID until the
+**whole transaction** finishes — there is no recheck or escape at Waits 1/2
+([lmgr.c#wait-loop](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L896-L918)).
+Because Wait 1 runs before the build scan even starts, one idle-in-transaction
+session that ran a single `UPDATE` an hour ago stalls CIC at its first phase
+for the remaining hour.
+
+The reads-only row is the counter-intuitive one: an idle-in-transaction
+`READ COMMITTED` session that only ran `SELECT`s does **not** block CIC at
+all. Once its statement finished and no registered snapshots remained,
+`SnapshotResetXmin` cleared its advertised `xmin`
+([snapmgr.c#SnapshotResetXmin](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028)),
+so Wait 3 skips it — and would drop it mid-wait if it went idle later
+([indexcmds.c#idle-recheck](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L331-L338)).
+Its leftover `AccessShareLock` matters at no blocking point. Writes to
+**other** tables are equally irrelevant at Waits 1/2, because
+`WaitForLockers` examines only the target table's lock tag
+([indexcmds.c#wait1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1346)).
+
+A transaction that starts after CIC reaches a wait never extends that wait:
+the Waits 1/2 holder list is a point-in-time snapshot
+([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L855-L860)),
+and a fresh snapshot's `xmin` is newer than `limitXmin`
+([procarray.c#limitXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2532-L2533)).
+
+#### Watching the waits
+
+All three waits are visible in `pg_stat_progress_create_index` as the phases
+`waiting for writers before build`, `waiting for writers before validation`,
+and `waiting for old snapshots`, with `lockers_total`, `lockers_done`, and
+`current_locker_pid` identifying who CIC is waiting on
+([monitoring.sgml#create-index-phases](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3639-L3708),
+[indexcmds.c#wait-progress](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L385-L395),
+[lmgr.c#wait-progress](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L887-L916)).
+
 ### Why two scans and three waits
 
 The build cannot stop the world, so it has to reason about three groups of
@@ -256,6 +491,19 @@ with `REINDEX INDEX CONCURRENTLY`
   `src/include/storage/lockdefs.h`.
 - `PreventInTransactionBlock` dispatch in `src/backend/tcop/utility.c`.
 - `doc/src/sgml/ref/create_index.sgml` (CONCURRENTLY narrative).
+- For the blocking-operations section: `GetLockConflicts` in
+  `src/backend/storage/lmgr/lock.c`; `GetCurrentVirtualXIDs` in
+  `src/backend/storage/ipc/procarray.c`; the autovacuum-cancel branch of
+  `ProcSleep` in `src/backend/storage/lmgr/proc.c`; `vacuumFlags` in
+  `src/include/storage/proc.h`; `MarkAsPreparingGuts` in
+  `src/backend/access/transam/twophase.c`; `GetTransactionSnapshot` in
+  `src/backend/utils/time/snapmgr.c`; the lock-mode/command table in
+  `doc/src/sgml/mvcc.sgml`; the `pg_stat_progress_create_index` phase table in
+  `doc/src/sgml/monitoring.sgml`.
+- For the worked examples: the dump-transaction setup, timeout disabling, and
+  `LOCK TABLE ... IN ACCESS SHARE MODE` statements in
+  `src/bin/pg_dump/pg_dump.c`; `SnapshotResetXmin` in
+  `src/backend/utils/time/snapmgr.c`.
 - Tests: `src/test/regress/sql/create_index.sql` and
   `src/test/isolation/specs/multiple-cic.spec`.
 
@@ -279,6 +527,17 @@ with `REINDEX INDEX CONCURRENTLY`
 | Correctness narrative (two scans, three waits) | [index.c:3112-3174](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174), [ref/create_index.sgml:545-572](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L572) |
 | Invalid index left on failure; unique-constraint caveat | [ref/create_index.sgml:574-606](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L606) |
 | Tests | [create_index.sql:467-520](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
+| Initial lock acquisition point and its conflict set | [utility.c:1311-1326](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) |
+| Which v12 commands take each conflicting lock mode | [mvcc.sgml:890-1030](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1030) |
+| Autovacuum blocking CIC is sent SIGINT after `deadlock_timeout`, except anti-wraparound | [proc.c:1308-1375](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375), [proc.c:1319-1324](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1319-L1324) |
+| Prepared transactions hold table locks until COMMIT/ROLLBACK PREPARED but are ignored by Waits 1/2 | [lock.c:2873-2876](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876), [lock.c:2815-2818](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2815-L2818), [lmgr.c:890-894](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894) |
+| Waits 1/2 sleep until each holder's whole transaction ends; lock waiters and later writers are skipped | [lmgr.c:896-918](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L896-L918), [lock.c:2804-2807](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2807), [lmgr.c:855-860](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L855-L860) |
+| Wait 3 filters: same database, xmin ≤ limitXmin, xmin=0 skipped, vacuum flags excluded | [indexcmds.c:346-348](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L348), [procarray.c:2508-2541](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2508-L2541), [proc.h:53-56](../../../raw/postgres-12/src/include/storage/proc.h#L53-L56) |
+| REPEATABLE READ / SERIALIZABLE first snapshot lives until transaction end | [snapmgr.c:336-356](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L336-L356) |
+| Prepared transactions invisible to Wait 3 (invalid xmin and backendId) | [twophase.c:465-472](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472), [procarray.c:2525-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539) |
+| The three waits are visible in `pg_stat_progress_create_index` | [monitoring.sgml:3639-3708](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3639-L3708), [indexcmds.c:385-395](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L385-L395) |
+| `pg_dump` runs one `REPEATABLE READ, READ ONLY` (or `SERIALIZABLE, READ ONLY, DEFERRABLE`) transaction, disables the three timeouts, and takes only `ACCESS SHARE` table locks | [pg_dump.c:1166-1194](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1166-L1194), [pg_dump.c:1140-1147](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1147), [pg_dump.c:6646-6671](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671) |
+| An idle backend with no active or registered snapshots clears its advertised xmin | [snapmgr.c:989-1028](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028) |
 
 ## Open Questions
 
@@ -291,6 +550,21 @@ with `REINDEX INDEX CONCURRENTLY`
   index builds from its wait set; CIC instead relies on dropping its reference
   snapshot before waiting to avoid mutual deadlock. Whether this is the only
   inter-CIC interaction was not exhaustively traced.
+- Waits 1 and 2 ignore prepared transactions:
+  [lmgr.c:890-894](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894)
+  asserts they "certainly aren't going to do anything anymore". But a
+  transaction that wrote the table and then ran `PREPARE TRANSACTION` still
+  holds `RowExclusiveLock` and commits its writes later, at `COMMIT PREPARED`
+  ([lock.c:2873-2876](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)).
+  Whether skipping such a transaction in the writer waits is actually safe for
+  index correctness was not assessed from this checkout; this page records
+  only what the pinned source does and claims.
+- Whether walsenders or other non-transaction backends holding an old xmin
+  (for example via `hot_standby_feedback` or replication slots) can appear in
+  the Wait 3 set was not traced; `GetCurrentVirtualXIDs` requires a valid
+  virtual transaction ID
+  ([procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539)),
+  which such backends may not advertise.
 
 ## Source References
 
@@ -301,8 +575,19 @@ with `REINDEX INDEX CONCURRENTLY`
 - [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)
 - [lmgr.c#WaitForLockers](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)
 - [lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)
+- [lock.c#GetLockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2821)
 - [lockdefs.h#lockmodes](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46)
 - [utility.c#CIC-dispatch](../../../raw/postgres-12/src/backend/tcop/utility.c#L1305-L1321)
+- [procarray.c#GetCurrentVirtualXIDs](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2467-L2548)
+- [proc.c#ProcSleep-autovacuum-cancel](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375)
+- [proc.h#vacuumFlags](../../../raw/postgres-12/src/include/storage/proc.h#L53-L56)
+- [twophase.c#MarkAsPreparingGuts](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L446-L490)
+- [snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L305-L373)
+- [snapmgr.c#SnapshotResetXmin](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028)
+- [pg_dump.c#dump-transaction](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1194)
+- [pg_dump.c#lock-table](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671)
+- [mvcc.sgml#table-level-locks](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1039)
+- [monitoring.sgml#create-index-phases](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3630-L3709)
 - [ref/create_index.sgml#CONCURRENTLY](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L631)
 
 ## Navigation
