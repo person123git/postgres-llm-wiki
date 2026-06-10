@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-10] restructure v12 | CREATE INDEX CONCURRENTLY safety runbook
+
+- Moved [Safe CREATE INDEX CONCURRENTLY Runbook for PostgreSQL 12 (unverified)](v12/runbooks/create-index-concurrently-safety-guardrails.md) from `wiki/v12/questions/` to `wiki/v12/runbooks/`.
+- Changed the page front matter from `type: question` to `type: runbook`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, `AGENTS.md`, and `scripts/wiki_lint` so `runbooks/` pages are managed version-local `type: runbook` pages.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-10] answer v12 | CREATE INDEX CONCURRENTLY safety guardrails
+
+- Filed [Safe CREATE INDEX CONCURRENTLY Runbook for PostgreSQL 12 (unverified)](v12/runbooks/create-index-concurrently-safety-guardrails.md).
+- Corrected the user's prompt grammar per approval and restated the corrected prompt under `## Question`.
+- Built the runbook from the pinned `raw/postgres-12/` checkout: target eligibility, invalid-index leftovers, initial `ShareUpdateExclusiveLock` blockers, target-table writer transactions, old-snapshot holders including `pg_dump`, target `VACUUM` / autovacuum behavior, prepared transactions, a `LOCK TABLE ... NOWAIT` probe, dedicated CIC-session settings, progress monitoring, blocker triage, and post-failure cleanup.
+- Verified the production SQL snippets against v12 catalogs/views/functions/GUCs and tagged each snippet with an inline `wiki_cic_*` block comment.
+- Included explicit GUC scope notes for `application_name`, `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, `maintenance_work_mem`, and `max_parallel_maintenance_workers` from v12 `guc.c`.
+- Filed `verified_by_agent: not yet`; title carries `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-10] answer v12 | ATTACH PARTITION index-drop scenarios
 
 - Filed [Can ALTER TABLE ... ATTACH PARTITION Drop Indexes in PostgreSQL 12? (unverified)](v12/questions/attach-partition-index-drops.md).

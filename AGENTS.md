@@ -132,6 +132,7 @@ verified_by_agent: not yet
 ```
 
 - Legacy `type: answer` pages use the same field order with `type: answer`. Do not file new answer pages; see `MANDATORY Question Documents`.
+- Runbook pages use the same field order with `type: runbook`.
 
 - Do not set the timestamp form if any claim is unverified. Fix it, move it under `## Open Questions`, or leave `verified_by_agent: not yet`.
 - Unverified managed pages must show `(unverified)` in the visible title and in index/landing-page link text until `verified: true`.
@@ -181,6 +182,7 @@ Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not creat
 - Keep version-specific pages under `wiki/vNN/`.
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
   - `wiki/vNN/questions/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`.
+  - `wiki/vNN/runbooks/` for `type: runbook` pages.
   - `wiki/vNN/concepts/` for `type: concept` pages.
   - `wiki/vNN/answers/` holds legacy `type: answer` pages only. Do not file new answer pages there.
 - The version landing page `wiki/vNN/index.md` stays at the version root and is the only page allowed there.
