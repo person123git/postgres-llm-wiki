@@ -2,6 +2,17 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-10] answer v17 | ATTACH PARTITION index-drop scenarios + since-v12
+
+- Filed [Can ALTER TABLE ... ATTACH PARTITION Drop Indexes in PostgreSQL 17? (unverified)](v17/questions/attach-partition-index-drops.md).
+- Answer leads with: there is **no** scenario — `ALTER TABLE ... ATTACH PARTITION` never drops an index from the table being attached. `AttachPartitionEnsureIndexes` is strictly match-or-create: per partitioned parent index it re-parents a compatible existing partition index via `IndexSetParentIndex` (kept, not rebuilt) or creates a cloned one via `DefineIndex`; incompatible/extra/invalid child indexes are left in place. Confirmed there is no `index_drop`/`performDeletion` in the attach path (all such calls live in the DETACH/DROP CONSTRAINT/trigger paths), and `MergeConstraintsIntoExisting` touches CHECK constraints only. Regression proof: after attaching a table with four incompatible indexes, `\d` shows all four retained plus one added (`indexing.out:277-281`).
+- Distinguished three look-alikes that are not ATTACH drops: an absorbed/re-parented index gains `relispartition` and can no longer be dropped on its own ("cannot drop index ... because index ... requires it"); the docs' manual drop of the now-redundant CHECK constraint (not an index); and a later cascading `DROP INDEX` on the parent.
+- "Changes since PostgreSQL 12" section: the no-drop invariant is unchanged from v12's `AttachPartitionEnsureIndexes`; two matching refinements landed after the pinned 12.2 — the invalid-index skip (`indisvalid` guard, commit `fc55c7ff`, 2023, back-patched to v11+) and the v17-only same-constraint-type match that stops a PRIMARY KEY matching a plain UNIQUE (commit `cee8db3f`, 2024) — plus mechanical attmap / `DefineIndex` `total_parts` / `foreach_oid` refactors. Both commits verified as ancestors of the pinned HEAD (`git merge-base --is-ancestor`) with release reach via `git tag --contains`; v12 deltas anchored to the v17 checkout's history per the one-version-per-page citation rule.
+- Per MANDATORY Prompt Hygiene, flagged the prompt's punctuation/capitalization slips and the false premise; the user chose to clean up the wording and document the actual behavior. Corrected question text restated under `## Question`.
+- Filed `verified_by_agent: not yet`; title carries `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v17/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-09] research v12 | leaf_fragmentation exclusion rationale
 
 - Added `### Why leaf_fragmentation Is Not in the Priority Score` to [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md), per user follow-up.
