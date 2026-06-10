@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: 4b0bf0788b066a4ca1d4f959566678e44ec93422
+pinned_commit: e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa
 verified: false
 verified_by_agent: not yet
 ---
@@ -16,7 +16,7 @@ Follow AGENTS.md. In PostgreSQL 19, create a question document to explain all th
 
 ## Short Answer
 
-All three statements are true for PostgreSQL 19 beta 1 (`REL_19_BETA1`, pinned commit `4b0bf0788b066a4ca1d4f959566678e44ec93422`). They are three independent features:
+All three statements are true for the pinned PostgreSQL 19 development line (post-`REL_19_BETA1` `master` commit `e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa`). They are three independent features:
 
 1. **Parallel autovacuum.** An autovacuum worker can now hand its **index** vacuuming and index cleanup phases to parallel workers, exactly like manual `VACUUM (PARALLEL)`. The new GUC `autovacuum_max_parallel_workers` caps how many parallel workers a *single* autovacuum worker may use; it defaults to `0`, which keeps autovacuum serial. A per-table reloption `autovacuum_parallel_workers` requests a specific degree [autovacuum.c#parallel-workers](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuumparallel.c#compute-workers](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L741-L802) [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9715-L9736).
 
@@ -178,7 +178,7 @@ PostgreSQL maintains a per-relation visibility map (VM) with two bits per heap p
 
 ### Normal path
 
-1. **Plan time / scan setup — is the scan read-only?** `ScanRelIsReadOnly()` returns true when the scanned relation is neither a result (modified) relation nor a row-mark relation [executor.h#decl](../../../raw/postgres-19/src/include/executor/executor.h#L700) [execUtils.c#ScanRelIsReadOnly](../../../raw/postgres-19/src/backend/executor/execUtils.c#L739-L758). All the heap-scanning executor nodes consult it: sequential [nodeSeqscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeSeqscan.c#L67-L85), index and index-only [nodeIndexscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeIndexscan.c#L117) [nodeIndexonlyscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeIndexonlyscan.c#L99), sample [nodeSamplescan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeSamplescan.c#L302), TID-range [nodeTidrangescan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeTidrangescan.c#L249), and bitmap heap [nodeBitmapHeapscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeBitmapHeapscan.c#L149).
+1. **Plan time / scan setup — is the scan read-only?** `ScanRelIsReadOnly()` returns true when the scanned relation is neither a result (modified) relation nor a row-mark relation [executor.h#decl](../../../raw/postgres-19/src/include/executor/executor.h#L698) [execUtils.c#ScanRelIsReadOnly](../../../raw/postgres-19/src/backend/executor/execUtils.c#L739-L758). All the heap-scanning executor nodes consult it: sequential [nodeSeqscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeSeqscan.c#L67-L85), index and index-only [nodeIndexscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeIndexscan.c#L117) [nodeIndexonlyscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeIndexonlyscan.c#L99), sample [nodeSamplescan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeSamplescan.c#L302), TID-range [nodeTidrangescan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeTidrangescan.c#L249), and bitmap heap [nodeBitmapHeapscan.c#read-only](../../../raw/postgres-19/src/backend/executor/nodeBitmapHeapscan.c#L149).
 
 2. **Flag travels on the scan descriptor.** A read-only seq scan begins with `SO_HINT_REL_READ_ONLY` set [nodeSeqscan.c#flag](../../../raw/postgres-19/src/backend/executor/nodeSeqscan.c#L67-L85).
 
@@ -236,7 +236,7 @@ The headline commit `b46e1e54d` changed only heap access-method code and headers
 
 ## Source Commit History
 
-All hashes are ancestors of the pinned `REL_19_BETA1` commit `4b0bf0788b066a4ca1d4f959566678e44ec93422`. Dates are author dates.
+All hashes are ancestors of the pinned post-`REL_19_BETA1` `master` commit `e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa`. No autovacuum, parallel-vacuum, or visibility-map/pruning feature files changed between `REL_19_BETA1` and this pin. Dates are author dates.
 
 ### Parallel autovacuum workers
 
