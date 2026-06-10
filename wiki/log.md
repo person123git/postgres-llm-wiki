@@ -2,6 +2,19 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-10] answer v12 | ATTACH PARTITION index-drop scenarios
+
+- Filed [Can ALTER TABLE ... ATTACH PARTITION Drop Indexes in PostgreSQL 12? (unverified)](v12/questions/attach-partition-index-drops.md).
+- Answer leads with: there is **no** scenario — `ALTER TABLE ... ATTACH PARTITION` never drops an index from the table being attached. v12's `AttachPartitionEnsureIndexes` (`tablecmds.c:15872-16040`, called from `ATExecAttachPartition` at `15771`) is strictly match-or-create: per partitioned parent index it re-parents a compatible existing partition index via `IndexSetParentIndex` (`16000-16008`; `IndexSetParentIndex` only edits `pg_inherits`/`pg_depend`, `indexcmds.c:3398-3405`) or creates a clone via `generateClonedIndexStmt`+`DefineIndex` (`16016-16029`; v12 `DefineIndex` is the 10-param signature with no `total_parts`, `indexcmds.c:430-439`). Incompatible/extra indexes are left in place.
+- Confirmed no drop path: a whole-file scan shows every `performDeletion`/`RemoveInheritance` lives in DETACH (`ATExecDetachPartition`, `16256`/`16407-16421`), DROP CONSTRAINT, trigger, or sequence paths; the pre-index `CreateInheritance` step only merges CHECK constraints (`MergeConstraintsIntoExisting` skips `contype != CONSTRAINT_CHECK`, `13219-13252`).
+- Noted v12's matching is looser than later minors but still never drops: the candidate loop applies only the `relispartition` guard (`15972-15974`) and an existence-only constraint check (`15990-15998`); it has **no** `indisvalid` skip and **no** constraint-type comparison (the later `fc55c7ff` / `cee8db3f` refinements documented on the v17 page; not re-cited here per one-version-per-page).
+- Distinguished the three look-alikes (absorbed/re-parented index losing independent droppability — "cannot drop index ... requires it" `indexing.out:157-159`; the docs' manual redundant-CHECK drop `ddl.sgml:3960-3971`; a later cascading parent `DROP INDEX` `indexing.out:160-177`); showed `ALTER INDEX ... ATTACH PARTITION` (`ATExecAttachPartitionIdx`, `16504-16652`) also only re-parents or errors (`refuseDupeIndexAttach`, "index definitions do not match"); and gave the docs' pre-build workflow with plain `CREATE INDEX` (v12 bans partitioned CIC, `indexing.out:56-57`).
+- Regression proof: attaching a table with four incompatible indexes (hash/partial/expression/`(a,a)`) keeps all four and adds one matching `idxpart1_a_idx2` (`indexing.out:222-243`); auto-create-on-attach (`78-122`) and reuse-no-duplicate (`125-150`) also cited.
+- Prompt hygiene: the prompt is grammatically clean (no typos), so no correction was needed; the false premise ("in what scenarios *can*") is answered head-on with "None". Question restated verbatim under `## Question`.
+- Filed `verified_by_agent: not yet`; title carries `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-10] answer v17 | ATTACH PARTITION index-drop scenarios + since-v12
 
 - Filed [Can ALTER TABLE ... ATTACH PARTITION Drop Indexes in PostgreSQL 17? (unverified)](v17/questions/attach-partition-index-drops.md).
