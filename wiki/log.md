@@ -710,3 +710,15 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Filed as `verified_by_agent: not yet`; title carries `(unverified)`. Two `## Open Questions` items: the first-scan tuple-visibility rule inside `index_build`/`table_index_build_scan` was summarized from the `validate_index` header comment rather than traced line-by-line, and v12 `WaitForOlderSnapshots` does not exclude other CIC builds from its wait set.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-10] answer v17 | CREATE INDEX CONCURRENTLY implementation, table locks, and v12 diff
+
+- Filed [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](v17/questions/create-index-concurrently.md), a cross-version page (v17 implementation + "what changed from v12").
+- Verified against the pinned `raw/postgres-17/` checkout (`54eeefaedbee0385529f3edf321bb99e49232aaa`) that the CIC algorithm is structurally identical to v12: same four internal transactions, two heap scans, three waits, and `ShareUpdateExclusiveLock` (transaction- + session-level) footprint; `lockmode = concurrent ? ShareUpdateExclusiveLock : ShareLock` and the `index_concurrently_build`/`validate_index` heap-SUE/index-RowExclusive locks all match.
+- Headline v12->v17 change: the PG14 `PROC_IN_SAFE_IC` optimization. A CIC on a non-partial, non-expression index advertises `PROC_IN_SAFE_IC` in `MyProc->statusFlags` via `set_indexsafe_procflags()` (called after each phase commit), and `WaitForOlderSnapshots` adds it to its ignore set. Scoped precisely: this only shortens Wait 3 (the snapshot wait) and only for *other* safe builds; the lock-based `WaitForLockers` Waits 1/2 are unaffected and still wait out writers. The v17 docs document this ("...unless the indexes involved are partial or have columns that are not simple column references").
+- Per AGENTS.md one-version-per-page citation rule, all source citations are to `raw/postgres-17/`; the v12-diff claims are anchored to the v17 checkout's own commit history. Verified each cited commit with `git show`/`git tag --contains`: `c98763bf` (2020-11-25, CIC PROC_IN_SAFE_IC; first in REL_14_0), `f9900df5` (2021-01-15, RIC), `5788e258` (2020-08-14, PGXACT->ProcGlobal statusFlags), and `e28bb885` (2022-05-31, "Revert changes to CONCURRENTLY that 'sped up' Xmin advance" — present in v17, so VACUUM still holds CIC's xmin horizon).
+- A background subagent mined candidate commits; I re-verified every hash against the checkout and discarded its fabricated/approximate hash for the (RIC-only) PG17 fix `cd6b2ae3`, which I left in Open Questions as out-of-scope.
+- User approved correcting two prompt issues ("explaination" -> "explanation"; "what have changed" -> "what has changed"); the corrected prompt is restated verbatim under `## Question`.
+- Filed `verified_by_agent: not yet`; title carries `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v17/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
