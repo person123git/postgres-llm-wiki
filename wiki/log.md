@@ -670,3 +670,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Corrected citation ranges to the pinned checkout: `estimate_rel_size` index branch extended to its tuple estimate (`L955-L1026`, three places), `index_pages_fetched` normalized to `L787-L877` (was `L754-L860`, which started inside `extract_nonindex_conditions`), `_bt_walk_left` extended to its function end `L2053` (three places, covering the deleted-page handling the claim cites), `btvacuumscan` stats extended to `L1099` (covers the `stats->num_pages`/`pages_free` assignments), `show_buffer_usage` extended to `L2985` (three places), `cost_index` corrected to `L475-L748`, combined selfuncs reference corrected to `L5679-L6223` (the old `L5919-L6267` missed `genericcostestimate` and included `hashcostestimate`), and the malformed `nbtree.c#L215-L330, L897-L996` link split into valid `btgettuple`/`btgetbitmap` (`L213-L342`) and `btvacuumcleanup`/`btvacuumscan` (`L890-L1099`) links. Split the mislabeled `bufmgr.c` reference (`L3400-L3607`) into `ReleaseAndReadBuffer` (`L1506-L1553`) and `LockBuffer` (`L3585-L3607`).
 - Advanced `verified_by_agent` to the timestamp form (`claude-fable-5 2026-06-10T11:04:20Z`); `verified:` stays human-only `false`, so the title keeps `(unverified)`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-10] remove v19 | autovacuum parallel workers, scoring, and visibility-map question
+
+- Removed `wiki/v19/questions/autovacuum-parallel-scoring-visibility.md` at the user's request.
+- The page was an orphan and untracked (never committed): no links from `wiki/index.md`, `wiki/v19/index.md`, or `wiki/log.md`, and no references to its slug anywhere else in the repo, so no index edits were needed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
