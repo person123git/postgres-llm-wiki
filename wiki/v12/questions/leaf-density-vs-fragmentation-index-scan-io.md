@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: gpt-5 2026-06-02T17:37:56Z
+verified_by_agent: claude-fable-5 2026-06-10T10:43:46Z
 ---
 
 # B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)
@@ -48,7 +48,7 @@ The default B-tree leaf fillfactor is 90%, while non-leaf pages use a fixed 70% 
 
 ## Where Index Scan I/O Comes From
 
-For a plain B-tree scan, `_bt_first` preprocesses scan keys, descends with `_bt_search`, positions on the first leaf page with `_bt_binsrch`, and loads matching items from that page with `_bt_readpage`. Later calls to `_bt_next` return saved items from the current page until the page is exhausted, then call `_bt_steppage` ([nbtsearch.c#_bt_first-position](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1245-L1328), [nbtsearch.c#_bt_next](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381)).
+For a plain B-tree scan, `_bt_first` preprocesses scan keys, descends with `_bt_search`, positions on the first leaf page with `_bt_binsrch`, and loads matching items from that page with `_bt_readpage`. Later calls to `_bt_next` return saved items from the current page until the page is exhausted, then call `_bt_steppage` ([nbtsearch.c#_bt_first](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L746-L1328), [nbtsearch.c#_bt_next](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381)).
 
 For forward scans, `_bt_steppage` uses the saved `nextPage` right link, and `_bt_readnextpage` reads each candidate leaf page with `_bt_getbuf`. `_bt_readpage` then checks tuples against the scan keys and stores matching TIDs in the backend-local scan position array ([nbtsearch.c#_bt_steppage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1618-L1724), [nbtsearch.c#forward-readnextpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800), [nbtsearch.c#_bt_readpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1383-L1616)).
 
@@ -173,7 +173,7 @@ Index-only scans still walk the same index pages through `index_getnext_tid`; th
 
 ## Operational Reading
 
-For index scan I/O visible in PostgreSQL counters, compare `leaf_pages`, `index_size`, and `avg_leaf_density` first. A fall from 90% to 60% density implies roughly 50% more leaf-page visits for broad scans, and that can appear as more shared buffer hits or reads in the scan node depending on cache state ([pgstatindex.c#result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L356), [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978)).
+For index scan I/O visible in PostgreSQL counters, compare `leaf_pages`, `index_size`, and `avg_leaf_density` first. A fall from 90% to 60% density implies roughly 50% more leaf-page visits for broad scans, and that can appear as more shared buffer hits or reads in the scan node depending on cache state ([pgstatindex.c#result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L336-L356), [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867-L2978)).
 
 For elapsed I/O latency on cold scans, inspect `leaf_fragmentation` next. A 50% fragmented index does not necessarily read 50% more buffers, but it can turn many logical next-page steps into nonsequential block accesses. The severity depends on cache residency, storage random-read cost, read-ahead behavior, and the fragmented run structure that `leaf_fragmentation` does not expose ([pgstatindex.c#fragmentation-count](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L300-L307), [config.sgml#random-page-cost](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4713-L4765)).
 

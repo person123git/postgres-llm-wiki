@@ -2,6 +2,37 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-09] research v12 | leaf_fragmentation exclusion rationale
+
+- Added `### Why leaf_fragmentation Is Not in the Priority Score` to [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md), per user follow-up.
+- Five cited reasons: (1) planner adjacency-blindness — `genericcostestimate` prices index page fetches at the tablespace `random_page_cost`, so fragmentation neither raises nor lowers estimated cost; (2) no byte value, incommensurable with the wasted-bytes-times-usage score; (3) metric coarseness — per-page backward-right-link test with no distance/run-length/cache information; (4) narrow, workload-conditional runtime impact via the `_bt_steppage` / `_bt_readnextpage` leaf walk, with the docs claiming only "slightly faster" adjacency; (5) density-triggered sorted rebuilds reset fragmentation for free while split-time `_bt_getbuf(P_NEW)` FSM reuse re-fragments churning indexes.
+- Spot-checked all newly cited ranges against the pinned checkout (`pgstatindex.c` fragment test, `nbtinsert.c` split right-page allocation, `nbtsearch.c` leaf walk, `selfuncs.c` tablespace page-cost fetch, `config.sgml` page-cost constants).
+- Added an `## Open Questions` bullet: no v12-derivable break-even for fragmentation-only rebuilds; page-cost constants are global/per-tablespace, never per index.
+- Extended Evidence Map, Context Reviewed, and Source References; `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md` summaries.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-09] research v12 | post-REINDEX improvement measurement
+
+- Added `### Measuring the Improvement After a REINDEX` to [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md), per user follow-up.
+- Three measurement layers: physical shape (`pg_relation_size` delta, one post-rebuild `pgstatindex` run, plain `EXPLAIN` cost drop), per-index counter rates (`blocks_per_scan` falls while `tuples_per_scan` stays flat as the density-win control), and query level (`EXPLAIN (ANALYZE, BUFFERS)`, `pg_stat_statements` 1.7 windows with selective reset, `track_io_timing` PGC_SUSET scope note).
+- Key v12 trace: per-index cumulative counters survive both REINDEX forms — plain `reindex_index` keeps the index relation and only swaps relfilenode; `index_concurrently_swap` copies `numscans`/tuple/block counters from the old index's collector entry into the new relation's pending stats, flushed at the next `pgstat_report_stat()`. Pending-counter loss at swap time filed under `## Open Questions` as an inference.
+- Added the `wiki_index_reindex_baseline_v12` capture snippet with session-scoped timeouts; extended Evidence Map, Context Reviewed, and Source References.
+- `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md` summaries.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-09] answer v12 | bloated-index REINDEX triage heuristic
+
+- Filed [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md).
+- Proposed a three-stage heuristic: Stage 1 shortlists from always-available statistics (`pg_class` size/tuple estimates, `pg_stat_user_tables` churn incl. non-HOT updates, `pg_stat_user_indexes.idx_scan`, `pg_statio_user_indexes`, `pg_relation_size()` `stat()` probes); Stage 2 confirms with gated `pgstatindex` runs (full block walk, `AccessShareLock`, `BAS_BULKREAD` ring); Stage 3 ranks by `est_wasted_bytes * ln(1 + idx_scan)` and executes `REINDEX (CONCURRENTLY)`.
+- Traced `idx_scan` counting to `_bt_first` only (insert-time uniqueness checks via `_bt_doinsert`/`_bt_check_unique` do not count), and the index `pg_class` staleness path through `_bt_vacuum_needs_cleanup` / `btvacuumcleanup` `NULL` return / `lazy_cleanup_index` skip, governed by `vacuum_cleanup_index_scale_factor`.
+- Verified both production SQL snippets' catalogs, views, functions, and GUC scopes against the pinned checkout; tagged them `wiki_index_bloat_shortlist_v12` and `wiki_index_bloat_pgstatindex_v12` with session-scoped timeouts.
+- The user approved correcting the prompt grammar before filing; the corrected text is restated under `## Question`.
+- Filed as `verified_by_agent: not yet`; title carries `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-09] answer v12 | query planner statistics sources
 
 - Filed [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](v12/questions/query-planner-statistics-sources.md).
@@ -613,3 +644,20 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Confirmed the core planner does not reference `pg_stat_all_tables`, `PgStat_StatTabEntry`, or `pg_stat_get_*()` in `src/backend/optimizer/`; planner-source claims still match the cited v12 source.
 - Corrected citation ranges for `pg_stats`, `pg_stats_ext`, extended-statistics MCV coverage, and the statistics-collector test setup.
 - Refreshed `verified_by_agent`; `verified:` remains human-only `false`, so the title keeps `(unverified)`.
+
+## [2026-06-10] review-fix v12 | bloated-index planner descent-charge scope
+
+- Re-checked every behavioral claim in [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](v12/questions/bloated-indexes-query-planner.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed: `get_relation_info` pages/tuples/`tree_height` capture and partial-index `estimate_rel_size` path, the full `RelationGetNumberOfBlocks` -> `RelationGetNumberOfBlocksInFork` -> `smgrnblocks` -> `mdnblocks` -> `_mdnblocks` -> `FileSize`/`lseek(SEEK_END)` chain and its I/O/CPU boundaries, `genericcostestimate` pro-rata page formula with guard and single-vs-repeated-scan costing, `btcostestimate` log2 comparison and `(tree_height + 1) * 50 * cpu_operator_cost` bloat-charge comment, `_bt_getrootheight`/`btm_fastlevel` vs `pgstatindex` `btm_level`, `index_pages_fetched` `total_table_pages + index_pages` cache prorating and `cost_index` heap-side reuse, all `pgstatindex_impl` classification/density/fragmentation/`index_size` formulas, the `_bt_first`/`_bt_next`/`_bt_steppage`/`_bt_readnextpage`/`_bt_getbuf` leaf walk, `_bt_split` right-page allocation and FSM reuse, `btgetbitmap` and index-only VM checks, GUC contexts, docs (`maintenance.sgml`, `reindex.sgml`, `create_index.sgml`, `config.sgml`), and `pgstattuple`/`btree_index` regression coverage (no populated-index density assertions; no density-level plan comparisons).
+- Corrected the cross-AM descent-charge scope: only the height measured from the index (`_bt_getrootheight()`) is B-tree-only; `gistcostestimate()` and `spgcostestimate()` apply the same `(tree_height + 1) * 50.0 * cpu_operator_cost` charge with a synthetic `log100(index->pages)` height, and `hashcostestimate()` charges no descent cost. Updated Answer Up Front, Planner Mechanisms, the Evidence Map row, and the `wiki/index.md` / `wiki/v12/index.md` summaries to match.
+- Attributed the partial-index tuple clamp to `get_relation_info()` (not `estimate_rel_size()`), extended the `estimate_rel_size` index-branch citation to include the tuple estimate (L955-L1026), extended the `FileSize` citation to its `lseek` return (L2039-L2053), and added the `pgstattuple` 1.4->1.5 `pgstatindex(regclass)` re-creation citation.
+- Advanced `verified_by_agent` to the timestamp form; `verified:` stays human-only `false`, so the title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-10] review-fix v12 | density vs fragmentation citation ranges
+
+- Re-checked every behavioral claim in [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)](v12/questions/leaf-density-vs-fragmentation-index-scan-io.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed: `pgstatindex_impl` live-leaf-only `avg_leaf_density` (`100 - free_space / max_avail * 100`) and `leaf_fragmentation` (`fragments / leaf_pages * 100` with the `btpo_next != P_NONE && btpo_next < blkno` test), `PageGetFreeSpace` line-pointer subtraction, `nbtree.h` fillfactor constants (90 leaf / 70 non-leaf / 96 single-value) and `nbtsplitloc.c` rightmost-vs-50:50 selection, the `_bt_first`/`_bt_binsrch`/`_bt_readpage`/`_bt_next`/`_bt_steppage`/`_bt_readnextpage`/`_bt_walk_left`/`_bt_endpoint` scan paths, `_bt_insertonpg`/`_bt_split`/`_bt_getbuf(P_NEW)` FSM-reuse-or-extend allocation with `btvacuumpage` `RecordFreeIndexPage`, `get_relation_info` pages/tuples/tree-height capture and the `estimate_rel_size` index branch, `genericcostestimate` pro-rata page formula, the `(tree_height + 1) * 50.0 * cpu_operator_cost` bloat descent charge, `cost.h` 1.0/4.0 defaults and the `config.sgml` mechanical/cached/SSD `random_page_cost` guidance, `show_buffer_usage`/`BufferUsage` counter shapes, `btgetbitmap` and index-only-scan VM checks, docs (`maintenance.sgml` physical-adjacency claim, `reindex.sgml` bloat wording, `indexam.sgml`, `pgstattuple.sgml`), and the `pgstattuple`/`btree_index` regression coverage gaps. Grepped that `leaf_fragmentation` exists only under `contrib/pgstattuple/`, so the planner-blindness claims hold. Re-derived all density/fragmentation/combined multiplier tables from the stated formulas.
+- No factual corrections needed. Widened two citation ranges: the `_bt_first` scan-key-preprocessing sentence now cites the full function (`L746-L1328`, covering `_bt_preprocess_keys`), and the Operational Reading `pgstatindex` result citation now starts at `L336` so it covers the cited `index_size` and `leaf_pages` outputs.
+- Advanced `verified_by_agent` to the timestamp form (`claude-fable-5 2026-06-10T10:43:46Z`); `verified:` stays human-only `false`, so the title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
