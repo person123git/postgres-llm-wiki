@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: claude-fable-5 2026-06-10T18:48:46Z
 ---
 
 # Foreign-Key Join Optimization for Two-Table Joins (unverified)
@@ -42,7 +42,8 @@ Short-circuits inside [get_relation_foreign_keys](../../../raw/postgres-12/src/b
 
 - Skip if `rel->reloptkind != RELOPT_BASEREL`.
 - Skip if `list_length(rtable) < 2` (single-table queries cannot benefit).
-- Skip inheritance parents.
+- Skip inheritance parents on the referencing side (`inhparent`).
+- When scanning the range table for the referenced side, skip RTEs that are inheritance parents (`rte->inh`) — they don't really match the FK [plancat.c:541](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L541-L543).
 - Skip self-referential FKs.
 
 The data structure is [ForeignKeyOptInfo](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L845): per-column arrays for `conkey`, `confkey`, `conpfeqop`, plus the match bookkeeping (`nmatched_ec`, `nmatched_rcols`, `nmatched_ri`, `eclass[]`, `rinfos[]`) that gets filled in later.
@@ -146,7 +147,7 @@ Multi-column FKs traverse the same code; multiple per-column matches are require
 |---|---|
 | FK info attached during base-rel info collection | [get_relation_foreign_keys](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L476) |
 | Skip when single-RTE / non-baserel / inheritance parent | [get_relation_foreign_keys](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L476) |
-| One `ForeignKeyOptInfo` per matching RTE pair, self-FKs skipped | [get_relation_foreign_keys](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L476) |
+| One `ForeignKeyOptInfo` per matching RTE pair; referenced-side inheritance-parent RTEs and self-FKs skipped | [get_relation_foreign_keys](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L476) [plancat.c:541](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L541-L543) |
 | FK-to-clause matching uses EC then loose `joininfo` scan | [match_foreign_keys_to_quals](../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2413) |
 | EC matching requires opfamily match | [match_eclasses_to_foreign_key_col](../../../raw/postgres-12/src/backend/optimizer/path/equivclass.c#L2030) |
 | Multicolumn FKs must match every column to be retained | [match_foreign_keys_to_quals](../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2413) |
