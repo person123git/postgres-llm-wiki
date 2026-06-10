@@ -699,3 +699,14 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - `verified:` stays human-only `false` and `verified_by_agent:` stays `not yet` on all three pages: this pass repins and re-verifies citations, not a full claim-by-claim verification. Titles keep `(unverified)`.
 - Updated `wiki/versions.md` (branch label `master` (post-19beta1), commit, REPACK 40→41, pin sentence), `wiki/v19/index.md` (branch/tag, commit, Repinned 2026-06-10, coverage, REPACK link 40→41), and `wiki/index.md` (v19 pin line, REPACK 40→41).
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-10] answer v12 | CREATE INDEX CONCURRENTLY implementation and table locks
+
+- Filed [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md).
+- Traced the concurrent branch of `DefineIndex` end-to-end: four internal transactions (catalog create -> build -> validate -> mark valid), two heap scans, and three waits, with the `indislive`/`indisready`/`indisvalid` progression created not-ready/not-valid by `index_create`/`UpdateIndexRelation` and flipped non-transactionally (`heap_inplace_update`) by `index_set_state_flags`.
+- Added the requested "All steps and locks required on the table" section: transaction-level `ShareUpdateExclusiveLock` (re-taken in `index_concurrently_build` and `validate_index`) plus a session-level `ShareUpdateExclusiveLock` spanning the commits; clarified that the three `WaitForLockers`/`WaitForOlderSnapshots` waits take no table lock (they sleep on VXIDs from `GetLockConflicts`); and used the `lock.c` `LockConflicts` table to show `ShareUpdateExclusiveLock` admits SELECT/DML (`RowExclusiveLock`) but self-conflicts and blocks plain `CREATE INDEX`/`VACUUM`/`ANALYZE`/DDL.
+- Documented preconditions/restrictions (no transaction block via `PreventInTransactionBlock`, temp fallback, partitioned/system-catalog/exclusion bans), the invalid-index failure path, and regression (`create_index.sql`) plus `multiple-cic` isolation test coverage.
+- User approved correcting the prompt typo ("explaination" -> "explanation"); the corrected text is restated verbatim under `## Question`.
+- Filed as `verified_by_agent: not yet`; title carries `(unverified)`. Two `## Open Questions` items: the first-scan tuple-visibility rule inside `index_build`/`table_index_build_scan` was summarized from the `validate_index` header comment rather than traced line-by-line, and v12 `WaitForOlderSnapshots` does not exclude other CIC builds from its wait set.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
