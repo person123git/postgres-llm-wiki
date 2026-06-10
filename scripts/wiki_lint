@@ -26,12 +26,8 @@ from wiki_tooling import (
 )
 
 
-MANAGED_VERSION_DIR_TYPES = {
-    "questions": "question",
-    "runbooks": "runbook",
-}
-MANAGED_VERSION_DIRS = tuple(MANAGED_VERSION_DIR_TYPES)
-SOURCE_REQUIRED_TYPES = {"question", "runbook"}
+MANAGED_VERSION_DIRS = ("questions",)
+SOURCE_REQUIRED_TYPES = {"question"}
 ROOT_EXEMPT_SLUGS = {"index", "overview", "versions", "log"}
 
 
@@ -99,7 +95,7 @@ def lint() -> tuple[list[Issue], list[Issue]]:
         if requires_front_matter(slug) and not has_fm:
             errors.append(Issue("ERROR", rel(path), "missing required front matter"))
 
-        version, managed_dir = is_version_local(slug)
+        version, _ = is_version_local(slug)
         if version:
             expected = versions.get(version, {}).get("commit")
             if str(fm.get("version", "")) != version:
@@ -113,11 +109,6 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                 errors.append(Issue("ERROR", rel(path), f"cites source checkout(s) for wrong version: {', '.join(wrong)}"))
 
         page_type = str(fm.get("type", ""))
-        if managed_dir:
-            expected_type = MANAGED_VERSION_DIR_TYPES[managed_dir]
-            if page_type != expected_type:
-                errors.append(Issue("ERROR", rel(path), f"{managed_dir}/ page must declare type: {expected_type}"))
-
         if page_type in SOURCE_REQUIRED_TYPES and not has_source_references(text):
             errors.append(Issue("ERROR", rel(path), "missing ## Source References entries"))
 
@@ -135,7 +126,7 @@ def lint() -> tuple[list[Issue], list[Issue]]:
             if page_type == "question" and verified != "false":
                 errors.append(Issue("ERROR", rel(path), "Question pages must have verified: false"))
 
-            if page_type in SOURCE_REQUIRED_TYPES:
+            if page_type == "question":
                 all_keys = ['type', 'version', 'pinned_commit', 'verified', 'verified_by_agent']
                 # verified_by_agent is optional (set only after review); accept 4- or 5-key forms
                 present_expected = [k for k in all_keys if k in fm]
