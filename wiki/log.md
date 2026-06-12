@@ -2,6 +2,37 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-12] expand v12 | CIC failure-states — REINDEX _ccnew/_ccold example
+
+- Per user follow-up, added a `#### The same states under REINDEX INDEX CONCURRENTLY (the _ccnew / _ccold names)` subsection to [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md), right after the CREATE "three persistent pg_index states" table (kept as-is per the user's choice of "Both tables").
+- Added a setup table (what gets reindexed: `REINDEX INDEX CONCURRENTLY concur_reindex_ind5` builds `concur_reindex_ind5_ccnew`) and a result-names table showing the `\d` names after each persistent state of the `_ccnew` copy's build: no copy -> only the original; either invalid state -> original + `concur_reindex_ind5_ccnew` INVALID; valid+swap -> single rebuilt `concur_reindex_ind5` with the old index renamed `_ccold`, set dead, and dropped.
+- Source-verified the REINDEX naming/flow: six phases (`indexcmds.c:2941-2955`), the `<orig>_ccnew` copy name (`indexcmds.c:2993-2998`), the swap renaming the rebuilt copy to the original and the old to `<orig>_ccold` while marking new valid / old invalid (`indexcmds.c:3201-3241`, `index.c:1490-1492`); regression leftover (`concur_reindex_ind5` + `_ccnew` both INVALID, then `_ccnew` dropped, `create_index.out:2323-2350`).
+- Flagged a correctness nuance: a reindex whose `_ccnew` build fails never invalidates a healthy original (the swap is the only step that marks the old index invalid, and runs only after the copy is built+validated); the regression's original is INVALID only because that example built it from an already-failed CIC.
+- Added a matching Evidence Map row and two Source References (`ReindexRelationConcurrently`, `index_concurrently_swap`); extended Context Reviewed. `verified_by_agent` stays `not yet`; title keeps `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-12] expand v12 | CIC failure-states table — named example column
+
+- Per user follow-up, added an `Example (v12 regression suite)` column to the "three persistent pg_index states" table in [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md), naming a concrete index for each state.
+- Examples cited from `create_index.out`: `concur_index7` for **no index** (rejected inside a `BEGIN; ... COMMIT;` block, never listed in `\d`, `1391-1395`); `concur_index3` for **invalid, not ready** (unique build over duplicate `f2` values fails in the build scan, shown `INVALID`, `1383-1385`/`1415`); `concur_index1`/`concur_index2` for **valid** (built concurrently, listed without `INVALID`, `1413-1420`).
+- **invalid, ready** has no named v12 example: it needs a duplicate appearing during the second scan, which the non-concurrent regression test cannot stage (the test file itself notes it exercises "about half the code paths"); cell points to the docs' second-scan caveat (`create_index.sgml:598-606`).
+- Added a matching Evidence Map row; `verified_by_agent` stays `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-12] expand v12 | CIC failure-scenarios section
+
+- Added `### Failure scenarios and the outcome on the table` to [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md), per a user follow-up.
+- Core result: the leftover on the table depends on which internal transaction was running. A failure before commit 1 leaves no index (`indexcmds.c:1318-1320`); after that the leftover is always invalid (`indisvalid = false`, planner skips it, `plancat.c:200-210`), and whether it is also ready depends only on whether the build had set `indisready` — which is `index_concurrently_build`'s last action (`index.c:1426-1438`).
+- Documented the three persistent `pg_index` states (none / invalid+not-ready / invalid+ready / valid) with the `index_set_state_flags` assert ladder (`index.c:3353-3396`), and the per-leftover cost on the table: not-ready indexes are opened + `RowExclusiveLock`ed but receive no entries and skip the unique check (`execIndexing.c:185-192`, `330-332`, `537-539`) yet still count for HOT-safety so updates to their columns are forced non-HOT (`relcache.c:4388-4395`, `4861-4870`); ready-but-invalid indexes take full write overhead and enforce uniqueness (`create_index.sgml:574-606`, `nbtinsert.c:563-568`).
+- Pinned the build-scan-vs-validation-scan split to the two distinct unique-violation errors: "could not create unique index ... is duplicated" from the build sort (`tuplesort.c:4048-4056`, before `indisready`) vs "duplicate key ... already exists" from `_bt_check_unique` (`nbtinsert.c:563-568`, second scan, after `indisready`).
+- Added source-verified facts: a failed CIC does NOT leak its session lock (removed on `ereport(ERROR)`; main-transaction abort releases session locks via `ProcReleaseLocks` -> `LockReleaseAll(DEFAULT_LOCKMETHOD, !isCommit)`, `lmgr.c:356-363`, `proc.c:772-798`); `DROP INDEX CONCURRENTLY` is retryable because `INDEX_DROP_CLEAR_VALID` does not assert its starting flags (`index.c:3367-3383`); crash behavior follows the per-commit rule (Open Questions notes the crash flag-state was reasoned, not recovery-traced).
+- Regression evidence cited from `create_index.out`: a pre-existing duplicate fails the build and leaves `concur_index3` INVALID and retained through `VACUUM FULL` (`1383-1417`, `1400-1406`), and a retried `REINDEX INDEX CONCURRENTLY` stacks an invalid `_ccnew` index (`2317-2350`).
+- Prompt hygiene: the follow-up had two typos ("scenations" -> "scenarios", "comprensive" -> "comprehensive"); the user chose to correct both, and the corrected follow-up is restated verbatim under `## Question`.
+- Set `verified_by_agent: not yet` (was `claude-fable-5 2026-06-10T18:35:24Z`): the new section was verified against the pinned `45b88269` checkout, but the full pre-existing page (the blocking-operations and worked-example sections) was not re-verified claim-by-claim in this pass, so the page-level timestamp cannot honestly stand. `verified:` stays human-only `false`; title keeps `(unverified)`.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-10] remove v12 | CIC safety runbook
 
 - Reverted commit `dcafd70` ("Add v12 CIC safety runbook") at the user's request.

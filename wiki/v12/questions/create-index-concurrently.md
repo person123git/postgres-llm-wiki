@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: claude-fable-5 2026-06-10T18:35:24Z
+verified_by_agent: not yet
 ---
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -19,6 +19,9 @@ a `CREATE INDEX CONCURRENTLY`.
 Follow-up (2026-06-10): does a running `pg_dump` block it? How about another
 open transaction that will not commit for 1 hour? How about a session that is
 idle in transaction?
+
+Follow-up (2026-06-12): also add a new section with a comprehensive list of all
+failure scenarios and the outcome on the table, like invalid indexes, etc.
 
 ## Answer
 
@@ -455,14 +458,165 @@ is even usable, and a failed second scan leaves an invalid index that still
 enforces uniqueness
 ([ref/create_index.sgml#unique-caveat](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L598-L606)).
 
-### Failure handling
+### Failure scenarios and the outcome on the table
 
-If the build or validation fails (deadlock, uniqueness violation, expression
-error), the command leaves behind an **invalid** index: it has a catalog row but
-`indisvalid = false`, so the planner ignores it for queries, yet it still adds
-write overhead. The documented recovery is to `DROP INDEX` and retry, or rebuild
-with `REINDEX INDEX CONCURRENTLY`
+Because CIC commits several times, the effect of a failure on the table depends
+entirely on **which internal transaction was running when it failed**. Two facts
+fix every outcome:
+
+- The catalog row is created in transaction 1 and only becomes durable at the
+  first commit. **Any failure before commit 1 leaves no index at all** — the
+  transaction simply rolls back
+  ([indexcmds.c#commit1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1318-L1320)).
+- Every leftover after that is an **invalid** index (`indisvalid = false`), which
+  the planner never uses for queries
+  ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210)).
+  Whether it is also **ready** (`indisready`) — and therefore whether it costs
+  writes and enforces uniqueness — depends only on whether the build set
+  `indisready`, which is `index_concurrently_build`'s last action
+  ([index.c#build-set-ready](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438)).
+
+#### The three persistent pg_index states
+
+| Leftover state | `indislive` | `indisready` | `indisvalid` | How you reach it | Example (v12 regression suite) |
+|---|---|---|---|---|---|
+| no index | — | — | — | failure before commit 1 | `concur_index7` — rejected inside a `BEGIN; ... COMMIT;` block, so it never appears in `\d` ([create_index.out:1391-1395](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1391-L1395)) |
+| invalid, not ready | `t` | `f` | `f` | failure after commit 1, before `indisready` is set | `concur_index3` — its unique build over duplicate `f2` values failed in the build scan, leaving it `INVALID` ([create_index.out:1383-1385](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1385), [create_index.out:1415](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1415)) |
+| invalid, ready | `t` | `t` | `f` | failure after `indisready` is set, before `indisvalid` | none named in the v12 suite — it needs a duplicate appearing *during* the second scan, which the non-concurrent regression test cannot stage; the docs describe this case ([create_index.sgml:598-606](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L598-L606)) |
+| valid (success) | `t` | `t` | `t` | `index_set_state_flags(SET_VALID)` ran | `concur_index1` / `concur_index2` — built concurrently and listed without `INVALID` ([create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420)) |
+
+The `index_set_state_flags` asserts encode this exact ladder: `SET_READY`
+requires live / not-ready / not-valid, and `SET_VALID` requires live / ready /
+not-valid
+([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3353-L3366)).
+
+#### The same states under REINDEX INDEX CONCURRENTLY (the `_ccnew` / `_ccold` names)
+
+`REINDEX INDEX CONCURRENTLY` reuses the exact same four-state build machine, but
+it runs it on a **new copy** it creates next to the original, then swaps the two.
+Its six phases are: create the copy, build it, validate it, swap names, mark the
+old one dead, drop the old one
+([indexcmds.c#reindex-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L2955)).
+The copy is named `<original>_ccnew` while it is being built
+([indexcmds.c#ccnew-name](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L2998)),
+and the swap then gives the rebuilt copy the original's name while renaming the
+old index to `<original>_ccold`
+([indexcmds.c#ccold-name](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3230-L3241),
+[index.c#swap-names](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492)).
+So the four states apply to the `_ccnew` copy, and the original is left untouched
+(still valid, if it was valid) until the swap.
+
+Take this index to rebuild:
+
+| Command | Index being reindexed | Transient copy it builds |
+|---|---|---|
+| `REINDEX INDEX CONCURRENTLY concur_reindex_ind5` | `concur_reindex_ind5` | `concur_reindex_ind5_ccnew` |
+
+`\d` then shows these names after each state of the `_ccnew` copy's build:
+
+| `_ccnew` copy state | Names visible in `\d` afterward |
+|---|---|
+| no copy (failure before the copy's first commit) | only `concur_reindex_ind5` (original untouched) |
+| invalid, not ready (build-scan failure, e.g. a duplicate caught by the unique build sort) | `concur_reindex_ind5` + a leftover `concur_reindex_ind5_ccnew` **INVALID** ([create_index.out:2323-2333](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2333)) |
+| invalid, ready (second-scan failure) | `concur_reindex_ind5` + `concur_reindex_ind5_ccnew` **INVALID** (ready, so the copy also enforces uniqueness) |
+| valid, then swap (success) | one `concur_reindex_ind5` (now the rebuilt copy, marked valid); the old index becomes `concur_reindex_ind5_ccold`, is marked dead, and is dropped ([indexcmds.c#reindex-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L2955)) |
+
+The names are identical for the two `INVALID` rows because `indisready` is not
+shown by `\d` — only the build's write/uniqueness cost differs (see the cost
+table below). In the cited regression the original `concur_reindex_ind5` is also
+`INVALID`, but only because that example built it from an already-failed CIC; a
+reindex whose `_ccnew` build fails never invalidates a healthy original, since
+the swap (the only step that marks the old index invalid) is reached only after
+the copy is fully built and validated
+([indexcmds.c#swap-marks-old-invalid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3201-L3241)).
+A failed `_ccnew` is just an invalid index, cleaned up like any other —
+`DROP INDEX concur_reindex_ind5_ccnew`, then retry once the underlying problem is
+gone
+([create_index.out:2335-2350](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2335-L2350)).
+
+#### What each leftover costs the table
+
+| Leftover | Planner uses it? | INSERT/UPDATE/DELETE | Uniqueness | HOT |
+|---|---|---|---|---|
+| invalid, **not ready** | no ([plancat.c:206-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L206-L210)) | index is still opened and `RowExclusiveLock`-ed on every write ([execIndexing.c#ExecOpenIndices](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L185-L192)), but **no entries are inserted** ([execIndexing.c#skip-not-ready](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332)) | **not** enforced — the unique check is skipped for not-ready indexes ([execIndexing.c#unique-skip](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L537-L539)) | still counted in HOT-safety, so an update touching its columns is forced non-HOT (extra bloat) even though it receives no entries ([relcache.c#omit-not-live](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395), [relcache.c#HOT-all-live](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870)) |
+| invalid, **ready** | no ([plancat.c:206-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L206-L210)) | **entries inserted on every write** — the documented "update overhead" ([execIndexing.c#skip-not-ready](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332), [ref/create_index.sgml#invalid-overhead](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L580)) | **enforced** for a unique index, even while invalid ([ref/create_index.sgml#unique-caveat](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L598-L606), [nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)) | counted in HOT-safety |
+
+A "dead" index (`indislive = false`) is a different thing: it appears only during
+`DROP INDEX CONCURRENTLY`, and `RelationGetIndexList` drops it from every list so
+nothing touches it
+([relcache.c#omit-not-live](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395),
+[index.c#INDEX_DROP_SET_DEAD](../../../raw/postgres-12/src/backend/catalog/index.c#L3384-L3396)).
+CIC never leaves this state.
+
+#### Failure by phase
+
+| Failure point | Example causes | Leftover on the table |
+|---|---|---|
+| Preconditions / parse / catalog insert (transaction 1, before commit 1) | runs inside a `BEGIN; ... COMMIT;` block; partitioned, system-catalog, or exclusion-constraint table; index-name collision; `lock_timeout` while acquiring the initial `ShareUpdateExclusiveLock`; any error inside `index_create` | **none** — transaction 1 rolls back |
+| Wait 1 or the build scan (transaction 2, before `indisready` is set) | deadlock / cancel (`SIGINT`) / `statement_timeout` in `WaitForLockers`; a **pre-existing duplicate** caught by the unique build sort ([tuplesort.c#dup](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056)); an error evaluating an index expression or predicate; out-of-space during the build | **invalid, not ready** index |
+| Wait 2, `validate_index`, or Wait 3 (after `indisready` committed, before `indisvalid`) | deadlock / cancel / timeout in `WaitForLockers` or `WaitForOlderSnapshots`; a **duplicate that appears concurrently** and is hit by the second scan's `index_insert` ([nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)); an expression error in the second scan | **invalid, ready** index |
+| After `index_set_state_flags(SET_VALID)` | — | none possible: the flag flip is a non-transactional in-place update that cannot roll back, after which the command only sends a relcache invalidation and releases the session lock ([index.c#set-valid](../../../raw/postgres-12/src/backend/catalog/index.c#L3360-L3366), [indexcmds.c#after-valid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1453-L1472)) |
+
+The not-ready-vs-ready split is exactly the build-scan-vs-validation-scan split,
+because `index_concurrently_build` sets `indisready` only after `index_build`
+returns ([index.c#build-set-ready](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438));
+the second scan in `validate_index` runs in the next transaction, with
+`indisready` already true.
+
+#### Worked regression examples
+
+- **Pre-existing duplicate fails the build (first scan).** With two `f2 = 'b'`
+  rows present, `CREATE UNIQUE INDEX CONCURRENTLY concur_index3 ON concur_heap(f2)`
+  errors `could not create unique index "concur_index3" ... Key (f2)=(b) is
+  duplicated`
+  ([create_index.out#concur_index3](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1385)),
+  and `\d` later shows the index retained but `INVALID`
+  ([create_index.out#invalid-listing](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1417)).
+  The error comes from the build sort
+  ([tuplesort.c#dup](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056)),
+  i.e. before `indisready` is set, so this leftover is invalid **and not ready**.
+- **The leftover survives maintenance.** `VACUUM FULL` keeps the invalid index,
+  and `REINDEX TABLE` re-runs the same build and fails identically until the
+  duplicate row is deleted
+  ([create_index.out#vacuum-reindex](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1400-L1406)).
+- **A retried concurrent rebuild can stack invalid indexes.**
+  `REINDEX INDEX CONCURRENTLY` of an already-invalid unique index adds a second,
+  also-invalid `_ccnew` index
+  ([create_index.out#ccnew](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2333));
+  the spare is dropped, and after the duplicate is removed the original is
+  repaired with a non-concurrent `REINDEX INDEX`
+  ([create_index.out#repair](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2335-L2350)).
+
+#### A failed CIC does not leak its session lock
+
+After any failure the **only** artifact is the invalid index; the session-level
+`ShareUpdateExclusiveLock` is released. `LockRelationIdForSession` is documented
+to be removed "if an `ereport(ERROR)` occurs"
+([lmgr.c#session-lock-doc](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363)),
+because main-transaction **abort** releases session locks too: `ProcReleaseLocks`
+calls `LockReleaseAll(DEFAULT_LOCKMETHOD, !isCommit)`, and on abort `!isCommit` is
+true
+([proc.c#ProcReleaseLocks](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798)).
+So a failed CIC never leaves a lock that blocks `VACUUM`, `ANALYZE`, DDL, or
+another CIC on the table.
+
+#### Server crash or immediate shutdown
+
+A crash partway through CIC is just an abort of the in-progress transaction at
+recovery, so the same per-commit rule applies: **no index** if it crashed before
+commit 1, otherwise an **invalid** index (ready or not, depending on how far the
+build had progressed). Nothing resumes an interrupted build; the leftover is
+handled like any other invalid index (see `## Open Questions`).
+
+#### Recovery
+
+The documented fix is to `DROP INDEX` (optionally `CONCURRENTLY`) the invalid
+index and retry, or rebuild it with `REINDEX INDEX CONCURRENTLY`
 ([ref/create_index.sgml#invalid-index](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596)).
+A `DROP INDEX CONCURRENTLY` that itself fails partway can simply be re-run: its
+`INDEX_DROP_CLEAR_VALID` step deliberately does not assert its starting flags, so
+the drop is retryable
+([index.c#drop-clear-valid](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3383)).
 
 ### Test coverage
 
@@ -473,6 +627,11 @@ with `REINDEX INDEX CONCURRENTLY`
 - The concurrency itself is exercised by an isolation test that runs two CIC
   operations simultaneously and uses advisory locks to interleave them
   ([multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)).
+- Failure outcomes are exercised too: `create_index.sql` builds a unique index
+  concurrently over duplicate rows and checks that the failed build is left
+  `INVALID`, survives `VACUUM FULL`, and is repaired only after the duplicate is
+  removed
+  ([create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1417)).
 
 ## Context Reviewed
 
@@ -504,6 +663,22 @@ with `REINDEX INDEX CONCURRENTLY`
   `LOCK TABLE ... IN ACCESS SHARE MODE` statements in
   `src/bin/pg_dump/pg_dump.c`; `SnapshotResetXmin` in
   `src/backend/utils/time/snapmgr.c`.
+- For the failure-scenarios section: the planner's invalid-index skip in
+  `src/backend/optimizer/util/plancat.c`; `ExecOpenIndices` /
+  `ExecInsertIndexTuples` ready-for-inserts handling in
+  `src/backend/executor/execIndexing.c`; `RelationGetIndexList` index-list
+  filtering and HOT-attribute collection in
+  `src/backend/utils/cache/relcache.c`; the unique-violation `ereport`s in
+  `src/backend/utils/sort/tuplesort.c` (build sort) and
+  `src/backend/access/nbtree/nbtinsert.c` (`_bt_check_unique`); `index_drop` and
+  the `INDEX_DROP_*` branches of `index_set_state_flags`, plus the
+  `REINDEX INDEX CONCURRENTLY` phase loop (`ReindexRelationConcurrently`, the
+  `_ccnew`/`_ccold` naming, and `index_concurrently_swap`) in
+  `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`;
+  `LockRelationIdForSession` in
+  `src/backend/storage/lmgr/lmgr.c` and `ProcReleaseLocks` in
+  `src/backend/storage/lmgr/proc.c`; and the invalid-index regression evidence in
+  `src/test/regress/expected/create_index.out`.
 - Tests: `src/test/regress/sql/create_index.sql` and
   `src/test/isolation/specs/multiple-cic.spec`.
 
@@ -526,6 +701,17 @@ with `REINDEX INDEX CONCURRENTLY`
 | Wait 3 excludes autovacuum and lazy VACUUM only | [indexcmds.c:339-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402) |
 | Correctness narrative (two scans, three waits) | [index.c:3112-3174](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174), [ref/create_index.sgml:545-572](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L572) |
 | Invalid index left on failure; unique-constraint caveat | [ref/create_index.sgml:574-606](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L606) |
+| Failure before commit 1 leaves no index (commit-1 boundary) | [indexcmds.c:1318-1320](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1318-L1320) |
+| Planner ignores `indisvalid = false` indexes (executor still inserts if `indisready`) | [plancat.c:200-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210) |
+| Not-ready index is opened + `RowExclusiveLock`ed but receives no entries, and its unique check is skipped | [execIndexing.c:185-192](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L185-L192), [execIndexing.c:330-332](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332), [execIndexing.c:537-539](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L537-L539) |
+| Every `indislive` index counts for HOT-safety; not-live indexes are omitted from the index list | [relcache.c:4388-4395](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395), [relcache.c:4861-4870](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870) |
+| Build sets `indisready` as its last action (build-scan vs validate-scan split); state-ladder asserts | [index.c:1426-1438](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438), [index.c:3353-3396](../../../raw/postgres-12/src/backend/catalog/index.c#L3353-L3396) |
+| Build-scan dup is "could not create unique index ... is duplicated"; concurrent second-scan dup is "duplicate key ... already exists" | [tuplesort.c:4048-4056](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056), [nbtinsert.c:563-568](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568) |
+| Regression: failed unique build left INVALID, retained through `VACUUM FULL`, fixed by REINDEX; retried rebuild stacks an invalid `_ccnew` | [create_index.out:1383-1417](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1417), [create_index.out:1400-1406](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1400-L1406), [create_index.out:2317-2350](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2350) |
+| Named example index per `pg_index` state: `concur_index7` (none), `concur_index3` (invalid, not ready), `concur_index1`/`concur_index2` (valid) | [create_index.out:1391-1395](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1391-L1395), [create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420) |
+| `REINDEX INDEX CONCURRENTLY`: six phases; builds `<orig>_ccnew`, swap renames it to the original and the old to `<orig>_ccold` (new marked valid, old invalid); failed `_ccnew` left INVALID | [indexcmds.c:2941-2955](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L2955), [indexcmds.c:2993-2998](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L2998), [indexcmds.c:3201-3241](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3201-L3241), [index.c:1490-1492](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492), [create_index.out:2323-2350](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2350) |
+| A failed CIC releases its session lock (removed on `ereport(ERROR)`; abort releases session locks) | [lmgr.c:356-363](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363), [proc.c:772-798](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798) |
+| `DROP INDEX CONCURRENTLY` is retryable: `INDEX_DROP_CLEAR_VALID` does not assert its starting flags | [index.c:3367-3383](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3383) |
 | Tests | [create_index.sql:467-520](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
 | Initial lock acquisition point and its conflict set | [utility.c:1311-1326](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) |
 | Which v12 commands take each conflicting lock mode | [mvcc.sgml:890-1030](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1030) |
@@ -565,6 +751,15 @@ with `REINDEX INDEX CONCURRENTLY`
   virtual transaction ID
   ([procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539)),
   which such backends may not advertise.
+- The crash / immediate-shutdown failure outcome is reasoned from
+  `index_set_state_flags` being a WAL-logged in-place update
+  ([index.c:3399-3400](../../../raw/postgres-12/src/backend/catalog/index.c#L3399-L3400))
+  combined with the per-commit rollback rule, not traced through crash recovery.
+  The statement that nothing resumes an interrupted CIC is an absence-of-code
+  observation: no recovery path re-enters `DefineIndex`, so an interrupted build
+  is left as an ordinary invalid index. The exact flag state after a crash in the
+  razor-thin window between `index_set_state_flags(SET_READY)` and the build
+  transaction's commit was not isolated.
 
 ## Source References
 
@@ -589,6 +784,17 @@ with `REINDEX INDEX CONCURRENTLY`
 - [mvcc.sgml#table-level-locks](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1039)
 - [monitoring.sgml#create-index-phases](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3630-L3709)
 - [ref/create_index.sgml#CONCURRENTLY](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L631)
+- [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210)
+- [execIndexing.c#ready-for-inserts](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L185-L539)
+- [relcache.c#RelationGetIndexList](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4348-L4435)
+- [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2007-L2166)
+- [indexcmds.c#ReindexRelationConcurrently](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L3260)
+- [index.c#index_concurrently_swap](../../../raw/postgres-12/src/backend/catalog/index.c#L1441-L1515)
+- [tuplesort.c#unique-violation](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4040-L4056)
+- [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
+- [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L383)
+- [proc.c#ProcReleaseLocks](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798)
+- [create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1417)
 
 ## Navigation
 
