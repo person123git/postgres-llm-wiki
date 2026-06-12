@@ -2,6 +2,17 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-12] review-fix v12 | REINDEX INDEX CONCURRENTLY implementation page
+
+- Reviewed [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/reindex-index-concurrently.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Fixed correctness issues found in the review: CIC's old-snapshot wait can block a plain `SELECT` with an old snapshot, so the RIC comparison now distinguishes CIC's two lock-based `ShareLock` waits from the old-snapshot wait; the RIC `ShareLock` waits now describe the full `ShareLock` conflict set rather than only `RowExclusiveLock` writers; the `AccessExclusiveLock` waits are described as conservative heap-lock-tag waits that can include readers even if they would not actually use the old index.
+- Split restriction details that were previously collapsed: direct system-catalog targets / `REINDEX SYSTEM CONCURRENTLY` error while concurrent schema/database sweeps skip system catalogs with a warning; partitioned tables warn/skip, while partitioned indexes named directly error via `ReindexPartitionedIndex`.
+- Corrected the test-coverage section: v12 does have a dedicated `src/test/isolation/specs/reindex-concurrently.spec` with expected output covering concurrent read/write transactions around `REINDEX TABLE CONCURRENTLY`; removed the false "no RIC isolation spec" claim.
+- Tightened failure and cleanup evidence: pre-swap failures now say the original index state is unchanged (valid only if it started valid), invalid leftovers are backed with planner (`plancat`) and executor/relcache citations, and the `PERFORM_DELETION_CONCURRENT_LOCK` / `index_drop` citation now covers both the lock-mode path and the skipped concurrent set-dead/two-wait branch.
+- Added `heapam.c#heap_inplace_update` to the crash-recovery open question, updated Source References and Evidence Map, and advanced `verified_by_agent` to `gpt-5 2026-06-12T17:29:25Z`; `verified:` stays human-only `false`, so the title keeps `(unverified)`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-12] split v12 | REINDEX INDEX CONCURRENTLY — new page split out of the CIC page
 
 - Per user request, split the combined index-concurrency page into one page per command, adding [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/reindex-index-concurrently.md) alongside the existing [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md). All evidence cites pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.

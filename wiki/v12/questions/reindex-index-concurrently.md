@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: gpt-5 2026-06-12T17:29:25Z
 ---
 
 # How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -79,11 +79,16 @@ differences:
 | Names | the index keeps its name | new copy takes the original's name; the old index is renamed `<name>_ccold` ([index.c#swap-names](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492), [indexcmds.c#ccold](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3230-L3235)) |
 | On failure | leaves the **target** index invalid | leaves an invalid `_ccnew` (before swap) or `_ccold` (after swap); a healthy original is preserved until the swap |
 
-The "wait out readers" difference is the operationally important one: CIC's three
-waits never block on plain `SELECT`, but RIC's phases 5 and 6 must wait for every
-transaction that could still be **reading through the old index** to finish before
-it can mark that index dead and drop it
-([reindex.sgml#concurrent-steps](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L334-L359)).
+The "wait out readers" difference is the operationally important one. CIC's two
+lock-based waits use `ShareLock` conflict checks and do not wait for
+`AccessShareLock` readers, though its old-snapshot wait can still wait for a
+plain `SELECT` that holds an old snapshot. RIC adds two later
+`AccessExclusiveLock` conflict checks on the heap lock tag, so current table
+lock holders, including `AccessShareLock` readers, can delay marking the old
+index dead and dropping it
+([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402),
+[lock.c#AccessExclusive-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103),
+[reindex.sgml#concurrent-steps](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L334-L359)).
 
 ### Dispatch, preconditions, and restrictions
 
@@ -116,8 +121,10 @@ The full restriction set, with where each is enforced:
 | Inside a transaction block | error: `REINDEX CONCURRENTLY cannot run inside a transaction block` | [utility.c:777-779](../../../raw/postgres-12/src/backend/tcop/utility.c#L777-L779) |
 | During recovery (standby) | error: `REINDEX` cannot run during recovery | [utility.c:782](../../../raw/postgres-12/src/backend/tcop/utility.c#L782) |
 | Temporary table/index | falls back to a **non-concurrent** reindex | [indexcmds.c:2377-2381](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2377-L2381), [indexcmds.c:2477-2491](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2477-L2491) |
-| System catalogs | error: `cannot reindex system catalogs concurrently` | [indexcmds.c:2804-2807](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2804-L2807), [indexcmds.c:2897-2900](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2897-L2900), [indexcmds.c:2530-2533](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2530-L2533) |
-| Partitioned table/index | warning, skipped (no-op) | [indexcmds.c:2917-2923](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2917-L2923) |
+| System catalog direct target, or `REINDEX SYSTEM CONCURRENTLY` | error: `cannot reindex system catalogs concurrently` | [indexcmds.c:2804-2807](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2804-L2807), [indexcmds.c:2897-2900](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2897-L2900), [indexcmds.c:2530-2533](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2530-L2533) |
+| System catalogs reached by `REINDEX SCHEMA/DATABASE CONCURRENTLY` | warning, skipped | [indexcmds.c:2641-2650](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2641-L2650) |
+| Partitioned table target | warning, skipped (no-op) | [indexcmds.c:2917-2923](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2917-L2923) |
+| Partitioned index named directly | error: `REINDEX is not yet implemented for partitioned indexes` | [indexcmds.c:2368-2371](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2368-L2371), [indexcmds.c#ReindexPartitionedIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3390-L3396) |
 | Exclusion-constraint index named directly | error: `concurrent index creation for exclusion constraints is not supported` | [index.c:1268-1271](../../../raw/postgres-12/src/backend/catalog/index.c#L1268-L1271) |
 | Exclusion-constraint index reached via a table | warning, skipped | [indexcmds.c:2825-2830](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2825-L2830) |
 | Invalid index reached via a table | warning, skipped | [indexcmds.c:2819-2824](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824) |
@@ -158,9 +165,11 @@ the relations mid-rebuild.
 #### Phase 2: wait, then build each new index
 
 **Wait 1** is `WaitForLockersMultiple(lockTags, ShareLock, true)`: it waits out
-every transaction that could still have the table open without the new index in
-its index list
-([indexcmds.c#wait1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3090-L3093)).
+the current transactions holding locks that conflict with `ShareLock`, so no
+running writer or stronger table operation can still have the table open without
+the new index in its index list
+([indexcmds.c#wait1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3090-L3093),
+[lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)).
 Then, in a **separate transaction per index**, RIC takes a fresh snapshot and calls
 `index_concurrently_build`, which scans the heap, builds the new copy, and sets
 `indisready = true`
@@ -170,9 +179,11 @@ This is the same build CIC uses.
 
 #### Phase 3: wait, validate, then wait for old snapshots
 
-**Wait 2** is another `WaitForLockersMultiple(lockTags, ShareLock, true)`, so that
-every in-flight transaction now sees the new copy as ready-for-inserts
-([indexcmds.c#wait2](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3139-L3142)).
+**Wait 2** is another `WaitForLockersMultiple(lockTags, ShareLock, true)`, so
+that every current `ShareLock`-conflicting transaction finishes before the
+validation pass assumes new writers see the new copy as ready-for-inserts
+([indexcmds.c#wait2](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3139-L3142),
+[lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)).
 Then, per new index, RIC registers a **reference snapshot**, runs `validate_index`
 to backfill any tuples the build scan missed, saves the snapshot's `xmin` as
 `limitXmin`, drops the snapshot, commits, and in a fresh transaction does **Wait 3**
@@ -215,8 +226,9 @@ after this commit.
 **Wait 4** is `WaitForLockersMultiple(lockTags, AccessExclusiveLock, true)`
 ([indexcmds.c#wait4](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3272-L3274)).
 Because `AccessExclusiveLock` conflicts with every lock mode including
-`AccessShareLock`, this waits out **readers** — any transaction that might still
-run a query through the old index — not just writers
+`AccessShareLock`, this waits out current table lock holders, including
+**readers**. The wait is conservative: a reader need not actually use the old
+index to be in the wait set, because the wait is on the heap relation lock tag
 ([lock.c#AccessExclusive-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103)).
 Then `index_concurrently_set_dead` transfers predicate locks to the heap and sets
 `indisready = false, indislive = false` (dead) on each old index
@@ -230,11 +242,13 @@ After another `WaitForLockersMultiple(lockTags, AccessExclusiveLock, true)`
 RIC drops the old indexes with
 `performMultipleDeletions(objects, DROP_RESTRICT, PERFORM_DELETION_CONCURRENT_LOCK | PERFORM_DELETION_INTERNAL)`
 ([indexcmds.c#drop-loop](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3306-L3329)).
-`PERFORM_DELETION_CONCURRENT_LOCK` tells `index_drop` to take
-`ShareUpdateExclusiveLock` (not `AccessExclusiveLock`) on the index and to skip its
-own set-dead/wait logic, because RIC already did the dead-marking and the reader
-waits itself
-([index.c#index_drop-lockmode](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2048)).
+`PERFORM_DELETION_CONCURRENT_LOCK` becomes `concurrent_lock_mode` in the
+dependency deletion path. That makes `index_drop` take
+`ShareUpdateExclusiveLock` (not `AccessExclusiveLock`) on the heap and index,
+while skipping the `if (concurrent)` set-dead/two-wait branch because RIC already
+did the dead-marking and reader waits itself
+([dependency.c#deleteOneObject-index](../../../raw/postgres-12/src/backend/catalog/dependency.c#L1345-L1352),
+[index.c#index_drop-concurrent-lock-mode](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197)).
 Finally RIC releases all the session locks
 ([indexcmds.c#release-session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3337-L3342)).
 
@@ -255,19 +269,20 @@ until it ends; later transactions are not waited for
 ([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)).
 The conflict mode passed to the wait decides who is waited out:
 
-| Phase | Heap lock held | Wait | Conflict mode | Who it waits out |
+| Phase | Relation locks held by RIC | Wait | Conflict mode | Who it waits out |
 |---|---|---|---|---|
-| 1: create copies | txn + session `ShareUpdateExclusiveLock` | — | — | — |
-| 2: build | `ShareUpdateExclusiveLock`; new index `RowExclusiveLock` | Wait 1 | `ShareLock` | open **writers** (`RowExclusiveLock`) ([lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)) |
-| 3: validate | `ShareUpdateExclusiveLock` | Wait 2 | `ShareLock` | open **writers** |
-| 3: catch up | — | Wait 3 | `WaitForOlderSnapshots` | same-database **old-snapshot** holders ([indexcmds.c:339-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)) |
-| 5: set dead | `ShareUpdateExclusiveLock` | Wait 4 | `AccessExclusiveLock` | **all** lock holders, including **readers** ([lock.c:99-103](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103)) |
-| 6: drop | index `ShareUpdateExclusiveLock` | Wait 5 | `AccessExclusiveLock` | **all** lock holders, including **readers** |
+| 1: create copies | transaction, then session `ShareUpdateExclusiveLock` on heap and indexes | — | — | — |
+| 2: before build | session `ShareUpdateExclusiveLock`; build later takes heap `ShareUpdateExclusiveLock` and new-index `RowExclusiveLock` | Wait 1 | `ShareLock` | current holders conflicting with `ShareLock`, usually open writers, plus stronger table operations ([lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)) |
+| 3: before validation | session `ShareUpdateExclusiveLock`; validation later takes heap `ShareUpdateExclusiveLock` and new-index `RowExclusiveLock` | Wait 2 | `ShareLock` | same `ShareLock` conflict set |
+| 3: after validation | session `ShareUpdateExclusiveLock` | Wait 3 | `WaitForOlderSnapshots` | same-database **old-snapshot** holders ([indexcmds.c:339-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)) |
+| 5: before set-dead | session `ShareUpdateExclusiveLock`; set-dead later takes heap and old-index `ShareUpdateExclusiveLock` | Wait 4 | `AccessExclusiveLock` | current table lock holders, including **readers** ([lock.c:99-103](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103)) |
+| 6: before drop | session `ShareUpdateExclusiveLock`; drop later takes heap and old-index `ShareUpdateExclusiveLock` | Wait 5 | `AccessExclusiveLock` | current table lock holders, including **readers** |
 
-So RIC has the same three CIC waits (writers, writers, old snapshots) **plus** two
-reader waits that CIC does not have. Those two reader waits exist because the old
-index is still being used for queries until it is marked dead, so RIC cannot
-remove it until every backend that might read through it has finished
+So RIC has the same three CIC waits (`ShareLock`, `ShareLock`, old snapshots)
+**plus** two reader-capable waits that CIC does not have. Those two reader waits
+exist because the old index may still be usable by transactions that planned
+before the swap, so RIC cannot remove it until current table lock holders that
+might touch it have finished
 ([reindex.sgml#concurrent-steps](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L334-L359)).
 
 Because `ShareUpdateExclusiveLock` is self-conflicting, only one concurrent build
@@ -310,15 +325,24 @@ validated.
 | Failure point | Leftover on the table | Recovery |
 |---|---|---|
 | Phase 1 (gather / create copies / initial lock) | **none** — phase 1's single transaction rolls back, so no `_ccnew` persists; original untouched | retry |
-| Phase 2 (Wait 1 or build) | one or more **invalid `_ccnew`** copies (the failing one **not ready**, any earlier-built ones **ready**); original still valid | `DROP INDEX <name>_ccnew`, then retry |
-| Phase 3 (Wait 2 / validate / Wait 3) | **invalid, ready `_ccnew`** copy; original still valid | `DROP INDEX <name>_ccnew`, then retry |
-| Phase 4 (swap), before its commit | swap transaction rolls back: `_ccnew` still invalid, original still valid and normally named | `DROP INDEX <name>_ccnew`, then retry |
+| Phase 2 (Wait 1 or build) | one or more **invalid `_ccnew`** copies (the failing one **not ready**, any earlier-built ones **ready**); original state unchanged | `DROP INDEX <name>_ccnew`, then retry |
+| Phase 3 (Wait 2 / validate / Wait 3) | **invalid, ready `_ccnew`** copy; original state unchanged | `DROP INDEX <name>_ccnew`, then retry |
+| Phase 4 (swap), before its commit | swap transaction rolls back: `_ccnew` still invalid, original state unchanged and normally named | `DROP INDEX <name>_ccnew`, then retry |
 | Phase 5 or 6 (after swap committed) | the **new** index is already valid and carries the original name; the **old** `_ccold` index lingers (invalid, possibly dead) | `DROP INDEX <name>_ccold` |
 
-The leftover is invalid because `plancat` never offers an `indisvalid = false`
-index to the planner, and because RIC's failure paths are ordinary
-ERROR/cancel/timeout aborts. Each phase loop runs inside a transaction precisely so
-that an abort cleans up session locks rather than leaking them
+Invalid leftovers are ignored for query planning: `get_relation_info` closes and
+skips an index whose `indisvalid` flag is false. They can still matter for
+writes, because `RelationGetIndexList` omits only indexes with `indislive =
+false`, and executor insertion skips only indexes whose `ii_ReadyForInserts` is
+false. That means a ready-but-invalid `_ccnew` or `_ccold` can still impose
+write/HOT-safety overhead even though the planner will not choose it
+([plancat.c#skip-invalid-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210),
+[relcache.c#RelationGetIndexList](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4327-L4329),
+[relcache.c#RelationGetIndexAttrBitmap](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4864-L4869),
+[execIndexing.c#ExecInsertIndexTuples](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L400)).
+RIC's failure paths are ordinary ERROR/cancel/timeout aborts. Each phase loop
+runs inside a transaction precisely so that an abort cleans up session locks
+rather than leaking them
 ([indexcmds.c#abort-cleanup](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3105-L3110)).
 
 The regression suite stages the phase-2 case directly. Starting from an index left
@@ -339,7 +363,8 @@ A unique `_ccnew` that reaches phase 3 enforces uniqueness while it is ready but
 invalid, just like any ready index — so a duplicate appearing during the second
 scan surfaces as a `duplicate key value violates unique constraint` error from
 `_bt_check_unique`
-([nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)).
+([execIndexing.c#unique-check](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L371-L400),
+[nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)).
 
 ### Multiple indexes in one command
 
@@ -386,11 +411,13 @@ The wait phases map to the view's `phase` text via the integer codes in
 - Failure coverage: the invalid `_ccnew` leftover, its manual drop, and the eventual
   repair
   ([create_index.out#invalid-handling](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358)).
-- **Test absence:** v12 ships an isolation spec for concurrent *creation*
-  (`multiple-cic.spec`) but **no** dedicated isolation spec for `REINDEX
-  CONCURRENTLY`; its concurrency is covered only indirectly through the functional
-  tests above
-  ([multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)).
+- Isolation coverage: `reindex-concurrently.spec` runs one transaction that reads,
+  one transaction that updates/inserts/deletes, and a `REINDEX TABLE
+  CONCURRENTLY` session across six permutations; the expected output shows the
+  reindex waiting in the permutations where an open read or write transaction is
+  still relevant, then completing after those transactions commit
+  ([reindex-concurrently.spec](../../../raw/postgres-12/src/test/isolation/specs/reindex-concurrently.spec#L1-L40),
+  [reindex-concurrently.out](../../../raw/postgres-12/src/test/isolation/expected/reindex-concurrently.out#L1-L78)).
 
 ## Context Reviewed
 
@@ -419,8 +446,9 @@ The wait phases map to the view's `phase` text via the integer codes in
   `doc/src/sgml/monitoring.sgml`.
 - `doc/src/sgml/ref/reindex.sgml` (CONCURRENTLY steps, restrictions, recovery).
 - Tests: `src/test/regress/sql/create_index.sql`,
-  `src/test/regress/expected/create_index.out`, and the absence of a
-  REINDEX-specific spec under `src/test/isolation/specs/`.
+  `src/test/regress/expected/create_index.out`,
+  `src/test/isolation/specs/reindex-concurrently.spec`, and
+  `src/test/isolation/expected/reindex-concurrently.out`.
 
 ## Evidence Map
 
@@ -430,8 +458,8 @@ The wait phases map to the view's `phase` text via the integer codes in
 | CONCURRENTLY cannot run in a transaction block or during recovery | [utility.c:773-807](../../../raw/postgres-12/src/backend/tcop/utility.c#L773-L807) |
 | `REINDEX INDEX` locks `ShareUpdateExclusiveLock` for concurrent; temp falls back to non-concurrent | [indexcmds.c:2336-2382](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2382) |
 | `REINDEX TABLE` no-qualifying-index NOTICE | [indexcmds.c:2477-2499](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2477-L2499) |
-| System catalogs rejected with error | [indexcmds.c:2804-2807](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2804-L2807), [indexcmds.c:2530-2533](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2530-L2533) |
-| Partitioned table/index warns and skips | [indexcmds.c:2917-2923](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2917-L2923) |
+| System catalogs rejected directly, but skipped with warning during concurrent schema/database sweeps | [indexcmds.c:2804-2807](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2804-L2807), [indexcmds.c:2530-2533](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2530-L2533), [indexcmds.c:2641-2650](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2641-L2650) |
+| Partitioned table warns and skips; partitioned index named directly errors before the concurrent path | [indexcmds.c:2917-2923](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2917-L2923), [indexcmds.c:2368-2371](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2368-L2371), [indexcmds.c:3390-3396](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3390-L3396) |
 | Invalid index skipped via table, allowed when named directly | [indexcmds.c:2819-2824](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824), [indexcmds.c:2908-2912](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2908-L2912) |
 | Exclusion index: error if named directly, skip if via table | [index.c:1268-1271](../../../raw/postgres-12/src/backend/catalog/index.c#L1268-L1271), [indexcmds.c:2825-2830](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2825-L2830) |
 | Toast indexes are gathered and rebuilt with the table | [indexcmds.c:2844-2888](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2844-L2888) |
@@ -444,16 +472,18 @@ The wait phases map to the view's `phase` text via the integer codes in
 | Per-index cumulative stats copied old->new during swap | [index.c:1683-1705](../../../raw/postgres-12/src/backend/catalog/index.c#L1683-L1705) |
 | Phase 5: Wait 4 (`AccessExclusiveLock`) then `index_concurrently_set_dead` (clears indisready+indislive) | [indexcmds.c:3272-3290](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3272-L3290), [index.c:1727-1761](../../../raw/postgres-12/src/backend/catalog/index.c#L1727-L1761) |
 | Phase 6: Wait (`AccessExclusiveLock`) then `performMultipleDeletions` drops old | [indexcmds.c:3302-3329](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3302-L3329) |
-| Drop uses `PERFORM_DELETION_CONCURRENT_LOCK` -> `index_drop` takes SUE, skips its own set-dead | [index.c:2001-2048](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2048) |
+| Drop uses `PERFORM_DELETION_CONCURRENT_LOCK` -> `index_drop` takes SUE, skips its own concurrent set-dead/two-wait branch | [dependency.c:1345-1352](../../../raw/postgres-12/src/backend/catalog/dependency.c#L1345-L1352), [index.c:2001-2197](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197) |
 | `AccessExclusiveLock` conflicts with `AccessShareLock`, so phases 5/6 wait out readers | [lock.c:99-103](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103) |
-| `ShareLock` waits (Waits 1/2) wait out writers (`RowExclusiveLock`) | [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
+| `ShareLock` waits (Waits 1/2) wait out current holders of `RowExclusiveLock`, `ShareUpdateExclusiveLock`, `ShareLock`, `ShareRowExclusiveLock`, `ExclusiveLock`, or `AccessExclusiveLock` | [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
 | `WaitForLockersMultiple` waits on VXIDs, not later transactions | [lmgr.c:850-949](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949) |
+| Invalid indexes are skipped by the planner but can still affect writes/HOT decisions while live/ready | [plancat.c:199-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210), [relcache.c:4327-4329](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4327-L4329), [relcache.c:4864-4869](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4864-L4869), [execIndexing.c:330-400](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L400) |
 | `index_set_state_flags` non-transactional in-place; `INDEX_DROP_SET_DEAD` asserts not valid | [index.c:3331-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403) |
 | Abort inside each phase loop cleans up session locks | [indexcmds.c:3105-3110](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3105-L3110) |
 | Docs: two table scans, wait for transactions, six steps, `_ccnew`/`_ccold`, recovery | [reindex.sgml:283-390](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L283-L390) |
 | Regression: failed `_ccnew` left INVALID, dropped, then repaired | [create_index.out:2323-2358](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2358) |
 | Regression: deps and comments preserved across reindex | [create_index.out:2052-2115](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2052-L2115) |
-| Regression: txn-block, system-catalog, partitioned, exclusion, temp restrictions | [create_index.out:2029-2032](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2029-L2032), [create_index.out:2278-2296](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2278-L2296), [create_index.out:2439-2460](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2439-L2460) |
+| Regression: txn-block, system-catalog, partitioned, exclusion, temp restrictions | [create_index.out:2029-2032](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2029-L2032), [create_index.out:2152-2163](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2152-L2163), [create_index.out:2278-2296](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2278-L2296), [create_index.out:2439-2460](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2439-L2460) |
+| Isolation test covers concurrent read/write transactions around RIC | [reindex-concurrently.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/reindex-concurrently.spec#L1-L40), [reindex-concurrently.out:1-78](../../../raw/postgres-12/src/test/isolation/expected/reindex-concurrently.out#L1-L78) |
 | Progress command is `REINDEX CONCURRENTLY`; phase codes/text | [indexcmds.c:2984-2991](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2984-L2991), [progress.h:73-82](../../../raw/postgres-12/src/include/commands/progress.h#L73-L82), [system_views.sql:1004-1016](../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1004-L1016) |
 
 ## Open Questions
@@ -481,7 +511,8 @@ The wait phases map to the view's `phase` text via the integer codes in
   traced through crash recovery; as on the CIC page, `index_set_state_flags` is a
   non-transactional WAL-logged in-place overwrite, so the recovered flag state
   around the set-ready / swap / set-dead boundaries was not isolated
-  ([index.c:3316-3324](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324)).
+  ([index.c:3316-3324](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324),
+  [heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5755-L5773)).
 - Whether reindexing multiple indexes that share a long base name can collide on
   the `_ccnew` / `_ccold` names is mitigated by `ChooseRelationName` plus the
   per-iteration `CommandCounterIncrement`
@@ -495,12 +526,18 @@ The wait phases map to the view's `phase` text via the integer codes in
 - [indexcmds.c#ReindexIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2382)
 - [indexcmds.c#ReindexTable](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2458-L2499)
 - [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)
+- [dependency.c#deleteOneObject-index](../../../raw/postgres-12/src/backend/catalog/dependency.c#L1345-L1352)
 - [index.c#index_concurrently_create_copy](../../../raw/postgres-12/src/backend/catalog/index.c#L1240-L1388)
 - [index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439)
 - [index.c#index_concurrently_swap](../../../raw/postgres-12/src/backend/catalog/index.c#L1447-L1716)
 - [index.c#index_concurrently_set_dead](../../../raw/postgres-12/src/backend/catalog/index.c#L1719-L1761)
-- [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2048)
+- [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197)
 - [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)
+- [heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5692-L5773)
+- [plancat.c#skip-invalid-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210)
+- [relcache.c#RelationGetIndexList](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4318-L4420)
+- [relcache.c#RelationGetIndexAttrBitmap](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4841-L4869)
+- [execIndexing.c#ExecInsertIndexTuples](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L400)
 - [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)
 - [lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)
 - [lockdefs.h#lockmodes](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46)
@@ -512,7 +549,8 @@ The wait phases map to the view's `phase` text via the integer codes in
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
 - [create_index.sql#ric-block](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L786-L905)
 - [create_index.out#ric-coverage](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2005-L2360)
-- [multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)
+- [reindex-concurrently.spec](../../../raw/postgres-12/src/test/isolation/specs/reindex-concurrently.spec#L1-L40)
+- [reindex-concurrently.out](../../../raw/postgres-12/src/test/isolation/expected/reindex-concurrently.out#L1-L78)
 
 ## Navigation
 
