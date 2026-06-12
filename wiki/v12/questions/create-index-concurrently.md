@@ -8,6 +8,24 @@ verified_by_agent: not yet
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
 
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Preconditions and restrictions](#preconditions-and-restrictions)
+  - [The three pg_index state flags](#the-three-pgindex-state-flags)
+  - [Step-by-step implementation](#step-by-step-implementation)
+  - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
+  - [All operations that can block CREATE INDEX CONCURRENTLY](#all-operations-that-can-block-create-index-concurrently)
+  - [Why two scans and three waits](#why-two-scans-and-three-waits)
+  - [Failure scenarios and the outcome on the table](#failure-scenarios-and-the-outcome-on-the-table)
+  - [Test coverage](#test-coverage)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
 ## Question
 
 give a comprehensive explanation of how create index concurrently is

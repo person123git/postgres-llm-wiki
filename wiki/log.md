@@ -2,6 +2,25 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-12] rules | AGENTS.md — require a Contents table of contents on all content pages
+
+- Added a `## MANDATORY Table of Contents` section to `AGENTS.md`: every content page (`type: question`, `type: concept`, legacy `type: answer`) must open with a `## Contents` table of contents, regardless of length. Navigation pages (`wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, `wiki/vNN/index.md`) are exempt.
+- Format mandated (matches the v12 CIC page precedent): H2 + H3 only, nested bullet list, placed between the title and the first content section; `####` and deeper excluded; the `## Contents` section does not list itself; keep it in sync on section add/remove/rename/reorder.
+- Anchors use the VS Code Markdown-preview slugifier (trim, lowercase, whitespace→`-`, strip punctuation incl. backticks/underscores/em dashes), with the `pg_index` -> `pgindex` gotcha and the duplicate `-1`/`-2` suffix rule spelled out; noted that `scripts/wiki_lint` does not validate `#`-anchor links, so they must be checked by hand in VS Code preview.
+- Wired the requirement into the `MANDATORY Answer And File` workflow as new step 9 (add the TOC), renumbering "Update indexes and log" to step 10.
+- Added a migration note: existing TOC-less content pages stay valid until next substantially revised. Did not backfill existing pages and did not change `scripts/wiki_lint` (no anchor enforcement added).
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-12] navigation v12 | CIC question — add Contents table-of-contents
+
+- Per user request, added a `## Contents` table of contents to [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md), placed between the title and `## Question`.
+- Depth is H2 + H3 (user's choice): the seven `##` sections, with the eight `###` Answer subsections nested under `Answer`. The `####` sub-subsections (the per-blocking-point and per-failure-state headings) are intentionally excluded.
+- Anchors follow VS Code's Markdown-preview slugifier (the wiki's link target per `AGENTS.md`): lowercase, whitespace→`-`, punctuation stripped including `_`, so `### The three pg_index state flags` → `#the-three-pgindex-state-flags`. Generated mechanically via the project venv, not by hand.
+- Lint-safe: `scripts/wiki_lint`'s `extract_markdown_wiki_links` skips URLs starting with `#`, so in-page anchor links are not validated as wiki links and are not flagged broken.
+- Self-checked: all 15 TOC links map 1:1 onto the 15 H2/H3 headings (excluding `Contents` itself) — no missing targets, no uncovered headings, no duplicate slugs needing `-1` suffixes.
+- No claims or content changed; this is navigation only. Verification fields untouched (`verified: false`, `verified_by_agent: not yet`); title keeps `(unverified)`. Left `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md` coverage summaries unchanged (page coverage is unchanged).
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-12] expand v12 | CIC failure-states — REINDEX _ccnew/_ccold example
 
 - Per user follow-up, added a `#### The same states under REINDEX INDEX CONCURRENTLY (the _ccnew / _ccold names)` subsection to [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md), right after the CREATE "three persistent pg_index states" table (kept as-is per the user's choice of "Both tables").

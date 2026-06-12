@@ -176,6 +176,39 @@ Why one document per question, not a question page plus an answer page:
 
 Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not create new ones. Leave existing answer pages in place until they are next substantially revised, then fold them back into their question page.
 
+## MANDATORY Table of Contents
+
+- Every content page must open with a `## Contents` table of contents: `type: question`, `type: concept`, and legacy `type: answer` pages, regardless of page length.
+- Navigation pages are exempt: `wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, and the `wiki/vNN/index.md` version landing pages.
+- Place the `## Contents` block between the page title (`# ...`) and the first content section. On a question page that means immediately before `## Question`.
+- List every `##` and `###` section in document order as a nested Markdown bullet list: each `##` is a top-level bullet and its `###` subsections are indented two spaces beneath it. Do not list `####` or deeper headings.
+- The `## Contents` section never lists itself.
+- Keep it in sync with the page: update the table of contents whenever a `##`/`###` section is added, removed, renamed, or reordered.
+- Link with page-internal Markdown anchors `[Section title](#slug)`. Build each `#slug` with the VS Code Markdown-preview rule: trim, lowercase, replace each whitespace run with `-`, then strip punctuation — including backticks, underscores, and em dashes (`—`). So `### The three pg_index state flags` -> `#the-three-pgindex-state-flags` and `## Open Questions` -> `#open-questions`. Suffix later duplicate slugs with `-1`, `-2`, and so on.
+- `scripts/wiki_lint` does not validate `#`-anchor links, so every Contents link must be checked to resolve to its heading in VS Code Markdown preview.
+
+Example (question page):
+
+```md
+# Page Title (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [First answer subsection](#first-answer-subsection)
+  - [Second answer subsection](#second-answer-subsection)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
+## Question
+```
+
+Migration note: existing content pages without a `## Contents` block remain valid and need not be changed until they are next substantially revised, at which point add the table of contents.
+
 ## MANDATORY Wiki Structure
 
 - Keep version-specific pages under `wiki/vNN/`.
@@ -228,7 +261,8 @@ Log heading format:
 6. Answer with matching-version raw citations.
 7. File the answer inline in the question page under `wiki/vNN/questions/` (`type: question`). Do not create a separate answer page; see `MANDATORY Question Documents`.
 8. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
-9. Update indexes and log.
+9. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
+10. Update indexes and log.
 
 ## MANDATORY Lint
 
