@@ -2,6 +2,16 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-12] review-fix v12 | CIC crash scope and citation precision
+
+- Fixed review findings in [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Replaced the top-level `DefineIndex` signature-only citation with citations to the actual concurrent path: `INDEX_CREATE_CONCURRENT` / `INDEX_CREATE_SKIP_BUILD` setup and the post-commit build/validate/mark-valid phase sequence.
+- Narrowed the failure/session-lock wording to ordinary ERROR/cancel paths: failure before commit 1 leaves no index; failure after commit 1 and before `SET_VALID` leaves an invalid index; either path releases the session-level `ShareUpdateExclusiveLock`.
+- Removed the definitive crash/immediate-shutdown outcome claim. The page now states that crash recovery was not traced, cites `index_set_state_flags` as non-transactional and `heap_inplace_update` as a WAL-logged in-place overwrite, and keeps the exact crash-window flag state under `## Open Questions`.
+- Added `heapam.c#heap_inplace_update` to Context Reviewed, Evidence Map, and Source References; updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md` so their summaries describe crash/immediate-shutdown as an open recovery question rather than covered behavior.
+- Verification fields untouched (`verified: false`, `verified_by_agent: not yet`); title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-12] rules | AGENTS.md — require a Contents table of contents on all content pages
 
 - Added a `## MANDATORY Table of Contents` section to `AGENTS.md`: every content page (`type: question`, `type: concept`, legacy `type: answer`) must open with a `## Contents` table of contents, regardless of length. Navigation pages (`wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, `wiki/vNN/index.md`) are exempt.

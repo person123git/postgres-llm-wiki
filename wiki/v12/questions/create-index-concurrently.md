@@ -50,11 +50,15 @@ total work: it splits the build across **four internal transactions**, does
 whole dance exists to keep the index correct under concurrent writes, since the
 build cannot freeze the table.
 
-All of the orchestration lives in `DefineIndex()` in the concurrent branch
-([indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L440)),
-which calls helpers in `index.c` (`index_create`, `index_concurrently_build`,
-`validate_index`, `index_set_state_flags`) and waits via `WaitForLockers` /
-`WaitForOlderSnapshots`.
+All of the orchestration lives in `DefineIndex()` in the concurrent path: it
+creates not-built catalog entries with `INDEX_CREATE_CONCURRENT` and
+`INDEX_CREATE_SKIP_BUILD`, then runs the post-commit build, validation, and
+mark-valid phases
+([indexcmds.c#flags](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L974-L986),
+[indexcmds.c#concurrent-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1472)).
+Those phases call helpers in `index.c` (`index_create`,
+`index_concurrently_build`, `validate_index`, `index_set_state_flags`) and wait
+via `WaitForLockers` / `WaitForOlderSnapshots`.
 
 The table lock used throughout is **`ShareUpdateExclusiveLock`** — strong enough
 to keep out a second CIC, `VACUUM`, `ANALYZE`, and schema changes, but weak
@@ -607,9 +611,10 @@ the second scan in `validate_index` runs in the next transaction, with
 
 #### A failed CIC does not leak its session lock
 
-After any failure the **only** artifact is the invalid index; the session-level
-`ShareUpdateExclusiveLock` is released. `LockRelationIdForSession` is documented
-to be removed "if an `ereport(ERROR)` occurs"
+For ordinary ERROR/cancel paths, a failure before commit 1 leaves no index; a
+failure after commit 1 and before `SET_VALID` leaves an invalid index. In either
+case, the session-level `ShareUpdateExclusiveLock` is released.
+`LockRelationIdForSession` is documented to be removed "if an `ereport(ERROR)` occurs"
 ([lmgr.c#session-lock-doc](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363)),
 because main-transaction **abort** releases session locks too: `ProcReleaseLocks`
 calls `LockReleaseAll(DEFAULT_LOCKMETHOD, !isCommit)`, and on abort `!isCommit` is
@@ -620,11 +625,14 @@ another CIC on the table.
 
 #### Server crash or immediate shutdown
 
-A crash partway through CIC is just an abort of the in-progress transaction at
-recovery, so the same per-commit rule applies: **no index** if it crashed before
-commit 1, otherwise an **invalid** index (ready or not, depending on how far the
-build had progressed). Nothing resumes an interrupted build; the leftover is
-handled like any other invalid index (see `## Open Questions`).
+This page does not state a definitive crash-recovery outcome for every
+instruction boundary. Ordinary ERROR/cancel rollback rules are not enough by
+themselves, because `index_set_state_flags` uses a non-transactional in-place
+catalog update that "will not roll back on error", and `heap_inplace_update`
+overwrites the tuple and writes a WAL record in a critical section
+([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324),
+[heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5692-L5774)).
+The unresolved crash windows are listed under `## Open Questions`.
 
 #### Recovery
 
@@ -693,6 +701,8 @@ the drop is retryable
   `REINDEX INDEX CONCURRENTLY` phase loop (`ReindexRelationConcurrently`, the
   `_ccnew`/`_ccold` naming, and `index_concurrently_swap`) in
   `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`;
+  `heap_inplace_update` in `src/backend/access/heap/heapam.c` for the scoped
+  crash-recovery open question;
   `LockRelationIdForSession` in
   `src/backend/storage/lmgr/lmgr.c` and `ProcReleaseLocks` in
   `src/backend/storage/lmgr/proc.c`; and the invalid-index regression evidence in
@@ -730,6 +740,7 @@ the drop is retryable
 | `REINDEX INDEX CONCURRENTLY`: six phases; builds `<orig>_ccnew`, swap renames it to the original and the old to `<orig>_ccold` (new marked valid, old invalid); failed `_ccnew` left INVALID | [indexcmds.c:2941-2955](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L2955), [indexcmds.c:2993-2998](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L2998), [indexcmds.c:3201-3241](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3201-L3241), [index.c:1490-1492](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492), [create_index.out:2323-2350](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2350) |
 | A failed CIC releases its session lock (removed on `ereport(ERROR)`; abort releases session locks) | [lmgr.c:356-363](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363), [proc.c:772-798](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798) |
 | `DROP INDEX CONCURRENTLY` is retryable: `INDEX_DROP_CLEAR_VALID` does not assert its starting flags | [index.c:3367-3383](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3383) |
+| Crash/immediate-shutdown outcome is left open because state-flag updates are non-transactional in-place WAL-logged overwrites | [index.c:3316-3324](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324), [heapam.c:5746-5774](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774) |
 | Tests | [create_index.sql:467-520](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
 | Initial lock acquisition point and its conflict set | [utility.c:1311-1326](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) |
 | Which v12 commands take each conflicting lock mode | [mvcc.sgml:890-1030](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1030) |
@@ -769,15 +780,15 @@ the drop is retryable
   virtual transaction ID
   ([procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539)),
   which such backends may not advertise.
-- The crash / immediate-shutdown failure outcome is reasoned from
-  `index_set_state_flags` being a WAL-logged in-place update
-  ([index.c:3399-3400](../../../raw/postgres-12/src/backend/catalog/index.c#L3399-L3400))
-  combined with the per-commit rollback rule, not traced through crash recovery.
-  The statement that nothing resumes an interrupted CIC is an absence-of-code
-  observation: no recovery path re-enters `DefineIndex`, so an interrupted build
-  is left as an ordinary invalid index. The exact flag state after a crash in the
-  razor-thin window between `index_set_state_flags(SET_READY)` and the build
-  transaction's commit was not isolated.
+- The exact crash / immediate-shutdown outcome was not traced through crash
+  recovery. This matters because `index_set_state_flags` is explicitly
+  non-transactional and will not roll back on error
+  ([index.c:3316-3324](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324)),
+  while `heap_inplace_update` WAL-logs the overwrite in a critical section
+  ([heapam.c:5746-5774](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774)).
+  The exact flag state after a crash around `INDEX_CREATE_SET_READY`,
+  `INDEX_CREATE_SET_VALID`, and their surrounding commit boundaries was not
+  isolated.
 
 ## Source References
 
@@ -808,6 +819,7 @@ the drop is retryable
 - [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2007-L2166)
 - [indexcmds.c#ReindexRelationConcurrently](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L3260)
 - [index.c#index_concurrently_swap](../../../raw/postgres-12/src/backend/catalog/index.c#L1441-L1515)
+- [heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5692-L5774)
 - [tuplesort.c#unique-violation](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4040-L4056)
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
 - [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L383)
