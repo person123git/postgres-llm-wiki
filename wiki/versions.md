@@ -13,6 +13,14 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-12: v12 `REINDEX INDEX CONCURRENTLY` gained a "Can a failure leave an
+  invalid index with the original index name?" section. For a healthy index a RIC
+  failure never leaves `index_name` invalid: the phase-4 swap renames the rebuilt
+  copy to `index_name` and flips validity atomically in one transaction, so the
+  invalid leftover is always the differently-named `_ccnew` (pre-swap) or `_ccold`
+  (post-swap) and a bloated-but-valid index never degrades to no usable index; the
+  only `index_name`-invalid outcome is an index that was already invalid before
+  RIC ran (the regression repair case).
 - 2026-06-12: v12 `REINDEX INDEX CONCURRENTLY` review tightened the `ShareLock`
   wait conflict-set wording, split partitioned-table skip from partitioned-index
   direct-target error, and added the dedicated `reindex-concurrently` isolation

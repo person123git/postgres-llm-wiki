@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: claude-opus-4-8 2026-06-12T17:41:08Z
+verified_by_agent: claude-opus-4-8 2026-06-12T20:15:00Z
 ---
 
 # How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -18,6 +18,7 @@ verified_by_agent: claude-opus-4-8 2026-06-12T17:41:08Z
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [State flags for the old and new index](#state-flags-for-the-old-and-new-index)
   - [Failure scenarios and the outcome on the table](#failure-scenarios-and-the-outcome-on-the-table)
+  - [Can a failure leave an invalid index with the original index name?](#can-a-failure-leave-an-invalid-index-with-the-original-index-name)
   - [Multiple indexes in one command](#multiple-indexes-in-one-command)
   - [Watching the phases](#watching-the-phases)
   - [Test coverage](#test-coverage)
@@ -35,6 +36,15 @@ implemented in PostgreSQL 12, including the steps, locks, and failure scenarios
 (Filed 2026-06-12 by splitting the prior combined page
 [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](create-index-concurrently.md)
 into one page per command.)
+
+Follow-up (2026-06-12): Can a failure leave an invalid index with the original
+index name? Confirm whether `REINDEX INDEX CONCURRENTLY index_name;` can, on
+failure, leave the table with an index called `index_name` that is marked invalid
+— so query plans can no longer use it. Before, the index was only bloated; after
+such a failure the table would effectively have no usable index.
+
+(The follow-up wording was corrected from the original prompt for grammar at the
+user's request; meaning preserved.)
 
 ## Answer
 
@@ -366,6 +376,79 @@ scan surfaces as a `duplicate key value violates unique constraint` error from
 ([execIndexing.c#unique-check](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L371-L400),
 [nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)).
 
+### Can a failure leave an invalid index with the original index name?
+
+**For a healthy index, no.** A `REINDEX INDEX CONCURRENTLY index_name` failure
+never leaves the table with `index_name` marked invalid and therefore no usable
+index. The name `index_name` always ends up on a **valid** index, so query plans
+can still use it. `index_name` itself is left invalid only if it was **already
+invalid before** the command ran — the repair case below.
+
+Why the name is safe: the **swap in phase 4 is the only step that touches the
+original index's name or its `indisvalid` flag**, and it does both together. In a
+single transaction, `index_concurrently_swap` renames the rebuilt copy to
+`index_name` and the old index to `index_name_ccold`, and in the same call flips
+`new.indisvalid = true`, `old.indisvalid = false`
+([index.c#swap-names](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492),
+[index.c#swap-mark-valid](../../../raw/postgres-12/src/backend/catalog/index.c#L1531-L1537)).
+Those validity writes use the **transactional** `CatalogTupleUpdate` — not the
+in-place `index_set_state_flags` — and all swaps run inside one phase-4
+transaction, so the rename and the validity flip commit or roll back together
+([indexcmds.c#phase4-txn](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3212-L3261)).
+The source comment states the intent: mark the new valid and the old invalid "at
+the same time to make sure we only get constraint violations from the indexes
+with the correct names"
+([indexcmds.c:3207-3209](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3207-L3209)).
+
+So every committed outcome keeps a valid `index_name`:
+
+| When the failure happens | What `index_name` is | Invalid leftover |
+|---|---|---|
+| Phases 1-3, or phase 4 **before** it commits | the **original** index — name and `indisvalid` untouched, still valid even if bloated | a separate `index_name_ccnew` build copy, invalid |
+| Phases 5-6, **after** the swap commits | the **rebuilt** index — already marked valid under `index_name` | the renamed `index_name_ccold` old index, invalid |
+
+A pre-swap abort discards the `_ccnew` copy's catalog work with its transaction
+and never renamed or invalidated the original; a post-swap failure can only
+happen once the rebuilt index is already valid under `index_name`. The invalid
+leftover is therefore always a **differently named** index (`_ccnew` or
+`_ccold`), never the bare `index_name`. RIC's ordinary ERROR/cancel/timeout
+aborts run inside each phase's transaction precisely so the abort rolls back
+cleanly and frees the session locks
+([indexcmds.c#abort-cleanup](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3105-L3110)).
+
+This directly answers the bloat worry: you do **not** go from "one bloated but
+valid `index_name`" to "no usable index." Before the swap the planner still has
+the original (bloated) `index_name`; after the swap it has the fresh rebuild. The
+planner skips only indexes whose `indisvalid` is false
+([plancat.c#skip-invalid-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210)),
+and in neither committed state is `index_name` the invalid one. A leftover
+`_ccnew`/`_ccold` that is ready but invalid can still add write/HOT overhead until
+you drop it, as the
+[failure table](#failure-scenarios-and-the-outcome-on-the-table) notes, but it
+does not remove your usable index.
+
+**The one exception — repairing an already-invalid index.** If `index_name` was
+invalid before you ran RIC (for example, left invalid by a failed
+`CREATE INDEX CONCURRENTLY` or an earlier failed RIC), a new pre-swap failure
+leaves it invalid — but only because it started that way, not because RIC broke a
+healthy index. The v12 regression suite stages exactly this: a unique index made
+invalid by a failed CIC over duplicate data, then
+`REINDEX INDEX CONCURRENTLY concur_reindex_ind5` fails its build with
+`could not create unique index "concur_reindex_ind5_ccnew"`, and `\d` shows
+**both** `concur_reindex_ind5` and `concur_reindex_ind5_ccnew` as `INVALID`
+([create_index.out#both-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2333)).
+Dropping the `_ccnew` spare, deleting the duplicate, and re-running RIC makes
+`concur_reindex_ind5` valid again
+([create_index.out#repair](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2335-L2358)).
+
+A crash or immediate shutdown mid-rebuild is a separate question. The swap's
+validity flip is transactional, but the phase-2 set-ready and phase-5 set-dead
+writes go through the non-transactional `index_set_state_flags` /
+`heap_inplace_update` path, so the exact recovered flag state at a crash
+instruction boundary is scoped under [Open Questions](#open-questions), not
+asserted here
+([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)).
+
 ### Multiple indexes in one command
 
 `REINDEX TABLE CONCURRENTLY` (and reindex of a matview or toast relation) rebuilds
@@ -481,6 +564,8 @@ The wait phases map to the view's `phase` text via the integer codes in
 | Abort inside each phase loop cleans up session locks | [indexcmds.c:3105-3110](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3105-L3110) |
 | Docs: two table scans, wait for transactions, six steps, `_ccnew`/`_ccold`, recovery | [reindex.sgml:283-390](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L283-L390) |
 | Regression: failed `_ccnew` left INVALID, dropped, then repaired | [create_index.out:2323-2358](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2358) |
+| A RIC failure keeps `index_name` on a valid index; only `_ccnew` (pre-swap) or `_ccold` (post-swap) is left invalid, because phase 4 atomically renames and flips `indisvalid` in one transaction via `CatalogTupleUpdate` | [indexcmds.c:3207-3261](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3207-L3261), [index.c:1490-1537](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1537) |
+| `index_name` itself ends up invalid only when it was already invalid before RIC ran (repair case) | [create_index.out:2317-2358](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2358) |
 | Regression: deps and comments preserved across reindex | [create_index.out:2052-2115](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2052-L2115) |
 | Regression: txn-block, system-catalog, partitioned, exclusion, temp restrictions | [create_index.out:2029-2032](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2029-L2032), [create_index.out:2152-2163](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2152-L2163), [create_index.out:2278-2296](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2278-L2296), [create_index.out:2439-2460](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2439-L2460) |
 | Isolation test covers concurrent read/write transactions around RIC | [reindex-concurrently.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/reindex-concurrently.spec#L1-L40), [reindex-concurrently.out:1-78](../../../raw/postgres-12/src/test/isolation/expected/reindex-concurrently.out#L1-L78) |
