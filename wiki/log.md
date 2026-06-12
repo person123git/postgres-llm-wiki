@@ -2,6 +2,17 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-12] split v12 | REINDEX INDEX CONCURRENTLY — new page split out of the CIC page
+
+- Per user request, split the combined index-concurrency page into one page per command, adding [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/reindex-index-concurrently.md) alongside the existing [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md). All evidence cites pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- New RIC page is a full deep-inquiry walkthrough of `ReindexRelationConcurrently`: the six phases (create the `_ccnew` copy via `index_concurrently_create_copy`, build, validate, swap, set-dead, drop) and the five wait points — the three shared CIC waits plus two extra `WaitForLockers(AccessExclusiveLock)` "wait for readers" waits before set-dead and drop (`AccessExclusiveLock` conflicts with `AccessShareLock`); the atomic `index_concurrently_swap` (new valid + old invalid, `_ccnew`→original / original→`_ccold` rename, constraints/triggers/comment/dependencies and per-index cumulative stats moved); `ShareUpdateExclusiveLock` scope on old index, new index, and heap; dispatch and restrictions; two-index state-flag progression; a per-phase failure table; multi-index batching; and test coverage (plus the test-absence of a RIC isolation spec).
+- Recorded a source-vs-view discrepancy under `## Open Questions`: `progress.h` defines `PROGRESS_CREATEIDX_PHASE_WAIT_5 = 9` ("waiting for readers before dropping"), but phase 6 sets `WAIT_4` (8), so that view/`monitoring.sgml` phase text is never emitted in v12. Source wins per `AGENTS.md`.
+- Edited the CIC page: replaced its in-page RIC subsection with a one-paragraph cross-link; trimmed the RIC-specific Evidence Map row, the `ReindexRelationConcurrently`/`index_concurrently_swap` Source References, and the Context Reviewed phrasing; reworded the recovery bullet; added the RIC page to Navigation. CIC content otherwise unchanged.
+- Bookkeeping: trimmed the RIC `_ccnew`/`_ccold` example from the CIC summaries and added a RIC entry/coverage clause in `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+- Prompt hygiene: the user's prompt spelled it "CONCURENTLY"; per the user's choice the filed `## Question` uses corrected "REINDEX INDEX CONCURRENTLY".
+- Both pages keep `verified: false`, `verified_by_agent: not yet`, and `(unverified)` titles. RIC page Contents lists only `##`/`###` (the six `####` phase headings are excluded, matching the CIC precedent); all 16 RIC and 15 CIC TOC anchors were checked to resolve under the VS Code slugifier.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-12] review-fix v12 | CIC crash scope and citation precision
 
 - Fixed review findings in [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
