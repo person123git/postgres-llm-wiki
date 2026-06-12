@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: claude-opus-4-8 2026-06-12T17:55:45Z
 ---
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -568,11 +568,14 @@ the second scan in `validate_index` runs in the next transaction, with
   duplicate row is deleted
   ([create_index.out#vacuum-reindex](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1400-L1406)).
 - **Repairing the leftover.** Once the underlying cause is gone, the invalid
-  index is fixed with a non-concurrent `REINDEX INDEX`
-  ([create_index.out#repair](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2335-L2350)).
-  Repairing it *concurrently* runs through `REINDEX INDEX CONCURRENTLY`, which
+  index can be rebuilt. The non-concurrent path shown in the suite is
+  `REINDEX TABLE`: after the duplicate row is deleted, `REINDEX TABLE concur_heap`
+  clears `concur_index3`'s `INVALID` marker
+  ([create_index.out#reindex-repair](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1422-L1436)).
+  Rebuilding it *concurrently* runs through `REINDEX INDEX CONCURRENTLY`, which
   builds a separate `_ccnew` copy and can itself stack another invalid index if
-  the cause persists — see
+  the cause persists, then makes the index valid once the cause is gone
+  ([create_index.out#cic-repair](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2358)) — see
   [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](reindex-index-concurrently.md).
 
 #### A failed CIC does not leak its session lock
@@ -623,7 +626,7 @@ the drop is retryable
   concurrently over duplicate rows and checks that the failed build is left
   `INVALID`, survives `VACUUM FULL`, and is repaired only after the duplicate is
   removed
-  ([create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1417)).
+  ([create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1436)).
 
 ## Context Reviewed
 
@@ -699,7 +702,7 @@ the drop is retryable
 | Every `indislive` index counts for HOT-safety; not-live indexes are omitted from the index list | [relcache.c:4388-4395](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395), [relcache.c:4861-4870](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870) |
 | Build sets `indisready` as its last action (build-scan vs validate-scan split); state-ladder asserts | [index.c:1426-1438](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438), [index.c:3353-3396](../../../raw/postgres-12/src/backend/catalog/index.c#L3353-L3396) |
 | Build-scan dup is "could not create unique index ... is duplicated"; concurrent second-scan dup is "duplicate key ... already exists" | [tuplesort.c:4048-4056](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056), [nbtinsert.c:563-568](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568) |
-| Regression: failed unique build left INVALID, retained through `VACUUM FULL`, fixed by REINDEX | [create_index.out:1383-1417](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1417), [create_index.out:1400-1406](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1400-L1406) |
+| Regression: failed unique build left INVALID, retained through `VACUUM FULL`, then made valid by non-concurrent `REINDEX TABLE` once the duplicate is deleted | [create_index.out:1383-1417](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1417), [create_index.out:1400-1406](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1400-L1406), [create_index.out:1422-1436](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1422-L1436) |
 | Named example index per `pg_index` state: `concur_index7` (none), `concur_index3` (invalid, not ready), `concur_index1`/`concur_index2` (valid) | [create_index.out:1391-1395](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1391-L1395), [create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420) |
 | A failed CIC releases its session lock (removed on `ereport(ERROR)`; abort releases session locks) | [lmgr.c:356-363](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363), [proc.c:772-798](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798) |
 | `DROP INDEX CONCURRENTLY` is retryable: `INDEX_DROP_CLEAR_VALID` does not assert its starting flags | [index.c:3367-3383](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3383) |
@@ -785,7 +788,7 @@ the drop is retryable
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
 - [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L383)
 - [proc.c#ProcReleaseLocks](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798)
-- [create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1417)
+- [create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1436)
 
 ## Navigation
 
