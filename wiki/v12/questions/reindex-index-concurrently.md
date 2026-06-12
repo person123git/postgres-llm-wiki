@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: gpt-5 2026-06-12T17:29:25Z
+verified_by_agent: claude-opus-4-8 2026-06-12T17:41:08Z
 ---
 
 # How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -474,7 +474,7 @@ The wait phases map to the view's `phase` text via the integer codes in
 | Phase 6: Wait (`AccessExclusiveLock`) then `performMultipleDeletions` drops old | [indexcmds.c:3302-3329](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3302-L3329) |
 | Drop uses `PERFORM_DELETION_CONCURRENT_LOCK` -> `index_drop` takes SUE, skips its own concurrent set-dead/two-wait branch | [dependency.c:1345-1352](../../../raw/postgres-12/src/backend/catalog/dependency.c#L1345-L1352), [index.c:2001-2197](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197) |
 | `AccessExclusiveLock` conflicts with `AccessShareLock`, so phases 5/6 wait out readers | [lock.c:99-103](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103) |
-| `ShareLock` waits (Waits 1/2) wait out current holders of `RowExclusiveLock`, `ShareUpdateExclusiveLock`, `ShareLock`, `ShareRowExclusiveLock`, `ExclusiveLock`, or `AccessExclusiveLock` | [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
+| `ShareLock` waits (Waits 1/2) wait out current holders of `RowExclusiveLock`, `ShareUpdateExclusiveLock`, `ShareRowExclusiveLock`, `ExclusiveLock`, or `AccessExclusiveLock` (not other `ShareLock` holders — `ShareLock` is not self-conflicting) | [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
 | `WaitForLockersMultiple` waits on VXIDs, not later transactions | [lmgr.c:850-949](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949) |
 | Invalid indexes are skipped by the planner but can still affect writes/HOT decisions while live/ready | [plancat.c:199-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210), [relcache.c:4327-4329](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4327-L4329), [relcache.c:4864-4869](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4864-L4869), [execIndexing.c:330-400](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L400) |
 | `index_set_state_flags` non-transactional in-place; `INDEX_DROP_SET_DEAD` asserts not valid | [index.c:3331-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403) |
