@@ -2,6 +2,15 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-14] review-fix v12 | codebase navigation guide coverage gaps
+
+- Fixed review findings in [PostgreSQL 12 Codebase Navigation Guide (unverified)](v12/codebase-navigation-guide.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Added the extended-query protocol entry path: `PostgresMain()` Parse/Bind/Execute dispatch into `exec_parse_message()`, `exec_bind_message()`, and `exec_execute_message()`, including the `CachedPlanSource`/`GetCachedPlan()`/portal handoff and matching abort-state checks.
+- Added the core extension-command boundary for contrib work: `src/backend/commands/extension.c` control-file parsing, `CreateExtensionInternal()` version/script selection and `pg_extension` insertion, and `execute_sql_string()` parsing, rewriting, planning, and executing extension script commands.
+- Tightened the utility evidence map by splitting simple-query vs extended-query evidence and citing direct `standard_ProcessUtility()` `EXPLAIN`/`SET` dispatch separately from `ProcessUtilitySlow()` DDL dispatch.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md` Coverage Notes. `verified_by_agent` remains `not yet` because this was a targeted coverage fix, not a full page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-14] scaffold | codebase guide follows question document rules
 
 - Updated `AGENTS.md` so `type: codebase-navigation-guide` keeps its root-level `wiki/vNN/codebase-navigation-guide.md` path but otherwise follows all question-document rules.

@@ -13,6 +13,12 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-14: tightened the PostgreSQL 12 codebase navigation guide after
+  review. Added the extended-query protocol Parse/Bind/Execute path through
+  `exec_parse_message()`, `exec_bind_message()`, and `exec_execute_message()`;
+  added the core `src/backend/commands/extension.c` boundary for contrib
+  extension control files, `CREATE EXTENSION`, and extension script execution;
+  and cited the direct `standard_ProcessUtility()` `EXPLAIN`/`SET` dispatch.
 - 2026-06-14: made the codebase navigation guide a mandatory root-level
   question-style `type: codebase-navigation-guide` page for every supported
   version. Converted the v12 guide to `wiki/v12/codebase-navigation-guide.md`
