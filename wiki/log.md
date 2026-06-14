@@ -2,6 +2,32 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-14] scaffold | codebase guide follows question document rules
+
+- Updated `AGENTS.md` so `type: codebase-navigation-guide` keeps its root-level `wiki/vNN/codebase-navigation-guide.md` path but otherwise follows all question-document rules.
+- Updated `scripts/wiki_lint` to treat `type: codebase-navigation-guide` as a question-style type: `verified: false`, ordered front matter, non-empty `## Question`, non-empty inline `## Answer`, and source references are now enforced.
+- Converted all supported-version guides ([v12](v12/codebase-navigation-guide.md), [v17](v17/codebase-navigation-guide.md), [v18](v18/codebase-navigation-guide.md), [v19](v19/codebase-navigation-guide.md)) from `## Guide` to `## Question` plus inline `## Answer`; the v17/v18/v19 pages use the canonical mandatory guide prompt for their version.
+- Updated `wiki/index.md`, all supported version landing pages, and `wiki/versions.md` Coverage Notes.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-14] scaffold | mandatory codebase navigation guides
+
+- Updated `AGENTS.md` to make `wiki/vNN/codebase-navigation-guide.md` mandatory for every supported version, with `type: codebase-navigation-guide`, root-level placement under `wiki/vNN/`, its own front matter shape, root-level citation depth, and required links from the global and version indexes.
+- Updated `scripts/wiki_lint` to recognize the root-level guide as a version-local managed page, require source references for it, require one guide per supported version, validate its path/type pairing, and allow only `index.md` plus `codebase-navigation-guide.md` at each version root.
+- Converted [PostgreSQL 12 Codebase Navigation Guide (unverified)](v12/codebase-navigation-guide.md) from a question-path page into the root-level guide type, adjusted citation depth from `../../../raw/postgres-12/...` to `../../raw/postgres-12/...`, and removed the `## Question` / `## Answer` wrapper.
+- Added [PostgreSQL 17 Codebase Navigation Guide (unverified)](v17/codebase-navigation-guide.md), [PostgreSQL 18 Codebase Navigation Guide (unverified)](v18/codebase-navigation-guide.md), and [PostgreSQL 19 Codebase Navigation Guide (unverified)](v19/codebase-navigation-guide.md), each citing only its matching pinned checkout.
+- Updated `wiki/index.md`, all supported version landing pages, and `wiki/versions.md` Coverage Notes.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-14] question v12 | codebase navigation guide
+
+- Filed [PostgreSQL 12 Codebase Navigation Guide (unverified)](v12/codebase-navigation-guide.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_STABLE`, 12.2).
+- Prompt hygiene: the user approved correcting "create a codebase navigation guide document" to "Create a codebase navigation guide document."; the corrected prompt is restated under `## Question` with an inline prompt note.
+- The guide maps the v12 source tree from source evidence only: top-level and backend makefile layout, SQL statement flow through `PostgresMain` / `exec_simple_query` / parser / analyzer / rewrite / planner / portal / executor, utility-command dispatch through `ProcessUtility` and `ProcessUtilitySlow`, generated catalog/parser/GUC/header artifacts, key structs (`RawStmt`, `Query`, `PlannedStmt`, `RelOptInfo`, `Path`, `QueryDesc`, `EState`, `PlanState`, `RelationData`, `TableAmRoutine`, `IndexAmRoutine`, `MemoryContextData`), contrib extension boundaries, and regression/isolation/TAP/docs surfaces.
+- Filed as `verified_by_agent: not yet`; title keeps `(unverified)`. Added a full `## Contents` table of contents, `## Context Reviewed`, `## Evidence Map`, `## Open Questions`, `## Source References`, and `## Navigation`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md` Coverage Notes.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-12] expand v17 | REINDEX INDEX CONCURRENTLY — can a failure leave the original index name invalid?
 
 - Per a user follow-up, added a `### Can a failure leave an invalid index with the original index name?` section to [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](v17/questions/reindex-index-concurrently.md), placed right after `### Failure scenarios and the outcome on the table`. The v17 companion to the same v12 RIC section. All evidence cites pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).

@@ -12,6 +12,7 @@
 Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 
 ## Pages
+- [PostgreSQL 12 Codebase Navigation Guide (unverified)](codebase-navigation-guide.md) - Mandatory root-level question-style map for navigating the pinned v12 source tree: top-level and backend makefile layout, SQL statement flow through `tcop`/parser/analyzer/rewrite/planner/executor, utility-command dispatch, generated catalog/parser/GUC/header artifacts, key structs, contrib boundaries, and test/doc surfaces.
 - [Foreign-Key Join Optimization for Two-Table Joins (unverified)](questions/fk-join-optimization-two-tables.md)
 - [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](questions/query-planner-statistics-sources.md) - Explains that the v12 planner does not use `pg_stat_all_tables`, `pg_stats`, or `pg_stats_ext` directly; it uses `pg_class`, `pg_statistic`, `pg_statistic_ext`, `pg_statistic_ext_data`, index metadata, FK metadata, constraints, and explicit planner statistics hooks, with regression coverage notes.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](questions/explain-analyze-buffers-output.md)

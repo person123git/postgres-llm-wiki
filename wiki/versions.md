@@ -13,6 +13,13 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-14: made the codebase navigation guide a mandatory root-level
+  question-style `type: codebase-navigation-guide` page for every supported
+  version. Converted the v12 guide to `wiki/v12/codebase-navigation-guide.md`
+  and added matching guides for v17, v18, and v19. Each guide has `## Question`
+  and inline `## Answer` sections and maps that version's pinned source layout,
+  normal SQL statement path, utility-command dispatch, generated/catalog
+  artifacts, key structs, contrib boundaries, tests, and docs.
 - 2026-06-12: v17 `REINDEX INDEX CONCURRENTLY` gained a "Can a failure leave an
   invalid index with the original index name?" section, the v17 companion to the
   v12 RIC section. For a healthy index a RIC failure never leaves `index_name`

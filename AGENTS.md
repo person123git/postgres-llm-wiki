@@ -66,7 +66,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 
   - Link text: short human label, typically `file.ext#Symbol` (function, struct, macro, GUC, or doc-section name). Use `file.ext:line` for a single-line citation.
   - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment. Single-line citations use `#L42`.
-  - Use enough `../` segments to make the link open from the current wiki page in VS Code. For pages under `wiki/vNN/questions/`, that prefix is `../../../raw/postgres-NN/...`.
+  - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For pages under `wiki/vNN/questions/`, that prefix is `../../../raw/postgres-NN/...`.
   - New or edited source citations must use this page-relative format. `scripts/wiki_lint` may normalize repo-relative `raw/postgres-NN/...` URLs for validation, but that is compatibility behavior, not the citation style for new work.
   - Line numbers are stable because every page pins an exact commit via `pinned_commit:`; they jump correctly in VS Code and editors that understand Markdown line fragments.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
@@ -131,6 +131,16 @@ verified: false
 verified_by_agent: not yet
 ```
 
+- Codebase navigation guide pages use this exact front matter order and otherwise follow all question-document rules:
+
+```yaml
+type: codebase-navigation-guide
+version: NN
+pinned_commit: abc123...
+verified: false
+verified_by_agent: not yet
+```
+
 - Legacy `type: answer` pages use the same field order with `type: answer`. Do not file new answer pages; see `MANDATORY Question Documents`.
 
 - Do not set the timestamp form if any claim is unverified. Fix it, move it under `## Open Questions`, or leave `verified_by_agent: not yet`.
@@ -154,10 +164,28 @@ The timestamp form is `<model-name> <ISO-8601-UTC>`: a single space separator, t
 
 - `wiki/versions.md` is the source pin manifest.
 - Each supported version has `wiki/vNN/index.md`.
+- Each supported version has `wiki/vNN/codebase-navigation-guide.md`.
 - Default new ingests and answers to the primary version unless the user specifies another.
 - If the user omits a version, assume the primary version and state that assumption.
 - Every source citation must use the matching `raw/postgres-NN/` checkout.
 - Never use citations from another PostgreSQL version.
+
+## MANDATORY Codebase Navigation Guide
+
+Every supported version must have one codebase navigation guide:
+
+```text
+wiki/vNN/codebase-navigation-guide.md
+```
+
+- Use `type: codebase-navigation-guide`.
+- File it at the version root, not under `questions/`, `concepts/`, or `answers/`.
+- Treat it as version-local content and as a question-style document. It must have front matter, a `## Contents` table of contents, `## Question`, inline `## Answer`, matching-version raw source citations, `## Context Reviewed`, `## Evidence Map`, `## Open Questions`, `## Source References`, and `## Navigation`.
+- Apply every `MANDATORY Question Documents` rule unless it conflicts with the fixed `type:` or fixed root-level path for this guide.
+- If a user-requested guide prompt exists, restate that prompt verbatim under `## Question` after applying `MANDATORY Prompt Hygiene`. If the guide is generated as a mandatory per-version scaffold without a user prompt, use this canonical question text: `Create a codebase navigation guide document for PostgreSQL NN.`
+- The guide must orient readers to the pinned checkout's source layout, normal SQL statement path, utility-command path, generated files and catalog/parser/header implications, key data structures, extension/contrib boundaries, tests, and docs.
+- Update the guide when adding a supported version, repinning a supported version, or making a meaningful source-tree coverage change that affects codebase navigation.
+- Link the guide from `wiki/index.md` and the matching `wiki/vNN/index.md`.
 
 ## MANDATORY Question Documents
 
@@ -178,9 +206,9 @@ Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not creat
 
 ## MANDATORY Table of Contents
 
-- Every content page must open with a `## Contents` table of contents: `type: question`, `type: concept`, and legacy `type: answer` pages, regardless of page length.
+- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: concept`, and legacy `type: answer` pages, regardless of page length.
 - Navigation pages are exempt: `wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, and the `wiki/vNN/index.md` version landing pages.
-- Place the `## Contents` block between the page title (`# ...`) and the first content section. On a question page that means immediately before `## Question`.
+- Place the `## Contents` block between the page title (`# ...`) and the first content section. On a question-style page, including `type: codebase-navigation-guide`, that means immediately before `## Question`.
 - List every `##` and `###` section in document order as a nested Markdown bullet list: each `##` is a top-level bullet and its `###` subsections are indented two spaces beneath it. Do not list `####` or deeper headings.
 - The `## Contents` section never lists itself.
 - Keep it in sync with the page: update the table of contents whenever a `##`/`###` section is added, removed, renamed, or reordered.
@@ -212,13 +240,14 @@ Migration note: existing content pages without a `## Contents` block remain vali
 ## MANDATORY Wiki Structure
 
 - Keep version-specific pages under `wiki/vNN/`.
+- Each `wiki/vNN/` root must contain `index.md` and the mandatory `codebase-navigation-guide.md`.
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
   - `wiki/vNN/questions/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`.
   - `wiki/vNN/concepts/` for `type: concept` pages.
   - `wiki/vNN/answers/` holds legacy `type: answer` pages only. Do not file new answer pages there.
-- The version landing page `wiki/vNN/index.md` stays at the version root and is the only page allowed there.
+- The version landing page `wiki/vNN/index.md` and `wiki/vNN/codebase-navigation-guide.md` are the only Markdown pages allowed at the version root.
 - Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../index.md)` and `[versions](../../versions.md)` from a `wiki/v18/questions/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
-- Include the version segment and the type subdirectory in links into per-version directories.
+- Include the version segment and the type subdirectory in links into per-version typed directories. The mandatory codebase navigation guide is the root-level exception, e.g. `wiki/v18/codebase-navigation-guide.md`.
 - Create a page only when the work justifies it.
 - Do not create standalone call-chain or source-trace document families.
 - Treat generated pages as drafts until source references are checked.
@@ -248,8 +277,9 @@ Log heading format:
 2. Pin it to an exact commit.
 3. Add it to `wiki/versions.md`.
 4. Create `wiki/vNN/index.md`.
-5. Update `wiki/index.md`.
-6. Append to `wiki/log.md`.
+5. Create `wiki/vNN/codebase-navigation-guide.md`.
+6. Update `wiki/index.md`.
+7. Append to `wiki/log.md`.
 
 ### MANDATORY Answer And File
 

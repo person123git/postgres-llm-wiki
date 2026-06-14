@@ -12,6 +12,8 @@
 
 Behavioral claims cite the matching pinned checkout under `raw/postgres-18/`.
 
+- [PostgreSQL 18 Codebase Navigation Guide (unverified)](codebase-navigation-guide.md) - Mandatory root-level question-style map for navigating the pinned v18 source tree: layout, SQL statement flow, utility dispatch, generated/catalog artifacts, key structs, contrib boundaries, tests, and docs.
+
 ## Questions
 
 - [How Bi-Directional Logical Replication Works in PostgreSQL 18, and New Logical Replication Features Since PostgreSQL 17 (unverified)](questions/bidirectional-logical-replication.md) - How two v18 nodes replicate to each other without loops via mutual `origin = none` subscriptions (apply-worker origin tagging into WAL, `pgoutput`/decode-time origin filtering, the `copy_data` initial-sync WARNING, setup pattern, limitations), plus the new v18 conflict detection (`update_origin_differs`/`delete_origin_differs` and friends, logged and counted in `pg_stat_subscription_stats`); with a verified section on all logical replication features new since v17: conflict logging/stats, generated-column replication (`publish_generated_columns`), `streaming = parallel` default, alterable `two_phase`, the `max_active_replication_origins` and `idle_replication_slot_timeout` GUCs, `pg_createsubscriber` `--all`/`--clean`/`--enable-two-phase`, `pg_recvlogical` improvements, and contrib `pg_logicalinspect`.

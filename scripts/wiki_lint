@@ -27,8 +27,13 @@ from wiki_tooling import (
 
 
 MANAGED_VERSION_DIRS = ("questions",)
-SOURCE_REQUIRED_TYPES = {"question"}
+CODEBASE_GUIDE_BASENAME = "codebase-navigation-guide"
+CODEBASE_GUIDE_TYPE = "codebase-navigation-guide"
+SOURCE_REQUIRED_TYPES = {"question", CODEBASE_GUIDE_TYPE}
+QUESTION_STYLE_TYPES = {"question", CODEBASE_GUIDE_TYPE}
+QUESTION_SECTION_REQUIRED_TYPES = {CODEBASE_GUIDE_TYPE}
 ROOT_EXEMPT_SLUGS = {"index", "overview", "versions", "log"}
+VERSION_ROOT_ALLOWED_BASENAMES = {"index", CODEBASE_GUIDE_BASENAME}
 
 
 @dataclass
@@ -44,6 +49,8 @@ def rel(path: Path) -> str:
 
 def is_version_local(slug: str) -> tuple[str | None, str | None]:
     parts = slug.split("/")
+    if len(parts) == 2 and re.fullmatch(r"v\d+", parts[0]) and parts[1] == CODEBASE_GUIDE_BASENAME:
+        return parts[0][1:], CODEBASE_GUIDE_TYPE
     if len(parts) >= 3 and re.fullmatch(r"v\d+", parts[0]) and parts[1] in MANAGED_VERSION_DIRS:
         return parts[0][1:], parts[1]
     return None, None
@@ -95,7 +102,19 @@ def lint() -> tuple[list[Issue], list[Issue]]:
         if requires_front_matter(slug) and not has_fm:
             errors.append(Issue("ERROR", rel(path), "missing required front matter"))
 
-        version, _ = is_version_local(slug)
+        parts = slug.split("/")
+        if (
+            len(parts) == 2
+            and re.fullmatch(r"v\d+", parts[0])
+            and parts[1] not in VERSION_ROOT_ALLOWED_BASENAMES
+        ):
+            errors.append(Issue(
+                "ERROR",
+                rel(path),
+                "version root may only contain index.md and codebase-navigation-guide.md",
+            ))
+
+        version, version_local_kind = is_version_local(slug)
         if version:
             expected = versions.get(version, {}).get("commit")
             if str(fm.get("version", "")) != version:
@@ -109,8 +128,19 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                 errors.append(Issue("ERROR", rel(path), f"cites source checkout(s) for wrong version: {', '.join(wrong)}"))
 
         page_type = str(fm.get("type", ""))
+        if version_local_kind == CODEBASE_GUIDE_TYPE and page_type != CODEBASE_GUIDE_TYPE:
+            errors.append(Issue("ERROR", rel(path), f"codebase navigation guide must have type: {CODEBASE_GUIDE_TYPE}"))
+        if page_type == CODEBASE_GUIDE_TYPE and version_local_kind != CODEBASE_GUIDE_TYPE:
+            errors.append(Issue("ERROR", rel(path), "codebase navigation guide must live at wiki/vNN/codebase-navigation-guide.md"))
+
         if page_type in SOURCE_REQUIRED_TYPES and not has_source_references(text):
             errors.append(Issue("ERROR", rel(path), "missing ## Source References entries"))
+
+        if page_type in QUESTION_SECTION_REQUIRED_TYPES:
+            if not section_text(text, "Question"):
+                errors.append(Issue("ERROR", rel(path), "missing non-empty ## Question section"))
+            if not section_text(text, "Answer"):
+                errors.append(Issue("ERROR", rel(path), "missing non-empty ## Answer section"))
 
         # Verification field checks
         if requires_front_matter(slug):
@@ -123,12 +153,11 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                 if not re.match(r"^[a-zA-Z0-9_-]+ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", str(vba)):
                     errors.append(Issue("ERROR", rel(path), "verified_by_agent invalid format: <model> YYYY-MM-DDTHH:MM:SSZ"))
 
-            if page_type == "question" and verified != "false":
-                errors.append(Issue("ERROR", rel(path), "Question pages must have verified: false"))
+            if page_type in QUESTION_STYLE_TYPES and verified != "false":
+                errors.append(Issue("ERROR", rel(path), "question-style pages must have verified: false"))
 
-            if page_type == "question":
+            if page_type in QUESTION_STYLE_TYPES:
                 all_keys = ['type', 'version', 'pinned_commit', 'verified', 'verified_by_agent']
-                # verified_by_agent is optional (set only after review); accept 4- or 5-key forms
                 present_expected = [k for k in all_keys if k in fm]
                 if list(fm.keys()) != present_expected:
                     warnings.append(Issue("WARN", rel(path), f"front matter keys not in order: {list(fm.keys())} (expected {all_keys})"))
@@ -177,6 +206,10 @@ def lint() -> tuple[list[Issue], list[Issue]]:
         warnings.append(Issue("WARN", f"wiki/{slug}.md", "orphan page has no inbound wiki links"))
 
     for version in versions:
+        guide = WIKI_ROOT / f"v{version}" / f"{CODEBASE_GUIDE_BASENAME}.md"
+        if not guide.exists():
+            errors.append(Issue("ERROR", rel(guide), "missing mandatory codebase navigation guide"))
+
         landing = WIKI_ROOT / f"v{version}" / "index.md"
         if not landing.exists():
             errors.append(Issue("ERROR", rel(landing), "missing version landing page"))
