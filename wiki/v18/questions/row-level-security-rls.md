@@ -1,0 +1,248 @@
+---
+type: question
+version: 18
+pinned_commit: 6cb307251c5c6261286c1566496920976640108e
+verified: false
+verified_by_agent: not yet
+---
+
+# Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 12 (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Answer Up Front](#answer-up-front)
+  - [Implementation Path](#implementation-path)
+  - [Visibility and Write Checks](#visibility-and-write-checks)
+  - [Policy Storage and DDL](#policy-storage-and-ddl)
+  - [Bypass and Environment Decisions](#bypass-and-environment-decisions)
+  - [Planner and Executor Effects](#planner-and-executor-effects)
+  - [Partitions Views COPY and Replication](#partitions-views-copy-and-replication)
+  - [Scalability and Performance Issues](#scalability-and-performance-issues)
+  - [Settings and Related Surfaces](#settings-and-related-surfaces)
+  - [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12)
+  - [Test Coverage](#test-coverage)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
+## Question
+
+In PostgreSQL 18, how is Row-Level Security (RLS) implemented? What are the possible scalability and/or performance issues? What are all settings related to the feature? List all fixes since PostgreSQL 12.
+
+Prompt note: the original prompt contained typos, and the user approved correcting the wording before filing.
+
+## Answer
+
+### Answer Up Front
+
+PostgreSQL 18 implements Row-Level Security during query rewrite, not as a table access method or executor-only feature. For each ordinary or partitioned table range-table entry, the rewriter calls `get_row_security_policies()`, decides whether RLS applies for the current role and `row_security` setting, then injects policy expressions as `RangeTblEntry.securityQuals` for row visibility and as `WithCheckOption` entries for writes.[rowsecurity.c#get_row_security_policies](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L97-L529) [rewriteHandler.c#fireRIRrules](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2224-L2334)
+
+The visibility rule is "OR permissive policies, AND restrictive policies"; if RLS is enabled but no permissive policy matches, PostgreSQL adds a constant-false qual, which is the default-deny behavior.[rowsecurity.c#add_security_quals](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L688-L778) Write checks use `WITH CHECK` expressions when present, fall back to `USING` expressions when needed, and create error-producing `WithCheckOption` entries for `INSERT`, `UPDATE`, `ON CONFLICT DO UPDATE`, and `MERGE` actions.[rowsecurity.c#add_with_check_options](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L780-L909) [parsenodes.h#WCOKind](../../../raw/postgres-18/src/include/nodes/parsenodes.h#L1386-L1404)
+
+The main performance costs are policy-expression evaluation, larger planner qual trees, security-barrier ordering constraints, per-role plan-cache invalidation, policy DDL locks, and policy catalog/cache work when many policies or roles exist. The source shows those mechanisms directly: policies become security barrier quals, the planner assigns security levels to them, cached plans record RLS dependence on role and `row_security`, policy DDL takes `AccessExclusiveLock`, and role matching walks policy role arrays with `has_privs_of_role()`.[parsenodes.h#RangeTblEntry.securityQuals](../../../raw/postgres-18/src/include/nodes/parsenodes.h#L1277-L1278) [planner.c#securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L828-L836) [initsplan.c#securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1645) [plancache.c#RLS-dependencies](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L445-L452) [policy.c#CreatePolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L568-L759) [rowsecurity.c#check_role_for_policy](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L911-L932)
+
+The only RLS-specific server GUC is `row_security`; it is `PGC_USERSET`, defaults to `on`, and therefore has session or transaction scope, not reload or restart scope.[guc_tables.c#row_security](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1696-L1703) The rest of the related controls are SQL/catalog surfaces: table flags `relrowsecurity` and `relforcerowsecurity`, policy rows in `pg_policy`, the `BYPASSRLS` role attribute, `row_security_active()` inspection functions, catalog views, and pg_dump/pg_restore row-security options.[pg_class.h#relrowsecurity](../../../raw/postgres-18/src/include/catalog/pg_class.h#L110-L114) [pg_policy.h#FormData_pg_policy](../../../raw/postgres-18/src/include/catalog/pg_policy.h#L29-L43) [pg_authid.h#rolbypassrls](../../../raw/postgres-18/src/include/catalog/pg_authid.h#L35-L41) [rls.c#row_security_active](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L135-L167) [pg_dump.sgml#enable-row-security](../../../raw/postgres-18/doc/src/sgml/ref/pg_dump.sgml#L784-L800)
+
+### Implementation Path
+
+RLS starts with table metadata. `pg_class` stores whether a relation has row security enabled and whether owners are forced through policies, and `pg_policy` stores policy name, command, permissive/restrictive mode, role array, `USING` expression, and `WITH CHECK` expression.[pg_class.h#FormData_pg_class](../../../raw/postgres-18/src/include/catalog/pg_class.h#L110-L114) [pg_policy.h#FormData_pg_policy](../../../raw/postgres-18/src/include/catalog/pg_policy.h#L29-L43)
+
+The relcache builds a `RowSecurityDesc` for a relation by scanning `pg_policy`, copying each policy's roles and serialized expression trees, and caching whether policy expressions contain sublinks.[policy.c#RelationBuildRowSecurity](../../../raw/postgres-18/src/backend/commands/policy.c#L192-L322) The in-memory `RowSecurityPolicy` stores the command kind, permissive flag, roles, policy qual, `WITH CHECK` qual, and sublink marker.[rowsecurity.h#RowSecurityPolicy](../../../raw/postgres-18/src/include/rewrite/rowsecurity.h#L20-L35)
+
+During rewrite, `fireRIRrules()` loops over range-table entries, skips non-table and non-partitioned-table entries, calls `get_row_security_policies()`, prepends returned security quals to the RTE, appends returned write checks to the query, and marks the query if RLS or sublinks are present.[rewriteHandler.c#fireRIRrules](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2224-L2334) When a policy expression contains sublinks, rewrite recurses into those sublinks and also locks relations referenced by the sublink query.[rewriteHandler.c#fireRIRrules-sublinks](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2281-L2323)
+
+`get_row_security_policies()` first rejects non-table and non-partitioned-table relations, finds the user to check from the RTE permission info, and calls `check_enable_rls()` to classify the relation as no RLS, no RLS but environment-dependent, or RLS enabled.[rowsecurity.c#get_row_security_policies](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L97-L150) The environment-dependent case adds no quals but marks `Query.hasRowSecurity` so a cached plan is invalidated if the role or `row_security` setting later changes.[rowsecurity.c#get_row_security_policies](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L136-L150) [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717)
+
+Policy selection is command-specific. Target-table `SELECT`, `UPDATE`, `DELETE`, and `INSERT` use the query command type; non-target relations use `SELECT`; `MERGE` is split into the action-specific `SELECT`, `UPDATE`, `DELETE`, and `INSERT` policy paths rather than using a separate `MERGE` policy.[rowsecurity.c#get_row_security_policies](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L153-L229) [rowsecurity.c#MERGE](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L381-L514) [create_policy.sgml#MERGE](../../../raw/postgres-18/doc/src/sgml/ref/create_policy.sgml#L742-L747)
+
+Extensions can add policies with two hooks. Permissive hook policies are OR-combined with internal permissive policies, and restrictive hook policies are AND-combined with internal restrictive policies.[rowsecurity.c#hooks](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L77-L87) The `test_rls_hooks` module exercises hook-only and hook-plus-internal policy behavior.[test_rls_hooks.c#hooks](../../../raw/postgres-18/src/test/modules/test_rls_hooks/test_rls_hooks.c#L32-L162) [test_rls_hooks.sql#coverage](../../../raw/postgres-18/src/test/modules/test_rls_hooks/sql/test_rls_hooks.sql#L20-L161)
+
+### Visibility and Write Checks
+
+For visibility, `add_security_quals()` gathers policy `USING` expressions. It appends restrictive policy expressions as separate ANDed quals, ORs all permissive policy expressions into one qual, and injects a constant-false qual if no permissive policy exists.[rowsecurity.c#add_security_quals](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L688-L778)
+
+For writes, `add_with_check_options()` builds `WithCheckOption` entries. Permissive policies are combined into one OR expression, restrictive policies become separate checks with policy names for error reporting, and a no-permissive-policy case becomes a false check.[rowsecurity.c#add_with_check_options](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L780-L909) The executor evaluates those entries per tuple and suppresses row data in RLS error messages.[execMain.c#ExecWithCheckOptions](../../../raw/postgres-18/src/backend/executor/execMain.c#L2222-L2370)
+
+`INSERT` and `UPDATE` use `WITH CHECK` when a policy has it, otherwise they use the policy's `USING` expression for write checks when needed.[rowsecurity.c#INSERT-UPDATE-WCO](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L258-L301) `ON CONFLICT DO UPDATE` uses conflict-check WCOs for update `USING`, adds `SELECT` policies if the statement needs SELECT rights, and then adds update `WITH CHECK` checks.[rowsecurity.c#ON-CONFLICT](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L303-L378) `MERGE` has action-specific RLS WCO kinds for UPDATE, DELETE, and INSERT, and the executor applies the relevant `MERGE` WCO after the action's `WHEN` qual passes.[rowsecurity.c#MERGE](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L381-L514) [nodeModifyTable.c#MERGE-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L3168-L3178)
+
+The SQL documentation matches the source rule: `USING` filters visible rows, `WITH CHECK` checks new rows for `INSERT` and `UPDATE`, `WITH CHECK` defaults to the `USING` expression when absent, and policy expressions run before ordinary user conditions except where leakproof functions can move earlier.[create_policy.sgml#USING-WITH-CHECK](../../../raw/postgres-18/doc/src/sgml/ref/create_policy.sgml#L43-L68) [ddl.sgml#RLS-expression-order](../../../raw/postgres-18/doc/src/sgml/ddl.sgml#L2643-L2656)
+
+### Policy Storage and DDL
+
+`CREATE POLICY` and `ALTER POLICY` parse policy expressions with policy expression kinds, store the serialized expression trees in `pg_policy`, record role and expression dependencies, and invalidate the relation cache.[policy.c#CreatePolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L568-L759) [policy.c#AlterPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L767-L1089) Both commands open the table with `AccessExclusiveLock`.[policy.c#CreatePolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L568-L759) [policy.c#AlterPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L767-L1089)
+
+Policy DDL is limited to ordinary tables and partitioned tables, requires table ownership, and rejects system tables unless the callback allows them.[policy.c#RangeVarCallbackForPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L48-L96) The grammar defaults policies to `AS PERMISSIVE`, `FOR ALL`, and `TO PUBLIC` when those clauses are omitted.[gram.y#CreatePolicyStmt](../../../raw/postgres-18/src/backend/parser/gram.y#L5890-L5982) [create_policy.sgml#parameters](../../../raw/postgres-18/doc/src/sgml/ref/create_policy.sgml#L76-L99)
+
+`ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY` changes `pg_class.relrowsecurity`, and `ALTER TABLE ... FORCE/NO FORCE ROW LEVEL SECURITY` changes `pg_class.relforcerowsecurity`.[tablecmds.c#ATExecSetRowSecurity](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L18602-L18630) [tablecmds.c#ATExecForceNoForceRowSecurity](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L18633-L18658) Those subcommands require `AccessExclusiveLock` and are valid for tables and partitioned tables.[tablecmds.c#ATPrepCmd-locks](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L4708-L4718) [tablecmds.c#ATSimplePermissions](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L5251-L5258)
+
+Dropping a policy removes the catalog row, opens the target relation with `AccessExclusiveLock`, and invalidates the relcache; if RLS remains enabled and no policy permits a row, the default-deny path still applies.[policy.c#RemovePolicyById](../../../raw/postgres-18/src/backend/commands/policy.c#L331-L400)
+
+### Bypass and Environment Decisions
+
+`check_enable_rls()` returns `RLS_NONE` if the relation has no RLS or is a built-in relation that should not apply it.[rls.c#check_enable_rls](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L51-L78) Superusers and roles with `BYPASSRLS` bypass policies, and table owners bypass policies unless the table is forced through RLS or PostgreSQL is inside a no-force-RLS operation.[rls.c#check_enable_rls](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L80-L118)
+
+If RLS applies and the `row_security` GUC is off, `check_enable_rls()` raises an error unless its caller requested no error.[rls.c#check_enable_rls](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L120-L132) The SQL functions `row_security_active(oid)` and `row_security_active(text)` expose the same decision path to SQL callers.[rls.c#row_security_active](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L135-L167) [pg_proc.dat#row_security_active](../../../raw/postgres-18/src/include/catalog/pg_proc.dat#L12262-L12270)
+
+The role attribute is stored as `pg_authid.rolbypassrls`, and only a current user with `BYPASSRLS` can create or alter a role to have that attribute.[pg_authid.h#rolbypassrls](../../../raw/postgres-18/src/include/catalog/pg_authid.h#L35-L41) [user.c#CreateRole-BYPASSRLS](../../../raw/postgres-18/src/backend/commands/user.c#L339-L344) [user.c#AlterRole-BYPASSRLS](../../../raw/postgres-18/src/backend/commands/user.c#L796-L817)
+
+### Planner and Executor Effects
+
+RLS quals are stored in `RangeTblEntry.securityQuals`, the same security-barrier qual list used for security-barrier views.[parsenodes.h#RangeTblEntry.securityQuals](../../../raw/postgres-18/src/include/nodes/parsenodes.h#L1031-L1036) [parsenodes.h#RangeTblEntry.securityQuals-field](../../../raw/postgres-18/src/include/nodes/parsenodes.h#L1277-L1278) The planner computes the maximum security level from those lists and preprocesses each security qual separately.[planner.c#securityQuals-level](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L828-L836) [planner.c#preprocess-securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L1044-L1055)
+
+`distribute_qual_to_rels()` moves RLS security quals into base relation restriction info with increasing security levels, so they participate in ordinary planning but keep security ordering metadata.[initsplan.c#process_security_barrier_quals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1472-L1476) [initsplan.c#securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1645)
+
+Cached plans store whether the rewrite result depends on RLS, the rewrite role, and the `row_security` setting; later validation rejects the cache entry if the role or setting changes.[plancache.c#CachedPlanSource-RLS](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L445-L452) [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717) `extract_query_dependencies_walker()` also records that a query depends on role if any `Query` node has RLS.[setrefs.c#extract_query_dependencies](../../../raw/postgres-18/src/backend/optimizer/plan/setrefs.c#L3634-L3660) [setrefs.c#dependsOnRole](../../../raw/postgres-18/src/backend/optimizer/plan/setrefs.c#L3711-L3713)
+
+Executor permission checks do not implement RLS visibility; they run ordinary ACL checks at executor startup, while RLS write checks run through `ExecWithCheckOptions()` for the relevant WCO kind.[execMain.c#ExecCheckPermissions](../../../raw/postgres-18/src/backend/executor/execMain.c#L565-L576) [execMain.c#ExecWithCheckOptions](../../../raw/postgres-18/src/backend/executor/execMain.c#L2222-L2370) Insert, update, `ON CONFLICT`, partition-movement, and `MERGE` paths choose the WCO kind before calling that executor check.[nodeModifyTable.c#INSERT-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L1068-L1090) [nodeModifyTable.c#UPDATE-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L2205-L2214) [nodeModifyTable.c#ON-CONFLICT-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L2874-L2890) [nodeModifyTable.c#MERGE-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L3168-L3178)
+
+RLS also affects error detail paths. Foreign-key violations and index metadata errors suppress row details when RLS is enabled, so error messages do not disclose rows hidden by policy.[ri_triggers.c#RLS-FK-checks](../../../raw/postgres-18/src/backend/utils/adt/ri_triggers.c#L1587-L1599) [ri_triggers.c#RLS-FK-error-detail](../../../raw/postgres-18/src/backend/utils/adt/ri_triggers.c#L2684-L2700) [genam.c#RLS-index-error](../../../raw/postgres-18/src/backend/access/index/genam.c#L194-L208) [execMain.c#ExecBuildSlotValueDescription](../../../raw/postgres-18/src/backend/executor/execMain.c#L2410-L2416)
+
+### Partitions Views COPY and Replication
+
+For inheritance and partition expansion, PostgreSQL copies parent-derived security quals to child RTE handling and leaves inherited child RTE `securityQuals` empty; the planner comment says inheritance-child RTEs do not have their own security quals.[inherit.c#expand_single_inheritance_child](../../../raw/postgres-18/src/backend/optimizer/util/inherit.c#L478-L505) [planner.c#securityQuals-level](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L828-L836) There is separate code for child security quals in UNION ALL/subquery expansion, but the inheritance path is parent-qual based.[inherit.c#apply_child_securityQuals](../../../raw/postgres-18/src/backend/optimizer/util/inherit.c#L922-L944)
+
+Views normally use the view owner's policies for underlying table access; `security_invoker` views can change whose privileges and policies apply.[create_policy.sgml#views](../../../raw/postgres-18/doc/src/sgml/ref/create_policy.sgml#L733-L739)
+
+`COPY TO` on an RLS-applicable table is converted to a query `COPY`, while `COPY FROM` raises an error because the copy-from path does not support RLS checks.[copy.c#DoCopy-RLS](../../../raw/postgres-18/src/backend/commands/copy.c#L208-L234) The generated RLS `COPY TO` query marks the source relation as `ONLY`, so inheritance children are not silently copied through the generated query.[copy.c#COPY-TO-RLS-ONLY](../../../raw/postgres-18/src/backend/commands/copy.c#L289-L299)
+
+`CREATE TABLE AS` rejects RLS on the destination relation because policies are not implemented for that command path.[createas.c#CTAS-RLS](../../../raw/postgres-18/src/backend/commands/createas.c#L535-L546) Logical replication apply and table synchronization reject writes into RLS-enabled target tables when the subscription owner is subject to RLS, because those code paths lack RLS enforcement infrastructure and `COPY FROM` does not honor RLS.[worker.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/worker.c#L2368-L2380) [tablesync.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c#L1530-L1542)
+
+### Scalability and Performance Issues
+
+Policy expressions add per-query planning work and per-row execution work. The rewriter copies policy expression trees into security quals or WCOs, the planner preprocesses each security qual, and the executor evaluates WCO expressions per tuple.[rowsecurity.c#add_security_quals](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L688-L778) [planner.c#preprocess-securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L1044-L1055) [execMain.c#ExecWithCheckOptions](../../../raw/postgres-18/src/backend/executor/execMain.c#L2222-L2370)
+
+Many permissive policies can make large OR expressions, and many restrictive policies add multiple ANDed security quals. That shape comes directly from `add_security_quals()` and `add_with_check_options()`.[rowsecurity.c#add_security_quals](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L688-L778) [rowsecurity.c#add_with_check_options](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L780-L909)
+
+Security-barrier ordering can reduce freedom to reorder predicates. PostgreSQL stores RLS quals as security-barrier quals, assigns security levels, and documents that policy expressions are evaluated before user query conditions except where the optimizer can move leakproof functions earlier.[parsenodes.h#RangeTblEntry.securityQuals](../../../raw/postgres-18/src/include/nodes/parsenodes.h#L1277-L1278) [initsplan.c#securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1645) [ddl.sgml#RLS-expression-order](../../../raw/postgres-18/doc/src/sgml/ddl.sgml#L2643-L2656)
+
+Policy subqueries add rewrite recursion, relation locks for sublink queries, and normal planning/execution cost for those subqueries.[rewriteHandler.c#fireRIRrules-sublinks](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2281-L2323) The RLS documentation includes policy examples that call functions and use subqueries, which are valid but can add the cost of those objects to every protected query path that uses the policy.[ddl.sgml#RLS-subquery-example](../../../raw/postgres-18/doc/src/sgml/ddl.sgml#L2984-L3001)
+
+RLS can reduce plan-cache reuse across role or `row_security` changes. Cached plans record the rewrite role and `row_security` value when RLS matters and are invalidated when either differs at reuse time.[plancache.c#CachedPlanSource-RLS](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L445-L452) [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717) SQL-language function inlining also marks plans role-dependent when inlined function queries contain RLS.[clauses.c#inline_function-RLS](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c#L5334-L5339)
+
+Large policy catalogs and role arrays add rewrite-time work. `get_policies_for_relation()` walks all cached policies for the relation, checks policy command applicability, checks role applicability, sorts restrictive policies by name, and appends hook policies.[rowsecurity.c#get_policies_for_relation](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L540-L654) Role applicability checks use `has_privs_of_role()` for each policy role unless the policy role is `PUBLIC`.[rowsecurity.c#check_role_for_policy](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L911-L932)
+
+Policy and table-RLS DDL has high lock impact because `CREATE POLICY`, `ALTER POLICY`, `DROP POLICY`, and `ALTER TABLE ... ROW LEVEL SECURITY` paths use `AccessExclusiveLock` on the table.[policy.c#CreatePolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L568-L759) [policy.c#AlterPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L767-L1089) [policy.c#RemovePolicyById](../../../raw/postgres-18/src/backend/commands/policy.c#L331-L400) [tablecmds.c#ATPrepCmd-locks](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L4708-L4718)
+
+`COPY TO` under RLS is not the direct table-copy path; PostgreSQL rewrites it as query `COPY`, so it pays query planning and policy evaluation costs.[copy.c#DoCopy-RLS](../../../raw/postgres-18/src/backend/commands/copy.c#L208-L234) `COPY FROM`, `CREATE TABLE AS` destination policies, and logical replication apply under an RLS-subject owner are unsupported rather than slower paths.[copy.c#DoCopy-RLS](../../../raw/postgres-18/src/backend/commands/copy.c#L230-L234) [createas.c#CTAS-RLS](../../../raw/postgres-18/src/backend/commands/createas.c#L535-L546) [worker.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/worker.c#L2368-L2380)
+
+The source tree does not include a benchmark that quantifies these costs. The regression tests verify semantics for policies, owners, partitioning, COPY, hooks, MERGE, plan invalidation, and known security fixes, but they do not measure throughput or latency.[rowsecurity.sql#basic-coverage](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L88-L117) [rowsecurity.sql#MERGE](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L814-L966) [rowsecurity.sql#plan-invalidation](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2359-L2401)
+
+### Settings and Related Surfaces
+
+| Surface | Scope or restart impact | What it controls | Evidence |
+|---|---|---|---|
+| `row_security` GUC | `PGC_USERSET`, so session or transaction scope; no reload or restart is required. | `on` applies policies; `off` errors if a policy would apply; it does not affect superusers or roles with `BYPASSRLS`. | [guc_tables.c#row_security](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1696-L1703) [config.sgml#row-security](../../../raw/postgres-18/doc/src/sgml/config.sgml#L9769-L9790) [rls.c#check_enable_rls](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L120-L132) |
+| `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` / `DISABLE ROW LEVEL SECURITY` | Catalog change with `AccessExclusiveLock`; not a GUC restart/reload setting. | Sets or clears `pg_class.relrowsecurity`. | [alter_table.sgml#ROW-LEVEL-SECURITY](../../../raw/postgres-18/doc/src/sgml/ref/alter_table.sgml#L700-L711) [tablecmds.c#ATExecSetRowSecurity](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L18602-L18630) |
+| `ALTER TABLE ... FORCE ROW LEVEL SECURITY` / `NO FORCE ROW LEVEL SECURITY` | Catalog change with `AccessExclusiveLock`; not a GUC restart/reload setting. | Sets or clears `pg_class.relforcerowsecurity`, which decides whether the table owner is subject to policies. | [alter_table.sgml#FORCE-ROW-LEVEL-SECURITY](../../../raw/postgres-18/doc/src/sgml/ref/alter_table.sgml#L715-L725) [tablecmds.c#ATExecForceNoForceRowSecurity](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L18633-L18658) [rls.c#owner-bypass](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L90-L118) |
+| `CREATE POLICY` / `ALTER POLICY` clauses: `AS PERMISSIVE/RESTRICTIVE`, `FOR`, `TO`, `USING`, `WITH CHECK` | Catalog change with `AccessExclusiveLock`; not a GUC restart/reload setting. | Creates or changes rows in `pg_policy`; omitted clauses default to permissive, all commands, and public. | [gram.y#policy-grammar](../../../raw/postgres-18/src/backend/parser/gram.y#L5890-L5982) [policy.c#CreatePolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L568-L759) [policy.c#AlterPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L767-L1089) |
+| `CREATE ROLE ... BYPASSRLS` / `ALTER ROLE ... BYPASSRLS` | Catalog role attribute; not a GUC restart/reload setting. | Lets a role bypass row security; superusers bypass RLS too. | [create_role.sgml#BYPASSRLS](../../../raw/postgres-18/doc/src/sgml/ref/create_role.sgml#L205-L220) [pg_authid.h#rolbypassrls](../../../raw/postgres-18/src/include/catalog/pg_authid.h#L35-L41) [rls.c#BYPASSRLS](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L80-L88) |
+| `row_security_active(regclass)` and `row_security_active(text)` | SQL inspection functions; no restart/reload setting. | Reports whether RLS is active for a relation in the caller's current environment. | [rls.c#row_security_active](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L135-L167) [pg_proc.dat#row_security_active](../../../raw/postgres-18/src/include/catalog/pg_proc.dat#L12262-L12270) |
+| `pg_policies`, `pg_tables.rowsecurity`, `pg_roles.rolbypassrls` | Catalog/system-view read surfaces; no restart/reload setting. | Expose policy definitions, table row-security enablement, and role bypass status. | [system_views.sql#pg_policies](../../../raw/postgres-18/src/backend/catalog/system_views.sql#L73-L106) [system_views.sql#pg_tables](../../../raw/postgres-18/src/backend/catalog/system_views.sql#L128-L137) [system-views.sgml#pg_roles](../../../raw/postgres-18/doc/src/sgml/system-views.sgml#L3095-L3101) |
+| `pg_dump --enable-row-security` | Client option. It makes pg_dump issue `SET row_security = on`; otherwise pg_dump sets it off. | Allows a non-bypass user to dump only rows visible through RLS instead of erroring. | [pg_dump.sgml#enable-row-security](../../../raw/postgres-18/doc/src/sgml/ref/pg_dump.sgml#L784-L800) [pg_dump.c#row-security-setting](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L1468-L1479) |
+| `pg_dump --no-policies` / pg_restore equivalent restore option | Client/archive option. | Omits row-security policies and row-security archive entries when dumping/restoring. | [pg_dump.sgml#no-policies](../../../raw/postgres-18/doc/src/sgml/ref/pg_dump.sgml#L1109-L1114) [pg_backup_archiver.c#no_policies](../../../raw/postgres-18/src/bin/pg_dump/pg_backup_archiver.c#L3031-L3045) |
+
+### Fixes Since PostgreSQL 12
+
+This list is scoped to the pinned PostgreSQL 18 checkout's own source history after the v13 development stamp commit `615cebc94b`. It includes RLS runtime fixes, security fixes, catalog/tooling fixes, and documentation fixes whose commit messages or changed paths are RLS-specific.
+
+| Commit | Area | Fix | Current v18 evidence |
+|---|---|---|---|
+| `7f1f72c444` | Whole-row variables in RLS and WCO expressions | Fixed wrong handling of whole-row variables when WCO/RLS expressions were initialized under the wrong plan-node parent. | Regression coverage for bug #16006 uses whole-row variables in RLS policy contexts.[rowsecurity.sql#bug-16006](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2262-L2278) |
+| `f31364676d` | pg_dump comments | Made pg_dump dump comments on RLS policy objects. | Current pg_dump emits policy comments, and TAP coverage checks policy comments.[pg_dump.c#dumpPolicy](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4318-L4405) [002_pg_dump.pl#policy-comments](../../../raw/postgres-18/src/bin/pg_dump/t/002_pg_dump.pl#L1924-L1941) |
+| `e55f718fc4` | Relcache memory use | Fixed memory leaks in `RelationBuildRowSecurity()` during repeated relcache reloads. | Current relcache build uses a dedicated memory context and frees serialized policy-expression strings after `stringToNode()`.[policy.c#RelationBuildRowSecurity](../../../raw/postgres-18/src/backend/commands/policy.c#L192-L322) |
+| `d907bd0543` | BYPASSRLS role administration | Allowed users with `BYPASSRLS` to alter BYPASSRLS-bearing roles instead of requiring superuser-only behavior. | Current role alteration checks the current user's BYPASSRLS privilege before allowing BYPASSRLS changes.[user.c#AlterRole-BYPASSRLS](../../../raw/postgres-18/src/backend/commands/user.c#L796-L817) |
+| `d21fca0843` | `DROP OWNED BY` and duplicate policy roles | Fixed duplicate `pg_policy.polroles` handling that could trigger tuple-self-update/assertion failures during ownership cleanup. | Current `RemoveRoleFromObjectPolicy()` deletes all occurrences of a role OID and regression coverage includes duplicate policy roles.[policy.c#RemoveRoleFromObjectPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L415-L560) [rowsecurity.sql#duplicate-polroles](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2132-L2162) |
+| `5a0f1c8c01` | `DROP OWNED BY` and policy role removal | Removed unnecessary failure cases in role removal from policies, including needless relation open/ownership checks. | Current `RemoveRoleFromObjectPolicy()` updates policy role arrays and dependencies without table ownership checks.[policy.c#RemoveRoleFromObjectPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L415-L560) |
+| `bd3611db5a` | pg_dump scalability | Made pg_dump read all RLS policies for dumpable tables with one query instead of issuing per-table policy queries. | Current `getPolicies()` first marks tables of interest and then reads all matching policies in one query.[pg_dump.c#getPolicies](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4125-L4258) |
+| `a2ab9c06ea` | Logical replication security | Prevented logical replication subscription owners from bypassing RLS on target tables. | Apply and table-sync workers reject RLS-enabled targets when the subscription owner is subject to RLS, and TAP coverage exercises forced-RLS behavior.[worker.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/worker.c#L2368-L2380) [tablesync.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c#L1530-L1542) [027_nosuperuser.pl#RLS](../../../raw/postgres-18/src/test/subscription/t/027_nosuperuser.pl#L204-L240) |
+| `0d3b49d4af` | MERGE into partitioned table with RLS | Fixed an assertion failure for `MERGE` into partitioned tables with RLS by allowing MERGE-specific WCO handling in modify-table setup. | Current `ExecInitPartitionInfo()` chooses insert, update, and merge WCO kinds explicitly.[nodeModifyTable.c#partition-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L1068-L1090) |
+| `d66bb048c3` | `COPY TO` with RLS and inheritance | Fixed `COPY TO` on RLS-enabled tables so the generated query does not copy more rows than the source table path should copy. | Current generated RLS `COPY TO` query sets `from->inh = false`, and regression coverage covers COPY with RLS.[copy.c#COPY-TO-RLS-ONLY](../../../raw/postgres-18/src/backend/commands/copy.c#L289-L299) [rowsecurity.sql#COPY](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L1620-L1668) |
+| `ca73753b09` | CVE-2023-2455 SRF inlining | Marked plans role-dependent when inlining a set-returning SQL function introduces an RLS dependency. | Current inlining code propagates `dependsOnRole`, and regression coverage names CVE-2023-2455.[clauses.c#inline_function-RLS](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c#L5334-L5339) [rowsecurity.sql#CVE-2023-2455](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2281-L2339) |
+| `c2e08b04c9` | CVE-2023-39418 MERGE policy use | Fixed incorrect MERGE RLS policy selection and WCO application, including UPDATE actions, SELECT-policy checks, and DO NOTHING behavior. | Current RLS rewrite builds action-specific MERGE policy checks, and regression coverage covers MERGE RLS combinations.[rowsecurity.c#MERGE](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L381-L514) [rowsecurity.sql#MERGE](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L814-L966) |
+| `a70f2a57f2` | pg_dump extension members | Stopped pg_dump from dumping RLS policies and security labels that belong to extension-member objects. | Current pg_dump code documents and implements skipping extension-member policies.[pg_dump.c#extension-member-policies](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L1919-L1924) |
+| `521a7156ab` | CVE-2024-4317 statistics views | Fixed privilege and RLS checks in extended-statistics views so expression statistics are not exposed incorrectly. | Current system views hide stats data when `row_security_active()` applies or privileges are insufficient.[system_views.sql#pg_stats_ext](../../../raw/postgres-18/src/backend/catalog/system_views.sql#L296-L305) [system_views.sql#pg_stats_ext_exprs](../../../raw/postgres-18/src/backend/catalog/system_views.sql#L368-L376) |
+| `6572bd55b0` | `WHERE CURRENT OF` with `ctid` RLS quals | Prevented RLS filters on `ctid` from overriding the cursor TID used by `WHERE CURRENT OF`. | Regression coverage checks that RLS `ctid` filters do not override `WHERE CURRENT OF` updates.[rowsecurity.sql#WHERE-CURRENT-OF](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L1680-L1748) |
+| `cd7ab57532` | CVE-2024-10976 plan-cache role dependence | Fixed missing role-dependency marking for cached plans involving RLS through subqueries, CTEs, sublinks, security-invoker views, and coercion projection paths. | Current rewrite/setrefs code marks RLS queries and role dependence, and regression coverage exercises those plan-cache cases.[rewriteHandler.c#fireRIRrules](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2224-L2334) [setrefs.c#dependsOnRole](../../../raw/postgres-18/src/backend/optimizer/plan/setrefs.c#L3711-L3713) [rowsecurity.sql#RLS-plan-cache-dependencies](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2297-L2352) |
+| `0dca5d68d7` | SQL-language function plan cache | Added RLS context-change coverage for SQL-language function plan caching after SQL functions began using the plan cache. | Regression coverage switches RLS context and checks SQL function plan invalidation behavior.[rowsecurity.sql#SQL-function-plan-cache](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2359-L2401) [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717) |
+| `64f77c6a65` | CVE-2025-8713 selectivity estimation security checks | Fixed security checks used by selectivity estimation functions so planner-time estimation cannot leak data through RLS/security-barrier contexts. | Current planner comments call out view permission checks needed to prevent selectivity-estimation leaks, and selectivity hooks still execute operator support procedures during planning.[planner.c#selectivity-security-check](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L852-L872) [plancat.c#restriction_selectivity](../../../raw/postgres-18/src/backend/optimizer/util/plancat.c#L1974-L2010) |
+| `cd3c45125d` | pg_dump and pg_restore option surface | Added the `--no-policies` option to omit row-security policy archive entries. | Current docs and archiver code implement `--no-policies`.[pg_dump.sgml#no-policies](../../../raw/postgres-18/doc/src/sgml/ref/pg_dump.sgml#L1109-L1114) [pg_backup_archiver.c#no_policies](../../../raw/postgres-18/src/bin/pg_dump/pg_backup_archiver.c#L3031-L3045) |
+| `749f4ce4d9` | Documentation | Corrected `CREATE POLICY` documentation around command-specific policy behavior for `MERGE`, `ON CONFLICT`, and related errors. | Current `CREATE POLICY` docs explicitly say there is no separate MERGE policy and tie MERGE behavior to action-specific policies.[create_policy.sgml#MERGE](../../../raw/postgres-18/doc/src/sgml/ref/create_policy.sgml#L742-L747) |
+
+### Test Coverage
+
+The core regression test covers basic enablement, permissive and restrictive policies, error cases, owner and BYPASSRLS bypass, partition behavior, `row_security = off`, COPY behavior, MERGE behavior, policy dependencies, `DROP OWNED`, view-owner behavior, security-barrier interactions, known CVE regressions, and SQL-function plan-cache invalidation.[rowsecurity.sql#basic-coverage](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L88-L117) [rowsecurity.sql#owner-bypass](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L194-L225) [rowsecurity.sql#partitions](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L349-L456) [rowsecurity.sql#MERGE](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L814-L966) [rowsecurity.sql#COPY](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L1620-L1668) [rowsecurity.sql#dependencies](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L1772-L1808) [rowsecurity.sql#target-non-target-DML](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L1838-L1908) [rowsecurity.sql#CVE-coverage](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2262-L2352) [rowsecurity.sql#SQL-function-plan-cache](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2359-L2401)
+
+Extension hook coverage lives in `src/test/modules/test_rls_hooks`, and logical replication RLS coverage lives in the subscription TAP tests.[test_rls_hooks.sql#coverage](../../../raw/postgres-18/src/test/modules/test_rls_hooks/sql/test_rls_hooks.sql#L20-L161) [027_nosuperuser.pl#RLS](../../../raw/postgres-18/src/test/subscription/t/027_nosuperuser.pl#L204-L240)
+
+## Context Reviewed
+
+- Required wiki navigation: [versions](../../versions.md), [wiki index](../../index.md), recent [log](../../log.md), and [v18/index](../index.md).
+- Primary source files: `src/backend/rewrite/rowsecurity.c`, `src/include/rewrite/rowsecurity.h`, `src/backend/utils/misc/rls.c`, `src/include/utils/rls.h`, `src/backend/rewrite/rewriteHandler.c`, planner/executor files, policy DDL/catalog files, COPY/CTAS/logical replication paths, docs, and regression tests in the pinned v18 checkout.
+- Source history: same-checkout `git log`/`git show` searches over RLS-related subjects and paths, scoped after the v13 development stamp commit `615cebc94b`.
+
+## Evidence Map
+
+| Claim | Primary evidence |
+|---|---|
+| RLS is injected by rewrite as security quals and WCOs. | [rowsecurity.c#get_row_security_policies](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L97-L529), [rewriteHandler.c#fireRIRrules](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2224-L2334) |
+| Policy combination is permissive OR plus restrictive AND with default deny. | [rowsecurity.c#add_security_quals](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L688-L778), [rowsecurity.c#add_with_check_options](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L780-L909) |
+| Bypass depends on relation flags, role BYPASSRLS/superuser, owner/force-RLS, and `row_security`. | [rls.c#check_enable_rls](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L51-L132), [pg_authid.h#rolbypassrls](../../../raw/postgres-18/src/include/catalog/pg_authid.h#L35-L41) |
+| RLS affects planning and plan-cache validity. | [planner.c#securityQuals-level](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L828-L836), [initsplan.c#securityQuals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1645), [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717) |
+| `row_security` is the only RLS-specific server GUC and is session/transaction scoped. | [guc_tables.c#row_security](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1696-L1703), [config.sgml#row-security](../../../raw/postgres-18/doc/src/sgml/config.sgml#L9769-L9790) |
+| Since-v12 fixes are from same-checkout source history and current v18 behavior/tests. | Commit hashes in [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12), plus each row's current-source evidence. |
+
+## Open Questions
+
+- The performance section identifies source-visible cost mechanisms, not measured overhead. I did not find a v18 benchmark in the pinned checkout that quantifies RLS overhead by policy count, role count, partition count, or predicate shape.
+- The since-v12 fix list is based on the pinned checkout's own commit history and RLS-focused path/subject searches. If a fix changed RLS behavior without mentioning RLS-related files, symbols, tests, or subjects, it would need a wider full-history audit to discover.
+- Minor-release first-appearance labels are not assigned here because the local checkout history has sparse release tags. The table gives commit hashes and current v18 evidence instead.
+
+## Source References
+
+- [rowsecurity.c](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c)
+- [rowsecurity.h](../../../raw/postgres-18/src/include/rewrite/rowsecurity.h)
+- [rls.c](../../../raw/postgres-18/src/backend/utils/misc/rls.c)
+- [rls.h](../../../raw/postgres-18/src/include/utils/rls.h)
+- [rewriteHandler.c](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c)
+- [parsenodes.h](../../../raw/postgres-18/src/include/nodes/parsenodes.h)
+- [planner.c](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c)
+- [initsplan.c](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c)
+- [inherit.c](../../../raw/postgres-18/src/backend/optimizer/util/inherit.c)
+- [plancache.c](../../../raw/postgres-18/src/backend/utils/cache/plancache.c)
+- [setrefs.c](../../../raw/postgres-18/src/backend/optimizer/plan/setrefs.c)
+- [clauses.c](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c)
+- [execMain.c](../../../raw/postgres-18/src/backend/executor/execMain.c)
+- [nodeModifyTable.c](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c)
+- [policy.c](../../../raw/postgres-18/src/backend/commands/policy.c)
+- [tablecmds.c](../../../raw/postgres-18/src/backend/commands/tablecmds.c)
+- [copy.c](../../../raw/postgres-18/src/backend/commands/copy.c)
+- [createas.c](../../../raw/postgres-18/src/backend/commands/createas.c)
+- [worker.c](../../../raw/postgres-18/src/backend/replication/logical/worker.c)
+- [tablesync.c](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c)
+- [pg_policy.h](../../../raw/postgres-18/src/include/catalog/pg_policy.h)
+- [pg_class.h](../../../raw/postgres-18/src/include/catalog/pg_class.h)
+- [pg_authid.h](../../../raw/postgres-18/src/include/catalog/pg_authid.h)
+- [guc_tables.c](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c)
+- [system_views.sql](../../../raw/postgres-18/src/backend/catalog/system_views.sql)
+- [ddl.sgml](../../../raw/postgres-18/doc/src/sgml/ddl.sgml)
+- [create_policy.sgml](../../../raw/postgres-18/doc/src/sgml/ref/create_policy.sgml)
+- [alter_table.sgml](../../../raw/postgres-18/doc/src/sgml/ref/alter_table.sgml)
+- [create_role.sgml](../../../raw/postgres-18/doc/src/sgml/ref/create_role.sgml)
+- [pg_dump.sgml](../../../raw/postgres-18/doc/src/sgml/ref/pg_dump.sgml)
+- [pg_dump.c](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c)
+- [pg_backup_archiver.c](../../../raw/postgres-18/src/bin/pg_dump/pg_backup_archiver.c)
+- [rowsecurity.sql](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql)
+- [test_rls_hooks.c](../../../raw/postgres-18/src/test/modules/test_rls_hooks/test_rls_hooks.c)
+- [test_rls_hooks.sql](../../../raw/postgres-18/src/test/modules/test_rls_hooks/sql/test_rls_hooks.sql)
+- [027_nosuperuser.pl](../../../raw/postgres-18/src/test/subscription/t/027_nosuperuser.pl)
+
+## Navigation
+
+- [PostgreSQL 18 index](../index.md)
+- [Codebase navigation guide](../codebase-navigation-guide.md)
+- [Global wiki index](../../index.md)
+- [Version manifest](../../versions.md)
