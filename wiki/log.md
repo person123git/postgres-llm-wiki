@@ -2,6 +2,17 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-17] question v12 | partial indexes pros, cons, statistics, and planner use
+
+- Filed [Pros and Cons of Partial Indexes in PostgreSQL 12 (unverified)](v12/questions/partial-indexes-pros-cons.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Covers partial-index definition and storage (`pg_index.indpred`, `IndexInfo.ii_Predicate`, `IndexOptInfo.indpred`/`predOK`), predicate validation and build/DML filtering, planner implication matching and bitmap recheck behavior, pros and cons, operational restrictions (constraint adoption, replica identity, `CLUSTER`, `ON CONFLICT` inference), and regression coverage.
+- Follow-up coverage added partial indexes on expressions: `pg_index.indkey` zeroes plus `indexprs`, `FormIndexDatum()` expression evaluation after predicate filtering, separate planner gates for predicate implication and expression-key matching, partial expression-index statistics, and partitioned-index regression coverage for matching/non-matching expression-plus-predicate definitions.
+- Second follow-up coverage added ordinary non-partial expression indexes as the baseline: syntax and docs examples, catalog storage with `indpred` null, expression-key maintenance via `FormIndexDatum()`, planner expression-key matching without predicate implication, whole-relation expression statistics from non-partial expression indexes, and unique functional/expression-index regression coverage.
+- Adds a dedicated statistics section: `ANALYZE` filters sampled rows through the predicate, estimates `tupleFract` and partial-index `pg_class.reltuples`, stores expression-index statistics in `pg_statistic`, and planner costing adds non-redundant predicate clauses to index selectivity while excluding partial expression-index stats from whole-relation expression estimates.
+- Prompt hygiene: the original request had grammar/capitalization issues, and both follow-ups were phrased as fragments; the user approved correcting the wording before filing/updating this page.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-14] review-fix v12 | codebase navigation guide coverage gaps
 
 - Fixed review findings in [PostgreSQL 12 Codebase Navigation Guide (unverified)](v12/codebase-navigation-guide.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
