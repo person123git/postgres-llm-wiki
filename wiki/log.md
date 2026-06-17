@@ -1016,3 +1016,11 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Covered the shared index path (`FormIndexDatum`/executor `isnull[]`/`index_insert`/`aminsert`), `IndexTuple` NULL bitmaps, `ScanKey` NULL flags, and the planner's `amsearchnulls` gate for generic `IS NULL` and `IS NOT NULL` index quals.
 - Added per-index-type sections for B-tree, hash, GiST, SP-GiST, GIN, BRIN, and contrib Bloom, including storage/summary behavior, plain `NullTest` support, uniqueness or opclass boundaries where relevant, and direct regression-test coverage or explicit test absence.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`; `.wiki-runtime/venv/bin/python scripts/wiki_lint` reported 0 errors and 0 warnings.
+
+## [2026-06-17] review-fix v12 | NULL handling by index type
+
+- Reviewed [How NULL Values Are Handled in PostgreSQL 12 Indexes (unverified)](v12/questions/null-values-in-indexes.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+- Re-checked the shared executor/index AM path, `amsearchnulls` planner gate, B-tree/hash/GiST/SP-GiST/GIN/BRIN/Bloom insertion and scan behavior, docs, and regression coverage against the pinned checkout.
+- Fixed review findings: removed the `_hash_checkqual` runtime claim because its NULL-checking body is under `#ifdef NOT_USED`; corrected stale GiST `gistindex_keytest` citation ranges; corrected SP-GiST scan citations from stale `resetSpGistScanOpaque`/`spgWalk` line ranges to `spgPrepareScanKeys`, `resetSpGistScanOpaque`, and `spgAddStartItem`; and reworded the B-tree regression-test paragraph because the cited block shows result coverage, not `EXPLAIN` plan-shape coverage.
+- Advanced `verified_by_agent` to `GPT-5-5-XHigh-Thinking 2026-06-17T17:30:21Z`; `verified:` stays human-only `false`, so the page title keeps `(unverified)`. Existing index and landing-page summaries remain accurate.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

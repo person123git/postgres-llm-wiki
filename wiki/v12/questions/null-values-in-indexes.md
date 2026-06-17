@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: GPT-5-5-XHigh-Thinking 2026-06-17T17:30:21Z
 ---
 
 # How NULL Values Are Handled in PostgreSQL 12 Indexes (unverified)
@@ -47,7 +47,7 @@ PostgreSQL 12's built-in index methods are B-tree, hash, GiST, SP-GiST, GIN, and
 | --- | --- | --- | --- |
 | B-tree | Stores NULLs in index tuples, with NULL ordering controlled by scan/index options.[nbtutils.c#_bt_mkscankey](../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L95-L154) [nbtsearch.c#_bt_compare](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L545-L625) | Yes, because `amsearchnulls = true`.[nbtree.c#bthandler](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L102-L130) | Unique B-tree indexes allow multiple rows where any indexed key column is NULL.[nbtinsert.c#btinsert](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L90-L116) |
 | Hash | Does not insert NULL values.[hashutil.c#_hash_convert_tuple](../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L343) | No, because `amsearchnulls = false`.[hash.c#hashhandler](../../../raw/postgres-12/src/backend/access/hash/hash.c#L54-L83) | A NULL equality search key is treated as unable to match.[hashsearch.c#_hash_first](../../../raw/postgres-12/src/backend/access/hash/hashsearch.c#L325-L330) |
-| GiST | Stores NULL markers in index tuples and avoids opclass compression for NULL key attributes.[gistutil.c#gistFormTuple](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L576-L624) | Yes, because `amsearchnulls = true`.[gist.c#gisthandler](../../../raw/postgres-12/src/backend/access/gist/gist.c#L55-L82) | Internal GiST decisions treat `IS NULL` conservatively on non-leaf pages because a child union can hide NULL entries.[gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L160-L190) |
+| GiST | Stores NULL markers in index tuples and avoids opclass compression for NULL key attributes.[gistutil.c#gistFormTuple](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L576-L624) | Yes, because `amsearchnulls = true`.[gist.c#gisthandler](../../../raw/postgres-12/src/backend/access/gist/gist.c#L55-L82) | Internal GiST decisions treat `IS NULL` conservatively on non-leaf pages because a child union can hide NULL entries.[gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L173-L191) |
 | SP-GiST | Stores NULL entries in a separate NULL tree rooted at block 2.[spgist_private.h#SPGIST_NULL_BLKNO](../../../raw/postgres-12/src/include/access/spgist_private.h#L24-L62) [spgdoinsert.c#spgdoinsert](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1963-L2058) | Yes, because `amsearchnulls = true`.[spgutils.c#spghandler](../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L36-L62) | SP-GiST core handles NULLs before opclass methods see the value.[spgist.sgml#null-values](../../../raw/postgres-12/doc/src/sgml/spgist.sgml#L272-L280) |
 | GIN | Stores special categories for NULL items, NULL keys, empty items, and empty queries.[ginblock.h#GinNullCategory](../../../raw/postgres-12/src/include/access/ginblock.h#L199-L216) [ginutil.c#ginExtractEntries](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L484-L600) | No generic column `IS NULL` path, because `amsearchnulls = false`.[ginutil.c#ginhandler](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L33-L58) | NULL handling is part of GIN key extraction and opclass query semantics, not the planner's generic `NullTest` path.[ginscan.c#startScanKey](../../../raw/postgres-12/src/backend/access/gin/ginscan.c#L296-L365) |
 | BRIN | Stores per-range `hasnulls` and `allnulls` flags.[brin_tuple.c#tuple-layout](../../../raw/postgres-12/src/backend/access/brin/brin_tuple.c#L15-L24) [brin_tuple.h#BrinValues](../../../raw/postgres-12/src/include/access/brin_tuple.h#L23-L45) | Yes, because `amsearchnulls = true`.[brin.c#brinhandler](../../../raw/postgres-12/src/backend/access/brin/brin.c#L81-L107) | BRIN answers NULL tests at block-range granularity and returns lossy bitmap scans for executor recheck.[brin.sgml#intro](../../../raw/postgres-12/doc/src/sgml/brin.sgml#L14-L40) |
@@ -79,15 +79,13 @@ Hash indexes do not store NULL index entries. `hashinsert` converts the table va
 
 Hash indexes do not support generic `IS NULL` or `IS NOT NULL` index scans because the handler sets `amsearchnulls = false`. This also matches the search code: if the equality scan argument is NULL, hash scan startup assumes the qual cannot match any stored tuple.[hash.c#hashhandler](../../../raw/postgres-12/src/backend/access/hash/hash.c#L54-L83) [hashsearch.c#_hash_first](../../../raw/postgres-12/src/backend/access/hash/hashsearch.c#L325-L330)
 
-The tuple-qual helper also treats NULLs as non-matches. `_hash_checkqual` returns false if the stored index datum is NULL or if the scan key datum is NULL, before invoking the equality function.[hashutil.c#_hash_checkqual](../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L45-L72)
-
 ### GiST
 
 GiST stores NULL key attributes as NULL attributes in the index tuple. `gistFormTuple` puts a zero datum placeholder in the compressed-attribute array for NULL key values and does not call the opclass compression function for that key; the original `isnull[]` value is then passed to `index_form_tuple`.[gist.c#gistinsert](../../../raw/postgres-12/src/backend/access/gist/gist.c#L146-L183) [gistutil.c#gistFormTuple](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L576-L624)
 
 GiST supports indexed `IS NULL` and `IS NOT NULL` searches because its handler sets `amsearchnulls = true`. During scan setup, a normal operator qual with a NULL comparison constant is treated as impossible unless the key is explicitly `SK_SEARCHNULL` or `SK_SEARCHNOTNULL`.[gist.c#gisthandler](../../../raw/postgres-12/src/backend/access/gist/gist.c#L55-L82) [gistscan.c#gistrescan](../../../raw/postgres-12/src/backend/access/gist/gistscan.c#L242-L272)
 
-On leaf pages, GiST can test the actual tuple NULL state: `SK_SEARCHNULL` rejects non-NULL tuples, and `SK_SEARCHNOTNULL` rejects NULL tuples. On non-leaf pages, `SK_SEARCHNULL` cannot reject a child solely because the downlink value is non-NULL, since GiST union construction can produce a non-NULL union value for a subtree that also contains NULLs.[gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L160-L230) [gistutil.c#gistMakeUnionItVec](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L151-L210) [gistutil.c#gistMakeUnionKey](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L234-L276)
+On leaf pages, GiST can test the actual tuple NULL state: `SK_SEARCHNULL` rejects non-NULL tuples, and `SK_SEARCHNOTNULL` rejects NULL tuples. On non-leaf pages, `SK_SEARCHNULL` cannot reject a child solely because the downlink value is non-NULL, since GiST union construction can produce a non-NULL union value for a subtree that also contains NULLs.[gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L173-L191) [gistutil.c#gistMakeUnionItVec](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L151-L210) [gistutil.c#gistMakeUnionKey](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L234-L276)
 
 ### SP-GiST
 
@@ -97,7 +95,7 @@ Index initialization creates both the normal root page and the NULL root page. T
 
 Insertion chooses the NULL root when the indexed value is NULL and the normal root when it is not. The core insertion path skips opclass choose/compress work for NULLs, verifies that each page matches the expected NULL-vs-non-NULL kind, and forms the leaf tuple with the stored NULL flag.[spginsert.c#spginsert](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L207-L232) [spgdoinsert.c#spgdoinsert-null-opclass-boundary](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1890-L1925) [spgdoinsert.c#spgdoinsert-null-root](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1963-L2058)
 
-SP-GiST supports indexed `IS NULL` and `IS NOT NULL` searches because its handler sets `amsearchnulls = true`. Scan preprocessing separates `SK_SEARCHNULL` and `SK_SEARCHNOTNULL` from regular operator keys, marks ordinary NULL operator arguments as impossible, and chooses whether to search the NULL tree, the non-NULL tree, or both.[spgutils.c#spghandler](../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L36-L62) [spgscan.c#resetSpGistScanOpaque](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L200-L285) [spgscan.c#spgAddStartItem](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L122-L133) [spgscan.c#spgWalk](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L154-L168)
+SP-GiST supports indexed `IS NULL` and `IS NOT NULL` searches because its handler sets `amsearchnulls = true`. Scan preprocessing separates `SK_SEARCHNULL` and `SK_SEARCHNOTNULL` from regular operator keys, marks ordinary NULL operator arguments as impossible, and chooses whether to search the NULL tree, the non-NULL tree, or both.[spgutils.c#spghandler](../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L36-L62) [spgscan.c#spgPrepareScanKeys](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L192-L297) [spgscan.c#resetSpGistScanOpaque](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L145-L168) [spgscan.c#spgAddStartItem](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L121-L133)
 
 SP-GiST opclasses do not handle SQL NULL values directly. The SGML documentation states that SP-GiST core stores NULL entries, hides NULL values from opclass methods, and assumes indexed operators are strict.[spgist.sgml#null-values](../../../raw/postgres-12/doc/src/sgml/spgist.sgml#L272-L280)
 
@@ -141,7 +139,7 @@ Do not expect hash, GIN, or contrib Bloom to accelerate a plain `indexed_column 
 
 ### Test Coverage
 
-PostgreSQL 12 regression tests exercise B-tree `IS NULL` and `IS NOT NULL` plans with different NULL ordering options. The expected output shows index-only scans using B-tree indexes for both forms.[create_index.sql#btree-null-tests](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L603-L676) [create_index.out#btree-null-tests](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1566-L1724)
+PostgreSQL 12 regression tests exercise B-tree `IS NULL` and `IS NOT NULL` predicates after building unique B-tree indexes with different NULL ordering options. The expected output shows correct result counts; this block does not include `EXPLAIN`, so it is result coverage rather than plan-shape coverage.[create_index.sql#btree-null-tests](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L603-L676) [create_index.out#btree-null-tests](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1566-L1724)
 
 The regression suite also tests unique expression indexes with NULL inputs. The SQL inserts rows where one expression result is NULL, and the expected output shows that the duplicate non-NULL expression value fails while the NULL-containing case is accepted.[create_index.sql#unique-expression-null-tests](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L393-L423) [create_index.out#unique-expression-null-tests](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1274-L1315)
 
@@ -176,15 +174,15 @@ The reviewed hash and contrib Bloom regression files did not include direct NULL
 | Generic `IS NULL` index matching requires `amsearchnulls`. | [amapi.h#IndexAmRoutine](../../../raw/postgres-12/src/include/access/amapi.h#L163-L199), [skey.h#ScanKey-flags](../../../raw/postgres-12/src/include/access/skey.h#L43-L51), [indxpath.c#match_clause_to_indexcol](../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L2408-L2444) |
 | B-tree stores NULLs, can search them, orders them, and treats them as distinct for uniqueness. | [nbtree.c#bthandler](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L102-L130), [nbtutils.c#_bt_mkscankey](../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L95-L154), [nbtsearch.c#_bt_compare](../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L545-L625), [nbtinsert.c#btinsert](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L90-L116) |
 | Hash skips NULL entries and cannot search NULLs. | [hash.c#hashhandler](../../../raw/postgres-12/src/backend/access/hash/hash.c#L54-L83), [hash.c#hashinsert](../../../raw/postgres-12/src/backend/access/hash/hash.c#L239-L269), [hashutil.c#_hash_convert_tuple](../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L343), [hashsearch.c#_hash_first](../../../raw/postgres-12/src/backend/access/hash/hashsearch.c#L325-L330) |
-| GiST stores NULL index attributes and supports NULL tests with page-level caveats. | [gist.c#gisthandler](../../../raw/postgres-12/src/backend/access/gist/gist.c#L55-L82), [gistutil.c#gistFormTuple](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L576-L624), [gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L160-L230) |
-| SP-GiST stores NULLs in a separate NULL tree and supports NULL tests. | [spgutils.c#spghandler](../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L36-L62), [spgist_private.h#SPGIST-layout](../../../raw/postgres-12/src/include/access/spgist_private.h#L24-L62), [spgdoinsert.c#spgdoinsert-null-root](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1963-L2058), [spgscan.c#resetSpGistScanOpaque](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L200-L285) |
+| GiST stores NULL index attributes and supports NULL tests with page-level caveats. | [gist.c#gisthandler](../../../raw/postgres-12/src/backend/access/gist/gist.c#L55-L82), [gistutil.c#gistFormTuple](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L576-L624), [gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L173-L191) |
+| SP-GiST stores NULLs in a separate NULL tree and supports NULL tests. | [spgutils.c#spghandler](../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L36-L62), [spgist_private.h#SPGIST-layout](../../../raw/postgres-12/src/include/access/spgist_private.h#L24-L62), [spgdoinsert.c#spgdoinsert-null-root](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1963-L2058), [spgscan.c#spgPrepareScanKeys](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L192-L297), [spgscan.c#resetSpGistScanOpaque](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L145-L168) |
 | GIN stores NULL categories for GIN key semantics but does not expose generic `IS NULL` matching. | [ginutil.c#ginhandler](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L33-L58), [ginblock.h#GinNullCategory](../../../raw/postgres-12/src/include/access/ginblock.h#L199-L216), [ginutil.c#ginExtractEntries](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L484-L600), [ginscan.c#startScanKey](../../../raw/postgres-12/src/backend/access/gin/ginscan.c#L296-L365) |
 | BRIN summarizes NULLs with `hasnulls` and `allnulls`, and can search NULL tests at range granularity. | [brin.c#brinhandler](../../../raw/postgres-12/src/backend/access/brin/brin.c#L81-L107), [brin_tuple.c#tuple-layout](../../../raw/postgres-12/src/backend/access/brin/brin_tuple.c#L15-L24), [brin_minmax.c#brin_minmax_consistent](../../../raw/postgres-12/src/backend/access/brin/brin_minmax.c#L154-L188), [brin_inclusion.c#brin_inclusion_consistent](../../../raw/postgres-12/src/backend/access/brin/brin_inclusion.c#L266-L300) |
 | Contrib Bloom skips NULL columns and does not support NULL search. | [blutils.c#blhandler](../../../raw/postgres-12/contrib/bloom/blutils.c#L101-L122), [blutils.c#BloomFormTuple](../../../raw/postgres-12/contrib/bloom/blutils.c#L286-L302), [blscan.c#blgetbitmap](../../../raw/postgres-12/contrib/bloom/blscan.c#L89-L113), [bloom.sgml#limitations](../../../raw/postgres-12/doc/src/sgml/bloom.sgml#L228-L259) |
 
 ## Open Questions
 
-None for source behavior at the pinned PostgreSQL 12 commit. The reviewed regression suite has direct NULL-search coverage for B-tree, GiST, SP-GiST, and BRIN, plus GIN array NULL operator semantics. Hash and contrib Bloom NULL behavior is source-backed; Bloom is also documentation-backed.
+None for source behavior at the pinned PostgreSQL 12 commit. The reviewed regression suite has direct NULL-predicate coverage for B-tree, GiST, SP-GiST, and BRIN, plus GIN array NULL operator semantics. Hash and contrib Bloom NULL behavior is source-backed; Bloom is also documentation-backed.
 
 ## Source References
 
@@ -213,7 +211,6 @@ None for source behavior at the pinned PostgreSQL 12 commit. The reviewed regres
 - [create_table.sgml#unique-constraints](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L878-L899)
 - [hash.c#hashhandler](../../../raw/postgres-12/src/backend/access/hash/hash.c#L54-L83)
 - [hash.c#hashinsert](../../../raw/postgres-12/src/backend/access/hash/hash.c#L239-L269)
-- [hashutil.c#_hash_checkqual](../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L45-L72)
 - [hashutil.c#_hash_convert_tuple](../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L343)
 - [hashsearch.c#_hash_first](../../../raw/postgres-12/src/backend/access/hash/hashsearch.c#L325-L330)
 - [gist.c#gisthandler](../../../raw/postgres-12/src/backend/access/gist/gist.c#L55-L82)
@@ -222,18 +219,18 @@ None for source behavior at the pinned PostgreSQL 12 commit. The reviewed regres
 - [gistutil.c#gistMakeUnionKey](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L234-L276)
 - [gistutil.c#gistFormTuple](../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L576-L624)
 - [gistscan.c#gistrescan](../../../raw/postgres-12/src/backend/access/gist/gistscan.c#L242-L272)
-- [gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L160-L230)
+- [gistget.c#gistindex_keytest](../../../raw/postgres-12/src/backend/access/gist/gistget.c#L173-L191)
 - [spgutils.c#spghandler](../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L36-L62)
 - [spgist_private.h#SPGIST-layout](../../../raw/postgres-12/src/include/access/spgist_private.h#L24-L62)
 - [spginsert.c#spgbuildempty](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L84-L110)
 - [spginsert.c#spginsert](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L207-L232)
 - [spgdoinsert.c#spgdoinsert-null-opclass-boundary](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1890-L1925)
 - [spgdoinsert.c#spgdoinsert-null-root](../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1963-L2058)
-- [spgscan.c#spgAddStartItem](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L122-L133)
-- [spgscan.c#spgWalk](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L154-L168)
-- [spgscan.c#resetSpGistScanOpaque](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L200-L285)
+- [spgscan.c#spgAddStartItem](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L121-L133)
+- [spgscan.c#spgPrepareScanKeys](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L192-L297)
+- [spgscan.c#resetSpGistScanOpaque](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L145-L168)
 - [spgscan.c#spgLeafTest](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L470-L555)
-- [spgscan.c#spgScanPage](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L800-L845)
+- [spgscan.c#spgWalk](../../../raw/postgres-12/src/backend/access/spgist/spgscan.c#L769-L879)
 - [spgist.sgml#null-values](../../../raw/postgres-12/doc/src/sgml/spgist.sgml#L272-L280)
 - [gin.sgml#intro](../../../raw/postgres-12/doc/src/sgml/gin.sgml#L14-L36)
 - [ginutil.c#ginhandler](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L33-L58)
