@@ -2,6 +2,13 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-17] review-fix v17 | partial indexes pros/cons
+
+- Reviewed [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](v17/questions/partial-indexes-pros-cons.md) against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).
+- Re-checked the core partial-index, expression-index, planner predicate implication, expression-key matching, `ANALYZE`, selectivity/costing, operational-restriction, regression-test, and v12-to-v17 history claims against the pinned checkout.
+- Fixed review findings: widened the partial-hash regression expected-output citation to include the `Index Scan using hash_i4_partial_index` line, and filled in missing `## Source References` entries for body citations that were already otherwise valid.
+- Advanced `verified_by_agent` to `GPT-5 2026-06-17T20:10:26Z`; `verified:` stays human-only `false`, so the page title keeps `(unverified)`. Existing index and version summaries remain accurate.
+
 ## [2026-06-17] expand v17 | partial indexes — what changed from PostgreSQL 12
 
 - Per user follow-up, added `### What changed from PostgreSQL 12` to [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](v17/questions/partial-indexes-pros-cons.md), against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa`.

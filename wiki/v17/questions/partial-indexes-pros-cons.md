@@ -3,7 +3,7 @@ type: question
 version: 17
 pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
 verified: false
-verified_by_agent: not yet
+verified_by_agent: GPT-5 2026-06-17T20:10:26Z
 ---
 
 # Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)
@@ -169,7 +169,7 @@ The important changes and additions in PostgreSQL 17 relative to that baseline a
 
 6. **Partial unique indexes no longer prove relation uniqueness for join planning.** PostgreSQL 16 commit `7fcd7ef2a9c` changed `relation_has_unique_index_for()` so it skips all partial indexes, even when `predOK` is true. The source explains that `predOK` may have been proven using join predicates, while this uniqueness proof must hold before joins are evaluated.[indxpath.c#relation_has_unique_index_for-partial](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3509-L3518)
 
-7. **Partial indexes on non-optional-key access methods have a planning fix.** In the pinned PostgreSQL 17 stable checkout, commit `e79b2766216` makes `check_index_predicates()` keep `indrestrictinfo` unchanged for `!amoptionalkey` indexes, avoiding removal of every first-key qual and failure to generate an index scan. The regression suite now creates a partial hash index and verifies an index scan for `WHERE seqno = 9999`.[indxpath.c#check_index_predicates-amoptionalkey](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3352-L3364) [hash_index.sql#partial-hash-index](../../../raw/postgres-17/src/test/regress/sql/hash_index.sql#L56-L65) [hash_index.out#partial-hash-index](../../../raw/postgres-17/src/test/regress/expected/hash_index.out#L145-L153)
+7. **Partial indexes on non-optional-key access methods have a planning fix.** In the pinned PostgreSQL 17 stable checkout, commit `e79b2766216` makes `check_index_predicates()` keep `indrestrictinfo` unchanged for `!amoptionalkey` indexes, avoiding removal of every first-key qual and failure to generate an index scan. The regression suite now creates a partial hash index and verifies an index scan for `WHERE seqno = 9999`.[indxpath.c#check_index_predicates-amoptionalkey](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3352-L3364) [hash_index.sql#partial-hash-index](../../../raw/postgres-17/src/test/regress/sql/hash_index.sql#L56-L65) [hash_index.out#partial-hash-index](../../../raw/postgres-17/src/test/regress/expected/hash_index.out#L139-L153)
 
 ### Regression coverage
 
@@ -208,7 +208,7 @@ Partitioned-index coverage includes partial expression indexes. The test creates
 | `ANALYZE` estimates partial-index row counts from sampled rows that pass the predicate and updates index `pg_class` stats. | [analyze.c#compute_index_stats](../../../raw/postgres-17/src/backend/commands/analyze.c#L828-L977), [analyze.c#do_analyze_rel-index-relstats](../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663), [vacuum.c#vac_update_relstats](../../../raw/postgres-17/src/backend/commands/vacuum.c#L1370-L1456) |
 | Planner costing includes non-redundant partial-index predicate clauses in index selectivity and caps tuple estimates by index size. | [selfuncs.c#genericcostestimate](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6625-L6827), [selfuncs.c#add_predicate_to_index_quals](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6830-L6866), [selfuncs.c#btcostestimate-partial-selectivity](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6988-L7072) |
 | Operational restrictions reject partial or expression indexes in specific places. | [parse_utilcmd.c#constraint-using-index-rejects-exprs-predicates](../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L2276-L2303), [tablecmds.c#ATExecReplicaIdentity](../../../raw/postgres-17/src/backend/commands/tablecmds.c#L16796-L16861), [cluster.c#check_index_is_clusterable](../../../raw/postgres-17/src/backend/commands/cluster.c#L500-L549), [matview.c#is_usable_unique_index](../../../raw/postgres-17/src/backend/commands/matview.c#L902-L936) |
-| The v17-vs-v12 section identifies post-v12 documentation, planner, statistics, uniqueness, and regression-test changes from the v17 checkout's source and history. | [indices.sgml#partial-indexes-not-partitioning](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L1031-L1070), [indexcmds.c#safe-index-test](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1128-L1130), [indxpath.c#check_index_predicates-target-rel](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3318-L3331), [create_statistics.sgml#expression-statistics](../../../raw/postgres-17/doc/src/sgml/ref/create_statistics.sgml#L46-L56), [create_index.sgml#nulls-not-distinct](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L339-L349), [indxpath.c#relation_has_unique_index_for-partial](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3509-L3518), [hash_index.out#partial-hash-index](../../../raw/postgres-17/src/test/regress/expected/hash_index.out#L145-L153) |
+| The v17-vs-v12 section identifies post-v12 documentation, planner, statistics, uniqueness, and regression-test changes from the v17 checkout's source and history. | [indices.sgml#partial-indexes-not-partitioning](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L1031-L1070), [indexcmds.c#safe-index-test](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1128-L1130), [indxpath.c#check_index_predicates-target-rel](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3318-L3331), [create_statistics.sgml#expression-statistics](../../../raw/postgres-17/doc/src/sgml/ref/create_statistics.sgml#L46-L56), [create_index.sgml#nulls-not-distinct](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L339-L349), [indxpath.c#relation_has_unique_index_for-partial](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3509-L3518), [hash_index.out#partial-hash-index](../../../raw/postgres-17/src/test/regress/expected/hash_index.out#L139-L153) |
 | Regression tests cover creation, planner use/non-use, expression indexes, partial expression indexes, `ON CONFLICT` inference, and replica-identity rejection. | [create_index.sql#btree-partial-indexes](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L52-L65), [select.out#partial-index-plans](../../../raw/postgres-17/src/test/regress/expected/select.out#L741-L900), [create_index.out#functional-and-expression-index-tests](../../../raw/postgres-17/src/test/regress/expected/create_index.out#L1314-L1378), [indexing.out#partial-expression-index-attach](../../../raw/postgres-17/src/test/regress/expected/indexing.out#L852-L881), [insert_conflict.out#partial-and-expression-inference](../../../raw/postgres-17/src/test/regress/expected/insert_conflict.out#L311-L402), [replica_identity.out#expression-and-partial-replica-identity](../../../raw/postgres-17/src/test/regress/expected/replica_identity.out#L49-L55) |
 
 ## Open Questions
@@ -220,9 +220,16 @@ None for source behavior at the pinned PostgreSQL 17 commit.
 - [indices.sgml#indexes-expressional](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L732-L798)
 - [indices.sgml#Partial-Indexes](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L801-L816)
 - [indices.sgml#partial-index-benefit](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L818-L899)
+- [indices.sgml#partial-index-distribution-maintenance](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L880-L886)
+- [indices.sgml#exclude-uninteresting-values](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L889-L899)
+- [indices.sgml#partial-index-column-vs-predicate](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L900-L953)
+- [indices.sgml#partial-index-unbilled-example](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L900-L941)
 - [indices.sgml#partial-index-matching](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L943-L969)
 - [indices.sgml#partial-unique-index](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L971-L1005)
+- [indices.sgml#partial-index-plan-steering](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L1007-L1018)
 - [indices.sgml#partial-indexes-not-partitioning](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L1031-L1070)
+- [analyze.sgml#description](../../../raw/postgres-17/doc/src/sgml/ref/analyze.sgml#L42-L57)
+- [analyze.sgml#notes-statistics](../../../raw/postgres-17/doc/src/sgml/ref/analyze.sgml#L219-L268)
 - [create_index.sgml#synopsis](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L23-L31)
 - [create_index.sgml#partial-index-description](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L66-L96)
 - [create_index.sgml#nulls-not-distinct](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L339-L349)
@@ -236,6 +243,7 @@ None for source behavior at the pinned PostgreSQL 17 commit.
 - [pathnodes.h#IndexOptInfo](../../../raw/postgres-17/src/include/nodes/pathnodes.h#L1068-L1181)
 - [parse_utilcmd.c#transformIndexStmt](../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L2789-L2864)
 - [parse_utilcmd.c#constraint-using-index-rejects-exprs-predicates](../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L2276-L2303)
+- [indexcmds.c#CheckPredicate-call](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L888-L892)
 - [indexcmds.c#CheckPredicate](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1782-L1807)
 - [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L433-L463)
 - [indexcmds.c#safe-index-test](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1128-L1130)
@@ -249,6 +257,7 @@ None for source behavior at the pinned PostgreSQL 17 commit.
 - [relcache.c#RelationGetIndexPredicate](../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L5162-L5228)
 - [heapam_handler.c#partial-index-build-filter](../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1631-L1644)
 - [execIndexing.c#ExecInsertIndexTuples](../../../raw/postgres-17/src/backend/executor/execIndexing.c#L339-L397)
+- [plancat.c#get_relation_info-index-metadata](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L240-L267)
 - [plancat.c#get_relation_info-index-predicate](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L441-L459)
 - [plancat.c#get_relation_info-index-size](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L463-L507)
 - [plancat.c#infer_arbiter_indexes](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L850-L950)
@@ -259,28 +268,46 @@ None for source behavior at the pinned PostgreSQL 17 commit.
 - [indxpath.c#check_index_predicates-amoptionalkey](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3352-L3364)
 - [indxpath.c#relation_has_unique_index_for-partial](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3509-L3518)
 - [indxpath.c#match_clause_to_indexcol](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2138-L2252)
+- [indxpath.c#match_opclause_to_indexcol](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2388-L2477)
 - [indxpath.c#match_index_to_operand](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3667-L3744)
+- [indxpath.c#generate_bitmap_or_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1169-L1249)
 - [predtest.c#predicate_implied_by](../../../raw/postgres-17/src/backend/optimizer/util/predtest.c#L115-L180)
 - [createplan.c#create_bitmap_subplan](../../../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L3316-L3531)
+- [analyze.c#do_analyze_rel-indexdata](../../../raw/postgres-17/src/backend/commands/analyze.c#L445-L479)
+- [analyze.c#do_analyze_rel-write-stats](../../../raw/postgres-17/src/backend/commands/analyze.c#L580-L602)
 - [analyze.c#compute_index_stats](../../../raw/postgres-17/src/backend/commands/analyze.c#L828-L977)
 - [analyze.c#do_analyze_rel-index-relstats](../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663)
+- [analyze.c#examine_attribute](../../../raw/postgres-17/src/backend/commands/analyze.c#L999-L1078)
 - [analyze.c#update_attstats](../../../raw/postgres-17/src/backend/commands/analyze.c#L1587-L1671)
 - [vacuum.c#vac_update_relstats](../../../raw/postgres-17/src/backend/commands/vacuum.c#L1370-L1456)
+- [selfuncs.c#examine_variable-simple-var](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5055-L5075)
+- [selfuncs.c#var_eq_const](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L306-L360)
+- [selfuncs.c#scalarineqsel](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L592-L686)
+- [selfuncs.c#mcv_selectivity](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L737-L789)
+- [selfuncs.c#histogram_selectivity](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L791-L846)
 - [selfuncs.c#examine_variable-expression-index-stats](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5133-L5234)
 - [selfuncs.c#genericcostestimate](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6625-L6827)
 - [selfuncs.c#add_predicate_to_index_quals](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6830-L6866)
 - [selfuncs.c#btcostestimate-partial-selectivity](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6988-L7072)
 - [tablecmds.c#ATExecReplicaIdentity](../../../raw/postgres-17/src/backend/commands/tablecmds.c#L16796-L16861)
 - [cluster.c#check_index_is_clusterable](../../../raw/postgres-17/src/backend/commands/cluster.c#L500-L549)
+- [matview.c#RefreshMatViewByOid-concurrent-index-check](../../../raw/postgres-17/src/backend/commands/matview.c#L243-L272)
 - [matview.c#is_usable_unique_index](../../../raw/postgres-17/src/backend/commands/matview.c#L902-L936)
 - [create_index.sql#btree-partial-indexes](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L52-L65)
+- [create_index.out#btree-partial-indexes](../../../raw/postgres-17/src/test/regress/expected/create_index.out#L48-L59)
+- [select.sql#partial-btree-indexes](../../../raw/postgres-17/src/test/regress/sql/select.sql#L59-L93)
+- [select.sql#partial-index-planning](../../../raw/postgres-17/src/test/regress/sql/select.sql#L191-L235)
 - [select.out#partial-index-plans](../../../raw/postgres-17/src/test/regress/expected/select.out#L741-L900)
+- [create_index.sql#functional-and-expression-index-tests](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L421-L459)
 - [create_index.out#functional-and-expression-index-tests](../../../raw/postgres-17/src/test/regress/expected/create_index.out#L1314-L1378)
+- [indexing.sql#partial-expression-index-attach](../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L412-L434)
 - [indexing.out#partial-expression-index-attach](../../../raw/postgres-17/src/test/regress/expected/indexing.out#L852-L881)
+- [insert_conflict.sql#partial-and-expression-inference](../../../raw/postgres-17/src/test/regress/sql/insert_conflict.sql#L148-L232)
 - [insert_conflict.out#partial-and-expression-inference](../../../raw/postgres-17/src/test/regress/expected/insert_conflict.out#L311-L402)
+- [replica_identity.sql#expression-and-partial-replica-identity](../../../raw/postgres-17/src/test/regress/sql/replica_identity.sql#L13-L40)
 - [replica_identity.out#expression-and-partial-replica-identity](../../../raw/postgres-17/src/test/regress/expected/replica_identity.out#L49-L55)
 - [hash_index.sql#partial-hash-index](../../../raw/postgres-17/src/test/regress/sql/hash_index.sql#L56-L65)
-- [hash_index.out#partial-hash-index](../../../raw/postgres-17/src/test/regress/expected/hash_index.out#L145-L153)
+- [hash_index.out#partial-hash-index](../../../raw/postgres-17/src/test/regress/expected/hash_index.out#L139-L153)
 
 ## Navigation
 
