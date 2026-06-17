@@ -1008,3 +1008,11 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Fixed review findings: widened the `ATExecForceNoForceRowSecurity` citation to include the closing brace, changed logical replication wording from "reject writes" to reject all replicated commands including `TRUNCATE`, corrected the MERGE/partition evidence to cite `execPartition.c#ExecInitPartitionInfo`, and widened the pg_dump extension-member policy citation.
 - Marked the fix-history table's commit provenance as unverified because the local `raw/postgres-18/` checkout is shallow and contains only the pinned commit; current v18 code/test/doc evidence remains cited, but commit hashes, subjects, ancestry after the v13 development stamp, and all-fixes completeness are now listed under Open Questions.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v18/index.md` summaries to match the provenance caveat. `verified_by_agent` remains `not yet`.
+
+## [2026-06-17] question v12 | NULL handling by index type
+
+- Filed [How NULL Values Are Handled in PostgreSQL 12 Indexes (unverified)](v12/questions/null-values-in-indexes.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- User approved correcting the prompt wording before filing; the corrected prompt is restated under `## Question` with a prompt note.
+- Covered the shared index path (`FormIndexDatum`/executor `isnull[]`/`index_insert`/`aminsert`), `IndexTuple` NULL bitmaps, `ScanKey` NULL flags, and the planner's `amsearchnulls` gate for generic `IS NULL` and `IS NOT NULL` index quals.
+- Added per-index-type sections for B-tree, hash, GiST, SP-GiST, GIN, BRIN, and contrib Bloom, including storage/summary behavior, plain `NullTest` support, uniqueness or opclass boundaries where relevant, and direct regression-test coverage or explicit test absence.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`; `.wiki-runtime/venv/bin/python scripts/wiki_lint` reported 0 errors and 0 warnings.

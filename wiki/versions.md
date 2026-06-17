@@ -13,6 +13,10 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-17: filed PostgreSQL 12 NULL-handling-by-index-type coverage for
+  B-tree, hash, GiST, SP-GiST, GIN, BRIN, and contrib Bloom. The page uses
+  pinned v12 source to connect executor `isnull[]` handling, `amsearchnulls`,
+  access-method insertion/search behavior, and regression-test coverage.
 - 2026-06-14: tightened the PostgreSQL 12 codebase navigation guide after
   review. Added the extended-query protocol Parse/Bind/Execute path through
   `exec_parse_message()`, `exec_bind_message()`, and `exec_execute_message()`;
