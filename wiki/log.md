@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-17] expand v17 | partial indexes — what changed from PostgreSQL 12
+
+- Per user follow-up, added `### What changed from PostgreSQL 12` to [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](v17/questions/partial-indexes-pros-cons.md), against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa`.
+- Prompt hygiene: the follow-up had capitalization/grammar issues; the user approved correcting “add a section on what changed from postgresql 12” to “Add a section on what changed from PostgreSQL 12.” before updating the page.
+- The new section states that the core partial-index mechanics remain recognizable from the v12 baseline (predicate in `pg_index.indpred`, build/DML predicate filtering, planner `predOK`/`predicate_implied_by()`, and `ANALYZE` predicate-filtered row-count estimates) and then lists v17-side deltas from source/history: post-v12 documentation warning against partial-index-as-partitioning, PG14 `PROC_IN_SAFE_IC` safe-wait optimization with expression/partial indexes excluded, PG15 MERGE target-relation rechecks, PG14 expression statistics without expression-index maintenance, PG15 `NULLS NOT DISTINCT`, PG16 skip of partial unique indexes for join uniqueness proofs, and the pinned v17 stable partial-hash planning fix.
+- Updated `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-17] question v17 | partial indexes pros, cons, statistics, and planner use
+
+- Filed [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](v17/questions/partial-indexes-pros-cons.md) against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa`.
+- Covers partial-index definition and storage (`pg_index.indpred`, `IndexInfo.ii_Predicate`, `IndexOptInfo.indpred`/`predOK`), predicate validation and build/DML filtering, planner implication matching and bitmap recheck behavior, pros and cons, operational restrictions (constraint adoption, replica identity, `CLUSTER`, materialized-view concurrent refresh, `ON CONFLICT` inference), and regression coverage.
+- Includes ordinary expression indexes as the baseline and partial indexes on expressions: `pg_index.indkey` zeroes plus `indexprs`, `FormIndexDatum()` expression evaluation after predicate filtering, separate planner gates for predicate implication and expression-key matching, partial expression-index statistics, partitioned-index attach coverage, and `ON CONFLICT` expression/partial inference coverage.
+- Adds a dedicated statistics section: `ANALYZE` filters sampled rows through the predicate, estimates `tupleFract` and partial-index `pg_class.reltuples`, stores expression-index statistics in `pg_statistic`, and planner costing adds non-redundant predicate clauses to index selectivity while excluding partial expression-index stats from whole-relation expression estimates.
+- Prompt hygiene: the original request had grammar/capitalization issues; the user approved correcting the wording before filing this page.
+- Updated `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-17] question v12 | partial indexes pros, cons, statistics, and planner use
 
 - Filed [Pros and Cons of Partial Indexes in PostgreSQL 12 (unverified)](v12/questions/partial-indexes-pros-cons.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
