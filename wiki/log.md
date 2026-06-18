@@ -2,6 +2,14 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-18] expand v12 | CREATE INDEX CONCURRENTLY inter-builder interactions
+
+- Expanded [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Resolved the open question about other concurrent index builds in the v12 snapshot wait: same-table CICs serialize at the self-conflicting `ShareUpdateExclusiveLock`; different-table CIC/RIC can still meet in the database-wide `WaitForOlderSnapshots` / `GetCurrentVirtualXIDs` old-snapshot wait; and CIC avoids mutual final-phase deadlock by dropping its reference snapshot, committing into a no-`xmin` transaction, and only then waiting.
+- Added source evidence for `ReindexRelationConcurrently`'s analogous wait boundary, the `multiple-cic` isolation expected output, and same-checkout history review (`c3d09b3bd23`, `54eff5311d7`, `1dec82068b3`). Removed the resolved `## Open Questions` bullet.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Reset `verified_by_agent` to `not yet` because this was a targeted expansion rather than a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-18] question v12 | wal_sender_timeout usage and logical replication impact
 
 - Filed [How wal_sender_timeout Is Used and What It Impacts in PostgreSQL 12 (unverified)](v12/questions/wal-sender-timeout.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.

@@ -13,6 +13,15 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-18: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
+  against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
+  the inter-builder open question. The page now distinguishes same-table CIC
+  serialization by self-conflicting `ShareUpdateExclusiveLock`, different-table
+  CIC/RIC interaction through the database-wide `WaitForOlderSnapshots` /
+  `GetCurrentVirtualXIDs` old-snapshot wait, and the final no-`xmin` boundary
+  that prevents mutual CIC snapshot-wait deadlocks. `verified_by_agent` was
+  reset to `not yet` because this was a targeted update, not a full-page
+  re-verification.
 - 2026-06-18: filed PostgreSQL 12 `wal_sender_timeout` coverage against
   pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42`. The page covers
   GUC scope/default/disable behavior, sender reply tracking, half-time
