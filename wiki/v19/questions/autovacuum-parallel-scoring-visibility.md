@@ -1,12 +1,50 @@
 ---
 type: question
 version: 19
-pinned_commit: e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa
+pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
 verified: false
 verified_by_agent: not yet
 ---
 
 # PostgreSQL 19 Autovacuum and VACUUM: Parallel Workers, Table Scoring, and Setting Pages All-Visible During Reads (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Short Answer](#short-answer)
+- [1. Parallel autovacuum workers](#1-parallel-autovacuum-workers)
+  - [What it does](#what-it-does)
+  - [How a table gets parallel workers (normal path)](#how-a-table-gets-parallel-workers-normal-path)
+  - [The per-autovacuum-worker cap](#the-per-autovacuum-worker-cap)
+  - [Cost-delay propagation to parallel workers (new infrastructure)](#cost-delay-propagation-to-parallel-workers-new-infrastructure)
+  - [When no parallelism happens (edge cases)](#when-no-parallelism-happens-edge-cases)
+  - [GUC / reloption scope](#guc--reloption-scope)
+  - [Tests](#tests)
+- [2. Autovacuum table scoring (prioritization)](#2-autovacuum-table-scoring-prioritization)
+  - [What it does](#what-it-does-1)
+  - [How the score is computed](#how-the-score-is-computed)
+  - [How tables are sorted](#how-tables-are-sorted)
+  - [The five score-weight GUCs (and the escape hatch)](#the-five-score-weight-gucs-and-the-escape-hatch)
+  - [Monitoring: `pg_stat_autovacuum_scores`](#monitoring-pgstatautovacuumscores)
+  - [Not the same as the launcher's database scheduling](#not-the-same-as-the-launchers-database-scheduling)
+  - [Tests](#tests-1)
+- [3. Setting pages all-visible during read-only query scans](#3-setting-pages-all-visible-during-read-only-query-scans)
+  - [What it does](#what-it-does-2)
+  - [Normal path](#normal-path)
+  - [How the VM bits get set](#how-the-vm-bits-get-set)
+  - [The read-query safety valve](#the-read-query-safety-valve)
+  - [Why this reduces future vacuuming work](#why-this-reduces-future-vacuuming-work)
+  - [Edge cases](#edge-cases)
+  - [Tests](#tests-2)
+- [Source Commit History](#source-commit-history)
+  - [Parallel autovacuum workers](#parallel-autovacuum-workers)
+  - [Autovacuum table scoring](#autovacuum-table-scoring)
+  - [Setting pages all-visible during reads](#setting-pages-all-visible-during-reads)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Related Pages](#related-pages)
 
 ## Question
 
@@ -16,7 +54,7 @@ Follow AGENTS.md. In PostgreSQL 19, create a question document to explain all th
 
 ## Short Answer
 
-All three statements are true for the pinned PostgreSQL 19 development line (post-`REL_19_BETA1` `master` commit `e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa`). They are three independent features:
+All three statements are true for the pinned PostgreSQL 19 development line (post-`REL_19_BETA1` `master` commit `ff8bec8c460a13bedbb416d8697f4675a0709ce8`). They are three independent features:
 
 1. **Parallel autovacuum.** An autovacuum worker can now hand its **index** vacuuming and index cleanup phases to parallel workers, exactly like manual `VACUUM (PARALLEL)`. The new GUC `autovacuum_max_parallel_workers` caps how many parallel workers a *single* autovacuum worker may use; it defaults to `0`, which keeps autovacuum serial. A per-table reloption `autovacuum_parallel_workers` requests a specific degree [autovacuum.c#parallel-workers](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuumparallel.c#compute-workers](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L741-L802) [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9715-L9736).
 
@@ -236,7 +274,7 @@ The headline commit `b46e1e54d` changed only heap access-method code and headers
 
 ## Source Commit History
 
-All hashes are ancestors of the pinned post-`REL_19_BETA1` `master` commit `e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa`. No autovacuum, parallel-vacuum, or visibility-map/pruning feature files changed between `REL_19_BETA1` and this pin. Dates are author dates.
+All hashes are ancestors of the pinned post-`REL_19_BETA1` `master` commit `ff8bec8c460a13bedbb416d8697f4675a0709ce8`. No autovacuum, parallel-vacuum, or visibility-map/pruning feature files changed between `REL_19_BETA1` and this pin. Dates are author dates.
 
 ### Parallel autovacuum workers
 

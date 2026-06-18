@@ -1,12 +1,65 @@
 ---
 type: question
 version: 19
-pinned_commit: e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa
+pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
 verified: false
 verified_by_agent: not yet
 ---
 
 # How pg_plan_advice Works in PostgreSQL 19, and All Its Commits (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Short Answer](#short-answer)
+- [Module Layout](#module-layout)
+- [Core Planner Changes (the mechanism)](#core-planner-changes-the-mechanism)
+  - [1. The strategy mask `pgs_mask`](#1-the-strategy-mask-pgsmask)
+  - [2. Five new planner hooks](#2-five-new-planner-hooks)
+  - [3. Per-object extension state](#3-per-object-extension-state)
+  - [4. Per-index disabling](#4-per-index-disabling)
+- [Module Initialization](#module-initialization)
+- [The Advice Language](#the-advice-language)
+  - [Relation identifiers](#relation-identifiers)
+  - [What each tag family means](#what-each-tag-family-means)
+- [Generating Advice (plan -> string)](#generating-advice-plan---string)
+- [Enforcing Advice (string -> plan)](#enforcing-advice-string---plan)
+- [Feedback and EXPLAIN Output](#feedback-and-explain-output)
+- [GUCs](#gucs)
+- [Prepared Statements and Plan Caching](#prepared-statements-and-plan-caching)
+  - [Enforcement is frozen into the cached plan](#enforcement-is-frozen-into-the-cached-plan)
+  - [Generated advice and feedback are usually absent for EXECUTE](#generated-advice-and-feedback-are-usually-absent-for-execute)
+- [Round-Trip Testing](#round-trip-testing)
+- [Source Commit History](#source-commit-history)
+  - [Core planner enabling and fix commits](#core-planner-enabling-and-fix-commits)
+  - [`5883ff30` — Add pg_plan_advice contrib module (2026-03-12, Robert Haas)](#5883ff30--add-pgplanadvice-contrib-module-2026-03-12-robert-haas)
+  - [`be43c48c` — Initialize variable to placate compiler (2026-03-13, Nathan Bossart; patch by Sami Imseih)](#be43c48c--initialize-variable-to-placate-compiler-2026-03-13-nathan-bossart-patch-by-sami-imseih)
+  - [`4f888d0f` — Fix whitespace (2026-03-16, Peter Eisentraut)](#4f888d0f--fix-whitespace-2026-03-16-peter-eisentraut)
+  - [`5e72ce24` — Fix failures to accept identifier keywords (2026-03-16, Robert Haas; author Lukas Fittl)](#5e72ce24--fix-failures-to-accept-identifier-keywords-2026-03-16-robert-haas-author-lukas-fittl)
+  - [`7560995a` — Fix variable type confusion (2026-03-17, Robert Haas)](#7560995a--fix-variable-type-confusion-2026-03-17-robert-haas)
+  - [`59dcc19b` — Always install pg_plan_advice.h, and in the right place (2026-03-17, Robert Haas; author Zsolt Parragi)](#59dcc19b--always-install-pgplanadviceh-and-in-the-right-place-2026-03-17-robert-haas-author-zsolt-parragi)
+  - [`01b02c0e` — Avoid a crash under GEQO (2026-03-17, Robert Haas)](#01b02c0e--avoid-a-crash-under-geqo-2026-03-17-robert-haas)
+  - [`b335fe56` — Fix multiple copy-and-paste errors in test case (2026-03-18, Robert Haas; reported by Tom Lane)](#b335fe56--fix-multiple-copy-and-paste-errors-in-test-case-2026-03-18-robert-haas-reported-by-tom-lane)
+  - [`5dcb15e8` — Refactor to invent pgpa_planner_info (2026-03-26, Robert Haas)](#5dcb15e8--refactor-to-invent-pgpaplannerinfo-2026-03-26-robert-haas)
+  - [`6455e55b` — Invent DO_NOT_SCAN(relation_identifier) (2026-03-26, Robert Haas; reviewer Lukas Fittl)](#6455e55b--invent-donotscanrelationidentifier-2026-03-26-robert-haas-reviewer-lukas-fittl)
+  - [`874da8b1` — pgindent (2026-03-26, Robert Haas; reported by Lukas Fittl)](#874da8b1--pgindent-2026-03-26-robert-haas-reported-by-lukas-fittl)
+  - [`e2ee9523` — Avoid assertion failure with partitionwise aggregate (2026-03-30, Robert Haas; reported by Alexander Lakhin)](#e2ee9523--avoid-assertion-failure-with-partitionwise-aggregate-2026-03-30-robert-haas-reported-by-alexander-lakhin)
+  - [`0442f1c9` — Add a guc_check_handler to the EXPLAIN extension mechanism (2026-04-06, Robert Haas)](#0442f1c9--add-a-guccheckhandler-to-the-explain-extension-mechanism-2026-04-06-robert-haas)
+  - [`49ce4181` — Improve various new-to-v19 appendStringInfo calls (2026-04-13, David Rowley)](#49ce4181--improve-various-new-to-v19-appendstringinfo-calls-2026-04-13-david-rowley)
+  - [`3311ccc3` — Handle non-repeatable TABLESAMPLE scans (2026-04-13, Robert Haas; reported by Alexander Lakhin)](#3311ccc3--handle-non-repeatable-tablesample-scans-2026-04-13-robert-haas-reported-by-alexander-lakhin)
+  - [`1faf9dfa` — Add alternatives test to Makefile (2026-04-13, Robert Haas)](#1faf9dfa--add-alternatives-test-to-makefile-2026-04-13-robert-haas)
+  - [`0f93ebb3` — Fix a bug when a subquery is pruned away entirely (2026-04-13, Robert Haas; reported by Alexander Lakhin)](#0f93ebb3--fix-a-bug-when-a-subquery-is-pruned-away-entirely-2026-04-13-robert-haas-reported-by-alexander-lakhin)
+  - [`c644aca2` — Export feedback-related definitions (2026-04-13, Robert Haas)](#c644aca2--export-feedback-related-definitions-2026-04-13-robert-haas)
+  - [`4321dcad` — Fix another unique-semijoin bug (2026-04-17, Robert Haas; reported by Alexander Lakhin)](#4321dcad--fix-another-unique-semijoin-bug-2026-04-17-robert-haas-reported-by-alexander-lakhin)
+  - [`228a1f95` — pgindent (2026-04-17, Robert Haas; per buildfarm member koel)](#228a1f95--pgindent-2026-04-17-robert-haas-per-buildfarm-member-koel)
+  - [`d3bba041` — Fix a set of typos and grammar issues across the tree (2026-04-21, Michael Paquier)](#d3bba041--fix-a-set-of-typos-and-grammar-issues-across-the-tree-2026-04-21-michael-paquier)
+  - [`b1901e28` — DO_NOT_SCAN is a simple tag, not a generic one (2026-05-29, Robert Haas; reported by Nikita Kalinin)](#b1901e28--donotscan-is-a-simple-tag-not-a-generic-one-2026-05-29-robert-haas-reported-by-nikita-kalinin)
+  - [Test, documentation, and build-tooling support commits](#test-documentation-and-build-tooling-support-commits)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Related Pages](#related-pages)
 
 ## Question
 
@@ -316,7 +369,7 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 - `src/test/modules/test_plan_advice/test_plan_advice.c`, the `contrib` `sql/` and `expected/` regression files (including `prepared`), and the `Makefile` `REGRESS` list.
 - Core plan-cache policy in `src/backend/utils/cache/plancache.c` (`choose_custom_plan`) for the prepared-statement interaction.
 - Same-checkout docs in `doc/src/sgml/pgplanadvice.sgml`.
-- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned post-`REL_19_BETA1` `master` commit `e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa`. No `pg_plan_advice` module, doc, or test files changed between `REL_19_BETA1` and this pin, so the newest module commit remains `b1901e28` (2026-05-29).
+- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned post-`REL_19_BETA1` `master` commit `ff8bec8c460a13bedbb416d8697f4675a0709ce8`. No `pg_plan_advice` module, doc, or test files changed between `REL_19_BETA1` and this pin, so the newest module commit remains `b1901e28` (2026-05-29).
 
 ## Evidence Map
 

@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa
+pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
 verified: false
 verified_by_agent: not yet
 ---
@@ -63,7 +63,7 @@ Keep these structs open when tracing behavior:
 
 | Structure | Why it matters |
 |---|---|
-| `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L117-L170) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2187-L2210). |
+| `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-19/src/include/nodes/plannodes.h#L59-L135). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-19/src/include/nodes/pathnodes.h#L168-L245) [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095) [pathnodes.h#Path](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1964-L2005). |
 | `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L80) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L690-L785) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265). |
@@ -118,7 +118,7 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 - [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345)
 - [backend/Makefile#generated-headers](../../raw/postgres-19/src/backend/Makefile#L183-L188)
 - [pg_index.h#CATALOG](../../raw/postgres-19/src/include/catalog/pg_index.h#L31-L78)
-- [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2187-L2210)
+- [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207)
 - [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095)
 - [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265)
 - [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420)

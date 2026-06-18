@@ -1060,3 +1060,12 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Fixed review findings: removed the `_hash_checkqual` runtime claim because its NULL-checking body is under `#ifdef NOT_USED`; corrected stale GiST `gistindex_keytest` citation ranges; corrected SP-GiST scan citations from stale `resetSpGistScanOpaque`/`spgWalk` line ranges to `spgPrepareScanKeys`, `resetSpGistScanOpaque`, and `spgAddStartItem`; and reworded the B-tree regression-test paragraph because the cited block shows result coverage, not `EXPLAIN` plan-shape coverage.
 - Advanced `verified_by_agent` to `GPT-5-5-XHigh-Thinking 2026-06-17T17:30:21Z`; `verified:` stays human-only `false`, so the page title keeps `(unverified)`. Existing index and landing-page summaries remain accurate.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-18] repin v19 | fetch latest master and review all questions
+
+- Fetched upstream PostgreSQL `master` for `raw/postgres-19/` and repinned from `e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa` to `ff8bec8c460a13bedbb416d8697f4675a0709ce8` (59 new commits; latest commit `ff8bec8c`, 2026-06-18, `Create TOAST table for partitions made by MERGE/SPLIT PARTITION`).
+- Reviewed all v19 question pages and the mandatory v19 codebase navigation guide against the changed-file range. No `pg_plan_advice` module/doc/test files changed in the range; no autovacuum, parallel-vacuum, or visibility-map/pruning feature files changed in the range.
+- Updated [How the REPACK Command Works in PostgreSQL 19, and Its 42 Feature-Scope Commits (unverified)](v19/questions/repack-command.md) for the new explicit REPACK commit `e2a8cabc` (`concurrent repack: check there are no leftover toast attribs`), adding the `restore_tuple()` leftover separately-stored-attribute check and refreshing affected `repack.c` / `parsenodes.h` line ranges.
+- Added `## Contents` blocks to the three v19 question pages while touching them for the repin, and refreshed the v19 codebase guide's shifted `parsenodes.h` citations.
+- Updated `wiki/index.md`, `wiki/v19/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet` on v19 pages because this was a repin and changed-file review, not a full claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

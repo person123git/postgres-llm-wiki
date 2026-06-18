@@ -1,12 +1,41 @@
 ---
 type: question
 version: 19
-pinned_commit: e18b0cb7344cb4bd28468f6c0aeeb9b9241d30aa
+pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
 verified: false
 verified_by_agent: not yet
 ---
 
-# How the REPACK Command Works in PostgreSQL 19, and Its 41 Feature-Scope Commits (unverified)
+# How the REPACK Command Works in PostgreSQL 19, and Its 42 Feature-Scope Commits (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Short Answer](#short-answer)
+- [Syntax and Modes](#syntax-and-modes)
+- [Source Layout](#source-layout)
+- [Blocking REPACK (the simple rewrite)](#blocking-repack-the-simple-rewrite)
+- [REPACK CONCURRENTLY (online rewrite via logical decoding)](#repack-concurrently-online-rewrite-via-logical-decoding)
+  - [Step by step](#step-by-step)
+  - [How concurrent changes are captured and replayed](#how-concurrent-changes-are-captured-and-replayed)
+  - [Error handling and worker teardown](#error-handling-and-worker-teardown)
+  - [WAL retention and `effective_wal_level`](#wal-retention-and-effectivewallevel)
+- [Restrictions on CONCURRENTLY](#restrictions-on-concurrently)
+- [GUC: `max_repack_replication_slots`](#guc-maxrepackreplicationslots)
+- [I/O Impact and Throttling](#io-impact-and-throttling)
+- [Progress reporting](#progress-reporting)
+- [Tests](#tests)
+- [Feature-Scope Commits](#feature-scope-commits)
+  - [Foundational](#foundational)
+  - [CONCURRENTLY infrastructure](#concurrently-infrastructure)
+  - [Correctness fixes](#correctness-fixes)
+  - [Error messages, docs, style](#error-messages-docs-style)
+  - [Tests](#tests-1)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Related Pages](#related-pages)
 
 ## Question
 
@@ -24,11 +53,11 @@ In PostgreSQL 19, do a comprehensive explanation of how `pg_repack` works, expla
 - **Blocking (default).** Takes `AccessExclusiveLock`, builds a new heap, copies live tuples in the chosen order, rebuilds indexes via `REINDEX`, then swaps relfilenodes. This is the classic `CLUSTER`/`VACUUM FULL` path, now reached through `repack.c` [repack.c#rebuild_relation](../../../raw/postgres-19/src/backend/commands/repack.c#L1114-L1139).
 - **`CONCURRENTLY`.** Takes only `ShareUpdateExclusiveLock` for almost all of the work, so readers and writers keep using the table. It captures concurrent DML with **logical decoding** through a dedicated background worker and a temporary replication slot, replays those changes onto the new heap, and only upgrades to `AccessExclusiveLock` for the brief final relfilenode swap [repack.c#overview](../../../raw/postgres-19/src/backend/commands/repack.c#L7-L21) [ref/repack.sgml#CONCURRENTLY](../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L221-L234).
 
-This page tracks **41 feature-scope commits (2026-03-10 to 2026-06-09)**: commits whose subject/body explicitly references REPACK, adjacent prerequisite/support commits used by that history, and tree-wide fixes that changed REPACK-specific code or text. The bulk were authored by Antonin Houska and Álvaro Herrera, building on Houska's `pg_squeeze` extension. They are listed and explained under [Feature-Scope Commits](#feature-scope-commits).
+This page tracks **42 feature-scope commits (2026-03-10 to 2026-06-16)**: commits whose subject/body explicitly references REPACK, adjacent prerequisite/support commits used by that history, and tree-wide fixes that changed REPACK-specific code or text. The bulk were authored by Antonin Houska and Álvaro Herrera, building on Houska's `pg_squeeze` extension. They are listed and explained under [Feature-Scope Commits](#feature-scope-commits).
 
 ## Syntax and Modes
 
-The grammar produces a single `RepackStmt` node for `REPACK` and `CLUSTER`, distinguished by a `RepackCommand` tag [parsenodes.h#RepackStmt](../../../raw/postgres-19/src/include/nodes/parsenodes.h#L4097-L4112) [gram.y#RepackStmt](../../../raw/postgres-19/src/backend/parser/gram.y#L12587-L12680). `VACUUM (FULL)` still parses as `VacuumStmt`; when the `FULL` option is present, `vacuum.c` routes execution into the same rewrite engine with `REPACK_COMMAND_VACUUMFULL` [gram.y#VacuumStmt](../../../raw/postgres-19/src/backend/parser/gram.y#L12700-L12732) [vacuum.c#VACUUMFULL-repack](../../../raw/postgres-19/src/backend/commands/vacuum.c#L2302-L2305):
+The grammar produces a single `RepackStmt` node for `REPACK` and `CLUSTER`, distinguished by a `RepackCommand` tag [parsenodes.h#RepackStmt](../../../raw/postgres-19/src/include/nodes/parsenodes.h#L4092-L4107) [gram.y#RepackStmt](../../../raw/postgres-19/src/backend/parser/gram.y#L12587-L12680). `VACUUM (FULL)` still parses as `VacuumStmt`; when the `FULL` option is present, `vacuum.c` routes execution into the same rewrite engine with `REPACK_COMMAND_VACUUMFULL` [gram.y#VacuumStmt](../../../raw/postgres-19/src/backend/parser/gram.y#L12700-L12732) [vacuum.c#VACUUMFULL-repack](../../../raw/postgres-19/src/backend/commands/vacuum.c#L2302-L2305):
 
 ```
 REPACK [ ( option [, ...] ) ] [ table [ ( column [, ...] ) ] [ USING INDEX [ index_name ] ] ]
@@ -94,12 +123,12 @@ The concurrent path keeps the table online by combining a low-strength lock with
 ### Step by step
 
 1. **Precondition checks.** `check_concurrent_repack_requirements()` enforces `wal_level >= replica`, rejects catalogs, TOAST tables, non-permanent (temp/unlogged) tables, and `REPLICA IDENTITY NOTHING`/`FULL`, and obtains the **identity index** (replica-identity index or a non-deferrable primary key). Without a usable identity index, concurrent mode is refused [repack.c#check_concurrent_repack_requirements](../../../raw/postgres-19/src/backend/commands/repack.c#L894-L985).
-2. **Start the worker before any XID is assigned.** The leader becomes a lock-group leader, then `start_repack_decoding_worker()` sets up the DSM, registers the `bgworker`, and blocks until the worker reports `initialized` [repack.c#start_repack_decoding_worker](../../../raw/postgres-19/src/backend/commands/repack.c#L1030-L1056) [repack.c#start_repack_decoding_worker-impl](../../../raw/postgres-19/src/backend/commands/repack.c#L3439-L3521). The worker creates the temporary slot, enables logical decoding, restricts decoding to the target relation (and its TOAST relation), builds an initial historic snapshot, and exports it to a file [repack_worker.c#setup](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L194-L291).
-3. **Initial copy under the exported snapshot.** The leader reads the exported snapshot with `get_initial_snapshot()`, pushes it active, and runs `copy_table_data()` against that MVCC snapshot, so the initial copy is a consistent point-in-time image [repack.c#get_initial_snapshot](../../../raw/postgres-19/src/backend/commands/repack.c#L1058-L1095) [repack.c#get_initial_snapshot-impl](../../../raw/postgres-19/src/backend/commands/repack.c#L3583-L3632). Meanwhile the worker keeps decoding WAL in a loop, and later advances the slot's restart/confirmed LSN at WAL-segment boundaries so processed WAL can be recycled [repack_worker.c#decode_loop](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L152-L164) [repack_worker.c#WAL-recycling](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L374-L403).
-4. **Build new indexes** on the new heap (instead of reindexing the old one), since this is slow and is done before the exclusive lock [repack.c#build_new_indexes](../../../raw/postgres-19/src/backend/commands/repack.c#L3327-L3358).
-5. **Catch-up #1 (still under `ShareUpdateExclusiveLock`).** `process_concurrent_changes()` tells the worker an `lsn_upto`, waits for the next spill file, and `apply_concurrent_changes()` replays it onto the new heap. Doing this first minimizes how long the exclusive lock is later held [repack.c#catch-up-1](../../../raw/postgres-19/src/backend/commands/repack.c#L3180-L3193).
-6. **Lock upgrade + catch-up #2.** The leader takes `AccessExclusiveLock` on the table, all its indexes, and its TOAST relation, transfers predicate locks, flushes WAL, and applies the remaining changes with `done = true` so the worker exits [repack.c#lock-upgrade](../../../raw/postgres-19/src/backend/commands/repack.c#L3196-L3250).
-7. **Swap.** `swap_relation_files()` swaps each index's storage, then `finish_heap_swap()` swaps the heap (and TOAST), dropping the transient relation. The old OID, grants, and dependencies are preserved [repack.c#swap](../../../raw/postgres-19/src/backend/commands/repack.c#L3263-L3314).
+2. **Start the worker before any XID is assigned.** The leader becomes a lock-group leader, then `start_repack_decoding_worker()` sets up the DSM, registers the `bgworker`, and blocks until the worker reports `initialized` [repack.c#start_repack_decoding_worker](../../../raw/postgres-19/src/backend/commands/repack.c#L1030-L1056) [repack.c#start_repack_decoding_worker-impl](../../../raw/postgres-19/src/backend/commands/repack.c#L3442-L3524). The worker creates the temporary slot, enables logical decoding, restricts decoding to the target relation (and its TOAST relation), builds an initial historic snapshot, and exports it to a file [repack_worker.c#setup](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L194-L291).
+3. **Initial copy under the exported snapshot.** The leader reads the exported snapshot with `get_initial_snapshot()`, pushes it active, and runs `copy_table_data()` against that MVCC snapshot, so the initial copy is a consistent point-in-time image [repack.c#get_initial_snapshot](../../../raw/postgres-19/src/backend/commands/repack.c#L1058-L1095) [repack.c#get_initial_snapshot-impl](../../../raw/postgres-19/src/backend/commands/repack.c#L3586-L3635). Meanwhile the worker keeps decoding WAL in a loop, and later advances the slot's restart/confirmed LSN at WAL-segment boundaries so processed WAL can be recycled [repack_worker.c#decode_loop](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L152-L164) [repack_worker.c#WAL-recycling](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L374-L403).
+4. **Build new indexes** on the new heap (instead of reindexing the old one), since this is slow and is done before the exclusive lock [repack.c#build_new_indexes](../../../raw/postgres-19/src/backend/commands/repack.c#L3330-L3361).
+5. **Catch-up #1 (still under `ShareUpdateExclusiveLock`).** `process_concurrent_changes()` tells the worker an `lsn_upto`, waits for the next spill file, and `apply_concurrent_changes()` replays it onto the new heap. Doing this first minimizes how long the exclusive lock is later held [repack.c#catch-up-1](../../../raw/postgres-19/src/backend/commands/repack.c#L3183-L3196).
+6. **Lock upgrade + catch-up #2.** The leader takes `AccessExclusiveLock` on the table, all its indexes, and its TOAST relation, transfers predicate locks, flushes WAL, and applies the remaining changes with `done = true` so the worker exits [repack.c#lock-upgrade](../../../raw/postgres-19/src/backend/commands/repack.c#L3199-L3253).
+7. **Swap.** `swap_relation_files()` swaps each index's storage, then `finish_heap_swap()` swaps the heap (and TOAST), dropping the transient relation. The old OID, grants, and dependencies are preserved [repack.c#swap](../../../raw/postgres-19/src/backend/commands/repack.c#L3266-L3317).
 
 ### How concurrent changes are captured and replayed
 
@@ -110,11 +139,11 @@ The `pgrepack` plugin's `change_cb` only ever sees the target relation (other re
 - **INSERT** → `table_tuple_insert(..., TABLE_INSERT_NO_LOGICAL)` plus index maintenance. The `NO_LOGICAL` flag stops these replayed rows from being decoded again [repack.c#apply_concurrent_insert](../../../raw/postgres-19/src/backend/commands/repack.c#L2653-L2668).
 - **UPDATE/DELETE** → locate the existing tuple in the new heap via the identity index (`find_target_tuple()`), then `table_tuple_update`/`table_tuple_delete` with `NO_LOGICAL`. For updates, unchanged TOAST pointers are re-pointed at the new relation's TOAST table via `adjust_toast_pointers()` [repack.c#apply_concurrent_update](../../../raw/postgres-19/src/backend/commands/repack.c#L2674-L2738) [repack.c#toast-pointers](../../../raw/postgres-19/src/backend/commands/repack.c#L2620-L2630).
 
-The identity-index scan key is precomputed in `initialize_change_context()`, which resolves the equality strategy from the index's operator family (so it works for non-btree identity indexes too — see commit `36f52a59`) [repack.c#initialize_change_context](../../../raw/postgres-19/src/backend/commands/repack.c#L3001-L3088).
+The identity-index scan key is precomputed in `initialize_change_context()`, which resolves the equality strategy from the index's operator family (so it works for non-btree identity indexes too — see commit `36f52a59`) [repack.c#initialize_change_context](../../../raw/postgres-19/src/backend/commands/repack.c#L3004-L3091). When replay reconstructs a spilled tuple, `restore_tuple()` checks that every separately stored varlena attribute is consumed and errors if the spill file contains too few or too many separately stored attributes; commit `e2a8cabc` added the leftover-attribute check [repack.c#restore_tuple](../../../raw/postgres-19/src/backend/commands/repack.c#L2751-L2817).
 
 ### Error handling and worker teardown
 
-The leader runs `rebuild_relation()` inside `PG_ENSURE_ERROR_CLEANUP(stop_repack_decoding_worker_cb)` so the worker and its slot are cleaned up even on `FATAL` exit (e.g. `pg_terminate_backend()`), and `stop_repack_decoding_worker()` terminates the worker, detaches the error queue, cancels CV sleeps, and frees the DSM [repack.c#ensure-cleanup](../../../raw/postgres-19/src/backend/commands/repack.c#L681-L689) [repack.c#stop_repack_decoding_worker](../../../raw/postgres-19/src/backend/commands/repack.c#L3529-L3578). Worker errors are forwarded to the leader through a shared-memory message queue and re-thrown with a "REPACK decoding worker" context line, using the `PROCSIG_REPACK_MESSAGE` interrupt and `ProcessRepackMessages()` [repack.c#ProcessRepackMessages](../../../raw/postgres-19/src/backend/commands/repack.c#L3654-L3792) [repack_worker.c#RepackWorkerShutdown](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L169-L179).
+The leader runs `rebuild_relation()` inside `PG_ENSURE_ERROR_CLEANUP(stop_repack_decoding_worker_cb)` so the worker and its slot are cleaned up even on `FATAL` exit (e.g. `pg_terminate_backend()`), and `stop_repack_decoding_worker()` terminates the worker, detaches the error queue, cancels CV sleeps, and frees the DSM [repack.c#ensure-cleanup](../../../raw/postgres-19/src/backend/commands/repack.c#L681-L689) [repack.c#stop_repack_decoding_worker](../../../raw/postgres-19/src/backend/commands/repack.c#L3532-L3581). Worker errors are forwarded to the leader through a shared-memory message queue and re-thrown with a "REPACK decoding worker" context line, using the `PROCSIG_REPACK_MESSAGE` interrupt and `ProcessRepackMessages()` [repack.c#ProcessRepackMessages](../../../raw/postgres-19/src/backend/commands/repack.c#L3657-L3795) [repack_worker.c#RepackWorkerShutdown](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L169-L179).
 
 ### WAL retention and `effective_wal_level`
 
@@ -128,7 +157,7 @@ Normally a replication slot pins `restart_lsn` so WAL can't be recycled. `REPACK
 
 Concurrent `REPACK` consumes a logical replication slot for its lifetime. Rather than forcing users to inflate `max_replication_slots`, v19 adds a dedicated pool sized by `max_repack_replication_slots` (default `5`, min `0`) [guc_parameters.dat#max_repack_replication_slots](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2115) [slot.c#decl](../../../raw/postgres-19/src/backend/replication/slot.c#L163-L164). `ReplicationSlotCreate(..., repack = true, ...)` allocates from the extra `[max_replication_slots, max_replication_slots + max_repack_replication_slots)` band of the slot array, so REPACK slots never compete with ordinary replication slots [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 
-**Scope:** `max_repack_replication_slots` is `PGC_POSTMASTER` — it **requires a server restart** [guc_parameters.dat#context](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2109). The decoding worker also needs a free `max_worker_processes` slot, or `REPACK (CONCURRENTLY)` errors out [repack.c#worker-slots](../../../raw/postgres-19/src/backend/commands/repack.c#L3494-L3498).
+**Scope:** `max_repack_replication_slots` is `PGC_POSTMASTER` — it **requires a server restart** [guc_parameters.dat#context](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2109). The decoding worker also needs a free `max_worker_processes` slot, or `REPACK (CONCURRENTLY)` errors out [repack.c#worker-slots](../../../raw/postgres-19/src/backend/commands/repack.c#L3497-L3501).
 
 ## I/O Impact and Throttling
 
@@ -158,11 +187,11 @@ Each backend running `REPACK` reports through `pg_stat_progress_repack`, exposin
 
 ## Tests
 
-Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tests live in `contrib/test_decoding` rather than the core regression suite (commit `4b2aa4b3`). The SQL test covers partition ownership checks, `attmissingval` preservation, the full matrix of rejection cases (partitioned, catalog, TOAST, temp, unlogged, `REPLICA IDENTITY NOTHING`, no PK/RI, deferrable PK), and a check that the `pgrepack` plugin cannot be driven directly through the SQL logical-decoding interface (added by commit `cd7b204b`) [test_decoding/sql/repack.sql](../../../raw/postgres-19/contrib/test_decoding/sql/repack.sql#L1-L84). Timing-sensitive concurrency (a transaction modifying the table during the rewrite) is driven by injection points in isolation specs `repack`, `repack_toast`, `repack_temporal`, and `repack_temporal_multirange`, hooked at `repack-concurrently-before-lock` [repack.c#injection-point](../../../raw/postgres-19/src/backend/commands/repack.c#L3174-L3178).
+Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tests live in `contrib/test_decoding` rather than the core regression suite (commit `4b2aa4b3`). The SQL test covers partition ownership checks, `attmissingval` preservation, the full matrix of rejection cases (partitioned, catalog, TOAST, temp, unlogged, `REPLICA IDENTITY NOTHING`, no PK/RI, deferrable PK), and a check that the `pgrepack` plugin cannot be driven directly through the SQL logical-decoding interface (added by commit `cd7b204b`) [test_decoding/sql/repack.sql](../../../raw/postgres-19/contrib/test_decoding/sql/repack.sql#L1-L84). Timing-sensitive concurrency (a transaction modifying the table during the rewrite) is driven by injection points in isolation specs `repack`, `repack_toast`, `repack_temporal`, and `repack_temporal_multirange`, hooked at `repack-concurrently-before-lock` [repack.c#injection-point](../../../raw/postgres-19/src/backend/commands/repack.c#L3177-L3181).
 
 ## Feature-Scope Commits
 
-These are the 41 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` `master` checkout (`e18b0cb7`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
+These are the 42 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` `master` checkout (`ff8bec8c`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
 
 ### Foundational
 
@@ -196,10 +225,10 @@ These are the 41 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` 
 | `b5f92b8e` | 2026-05-04 | Á. Herrera | Fix an off-by-one in the repack index loop (from `28d534e2`). |
 | `eb2e2eb4` | 2026-05-05 | Á. Herrera | **Don't lose `attmissingval` columns**: the tuple-reform fast path discarded fast-default values during any VACUUM FULL/CLUSTER/REPACK. |
 | `a0a0c0c2` | 2026-05-05 | Á. Herrera | Skip **other sessions' temp tables** in the no-table forms of REPACK/CLUSTER/VACUUM FULL to avoid blocking on them [repack.c#skip-temp](../../../raw/postgres-19/src/backend/commands/repack.c#L2180-L2187). |
-| `36f52a59` | 2026-05-11 | Á. Herrera | Fix REPACK with **`WITHOUT OVERLAPS`** (GiST) replica-identity indexes: derive the equality strategy from the opfamily instead of hard-coding btree [repack.c#eq-strategy](../../../raw/postgres-19/src/backend/commands/repack.c#L3047-L3074). |
+| `36f52a59` | 2026-05-11 | Á. Herrera | Fix REPACK with **`WITHOUT OVERLAPS`** (GiST) replica-identity indexes: derive the equality strategy from the opfamily instead of hard-coding btree [repack.c#eq-strategy](../../../raw/postgres-19/src/backend/commands/repack.c#L3050-L3077). |
 | `a120ecf5` | 2026-05-18 | Fujii Masao | Fix REPACK **option parsing**: `CONCURRENTLY OFF` was rejected, and repeated options weren't last-wins. |
 | `0160143a` | 2026-05-19 | Á. Herrera | Fix the decoding worker not being cleaned up on **`FATAL` exit** of the leader. |
-| `1588d89a` | 2026-05-26 | Á. Herrera | Restructure worker teardown so the DSM segment is always freed even if init fails partway [repack.c#stop_repack_decoding_worker](../../../raw/postgres-19/src/backend/commands/repack.c#L3529-L3571). |
+| `1588d89a` | 2026-05-26 | Á. Herrera | Restructure worker teardown so the DSM segment is always freed even if init fails partway [repack.c#stop_repack_decoding_worker](../../../raw/postgres-19/src/backend/commands/repack.c#L3532-L3574). |
 | `5bcc3fbd` | 2026-04-07 | Á. Herrera | Fix a valgrind failure. |
 | `a3b069ef` | 2026-04-07 | Á. Herrera | Avoid a different-size pointer-to-integer cast. |
 | `2cff3637` | 2026-04-08 | Á. Herrera | Simplify a `memcpy` target declaration. |
@@ -207,6 +236,7 @@ These are the 41 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` 
 | `05c401d5` | 2026-04-16 | Á. Herrera | Add a missing initialization. |
 | `5d48d3b1` | 2026-05-29 | Á. Herrera | Remove an unnecessary signal-handler change (bgworkers already use `die()`). |
 | `cd7b204b` | 2026-06-09 | Á. Herrera | **Disallow direct use of the `pgrepack` plugin.** Reject driving the output plugin outside `REPACK (CONCURRENTLY)` (direct use caused assertion failures and production crashes from bogus memory lifetime); also moves `output_writer_private` allocation into `repack_startup()`, always sets `->relid`, and renames the worker's plugin-name macro `REPL_PLUGIN_NAME` to `PGREPACK_PLUGIN` [pgrepack.c#repack_startup](../../../raw/postgres-19/src/backend/replication/pgrepack/pgrepack.c#L47-L79). |
+| `e2a8cabc` | 2026-06-16 | Á. Herrera | **Check leftover separately stored TOAST attributes during concurrent REPACK replay.** `restore_tuple()` now errors if the spill file contains too few or too many separately stored varlena attributes after reconstructing a tuple [repack.c#restore_tuple](../../../raw/postgres-19/src/backend/commands/repack.c#L2751-L2817). |
 
 ### Error messages, docs, style
 
@@ -241,7 +271,7 @@ These are the 41 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` 
 - GUC/slot pool — `guc_parameters.dat`, `slot.c` [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 - Observability — `system_views.sql`, `progress.h`, `wait_event_names.txt`.
 - Tests — `contrib/test_decoding/sql/repack.sql`, `src/test/modules/injection_points` repack specs.
-- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned post-`REL_19_BETA1` `master` checkout for the 41 feature-scope commits [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
+- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned post-`REL_19_BETA1` `master` checkout for the 42 feature-scope commits [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 
 ## Evidence Map
 
@@ -254,7 +284,8 @@ These are the 41 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` 
 | Decoding setup, temp slot, target-only filter | [repack_worker.c#L194-L291](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L194-L291) |
 | Change spill format | [pgrepack.c#L190-L305](../../../raw/postgres-19/src/backend/replication/pgrepack/pgrepack.c#L190-L305) |
 | Replay with NO_LOGICAL + identity-index lookup | [repack.c#L2527-L2738](../../../raw/postgres-19/src/backend/commands/repack.c#L2527-L2738) |
-| Lock upgrade + double catch-up + swap | [repack.c#L3174-L3314](../../../raw/postgres-19/src/backend/commands/repack.c#L3174-L3314) |
+| Spilled tuple reconstruction validates separately stored attributes | [repack.c#L2751-L2817](../../../raw/postgres-19/src/backend/commands/repack.c#L2751-L2817) |
+| Lock upgrade + double catch-up + swap | [repack.c#L3177-L3317](../../../raw/postgres-19/src/backend/commands/repack.c#L3177-L3317) |
 | WAL recycling during REPACK | [repack_worker.c#L374-L403](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L374-L403), `45b02984` |
 | `max_repack_replication_slots` = PGC_POSTMASTER | [guc_parameters.dat#L2109-L2115](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2115) |
 | Progress view + phases | [system_views.sql#L1349-L1398](../../../raw/postgres-19/src/backend/catalog/system_views.sql#L1349-L1398), [progress.h#L77-L106](../../../raw/postgres-19/src/include/commands/progress.h#L77-L106) |
