@@ -10,6 +10,23 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
 
+## [2026-06-18] question v18 | CREATE INDEX CONCURRENTLY implementation
+
+- Filed [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 18 (unverified)](v18/questions/create-index-concurrently.md) against pinned `raw/postgres-18/` commit `6cb307251c5c6261286c1566496920976640108e`.
+- Prompt hygiene: the user's request had capitalization, spacing, and grammar issues; the user approved corrected wording before filing the page. The corrected prompt is restated under `## Question` with a prompt note.
+- Coverage includes parser/utility dispatch, restrictions, four internal transactions, two heap scans, three waits, table/session `ShareUpdateExclusiveLock`, `indislive`/`indisready`/`indisvalid` state progression, invalid-index failure outcomes, and regression/isolation/progress-view coverage.
+- The PostgreSQL 17 comparison section records that the core choreography is unchanged and lists v18-side deltas: `pg_index` now has TOAST storage so the final mark-valid update pushes an active snapshot, GIN can use parallel build machinery during CIC's build phase, virtual generated columns are rejected before CIC starts, and temporal `WITHOUT OVERLAPS` changed shared `DefineIndex()` plumbing without adding standalone CIC syntax.
+- Updated `wiki/index.md`, `wiki/v18/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-18] review-fix v17 | CREATE INDEX CONCURRENTLY implementation
+
+- Reviewed [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](v17/questions/create-index-concurrently.md) against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).
+- Re-checked the `DefineIndex` concurrent branch, `WaitForOlderSnapshots`, `set_indexsafe_procflags`, `UpdateIndexRelation`/`index_create`, `index_concurrently_build`, `validate_index`, `index_set_state_flags`, `WaitForLockersMultiple`, lock conflict tables, docs, tests, and same-checkout commit history for the v12-to-v17 deltas.
+- Fixed review findings: added the mandatory `## Contents` block; corrected the v12-era claim that v17 `index_set_state_flags` uses non-transactional in-place updates. v17 uses transactional `CatalogTupleUpdate` for the CIC `indisready` and `indisvalid` flips (`index.c:3440-3518`), with the PG14 change anchored to commit `83158f74d3a`; and added direct `WaitForLockersMultiple` evidence for the wait-without-taking-the-relation-lock explanation.
+- Updated `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`. Advanced `verified_by_agent` to `GPT-5-5-XHigh-Thinking 2026-06-18T14:10:05Z`; `verified:` stays human-only `false`, so the page title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-17] review-fix v17 | partial indexes pros/cons
 
 - Reviewed [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](v17/questions/partial-indexes-pros-cons.md) against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).

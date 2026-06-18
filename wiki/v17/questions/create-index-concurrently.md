@@ -3,10 +3,27 @@ type: question
 version: 17
 pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
 verified: false
-verified_by_agent: not yet
+verified_by_agent: GPT-5-5-XHigh-Thinking 2026-06-18T14:10:05Z
 ---
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Preconditions and restrictions](#preconditions-and-restrictions)
+  - [The three pg_index state flags](#the-three-pgindex-state-flags)
+  - [Step-by-step implementation](#step-by-step-implementation)
+  - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
+  - [What changed from PostgreSQL 12](#what-changed-from-postgresql-12)
+  - [Failure handling](#failure-handling)
+  - [Test coverage](#test-coverage)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
 
 ## Question
 
@@ -20,10 +37,11 @@ add a section with what has changed from postgresql 12.
 that blocks `INSERT`/`UPDATE`/`DELETE` on the table. In PostgreSQL 17, as in
 PostgreSQL 12, it splits the build across **four internal transactions**, does
 **two full table scans**, and **waits out other transactions three times**. The
-mechanism is essentially unchanged from v12; the one behavioral difference is the
-`PROC_IN_SAFE_IC` optimization (added in PostgreSQL 14) that lets a CIC build on
-a plain index skip waiting for other concurrent index builds in its final
-snapshot wait. See [What changed from PostgreSQL 12](#what-changed-from-postgresql-12).
+core lock/scan/wait shape remains recognizable from v12. The main behavioral
+optimization is `PROC_IN_SAFE_IC` (added in PostgreSQL 14), which lets a CIC
+build on a plain index skip waiting for other concurrent index builds in its
+final snapshot wait; v17 also differs in catalog-update and security plumbing
+inside the same phases. See [What changed from PostgreSQL 12](#what-changed-from-postgresql-12).
 
 All orchestration lives in `DefineIndex()` in the concurrent branch
 ([indexcmds.c#DefineIndex](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L540)),
@@ -61,9 +79,11 @@ A normal `CREATE INDEX` is born with all three `true`. CIC instead creates the
 catalog row with `indisvalid = false` and `indisready = false`
 (`!concurrent && !invalid` and `!concurrent` at
 [index.c:1048-1049](../../../raw/postgres-17/src/backend/catalog/index.c#L1048-L1049)),
-then flips `indisready`, and finally `indisvalid`, using a **non-transactional
-in-place update** in `index_set_state_flags` so the transitions cannot roll back
-([index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3449-L3479)).
+then flips `indisready`, and finally `indisvalid`, using `index_set_state_flags`.
+In v17, that helper edits a writable copy of the `pg_index` tuple and stores it
+with transactional `CatalogTupleUpdate`, so other sessions hear about the flag
+change after the transaction commits
+([index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3440-L3518)).
 
 ### Step-by-step implementation
 
@@ -151,14 +171,20 @@ Because `ShareUpdateExclusiveLock` is **self-conflicting**
 ([lock.c:77-81](../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L77-L81)),
 only one concurrent build can run on a given table at a time.
 
-The three "waits" are **not** table locks. `WaitForLockers` does not acquire any
-lock; it reads the conflicting lock holders with `GetLockConflicts` and sleeps on
-their virtual transaction IDs until they end. Waits 1 and 2 pass `ShareLock`,
-which conflicts with `RowExclusiveLock`, so they wait out all current **writers**
+The three "waits" are **not** table locks. `WaitForLockers` calls
+`WaitForLockersMultiple`, which obtains the current conflicting lock holders and
+waits on their virtual transaction IDs; it explicitly does not try to acquire the
+relation locks itself
+([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L889-L900),
+[lmgr.c:914-923](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L914-L923),
+[lmgr.c:935-952](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L935-L952)).
+Waits 1 and 2 pass `ShareLock`, which conflicts with `RowExclusiveLock`, so they
+wait out all current **writers**
 ([lock.c:82-86](../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L82-L86)).
 Wait 3 (`WaitForOlderSnapshots`) waits on transactions holding old snapshots,
-excluding autovacuum workers, lazy `VACUUM`, and — new in v17 vs v12 — other safe
-concurrent index builds (`PROC_IS_AUTOVACUUM | PROC_IN_VACUUM | PROC_IN_SAFE_IC`)
+excluding autovacuum workers, lazy `VACUUM`, and — present in v17 but absent in
+v12 — other safe concurrent index builds
+(`PROC_IS_AUTOVACUUM | PROC_IN_VACUUM | PROC_IN_SAFE_IC`)
 ([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L439-L442)).
 
 End-to-end table lock timeline:
@@ -181,9 +207,10 @@ across the gaps). DML conflicts with none of these — the whole point of CIC.
 
 The CIC algorithm — four transactions, two scans, three waits, the
 `ShareUpdateExclusiveLock` footprint, and the `indislive`/`indisready`/`indisvalid`
-progression — is **unchanged** from v12. (For the v12 trace, see
+progression shape — remains recognizable from v12. (For the v12 trace, see
 [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](../../v12/questions/create-index-concurrently.md).)
-One behavioral optimization was added, plus supporting infrastructure changes.
+PostgreSQL 17 differs in one snapshot-wait optimization and in catalog/security
+plumbing around the same phases.
 
 **1. `PROC_IN_SAFE_IC`: a CIC build can be ignored by other concurrent builds
 (PostgreSQL 14).** In v12, the final snapshot wait `WaitForOlderSnapshots`
@@ -229,7 +256,18 @@ miss heap tuples that were HOT-pruned during the build. So in v17, exactly as in
 v12, a running CIC still holds back `VACUUM`'s horizon; `PROC_IN_SAFE_IC` only
 affects other *concurrent index* operations' snapshot waits, not `VACUUM`.
 
-**3. The flag lives in `PGPROC`, not `PGXACT` (mechanical, PostgreSQL 14).**
+**3. `index_set_state_flags` is transactional in v17 (PostgreSQL 14).**
+PostgreSQL 14 commit `83158f74d3a` (2020-09-14, "Make
+index_set_state_flags() transactional") changed the state-flag helper used by
+CIC. In v17, `index_set_state_flags` fetches a writable copy of the `pg_index`
+tuple, mutates `indisready` or `indisvalid`, and stores the result with
+`CatalogTupleUpdate`
+([index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3440-L3518)).
+That means the phase-2 ready flip and phase-4 valid flip follow normal
+transaction commit/abort semantics in v17. It does not change the number of CIC
+transactions, scans, waits, or table locks.
+
+**4. The flag lives in `PGPROC`, not `PGXACT` (mechanical, PostgreSQL 14).**
 v12 kept per-backend vacuum state in `MyPgXact->vacuumFlags` (the `PGXACT`
 array). PostgreSQL 14's snapshot-scalability work (commit `5788e258`, 2020-08-14)
 moved that state to `PGPROC`/`ProcGlobal`, and `set_indexsafe_procflags` now sets
@@ -238,7 +276,7 @@ moved that state to `PGPROC`/`ProcGlobal`, and `set_indexsafe_procflags` now set
 This is why DefineIndex's final-phase assertion reads `MyProc->xmin` in v17 where
 v12 read `MyPgXact->xmin`.
 
-**4. The concurrent build runs index/predicate functions under the owner with a
+**5. The concurrent build runs index/predicate functions under the owner with a
 restricted search path (security hardening, post-v12).** v17's
 `index_concurrently_build` switches to the table owner's userid and calls
 `RestrictSearchPath()` before building
@@ -290,8 +328,8 @@ uniqueness
   `src/test/isolation/specs/multiple-cic.spec`,
   `src/test/isolation/specs/prepared-transactions-cic.spec`.
 - v12 vs v17 deltas established from the `raw/postgres-17/` checkout's own commit
-  history (`c98763bf`, `f9900df5`, `e28bb885`, `5788e258`), each verified present
-  with `git show` / `git tag --contains`.
+  history (`c98763bf`, `f9900df5`, `e28bb885`, `83158f74d3a`, `5788e258`), each
+  verified present with `git show` / `git tag --contains`.
 
 ## Evidence Map
 
@@ -300,8 +338,10 @@ uniqueness
 | Table lock is `ShareUpdateExclusiveLock` for concurrent | [indexcmds.c:678-679](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L678-L679) |
 | `safe_index` true only for non-expression, non-partial indexes | [indexcmds.c:1128-1130](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1128-L1130) |
 | Four-transaction structure; session lock; three waits | [indexcmds.c:1599-1772](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1599-L1772) |
-| Build sets `indisready`; validate inserts missing tuples | [index.c:1482-1539](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1539), [index.c:3296-3324](../../../raw/postgres-17/src/backend/catalog/index.c#L3296-L3324) |
-| Non-transactional state-flag flips | [index.c:3449-3479](../../../raw/postgres-17/src/backend/catalog/index.c#L3449-L3479) |
+| Build sets `indisready`; validate inserts missing tuples | [index.c:1482-1539](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1539), [index.c:3296-3402](../../../raw/postgres-17/src/backend/catalog/index.c#L3296-L3402) |
+| v17 state-flag flips use transactional `CatalogTupleUpdate` | [index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3440-L3518) |
+| `index_set_state_flags` transactional change came in PG14 | commit `83158f74d3a` (2020-09-14) |
+| `WaitForLockers` reads current lock holders and waits on VXIDs without taking the relation lock itself | [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L889-L900), [lmgr.c:914-923](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L914-L923), [lmgr.c:935-952](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L935-L952) |
 | `WaitForLockers(ShareLock)` waits out writers; `ShareLock` vs `RowExclusiveLock` | [lock.c:82-86](../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L82-L86) |
 | `ShareUpdateExclusiveLock` conflict set + self-conflict | [lock.c:77-81](../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L77-L81) |
 | Wait 3 ignores autovacuum, VACUUM, and safe CIC (`PROC_IN_SAFE_IC`) | [indexcmds.c:439-442](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L439-L442) |
@@ -331,16 +371,24 @@ uniqueness
 
 ## Source References
 
-- [indexcmds.c#DefineIndex](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L540)
-- [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L433-L442)
+- [utility.c#T_IndexStmt](../../../raw/postgres-17/src/backend/tcop/utility.c#L1452-L1462)
+- [indexcmds.c#DefineIndex](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L540-L1777)
+- [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L397-L479)
 - [indexcmds.c#set_indexsafe_procflags](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4455-L4487)
+- [index.c#UpdateIndexRelation](../../../raw/postgres-17/src/backend/catalog/index.c#L630-L648)
+- [index.c#index_create](../../../raw/postgres-17/src/backend/catalog/index.c#L697-L709)
+- [index.c#index_create-flags](../../../raw/postgres-17/src/backend/catalog/index.c#L1043-L1049)
 - [index.c#index_concurrently_build](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1539)
-- [index.c#validate_index](../../../raw/postgres-17/src/backend/catalog/index.c#L3296-L3324)
-- [index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3449-L3479)
-- [proc.h#PROC_IN_SAFE_IC](../../../raw/postgres-17/src/include/storage/proc.h#L57-L78)
+- [index.c#validate_index](../../../raw/postgres-17/src/backend/catalog/index.c#L3233-L3402)
+- [index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3440-L3518)
+- [proc.h#PROC_IN_SAFE_IC](../../../raw/postgres-17/src/include/storage/proc.h#L54-L78)
+- [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L889-L988)
 - [lock.c#LockConflicts](../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L64-L103)
 - [lockdefs.h#lockmodes](../../../raw/postgres-17/src/include/storage/lockdefs.h#L36-L46)
 - [ref/create_index.sgml#CONCURRENTLY](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L612-L702)
+- [create_index.sql#concurrent-indexes](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L488-L525)
+- [multiple-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/multiple-cic.spec#L1-L43)
+- [prepared-transactions-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/prepared-transactions-cic.spec#L1-L37)
 
 ## Navigation
 
