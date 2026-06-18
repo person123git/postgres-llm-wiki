@@ -2,6 +2,14 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-18] question v12 | wal_sender_timeout usage and logical replication impact
+
+- Filed [How wal_sender_timeout Is Used and What It Impacts in PostgreSQL 12 (unverified)](v12/questions/wal-sender-timeout.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Prompt hygiene: the original request had typos and grammar issues; the user approved corrected wording before filing. The corrected prompt is restated under `## Question` with a prompt note.
+- Coverage includes the `PGC_USERSET` GUC definition, default and `0` disable behavior, sender-side reply tracking via `last_reply_timestamp`, `WalSndLoop` timeout activation, half-time keepalive reply requests, full-time `WalSndCheckTimeOut` disconnect, physical and logical `START_REPLICATION` paths, logical subscription apply-worker feedback, `pg_recvlogical` feedback, subscriber-side `wal_receiver_*` distinction, monitoring, synchronous replication, replication-slot WAL-retention effects, and the direct test-coverage gap.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-17] review-fix v17 | partial indexes pros/cons
 
 - Reviewed [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](v17/questions/partial-indexes-pros-cons.md) against pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).

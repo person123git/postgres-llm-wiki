@@ -13,6 +13,14 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-18: filed PostgreSQL 12 `wal_sender_timeout` coverage against
+  pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42`. The page covers
+  GUC scope/default/disable behavior, sender reply tracking, half-time
+  keepalives and full-time disconnect, physical and logical streaming paths,
+  publisher-side impact on logical subscriptions and `pg_recvlogical`, the
+  subscriber-side `wal_receiver_*` distinction, monitoring and synchronous
+  replication effects, replication-slot WAL retention, and the direct test
+  coverage gap.
 - 2026-06-18: repinned PostgreSQL 19 from `e18b0cb7` to `ff8bec8c`
   after fetching 59 new upstream `master` commits. Re-reviewed all v19
   question pages against the changed-file range. `pg_plan_advice` module/doc/test
