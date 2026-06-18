@@ -15,6 +15,18 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 - 2026-06-18: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
   against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
+  the first-build-scan tuple-visibility open question. The page now traces, line
+  by line into the heap table AM, that a concurrent first scan
+  (`index_concurrently_build` -> `index_build` -> `ambuild` ->
+  `table_index_build_scan` -> `heapam_index_build_range_scan`) leaves
+  `OldestXmin` invalid because of `!ii_Concurrent`, scans with a fresh MVCC
+  snapshot, relies on `heapgetpage` -> `HeapTupleSatisfiesMVCC` for visibility,
+  and therefore never indexes `RECENTLY_DEAD` tuples nor sets
+  `ii_BrokenHotChain` (unlike the non-concurrent `SnapshotAny` build).
+  `verified_by_agent` stays `not yet` because this was a targeted expansion, not
+  a full-page re-verification.
+- 2026-06-18: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
+  against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
   the inter-builder open question. The page now distinguishes same-table CIC
   serialization by self-conflicting `ShareUpdateExclusiveLock`, different-table
   CIC/RIC interaction through the database-wide `WaitForOlderSnapshots` /

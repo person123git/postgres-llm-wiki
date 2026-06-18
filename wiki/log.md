@@ -2,6 +2,15 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-18] expand v12 | CREATE INDEX CONCURRENTLY first-build-scan tuple visibility
+
+- Resolved the open question in [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) about the first build scan's exact tuple-visibility rule, against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Traced line-by-line into the table AM: `index_concurrently_build` sets `indexInfo->ii_Concurrent = true` and calls `index_build` -> the AM `ambuild` -> `table_index_build_scan` (B-tree/hash/GiST/SP-GiST/GIN/BRIN), which dispatches to `heapam_index_build_range_scan` with `anyvisible = false`.
+- Documented the MVCC-vs-`SnapshotAny` fork: a concurrent build leaves `OldestXmin` invalid (guarded by `!ii_Concurrent`) and scans with a fresh MVCC snapshot, so `heap_getnext`/`heapgetpage` applies `HeapTupleSatisfiesVisibility` -> `HeapTupleSatisfiesMVCC` and the build loop takes the `else` ("heap_getnext did the time qual check") branch. The concurrent path therefore never enters the `HeapTupleSatisfiesVacuum` switch, never indexes `RECENTLY_DEAD` tuples, and never sets `ii_BrokenHotChain`, unlike a normal build. Noted the parallel B-tree path inherits the same MVCC snapshot from the parallel scan.
+- Added a new `### The first build scan's tuple-visibility rule` section plus Contents entry, seven Evidence Map rows, Context Reviewed and Source References entries, and removed the resolved `## Open Questions` bullet.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. `verified_by_agent` stays `not yet` because this was a targeted expansion, not a full-page re-verification; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-18] expand v12 | CREATE INDEX CONCURRENTLY inter-builder interactions
 
 - Expanded [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.

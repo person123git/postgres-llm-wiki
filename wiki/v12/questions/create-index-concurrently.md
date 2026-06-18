@@ -15,6 +15,7 @@ verified_by_agent: not yet
   - [Preconditions and restrictions](#preconditions-and-restrictions)
   - [The three pg_index state flags](#the-three-pgindex-state-flags)
   - [Step-by-step implementation](#step-by-step-implementation)
+  - [The first build scan's tuple-visibility rule](#the-first-build-scans-tuple-visibility-rule)
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [How concurrent index builds interact with each other](#how-concurrent-index-builds-interact-with-each-other)
   - [All operations that can block CREATE INDEX CONCURRENTLY](#all-operations-that-can-block-create-index-concurrently)
@@ -167,6 +168,101 @@ The canonical narrative of why this ordering is correct is in the
 ([index.c#validate_index-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174))
 and the user docs
 ([ref/create_index.sgml#concurrent-narrative](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L572)).
+
+### The first build scan's tuple-visibility rule
+
+The first scan (Transaction 2) indexes **exactly the heap tuples that are live
+according to one fresh MVCC snapshot taken at the start of that transaction**,
+after Wait 1. It does *not* run the time-qual logic a normal `CREATE INDEX`
+uses, and it never indexes recently-dead tuples. That rule lives in the heap
+table AM, not in `DefineIndex`; the steps below trace it from the concurrent
+flag down to the per-tuple visibility test.
+
+**Where the choice is made.** `index_concurrently_build` rebuilds the
+`IndexInfo`, sets `ii_Concurrent = true`, then calls `index_build`
+([index.c#ii_Concurrent](../../../raw/postgres-12/src/backend/catalog/index.c#L1421-L1427)).
+`index_build` calls the access method's `ambuild`
+([index.c#ambuild-call](../../../raw/postgres-12/src/backend/catalog/index.c#L2902-L2903)),
+and every core index AM's `ambuild` scans the heap through
+`table_index_build_scan` — B-tree
+([nbtsort.c#build-scan](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L489-L491)),
+hash ([hash.c:166](../../../raw/postgres-12/src/backend/access/hash/hash.c#L166)),
+GiST ([gistbuild.c:196](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L196)),
+SP-GiST ([spginsert.c:126](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L126)),
+GIN ([gininsert.c:382](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L382)),
+and BRIN ([brin.c:723](../../../raw/postgres-12/src/backend/access/brin/brin.c#L723)).
+So the visibility rule is AM-independent: it is decided once in the heap AM and
+inherited by every index type built concurrently. `table_index_build_scan`
+dispatches to the heap AM's `heapam_index_build_range_scan` and always passes
+`anyvisible = false`
+([tableam.h#table_index_build_scan](../../../raw/postgres-12/src/include/access/tableam.h#L1512-L1533),
+[heapam_handler.c#tableam-routine](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2644)).
+
+**The MVCC-vs-`SnapshotAny` fork.** Inside `heapam_index_build_range_scan`,
+`ii_Concurrent` picks the snapshot. `OldestXmin` is left invalid for a
+concurrent build because the `GetOldestXmin` call is guarded by
+`!indexInfo->ii_Concurrent`; a non-concurrent build instead computes
+`OldestXmin` and scans with `SnapshotAny`
+([heapam_handler.c#snapshot-choice](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1212-L1223)).
+With `OldestXmin` invalid, the serial build registers a regular MVCC
+transaction snapshot (`RegisterSnapshot(GetTransactionSnapshot())`) and begins
+the scan with it via `table_beginscan_strat`
+([heapam_handler.c#mvcc-snapshot](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1233-L1246)).
+This is the transaction-2 MVCC snapshot `DefineIndex` set up for: just before
+calling the build it pushes a fresh `GetTransactionSnapshot()` and comments that
+it will "build the index using all tuples that are visible in this snapshot"
+([indexcmds.c#build-snapshot](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1358-L1370)).
+A parallel B-tree CIC build (CIC passes `parallel = true` to `index_build`)
+does not register its own snapshot; it inherits the MVCC snapshot from the
+parallel heap scan, chosen by the same `ii_Concurrent` criteria
+([heapam_handler.c#parallel-snapshot](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1248-L1260)).
+
+**What "visible to the snapshot" means, line by line.** The scan calls
+`heap_getnext`, which in page-at-a-time mode filters each page in `heapgetpage`:
+every normal line pointer is passed to `HeapTupleSatisfiesVisibility`, and only
+tuples that pass are recorded in `rs_vistuples`
+([heapam.c#heapgetpage](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L444-L453)).
+For an MVCC snapshot, `HeapTupleSatisfiesVisibility` dispatches to
+`HeapTupleSatisfiesMVCC`
+([heapam_visibility.c#dispatch](../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L1690-L1696)).
+So by the time a tuple reaches the build loop, its MVCC visibility is already
+decided. The build loop reflects that: because `snapshot != SnapshotAny`, it
+takes the `else` branch — "heap_getnext did the time qual check" — marks the
+tuple alive, counts it, and (after any partial-index predicate) hands it to the
+AM callback
+([heapam_handler.c#mvcc-branch](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1615)).
+
+**What the concurrent scan therefore skips.** The entire
+`switch (HeapTupleSatisfiesVacuum(...))` time-qual block runs only on the
+`SnapshotAny` path and is never entered for a concurrent build
+([heapam_handler.c#vacuum-switch](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1364-L1388)).
+Two consequences follow directly:
+
+- **No recently-dead tuples.** A normal build indexes
+  `HEAPTUPLE_RECENTLY_DEAD` tuples to preserve MVCC semantics for old
+  snapshots; the concurrent build cannot reach that case, so it omits them
+  ([heapam_handler.c#recently-dead](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1402-L1428)).
+  CIC compensates with Wait 3, which waits out every transaction old enough to
+  have needed those omitted rows before it sets `indisvalid`.
+- **No `ii_BrokenHotChain` from the scan.** `ii_BrokenHotChain` is set only
+  inside that `SnapshotAny` switch
+  ([heapam_handler.c#broken-hot](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1418-L1423)),
+  so a concurrent build never flags a broken HOT chain during the first scan,
+  and `index_build` accordingly skips the `indcheckxmin` write for concurrent
+  builds
+  ([index.c#concurrent-indcheckxmin](../../../raw/postgres-12/src/backend/catalog/index.c#L2939-L2952)).
+
+**Why MVCC and not `HeapTupleSatisfiesVacuum`.** The `validate_index` header
+gives the reason this page previously only summarized: using
+`HeapTupleSatisfiesVacuum` could make two versions of the same
+concurrently-updated row both look valid, producing a bogus unique-index
+failure; one MVCC snapshot sees exactly one version
+([index.c#validate_index-why-mvcc](../../../raw/postgres-12/src/backend/catalog/index.c#L3124-L3132)).
+The price is that the first scan "does not contain any tuples added to the
+table while we built the index," which is exactly why CIC then sets
+`indisready`, waits again, and runs the second `validate_index` scan to
+backfill the rest
+([index.c#validate_index-second-scan](../../../raw/postgres-12/src/backend/catalog/index.c#L3134-L3168)).
 
 ### All steps and locks required on the table
 
@@ -775,6 +871,19 @@ the drop is retryable
   `ReindexRelationConcurrently` adjacent caller in
   `src/backend/commands/indexcmds.c`; and the `GetCurrentVirtualXIDs` filter
   contract in `src/backend/storage/ipc/procarray.c`.
+- For the first-build-scan tuple-visibility trace: `index_concurrently_build`
+  and `index_build` in `src/backend/catalog/index.c`; the `ambuild` heap-scan
+  callers `nbtsort.c`, `hash.c`, `gistbuild.c`, `spginsert.c`, `gininsert.c`,
+  and `brin.c` under `src/backend/access/`; the `table_index_build_scan`
+  inline wrapper and `index_build_range_scan` callback in
+  `src/include/access/tableam.h`; `heapam_index_build_range_scan` and the
+  `TableAmRoutine` registration in
+  `src/backend/access/heap/heapam_handler.c`; `heapgetpage` in
+  `src/backend/access/heap/heapam.c`; `HeapTupleSatisfiesVisibility` /
+  `HeapTupleSatisfiesMVCC` in `src/backend/access/heap/heapam_visibility.c`;
+  the build-snapshot setup in `DefineIndex` in
+  `src/backend/commands/indexcmds.c`; and the `validate_index` header comment
+  in `src/backend/catalog/index.c`.
 
 ## Evidence Map
 
@@ -799,6 +908,12 @@ the drop is retryable
 | `REINDEX CONCURRENTLY` shares the same concurrent-build snapshot-wait boundary | [indexcmds.c:2957-3077](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3077), [indexcmds.c:3080-3198](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198) |
 | `multiple-cic` tests two simultaneous CIC commands on different tables completing | [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40), [multiple-cic.out:3-19](../../../raw/postgres-12/src/test/isolation/expected/multiple-cic.out#L3-L19) |
 | Correctness narrative (two scans, three waits) | [index.c:3112-3174](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174), [ref/create_index.sgml:545-572](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L572) |
+| First build scan sets `ii_Concurrent` then builds via `index_build` -> `ambuild` -> `table_index_build_scan` (all core AMs) | [index.c:1421-1427](../../../raw/postgres-12/src/backend/catalog/index.c#L1421-L1427), [index.c:2902-2903](../../../raw/postgres-12/src/backend/catalog/index.c#L2902-L2903), [nbtsort.c:489-491](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L489-L491), [hash.c:166](../../../raw/postgres-12/src/backend/access/hash/hash.c#L166), [gistbuild.c:196](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L196), [spginsert.c:126](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L126), [gininsert.c:382](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L382), [brin.c:723](../../../raw/postgres-12/src/backend/access/brin/brin.c#L723) |
+| `table_index_build_scan` passes `anyvisible = false` and dispatches to `heapam_index_build_range_scan` | [tableam.h:1512-1533](../../../raw/postgres-12/src/include/access/tableam.h#L1512-L1533), [heapam_handler.c:2644](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2644) |
+| Concurrent build keeps `OldestXmin` invalid and uses an MVCC snapshot; non-concurrent uses `SnapshotAny` + `GetOldestXmin` | [heapam_handler.c:1212-1223](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1212-L1223), [heapam_handler.c:1233-1246](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1233-L1246), [indexcmds.c:1358-1370](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1358-L1370) |
+| Heap scan applies the MVCC visibility test itself (`heapgetpage` -> `HeapTupleSatisfiesVisibility` -> `HeapTupleSatisfiesMVCC`); build loop trusts it via the `else` branch | [heapam.c:444-453](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L444-L453), [heapam_visibility.c:1690-1696](../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L1690-L1696), [heapam_handler.c:1595-1615](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1615) |
+| Concurrent scan skips the `SnapshotAny` `HeapTupleSatisfiesVacuum` switch, so it never indexes `RECENTLY_DEAD` tuples nor sets `ii_BrokenHotChain`; `index_build` skips `indcheckxmin` for concurrent | [heapam_handler.c:1364-1388](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1364-L1388), [heapam_handler.c:1402-1428](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1402-L1428), [index.c:2939-2952](../../../raw/postgres-12/src/backend/catalog/index.c#L2939-L2952) |
+| MVCC (not `HeapTupleSatisfiesVacuum`) avoids bogus unique failures; omitted tuples are backfilled by the second `validate_index` scan | [index.c:3124-3132](../../../raw/postgres-12/src/backend/catalog/index.c#L3124-L3132), [index.c:3134-3168](../../../raw/postgres-12/src/backend/catalog/index.c#L3134-L3168) |
 | Invalid index left on failure; unique-constraint caveat | [ref/create_index.sgml:574-606](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L606) |
 | Failure before commit 1 leaves no index (commit-1 boundary) | [indexcmds.c:1318-1320](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1318-L1320) |
 | Planner ignores `indisvalid = false` indexes (executor still inserts if `indisready`) | [plancat.c:200-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210) |
@@ -826,11 +941,6 @@ the drop is retryable
 
 ## Open Questions
 
-- The first build scan's exact tuple-visibility rule lives inside
-  `index_build` → `table_index_build_scan` (via `indexInfo->ii_Concurrent`),
-  which this page summarizes from the `validate_index` header comment rather
-  than tracing line-by-line into the table AM.
-  ([index.c:1426-1427](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1427))
 - Waits 1 and 2 ignore prepared transactions:
   [lmgr.c:890-894](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894)
   asserts they "certainly aren't going to do anything anymore". But a
@@ -861,6 +971,11 @@ the drop is retryable
 - [indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L1473)
 - [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)
 - [index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439)
+- [index.c#index_build](../../../raw/postgres-12/src/backend/catalog/index.c#L2824-L2952)
+- [tableam.h#table_index_build_scan](../../../raw/postgres-12/src/include/access/tableam.h#L1485-L1533)
+- [heapam_handler.c#heapam_index_build_range_scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1150-L1703)
+- [heapam.c#heapgetpage](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L351-L461)
+- [heapam_visibility.c#HeapTupleSatisfiesVisibility](../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L1679-L1718)
 - [index.c#validate_index](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3298)
 - [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)
 - [lmgr.c#WaitForLockers](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)
