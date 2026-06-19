@@ -47,12 +47,18 @@ failure scenarios and the outcome on the table, like invalid indexes, etc.
 
 ## Answer
 
-`CREATE INDEX CONCURRENTLY` (CIC) builds an index without ever taking a lock
-that blocks `INSERT`/`UPDATE`/`DELETE` on the table. It pays for that with more
-total work: it splits the build across **four internal transactions**, does
-**two full table scans**, and **waits out other transactions three times**. The
-whole dance exists to keep the index correct under concurrent writes, since the
-build cannot freeze the table.
+`CREATE INDEX CONCURRENTLY` (CIC) builds an index without ever taking a table
+lock that blocks ordinary `INSERT`/`UPDATE`/`DELETE`: v12 DML uses
+`RowExclusiveLock`, and CIC's `ShareUpdateExclusiveLock` does not conflict with
+that lock mode. It pays for that with more total work: it splits the build
+across **four internal transactions**, does **two full table scans**, and
+**waits out other transactions three times**
+([lockdefs.h#lockmodes](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46),
+[lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103),
+[indexcmds.c#concurrent-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1472)).
+The whole dance exists to keep the index correct under concurrent writes, since
+the build cannot freeze the table
+([index.c#validate_index-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174)).
 
 All of the orchestration lives in `DefineIndex()` in the concurrent path: it
 creates not-built catalog entries with `INDEX_CREATE_CONCURRENT` and
@@ -64,14 +70,21 @@ Those phases call helpers in `index.c` (`index_create`,
 `index_concurrently_build`, `validate_index`, `index_set_state_flags`) and wait
 via `WaitForLockers` / `WaitForOlderSnapshots`.
 
-The table lock used throughout is **`ShareUpdateExclusiveLock`** — strong enough
-to keep out a second CIC, `VACUUM`, `ANALYZE`, and schema changes, but weak
-enough to let normal DML proceed
-([lockdefs.h:36-46](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46)).
+The table lock chosen for a concurrent build is
+**`ShareUpdateExclusiveLock`**, both at utility dispatch and inside
+`DefineIndex`. Its conflict mask includes another `ShareUpdateExclusiveLock`,
+`ShareLock`, `ShareRowExclusiveLock`, `ExclusiveLock`, and
+`AccessExclusiveLock`, but not `RowExclusiveLock`. That is why another CIC,
+`VACUUM`, `ANALYZE`, plain `CREATE INDEX`, and conflicting DDL must wait while
+normal DML can proceed
+([utility.c#CIC-dispatch](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326),
+[indexcmds.c#table-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L548-L564),
+[lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81)).
 
 ### Preconditions and restrictions
 
-Before any build work, the command is rejected in several cases:
+Before any build work, v12 either rejects the concurrent form or disables
+concurrency in these cases:
 
 | Restriction | Where enforced |
 |---|---|

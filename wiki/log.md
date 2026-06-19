@@ -1149,3 +1149,19 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Added `## Contents` blocks to the three v19 question pages while touching them for the repin, and refreshed the v19 codebase guide's shifted `parsenodes.h` citations.
 - Updated `wiki/index.md`, `wiki/v19/index.md`, and `wiki/versions.md`. `verified_by_agent` remains `not yet` on v19 pages because this was a repin and changed-file review, not a full claim-by-claim re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY opening and preconditions
+
+- Reviewed the opening `## Answer` prose and `### Preconditions and restrictions`
+  section of [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Tightened the opening lock claim to cite the actual `LockConflicts` table and
+  the utility/`DefineIndex` `ShareUpdateExclusiveLock` selection, instead of
+  relying only on `lockdefs.h` comments; added the `validate_index` overview
+  citation for the correctness rationale.
+- Fixed the preconditions lead-in so temporary tables are described accurately as
+  disabling concurrency rather than being rejected.
+- `verified_by_agent` remains `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
