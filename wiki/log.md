@@ -1205,3 +1205,29 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - `verified_by_agent` remains `not yet` because this was a scoped section review,
   not a full-page re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY first build scan visibility
+
+- Reviewed the `### The first build scan's tuple-visibility rule` section of
+  [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed the core rule: `index_concurrently_build` sets `ii_Concurrent`, the
+  heap table AM keeps `OldestXmin` invalid and uses an MVCC snapshot, and the
+  build loop relies on the heap scan's visibility filtering instead of the
+  `SnapshotAny` / `HeapTupleSatisfiesVacuum` path.
+- Tightened wording around the candidate tuple set: the heap scan feeds only
+  MVCC-visible tuples into predicate / AM callback filtering, so "indexes exactly
+  the live heap tuples" was too broad for partial indexes and AM callbacks.
+- Added the B-tree parallel-build path to the section and Evidence Map: B-tree is
+  the only v12 AM with parallel build support, and parallel workers still call
+  `table_index_build_scan` with the shared concurrent flag and parallel scan
+  descriptor.
+- Reworded the recently-dead claim: concurrent build does not use the
+  normal-build `HEAPTUPLE_RECENTLY_DEAD` inclusion branch, but a tuple visible to
+  the MVCC snapshot can still be indexed if another transaction deletes it while
+  the scan is running.
+- Updated Context Reviewed, Evidence Map, and Source References. `verified_by_agent`
+  remains `not yet` because this was a scoped section review, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
