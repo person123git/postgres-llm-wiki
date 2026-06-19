@@ -2,6 +2,62 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] review v12 | CREATE INDEX CONCURRENTLY failure-scenarios and test-coverage sections
+
+- Reviewed the `### Failure scenarios and the outcome on the table` section
+  (intro plus the eight subsections, including `#### Server crash or immediate
+  shutdown` and `#### Recovery`) and the `### Test coverage` section of [How
+  CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, per user
+  request.
+- Verified the full citation set across both sections (~30 citations) and found
+  them all accurate; no changes to the page. Spot-highlights: commit-1 boundary
+  ([indexcmds.c:1318-1320](../raw/postgres-12/src/backend/commands/indexcmds.c#L1318-L1320));
+  the `index_set_state_flags` SET_READY/SET_VALID assert ladder + INDEX_DROP_SET_DEAD
+  ([index.c:3353-3396](../raw/postgres-12/src/backend/catalog/index.c#L3353-L3396));
+  the not-ready leftover cost map — opened+`RowExclusiveLock`ed but no inserts,
+  unique check skipped, still HOT-counted
+  ([execIndexing.c:185-192](../raw/postgres-12/src/backend/executor/execIndexing.c#L185-L192),
+  [execIndexing.c:330-332](../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332),
+  [execIndexing.c:537-539](../raw/postgres-12/src/backend/executor/execIndexing.c#L537-L539),
+  [relcache.c:4861-4870](../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870));
+  the build vs second-scan duplicate errors
+  ([tuplesort.c:4048-4056](../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056),
+  [nbtinsert.c:563-568](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568));
+  the failed-CIC session-lock release
+  ([lmgr.c:356-363](../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363),
+  [proc.c:772-798](../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798));
+  and the regression saga (concur_index3 INVALID, VACUUM FULL, REINDEX repair;
+  the `_ccnew` RIC repair; concur_index1/2 built concurrently)
+  ([create_index.out:1369-1436](../raw/postgres-12/src/test/regress/expected/create_index.out#L1369-L1436),
+  [create_index.out:2323-2358](../raw/postgres-12/src/test/regress/expected/create_index.out#L2323-L2358)).
+- Crash/immediate-shutdown subsection re-verified end to end (consistent with the
+  prior 2026-06-19 crash-recovery resolution): DB_SHUTDOWNED -> InRecovery
+  ([xlog.c:6740-6766](../raw/postgres-12/src/backend/access/transam/xlog.c#L6740-L6766));
+  `heap_inplace_update` one `XLOG_HEAP_INPLACE` + PageSetLSN, no flush, and its
+  physical redo
+  ([heapam.c:5746-5774](../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774),
+  [heapam.c:8797-8835](../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835));
+  the xidless asynchronous-commit branch even under `synchronous_commit=on`
+  ([xact.c:1342-1391](../raw/postgres-12/src/backend/access/transam/xact.c#L1342-L1391),
+  [xlog.c:2630-2645](../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2645));
+  `XLogFlush` through-position monotonicity
+  ([xlog.c:2791-2798](../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798));
+  per-AM build durability (B-tree `smgrimmedsync`/WAL-only-when-archiving, the
+  GiST/SP-GiST/GIN build-end `log_newpage_range`, BRIN/hash buffered build)
+  ([nbtsort.c:1288-1307](../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307),
+  [nbtsort.c:580](../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580),
+  [gistbuild.c:217-226](../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226),
+  [spginsert.c:134-143](../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143),
+  [gininsert.c:408-417](../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417),
+  [brin.c:683-709](../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709)); and the
+  unlogged-relation reset
+  ([reinit.c:36-46](../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46),
+  [xlog.c:6878-6884](../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884)).
+- `verified_by_agent` stays `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] review v12 | CREATE INDEX CONCURRENTLY why-two-scans-three-waits section
 
 - Reviewed the `### Why two scans and three waits` section of [How CREATE INDEX
