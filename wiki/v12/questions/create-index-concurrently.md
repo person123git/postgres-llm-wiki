@@ -20,6 +20,7 @@ verified_by_agent: not yet
   - [How concurrent index builds interact with each other](#how-concurrent-index-builds-interact-with-each-other)
   - [All operations that can block CREATE INDEX CONCURRENTLY](#all-operations-that-can-block-create-index-concurrently)
   - [Is skipping prepared transactions in the writer waits safe?](#is-skipping-prepared-transactions-in-the-writer-waits-safe)
+  - [Can walsenders or replication-slot xmin holders appear in the Wait 3 set?](#can-walsenders-or-replication-slot-xmin-holders-appear-in-the-wait-3-set)
   - [Why two scans and three waits](#why-two-scans-and-three-waits)
   - [Failure scenarios and the outcome on the table](#failure-scenarios-and-the-outcome-on-the-table)
   - [Test coverage](#test-coverage)
@@ -567,6 +568,11 @@ Not waited for at this point:
   so both the xmin filter and the virtual-transaction-ID validity check skip
   them
   ([procarray.c#vxid-check](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539)).
+- **Walsenders and replication-slot xmin holders**: a standby using
+  `hot_standby_feedback`, and any physical or logical replication slot, hold
+  back the cluster's dead-row *removal* horizon, but never as a per-backend
+  snapshot the wait can see — see
+  [Can walsenders or replication-slot xmin holders appear in the Wait 3 set?](#can-walsenders-or-replication-slot-xmin-holders-appear-in-the-wait-3-set).
 
 #### Worked example: a running pg_dump
 
@@ -763,6 +769,100 @@ uses of the result"
 Nothing in this checkout's CIC code or `CREATE INDEX` documentation guards
 against, or warns about, building an index concurrently while a conflicting
 prepared transaction is outstanding.
+
+### Can walsenders or replication-slot xmin holders appear in the Wait 3 set?
+
+**No — not through replication's xmin-holdback machinery.** A standby using
+`hot_standby_feedback`, and any physical or logical replication slot, hold back
+the cluster's dead-row removal horizon, but they do so in a way
+`WaitForOlderSnapshots` never observes. Three independent facts keep these
+backends out of the Wait 3 set; the only walsender that can appear is one that
+is, at that moment, running an ordinary in-database transaction — already
+covered by the lists above.
+
+**1. A replication slot's reserved xmin is a global, not a per-backend xmin.**
+Each slot's `effective_xmin` / `effective_catalog_xmin` is aggregated across all
+slots by `ReplicationSlotsComputeRequiredXmin` and stored in two *global*
+`ProcArrayStruct` fields — `replication_slot_xmin` and
+`replication_slot_catalog_xmin` — via `ProcArraySetReplicationSlotXmin`
+([slot.c#ReplicationSlotsComputeRequiredXmin](../../../raw/postgres-12/src/backend/replication/slot.c#L701-L742),
+[procarray.c#slot-xmin-fields](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L90-L93),
+[procarray.c#ProcArraySetReplicationSlotXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2982-L2992)).
+`GetCurrentVirtualXIDs` — the function behind Wait 3 — only ever reads each
+backend's own `pgxact->xmin` in its proc-array loop and never consults those
+slot globals
+([procarray.c#GetCurrentVirtualXIDs-xmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520-L2523)).
+So a slot can pin the removal horizon arbitrarily far back without ever
+contributing a VXID to the Wait 3 set. The slot globals *are* consulted
+elsewhere: `GetOldestXmin` folds them into the VACUUM removal horizon
+([procarray.c#GetOldestXmin-slots](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1425-L1441)),
+and `GetSnapshotData` folds them into `RecentGlobalXmin`
+([procarray.c#GetSnapshotData-slots](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1727-L1741)).
+Wait 3 is simply not one of those call sites.
+
+**2. A physical walsender is filtered out by database, even when it advertises
+its own xmin.** With `hot_standby_feedback` on and no slot, the walsender writes
+the standby's reported xmin straight into its own `MyPgXact->xmin` "so that the
+xmin will be taken into account by GetOldestXmin"
+([walsender.c#hs-feedback-xmin](../../../raw/postgres-12/src/backend/replication/walsender.c#L2026-L2065)).
+But a plain (physical) walsender connects to no database: `InitPostgres`
+returns early for `am_walsender && !am_db_walsender` without ever setting
+`MyDatabaseId`, so its `proc->databaseId` keeps the `InvalidOid` it was given at
+`InitProcess`
+([postinit.c#walsender-no-db](../../../raw/postgres-12/src/backend/utils/init/postinit.c#L841-L867),
+[proc.c#InitProcess-databaseId](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L394-L396)).
+`GetCurrentVirtualXIDs`'s same-database test is `proc->databaseId ==
+MyDatabaseId`
+([procarray.c#GetCurrentVirtualXIDs-db](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520)),
+and — unlike `GetOldestXmin` — it has **no** `|| proc->databaseId == 0 /* always
+include WalSender */` clause
+([procarray.c#GetOldestXmin-walsender-clause](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1348-L1350)).
+So the physical walsender is skipped by database. When it uses a slot instead,
+it clears `MyPgXact->xmin` to `InvalidTransactionId` and reserves through the
+slot, so there is no per-backend xmin to find at all
+([walsender.c#slot-clears-xmin](../../../raw/postgres-12/src/backend/replication/walsender.c#L1872-L1909)).
+
+**3. The VXID gate matches xmin's own lifecycle: no transaction, no xmin, no
+VXID.** Even a backend that passed the database and xmin filters is recorded
+only when `VirtualTransactionIdIsValid(vxid)` holds
+([procarray.c#vxid-gate](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539)),
+which requires a valid `lxid`
+([lock.h#VirtualTransactionIdIsValid](../../../raw/postgres-12/src/include/storage/lock.h#L69-L82)).
+A backend's `lxid` is assigned in `StartTransaction`
+([xact.c#StartTransaction-lxid](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1994))
+and cleared, together with `pgxact->xmin`, in `ProcArrayEndTransaction`
+([procarray.c#ProcArrayEndTransaction](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L456)).
+Because the local transaction id and the advertised xmin are set and cleared as
+a pair, an ordinary backend that is *not* in a transaction has both an invalid
+`lxid` and a zero xmin — there is no normal "old xmin but no transaction" state
+for the wait to miss. The only two code paths that set `pgxact->xmin` *outside*
+a normal transaction are the physical-walsender feedback path (excluded by item
+2) and the prepared-transaction dummy proc, which sets `xmin =
+InvalidTransactionId` anyway
+([twophase.c#MarkAsPreparingGuts](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472)).
+
+**The one walsender that can be in the set is a logical walsender
+mid-transaction.** When a logical slot is created with an exported snapshot,
+`SnapBuildInitialSnapshot` runs inside a `REPEATABLE READ` transaction (it
+asserts `XactIsoLevel == XACT_REPEATABLE_READ`) and sets `MyPgXact->xmin =
+snap->xmin`
+([snapbuild.c#SnapBuildInitialSnapshot](../../../raw/postgres-12/src/backend/replication/logical/snapbuild.c#L543-L583)).
+A logical walsender connects to a real database (`replication=database` sets
+`am_db_walsender`,
+[postmaster.c#replication-database](../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L2103-L2124)),
+so in that window it has a matching `databaseId`, an old xmin, and a valid
+`lxid`, and it *is* eligible for Wait 3 — but only because it is then an
+ordinary in-database `REPEATABLE READ` snapshot holder, indistinguishable from
+the open `REPEATABLE READ` / `SERIALIZABLE` transactions already listed under
+Point 4. It is not a "non-transaction backend." Routine logical *streaming*
+(after the slot exists) protects catalogs through the slot's `catalog_xmin`
+global, not through `MyPgXact->xmin`, so it falls back under item 1.
+
+Net: the `hot_standby_feedback` / replication-slot horizon is real, but it
+reaches CIC only through `GetOldestXmin` (what may be vacuumed) and
+`GetSnapshotData`'s `RecentGlobalXmin`, never through `WaitForOlderSnapshots`.
+Wait 3 waits on local, in-database, snapshot-holding transactions, and the
+slot/feedback machinery does not, by itself, create one.
 
 ### Why two scans and three waits
 
@@ -1015,6 +1115,21 @@ the drop is retryable
   `heapam_index_build_range_scan` in
   `src/backend/access/heap/heapam_handler.c`; and the not-ready-index insert
   skip in `src/backend/executor/execIndexing.c`.
+- For the walsender / replication-slot Wait 3 assessment: `GetCurrentVirtualXIDs`
+  versus `GetOldestXmin` versus `GetSnapshotData`, the
+  `replication_slot_xmin`/`replication_slot_catalog_xmin` global fields, and
+  `ProcArrayEndTransaction`/`ProcArraySetReplicationSlotXmin` in
+  `src/backend/storage/ipc/procarray.c`; `ReplicationSlotsComputeRequiredXmin`
+  in `src/backend/replication/slot.c`; `ProcessStandbyHSFeedbackMessage` and
+  `PhysicalReplicationSlotNewXmin` in `src/backend/replication/walsender.c`; the
+  physical-walsender no-database early return in `InitPostgres` in
+  `src/backend/utils/init/postinit.c` and the `InitProcess` `databaseId`
+  initialization in `src/backend/storage/lmgr/proc.c`; the
+  `VirtualTransactionIdIsValid`/`GET_VXID_FROM_PGPROC` macros in
+  `src/include/storage/lock.h`; `StartTransaction`'s `lxid` assignment in
+  `src/backend/access/transam/xact.c`; `SnapBuildInitialSnapshot` in
+  `src/backend/replication/logical/snapbuild.c`; and the `replication=database`
+  startup-packet parsing in `src/backend/postmaster/postmaster.c`.
 
 ## Evidence Map
 
@@ -1074,15 +1189,15 @@ the drop is retryable
 | A prepared xact's tuples stay in-progress (invisible to the MVCC build/validate scans) until `COMMIT PREPARED`; the concurrent build never runs the `SnapshotAny` `INSERT_IN_PROGRESS` path that would index them | [procarray.c:15-18](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L15-L18), [twophase.c:1514-1534](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1514-L1534), [heapam_handler.c:1429-1494](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1429-L1494), [heapam_handler.c:1595-1600](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1600) |
 | `COMMIT PREPARED` records the commit and releases locks but performs no executor work and inserts into no index | [twophase.c:1455-1534](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1455-L1534) |
 | A non-concurrent `CREATE INDEX` instead blocks at lock acquisition on a prepared xact's `RowExclusiveLock`, because its `ShareLock` conflicts with it | [utility.c:1320-1321](../../../raw/postgres-12/src/backend/tcop/utility.c#L1320-L1321), [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
+| A replication slot's reserved xmin is a global `procArray->replication_slot_xmin`/`replication_slot_catalog_xmin` (set by `ProcArraySetReplicationSlotXmin`), which `GetCurrentVirtualXIDs` never reads — so a slot never puts a VXID in the Wait 3 set | [procarray.c:90-93](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L90-L93), [procarray.c:2982-2992](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2982-L2992), [slot.c:701-742](../../../raw/postgres-12/src/backend/replication/slot.c#L701-L742), [procarray.c:2520-2523](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520-L2523) |
+| The slot xmin globals are consulted by `GetOldestXmin` and `GetSnapshotData` (`RecentGlobalXmin`), not by `WaitForOlderSnapshots` | [procarray.c:1425-1441](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1425-L1441), [procarray.c:1727-1741](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1727-L1741) |
+| A physical walsender sets its own `MyPgXact->xmin` from `hot_standby_feedback` (no slot) or clears it and reserves via the slot | [walsender.c:2026-2065](../../../raw/postgres-12/src/backend/replication/walsender.c#L2026-L2065), [walsender.c:1872-1909](../../../raw/postgres-12/src/backend/replication/walsender.c#L1872-L1909) |
+| A physical walsender connects to no database (`proc->databaseId` stays `InvalidOid`); `GetCurrentVirtualXIDs`'s same-db test lacks `GetOldestXmin`'s "always include WalSender" clause, so it is filtered by database | [postinit.c:841-867](../../../raw/postgres-12/src/backend/utils/init/postinit.c#L841-L867), [proc.c:394-396](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L394-L396), [procarray.c:2520](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520), [procarray.c:1348-1350](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1348-L1350) |
+| Wait 3 records a backend only with a valid VXID; `lxid` and `xmin` are set in `StartTransaction` and cleared together in `ProcArrayEndTransaction`, so an idle (non-transaction) backend has neither | [procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539), [lock.h:69-82](../../../raw/postgres-12/src/include/storage/lock.h#L69-L82), [xact.c:1981-1994](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1994), [procarray.c:433-456](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L456) |
+| A logical walsender sets `MyPgXact->xmin` only inside the `REPEATABLE READ` initial-snapshot transaction (slot creation/export) and connects to a real database; routine streaming uses the slot's catalog_xmin global | [snapbuild.c:543-583](../../../raw/postgres-12/src/backend/replication/logical/snapbuild.c#L543-L583), [postmaster.c:2103-2124](../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L2103-L2124) |
 
 ## Open Questions
 
-- Whether walsenders or other non-transaction backends holding an old xmin
-  (for example via `hot_standby_feedback` or replication slots) can appear in
-  the Wait 3 set was not traced; `GetCurrentVirtualXIDs` requires a valid
-  virtual transaction ID
-  ([procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539)),
-  which such backends may not advertise.
 - The exact crash / immediate-shutdown outcome was not traced through crash
   recovery. This matters because `index_set_state_flags` is explicitly
   non-transactional and will not roll back on error
@@ -1136,6 +1251,18 @@ the drop is retryable
 - [create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1436)
 - [multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)
 - [multiple-cic.out](../../../raw/postgres-12/src/test/isolation/expected/multiple-cic.out#L3-L19)
+- [procarray.c#GetOldestXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1306-L1443)
+- [procarray.c#GetSnapshotData-slots](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1700-L1743)
+- [procarray.c#ProcArraySetReplicationSlotXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2976-L2993)
+- [procarray.c#ProcArrayEndTransaction](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L464)
+- [slot.c#ReplicationSlotsComputeRequiredXmin](../../../raw/postgres-12/src/backend/replication/slot.c#L695-L742)
+- [walsender.c#ProcessStandbyHSFeedbackMessage](../../../raw/postgres-12/src/backend/replication/walsender.c#L1872-L2066)
+- [postinit.c#InitPostgres-walsender](../../../raw/postgres-12/src/backend/utils/init/postinit.c#L841-L867)
+- [proc.c#InitProcess](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L386-L398)
+- [lock.h#VirtualTransactionId](../../../raw/postgres-12/src/include/storage/lock.h#L55-L82)
+- [xact.c#StartTransaction](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1996)
+- [snapbuild.c#SnapBuildInitialSnapshot](../../../raw/postgres-12/src/backend/replication/logical/snapbuild.c#L543-L583)
+- [postmaster.c#ProcessStartupPacket-replication](../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L2103-L2124)
 
 ## Navigation
 

@@ -13,6 +13,32 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-19: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
+  against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
+  the walsender / replication-slot Wait 3 open question. Source-level
+  conclusion: walsenders and replication-slot xmin holders do **not** appear in
+  CIC's `WaitForOlderSnapshots` (Wait 3) set through replication's
+  xmin-holdback machinery. A slot's reserved xmin/catalog_xmin lives in the
+  global `procArray->replication_slot_xmin`/`replication_slot_catalog_xmin`
+  (set by `ProcArraySetReplicationSlotXmin`), which `GetCurrentVirtualXIDs`
+  never reads — only `GetOldestXmin` and `GetSnapshotData`'s
+  `RecentGlobalXmin` do. A physical walsender that advertises its own
+  `MyPgXact->xmin` via `hot_standby_feedback` (no slot) is filtered out by
+  database — `InitPostgres` returns early for `am_walsender && !am_db_walsender`
+  leaving `databaseId = InvalidOid`, and `GetCurrentVirtualXIDs`'s same-db test
+  lacks `GetOldestXmin`'s `|| proc->databaseId == 0 /* always include
+  WalSender */` clause — and by the valid-VXID gate. `lxid` and `xmin` are set
+  in `StartTransaction` and cleared together in `ProcArrayEndTransaction`, so a
+  non-transaction backend has neither. The only walsender that can be in the
+  set is a logical walsender running `SnapBuildInitialSnapshot` inside a
+  `REPEATABLE READ` transaction (slot creation/export), which is an ordinary
+  in-database snapshot holder the page already covers. Added a new
+  `### Can walsenders or replication-slot xmin holders appear in the Wait 3
+  set?` section, Contents entry, a cross-referenced Point 4 bullet, six
+  Evidence Map rows, a Context Reviewed entry, twelve Source References, and
+  removed the resolved `## Open Questions` bullet. `verified_by_agent` stays
+  `not yet` because this was a targeted expansion, not a full-page
+  re-verification.
 - 2026-06-18: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
   against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
   the prepared-transaction writer-wait open question. Source-level assessment:
