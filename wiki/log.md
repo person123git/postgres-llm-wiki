@@ -2,6 +2,84 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] open-question v18 | RLS commit-provenance open question resolved (checkout unshallowed)
+
+- Re-investigated and resolved the first/main `## Open Questions` item on [Row-Level
+  Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes
+  Since PostgreSQL 12 (unverified)](v18/questions/row-level-security-rls.md) — the
+  follow-up the prior unshallow entry (below) flagged as "unblocked but not done."
+  Now that `raw/postgres-18/` carries full history (62,317 commits, 685 tags, pin
+  unchanged at `6cb307251c5c6261286c1566496920976640108e` =
+  `REL_18_3-113-g6cb307251c5`), local `git` is valid provenance evidence.
+- Verified all 20 commit hashes in the page's `### Fixes Since PostgreSQL 12` table:
+  each exists in the checkout, each commit subject matches the page's summary, each
+  is an ancestor of the pinned commit (so it is present in v18), and each is a
+  descendant of the v13 development stamp `615cebc94b5` (2019-07-01) — i.e. a genuine
+  post-PostgreSQL-12 change. Confirmed the five RLS CVEs from the commit messages:
+  CVE-2023-2455 (`ca73753b09`), CVE-2023-39418 (`c2e08b04c9`), CVE-2024-4317
+  (`521a7156ab`), CVE-2024-10976 (`cd7ab57532`), CVE-2025-8713 (`64f77c6a65`).
+- Corrected one inaccurate row: `d907bd0543` was described as "allowed users with
+  BYPASSRLS to alter BYPASSRLS-bearing roles," but its message shows it fixed an
+  over-broad check (from the original RLS commit `491c029dbc4`) that required
+  superuser to change *any* property of a BYPASSRLS role; the requirement is now
+  scoped to changing the BYPASSRLS attribute itself (current `AlterRole()` gates on
+  `dbypassRLS`, [user.c:812-817](../raw/postgres-18/src/backend/commands/user.c#L812-L817)).
+  Also relabeled the table's `Unverified fix description` column to `Fix description`.
+- Completeness: searched `615cebc94b5..6cb307251c` over the core RLS files
+  (`rowsecurity.c`/`.h`, `rls.c`/`.h`, `policy.c`, `pg_policy.h`) plus an
+  RLS/policy/WCO/CVE keyword scan of subjects and messages. Found no significant
+  standalone RLS behavioral or security fix missing from the table. The extra RLS
+  commits surfaced are companion/follow-up fixes to already-listed areas
+  (`2ddbfede0c6`, `3e6e86abca0`, `5102f39440f` for pg_dump policy dumping/ordering;
+  `66ddac6982c` defense-in-depth paired with CVE-2025-8713), docs/message-wording/
+  psql-tab-completion/cosmetic-refactor commits, and the v15 security-invoker-views
+  feature (`7faa5fc84bf`, REL_15_0) the page already discusses. Absolute completeness
+  of a curated "fixes" list stays a judgment call.
+- Edited the RLS page: rewrote the `### Fixes Since PostgreSQL 12` intro (provenance
+  now verified; back-patch caveat that the master hash's development-cycle major is
+  not the first shipping release), the `d907bd0543` row, the `## Context Reviewed`
+  provenance bullet, the `## Evidence Map` hash row, and the two `## Open Questions`
+  bullets (removed the shallow-checkout framing; kept a calibrated completeness note
+  and a refined minor-release-label note). Refreshed the shallow-caveat wording in
+  the `wiki/versions.md` v18 row + a new Coverage Note, and the `wiki/index.md` and
+  `wiki/v18/index.md` summaries.
+- Minor-release first-appearance labels remain open: most fixes were back-patched to
+  all supported branches, so the first shipping minor release would require tracing
+  each back-branch cherry-pick (distinct hashes) and their tags. Did not touch the
+  v18 `CREATE INDEX CONCURRENTLY` page's separate "shallow" note (different
+  v17->v18-diff task).
+- `verified_by_agent` stays `not yet` and the title keeps `(unverified)`: this was a
+  targeted open-question investigation, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] checkout v18 | unshallowed raw/postgres-18 source checkout (pin unchanged)
+
+- Per user request, unshallowed the `raw/postgres-18/` evidence checkout. It was
+  a depth-1, single-commit clone (1 commit, 0 tags, `.git/shallow` present),
+  unlike the full `raw/postgres-12/`, `raw/postgres-17/`, and `raw/postgres-19/`
+  clones. Ran `git -C raw/postgres-18 fetch --unshallow --tags origin` against
+  `origin` (`https://git.postgresql.org/git/postgresql.git`); the standard
+  `+refs/heads/*:refs/remotes/origin/*` refspec was already in place.
+- Pin preserved (no repin): HEAD stays detached at
+  `6cb307251c5c6261286c1566496920976640108e`, which `git describe --tags` now
+  resolves as `REL_18_3-113-g6cb307251c5` and which is contained in
+  `origin/REL_18_STABLE`. Working tree clean.
+- Post-fetch state: no longer shallow (`is-shallow-repository` = `false`,
+  `.git/shallow` removed); 62,317 commits reachable from HEAD (was 1); 685 tags
+  (was 0), at parity with the v17/v12 checkouts.
+- No wiki content changed: all 15 `wiki/v18/**` pages already carry
+  `pinned_commit: 6cb307251c5c6261286c1566496920976640108e`, the commit is
+  unchanged, and no source-citation line numbers shift. `raw/postgres-12/`,
+  `raw/postgres-17/`, and `raw/postgres-19/` were left untouched (clean, at their
+  pins) per the user's "leave as-is" choice.
+- Follow-up unblocked but not done: the shallow-checkout limitation that was
+  cited as the reason v18 commit provenance was "left open" (the RLS page Open
+  Questions, plus the `versions.md` v18 row and the `index.md` / `v18/index.md`
+  summaries) is now lifted — local `git log`/tags can verify it. That provenance
+  has NOT been re-investigated here, so those "shallow" notes remain to be
+  refreshed when it is.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] open-question v18 | RLS first open question — no benchmark in pinned checkout
 
 - Investigated the first open question on [Row-Level Security (RLS) in
