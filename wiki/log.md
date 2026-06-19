@@ -2,6 +2,15 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-18] expand v12 | CREATE INDEX CONCURRENTLY prepared-transaction writer-wait safety
+
+- Resolved the open question in [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) about whether skipping prepared transactions in Waits 1 and 2 is safe for index correctness, against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Source-level conclusion: it is **not** sufficient on its own. The `validate_index` header and the Wait 1 comment in `DefineIndex` state the invariant the writer waits enforce — index-modifying transactions must either terminate before the scans or insert their own tuples ([index.c:3117-3144](../raw/postgres-12/src/backend/catalog/index.c#L3117-L3144), [indexcmds.c:1348-1364](../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1364)). A prepared transaction satisfies neither half.
+- Traced the mechanism: `MarkAsPreparingGuts` gives the dummy proc the real in-progress `xid` but an invalid `xmin`/VXID ([twophase.c:465-472](../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472)), so `GetLockConflicts` drops it from Waits 1/2 ([lock.c:2930-2936](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2930-L2936), [lock.c:2995-3001](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2995-L3001)), `WaitForOlderSnapshots` skips it at Wait 3, the MVCC build/validate scans never see its in-progress tuples (the concurrent path never runs the `SnapshotAny` `INSERT_IN_PROGRESS` logic), and `COMMIT PREPARED` records the commit and releases locks but performs no index maintenance ([twophase.c:1455-1534](../raw/postgres-12/src/backend/access/transam/twophase.c#L1455-L1534)). Net: a write committed after the build is left unindexed.
+- Added a new `### Is skipping prepared transactions in the writer waits safe?` section (with a concrete `INSERT` walkthrough table and the non-concurrent `CREATE INDEX` lock-blocking contrast), a Contents entry, five Evidence Map rows, a Context Reviewed entry, two Source References entries, and updated the Points 2-3 cross-reference. Removed the resolved `## Open Questions` bullet.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. `verified_by_agent` stays `not yet` because this was a targeted expansion, not a full-page re-verification; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-18] expand v12 | CREATE INDEX CONCURRENTLY first-build-scan tuple visibility
 
 - Resolved the open question in [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) about the first build scan's exact tuple-visibility rule, against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.

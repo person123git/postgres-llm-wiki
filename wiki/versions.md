@@ -15,6 +15,22 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 - 2026-06-18: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
   against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
+  the prepared-transaction writer-wait open question. Source-level assessment:
+  skipping prepared transactions in the two `WaitForLockers(ShareLock)` writer
+  waits is not sufficient for index correctness. The `validate_index` /
+  `DefineIndex` invariant requires that index-modifying transactions either
+  terminate before the scans or insert their own tuples; a prepared transaction
+  does neither. Its dummy proc carries the real (in-progress) `xid` but an
+  invalid `xmin`/VXID, so the MVCC build and validate scans never see its
+  writes, all three waits skip it, and `COMMIT PREPARED` does no index
+  maintenance — a write committed after the build is left unindexed. Added a new
+  `### Is skipping prepared transactions in the writer waits safe?` section,
+  Contents entry, Evidence Map rows, Context Reviewed and Source References
+  entries, and removed the resolved `## Open Questions` bullet.
+  `verified_by_agent` stays `not yet` because this was a targeted expansion, not
+  a full-page re-verification.
+- 2026-06-18: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
+  against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
   the first-build-scan tuple-visibility open question. The page now traces, line
   by line into the heap table AM, that a concurrent first scan
   (`index_concurrently_build` -> `index_build` -> `ambuild` ->

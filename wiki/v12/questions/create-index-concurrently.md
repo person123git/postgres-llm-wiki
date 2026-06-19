@@ -19,6 +19,7 @@ verified_by_agent: not yet
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [How concurrent index builds interact with each other](#how-concurrent-index-builds-interact-with-each-other)
   - [All operations that can block CREATE INDEX CONCURRENTLY](#all-operations-that-can-block-create-index-concurrently)
+  - [Is skipping prepared transactions in the writer waits safe?](#is-skipping-prepared-transactions-in-the-writer-waits-safe)
   - [Why two scans and three waits](#why-two-scans-and-three-waits)
   - [Failure scenarios and the outcome on the table](#failure-scenarios-and-the-outcome-on-the-table)
   - [Test coverage](#test-coverage)
@@ -502,7 +503,8 @@ Not waited for at these two points:
   and `WaitForLockersMultiple` states this is fine "since they certainly
   aren't going to do anything anymore"
   ([lmgr.c#prepared-comment](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894)).
-  See `## Open Questions`.
+  This skip is **not** sufficient for index correctness on its own — see
+  [Is skipping prepared transactions in the writer waits safe?](#is-skipping-prepared-transactions-in-the-writer-waits-safe).
 
 These waits use real lock acquisition on each holder's virtual transaction ID
 precisely so that deadlock detection applies; a cycle errors out instead of
@@ -644,6 +646,123 @@ and `waiting for old snapshots`, with `lockers_total`, `lockers_done`, and
 ([monitoring.sgml#create-index-phases](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3639-L3708),
 [indexcmds.c#wait-progress](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L385-L395),
 [lmgr.c#wait-progress](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L887-L916)).
+
+### Is skipping prepared transactions in the writer waits safe?
+
+**Not on its own.** Skipping prepared transactions in Waits 1 and 2 is safe for
+the narrow thing the comment claims: a prepared transaction runs no more
+statements, so after the wait it cannot start a new write or a new
+index-incompatible HOT update
+([lmgr.c#prepared-comment](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894)).
+It is **not** sufficient for full index correctness. A transaction that wrote
+the table and then ran `PREPARE TRANSACTION` has already made changes that are
+not yet committed, are invisible to both concurrent scans, and are never
+backfilled — yet they become live later at `COMMIT PREPARED` with no index
+entry. The pinned source's own correctness invariant is not satisfied for such
+a transaction.
+
+**The invariant the waits are supposed to establish.** The `validate_index`
+header states the rule the two writer waits enforce: CIC waits "for all
+transactions that could have been modifying the table to terminate" (twice), so
+the build and validate scans see a settled writer set, and it then relies on the
+claim that "Any tuples committed live after the snap will be inserted into the
+index by their originating transaction"
+([index.c#validate_index-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L3117-L3144)).
+The Wait 1 comment in `DefineIndex` says the same thing concretely: after the
+wait, "any updates made by transactions that didn't know about the index are now
+committed or rolled back"
+([indexcmds.c#wait1-hot-safety](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1364)).
+A prepared transaction is the one writer that has neither "terminated" nor been
+"committed or rolled back," and that will not insert its tuples "by their
+originating transaction." It falls outside both halves of the invariant.
+
+**Why a prepared transaction is skipped at every wait.** `PREPARE TRANSACTION`
+builds a dummy `PGPROC` whose `xid` is still the real, in-progress XID, but whose
+`xmin` and `backendId` are invalid
+([twophase.c#MarkAsPreparingGuts](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472)).
+Two consequences:
+
+- Waits 1 and 2 collect conflicting lock holders with `GetLockConflicts`, which
+  reads each holder's virtual transaction ID and drops an invalid VXID — the
+  prepared xact's — in both the fast-path and primary-table scans
+  ([lock.c#fast-path-skip](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2930-L2936),
+  [lock.c#primary-table-skip](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2995-L3001)).
+  The prepared xact still holds its `RowExclusiveLock` (transferred to the
+  primary lock table at prepare,
+  [lock.c#prepared-locks](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)),
+  but it is not waited on.
+- Wait 3 (`WaitForOlderSnapshots`) filters on `xmin` and a valid VXID, both of
+  which the dummy proc lacks, so it is skipped there too
+  ([procarray.c#vxid-check](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539))
+  — as already noted under Point 4.
+
+**Why the scans never index its tuples.** The prepared xact's `xid` stays in the
+proc array as in-progress until `COMMIT PREPARED` removes it
+([procarray.c#prepared-in-array](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L15-L18),
+[twophase.c#commit-prepared-procarray](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1514-L1534)).
+Both CIC scans use ordinary MVCC snapshots, so they treat the prepared xact as
+in-progress and never see the row versions it inserted. The concurrent build
+takes the `else` "heap_getnext did the time qual check" branch and never runs
+the `SnapshotAny` `INSERT_IN_PROGRESS` logic, the only path that indexes
+in-progress tuples
+([heapam_handler.c#insert-in-progress](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1429-L1494),
+[heapam_handler.c#mvcc-branch](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1600)).
+
+**Why `COMMIT PREPARED` does not fix it.** `COMMIT PREPARED` records the commit,
+marks the XID committed, removes the proc from the proc array, and runs only the
+two-phase resource-manager callbacks (which release locks, predicate locks, and
+update stats). It does no executor work and inserts into no index
+([twophase.c#FinishPreparedTransaction](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1455-L1534)).
+The index entries a transaction makes are created when it runs its DML, for the
+indexes that exist then; an index created afterward gets nothing — and a
+not-yet-ready index is skipped by writers in any case
+([execIndexing.c#skip-not-ready](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332)).
+
+**A concrete sequence (plain `INSERT`).** With `max_prepared_transactions > 0`:
+
+| Step | Action | Effect on the new index |
+|---|---|---|
+| 1 | Session A: `BEGIN; INSERT INTO t(c) VALUES (1);` | tuple X written, `xmin` = A, in-progress |
+| 2 | Session A: `PREPARE TRANSACTION 'p';` | A's lock moves to a dummy proc; X still invisible |
+| 3 | Session B: `CREATE INDEX CONCURRENTLY i ON t(c);` Txn 1 | empty `i` committed (`indislive`, not ready, not valid) |
+| 4 | Wait 1 | A skipped (invalid VXID); returns at once |
+| 5 | Txn 2 build scan (MVCC) | A in-progress -> X invisible -> X not indexed; `indisready` set |
+| 6 | Wait 2 | A skipped; returns at once |
+| 7 | Txn 3 `validate_index` (reference snapshot) | A in-progress -> X invisible -> X not backfilled |
+| 8 | Wait 3 | A skipped (invalid `xmin`); returns at once |
+| 9 | Txn 4 | `indisvalid` set — `i` is valid but lacks X |
+| 10 | `COMMIT PREPARED 'p';` | X becomes live; no index entry is ever created for it |
+
+After step 10, `SELECT c FROM t WHERE c = 1` answered by `i` returns no row,
+while a sequential scan returns X. The same outcome applies to the new live
+version produced by an `UPDATE` (HOT or not) that a prepared transaction
+performed before the index became ready. A prepared `DELETE` is harmless: it
+leaves at most a dead index entry, which is normal and reclaimed by VACUUM. The
+gap does not depend on how long the transaction stays prepared — any
+`COMMIT PREPARED` after the index is built, of writes the scans could not see,
+exposes it.
+
+**Contrast: a non-concurrent `CREATE INDEX` is not exposed this way.** A plain
+build takes `ShareLock` on the heap
+([utility.c:1320-1321](../../../raw/postgres-12/src/backend/tcop/utility.c#L1320-L1321)),
+which conflicts with the prepared xact's `RowExclusiveLock`
+([lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)),
+so it blocks at lock acquisition until `COMMIT PREPARED` / `ROLLBACK PREPARED`,
+then scans the resolved heap with `SnapshotAny`. CIC takes only
+`ShareUpdateExclusiveLock`, which does not conflict with `RowExclusiveLock`, and
+replaces lock-blocking with the VXID waits that skip prepared xacts — which is
+exactly where the gap enters.
+
+**Scope of this assessment.** This is a static trace of the pinned 12.2 source
+paths (the three waits, the two MVCC scans, and `COMMIT PREPARED`); it was not
+reproduced on a running cluster in this environment. The source itself flags the
+underlying choice as questionable: `GetLockConflicts` notes that ignoring
+prepared transactions "is a bit more debatable but is appropriate for current
+uses of the result"
+([lock.c#GetLockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2815-L2818)).
+Nothing in this checkout's CIC code or `CREATE INDEX` documentation guards
+against, or warns about, building an index concurrently while a conflicting
+prepared transaction is outstanding.
 
 ### Why two scans and three waits
 
@@ -884,6 +1003,18 @@ the drop is retryable
   the build-snapshot setup in `DefineIndex` in
   `src/backend/commands/indexcmds.c`; and the `validate_index` header comment
   in `src/backend/catalog/index.c`.
+- For the prepared-transaction writer-wait safety assessment: the
+  `validate_index` correctness narrative and the Wait 1 HOT-safety comment in
+  `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`;
+  `GetLockConflicts`'s invalid-VXID skip (fast-path and primary-table loops) in
+  `src/backend/storage/lmgr/lock.c`; `MarkAsPreparingGuts` and
+  `FinishPreparedTransaction` in `src/backend/access/transam/twophase.c`; the
+  prepared-xacts-in-the-proc-array note in
+  `src/backend/storage/ipc/procarray.c`; the `SnapshotAny`
+  `INSERT_IN_PROGRESS` branch versus the MVCC `else` branch in
+  `heapam_index_build_range_scan` in
+  `src/backend/access/heap/heapam_handler.c`; and the not-ready-index insert
+  skip in `src/backend/executor/execIndexing.c`.
 
 ## Evidence Map
 
@@ -938,18 +1069,14 @@ the drop is retryable
 | The three waits are visible in `pg_stat_progress_create_index` | [monitoring.sgml:3639-3708](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3639-L3708), [indexcmds.c:385-395](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L385-L395) |
 | `pg_dump` runs one `REPEATABLE READ, READ ONLY` (or `SERIALIZABLE, READ ONLY, DEFERRABLE`) transaction, disables the three timeouts, and takes only `ACCESS SHARE` table locks | [pg_dump.c:1166-1194](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1166-L1194), [pg_dump.c:1140-1147](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1147), [pg_dump.c:6646-6671](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671) |
 | An idle backend with no active or registered snapshots clears its advertised xmin | [snapmgr.c:989-1028](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028) |
+| Skipping prepared xacts in the writer waits is not sufficient for index correctness: it violates the stated "wait for all modifying transactions to terminate" / "inserted by their originating transaction" invariant | [index.c:3117-3144](../../../raw/postgres-12/src/backend/catalog/index.c#L3117-L3144), [indexcmds.c:1348-1364](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1364) |
+| Prepared xacts are skipped at the writer waits because their dummy proc has an invalid VXID, dropped by `GetLockConflicts` | [twophase.c:465-472](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472), [lock.c:2930-2936](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2930-L2936), [lock.c:2995-3001](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2995-L3001) |
+| A prepared xact's tuples stay in-progress (invisible to the MVCC build/validate scans) until `COMMIT PREPARED`; the concurrent build never runs the `SnapshotAny` `INSERT_IN_PROGRESS` path that would index them | [procarray.c:15-18](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L15-L18), [twophase.c:1514-1534](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1514-L1534), [heapam_handler.c:1429-1494](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1429-L1494), [heapam_handler.c:1595-1600](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1600) |
+| `COMMIT PREPARED` records the commit and releases locks but performs no executor work and inserts into no index | [twophase.c:1455-1534](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1455-L1534) |
+| A non-concurrent `CREATE INDEX` instead blocks at lock acquisition on a prepared xact's `RowExclusiveLock`, because its `ShareLock` conflicts with it | [utility.c:1320-1321](../../../raw/postgres-12/src/backend/tcop/utility.c#L1320-L1321), [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
 
 ## Open Questions
 
-- Waits 1 and 2 ignore prepared transactions:
-  [lmgr.c:890-894](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894)
-  asserts they "certainly aren't going to do anything anymore". But a
-  transaction that wrote the table and then ran `PREPARE TRANSACTION` still
-  holds `RowExclusiveLock` and commits its writes later, at `COMMIT PREPARED`
-  ([lock.c:2873-2876](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)).
-  Whether skipping such a transaction in the writer waits is actually safe for
-  index correctness was not assessed from this checkout; this page records
-  only what the pinned source does and claims.
 - Whether walsenders or other non-transaction backends holding an old xmin
   (for example via `hot_standby_feedback` or replication slots) can appear in
   the Wait 3 set was not traced; `GetCurrentVirtualXIDs` requires a valid
@@ -988,6 +1115,8 @@ the drop is retryable
 - [proc.c#ProcSleep-autovacuum-cancel](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375)
 - [proc.h#vacuumFlags](../../../raw/postgres-12/src/include/storage/proc.h#L53-L63)
 - [twophase.c#MarkAsPreparingGuts](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L446-L490)
+- [twophase.c#FinishPreparedTransaction](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1455-L1618)
+- [procarray.c#prepared-xacts-in-array](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L13-L18)
 - [snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L305-L373)
 - [snapmgr.c#SnapshotResetXmin](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028)
 - [pg_dump.c#dump-transaction](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1194)
