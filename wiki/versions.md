@@ -13,6 +13,23 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-19: reviewed the `## Open Questions` section of the PostgreSQL 12
+  `CREATE INDEX CONCURRENTLY` page against pinned commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-verified every crash /
+  immediate-shutdown citation behind the "None for source behavior" conclusion
+  (xidless `heap_inplace_update` flag flips, the async-commit branch,
+  `heap_xlog_inplace` physical redo, `XLogFlush`-through-position monotonicity,
+  and the `DB_SHUTDOWNED` recovery trigger) — the conclusion holds. Closed one
+  precision gap: the "recovered valid index is always complete" argument cited
+  build durability only for B-tree (`smgrimmedsync`); verified the other five
+  core AMs (hash/GiST/SP-GiST/GIN/BRIN) make build pages durable before
+  SET_VALID through shared-buffer WAL (`log_newpage_range` / buffered build
+  path), and that unlogged tables reset heap and indexes together on crash.
+  Rewrote the completeness paragraph to be AM-general, split the Evidence Map
+  completeness row and added an unlogged-reset row, added Source References and
+  a Context Reviewed entry, and tightened the `## Open Questions` text while
+  keeping the "None" marker. `verified_by_agent` stays `not yet` because this
+  was a scoped review, not a full-page re-verification.
 - 2026-06-19: expanded PostgreSQL 12 `CREATE INDEX CONCURRENTLY` coverage
   against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42` to resolve
   the crash / immediate-shutdown recovery open question. Source-level

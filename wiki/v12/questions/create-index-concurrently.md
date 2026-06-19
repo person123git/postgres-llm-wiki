@@ -1064,22 +1064,47 @@ Durable SET_VALID therefore implies durable SET_READY, so recovered
 | + SET_READY (`XLOG_HEAP_INPLACE`) | `indisready=t, indisvalid=f` | invalid, ready |
 | + SET_VALID (`XLOG_HEAP_INPLACE`) | `indisready=t, indisvalid=t` | valid |
 
-**A recovered valid index is always complete.** The B-tree build writes its
-pages outside shared buffers and `smgrimmedsync`s the index file before the
-build transaction may commit, and WAL-logs the built pages only when
-`wal_level >= replica`; either way the index data is durable no later than the
-SET_READY flip
-([nbtsort.c#build-durability](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L34-L44),
-[nbtsort.c#use-wal](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580),
-[nbtsort.c#immedsync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307));
-a permanent index always needs WAL
-([rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520)).
-The `validate_index` backfill inserts go through shared buffers and are
-WAL-logged ahead of SET_VALID, and the WAL-before-data rule forces `XLogFlush`
-up to a buffer's LSN before that buffer can reach disk
+**A recovered valid index is always complete**, for every core access method.
+Two facts combine. First, `XLogFlush` flushes WAL through a position
+([xlog.c#XLogFlush](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798))
+and SET_VALID carries the highest LSN of the whole sequence, so a durable
+SET_VALID implies every earlier record is durable too — including the
+`validate_index` backfill inserts, which go through shared buffers and are
+WAL-logged ahead of SET_VALID under the WAL-before-data rule that forces
+`XLogFlush` up to a buffer's LSN before that buffer can reach disk
 ([bufmgr.c#FlushBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736)).
-So durable SET_VALID implies the build and the backfill are durable too; no
-crash window can expose a valid index that is missing rows.
+Second, the first build's pages are themselves durable no later than the
+SET_READY flip, by one of two per-AM mechanisms:
+
+- **B-tree builds outside shared buffers**, so a concurrent checkpoint cannot
+  flush them; it therefore `smgrimmedsync`s the index file before the build
+  transaction may commit, and WAL-logs the built pages only when
+  `wal_level >= replica`
+  ([nbtsort.c#build-durability](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L34-L44),
+  [nbtsort.c#use-wal](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580),
+  [nbtsort.c#immedsync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)).
+- **Hash, GiST, SP-GiST, GIN, and BRIN build through shared buffers** and
+  WAL-log their pages, so the build WAL precedes SET_READY/SET_VALID and no
+  separate immediate sync is needed: GiST, SP-GiST, and GIN emit a build-end
+  `log_newpage_range` over the main fork
+  ([gistbuild.c#build-wal](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226),
+  [spginsert.c#build-wal](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143),
+  [gininsert.c#build-wal](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417)),
+  while hash and BRIN WAL-log through their ordinary buffered build path
+  ([hash.c#hashbuild](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168),
+  [hashpage.c#_hash_init-wal](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402),
+  [brin.c#build-wal](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709)).
+
+Either way a permanent index always needs WAL
+([rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520)),
+so durable SET_VALID implies the build and the backfill are durable too; no
+crash window can expose a valid permanent index that is missing rows. An
+**unlogged** table is reset to its empty init fork on crash recovery — heap and
+indexes together — so a recovered valid index on one is empty exactly when its
+heap is, never incomplete
+([xlog.c#reset-unlogged-cleanup](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884),
+[xlog.c#reset-unlogged-init](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331),
+[reinit.c#ResetUnloggedRelations](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46)).
 
 #### Recovery
 
@@ -1159,10 +1184,16 @@ the drop is retryable
   determination in `src/backend/access/transam/xlog.c`; the WAL-before-data rule
   in `FlushBuffer` in `src/backend/storage/buffer/bufmgr.c`; the B-tree build's
   WAL gating and final `smgrimmedsync` in
-  `src/backend/access/nbtree/nbtsort.c`; the `index_concurrently_build`
+  `src/backend/access/nbtree/nbtsort.c`; the through-shared-buffers build and
+  build-end WAL of the other core AMs (`gistbuild`/`spgbuild`/`ginbuild`
+  `log_newpage_range`, `hashbuild`/`_hash_init`, and `brinbuild`) under
+  `src/backend/access/{gist,spgist,gin,hash,brin}/`; the `index_concurrently_build`
   SET_READY and `DefineIndex` SET_VALID commit boundaries in
-  `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`; and the
-  `RelationNeedsWAL` macro in `src/include/utils/rel.h`.
+  `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`; the
+  `RelationNeedsWAL` macro in `src/include/utils/rel.h`; and the crash-recovery
+  unlogged-relation reset (`ResetUnloggedRelations` CLEANUP/INIT calls in
+  `StartupXLOG`) in `src/backend/access/transam/xlog.c` and
+  `src/backend/storage/file/reinit.c`.
 - Tests: `src/test/regress/sql/create_index.sql`,
   `src/test/isolation/specs/multiple-cic.spec`, and
   `src/test/isolation/expected/multiple-cic.out`.
@@ -1257,7 +1288,8 @@ the drop is retryable
 | An xidless WAL-writing transaction commits asynchronously (`XLogSetAsyncXactLSN`, not `XLogFlush`) regardless of `synchronous_commit`, so a flip's durability is decoupled from its phase commit | [xact.c:1232-1392](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1232-L1392), [xlog.c:2630-2670](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2670) |
 | `heap_xlog_inplace` redoes the flip physically and unconditionally whenever its record is durable, so a flip can survive a phase that wrote no commit record | [heapam.c:8797-8835](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835) |
 | `XLogFlush` flushes all WAL through a position, so durable SET_VALID implies durable SET_READY; recovered `(indisready, indisvalid)` is monotone, never `(f,t)` | [xlog.c:2791-2798](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798), [index.c:1426-1438](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438), [indexcmds.c:1448-1463](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1448-L1463) |
-| A recovered valid index is complete: the build `smgrimmedsync`s its file before commit and WAL-logs pages when `wal_level >= replica`, and validate-scan WAL precedes SET_VALID under the WAL-before-data rule | [nbtsort.c:1288-1307](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [nbtsort.c:580](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580), [rel.h:519-520](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520), [bufmgr.c:2712-2736](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736) |
+| A recovered valid index is complete for every core AM: B-tree `smgrimmedsync`s its outside-buffers build before commit (WAL-logging build pages only when `wal_level >= replica`); hash/GiST/SP-GiST/GIN/BRIN build through shared buffers and WAL-log their pages (GiST/SP-GiST/GIN via a build-end `log_newpage_range`); the `validate_index` backfill is WAL-logged ahead of SET_VALID under the WAL-before-data rule | [nbtsort.c:1288-1307](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [nbtsort.c:580](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580), [gistbuild.c:217-226](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226), [spginsert.c:134-143](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143), [gininsert.c:408-417](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417), [hash.c:129-168](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168), [hashpage.c:346-402](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402), [brin.c:683-709](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709), [rel.h:519-520](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520), [bufmgr.c:2712-2736](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736) |
+| An unlogged table's heap and indexes reset together to their empty init fork on crash recovery, so a recovered valid index on one is empty exactly when its heap is — never incomplete | [xlog.c:6878-6884](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884), [xlog.c:7323-7331](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331), [reinit.c:36-46](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46) |
 | Tests | [create_index.sql:467-520](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
 | Initial lock acquisition point and its conflict set | [utility.c:1311-1326](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) |
 | Which v12 commands take each conflicting lock mode | [mvcc.sgml:890-1030](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1030) |
@@ -1290,8 +1322,12 @@ crash / immediate-shutdown question is resolved inline under
 flag flips are xidless `heap_inplace_update` writes that commit asynchronously,
 `heap_xlog_inplace` redoes them physically on recovery, and the recovered state
 is monotone, so a crash always lands on one of the four documented leftovers and
-never on a valid-but-incomplete index. This conclusion is a static source trace
-of the pinned 12.2 checkout, not a live crash reproduction in this environment.
+never on a valid-but-incomplete index. That completeness holds for every core
+index access method — B-tree via the outside-buffers `smgrimmedsync`, and hash,
+GiST, SP-GiST, GIN, and BRIN via their shared-buffer build WAL — and for
+unlogged tables, whose heap and indexes reset together on crash. This conclusion
+is a static source trace of the pinned 12.2 checkout, not a live crash
+reproduction in this environment.
 
 ## Source References
 
@@ -1337,6 +1373,15 @@ of the pinned 12.2 checkout, not a live crash reproduction in this environment.
 - [bufmgr.c#FlushBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736)
 - [nbtsort.c#build-durability](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)
 - [rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520)
+- [gistbuild.c#gistbuild-wal](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226)
+- [spginsert.c#spgbuild-wal](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143)
+- [gininsert.c#ginbuild-wal](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417)
+- [hash.c#hashbuild](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168)
+- [hashpage.c#_hash_init](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402)
+- [brin.c#brinbuild](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709)
+- [xlog.c#reset-unlogged-cleanup](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884)
+- [xlog.c#reset-unlogged-init](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331)
+- [reinit.c#ResetUnloggedRelations](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46)
 - [tuplesort.c#unique-violation](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4040-L4056)
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
 - [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L383)
