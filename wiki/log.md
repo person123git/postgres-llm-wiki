@@ -2,6 +2,43 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] open-question v18 | RLS minor-release first-appearance labels assigned
+
+- Resolved the remaining `## Open Questions` item on [Row-Level Security (RLS) in
+  PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 12
+  (unverified)](v18/questions/row-level-security-rls.md): the precise first minor
+  release that shipped each of the 20 `### Fixes Since PostgreSQL 12` fixes. Worked
+  against the unchanged pin `6cb307251c5c6261286c1566496920976640108e` over the
+  unshallowed `raw/postgres-18/` checkout (62,317 commits, 685 tags).
+- Method: for each fix, listed every same-subject commit across all refs
+  (`git log --all --fixed-strings --grep=<subject>`), mapped each distinct
+  per-branch cherry-pick to its earliest containing release tag
+  (`git tag --contains <c> | grep '^REL_NN_M$' | sort -V | head -1`), and read tag
+  stamp dates with `git log -1 --format=%cs <tag>`. Confirmed the back-patch reach
+  in each commit message matched the same-subject commit count.
+- Added a `### Minor-Release First Appearance` section and table giving, per fix,
+  the master development-cycle major (a `.0`), the first minor release on every
+  tracked v12+ branch grouped by stamp date, and the back-patch reach. Because
+  PostgreSQL ships coordinated same-day minors across branches, a back-patched
+  fix first appears in those back-branch minors (earlier than the master `.0`):
+  e.g. CVE-2023-2455 (`ca73753b09`) shipped 2023-05-08 in 15.3/14.8/13.11/12.15
+  and only reached the v16 line in 16.0 (2023-09-11).
+- Correction surfaced and applied: the pin is a `REL_18_STABLE` commit and that
+  branch forked from master at `9c5b9a280c` (2025-06-29), so two of the table's
+  listed hashes are REL_18_STABLE back-patch commits, not master commits —
+  `64f77c6a65` (CVE-2025-8713; master `22424953cde`) and `749f4ce4d9` (doc fix;
+  master `7dc4fa91413`), both masters on the unreleased v19 line. Reworded the
+  Fixes-table intro (was "the hash shown is the master-branch commit").
+- Four fixes were not back-patched and first shipped in one major: `a2ab9c06ea`
+  (15.0), `6572bd55b0` (17.0), `0dca5d68d7` (18.0), `cd3c45125d` (18.0).
+- Updated Contents, removed the resolved open-question bullet (kept the
+  curated-list-completeness item), and added Context Reviewed / Evidence Map
+  entries. Refreshed the `wiki/index.md`, `wiki/v18/index.md`, and
+  `wiki/versions.md` (row + new Coverage Note) summaries.
+- `verified_by_agent` stays `not yet`: this was a targeted open-question
+  investigation, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] open-question v18 | RLS commit-provenance open question resolved (checkout unshallowed)
 
 - Re-investigated and resolved the first/main `## Open Questions` item on [Row-Level
