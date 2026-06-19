@@ -13,6 +13,28 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-19: reviewed the `### Is skipping prepared transactions in the writer
+  waits safe?` section of the PostgreSQL 12 `CREATE INDEX CONCURRENTLY` page
+  against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-verified
+  every claim and citation: the `lmgr.c` "prepared xacts certainly aren't going
+  to do anything anymore" comment; the `validate_index` "terminate"/"inserted by
+  their originating transaction" invariant; the Wait 1 HOT-safety comment;
+  `MarkAsPreparingGuts` setting the dummy proc's `xid` to the real XID but
+  `xmin`/`backendId` invalid; the `GetLockConflicts` invalid-VXID drops and the
+  `VirtualTransactionIdIsValid` `backendId` check; the Wait 3 `xmin`/VXID filter;
+  the `SnapshotAny` `INSERT_IN_PROGRESS` branch vs. the MVCC `else` branch;
+  `FinishPreparedTransaction` doing no index work; the not-ready-index insert
+  skip; and the non-concurrent `ShareLock`-vs-`RowExclusiveLock` contrast. Also
+  confirmed the negative claims (no "prepared" mention in `create_index.sgml`, no
+  prepared/two-phase handling in `indexcmds.c`). The "Not on its own [safe]"
+  conclusion holds. Fixed one precision error: the writer-wait bullet implied the
+  prepared xact's invalid VXID is dropped in "both the fast-path and
+  primary-table scans," but its `RowExclusiveLock` is transferred to the primary
+  lock table at prepare, so it is encountered and dropped only in the
+  primary-table scan; reworded to say both `GetLockConflicts` scan phases drop
+  invalid VXIDs in general while the prepared xact hits only the primary-table
+  one. `verified_by_agent` stays `not yet` because this was a scoped section
+  review, not a full-page re-verification.
 - 2026-06-19: reviewed the `## Open Questions` section of the PostgreSQL 12
   `CREATE INDEX CONCURRENTLY` page against pinned commit
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-verified every crash /

@@ -2,6 +2,69 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY prepared-transaction writer-wait section
+
+- Reviewed the `### Is skipping prepared transactions in the writer waits safe?`
+  section of [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, per user
+  request.
+- Re-verified every claim/citation in the section: the `WaitForLockersMultiple`
+  "prepared xacts ... certainly aren't going to do anything anymore" comment
+  ([lmgr.c:890-894](../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894),
+  with `WaitForLockers` wrapping it at
+  [lmgr.c:942-949](../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L942-L949));
+  the `validate_index` "wait for all transactions that could have been modifying
+  the table to terminate" (twice) / "Any tuples committed live after the snap
+  will be inserted into the index by their originating transaction" invariant
+  ([index.c:3117-3144](../raw/postgres-12/src/backend/catalog/index.c#L3117-L3144))
+  and the Wait 1 HOT-safety comment
+  ([indexcmds.c:1348-1364](../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1364));
+  `MarkAsPreparingGuts` giving the dummy proc the real `xid` but invalid
+  `xmin`/`backendId`
+  ([twophase.c:465-472](../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472));
+  the `GetLockConflicts` invalid-VXID drops
+  ([lock.c:2930-2936](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2930-L2936),
+  [lock.c:2995-3001](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2995-L3001)),
+  the prepared-lock transfer to the primary lock table
+  ([lock.c:2873-2876](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)),
+  the "debatable" note
+  ([lock.c:2815-2818](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2815-L2818)),
+  and the `VirtualTransactionIdIsValid` `backendId != InvalidBackendId`
+  requirement
+  ([lock.h:71-73](../raw/postgres-12/src/include/storage/lock.h#L71-L73)); the
+  Wait 3 `xmin`/VXID filter
+  ([procarray.c:2525-2539](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539))
+  and prepared-xacts-in-array note
+  ([procarray.c:15-18](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L15-L18));
+  the `SnapshotAny` `INSERT_IN_PROGRESS` indexing branch vs. the MVCC `else`
+  branch
+  ([heapam_handler.c:1429-1494](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1429-L1494),
+  [heapam_handler.c:1595-1600](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1600));
+  `FinishPreparedTransaction` doing no index work
+  ([twophase.c:1455-1534](../raw/postgres-12/src/backend/access/transam/twophase.c#L1455-L1534));
+  the not-ready-index insert skip
+  ([execIndexing.c:330-332](../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332));
+  and the non-concurrent `ShareLock`-vs-`RowExclusiveLock` contrast
+  ([utility.c:1320-1321](../raw/postgres-12/src/backend/tcop/utility.c#L1320-L1321),
+  [lock.c:83-86](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)).
+- Confirmed the negative claims: no "prepared" mention in
+  `doc/src/sgml/ref/create_index.sgml` and no prepared/two-phase handling in
+  `src/backend/commands/indexcmds.c`. The section's "Not on its own [safe]"
+  conclusion holds: a write by a prepared transaction that commits after the
+  build is left unindexed.
+- Fixed one precision error: the writer-wait bullet read as if the prepared
+  xact's invalid VXID is dropped in "both the fast-path and primary-table
+  scans," but at prepare its `RowExclusiveLock` is transferred to the primary
+  lock table, so it is encountered and dropped only in the primary-table scan.
+  Reworded so both `GetLockConflicts` scan phases drop invalid VXIDs in general
+  while noting the prepared xact hits only the primary-table one (invalid
+  `backendId`). Evidence Map rows 1408-1412 were already accurate and unchanged.
+- Updated `wiki/versions.md` Coverage Notes. `verified_by_agent` stays `not yet`
+  because this was a scoped section review, not a full-page re-verification;
+  title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY blocker matrix
 
 - Reviewed the `### All operations that can block CREATE INDEX CONCURRENTLY`

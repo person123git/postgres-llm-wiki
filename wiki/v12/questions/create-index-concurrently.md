@@ -779,15 +779,18 @@ builds a dummy `PGPROC` whose `xid` is still the real, in-progress XID, but whos
 ([twophase.c#MarkAsPreparingGuts](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472)).
 Two consequences:
 
-- Waits 1 and 2 collect conflicting lock holders with `GetLockConflicts`, which
-  reads each holder's virtual transaction ID and drops an invalid VXID — the
-  prepared xact's — in both the fast-path and primary-table scans
+- Waits 1 and 2 collect conflicting lock holders with `GetLockConflicts`. Both
+  of its scan phases — the fast-path array scan and the primary lock-table scan
+  — read each conflicting holder's virtual transaction ID and discard any
+  invalid VXID
   ([lock.c#fast-path-skip](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2930-L2936),
   [lock.c#primary-table-skip](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2995-L3001)).
-  The prepared xact still holds its `RowExclusiveLock` (transferred to the
-  primary lock table at prepare,
-  [lock.c#prepared-locks](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)),
-  but it is not waited on.
+  At prepare the prepared xact's `RowExclusiveLock` was transferred to the
+  primary lock table
+  ([lock.c#prepared-locks](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876)),
+  so `GetLockConflicts` meets it only in the primary-table scan, where its dummy
+  proc yields an invalid VXID (invalid `backendId`) and is dropped; the prepared
+  xact is never waited on.
 - Wait 3 (`WaitForOlderSnapshots`) filters on `xmin` and a valid VXID, both of
   which the dummy proc lacks, so it is skipped there too
   ([procarray.c#vxid-check](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539))
