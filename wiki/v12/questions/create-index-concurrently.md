@@ -196,7 +196,7 @@ saved `limitXmin` and waits for them, excluding autovacuum/lazy-VACUUM backends;
 those are the transactions that could have snapshots old enough to expect rows
 the index does not contain
 ([indexcmds.c#wait3](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1448),
-[indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402),
+[indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402),
 [procarray.c#GetCurrentVirtualXIDs](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540)).
 Then it sets `indisvalid = true`, sends a relcache invalidation on the parent
 table so cached plans get re-planned to use the new index, and releases the
@@ -414,7 +414,7 @@ CIC
 PostgreSQL 12 does **not** have a special safe-concurrent-index-build exclusion
 in `WaitForOlderSnapshots`: the call passes only `PROC_IS_AUTOVACUUM |
 PROC_IN_VACUUM` as its exclusion mask
-([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L348)).
+([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L348)).
 Concurrent index builders interact through two ordinary mechanisms: relation
 locks and database-wide old-snapshot waits.
 
@@ -445,7 +445,7 @@ locks and database-wide old-snapshot waits.
   `GetCurrentVirtualXIDs(limitXmin, true, false, PROC_IS_AUTOVACUUM |
   PROC_IN_VACUUM, ...)`, so it filters by same database, nonzero `xmin`, and
   `xmin <= limitXmin`, not by table
-  ([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L348),
+  ([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L348),
   [procarray.c#GetCurrentVirtualXIDs-filters](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2490),
   [procarray.c#GetCurrentVirtualXIDs-loop](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2508-L2540)).
   The only v12 exclusion mask there is autovacuum plus manual lazy `VACUUM`
@@ -470,17 +470,18 @@ locks and database-wide old-snapshot waits.
 
 - **`REINDEX CONCURRENTLY` follows the same boundary.**
   `ReindexRelationConcurrently` takes analogous `ShareUpdateExclusiveLock`
-  relation locks, records heap lock tags for the writer waits, registers and
-  drops a reference snapshot for validation, commits into a new transaction, and
-  then calls `WaitForOlderSnapshots`
+  relation locks on the heap, old index, and new index, records heap lock tags
+  for the writer waits, registers and drops a reference snapshot for validation,
+  commits into a new transaction, and then calls `WaitForOlderSnapshots`
   ([indexcmds.c#RIC-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3077),
   [indexcmds.c#RIC-build-validate-wait](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198)).
   So the snapshot-wait interaction is not a CIC-only code path.
 
 - **The direct inter-CIC isolation test covers different tables.**
   `multiple-cic.spec` creates two tables, starts two simultaneous CIC commands,
-  and uses an advisory-lock interleaving to make the first command wait while
-  the second command runs
+  and uses an advisory-lock predicate to make the first command wait while the
+  second command runs. That wait is test-induced; the point of the test is that
+  a CIC on a different table can proceed while the first CIC is still open
   ([multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)).
   The expected output shows the first CIC waiting, the second CIC executing, and
   then the first completing
@@ -498,7 +499,7 @@ The traced `DefineIndex`, `WaitForLockers`, `WaitForOlderSnapshots`,
 `GetCurrentVirtualXIDs`, and `ReindexRelationConcurrently` paths show those
 mechanisms, not a separate v12 CIC-specific exclusion flag or side channel
 ([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L860),
-[indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L348),
+[indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L348),
 [indexcmds.c#RIC-build-validate-wait](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198)).
 
 ### All operations that can block CREATE INDEX CONCURRENTLY
@@ -1282,11 +1283,12 @@ the drop is retryable
 - Tests: `src/test/regress/sql/create_index.sql`,
   `src/test/isolation/specs/multiple-cic.spec`, and
   `src/test/isolation/expected/multiple-cic.out`.
-- For the inter-builder follow-up: same-checkout source history for commits
-  `c3d09b3bd23`, `54eff5311d7`, and `1dec82068b3`; the
-  `ReindexRelationConcurrently` adjacent caller in
-  `src/backend/commands/indexcmds.c`; and the `GetCurrentVirtualXIDs` filter
-  contract in `src/backend/storage/ipc/procarray.c`.
+- For the inter-builder follow-up: the `ReindexRelationConcurrently` adjacent
+  caller in `src/backend/commands/indexcmds.c`; the `GetCurrentVirtualXIDs`
+  filter contract in `src/backend/storage/ipc/procarray.c`; the v12
+  `vacuumFlags` definitions in `src/include/storage/proc.h`; and a whole
+  checkout `rg` search confirming `PROC_IN_SAFE_IC` is absent in the pinned v12
+  source.
 - For the first-build-scan tuple-visibility trace: `index_concurrently_build`
   and `index_build` in `src/backend/catalog/index.c`; the `ambuild` heap-scan
   callers and the B-tree serial/parallel build helpers in `nbtsort.c`, plus
@@ -1350,12 +1352,12 @@ the drop is retryable
 | `index_set_state_flags` is non-transactional in-place | [index.c:3331-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403) |
 | `WaitForLockers` waits on current holders' VXIDs, takes no table lock, and does not report lock waiters; `ShareLock` conflicts with `RowExclusiveLock` | [lmgr.c:850-949](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949), [lock.c:2804-2821](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2821), [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
 | `ShareUpdateExclusiveLock` allows `AccessShareLock`, `RowShareLock`, and `RowExclusiveLock`, conflicts with schema-maintenance lock modes, and is self-conflicting | [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81), [lock.c:194-196](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L194-L196), [lockdefs.h:36-46](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46), [mvcc.sgml:890-1039](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1039) |
-| Wait 3 excludes autovacuum and lazy VACUUM only | [indexcmds.c:307-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402) |
+| Wait 3 excludes autovacuum and lazy VACUUM only; v12 has no safe-CIC exclusion in that mask | [indexcmds.c:307-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402), [proc.h:53-63](../../../raw/postgres-12/src/include/storage/proc.h#L53-L63) |
 | Same-table concurrent index builds serialize on self-conflicting `ShareUpdateExclusiveLock` | [indexcmds.c:563-564](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L563-L564), [indexcmds.c:1307-1316](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1316), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81), [ref/create_index.sgml:614-621](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L614-L621) |
-| Different-table concurrent builders can meet in the same-database old-snapshot wait, while Waits 1/2 remain heap-lock-tag-local | [indexcmds.c:1328-1346](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1346), [indexcmds.c:1381-1389](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1381-L1389), [indexcmds.c:339-348](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L348), [procarray.c:2471-2540](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540) |
+| Different-table concurrent builders can meet in the same-database old-snapshot wait, while Waits 1/2 remain heap-lock-tag-local | [indexcmds.c:1328-1346](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1346), [indexcmds.c:1381-1389](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1381-L1389), [lmgr.c:850-860](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L860), [indexcmds.c:307-348](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L348), [procarray.c:2471-2540](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540) |
 | CIC clears its own advertised xmin before Wait 3 to avoid inter-CIC deadlock | [indexcmds.c:1414-1448](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1414-L1448) |
-| `REINDEX CONCURRENTLY` shares the same concurrent-build snapshot-wait boundary | [indexcmds.c:2957-3077](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3077), [indexcmds.c:3080-3198](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198) |
-| `multiple-cic` tests two simultaneous CIC commands on different tables completing | [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40), [multiple-cic.out:3-19](../../../raw/postgres-12/src/test/isolation/expected/multiple-cic.out#L3-L19) |
+| `REINDEX CONCURRENTLY` uses analogous heap/index `ShareUpdateExclusiveLock` locks, saved heap lock tags for writer waits, and the same concurrent-build snapshot-wait boundary | [indexcmds.c:2957-3077](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3077), [indexcmds.c:3080-3198](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198) |
+| `multiple-cic` tests two simultaneous CIC commands on different tables; the visible wait is advisory-lock-induced, and the second CIC still completes while the first is open | [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40), [multiple-cic.out:3-19](../../../raw/postgres-12/src/test/isolation/expected/multiple-cic.out#L3-L19) |
 | Correctness narrative (two scans, three waits) | [index.c:3112-3174](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174), [ref/create_index.sgml:545-572](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L572) |
 | First build scan sets `ii_Concurrent` then builds via `index_build` -> `ambuild`; serial core AM paths call `table_index_build_scan` directly, and B-tree parallel workers call it with a parallel heap scan descriptor | [index.c:1421-1427](../../../raw/postgres-12/src/backend/catalog/index.c#L1421-L1427), [index.c:2902-2903](../../../raw/postgres-12/src/backend/catalog/index.c#L2902-L2903), [index.c:2844-2854](../../../raw/postgres-12/src/backend/catalog/index.c#L2844-L2854), [nbtsort.c:487-494](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L487-L494), [nbtsort.c:1779-1786](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1779-L1786), [hash.c:166](../../../raw/postgres-12/src/backend/access/hash/hash.c#L166), [gistbuild.c:196](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L196), [spginsert.c:126](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L126), [gininsert.c:382](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L382), [brin.c:723](../../../raw/postgres-12/src/backend/access/brin/brin.c#L723) |
 | `table_index_build_scan` passes `anyvisible = false` and dispatches to `heapam_index_build_range_scan` | [tableam.h:1512-1533](../../../raw/postgres-12/src/include/access/tableam.h#L1512-L1533), [heapam_handler.c:2644](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2644) |

@@ -1259,3 +1259,26 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `not yet` because this was a scoped section review, not a full-page
   re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY inter-builder interactions
+
+- Reviewed the `### How concurrent index builds interact with each other`
+  section of [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed the current-source behavior: same-table CIC commands serialize on
+  self-conflicting `ShareUpdateExclusiveLock`; different-table CIC/RIC commands
+  can interact only through the same-database old-snapshot
+  `WaitForOlderSnapshots` path; the builder drops its reference snapshot and
+  commits into a no-`xmin` transaction before Wait 3.
+- Tightened the section's evidence: widened `WaitForOlderSnapshots` citations to
+  include its explanatory comments, recorded that v12 has no `PROC_IN_SAFE_IC`
+  symbol, and removed the stale Context Reviewed claim that this scoped pass
+  had rechecked the earlier history commits.
+- Clarified the `multiple-cic` isolation test: it proves different-table CIC
+  commands can overlap, but the visible wait is caused by the advisory-lock
+  predicate used by the test, not by a CIC table-lock conflict.
+- Updated the Evidence Map and Context Reviewed. `verified_by_agent` remains
+  `not yet` because this was a scoped section review, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
