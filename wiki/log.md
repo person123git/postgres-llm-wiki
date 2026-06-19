@@ -2,6 +2,31 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] review v12 | CREATE INDEX CONCURRENTLY why-two-scans-three-waits section
+
+- Reviewed the `### Why two scans and three waits` section of [How CREATE INDEX
+  CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, per user
+  request.
+- Verified all four citations against source and found the section accurate; no
+  changes to the page. The three `validate_index`-header sub-ranges match: Wait 1
+  -> no incompatible HOT update so the first build scan is safe
+  ([index.c:3118-3132](../raw/postgres-12/src/backend/catalog/index.c#L3118-L3132));
+  `indisready` + Wait 2 -> live writers self-insert, so `validate_index` only
+  backfills earlier-unindexed tuples
+  ([index.c:3134-3152](../raw/postgres-12/src/backend/catalog/index.c#L3134-L3152));
+  Wait 3 -> no surviving older snapshot, so SET_VALID is safe
+  ([index.c:3163-3168](../raw/postgres-12/src/backend/catalog/index.c#L3163-L3168)).
+  The unique-index caveat matches the docs verbatim in substance — uniqueness
+  enforced from the second scan, violations visible before availability, failed
+  second scan leaves a still-enforcing invalid index
+  ([ref/create_index.sgml:598-606](../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L598-L606)).
+- The existing Evidence Map rows (correctness narrative; invalid-index/unique
+  caveat; MVCC-backfill) already back these claims. `verified_by_agent` stays
+  `not yet`; title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY walsender / replication-slot Wait 3 section
 
 - Reviewed the `### Can walsenders or replication-slot xmin holders appear in
