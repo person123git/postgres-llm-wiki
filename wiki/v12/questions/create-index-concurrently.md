@@ -597,17 +597,18 @@ hanging forever
 
 #### Point 4 — Wait 3 (before marking valid): old snapshot holders
 
-`WaitForOlderSnapshots(limitXmin, true)` is the broadest wait. It blocks on
-every backend **in the same database** whose advertised `xmin` is at or below
-the reference snapshot's `xmin` — regardless of which tables that backend
-touches
+`WaitForOlderSnapshots(limitXmin, true)` is the broadest wait. At the start of
+the wait it collects every backend **in the same database** whose advertised
+`xmin` is at or below the reference snapshot's `xmin` — regardless of which
+tables that backend touches
 ([indexcmds.c#wait3-filter](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L348),
 [procarray.c#GetCurrentVirtualXIDs](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2467-L2548)).
 Operations that block here:
 
-- Any long-running query in the same database, even a single-statement
-  `SELECT` against an unrelated table — the filter is "oldest live snapshot
-  older than ours", not "uses this table"
+- Any already-running long-running query in the same database whose advertised
+  `xmin` passes that filter, even a single-statement `SELECT` against an
+  unrelated table — the filter is "oldest live snapshot older than ours", not
+  "uses this table"
   ([procarray.c#xmin-filter](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2480-L2482),
   and the docs describe the phase as waiting for "transactions that can
   potentially see the table to release their snapshots"
@@ -659,9 +660,10 @@ Not waited for at this point:
 
 #### Worked example: a running pg_dump
 
-A `pg_dump` of the **same database** blocks CIC at exactly one point — Wait 3
-— but reliably, and for the dump's entire remaining duration. `pg_dump` wraps
-the whole dump in a single transaction: `BEGIN` followed by
+A `pg_dump` of the **same database** can block CIC at exactly one point — Wait
+3 — and when it is in the Wait 3 set it blocks for the dump's entire remaining
+duration. `pg_dump` wraps the whole dump in a single transaction: `BEGIN`
+followed by
 `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY` (or
 `SERIALIZABLE, READ ONLY, DEFERRABLE` under `--serializable-deferrable`)
 ([pg_dump.c#dump-transaction](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1166-L1194)),
@@ -680,10 +682,14 @@ mask ([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/l
 [lock.c#ShareLock-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86))
 — even when it is dumping the very table being indexed. Two boundary cases
 follow from the Wait 3 filters above: a dump of **another database** is
-skipped entirely, and a dump that **starts after** CIC's reference snapshot
-has a newer `xmin` than `limitXmin` and is skipped too. The blocking is also
-one-way: CIC never blocks `pg_dump`, since `ShareUpdateExclusiveLock` does not
-conflict with `AccessShareLock`.
+skipped entirely, and a same-database dump is skipped only if it is absent from
+the initial Wait 3 list or its advertised `xmin` is newer than `limitXmin`.
+Starting after CIC's reference snapshot is not, by itself, the test; the code
+checks the advertised `xmin` and VXID list
+([indexcmds.c#wait3-recheck](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L383),
+[procarray.c#limitXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2532-L2539)).
+The blocking is also one-way: CIC never blocks `pg_dump`, since
+`ShareUpdateExclusiveLock` does not conflict with `AccessShareLock`.
 
 #### Worked example: a transaction held open for an hour (idle in transaction)
 
@@ -696,7 +702,7 @@ blocks CIC only through what it has already done, never through its age:
 | Wrote the **target table** (`INSERT`/`UPDATE`/`DELETE`), now idle | Wait 1 (or 2) | until it commits or rolls back ([mvcc.sgml#ROW-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L910), [lmgr.c#wait-loop](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L896-L918)) |
 | `REPEATABLE READ`/`SERIALIZABLE`, snapshot taken before the reference snapshot, same database | Wait 3 | until transaction end ([snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L336-L356)) |
 | `READ COMMITTED`, only reads (or writes to **other** tables), idle, no open cursors | nothing | — ([snapmgr.c#SnapshotResetXmin](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028)) |
-| `READ COMMITTED` holding an open cursor, or mid-statement on an old snapshot | Wait 3 | until the cursor closes / the snapshot is released |
+| `READ COMMITTED` holding a portal/cursor snapshot, or mid-statement on an old snapshot | Wait 3 | until the cursor closes / the snapshot is released ([pquery.c#CreateQueryDesc](../../../raw/postgres-12/src/backend/tcop/pquery.c#L68-L83), [pquery.c#PortalRunSelect](../../../raw/postgres-12/src/backend/tcop/pquery.c#L924-L932)) |
 | Took a conflicting lock on the target table (DDL, `LOCK TABLE`) | initial acquisition | until transaction end |
 
 The writer row is the operationally painful one. A transaction that touched
@@ -720,11 +726,13 @@ Its leftover `AccessShareLock` matters at no blocking point. Writes to
 `WaitForLockers` examines only the target table's lock tag
 ([indexcmds.c#wait1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1346)).
 
-A transaction that starts after CIC reaches a wait never extends that wait:
-the Waits 1/2 holder list is a point-in-time snapshot
+A transaction that starts after CIC has collected a wait's holder/VXID list
+never extends that specific wait: the Waits 1/2 holder list is a point-in-time
+snapshot
 ([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L855-L860)),
-and a fresh snapshot's `xmin` is newer than `limitXmin`
-([procarray.c#limitXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2532-L2533)).
+and Wait 3's initial VXID list is only rechecked to remove entries that no
+longer qualify, not to add new ones
+([indexcmds.c#wait3-recheck](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L383)).
 
 #### Watching the waits
 
@@ -1246,7 +1254,8 @@ the drop is retryable
 - For the worked examples: the dump-transaction setup, timeout disabling, and
   `LOCK TABLE ... IN ACCESS SHARE MODE` statements in
   `src/bin/pg_dump/pg_dump.c`; `SnapshotResetXmin` in
-  `src/backend/utils/time/snapmgr.c`.
+  `src/backend/utils/time/snapmgr.c`; and portal/cursor snapshot registration
+  and execution in `src/backend/tcop/pquery.c`.
 - For the failure-scenarios section: the planner's invalid-index skip in
   `src/backend/optimizer/util/plancat.c`; `ExecOpenIndices` /
   `ExecInsertIndexTuples` ready-for-inserts handling in
@@ -1389,12 +1398,13 @@ the drop is retryable
 | Autovacuum blocking CIC is sent SIGINT after `deadlock_timeout`, except anti-wraparound | [proc.c:1308-1375](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375), [proc.c:1319-1324](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1319-L1324) |
 | Prepared transactions hold table locks until COMMIT/ROLLBACK PREPARED but are ignored by Waits 1/2 | [lock.c:2873-2876](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2873-L2876), [lock.c:2815-2818](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2815-L2818), [lmgr.c:890-894](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L890-L894) |
 | Waits 1/2 sleep until each holder's whole transaction ends; lock waiters and later writers are skipped | [lmgr.c:896-918](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L896-L918), [lock.c:2804-2807](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2807), [lmgr.c:855-860](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L855-L860) |
-| Wait 3 filters: same database, xmin ≤ limitXmin, xmin=0 skipped, vacuum flags excluded | [indexcmds.c:346-348](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L348), [procarray.c:2508-2541](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2508-L2541), [proc.h:53-56](../../../raw/postgres-12/src/include/storage/proc.h#L53-L56) |
+| Wait 3 filters: same database, xmin ≤ limitXmin, xmin=0 skipped, vacuum flags excluded; later rechecks remove old entries but do not add new wait targets | [indexcmds.c:346-383](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L383), [procarray.c:2508-2541](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2508-L2541), [proc.h:53-56](../../../raw/postgres-12/src/include/storage/proc.h#L53-L56) |
 | REPEATABLE READ / SERIALIZABLE first snapshot lives until transaction end | [snapmgr.c:336-356](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L336-L356) |
 | Prepared transactions invisible to Wait 3 (invalid xmin and backendId) | [twophase.c:465-472](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472), [procarray.c:2525-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2525-L2539) |
 | The three waits are visible in `pg_stat_progress_create_index` | [monitoring.sgml:3639-3708](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3639-L3708), [indexcmds.c:385-395](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L385-L395) |
-| `pg_dump` runs one `REPEATABLE READ, READ ONLY` (or `SERIALIZABLE, READ ONLY, DEFERRABLE`) transaction, disables the three timeouts, and takes only `ACCESS SHARE` table locks | [pg_dump.c:1166-1194](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1166-L1194), [pg_dump.c:1140-1147](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1147), [pg_dump.c:6646-6671](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671) |
+| `pg_dump` runs one `REPEATABLE READ, READ ONLY` (or `SERIALIZABLE, READ ONLY, DEFERRABLE`) transaction, disables the three timeouts, and takes only `ACCESS SHARE` table locks; same-database dumps block only when included by the Wait 3 VXID/xmin filter | [pg_dump.c:1166-1194](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1166-L1194), [pg_dump.c:1140-1147](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1147), [pg_dump.c:6646-6671](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671), [indexcmds.c:346-383](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L383), [procarray.c:2532-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2532-L2539) |
 | An idle backend with no active or registered snapshots clears its advertised xmin | [snapmgr.c:989-1028](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028) |
+| Portal/cursor execution can keep a registered snapshot visible to Wait 3 until the cursor/snapshot is released | [pquery.c:68-83](../../../raw/postgres-12/src/backend/tcop/pquery.c#L68-L83), [pquery.c:924-932](../../../raw/postgres-12/src/backend/tcop/pquery.c#L924-L932), [portalmem.c:520-525](../../../raw/postgres-12/src/backend/utils/mmgr/portalmem.c#L520-L525) |
 | Skipping prepared xacts in the writer waits is not sufficient for index correctness: it violates the stated "wait for all modifying transactions to terminate" / "inserted by their originating transaction" invariant | [index.c:3117-3144](../../../raw/postgres-12/src/backend/catalog/index.c#L3117-L3144), [indexcmds.c:1348-1364](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1364) |
 | Prepared xacts are skipped at the writer waits because their dummy proc has an invalid VXID, dropped by `GetLockConflicts` | [twophase.c:465-472](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L465-L472), [lock.c:2930-2936](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2930-L2936), [lock.c:2995-3001](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2995-L3001) |
 | A prepared xact's tuples stay in-progress (invisible to the MVCC build/validate scans) until `COMMIT PREPARED`; the concurrent build never runs the `SnapshotAny` `INSERT_IN_PROGRESS` path that would index them | [procarray.c:15-18](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L15-L18), [twophase.c:1514-1534](../../../raw/postgres-12/src/backend/access/transam/twophase.c#L1514-L1534), [heapam_handler.c:1429-1494](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1429-L1494), [heapam_handler.c:1595-1600](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1600) |
@@ -1456,6 +1466,9 @@ reproduction in this environment.
 - [procarray.c#prepared-xacts-in-array](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L13-L18)
 - [snapmgr.c#GetTransactionSnapshot](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L305-L373)
 - [snapmgr.c#SnapshotResetXmin](../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L989-L1028)
+- [pquery.c#CreateQueryDesc](../../../raw/postgres-12/src/backend/tcop/pquery.c#L68-L83)
+- [pquery.c#PortalRunSelect](../../../raw/postgres-12/src/backend/tcop/pquery.c#L924-L932)
+- [portalmem.c#PortalDrop](../../../raw/postgres-12/src/backend/utils/mmgr/portalmem.c#L520-L525)
 - [pg_dump.c#dump-transaction](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1140-L1194)
 - [pg_dump.c#lock-table](../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L6646-L6671)
 - [mvcc.sgml#table-level-locks](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1039)

@@ -2,6 +2,28 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY blocker matrix
+
+- Reviewed the `### All operations that can block CREATE INDEX CONCURRENTLY`
+  section of [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-checked the four blocking points: initial
+  `ShareUpdateExclusiveLock` acquisition, the two `WaitForLockers(ShareLock)`
+  writer waits, and the final same-database old-snapshot
+  `WaitForOlderSnapshots` wait.
+- Fixed the Wait 3 boundary wording: it collects an initial same-database VXID
+  list filtered by advertised `xmin` and vacuum flags; later rechecks remove
+  entries from that list but do not add new wait targets.
+- Corrected the `pg_dump` worked example: a same-database dump can block Wait 3
+  only when it is included by that VXID/`xmin` filter. Starting after the
+  reference snapshot is not itself the source-level skip condition.
+- Added portal/cursor snapshot citations for the READ COMMITTED
+  idle-in-transaction case and updated Context Reviewed, Evidence Map, and
+  Source References. `verified_by_agent` remains `not yet` because this was a
+  scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] review v12 | CREATE INDEX CONCURRENTLY open-question section
 
 - Reviewed the `## Open Questions` section of [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, per user request.
