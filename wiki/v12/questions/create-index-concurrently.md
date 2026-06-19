@@ -926,8 +926,9 @@ A backend's `lxid` is assigned in `StartTransaction`
 ([xact.c#StartTransaction-lxid](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1994))
 and cleared, together with `pgxact->xmin`, in `ProcArrayEndTransaction`
 ([procarray.c#ProcArrayEndTransaction](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L456)).
-Because the local transaction id and the advertised xmin are set and cleared as
-a pair, an ordinary backend that is *not* in a transaction has both an invalid
+Because an ordinary backend only advertises an xmin from within a transaction,
+and that xmin is cleared together with the local transaction id when the
+transaction ends, a backend that is *not* in a transaction has both an invalid
 `lxid` and a zero xmin — there is no normal "old xmin but no transaction" state
 for the wait to miss. The only two code paths that set `pgxact->xmin` *outside*
 a normal transaction are the physical-walsender feedback path (excluded by item
@@ -1417,7 +1418,7 @@ the drop is retryable
 | The slot xmin globals are consulted by `GetOldestXmin` and `GetSnapshotData` (`RecentGlobalXmin`), not by `WaitForOlderSnapshots` | [procarray.c:1425-1441](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1425-L1441), [procarray.c:1727-1741](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1727-L1741) |
 | A physical walsender sets its own `MyPgXact->xmin` from `hot_standby_feedback` (no slot) or clears it and reserves via the slot | [walsender.c:2026-2065](../../../raw/postgres-12/src/backend/replication/walsender.c#L2026-L2065), [walsender.c:1872-1909](../../../raw/postgres-12/src/backend/replication/walsender.c#L1872-L1909) |
 | A physical walsender connects to no database (`proc->databaseId` stays `InvalidOid`); `GetCurrentVirtualXIDs`'s same-db test lacks `GetOldestXmin`'s "always include WalSender" clause, so it is filtered by database | [postinit.c:841-867](../../../raw/postgres-12/src/backend/utils/init/postinit.c#L841-L867), [proc.c:394-396](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L394-L396), [procarray.c:2520](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520), [procarray.c:1348-1350](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1348-L1350) |
-| Wait 3 records a backend only with a valid VXID; `lxid` and `xmin` are set in `StartTransaction` and cleared together in `ProcArrayEndTransaction`, so an idle (non-transaction) backend has neither | [procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539), [lock.h:69-82](../../../raw/postgres-12/src/include/storage/lock.h#L69-L82), [xact.c:1981-1994](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1994), [procarray.c:433-456](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L456) |
+| Wait 3 records a backend only with a valid VXID; `lxid` is set in `StartTransaction`, and `lxid` and `xmin` are cleared together in `ProcArrayEndTransaction`, so an idle (non-transaction) backend has neither | [procarray.c:2537-2539](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539), [lock.h:69-82](../../../raw/postgres-12/src/include/storage/lock.h#L69-L82), [xact.c:1981-1994](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1994), [procarray.c:433-456](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L456) |
 | A logical walsender sets `MyPgXact->xmin` only inside the `REPEATABLE READ` initial-snapshot transaction (slot creation/export) and connects to a real database; routine streaming uses the slot's catalog_xmin global | [snapbuild.c:543-583](../../../raw/postgres-12/src/backend/replication/logical/snapbuild.c#L543-L583), [postmaster.c:2103-2124](../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L2103-L2124) |
 
 ## Open Questions

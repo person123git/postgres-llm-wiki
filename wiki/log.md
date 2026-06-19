@@ -2,6 +2,75 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY walsender / replication-slot Wait 3 section
+
+- Reviewed the `### Can walsenders or replication-slot xmin holders appear in
+  the Wait 3 set?` section of [How CREATE INDEX CONCURRENTLY Is Implemented in
+  PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md)
+  against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, per user request.
+- Re-verified every claim/citation across the three points and the exception:
+  Point 1 — slot xmin is a global aggregated by
+  `ReplicationSlotsComputeRequiredXmin`
+  ([slot.c:701-742](../raw/postgres-12/src/backend/replication/slot.c#L701-L742))
+  into `procArray->replication_slot_xmin`/`replication_slot_catalog_xmin`
+  ([procarray.c:90-93](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L90-L93),
+  [procarray.c:2982-2992](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2982-L2992)),
+  which `GetCurrentVirtualXIDs` never reads (loop reads only `pgxact->xmin`,
+  [procarray.c:2520-2523](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520-L2523))
+  whereas `GetOldestXmin`
+  ([procarray.c:1425-1441](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1425-L1441))
+  and `GetSnapshotData`'s `RecentGlobalXmin`
+  ([procarray.c:1727-1741](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1727-L1741))
+  do. Point 2 — physical walsender writes `MyPgXact->xmin` from feedback
+  ([walsender.c:2026-2065](../raw/postgres-12/src/backend/replication/walsender.c#L2026-L2065),
+  comment "so that the xmin will be taken into account by GetOldestXmin") or
+  clears it under a slot
+  ([walsender.c:1872-1909](../raw/postgres-12/src/backend/replication/walsender.c#L1872-L1909)),
+  but connects to no database (`InitPostgres` early return for
+  `am_walsender && !am_db_walsender`,
+  [postinit.c:841-867](../raw/postgres-12/src/backend/utils/init/postinit.c#L841-L867);
+  `databaseId = InvalidOid` from
+  [proc.c:394-396](../raw/postgres-12/src/backend/storage/lmgr/proc.c#L394-L396)),
+  and `GetCurrentVirtualXIDs`'s same-db test
+  ([procarray.c:2520](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2520))
+  lacks `GetOldestXmin`'s `|| proc->databaseId == 0 /* always include WalSender
+  */` clause
+  ([procarray.c:1348-1350](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1348-L1350)).
+  Point 3 — the valid-VXID gate
+  ([procarray.c:2537-2539](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2537-L2539),
+  [lock.h:69-82](../raw/postgres-12/src/include/storage/lock.h#L69-L82)) plus the
+  `lxid`/`xmin` clear in `ProcArrayEndTransaction`
+  ([procarray.c:433-456](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L433-L456)).
+  Exception — logical walsender's `SnapBuildInitialSnapshot` runs inside a
+  `REPEATABLE READ` txn (asserts `XACT_REPEATABLE_READ`, sets
+  `MyPgXact->xmin = snap->xmin`,
+  [snapbuild.c:543-583](../raw/postgres-12/src/backend/replication/logical/snapbuild.c#L543-L583))
+  and connects to a real database (`replication=database` sets
+  `am_db_walsender`,
+  [postmaster.c:2103-2124](../raw/postgres-12/src/backend/postmaster/postmaster.c#L2103-L2124)),
+  so it is an ordinary in-database snapshot holder. Confirmed exhaustiveness by
+  grepping all `(MyPgXact|pgxact)->xmin =` setters: every meaningful-value
+  setter outside the physical-walsender feedback path is in-transaction
+  (`GetSnapshotData`/imported/restored snapshot installs and `SnapshotResetXmin`
+  in `procarray.c`/`snapmgr.c`, and `SnapBuildInitialSnapshot`'s REPEATABLE READ
+  txn). The "No — not through replication's xmin-holdback machinery" conclusion
+  holds.
+- Fixed one precision error shared by the body and Evidence Map: both said
+  `lxid` and `xmin` "are set ... as a pair" / "are set in `StartTransaction`,"
+  but `StartTransaction` ([xact.c:1981-1994](../raw/postgres-12/src/backend/access/transam/xact.c#L1981-L1994))
+  sets only `lxid`; `xmin` is set when a snapshot is taken (`GetSnapshotData`),
+  not in `StartTransaction`. Reworded to "an ordinary backend only advertises an
+  xmin from within a transaction, and that xmin is cleared together with the
+  local transaction id when the transaction ends," and the Evidence Map row to
+  "`lxid` is set in `StartTransaction`, and `lxid` and `xmin` are cleared
+  together in `ProcArrayEndTransaction`." The load-bearing clear-together fact is
+  unchanged.
+- Updated `wiki/versions.md` Coverage Notes. `verified_by_agent` stays `not yet`
+  because this was a scoped section review, not a full-page re-verification;
+  title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY prepared-transaction writer-wait section
 
 - Reviewed the `### Is skipping prepared transactions in the writer waits safe?`

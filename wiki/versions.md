@@ -13,6 +13,26 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-19: reviewed the `### Can walsenders or replication-slot xmin holders
+  appear in the Wait 3 set?` section of the PostgreSQL 12 `CREATE INDEX
+  CONCURRENTLY` page against pinned commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-verified the three independent
+  reasons walsenders/slots stay out of `WaitForOlderSnapshots`: (1) slot xmin is
+  a global `procArray->replication_slot_xmin`/`replication_slot_catalog_xmin`
+  that `GetCurrentVirtualXIDs` never reads (only `GetOldestXmin` and
+  `GetSnapshotData`'s `RecentGlobalXmin` do); (2) a physical walsender connects
+  to no database and `GetCurrentVirtualXIDs` lacks `GetOldestXmin`'s "always
+  include WalSender" clause; (3) the valid-VXID gate plus the `lxid`/`xmin` clear
+  in `ProcArrayEndTransaction`. Confirmed the only in-set walsender is a logical
+  one mid-`REPEATABLE READ` snapshot export (`SnapBuildInitialSnapshot`), an
+  ordinary in-database holder. Verified xmin-setter exhaustiveness by grepping
+  all `(MyPgXact|pgxact)->xmin =` sites. Conclusion holds. Fixed one precision
+  error shared by the body and an Evidence Map row: `xmin` is not "set in
+  `StartTransaction`" (only `lxid` is; `xmin` is set at snapshot time), so
+  reworded to state that an ordinary backend only advertises xmin from within a
+  transaction and `lxid`/`xmin` are cleared together at transaction end.
+  `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
 - 2026-06-19: reviewed the `### Is skipping prepared transactions in the writer
   waits safe?` section of the PostgreSQL 12 `CREATE INDEX CONCURRENTLY` page
   against pinned commit `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-verified
