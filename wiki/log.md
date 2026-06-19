@@ -2,6 +2,36 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-19] open-question v18 | RLS first open question — no benchmark in pinned checkout
+
+- Investigated the first open question on [Row-Level Security (RLS) in
+  PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since
+  PostgreSQL 12 (unverified)](v18/questions/row-level-security-rls.md) against
+  pinned `raw/postgres-18/` commit
+  `6cb307251c5c6261286c1566496920976640108e`: whether the checkout contains a
+  benchmark that quantifies RLS overhead by policy/role/partition count or
+  predicate shape.
+- Conclusion: it does not. The tree's only benchmark/performance surfaces
+  (`src/bin/pgbench/`, `contrib/intarray/bench/`,
+  `src/interfaces/ecpg/test/performance/`, `src/test/modules/test_json_parser/`)
+  have no row-security or policy references; every whole-tree `benchmark` match
+  is unrelated to RLS (the `prepqual.c` hit is about TPC benchmarks needing
+  OR-normalization); there are no RLS isolation specs; and `rowsecurity.sql` and
+  `test_rls_hooks` verify only plan/qual shape with
+  `EXPLAIN (COSTS OFF)`/`(VERBOSE, COSTS OFF)` — no `\timing`,
+  `EXPLAIN (ANALYZE)`, or `pg_sleep`, and `generate_series` loads at most ~100
+  data rows. The only RLS performance statements in the checkout are qualitative
+  docs guidance in `ddl.sgml` (the "best-performing case"; the row-share-lock
+  "performance problem").
+- Rewrote the close of `### Scalability and Performance Issues` to state the
+  qualitative guidance and the verified absence of a benchmark, added a
+  `## Context Reviewed` search-method bullet and an `## Evidence Map` row, and
+  removed the resolved first `## Open Questions` bullet (the provenance and
+  minor-release-label questions remain open).
+- `verified_by_agent` stays `not yet` because this was a targeted open-question
+  investigation, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] review v12 | CREATE INDEX CONCURRENTLY failure-scenarios and test-coverage sections
 
 - Reviewed the `### Failure scenarios and the outcome on the table` section

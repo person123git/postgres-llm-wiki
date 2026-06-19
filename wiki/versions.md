@@ -13,6 +13,19 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-19: investigated the first `## Open Questions` item on the PostgreSQL
+  18 Row-Level Security page against pinned commit
+  `6cb307251c5c6261286c1566496920976640108e` — whether the checkout has a
+  benchmark that quantifies RLS overhead by policy/role/partition count or
+  predicate shape. Confirmed it does not: the tree's benchmark/perf tooling
+  (`pgbench`, `contrib/intarray/bench`, the ecpg and JSON-parser perf tests) has
+  no RLS scenario, the RLS regression and hook tests use only
+  `EXPLAIN (COSTS OFF)` plan-shape checks (no timing primitives), and the docs
+  give only qualitative guidance. Expanded `### Scalability and Performance
+  Issues`, added Context Reviewed and Evidence Map entries, and removed the
+  resolved open-question bullet. `verified_by_agent` stays `not yet` because
+  this was a targeted open-question investigation, not a full-page
+  re-verification.
 - 2026-06-19: reviewed the `### Can walsenders or replication-slot xmin holders
   appear in the Wait 3 set?` section of the PostgreSQL 12 `CREATE INDEX
   CONCURRENTLY` page against pinned commit
