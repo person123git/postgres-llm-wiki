@@ -1183,3 +1183,25 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - `verified_by_agent` remains `not yet` because this was a scoped section review,
   not a full-page re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY step-by-step implementation
+
+- Reviewed the `### Step-by-step implementation` section of [How CREATE INDEX
+  CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed the four-transaction outline, two heap scans, and three waits against
+  the `DefineIndex` concurrent branch, `index_concurrently_build`,
+  `validate_index`, `WaitForOlderSnapshots`, and the command-end
+  `finish_xact_command` commit path.
+- Tightened wording and citations: Transaction 1 now says the index is cataloged
+  but not built yet (`INDEX_CREATE_SKIP_BUILD`), the post-commit HOT-safety
+  sentence cites the direct comments, Wait 2 mirrors the "read-only for updates"
+  source wording, and Wait 3 describes the actual advertised-`xmin` / VXID filter
+  used by `GetCurrentVirtualXIDs`.
+- Updated the Evidence Map and Source References for the step-by-step phase
+  boundaries, skip-build path, HOT-safety comments, Wait 3 filter, and final
+  command-end commit.
+- `verified_by_agent` remains `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

@@ -136,22 +136,29 @@ The transitions are applied by `index_set_state_flags` using a
 
 ### Step-by-step implementation
 
-The concurrent branch of `DefineIndex` runs as four transactions. The commit /
-start boundaries are the `CommitTransactionCommand()` / `StartTransactionCommand()`
-pairs in the source.
+The concurrent branch of `DefineIndex` runs as four transactions. The first
+three boundaries are the explicit `CommitTransactionCommand()` /
+`StartTransactionCommand()` pairs inside `DefineIndex`; the fourth transaction
+returns to the normal command-end commit path after `DefineIndex` returns
+([indexcmds.c#concurrent-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1472),
+[postgres.c#finish_xact_command](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578)).
 
 **Transaction 1 — create the catalog entry (no build).** `index_create` makes
 the `pg_index`/`pg_class` rows with `INDEX_CREATE_CONCURRENT` and
-`INDEX_CREATE_SKIP_BUILD`, so the index has a catalog identity but no data, and
-is marked not-ready/not-valid
+`INDEX_CREATE_SKIP_BUILD`, so the index has a catalog identity but is not built
+yet, and is marked not-ready/not-valid
 ([indexcmds.c#flags](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L974-L986),
-[indexcmds.c#index_create-call](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1005-L1014)).
+[indexcmds.c#index_create-call](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1005-L1014),
+[index.c#index_create-skip-build](../../../raw/postgres-12/src/backend/catalog/index.c#L1198-L1222)).
 Before committing, CIC takes a **session-level** `ShareUpdateExclusiveLock` on
 the table so it survives across the upcoming commits and nobody can drop the
 table or index
 ([indexcmds.c#session-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1320)).
-The commit makes the empty index visible so other backends stop making
-incompatible HOT updates.
+The commit makes the cataloged-but-unbuilt index visible, so future transactions
+include it in HOT-safety decisions and cannot make new incompatible HOT chains
+for this index
+([indexcmds.c#catalog-visible-hot-safety](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1295-L1304),
+[indexcmds.c#post-wait1-hot-safety](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1363)).
 
 **Wait 1**, then **Transaction 2 — first scan, build the index.** CIC waits for
 every transaction that could still have the table open without the new index in
@@ -163,11 +170,12 @@ the heap, builds the index, and sets `indisready = true`
 [index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439)).
 This scan indexes only tuples valid as of the scan's snapshot; rows written by
 still-running or later transactions are handled differently (see below). The
-commit publishes `indisready` so new writers start maintaining the index.
+following commit makes the `indisready` update visible, so new writers start
+maintaining the index.
 
 **Wait 2**, then **Transaction 3 — second scan, validate.** CIC waits again with
-`WaitForLockers(..., ShareLock, ...)` so that every in-flight transaction now
-sees the index as ready-for-inserts
+`WaitForLockers(..., ShareLock, ...)` until no transaction can still have the
+table open with the index marked read-only for updates
 ([indexcmds.c#wait2](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1382-L1389)).
 It registers a **reference snapshot**, then calls `validate_index`
 ([indexcmds.c#validate](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1391-L1412)).
@@ -182,16 +190,21 @@ runs that would otherwise wait on it
 ([indexcmds.c#drop-snapshot](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1414-L1424)).
 
 **Wait 3**, then **Transaction 4 — mark valid.** In a fresh transaction (so no
-snapshot is held), CIC calls `WaitForOlderSnapshots(limitXmin, true)` to wait
-out any transaction whose snapshot predates the reference snapshot and could
-therefore expect to see rows the index does not contain
-([indexcmds.c#wait3](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1448)).
+snapshot is held), CIC calls `WaitForOlderSnapshots(limitXmin, true)`. That
+helper gathers same-database VXIDs whose advertised `xmin` is at or before the
+saved `limitXmin` and waits for them, excluding autovacuum/lazy-VACUUM backends;
+those are the transactions that could have snapshots old enough to expect rows
+the index does not contain
+([indexcmds.c#wait3](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1448),
+[indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402),
+[procarray.c#GetCurrentVirtualXIDs](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540)).
 Then it sets `indisvalid = true`, sends a relcache invalidation on the parent
 table so cached plans get re-planned to use the new index, and releases the
 session lock
 ([indexcmds.c#set-valid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1450-L1472)).
-This last transaction's commit happens in the caller when the utility command
-finishes.
+This last transaction's commit happens when the surrounding utility command
+finishes
+([postgres.c#finish_xact_command](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578)).
 
 The canonical narrative of why this ordering is correct is in the
 `validate_index` header comment
@@ -1171,6 +1184,8 @@ the drop is retryable
   `index_create`/`UpdateIndexRelation`, `BuildIndexInfo`,
   `index_concurrently_build`, `validate_index`, and `index_set_state_flags` in
   `src/backend/catalog/index.c`.
+- Surrounding command-end commit path in `finish_xact_command` in
+  `src/backend/tcop/postgres.c`.
 - `WaitForLockers`/`WaitForLockersMultiple` in
   `src/backend/storage/lmgr/lmgr.c`; the `LockConflicts` table and self-conflict
   note in `src/backend/storage/lmgr/lock.c`; lock-mode definitions in
@@ -1283,10 +1298,13 @@ the drop is retryable
 | `pg_index` state flags mean valid-for-queries / ready-for-inserts / alive-at-all; initial CIC row is live but not ready or valid | [pg_index.h:40-43](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43), [index.c:612-615](../../../raw/postgres-12/src/backend/catalog/index.c#L612-L615), [index.c:990-996](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996) |
 | `indislive` controls whether backends may touch the index at all and whether it participates in HOT-safety decisions | [relcache.c:4388-4395](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395), [relcache.c:4861-4870](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870) |
 | `indisready` gates executor insertion into an index; `indisvalid` gates planner use | [index.c:2337-2339](../../../raw/postgres-12/src/backend/catalog/index.c#L2337-L2339), [execIndexing.c:328-332](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L328-L332), [plancat.c:199-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210) |
+| CIC uses four transactions; the first three boundaries are explicit in `DefineIndex`, and the final one commits at utility command end | [indexcmds.c:1307-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1472), [postgres.c:2569-2578](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578) |
+| Transaction 1 creates catalog rows and skips the AM build until a later phase | [indexcmds.c:974-986](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L974-L986), [indexcmds.c:1005-1014](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1005-L1014), [index.c:1198-1222](../../../raw/postgres-12/src/backend/catalog/index.c#L1198-L1222) |
+| Catalog visibility plus Wait 1 makes future transactions include the new index in HOT-safety decisions before it is ready for inserts | [indexcmds.c:1295-1304](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1295-L1304), [indexcmds.c:1348-1363](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1363) |
 | Session lock taken before first commit; released at end | [indexcmds.c:1307-1320](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1320), [indexcmds.c:1465-1468](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1465-L1468) |
 | Wait 1 / build / set indisready (txn 2) | [indexcmds.c:1328-1379](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1379), [index.c:1399-1439](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439) |
 | Wait 2 / reference snapshot / validate (txn 3) | [indexcmds.c:1382-1424](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1382-L1424), [index.c:3176-3298](../../../raw/postgres-12/src/backend/catalog/index.c#L3176-L3298) |
-| Wait 3 / set indisvalid / relcache inval (txn 4) | [indexcmds.c:1437-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1472) |
+| Wait 3 gathers same-database VXIDs with advertised `xmin <= limitXmin`, excluding autovacuum/lazy VACUUM, then sets `indisvalid` and invalidates the heap relcache | [indexcmds.c:339-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402), [procarray.c:2471-2540](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540), [indexcmds.c:1437-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1472) |
 | `index_set_state_flags` is non-transactional in-place | [index.c:3331-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403) |
 | `WaitForLockers` waits on VXIDs, takes no lock; `ShareLock` conflicts with `RowExclusiveLock` | [lmgr.c:850-949](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949), [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
 | `ShareUpdateExclusiveLock` conflict set and self-conflict | [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81), [lock.c:194-196](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L194-L196) |
@@ -1364,7 +1382,9 @@ reproduction in this environment.
 
 - [indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L1473)
 - [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)
+- [postgres.c#finish_xact_command](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578)
 - [pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)
+- [index.c#index_create-skip-build](../../../raw/postgres-12/src/backend/catalog/index.c#L1198-L1222)
 - [index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439)
 - [index.c#BuildIndexInfo](../../../raw/postgres-12/src/backend/catalog/index.c#L2315-L2344)
 - [index.c#index_build](../../../raw/postgres-12/src/backend/catalog/index.c#L2824-L2952)
