@@ -334,14 +334,25 @@ Two distinct lock layers act on the **heap table**:
 
 1. A **transaction-level** `ShareUpdateExclusiveLock`, acquired by `table_open`
    at the start of the command and re-acquired inside `index_concurrently_build`
-   and `validate_index`; it is released at each `CommitTransactionCommand`.
+   and `validate_index`; standard transaction locks are released at main
+   transaction commit
+   ([indexcmds.c#initial-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L550-L564),
+   [index.c#index_concurrently_build-locks](../../../raw/postgres-12/src/backend/catalog/index.c#L1407-L1414),
+   [index.c#validate_index-locks](../../../raw/postgres-12/src/backend/catalog/index.c#L3203-L3206),
+   [proc.c#ProcReleaseLocks](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798)).
 2. A **session-level** `ShareUpdateExclusiveLock`
    (`LockRelationIdForSession`) that spans the gaps between transactions so the
    table cannot be dropped mid-build; released by `UnlockRelationIdForSession`
-   at the very end.
+   at the very end
+   ([indexcmds.c#session-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1319),
+   [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L389),
+   [indexcmds.c#unlock-session-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1465-L1468)).
 
 `ShareUpdateExclusiveLock` is the same level `VACUUM (non-FULL)` and `ANALYZE`
-use ([lockdefs.h:36-46](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46)).
+use. The command examples below come from v12's lock-mode definitions and lock
+documentation
+([lockdefs.h:36-46](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46),
+[mvcc.sgml#table-level-locks](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1039)).
 Its conflict row shows what it lets through and what it blocks
 ([lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)):
 
@@ -352,7 +363,9 @@ Its conflict row shows what it lets through and what it blocks
 | `RowExclusiveLock` (`INSERT`/`UPDATE`/`DELETE`) | No — **writes continue** |
 | `ShareUpdateExclusiveLock` (another CIC, `VACUUM`, `ANALYZE`) | **Yes** — only one at a time |
 | `ShareLock` (plain `CREATE INDEX`) | **Yes** |
-| `ShareRowExclusiveLock` / `ExclusiveLock` / `AccessExclusiveLock` (most `ALTER TABLE`, `DROP`) | **Yes** — schema changes blocked |
+| `ShareRowExclusiveLock` (`CREATE TRIGGER`, some `ALTER TABLE`) | **Yes** |
+| `ExclusiveLock` (`REFRESH MATERIALIZED VIEW CONCURRENTLY`) | **Yes** |
+| `AccessExclusiveLock` (`DROP TABLE`, `TRUNCATE`, `VACUUM FULL`, many `ALTER TABLE` / `ALTER INDEX` forms) | **Yes** — schema changes blocked |
 
 Because `ShareUpdateExclusiveLock` is **self-conflicting**, only one concurrent
 build can run on a given table at a time
@@ -362,32 +375,39 @@ The three "waits" are **not** table locks. `WaitForLockers` does not acquire any
 lock on the table; it reads the current set of conflicting lock holders with
 `GetLockConflicts` and then sleeps on each one's virtual transaction ID until it
 ends. New transactions that start after the holder list is taken are not waited
-for ([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)).
-Waits 1 and 2 pass `ShareLock`, which conflicts with `RowExclusiveLock`, so they
-wait out all current **writers**
-([lock.c#ShareLock-row](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86)).
+for, and lock waiters are not reported
+([lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949),
+[lock.c#GetLockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2821)).
+Waits 1 and 2 pass `ShareLock`; the `ShareLock` conflict row includes
+`RowExclusiveLock`, and the surrounding `DefineIndex` comments describe these
+waits as waiting out transactions with the table open for write / with the index
+still marked read-only for updates
+([lock.c#ShareLock-row](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86),
+[indexcmds.c#wait1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1346),
+[indexcmds.c#wait2](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1381-L1389)).
 Wait 3 (`WaitForOlderSnapshots`) instead waits on transactions holding old
 snapshots, excluding autovacuum workers and lazy `VACUUM` (which cannot be
 confused by missing index entries), but it does **not** exclude other CIC
 operations
-([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)).
+([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402)).
 
 End-to-end table lock timeline:
 
-| Phase | Table (heap) locks | Wait performed | Catalog effect |
-|---|---|---|---|
-| Txn 1: create catalog row | Txn `ShareUpdateExclusiveLock` + session `ShareUpdateExclusiveLock` taken ([indexcmds.c:563-564](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L563-L564), [:1316](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1316)) | — | `indislive=t`, `indisready=f`, `indisvalid=f` |
-| (commit 1) | Txn lock released; session lock held | — | empty index now visible |
-| Txn 2: build | Heap `ShareUpdateExclusiveLock`; index `RowExclusiveLock` ([index.c:1411-1414](../../../raw/postgres-12/src/backend/catalog/index.c#L1411-L1414)) | Wait 1: `WaitForLockers(ShareLock)` waits out writers | first scan; then `indisready=t` |
-| (commit 2) | Txn lock released; session lock held | — | `indisready` visible |
-| Txn 3: validate | Heap `ShareUpdateExclusiveLock`; index `RowExclusiveLock` ([index.c:3204-3206](../../../raw/postgres-12/src/backend/catalog/index.c#L3204-L3206)) | Wait 2: `WaitForLockers(ShareLock)` waits out writers | second scan inserts missing tuples |
-| (commit 3) | Txn lock released; session lock held | — | reference snapshot dropped |
-| Txn 4: mark valid | Session `ShareUpdateExclusiveLock` still held | Wait 3: `WaitForOlderSnapshots(limitXmin)` | `indisvalid=t`; relcache inval; session lock released |
+| Phase | Heap/table lock state | Other relation locks | Wait performed | Catalog effect |
+|---|---|---|---|---|
+| Txn 1: create catalog row | Txn `ShareUpdateExclusiveLock` from command start; session `ShareUpdateExclusiveLock` taken before commit ([indexcmds.c#initial-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L550-L564), [indexcmds.c#session-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1319)) | — | — | `indislive=t`, `indisready=f`, `indisvalid=f` |
+| (commit 1) | Txn lock released; session lock held | — | — | cataloged-but-unbuilt index now visible |
+| Txn 2: wait, then build | During Wait 1: session lock only; during build: heap `ShareUpdateExclusiveLock` ([index.c#index_concurrently_build-locks](../../../raw/postgres-12/src/backend/catalog/index.c#L1407-L1414)) | Target index `RowExclusiveLock` during build | Wait 1: `WaitForLockers(ShareLock)` waits on current conflicting holders, notably writers | first scan; then `indisready=t` |
+| (commit 2) | Txn lock released; session lock held | — | — | `indisready` visible |
+| Txn 3: wait, then validate | During Wait 2: session lock only; during validation: heap `ShareUpdateExclusiveLock` ([index.c#validate_index-locks](../../../raw/postgres-12/src/backend/catalog/index.c#L3203-L3206)) | Target index `RowExclusiveLock` during validation | Wait 2: `WaitForLockers(ShareLock)` waits on current conflicting holders, notably writers | second scan inserts missing tuples |
+| (commit 3) | Txn lock released; session lock held | — | — | reference snapshot dropped |
+| Txn 4: mark valid | Session `ShareUpdateExclusiveLock` still held; no heap transaction lock is opened in this phase ([indexcmds.c#set-valid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1446-L1468)) | `pg_index` is opened `RowExclusiveLock` inside `index_set_state_flags` ([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)) | Wait 3: `WaitForOlderSnapshots(limitXmin)` | `indisvalid=t`; relcache inval; session lock released |
 
 Throughout, the **only** lock the table ever carries is
 `ShareUpdateExclusiveLock` (transaction-level within each phase, session-level
 across the gaps). DML conflicts with none of these, which is the whole point of
-CIC.
+CIC
+([lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L86)).
 
 ### How concurrent index builds interact with each other
 
@@ -1323,14 +1343,14 @@ the drop is retryable
 | CIC uses four transactions; the first three boundaries are explicit in `DefineIndex`, and the final one commits at utility command end | [indexcmds.c:1307-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1472), [postgres.c:2569-2578](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578) |
 | Transaction 1 creates catalog rows and skips the AM build until a later phase | [indexcmds.c:974-986](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L974-L986), [indexcmds.c:1005-1014](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1005-L1014), [index.c:1198-1222](../../../raw/postgres-12/src/backend/catalog/index.c#L1198-L1222) |
 | Catalog visibility plus Wait 1 makes future transactions include the new index in HOT-safety decisions before it is ready for inserts | [indexcmds.c:1295-1304](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1295-L1304), [indexcmds.c:1348-1363](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1348-L1363) |
-| Session lock taken before first commit; released at end | [indexcmds.c:1307-1320](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1320), [indexcmds.c:1465-1468](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1465-L1468) |
+| Transaction-level heap locks are acquired at command start/build/validate and released at commit; the session-level heap lock spans transaction gaps and is released at the end | [indexcmds.c:550-564](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L550-L564), [index.c:1407-1414](../../../raw/postgres-12/src/backend/catalog/index.c#L1407-L1414), [index.c:3203-3206](../../../raw/postgres-12/src/backend/catalog/index.c#L3203-L3206), [proc.c:772-798](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798), [indexcmds.c:1307-1319](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1319), [lmgr.c:356-389](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L389), [indexcmds.c:1465-1468](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1465-L1468) |
 | Wait 1 / build / set indisready (txn 2) | [indexcmds.c:1328-1379](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1379), [index.c:1399-1439](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439) |
 | Wait 2 / reference snapshot / validate (txn 3) | [indexcmds.c:1382-1424](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1382-L1424), [index.c:3176-3298](../../../raw/postgres-12/src/backend/catalog/index.c#L3176-L3298) |
-| Wait 3 gathers same-database VXIDs with advertised `xmin <= limitXmin`, excluding autovacuum/lazy VACUUM, then sets `indisvalid` and invalidates the heap relcache | [indexcmds.c:339-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402), [procarray.c:2471-2540](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540), [indexcmds.c:1437-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1472) |
+| Wait 3 gathers same-database VXIDs with advertised `xmin <= limitXmin`, excluding autovacuum/lazy VACUUM, then sets `indisvalid` and invalidates the heap relcache | [indexcmds.c:307-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402), [procarray.c:2471-2540](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540), [indexcmds.c:1437-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1437-L1472) |
 | `index_set_state_flags` is non-transactional in-place | [index.c:3331-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403) |
-| `WaitForLockers` waits on VXIDs, takes no lock; `ShareLock` conflicts with `RowExclusiveLock` | [lmgr.c:850-949](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949), [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
-| `ShareUpdateExclusiveLock` conflict set and self-conflict | [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81), [lock.c:194-196](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L194-L196) |
-| Wait 3 excludes autovacuum and lazy VACUUM only | [indexcmds.c:339-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402) |
+| `WaitForLockers` waits on current holders' VXIDs, takes no table lock, and does not report lock waiters; `ShareLock` conflicts with `RowExclusiveLock` | [lmgr.c:850-949](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949), [lock.c:2804-2821](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2804-L2821), [lock.c:83-86](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) |
+| `ShareUpdateExclusiveLock` allows `AccessShareLock`, `RowShareLock`, and `RowExclusiveLock`, conflicts with schema-maintenance lock modes, and is self-conflicting | [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81), [lock.c:194-196](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L194-L196), [lockdefs.h:36-46](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46), [mvcc.sgml:890-1039](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1039) |
+| Wait 3 excludes autovacuum and lazy VACUUM only | [indexcmds.c:307-402](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402) |
 | Same-table concurrent index builds serialize on self-conflicting `ShareUpdateExclusiveLock` | [indexcmds.c:563-564](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L563-L564), [indexcmds.c:1307-1316](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1316), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81), [ref/create_index.sgml:614-621](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L614-L621) |
 | Different-table concurrent builders can meet in the same-database old-snapshot wait, while Waits 1/2 remain heap-lock-tag-local | [indexcmds.c:1328-1346](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1346), [indexcmds.c:1381-1389](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1381-L1389), [indexcmds.c:339-348](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L348), [procarray.c:2471-2540](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L2471-L2540) |
 | CIC clears its own advertised xmin before Wait 3 to avoid inter-CIC deadlock | [indexcmds.c:1414-1448](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1414-L1448) |
@@ -1403,7 +1423,7 @@ reproduction in this environment.
 ## Source References
 
 - [indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L1473)
-- [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)
+- [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402)
 - [postgres.c#finish_xact_command](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578)
 - [pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)
 - [index.c#index_create-skip-build](../../../raw/postgres-12/src/backend/catalog/index.c#L1198-L1222)
@@ -1463,7 +1483,7 @@ reproduction in this environment.
 - [reinit.c#ResetUnloggedRelations](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46)
 - [tuplesort.c#unique-violation](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4040-L4056)
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
-- [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L383)
+- [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L389)
 - [proc.c#ProcReleaseLocks](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798)
 - [create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1436)
 - [multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)

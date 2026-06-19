@@ -1231,3 +1231,31 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   remains `not yet` because this was a scoped section review, not a full-page
   re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY table lock timeline
+
+- Reviewed the `### All steps and locks required on the table` section of [How
+  CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed the lock model: the heap table uses transaction-level
+  `ShareUpdateExclusiveLock` at command start/build/validate, plus a
+  session-level `ShareUpdateExclusiveLock` across transaction gaps; standard
+  transaction locks release at commit while the session lock persists until
+  `UnlockRelationIdForSession`.
+- Tightened the Wait 1/Wait 2 wording: `WaitForLockers` does not acquire a
+  table lock, reads current conflicting holders through `GetLockConflicts`, skips
+  lock waiters, and waits on VXIDs; the source comments describe the target as
+  transactions with the table open for write / with the index still read-only for
+  updates.
+- Fixed the timeline table so Wait 1 and Wait 2 happen before the build/validate
+  heap `ShareUpdateExclusiveLock` reacquisition, separated target-index
+  `RowExclusiveLock` from heap locks, and noted that Txn 4 does not open a heap
+  transaction lock before setting `indisvalid`.
+- Split the stronger-lock examples (`ShareRowExclusiveLock`, `ExclusiveLock`,
+  `AccessExclusiveLock`) and added the v12 lock docs citation for command
+  examples.
+- Updated the Evidence Map and Source References. `verified_by_agent` remains
+  `not yet` because this was a scoped section review, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
