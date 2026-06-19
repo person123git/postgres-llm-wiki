@@ -100,18 +100,33 @@ user-opened transaction.
 
 ### The three pg_index state flags
 
-CIC is driven by three boolean flags on the index's `pg_index` row, all set by
-`UpdateIndexRelation`
-([index.c#UpdateIndexRelation](../../../raw/postgres-12/src/backend/catalog/index.c#L612-L615)):
+CIC is driven by three boolean flags on the index's `pg_index` row. The catalog
+declares them as "valid for queries", "ready for inserts", and "alive at all";
+the initial row is written by `UpdateIndexRelation`
+([pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43),
+[index.c#UpdateIndexRelation](../../../raw/postgres-12/src/backend/catalog/index.c#L612-L615)):
 
-- `indislive` — the index exists and must be maintained. CIC sets this `true`
-  from the start.
-- `indisready` — new tuples (from `INSERT`/non-HOT `UPDATE`) must be inserted
-  into the index.
-- `indisvalid` — the planner may use the index to answer queries.
+- `indislive` — backends may touch the index at all. `RelationGetIndexList`
+  omits indexes where this is false, which keeps them out of searching,
+  insertion, and HOT-safety decisions; CIC sets this `true` from the start so
+  new transactions examine the index for HOT-safety even before it is ready for
+  inserts
+  ([relcache.c#RelationGetIndexList-live](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395),
+  [relcache.c#HOT-safety-live-indexes](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870)).
+- `indisready` — new tuples (from `INSERT` and non-HOT `UPDATE`) should be
+  inserted into the index. `BuildIndexInfo` copies it into
+  `ii_ReadyForInserts`, and `ExecInsertIndexTuples` skips indexes where that
+  flag is false
+  ([index.c#BuildIndexInfo-ready](../../../raw/postgres-12/src/backend/catalog/index.c#L2337-L2339),
+  [execIndexing.c#ready-for-inserts](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L328-L332)).
+- `indisvalid` — the planner may use the index to answer queries; `plancat.c`
+  ignores invalid indexes for planner paths while noting that the executor can
+  still insert into invalid indexes if `indisready` is true
+  ([plancat.c#invalid-index-skip](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210)).
 
-A normal `CREATE INDEX` is born with all three `true`. CIC instead creates the
-catalog row with `indisvalid = false` and `indisready = false`
+A normal non-concurrent, non-invalid `CREATE INDEX` is born with all three
+`true`. CIC instead creates the catalog row with `indisvalid = false` and
+`indisready = false`
 (`!concurrent && !invalid` and `!concurrent` respectively at
 [index.c:990-996](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996)),
 then flips `indisready`, and finally `indisvalid`, at carefully chosen points.
@@ -1152,8 +1167,9 @@ the drop is retryable
   `45b88269a353ad93744772791feb6d01bc7e1e42` ("Stamp 12.2.").
 - `DefineIndex` concurrent branch and `WaitForOlderSnapshots` in
   `src/backend/commands/indexcmds.c`.
-- `index_create`/`UpdateIndexRelation`, `index_concurrently_build`,
-  `validate_index`, and `index_set_state_flags` in
+- `pg_index` flag declarations in `src/include/catalog/pg_index.h`;
+  `index_create`/`UpdateIndexRelation`, `BuildIndexInfo`,
+  `index_concurrently_build`, `validate_index`, and `index_set_state_flags` in
   `src/backend/catalog/index.c`.
 - `WaitForLockers`/`WaitForLockersMultiple` in
   `src/backend/storage/lmgr/lmgr.c`; the `LockConflicts` table and self-conflict
@@ -1264,7 +1280,9 @@ the drop is retryable
 | CIC cannot run in a transaction block | [utility.c:1307-1309](../../../raw/postgres-12/src/backend/tcop/utility.c#L1307-L1309) |
 | Temp tables fall back to non-concurrent | [indexcmds.c:489-499](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499) |
 | Partitioned / system-catalog / exclusion restrictions | [indexcmds.c:604-616](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L604-L616), [index.c:813-817](../../../raw/postgres-12/src/backend/catalog/index.c#L813-L817), [index.c:823-826](../../../raw/postgres-12/src/backend/catalog/index.c#L823-L826) |
-| Catalog row created not-ready/not-valid, `indislive` true | [index.c:612-615](../../../raw/postgres-12/src/backend/catalog/index.c#L612-L615), [index.c:990-996](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996) |
+| `pg_index` state flags mean valid-for-queries / ready-for-inserts / alive-at-all; initial CIC row is live but not ready or valid | [pg_index.h:40-43](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43), [index.c:612-615](../../../raw/postgres-12/src/backend/catalog/index.c#L612-L615), [index.c:990-996](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996) |
+| `indislive` controls whether backends may touch the index at all and whether it participates in HOT-safety decisions | [relcache.c:4388-4395](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395), [relcache.c:4861-4870](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870) |
+| `indisready` gates executor insertion into an index; `indisvalid` gates planner use | [index.c:2337-2339](../../../raw/postgres-12/src/backend/catalog/index.c#L2337-L2339), [execIndexing.c:328-332](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L328-L332), [plancat.c:199-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210) |
 | Session lock taken before first commit; released at end | [indexcmds.c:1307-1320](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1320), [indexcmds.c:1465-1468](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1465-L1468) |
 | Wait 1 / build / set indisready (txn 2) | [indexcmds.c:1328-1379](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1328-L1379), [index.c:1399-1439](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439) |
 | Wait 2 / reference snapshot / validate (txn 3) | [indexcmds.c:1382-1424](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1382-L1424), [index.c:3176-3298](../../../raw/postgres-12/src/backend/catalog/index.c#L3176-L3298) |
@@ -1346,7 +1364,9 @@ reproduction in this environment.
 
 - [indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L1473)
 - [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)
+- [pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)
 - [index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439)
+- [index.c#BuildIndexInfo](../../../raw/postgres-12/src/backend/catalog/index.c#L2315-L2344)
 - [index.c#index_build](../../../raw/postgres-12/src/backend/catalog/index.c#L2824-L2952)
 - [tableam.h#table_index_build_scan](../../../raw/postgres-12/src/include/access/tableam.h#L1485-L1533)
 - [heapam_handler.c#heapam_index_build_range_scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1150-L1703)

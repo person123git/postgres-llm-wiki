@@ -1165,3 +1165,21 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - `verified_by_agent` remains `not yet` because this was a scoped section review,
   not a full-page re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-19] review-fix v12 | CREATE INDEX CONCURRENTLY pg_index state flags
+
+- Reviewed the `### The three pg_index state flags` section of [How CREATE
+  INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Tightened the `indislive` wording: in v12 it means backends may touch the
+  index at all and include it in HOT-safety decisions, not that entries are
+  already inserted into it. `indisready` is the executor insertion gate, and
+  `indisvalid` is the planner-use gate.
+- Added direct citations for the `pg_index` flag declarations, `RelationGetIndexList`
+  live-index filtering / HOT-safety treatment, `BuildIndexInfo` /
+  `ExecInsertIndexTuples` ready-for-inserts handling, and `plancat.c` invalid-index
+  skip; updated the Evidence Map and Source References.
+- `verified_by_agent` remains `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
