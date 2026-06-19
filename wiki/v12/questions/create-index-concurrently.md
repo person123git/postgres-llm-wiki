@@ -1002,14 +1002,84 @@ another CIC on the table.
 
 #### Server crash or immediate shutdown
 
-This page does not state a definitive crash-recovery outcome for every
-instruction boundary. Ordinary ERROR/cancel rollback rules are not enough by
-themselves, because `index_set_state_flags` uses a non-transactional in-place
-catalog update that "will not roll back on error", and `heap_inplace_update`
-overwrites the tuple and writes a WAL record in a critical section
-([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324),
-[heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5692-L5774)).
-The unresolved crash windows are listed under `## Open Questions`.
+A crash or `immediate`-mode shutdown leaves **the same four states as an ERROR
+or cancel — never a half-applied flag flip, and never a valid index that is
+missing rows.** An unclean stop leaves `pg_control` in a state other than
+`DB_SHUTDOWNED`, so the next startup forces `InRecovery` and replays WAL
+automatically
+([xlog.c#crash-recovery](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6740-L6766)).
+Recovery is pure physical WAL replay: the recovered `pg_index` flags are
+whatever that replay produces, and v12 runs no CIC-aware repair pass — which is
+why the documented fix for an interrupted build is still a manual `DROP INDEX` /
+`REINDEX`
+([ref/create_index.sgml#invalid-index](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596)).
+
+**Why a flip's durability is decoupled from its phase commit.**
+`index_set_state_flags` runs with no assigned transaction id — it asserts
+`GetTopTransactionIdIfAny() == InvalidTransactionId` — and writes the flag
+through `heap_inplace_update`
+([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)).
+`heap_inplace_update` overwrites the tuple in a critical section, emits one
+`XLOG_HEAP_INPLACE` record, sets the page LSN, and returns **without** flushing
+WAL
+([heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774)).
+Because the phase transaction holds no XID, `RecordTransactionCommit` writes no
+commit record and takes the **asynchronous** branch — `XLogSetAsyncXactLSN`, not
+`XLogFlush` — even under `synchronous_commit = on`; its own comment notes that
+losing such a WAL-writing-but-xidless transaction on crash "will be irrelevant"
+([xact.c#RecordTransactionCommit](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1232-L1392)).
+`XLogSetAsyncXactLSN` only nudges the WAL writer
+([xlog.c#XLogSetAsyncXactLSN](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2670)).
+So a flip turns durable only once the WAL writer, a checkpoint, or a later
+synchronous commit flushes WAL past its LSN — possibly well after
+`CommitTransactionCommand` has already returned.
+
+This cuts both ways, but safely:
+
+- A flip can **survive even though its phase wrote no commit record**:
+  `heap_xlog_inplace` redoes the byte overwrite physically and unconditionally
+  whenever its record is durable
+  ([heapam.c#heap_xlog_inplace](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)).
+  ("Will not roll back on error" concerns the ERROR path, where the surrounding
+  transaction aborts but the in-place row stays; a crash only asks whether the
+  record was durable.)
+- A flip can be **lost even though the phase commit returned**, because that
+  commit was asynchronous; recovery then shows the prior, more-conservative
+  flag.
+
+**The recovered state is monotone.** SET_READY (Txn 2) has a lower LSN than
+SET_VALID (Txn 4)
+([index.c#build-set-ready](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438),
+[indexcmds.c#set-valid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1448-L1463)),
+and `XLogFlush` flushes all WAL through a position
+([xlog.c#XLogFlush](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798)).
+Durable SET_VALID therefore implies durable SET_READY, so recovered
+`(indisready, indisvalid)` is always `(f,f)`, `(t,f)`, or `(t,t)`, never
+`(f,t)`:
+
+| Last record durable at crash | Recovered `pg_index` | Failure-table row |
+|---|---|---|
+| commit-1 catalog row not yet durable | (no row) | no index |
+| catalog row only | `indislive=t, indisready=f, indisvalid=f` | invalid, not ready |
+| + SET_READY (`XLOG_HEAP_INPLACE`) | `indisready=t, indisvalid=f` | invalid, ready |
+| + SET_VALID (`XLOG_HEAP_INPLACE`) | `indisready=t, indisvalid=t` | valid |
+
+**A recovered valid index is always complete.** The B-tree build writes its
+pages outside shared buffers and `smgrimmedsync`s the index file before the
+build transaction may commit, and WAL-logs the built pages only when
+`wal_level >= replica`; either way the index data is durable no later than the
+SET_READY flip
+([nbtsort.c#build-durability](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L34-L44),
+[nbtsort.c#use-wal](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580),
+[nbtsort.c#immedsync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307));
+a permanent index always needs WAL
+([rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520)).
+The `validate_index` backfill inserts go through shared buffers and are
+WAL-logged ahead of SET_VALID, and the WAL-before-data rule forces `XLogFlush`
+up to a buffer's LSN before that buffer can reach disk
+([bufmgr.c#FlushBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736)).
+So durable SET_VALID implies the build and the backfill are durable too; no
+crash window can expose a valid index that is missing rows.
 
 #### Recovery
 
@@ -1076,12 +1146,23 @@ the drop is retryable
   `src/backend/access/nbtree/nbtinsert.c` (`_bt_check_unique`); `index_drop` and
   the `INDEX_DROP_*` branches of `index_set_state_flags` in
   `src/backend/catalog/index.c`;
-  `heap_inplace_update` in `src/backend/access/heap/heapam.c` for the scoped
-  crash-recovery open question;
+  `heap_inplace_update` in `src/backend/access/heap/heapam.c`;
   `LockRelationIdForSession` in
   `src/backend/storage/lmgr/lmgr.c` and `ProcReleaseLocks` in
   `src/backend/storage/lmgr/proc.c`; and the invalid-index regression evidence in
   `src/test/regress/expected/create_index.out`.
+- For the crash / immediate-shutdown recovery trace: `heap_inplace_update` and
+  its redo `heap_xlog_inplace` (`XLOG_HEAP_INPLACE`) in
+  `src/backend/access/heap/heapam.c`; the xidless-transaction asynchronous-commit
+  path of `RecordTransactionCommit` in `src/backend/access/transam/xact.c`;
+  `XLogFlush`, `XLogSetAsyncXactLSN`, and the `StartupXLOG` crash-recovery
+  determination in `src/backend/access/transam/xlog.c`; the WAL-before-data rule
+  in `FlushBuffer` in `src/backend/storage/buffer/bufmgr.c`; the B-tree build's
+  WAL gating and final `smgrimmedsync` in
+  `src/backend/access/nbtree/nbtsort.c`; the `index_concurrently_build`
+  SET_READY and `DefineIndex` SET_VALID commit boundaries in
+  `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`; and the
+  `RelationNeedsWAL` macro in `src/include/utils/rel.h`.
 - Tests: `src/test/regress/sql/create_index.sql`,
   `src/test/isolation/specs/multiple-cic.spec`, and
   `src/test/isolation/expected/multiple-cic.out`.
@@ -1171,7 +1252,12 @@ the drop is retryable
 | Named example index per `pg_index` state: `concur_index7` (none), `concur_index3` (invalid, not ready), `concur_index1`/`concur_index2` (valid) | [create_index.out:1391-1395](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1391-L1395), [create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420) |
 | A failed CIC releases its session lock (removed on `ereport(ERROR)`; abort releases session locks) | [lmgr.c:356-363](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363), [proc.c:772-798](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798) |
 | `DROP INDEX CONCURRENTLY` is retryable: `INDEX_DROP_CLEAR_VALID` does not assert its starting flags | [index.c:3367-3383](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3383) |
-| Crash/immediate-shutdown outcome is left open because state-flag updates are non-transactional in-place WAL-logged overwrites | [index.c:3316-3324](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324), [heapam.c:5746-5774](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774) |
+| Crash / `immediate` shutdown triggers automatic WAL-replay recovery; recovered `pg_index` flags are whatever physical replay produces (no CIC repair pass), so the documented fix stays manual `DROP`/`REINDEX` | [xlog.c:6740-6766](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6740-L6766), [ref/create_index.sgml:574-596](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596) |
+| Flag flips run with no XID and are written by `heap_inplace_update` (`XLOG_HEAP_INPLACE`, page LSN set, no `XLogFlush`) | [index.c:3331-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403), [heapam.c:5746-5774](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774) |
+| An xidless WAL-writing transaction commits asynchronously (`XLogSetAsyncXactLSN`, not `XLogFlush`) regardless of `synchronous_commit`, so a flip's durability is decoupled from its phase commit | [xact.c:1232-1392](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1232-L1392), [xlog.c:2630-2670](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2670) |
+| `heap_xlog_inplace` redoes the flip physically and unconditionally whenever its record is durable, so a flip can survive a phase that wrote no commit record | [heapam.c:8797-8835](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835) |
+| `XLogFlush` flushes all WAL through a position, so durable SET_VALID implies durable SET_READY; recovered `(indisready, indisvalid)` is monotone, never `(f,t)` | [xlog.c:2791-2798](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798), [index.c:1426-1438](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438), [indexcmds.c:1448-1463](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1448-L1463) |
+| A recovered valid index is complete: the build `smgrimmedsync`s its file before commit and WAL-logs pages when `wal_level >= replica`, and validate-scan WAL precedes SET_VALID under the WAL-before-data rule | [nbtsort.c:1288-1307](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [nbtsort.c:580](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580), [rel.h:519-520](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520), [bufmgr.c:2712-2736](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736) |
 | Tests | [create_index.sql:467-520](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
 | Initial lock acquisition point and its conflict set | [utility.c:1311-1326](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) |
 | Which v12 commands take each conflicting lock mode | [mvcc.sgml:890-1030](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1030) |
@@ -1198,15 +1284,14 @@ the drop is retryable
 
 ## Open Questions
 
-- The exact crash / immediate-shutdown outcome was not traced through crash
-  recovery. This matters because `index_set_state_flags` is explicitly
-  non-transactional and will not roll back on error
-  ([index.c:3316-3324](../../../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324)),
-  while `heap_inplace_update` WAL-logs the overwrite in a critical section
-  ([heapam.c:5746-5774](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5746-L5774)).
-  The exact flag state after a crash around `INDEX_CREATE_SET_READY`,
-  `INDEX_CREATE_SET_VALID`, and their surrounding commit boundaries was not
-  isolated.
+None for source behavior at the pinned PostgreSQL 12 commit. The former
+crash / immediate-shutdown question is resolved inline under
+[Server crash or immediate shutdown](#server-crash-or-immediate-shutdown): the
+flag flips are xidless `heap_inplace_update` writes that commit asynchronously,
+`heap_xlog_inplace` redoes them physically on recovery, and the recovered state
+is monotone, so a crash always lands on one of the four documented leftovers and
+never on a valid-but-incomplete index. This conclusion is a static source trace
+of the pinned 12.2 checkout, not a live crash reproduction in this environment.
 
 ## Source References
 
@@ -1244,6 +1329,14 @@ the drop is retryable
 - [relcache.c#RelationGetIndexList](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4348-L4435)
 - [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2007-L2166)
 - [heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5692-L5774)
+- [heapam.c#heap_xlog_inplace](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)
+- [xact.c#RecordTransactionCommit](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1206-L1401)
+- [xlog.c#XLogFlush](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798)
+- [xlog.c#XLogSetAsyncXactLSN](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2670)
+- [xlog.c#StartupXLOG-crash-recovery](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6740-L6766)
+- [bufmgr.c#FlushBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736)
+- [nbtsort.c#build-durability](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)
+- [rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520)
 - [tuplesort.c#unique-violation](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4040-L4056)
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
 - [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L383)
