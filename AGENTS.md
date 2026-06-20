@@ -279,6 +279,7 @@ After each meaningful wiki change:
 - Update `wiki/versions.md` for supported-version lifecycle, repin, or meaningful coverage changes.
 - Update `wiki/vNN/index.md` for created or substantially changed version-local pages.
 - Append to `wiki/log.md` after scaffold changes, ingests, lint passes, filed answers, or version lifecycle events.
+- Run `scripts/wiki_lint` after every wiki-facing edit, including small edits to existing pages, indexes, version pages, log entries, citations, titles, or front matter.
 
 Log heading format:
 
@@ -313,6 +314,8 @@ Log heading format:
 10. Update indexes and log.
 
 ## MANDATORY Lint
+
+Lint is required after every wiki-facing change. Do not treat it as optional or only for new pages; run it before the final response whenever any wiki document changed.
 
 Check broken links, orphan pages, missing source references, stale pins, wrong-version citations, invalid verification fields, unverified title hints, and version landing-page links.
 
