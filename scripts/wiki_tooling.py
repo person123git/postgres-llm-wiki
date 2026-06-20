@@ -263,15 +263,23 @@ def parse_front_matter(text: str) -> tuple[dict[str, object], str, bool]:
 
 LINK_RE = re.compile(r"(?<!!)\[\[([^\]\n]+)\]\]")
 MD_LINK_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)")
+RAW_SOURCE_REF_RE = re.compile(r"(?:(?:\.\./)+)?raw/postgres-\d+/[^\s<>\])]+")
+LINE_FRAGMENT_RE = re.compile(r"L\d+(?:-L\d+)?")
 _CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+
+
+def _strip_markdown_code(text: str) -> str:
+    """Remove fenced code blocks and inline code spans from Markdown text."""
+    text = _CODE_BLOCK_RE.sub("", text)
+    text = _CODE_SPAN_RE.sub("", text)
+    return text
 
 
 def extract_obsidian_links(text: str) -> list[str]:
     # Strip fenced code blocks and inline code spans so we don't flag
     # example citations written in documentation prose.
-    text = _CODE_BLOCK_RE.sub("", text)
-    text = _CODE_SPAN_RE.sub("", text)
+    text = _strip_markdown_code(text)
     links: list[str] = []
     for match in LINK_RE.finditer(text):
         target = match.group(1).split("|", 1)[0].strip()
@@ -294,8 +302,7 @@ def extract_markdown_raw_citations(text: str, page_path: Path | None = None) -> 
     URLs.  The linter normalizes both forms back to repo-relative paths before
     checking file existence and version matching.
     """
-    text = _CODE_BLOCK_RE.sub("", text)
-    text = _CODE_SPAN_RE.sub("", text)
+    text = _strip_markdown_code(text)
     targets: list[str] = []
     for match in MD_LINK_RE.finditer(text):
         url = match.group(2).strip()
@@ -317,10 +324,52 @@ def extract_markdown_raw_citations(text: str, page_path: Path | None = None) -> 
     return targets
 
 
+def markdown_raw_citation_format_issues(text: str) -> list[tuple[str, str]]:
+    """Return format issues for Markdown links that target raw/postgres-NN/."""
+    text = _strip_markdown_code(text)
+    issues: list[tuple[str, str]] = []
+    for match in MD_LINK_RE.finditer(text):
+        url = match.group(2).strip()
+        path, sep, fragment = url.partition("#")
+        path = path.split("?", 1)[0].strip().strip("/")
+        if not re.search(r"(^|/)raw/postgres-\d+/", path):
+            continue
+
+        if not sep:
+            continue
+
+        fragment = fragment.split("?", 1)[0].strip()
+        if not LINE_FRAGMENT_RE.fullmatch(fragment):
+            issues.append((url, "line fragment must be #L<line> or #L<start>-L<end>"))
+    return issues
+
+
+def raw_source_references_outside_links(text: str) -> list[str]:
+    """Return raw/postgres-NN/ references not covered by a complete link."""
+    text = _strip_markdown_code(text)
+    linked_spans: list[tuple[int, int]] = []
+
+    for match in MD_LINK_RE.finditer(text):
+        url = match.group(2)
+        if re.search(r"(^|/)raw/postgres-\d+/", url):
+            linked_spans.append(match.span())
+
+    for match in LINK_RE.finditer(text):
+        target = match.group(1).split("|", 1)[0].strip()
+        if target.startswith("raw/postgres-"):
+            linked_spans.append(match.span())
+
+    refs: list[str] = []
+    for match in RAW_SOURCE_REF_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in linked_spans):
+            continue
+        refs.append(match.group(0).rstrip(".,;:"))
+    return refs
+
+
 def extract_markdown_wiki_links(text: str, page_path: Path) -> list[str]:
     """Return wiki slugs from page-relative Markdown links to wiki pages."""
-    text = _CODE_BLOCK_RE.sub("", text)
-    text = _CODE_SPAN_RE.sub("", text)
+    text = _strip_markdown_code(text)
     targets: list[str] = []
     for match in MD_LINK_RE.finditer(text):
         url = match.group(2).strip()

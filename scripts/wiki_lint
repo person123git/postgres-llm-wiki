@@ -19,7 +19,9 @@ from wiki_tooling import (
     extract_markdown_wiki_links,
     extract_obsidian_links,
     load_versions,
+    markdown_raw_citation_format_issues,
     parse_front_matter,
+    raw_source_references_outside_links,
     section_text,
     wiki_markdown_files,
     wiki_slug,
@@ -197,6 +199,21 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                         "ERROR", rel(path),
                         f"Markdown citation targets wrong version: {target}",
                     ))
+
+        if page_type in SOURCE_REQUIRED_TYPES:
+            for target, reason in markdown_raw_citation_format_issues(text):
+                errors.append(Issue(
+                    "ERROR",
+                    rel(path),
+                    f"malformed Markdown citation ({target}): {reason}",
+                ))
+
+            for target in raw_source_references_outside_links(text):
+                errors.append(Issue(
+                    "ERROR",
+                    rel(path),
+                    f"raw source reference must be a complete Markdown citation: {target}",
+                ))
 
     for slug, count in inbound.items():
         if count > 0:
