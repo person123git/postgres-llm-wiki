@@ -64,6 +64,24 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
   [file.c:42](../../../raw/postgres-NN/path/file.c#L42)
   ```
 
+  A source citation is a complete Markdown inline link, not a link fragment. The opening `[`, closing `]`, opening `(`, and closing `)` are mandatory.
+
+  ```md
+  [<label>](<relative-path-to-raw-file>#L<start>-L<end>)
+  [<label>](<relative-path-to-raw-file>#L<line>)
+  ```
+
+  Invalid citation fragments include:
+
+  ```md
+  file.c#Symbol](../../../raw/postgres-NN/path/file.c#L42-L58
+  [file.c#Symbol]../../../raw/postgres-NN/path/file.c#L42-L58
+  raw/postgres-NN/path/file.c#L42-L58
+  [[raw/postgres-NN/path/file.c]]
+  ```
+
+  When asked to describe the citation format, show complete Markdown inline-link examples. Do not omit the delimiter characters.
+
   - Link text: short human label, typically `file.ext#Symbol` (function, struct, macro, GUC, or doc-section name). Use `file.ext:line` for a single-line citation.
   - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment. Single-line citations use `#L42`.
   - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For pages under `wiki/vNN/questions/`, that prefix is `../../../raw/postgres-NN/...`.
