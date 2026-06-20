@@ -85,7 +85,18 @@ High `dirtied` means the query turned clean buffers dirty. High `written` means 
 
 ## Tests And Examples
 
-The same-checkout documentation includes a worked `EXPLAIN (ANALYZE, BUFFERS)` example that shows parent and child `Buffers:` lines for a bitmap heap scan with bitmap index scan children [perform.sgml#EXPLAIN-BUFFERS-example](../../../raw/postgres-12/doc/src/sgml/perform.sgml#L694-L718). During this pass, no PostgreSQL 12 regression expected-output file was identified that asserts literal `Buffers:` output; treat that as a test-coverage gap for this page rather than a behavior source.
+The same-checkout documentation includes a worked `EXPLAIN (ANALYZE, BUFFERS)` example that shows parent and child `Buffers:` lines for a bitmap heap scan with bitmap index scan children [perform.sgml#EXPLAIN-BUFFERS-example](../../../raw/postgres-12/doc/src/sgml/perform.sgml#L694-L718).
+
+The regression suite has some `EXPLAIN ANALYZE` coverage, but no `EXPLAIN (ANALYZE, BUFFERS)` case and no expected output containing literal `Buffers:`. Specific findings:
+
+- `select_parallel.sql:399` exercises `EXPLAIN (analyze, timing off, summary off, costs off)` but does not include `BUFFERS`.
+- `tidscan.sql:71-82` exercises `EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)` for cursor-based updates but does not include `BUFFERS`.
+- Other regression EXPLAIN tests also omit `BUFFERS`; most are plan-shape checks with costs disabled, sometimes with verbose/timing option variants.
+- No file in `src/test/regress/expected/*.out` contains the literal string `Buffers:` as EXPLAIN output (only `rules.out` references `buffers_*` column names in `pg_stat_bgwriter` queries).
+- `src/test/isolation/`: no isolation test spec contains `Buffers:` output.
+- `contrib/auto_explain.c` sets `INSTRUMENT_BUFFERS` internally but has no `Buffers:` output assertion; `src/bin/psql/tab-complete.c` only lists `BUFFERS` in psql tab-completion hints.
+
+This is a test-coverage gap for literal `Buffers:` output formatting, though the behavior source in `explain.c#show_buffer_usage` is fully documented [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867).
 
 ## Context Reviewed
 
@@ -106,7 +117,11 @@ The same-checkout documentation includes a worked `EXPLAIN (ANALYZE, BUFFERS)` e
 - [buffile.c#BufFileDumpBuffer](../../../raw/postgres-12/src/backend/storage/file/buffile.c#L452)
 - [execParallel.c#ParallelQueryMain](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1330)
 - [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43)
+- [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192)
 - [perform.sgml#EXPLAIN-BUFFERS-example](../../../raw/postgres-12/doc/src/sgml/perform.sgml#L694-L718)
+- [auto_explain.c#INSTRUMENT_BUFFERS](../../../raw/postgres-12/contrib/auto_explain/auto_explain.c#L282)
+- [select_parallel.sql:399](../../../raw/postgres-12/src/test/regress/sql/select_parallel.sql#L399)
+- [tidscan.sql:71-82](../../../raw/postgres-12/src/test/regress/sql/tidscan.sql#L71-L82)
 
 ## Evidence Map
 
@@ -126,6 +141,7 @@ The same-checkout documentation includes a worked `EXPLAIN (ANALYZE, BUFFERS)` e
 | Parallel workers report buffer usage through DSM and leader accumulation | [execParallel.c#ParallelQueryMain](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1330) [execParallel.c#ExecParallelFinish](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1073) |
 | `track_io_timing` is superuser-settable and off by default | [guc.c#track_io_timing](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1402) |
 | Same-version documentation includes a `BUFFERS` example | [perform.sgml#EXPLAIN-BUFFERS-example](../../../raw/postgres-12/doc/src/sgml/perform.sgml#L694-L718) |
+| Regression suite has `EXPLAIN ANALYZE` but no `BUFFERS` case | `select_parallel.sql:399` and `tidscan.sql:71-82` use `EXPLAIN (ANALYZE, ...)` without `BUFFERS`; no expected output contains literal `Buffers:` |
 
 ## Source References
 
@@ -151,7 +167,6 @@ The same-checkout documentation includes a worked `EXPLAIN (ANALYZE, BUFFERS)` e
 ## Open Questions
 
 - The documentation describes `written` as previously dirty blocks evicted from cache, while the PostgreSQL 12 source also increments `shared_blks_written` and `local_blks_written` during relation extension in `ReadBuffer_common`. This page follows the implementation source for the detailed field definition [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43) [bufmgr.c#ReadBuffer_common](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L704).
-- No regression expected-output test for literal `Buffers:` output was identified during this pass. The source and same-version documentation above are the evidence base for the output semantics.
 
 ## Related Pages
 
