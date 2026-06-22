@@ -93,11 +93,12 @@ differences:
 The "wait out readers" difference is the operationally important one. CIC's two
 lock-based waits use `ShareLock` conflict checks and do not wait for
 `AccessShareLock` readers, though its old-snapshot wait can still wait for a
-plain `SELECT` that holds an old snapshot. RIC adds two later
-`AccessExclusiveLock` conflict checks on the heap lock tag, so current table
-lock holders, including `AccessShareLock` readers, can delay marking the old
-index dead and dropping it
-([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402),
+plain `SELECT` that holds an old snapshot
+([indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402)).
+RIC adds two later `AccessExclusiveLock` conflict checks on the heap lock tag, so
+current table lock holders, including `AccessShareLock` readers, can delay marking
+the old index dead and dropping it
+([indexcmds.c:3272-3304](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3272-L3304),
 [lock.c#AccessExclusive-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103),
 [reindex.sgml#concurrent-steps](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L334-L359)).
 

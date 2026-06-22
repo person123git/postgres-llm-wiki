@@ -2,6 +2,35 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY how-it-differs-from-CIC section
+
+- Reviewed the `### How it differs from CREATE INDEX CONCURRENTLY` section of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the comparison table and prose: RIC has five waits vs CIC's three;
+  the two extra `AccessExclusiveLock` waits run before set-dead (Wait 4,
+  [indexcmds.c:3274](../raw/postgres-12/src/backend/commands/indexcmds.c#L3274))
+  and before drop (Wait 5,
+  [indexcmds.c:3304](../raw/postgres-12/src/backend/commands/indexcmds.c#L3304)),
+  and both `WaitForLockersMultiple` calls take the **heap** lock tags built in
+  phase 1
+  ([indexcmds.c:3056-3060](../raw/postgres-12/src/backend/commands/indexcmds.c#L3056-L3060)).
+  Confirmed the name swap (new copy takes the original name, old renamed `_ccold`)
+  at [index.c:1490-1492](../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492)
+  and [indexcmds.c:3230-3235](../raw/postgres-12/src/backend/commands/indexcmds.c#L3230-L3235),
+  and the reindex.sgml "wait for running queries" step
+  ([reindex.sgml:345-359](../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L345-L359)).
+- Fix: in the "wait out readers" paragraph, moved the `WaitForOlderSnapshots`
+  citation onto the clause it actually supports (CIC's old-snapshot wait) and
+  cited the two `AccessExclusiveLock` waits directly
+  ([indexcmds.c:3272-3304](../raw/postgres-12/src/backend/commands/indexcmds.c#L3272-L3304))
+  on the RIC clause, instead of leaving the snapshot-wait citation attached to the
+  `AccessExclusiveLock` sentence.
+- `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY opening answer and six-phase summary
 
 - Reviewed the opening `## Answer` prose and the six-phase summary of [How
