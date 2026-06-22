@@ -2,6 +2,36 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY opening answer and six-phase summary
+
+- Reviewed the opening `## Answer` prose and the six-phase summary of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified every claim and citation in the section: `ReindexRelationConcurrently`
+  begins at [indexcmds.c:2738](../raw/postgres-12/src/backend/commands/indexcmds.c#L2738)
+  and the page's six-phase list matches the canonical source phase-overview comment
+  verbatim
+  ([indexcmds.c:2941-2955](../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L2955)).
+- Confirmed the "build and catch-up reuse the exact CIC machinery" framing: both
+  `DefineIndex` (CIC) and `ReindexRelationConcurrently` (RIC) call
+  `index_concurrently_build` and `validate_index`
+  ([indexcmds.c:1370](../raw/postgres-12/src/backend/commands/indexcmds.c#L1370),
+  [indexcmds.c:1412](../raw/postgres-12/src/backend/commands/indexcmds.c#L1412),
+  [indexcmds.c:3124](../raw/postgres-12/src/backend/commands/indexcmds.c#L3124),
+  [indexcmds.c:3169](../raw/postgres-12/src/backend/commands/indexcmds.c#L3169)).
+- Confirmed the lock claim: `ShareUpdateExclusiveLock` is documented for
+  "VACUUM (non-FULL),ANALYZE, CREATE INDEX CONCURRENTLY"
+  ([lockdefs.h:36-46](../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46))
+  and its `LockConflicts` row conflicts with itself / `ShareLock` /
+  `ShareRowExclusiveLock` / `ExclusiveLock` / `AccessExclusiveLock` but not
+  `RowExclusiveLock` (DML)
+  ([lock.c:78-81](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81)).
+- No page edits were needed; all three section citations resolve and the
+  six-phase list is accurate. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] expand v12 | REINDEX INDEX CONCURRENTLY on an invalid index
 
 - Added a `### Running REINDEX INDEX CONCURRENTLY on an invalid index` section to
