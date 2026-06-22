@@ -394,12 +394,15 @@ The fix depends on which outcome produced it:
 ## Open Questions
 
 None for v12 source behavior — the writers of `indisvalid = false` enumerated
-above are the complete set in the pinned checkout. A whole-source-tree scan for
-`indisvalid =` assignments confirms it: the only sites that write the catalog
-flag to `false` are the paths in the producers table above; every other match
-either sets it `true` (`validatePartitionedIndex`, the CIC set-valid and
-non-concurrent reindex paths) or is a non-write read into a local or relcache
-copy (`describe.c`, `relcache.c`, `tablecmds.c`). Two scoping notes:
+above are the complete set in the pinned checkout. A whole-source-tree scan
+confirms it, covering both direct `indisvalid =` assignments and the
+`UpdateIndexRelation` tuple build (`Anum_pg_index_indisvalid` /
+`BoolGetDatum(isvalid)`) for the born-invalid case: the only sites that write the
+catalog flag to `false` are the paths in the producers table above; every other
+match either sets it `true` (`validatePartitionedIndex`, the CIC set-valid, the
+`index_concurrently_swap` new index, and the non-concurrent reindex paths) or is
+a non-write read into a local or relcache copy (`describe.c`, `relcache.c`,
+`tablecmds.c`). Two scoping notes:
 
 - **Out of scope: manual catalog edits.** A superuser can `UPDATE pg_index SET
   indisvalid = false` directly; that is catalog tampering, not an outcome of a

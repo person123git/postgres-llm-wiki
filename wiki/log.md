@@ -2,6 +2,34 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes Open Questions completeness wording
+
+- Continued the section-by-section review of [All Outcomes That Leave an Invalid
+  Index in PostgreSQL 12, Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- `## Open Questions`: tightened the closed-set completeness paragraph on two
+  points (the five-producer conclusion is unchanged and re-confirmed):
+  - Same `indisvalid =` scan-method fix as Context Reviewed: the scan now also
+    covers the `UpdateIndexRelation` tuple build
+    (`Anum_pg_index_indisvalid` / `BoolGetDatum(isvalid)`,
+    [index.c:612](../raw/postgres-12/src/backend/catalog/index.c#L612)) that the
+    literal `indisvalid =` pattern skips for the born-invalid case.
+  - Completed the true-writer list: it omitted the `REINDEX CONCURRENTLY` swap's
+    new-index validation `newIndexForm->indisvalid = true`
+    ([index.c:1532](../raw/postgres-12/src/backend/catalog/index.c#L1532)). Added
+    `index_concurrently_swap`'s new index alongside `validatePartitionedIndex`,
+    the CIC set-valid, and the non-concurrent reindex paths, so the scan's
+    `true`-writers are fully enumerated.
+- Verified the Open Questions citations resolve: `index_set_state_flags`
+  ([index.c:3331-3403](../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403))
+  and `heap_xlog_inplace`
+  ([heapam.c:8797-8835](../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)),
+  and the CIC/RIC crash-recovery delegations are intact.
+- `verified_by_agent` stays `not yet`: scoped review/fix, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes closed-set scan methodology
 
 - Continued the section-by-section review of [All Outcomes That Leave an Invalid
