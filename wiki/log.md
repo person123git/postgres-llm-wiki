@@ -2,6 +2,32 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY state-flags section
+
+- Reviewed the `### State flags for the old and new index` section of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the two-index `(indislive, indisready, indisvalid)` progression
+  table and the prose against `index_set_state_flags`
+  ([index.c:3331-3403](../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)):
+  `INDEX_CREATE_SET_READY` asserts `live && !ready && !valid` then sets
+  `indisready` (so the after-phase-1 "live, not ready, not valid" row is the
+  documented precondition,
+  [index.c:3353-3359](../raw/postgres-12/src/backend/catalog/index.c#L3353-L3359));
+  `INDEX_DROP_SET_DEAD` asserts `!indisvalid` and clears `indisready`+`indislive`
+  ([index.c:3384-3396](../raw/postgres-12/src/backend/catalog/index.c#L3384-L3396));
+  and every write goes through the non-transactional `heap_inplace_update`
+  ([index.c:3400](../raw/postgres-12/src/backend/catalog/index.c#L3400)).
+- Confirmed the key RIC distinction the section makes: the new copy's `indisvalid`
+  is flipped by the phase-4 swap via transactional `CatalogTupleUpdate`
+  ([index.c:1531-1534](../raw/postgres-12/src/backend/catalog/index.c#L1531-L1534)),
+  not by `index_set_state_flags(INDEX_CREATE_SET_VALID)` — RIC never calls that
+  action.
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY steps-and-locks section
 
 - Reviewed the `### All steps and locks required on the table` section of [How
