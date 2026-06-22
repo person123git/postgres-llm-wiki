@@ -2,6 +2,47 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY six-phases section
+
+- Reviewed the `### The six phases` section (Phase 1-6 subsections) of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified all ~27 citations. Confirmed: Phase 1 `index_concurrently_create_copy`
+  uses `INDEX_CREATE_SKIP_BUILD | INDEX_CREATE_CONCURRENT`
+  ([index.c:1376](../raw/postgres-12/src/backend/catalog/index.c#L1376)); Phase 2
+  build loop takes a fresh snapshot and `index_concurrently_build` sets
+  `indisready` via `INDEX_CREATE_SET_READY`
+  ([index.c:1438](../raw/postgres-12/src/backend/catalog/index.c#L1438)); Phase 3
+  reference snapshot / `validate_index` / `limitXmin` / Wait 3
+  `WaitForOlderSnapshots`
+  ([indexcmds.c:3144-3199](../raw/postgres-12/src/backend/commands/indexcmds.c#L3144-L3199));
+  Phase 4 swap moves constraints/triggers/comment/partition-link/dependencies
+  ([index.c:1542-1680](../raw/postgres-12/src/backend/catalog/index.c#L1542-L1680))
+  and copies cumulative stats
+  ([index.c:1683-1705](../raw/postgres-12/src/backend/catalog/index.c#L1683-L1705));
+  Phase 5/6 the two `AccessExclusiveLock` waits, `index_concurrently_set_dead`,
+  and the `PERFORM_DELETION_CONCURRENT_LOCK` drop.
+- Confirmed the Phase 6 "not `AccessExclusiveLock`" claim: `index_drop` picks
+  `ShareUpdateExclusiveLock` when `concurrent_lock_mode` is set
+  ([index.c:2048](../raw/postgres-12/src/backend/catalog/index.c#L2048)), and the
+  `AccessExclusiveLock`-on-index upgrade
+  ([index.c:2191](../raw/postgres-12/src/backend/catalog/index.c#L2191)) lives
+  inside the `if (concurrent)` branch that RIC's `concurrent=false` drop skips.
+- Fix: the Phase 1 session-lock sentence claimed locks "on the old index, the new
+  index, and the heap" but cited only the acquisition loop
+  ([indexcmds.c:3068-3074](../raw/postgres-12/src/backend/commands/indexcmds.c#L3068-L3074));
+  the two index lock relids are actually registered at
+  [indexcmds.c:3024-3029](../raw/postgres-12/src/backend/commands/indexcmds.c#L3024-L3029).
+  Added that citation and split the relid-registration (indexes at 3024-3029,
+  heaps + LOCKTAG at 3042-3066) from the session-lock acquisition (3068-3074).
+- Follow-up: the matching Evidence Map row still cites only `indexcmds.c:3042-3074`
+  for this claim; extend it to include `3024-3029` when the Evidence Map section is
+  reviewed.
+- `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY dispatch/preconditions/restrictions section
 
 - Reviewed the `### Dispatch, preconditions, and restrictions` section of [How

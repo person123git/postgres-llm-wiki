@@ -167,11 +167,14 @@ Exclusion constraints are rejected here
 ([index.c:1268-1271](../../../raw/postgres-12/src/backend/catalog/index.c#L1268-L1271)).
 
 RIC then takes a **session-level** `ShareUpdateExclusiveLock` on the old index,
-the new index, and the heap table (including toast)
-([indexcmds.c#session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3068-L3074)),
-saves a `LOCKTAG` per heap for the later waits
+the new index, and the heap table (including toast). It records the two index
+lock relids during the phase-1 loop
+([indexcmds.c#index-session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3024-L3029)),
+records each heap relid and saves a `LOCKTAG` per heap for the later waits
 ([indexcmds.c#locktags](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3042-L3066)),
-then commits. These session locks survive the upcoming commits so nobody can drop
+then takes the session lock on every recorded relation
+([indexcmds.c#session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3068-L3074))
+and commits. These session locks survive the upcoming commits so nobody can drop
 the relations mid-rebuild.
 
 #### Phase 2: wait, then build each new index
