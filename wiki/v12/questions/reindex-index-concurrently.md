@@ -563,16 +563,23 @@ text.
 
 - Functional coverage is in the main regression suite, in the `REINDEX CONCURRENTLY`
   block of `create_index.sql`: it reindexes tables, matviews, a single index, and
-  toast indexes; checks dependency and comment preservation; rebuilds
-  expression/predicate indexes and verifies their definitions are unchanged; and
-  exercises the no-index `NOTICE`
+  toast indexes, checks dependency and comment preservation, and exercises the
+  no-index `NOTICE`
   ([create_index.sql#ric-block](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L786-L905)).
-- Restriction coverage: transaction-block rejection, system-catalog rejection,
-  partitioned no-op/skip, exclusion-constraint error-vs-skip, invalid-index
-  skip-vs-allow, and temporary-table fallback
-  ([create_index.out#restrictions](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2278-L2296),
-  [create_index.out#exclusion](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2029-L2032),
-  [create_index.out#temp](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2439-L2460)).
+  A later sub-test rebuilds expression and predicate indexes and verifies their
+  definitions are unchanged with `pg_get_indexdef` before and after
+  ([create_index.sql#exprs-preds](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L966-L986)).
+- Restriction coverage, each with its own test: transaction-block and
+  system-catalog rejection
+  ([create_index.out#restrictions](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2278-L2296)),
+  partitioned no-op/skip
+  ([create_index.out#partitioned](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2152-L2163)),
+  exclusion-constraint error-vs-skip
+  ([create_index.out#exclusion](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2029-L2032)),
+  invalid-index skip-vs-allow
+  ([create_index.out#invalid-handling](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358)),
+  and temporary-table fallback
+  ([create_index.out#temp](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2439-L2460)).
 - Failure coverage: the invalid `_ccnew` leftover, its manual drop, and the eventual
   repair
   ([create_index.out#invalid-handling](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358)).

@@ -2,6 +2,36 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY test-coverage section
+
+- Reviewed the `### Test coverage` section of [How REINDEX INDEX CONCURRENTLY Is
+  Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Verified the functional `create_index.sql` block items (tables/matviews/single/
+  toast/deps/comments/no-index NOTICE) fall within
+  [create_index.sql:786-905](../raw/postgres-12/src/test/regress/sql/create_index.sql#L786-L905),
+  the isolation spec/out (6 permutations, reindex waits then completes)
+  ([reindex-concurrently.spec:1-40](../raw/postgres-12/src/test/isolation/specs/reindex-concurrently.spec#L1-L40),
+  [reindex-concurrently.out:1-78](../raw/postgres-12/src/test/isolation/expected/reindex-concurrently.out#L1-L78)),
+  and the restriction `.out` ranges (txn/system L2278-2296, exclusion L2029-2032,
+  temp L2439-2460).
+- Fix 1: the functional bullet attributed "rebuilds expression/predicate indexes
+  and verifies their definitions are unchanged" to the L786-905 block, but that
+  `pg_get_indexdef` sub-test (the `concur_exprs_*` indexes) is actually at
+  [create_index.sql:966-986](../raw/postgres-12/src/test/regress/sql/create_index.sql#L966-L986);
+  split it into its own citation.
+- Fix 2: the restriction bullet listed six restriction types but its three
+  citations covered only four — "partitioned no-op/skip"
+  ([create_index.out:2152-2163](../raw/postgres-12/src/test/regress/expected/create_index.out#L2152-L2163))
+  and "invalid-index skip-vs-allow"
+  ([create_index.out:2314-2358](../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358))
+  were uncited there. Restructured the bullet to pair every restriction type with
+  its own test citation.
+- `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY watching-the-phases section
 
 - Reviewed the `### Watching the phases` section of [How REINDEX INDEX
