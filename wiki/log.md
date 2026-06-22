@@ -2,6 +2,28 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY navigation section and section-by-section pass complete
+
+- Reviewed the `## Navigation` section of [How REINDEX INDEX CONCURRENTLY Is
+  Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) and did a whole-page
+  Contents/anchor consistency check against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Navigation: the three page-relative links resolve — sibling
+  `create-index-concurrently.md`, `../index.md` (`wiki/v12/index.md`), and
+  `../../versions.md` (`wiki/versions.md`).
+- Contents: the table of contents lists all 17 `##`/`###` headings in document
+  order (correctly omitting the `####` Phase 1-6 subheadings) and stayed in sync
+  through this review pass; manually checked the anchor slugs (including the
+  comma- and `?`-bearing headings) resolve to their headings.
+- This completes the section-by-section review of the page (opening answer through
+  Navigation): citation-precision/consistency fixes landed in the
+  how-it-differs, six-phases, steps-and-locks, watching-the-phases, test-coverage,
+  and evidence-map sections; all other sections verified accurate as written.
+  `verified_by_agent` stays `not yet` because each pass was a scoped section
+  review, not a single full-page re-verification.
+- No page edits were needed for this final section. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY source-references section
 
 - Reviewed the `## Source References` section (29 entries) of [How REINDEX INDEX
