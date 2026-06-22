@@ -2,6 +2,30 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY watching-the-phases section
+
+- Reviewed the `### Watching the phases` section of [How REINDEX INDEX
+  CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the progress reporting. RIC advertises `command =
+  REINDEX CONCURRENTLY`
+  ([indexcmds.c:2984-2991](../raw/postgres-12/src/backend/commands/indexcmds.c#L2984-L2991));
+  the phase codes
+  ([progress.h:73-82](../raw/postgres-12/src/include/commands/progress.h#L73-L82),
+  WAIT_1=1, WAIT_2=3, WAIT_3=7, WAIT_4=8, WAIT_5=9) map through the
+  `pg_stat_progress_create_index` CASE on the 1-indexed `param10`
+  ([system_views.sql:1004-1016](../raw/postgres-12/src/backend/catalog/system_views.sql#L1004-L1016))
+  to the four phase texts the page lists, with WHEN 9 = "waiting for readers
+  before dropping" being the unused one deferred to Open Questions.
+- Fix: the section ended with a plain backtick reference `See ## Open Questions`;
+  converted it to a clickable internal anchor `[Open Questions](#open-questions)`
+  to match the page's other internal cross-references and the AGENTS.md
+  internal-navigation guidance.
+- `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY multiple-indexes section
 
 - Reviewed the `### Multiple indexes in one command` section of [How REINDEX

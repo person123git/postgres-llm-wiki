@@ -556,7 +556,8 @@ The wait phases map to the view's `phase` text via the integer codes in
 [system_views.sql#create-index-view](../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1004-L1016)):
 `waiting for writers before build`, `waiting for writers before validation`,
 `waiting for old snapshots`, and `waiting for readers before marking dead`. See
-`## Open Questions` for the unused `waiting for readers before dropping` text.
+[Open Questions](#open-questions) for the unused `waiting for readers before dropping`
+text.
 
 ### Test coverage
 
