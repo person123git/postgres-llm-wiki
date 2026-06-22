@@ -335,8 +335,10 @@ The fix depends on which outcome produced it:
   [pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43),
   [index.c#UpdateIndexRelation](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996),
   [index.c#flag-store](../../../raw/postgres-12/src/backend/catalog/index.c#L610-L615).
-- The complete set of `indisvalid` writers, found by grepping `indisvalid =`
-  across the whole `src` tree: the `false`-writers are
+- The complete set of `indisvalid` writers, found by scanning the whole `src`
+  tree for both direct `indisvalid =` assignments and the `UpdateIndexRelation`
+  tuple build (`Anum_pg_index_indisvalid` / `BoolGetDatum(isvalid)`): the
+  `false`-writers are
   `index_create`/`UpdateIndexRelation` (born-invalid),
   `index_set_state_flags(INDEX_DROP_CLEAR_VALID)`, `index_concurrently_swap`, the
   partitioned-parent invalidation in `DefineIndex`, and

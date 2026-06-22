@@ -2,6 +2,29 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes closed-set scan methodology
+
+- Continued the section-by-section review of [All Outcomes That Leave an Invalid
+  Index in PostgreSQL 12, Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- `## Context Reviewed`: tightened the closed-set methodology note. It said the
+  complete set of `indisvalid` writers was "found by grepping `indisvalid =`",
+  but that literal pattern does not match the born-invalid writer it lists —
+  `UpdateIndexRelation` writes `values[Anum_pg_index_indisvalid - 1] =
+  BoolGetDatum(isvalid)`
+  ([index.c:612](../raw/postgres-12/src/backend/catalog/index.c#L612)), where
+  `isvalid = !concurrent && !invalid`, so `indisvalid =` skips it. Reworded to
+  scan for both direct `indisvalid =` assignments and the `UpdateIndexRelation`
+  tuple build (`Anum_pg_index_indisvalid` / `BoolGetDatum(isvalid)`). The
+  conclusion (five producers) is unchanged and was independently re-confirmed.
+- All other Context Reviewed citations re-verified against pinned source.
+- The matching "scan for `indisvalid =`" wording in `## Open Questions` will get
+  the same fix when that section is reviewed.
+- `verified_by_agent` stays `not yet`: scoped review/fix, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes partitioned validation driver correction
 
 - Continued the section-by-section review of [All Outcomes That Leave an Invalid
