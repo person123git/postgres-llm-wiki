@@ -2,6 +2,45 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] expand v12 | REINDEX INDEX CONCURRENTLY on an invalid index
+
+- Added a `### Running REINDEX INDEX CONCURRENTLY on an invalid index` section to
+  [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md), against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, answering
+  what happens when RIC targets an already-invalid index.
+- Source-level conclusion: the behavior splits on **how** the invalid index is
+  reached. Named directly, RIC runs the full six-phase rebuild — the
+  `RELKIND_INDEX` arm of `ReindexRelationConcurrently` appends the OID with no
+  validity test ("Note that invalid indexes are allowed here",
+  [indexcmds.c:2893-2916](../raw/postgres-12/src/backend/commands/indexcmds.c#L2893-L2916))
+  and `ReindexIndex` has no validity gate
+  ([indexcmds.c:2336-2382](../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2382)).
+  Reached via `REINDEX TABLE`/`SCHEMA`/`DATABASE CONCURRENTLY`, the relation arm
+  warns `cannot reindex invalid index "..." concurrently, skipping` and drops it
+  from the work list
+  ([indexcmds.c:2819-2824](../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824);
+  toast indexes with `ERRCODE_INDEX_CORRUPTED` at
+  [indexcmds.c:2865-2870](../raw/postgres-12/src/backend/commands/indexcmds.c#L2865-L2870)).
+- The repair is state-independent: `index_concurrently_create_copy` derives the
+  `_ccnew` definition from the old index's **catalog definition**, not its
+  `indisvalid`/`indisready` flags, and rebuilds data from a fresh heap scan, so an
+  invalid-and-not-ready index (e.g. one left by a failed CIC) rebuilds like a
+  healthy one; the phase-4 swap then makes it valid under the original name
+  ([index.c:1240-1388](../raw/postgres-12/src/backend/catalog/index.c#L1240-L1388),
+  [index.c:1531-1534](../raw/postgres-12/src/backend/catalog/index.c#L1531-L1534)).
+  A directly-named repair still fails again pre-swap if the invalidity cause
+  persists, leaving both the original and `_ccnew` invalid — the regression
+  `concur_reindex_ind5` walk
+  ([create_index.out:2314-2358](../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358)).
+- Updated the page Contents and Evidence Map (two new rows); cross-linked the
+  existing "Can a failure leave an invalid index..." section and the invalid-index
+  outcomes page. Refreshed the `wiki/index.md` and `wiki/v12/index.md` summaries.
+- `verified_by_agent` changed from the `2026-06-12` timestamp to `not yet`: this
+  added new content and was not a full-page re-verification of every pre-existing
+  claim. Title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes Source References attach-validate entry
 
 - Continued the section-by-section review of [All Outcomes That Leave an Invalid

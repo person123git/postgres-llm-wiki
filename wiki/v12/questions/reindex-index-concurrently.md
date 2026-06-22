@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: claude-opus-4-8 2026-06-12T20:15:00Z
+verified_by_agent: not yet
 ---
 
 # How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -19,6 +19,7 @@ verified_by_agent: claude-opus-4-8 2026-06-12T20:15:00Z
   - [State flags for the old and new index](#state-flags-for-the-old-and-new-index)
   - [Failure scenarios and the outcome on the table](#failure-scenarios-and-the-outcome-on-the-table)
   - [Can a failure leave an invalid index with the original index name?](#can-a-failure-leave-an-invalid-index-with-the-original-index-name)
+  - [Running REINDEX INDEX CONCURRENTLY on an invalid index](#running-reindex-index-concurrently-on-an-invalid-index)
   - [Multiple indexes in one command](#multiple-indexes-in-one-command)
   - [Watching the phases](#watching-the-phases)
   - [Test coverage](#test-coverage)
@@ -449,6 +450,80 @@ instruction boundary is scoped under [Open Questions](#open-questions), not
 asserted here
 ([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)).
 
+### Running REINDEX INDEX CONCURRENTLY on an invalid index
+
+**It depends on how RIC reaches the invalid index.** Named directly, RIC
+reindexes it — this is the supported way to repair an invalid index. Reached
+through `REINDEX TABLE`/`SCHEMA`/`DATABASE CONCURRENTLY`, the invalid index is
+**skipped with a warning**, so a bulk concurrent reindex never repairs one.
+
+| How RIC reaches the invalid index | Outcome |
+|---|---|
+| `REINDEX INDEX CONCURRENTLY index_name` (named directly) | **allowed**: runs all six phases and, if the rebuild succeeds, leaves `index_name` valid again |
+| `REINDEX TABLE`/`SCHEMA`/`DATABASE CONCURRENTLY` (reached via a relation) | **skipped**: `WARNING: cannot reindex invalid index "...", skipping`, leaving it invalid |
+
+Why naming it directly works: in `ReindexRelationConcurrently`'s index-gathering
+switch, the `RELKIND_INDEX` arm appends the target OID with **no validity test** —
+the comment is explicit, "Note that invalid indexes are allowed here"
+([indexcmds.c#index-arm](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2893-L2916)) —
+and `ReindexIndex` has no validity gate either
+([indexcmds.c#ReindexIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2382)).
+The relation arm is the opposite: it walks `RelationGetIndexList` and, for any
+index whose `indisvalid` is false, emits
+`cannot reindex invalid index "%s.%s" concurrently, skipping` and drops it from
+the work list
+([indexcmds.c#skip-invalid-via-table](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824));
+toast indexes are skipped the same way, with `ERRCODE_INDEX_CORRUPTED`
+([indexcmds.c:2865-2870](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2865-L2870)).
+
+The repair does not depend on the old index's state. `index_concurrently_create_copy`
+derives the `_ccnew` copy's definition — access method, operator classes,
+collations, columns, expressions, predicate, and uniqueness — from the old
+index's **catalog definition**, never from its `indislive`/`indisready`/`indisvalid`
+flags, and always creates the copy not-ready and not-valid; the copy's data then
+comes from a fresh heap scan, not from the (invalid) old index
+([index.c#index_concurrently_create_copy](../../../raw/postgres-12/src/backend/catalog/index.c#L1240-L1388)).
+So an index that is invalid **and** not ready — for instance one left behind by a
+failed `CREATE INDEX CONCURRENTLY` — rebuilds exactly like a healthy one. When the
+rebuild succeeds, the phase-4 swap flips the new copy to valid under the original
+name (and the old, already-invalid index to `_ccold`), so `index_name` is valid
+again
+([index.c#swap-mark-valid](../../../raw/postgres-12/src/backend/catalog/index.c#L1531-L1534)).
+
+Naming the invalid index does **not guarantee** repair. If the condition that made
+it invalid still holds, the rebuild fails the same way, and because the failure is
+**pre-swap** the original index is untouched and stays invalid — you end up with
+**two** invalid indexes (the original plus the half-built `_ccnew`) and must drop
+`_ccnew`, remove the cause, and retry. The v12 regression suite walks this exact
+sequence on a unique index made invalid by a failed CIC over duplicate data:
+
+1. `REINDEX INDEX CONCURRENTLY concur_reindex_ind5` (named directly) re-runs the
+   build, hits the same duplicate, and fails with
+   `could not create unique index "concur_reindex_ind5_ccnew" ... Key (c1)=(1) is
+   duplicated`; `\d` then shows **both** `concur_reindex_ind5` and
+   `concur_reindex_ind5_ccnew` as `INVALID`
+   ([create_index.out#both-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2333)).
+2. `REINDEX TABLE CONCURRENTLY concur_reindex_tab4` (reaching the index via the
+   table) warns
+   `cannot reindex invalid index "public.concur_reindex_ind5" concurrently, skipping`
+   and — since that was the only index — adds
+   `NOTICE: table "concur_reindex_tab4" has no indexes that can be reindexed
+   concurrently`; the index stays `INVALID`
+   ([create_index.out#skip-via-table](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2338-L2348)).
+3. After `DROP INDEX concur_reindex_ind5_ccnew` and deleting the duplicate,
+   `REINDEX INDEX CONCURRENTLY concur_reindex_ind5` (named directly) finally
+   succeeds and `\d` shows it without `INVALID`
+   ([create_index.out#repaired](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2350-L2358)).
+
+This is why the failure-recovery guidance is to repair an invalid index by
+**naming it** in `REINDEX INDEX CONCURRENTLY` (or a plain blocking `REINDEX INDEX`),
+not by reindexing the whole table. The contrast with a *healthy* `index_name` —
+which a failure never converts into the invalid leftover — is the
+[previous section](#can-a-failure-leave-an-invalid-index-with-the-original-index-name);
+the broader, cross-command catalog of how an index becomes invalid and how to
+clear each case is on the
+[invalid-index outcomes page](invalid-index-outcomes.md).
+
 ### Multiple indexes in one command
 
 `REINDEX TABLE CONCURRENTLY` (and reindex of a matview or toast relation) rebuilds
@@ -544,6 +619,8 @@ The wait phases map to the view's `phase` text via the integer codes in
 | System catalogs rejected directly, but skipped with warning during concurrent schema/database sweeps | [indexcmds.c:2804-2807](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2804-L2807), [indexcmds.c:2530-2533](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2530-L2533), [indexcmds.c:2641-2650](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2641-L2650) |
 | Partitioned table warns and skips; partitioned index named directly errors before the concurrent path | [indexcmds.c:2917-2923](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2917-L2923), [indexcmds.c:2368-2371](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2368-L2371), [indexcmds.c:3390-3396](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3390-L3396) |
 | Invalid index skipped via table, allowed when named directly | [indexcmds.c:2819-2824](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824), [indexcmds.c:2908-2912](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2908-L2912) |
+| A directly-named invalid index runs the full RIC rebuild because `index_concurrently_create_copy` derives the `_ccnew` copy from the old index's catalog definition (AM/opclass/collation/columns/exprs/predicate/uniqueness), not its `indisvalid`/`indisready` flags, and always creates the copy not-ready/not-valid; data comes from a fresh heap scan | [index.c:1240-1388](../../../raw/postgres-12/src/backend/catalog/index.c#L1240-L1388), [indexcmds.c:2336-2382](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2382) |
+| Repairing a directly-named invalid index can fail again pre-swap if the invalidity cause persists, leaving both the original and `_ccnew` invalid; reaching it via `REINDEX TABLE` only warns/skips (toast: `ERRCODE_INDEX_CORRUPTED`); a directly-named retry succeeds once the cause is removed | [indexcmds.c:2865-2870](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2865-L2870), [create_index.out:2314-2358](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358) |
 | Exclusion index: error if named directly, skip if via table | [index.c:1268-1271](../../../raw/postgres-12/src/backend/catalog/index.c#L1268-L1271), [indexcmds.c:2825-2830](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2825-L2830) |
 | Toast indexes are gathered and rebuilt with the table | [indexcmds.c:2844-2888](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2844-L2888) |
 | Phase 1 creates `_ccnew` copy not-ready/not-valid via `index_concurrently_create_copy` | [indexcmds.c:2993-3003](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L3003), [index.c:1240-1388](../../../raw/postgres-12/src/backend/catalog/index.c#L1240-L1388) |
