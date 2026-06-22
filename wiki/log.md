@@ -2,6 +2,28 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY source-references section
+
+- Reviewed the `## Source References` section (29 entries) of [How REINDEX INDEX
+  CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Spot-checked the function-boundary ranges not already confirmed during the body
+  reviews: `ReindexRelationConcurrently` ends at
+  [indexcmds.c:3382](../raw/postgres-12/src/backend/commands/indexcmds.c#L3382),
+  `heap_inplace_update` starts at
+  [heapam.c:5692](../raw/postgres-12/src/backend/access/heap/heapam.c#L5692),
+  `RelationGetIndexList` at
+  [relcache.c:4318](../raw/postgres-12/src/backend/utils/cache/relcache.c#L4318);
+  the phase table body starts ~`monitoring.sgml:3630` and the RIC `.out` block at
+  `create_index.out:2005`. All entries resolve to the right symbol/code.
+- Note: the `RelationGetIndexAttrBitmap` entry (signature at relcache.c:4806) is
+  deliberately cited at L4841-4869 — the HOT-safety index-consideration code the
+  page actually relies on — matching the body's L4864-4869 citation; left as-is.
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY open-questions section
 
 - Reviewed the `## Open Questions` section (four items) of [How REINDEX INDEX
