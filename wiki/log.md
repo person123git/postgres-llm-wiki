@@ -2,6 +2,26 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY multiple-indexes section
+
+- Reviewed the `### Multiple indexes in one command` section of [How REINDEX
+  INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the "each phase loops all indexes, build/validate per-index
+  transaction" claim against the source phase-overview comment
+  ([indexcmds.c:2941-2955](../raw/postgres-12/src/backend/commands/indexcmds.c#L2941-L2955))
+  and the reindex.sgml step-loop note
+  ([reindex.sgml:299-302](../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L299-L302)).
+- Confirmed the regression evidence: the `pg_depend` listing is byte-identical
+  before and after `REINDEX INDEX/TABLE CONCURRENTLY`
+  ([create_index.out:2052-2091](../raw/postgres-12/src/test/regress/expected/create_index.out#L2052-L2091))
+  and an index comment survives `REINDEX TABLE CONCURRENTLY`
+  ([create_index.out:2110-2115](../raw/postgres-12/src/test/regress/expected/create_index.out#L2110-L2115)).
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY on-an-invalid-index section
 
 - Reviewed the `### Running REINDEX INDEX CONCURRENTLY on an invalid index`
