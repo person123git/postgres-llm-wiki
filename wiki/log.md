@@ -2,6 +2,33 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY on-an-invalid-index section
+
+- Reviewed the `### Running REINDEX INDEX CONCURRENTLY on an invalid index`
+  section of [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42` (this
+  section was added 2026-06-22; re-verifying it as part of the section-by-section
+  pass).
+- Re-verified the named-directly-vs-via-table split: the `RELKIND_INDEX` arm
+  appends with no validity test ("Note that invalid indexes are allowed here")
+  ([indexcmds.c:2893-2916](../raw/postgres-12/src/backend/commands/indexcmds.c#L2893-L2916))
+  and `ReindexIndex` has no validity gate
+  ([indexcmds.c:2336-2382](../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2382));
+  the relation arm warns/skips `!indisvalid`
+  ([indexcmds.c:2819-2824](../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824)),
+  and toast indexes skip the same way but with `ERRCODE_INDEX_CORRUPTED`
+  ([indexcmds.c:2865-2870](../raw/postgres-12/src/backend/commands/indexcmds.c#L2865-L2870)).
+- Confirmed the state-independent rebuild (`index_concurrently_create_copy` from
+  the old catalog definition + fresh-scan data; swap re-validates under the
+  original name) and the three-step regression walk
+  ([create_index.out:2314-2358](../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358)),
+  plus that the cross-link anchors and the invalid-index-outcomes page link
+  resolve.
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY can-a-failure-leave-invalid-name section
 
 - Reviewed the `### Can a failure leave an invalid index with the original index
