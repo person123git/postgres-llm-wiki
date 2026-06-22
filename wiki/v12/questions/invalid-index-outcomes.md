@@ -154,7 +154,9 @@ therefore leaves an invalid copy, not necessarily the original
 The key correctness point is that the **swap is the only step that touches the
 original's name or `indisvalid`, and it does both in one transaction**:
 `index_concurrently_swap` renames `_ccnew` to the original name and the original
-to `_ccold`, while flipping `new.indisvalid = true` and `old.indisvalid = false`
+to `_ccold`
+([index.c#swap-names](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492)),
+while flipping `new.indisvalid = true` and `old.indisvalid = false`
 together with the transactional `CatalogTupleUpdate`
 ([index.c#index_concurrently_swap](../../../raw/postgres-12/src/backend/catalog/index.c#L1531-L1537)).
 So a healthy `index_name` is **never** left invalid by a RIC failure; the invalid

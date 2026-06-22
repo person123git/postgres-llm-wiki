@@ -2,6 +2,29 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes RIC swap rename citation
+
+- Section-by-section review of [All Outcomes That Leave an Invalid Index in
+  PostgreSQL 12, Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, per user
+  request (review and commit one section at a time).
+- `### 2. A failed or cancelled REINDEX CONCURRENTLY`: the swap sentence asserts
+  `index_concurrently_swap` renames `_ccnew`/`_ccold` *and* flips `indisvalid` in
+  one transaction, but cited only the validity flip
+  ([index.c:1531-1537](../raw/postgres-12/src/backend/catalog/index.c#L1531-L1537)).
+  Added a citation to the actual name swap
+  ([index.c:1490-1492](../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492),
+  the two `namestrcpy` calls), so both halves of the one-transaction atomicity
+  claim are cited from inside `index_concurrently_swap`. No claim changed.
+- Earlier sections in this pass (Question, the five-outcome overview, the flag /
+  producers / state machinery, and the CIC outcome) were re-verified against
+  pinned source and needed no edit.
+- `verified_by_agent` stays `not yet`: scoped review/fix, not a full-page
+  re-verification; CIC/RIC crash-recovery flag state stays delegated to the
+  sibling pages.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes RIC crash-scope and citation pass
 
 - Reviewed [All Outcomes That Leave an Invalid Index in PostgreSQL 12, Including
