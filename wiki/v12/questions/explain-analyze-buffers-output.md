@@ -8,13 +8,29 @@ verified_by_agent: not yet
 
 # EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)
 
+## Contents
+
+- [Question](#question)
+- [Short Answer](#short-answer)
+- [What Each Field Means](#what-each-field-means)
+- [How The Counters Are Collected](#how-the-counters-are-collected)
+- [Where It Appears In The Plan](#where-it-appears-in-the-plan)
+- [I/O Timing And `track_io_timing`](#io-timing-and-trackiotiming)
+- [Reading Common Patterns](#reading-common-patterns)
+- [Tests And Examples](#tests-and-examples)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Related Pages](#related-pages)
+
 ## Question
 
 In PostgreSQL 12, when a query uses `EXPLAIN (ANALYZE, BUFFERS)`, describe in detail all buffer information in the output.
 
 ## Short Answer
 
-In PostgreSQL 12, `EXPLAIN (ANALYZE, BUFFERS)` executes the statement and adds buffer-use counters to the plan-node instrumentation. `BUFFERS` is rejected unless `ANALYZE` is also set, and `ExplainOnePlan` turns the option into `INSTRUMENT_BUFFERS` before it builds the `QueryDesc` and runs the executor [explain.c#ExplainQuery](../../../raw/postgres-12/src/backend/commands/explain.c#L143) [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L374).
+In PostgreSQL 12, `EXPLAIN (ANALYZE, BUFFERS)` executes the statement and adds buffer-use counters to the plan-node instrumentation. `BUFFERS` is rejected unless `ANALYZE` is also set, and `ExplainOnePlan` turns the option into `INSTRUMENT_BUFFERS` before it builds the `QueryDesc` and runs the executor [explain.c#ExplainQuery](../../../raw/postgres-12/src/backend/commands/explain.c#L143) [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L466).
 
 The text output prints lines like:
 
@@ -27,7 +43,7 @@ Those fields come directly from `BufferUsage`: shared blocks, local blocks, temp
 
 ## What Each Field Means
 
-`shared` means blocks for ordinary relations and indexes in the shared buffer pool. `local` means blocks for temporary relations and indexes in the backend-local buffer pool. `temp` means short-lived working files used by operations such as sorts, hashes, materialization, and similar executor work [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43).
+`shared` means blocks for ordinary relations and indexes in the shared buffer pool. `local` means blocks for temporary relations and indexes in the backend-local buffer pool. `temp` means short-lived working files used by operations such as sorts, hashes, materialization, and similar executor work [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192).
 
 The counters are block counters, not tuple counters. A PostgreSQL data block is `BLCKSZ` bytes, typically 8kB in a normal build [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19) [config.sgml#BLCKSZ](../../../raw/postgres-12/doc/src/sgml/config.sgml#L1504).
 
@@ -49,9 +65,9 @@ The counters are block counters, not tuple counters. A PostgreSQL data block is 
 
 `pgBufferUsage` is the backend-wide buffer-use accumulator. Plan nodes do not own separate counters while they run. Instead, instrumentation snapshots `pgBufferUsage` at node entry and adds the difference between the current value and the saved value at node exit [instrument.h#pgBufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L73) [instrument.c#InstrStartNode](../../../raw/postgres-12/src/backend/executor/instrument.c#L63) [instrument.c#InstrStopNode](../../../raw/postgres-12/src/backend/executor/instrument.c#L76).
 
-Executor nodes get an `Instrumentation` object when `estate->es_instrument` is set, and the executor wrapper calls `InstrStartNode` before the node callback and `InstrStopNode` after it returns a slot [execProcnode.c#ExecInitNode](../../../raw/postgres-12/src/backend/executor/execProcnode.c#L139) [execProcnode.c#ExecProcNodeInstr](../../../raw/postgres-12/src/backend/executor/execProcnode.c#L455). Because a parent node is instrumented while it calls its children, an upper-level node includes the buffer use of its child nodes. The PostgreSQL 12 `EXPLAIN` reference states the same rule explicitly [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43).
+Executor nodes get an `Instrumentation` object when `estate->es_instrument` is set, and the executor wrapper calls `InstrStartNode` before the node callback and `InstrStopNode` after it returns a slot [execProcnode.c#ExecInitNode](../../../raw/postgres-12/src/backend/executor/execProcnode.c#L139) [execProcnode.c#ExecProcNodeInstr](../../../raw/postgres-12/src/backend/executor/execProcnode.c#L455). Because a parent node is instrumented while it calls its children, an upper-level node includes the buffer use of its child nodes. The PostgreSQL 12 `EXPLAIN` reference states the same rule explicitly [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192).
 
-Do not add every `Buffers:` line in the text plan to get a query total. A parent already includes its descendants, so summing parent and child lines double-counts the same work [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43).
+Do not add every `Buffers:` line in the text plan to get a query total. A parent already includes its descendants, so summing parent and child lines double-counts the same work [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192).
 
 The counters are event counters, not distinct-page counters. `ReadBuffer_common` increments a hit, read, or extension-written counter each time a buffer request follows that path, so repeated requests for the same block can increase the count more than once [bufmgr.c#ReadBuffer_common](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L704).
 
@@ -61,7 +77,7 @@ The counters are event counters, not distinct-page counters. `ReadBuffer_common`
 
 In parallel query, PostgreSQL 12 allocates per-worker `BufferUsage` slots in dynamic shared memory. A worker stores the delta from its parallel execution with `InstrEndParallelQuery`, and the leader later accumulates those worker values into its own `pgBufferUsage` with `InstrAccumParallelQuery` [execParallel.c#ExecInitParallelPlan](../../../raw/postgres-12/src/backend/executor/execParallel.c#L561) [execParallel.c#ParallelQueryMain](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1330) [execParallel.c#ExecParallelFinish](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1073). `EXPLAIN (ANALYZE, VERBOSE, BUFFERS)` can print per-worker buffer detail because `ExplainNode` walks `worker_instrument` and calls `show_buffer_usage` for each worker [explain.c#ExplainNode](../../../raw/postgres-12/src/backend/commands/explain.c#L1062).
 
-Trigger functions are instrumented when trigger instrumentation is allocated, but the trigger report in PostgreSQL 12 prints trigger time and calls only. `report_triggers` does not call `show_buffer_usage`, so the separate `Trigger ...` summary does not display buffer fields [execMain.c#InitResultRelInfo](../../../raw/postgres-12/src/backend/executor/execMain.c#L850) [trigger.c#ExecCallTriggerFunc](../../../raw/postgres-12/src/backend/commands/trigger.c#L2373) [explain.c#report_triggers](../../../raw/postgres-12/src/backend/commands/explain.c#L907).
+Trigger functions are instrumented when trigger instrumentation is allocated, but the trigger report in PostgreSQL 12 prints trigger time and calls only. `report_triggers` does not call `show_buffer_usage`, so the separate `Trigger ...` summary does not display buffer fields [execMain.c#InitResultRelInfo](../../../raw/postgres-12/src/backend/executor/execMain.c#L1277) [trigger.c#ExecCallTriggerFunc](../../../raw/postgres-12/src/backend/commands/trigger.c#L2373) [explain.c#report_triggers](../../../raw/postgres-12/src/backend/commands/explain.c#L907).
 
 ## I/O Timing And `track_io_timing`
 
@@ -101,7 +117,7 @@ This is a test-coverage gap for literal `Buffers:` output formatting, though the
 ## Context Reviewed
 
 - [explain.c#ExplainQuery](../../../raw/postgres-12/src/backend/commands/explain.c#L143)
-- [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L374)
+- [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L466)
 - [explain.c#ExplainNode](../../../raw/postgres-12/src/backend/commands/explain.c#L1062)
 - [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867)
 - [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19)
@@ -128,12 +144,12 @@ This is a test-coverage gap for literal `Buffers:` output formatting, though the
 | Claim | Source |
 |---|---|
 | `BUFFERS` requires `ANALYZE` | [explain.c#ExplainQuery](../../../raw/postgres-12/src/backend/commands/explain.c#L143) |
-| `BUFFERS` maps to `INSTRUMENT_BUFFERS` | [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L374) |
+| `BUFFERS` maps to `INSTRUMENT_BUFFERS` | [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L466) |
 | Buffer counters are stored in `BufferUsage` | [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19) |
 | Plan nodes capture deltas from `pgBufferUsage` | [instrument.c#InstrStartNode](../../../raw/postgres-12/src/backend/executor/instrument.c#L63) [instrument.c#InstrStopNode](../../../raw/postgres-12/src/backend/executor/instrument.c#L76) |
 | Text format prints only positive buffer counters | [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867) |
 | Non-text formats emit explicit buffer properties | [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867) |
-| Upper nodes include child-node buffer use | [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43) |
+| Upper nodes include child-node buffer use | [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192) |
 | Shared/local hit/read/written counters are updated by `ReadBuffer_common` | [bufmgr.c#ReadBuffer_common](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L704) |
 | Shared dirty/write counters are updated by dirty/flush paths | [bufmgr.c#MarkBufferDirty](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1457) [bufmgr.c#FlushBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2672) |
 | Local dirty/write counters are updated by local buffer paths | [localbuf.c#MarkLocalBufferDirty](../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L280) [localbuf.c#LocalBufferAlloc](../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L103) |
@@ -146,7 +162,7 @@ This is a test-coverage gap for literal `Buffers:` output formatting, though the
 ## Source References
 
 - [explain.c#ExplainQuery](../../../raw/postgres-12/src/backend/commands/explain.c#L143) - parses `EXPLAIN` options and rejects `BUFFERS` without `ANALYZE`.
-- [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L374) - maps `BUFFERS` to executor instrumentation and runs the plan.
+- [explain.c#ExplainOnePlan](../../../raw/postgres-12/src/backend/commands/explain.c#L466) - maps `BUFFERS` to executor instrumentation and runs the plan.
 - [explain.c#ExplainNode](../../../raw/postgres-12/src/backend/commands/explain.c#L1062) - decides where buffer usage is printed for each node and worker.
 - [explain.c#show_buffer_usage](../../../raw/postgres-12/src/backend/commands/explain.c#L2867) - formats text, JSON, XML, and YAML buffer output.
 - [instrument.h#BufferUsage](../../../raw/postgres-12/src/include/executor/instrument.h#L19) - defines all buffer counters and I/O timing fields.
@@ -160,13 +176,13 @@ This is a test-coverage gap for literal `Buffers:` output formatting, though the
 - [buffile.c#BufFileLoadBuffer](../../../raw/postgres-12/src/backend/storage/file/buffile.c#L413) and [buffile.c#BufFileDumpBuffer](../../../raw/postgres-12/src/backend/storage/file/buffile.c#L452) - temp file read/write accounting.
 - [execParallel.c#ExecInitParallelPlan](../../../raw/postgres-12/src/backend/executor/execParallel.c#L561), [execParallel.c#ParallelQueryMain](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1330), and [execParallel.c#ExecParallelFinish](../../../raw/postgres-12/src/backend/executor/execParallel.c#L1073) - parallel worker buffer accounting.
 - [guc.c#track_io_timing](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1402) - `track_io_timing` GUC definition.
-- [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43) - user-facing definition of `BUFFERS` fields.
+- [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192) - user-facing definition of `BUFFERS` fields.
 - [config.sgml#track_io_timing](../../../raw/postgres-12/doc/src/sgml/config.sgml#L6854) - user-facing `track_io_timing` behavior and overhead note.
 - [perform.sgml#EXPLAIN-BUFFERS-example](../../../raw/postgres-12/doc/src/sgml/perform.sgml#L694-L718) - same-version documentation example with `Buffers:` lines.
 
 ## Open Questions
 
-- The documentation describes `written` as previously dirty blocks evicted from cache, while the PostgreSQL 12 source also increments `shared_blks_written` and `local_blks_written` during relation extension in `ReadBuffer_common`. This page follows the implementation source for the detailed field definition [ref/explain.sgml#BUFFERS](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L43) [bufmgr.c#ReadBuffer_common](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L704).
+- The documentation describes `written` as previously dirty blocks evicted from cache, while the PostgreSQL 12 source also increments `shared_blks_written` and `local_blks_written` during relation extension in `ReadBuffer_common`. This page follows the implementation source for the detailed field definition [ref/explain.sgml#BUFFERS-def](../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192) [bufmgr.c#ReadBuffer_common](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L704).
 
 ## Related Pages
 

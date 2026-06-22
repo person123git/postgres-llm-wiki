@@ -2,6 +2,65 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | EXPLAIN ANALYZE BUFFERS full-page citation pass + Contents TOC
+
+- Reviewed [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12
+  (unverified)](v12/questions/explain-analyze-buffers-output.md) section by
+  section against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, per user request. Verified every
+  citation target and every behavioral claim against source.
+- Fixed three citation defects:
+  - `explain.c#ExplainOnePlan` pointed at `#L374`, which is the call site inside
+    `ExplainOneQuery`, not the function. Repointed to the definition `#L466`
+    (the `if (es->buffers) instrument_option |= INSTRUMENT_BUFFERS;` mapping is
+    at [explain.c:484-485](../raw/postgres-12/src/backend/commands/explain.c#L484-L485)).
+    4 occurrences (Short Answer, Context Reviewed, Evidence Map, Source References).
+  - `execMain.c#InitResultRelInfo` pointed at `#L850`; the definition is `#L1277`
+    and the trigger-instrumentation alloc is
+    [execMain.c:1302-1303](../raw/postgres-12/src/backend/executor/execMain.c#L1302-L1303).
+    1 occurrence (Where It Appears In The Plan).
+  - `ref/explain.sgml#BUFFERS` at `#L43` is only the synopsis token
+    `BUFFERS [ boolean ]`; the descriptive prose (shared/local/temp meaning,
+    dirtied/written, upper-node-includes-children) is the varlistentry at
+    [ref/explain.sgml:168-192](../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L168-L192).
+    Moved the 6 prose claims to the existing `#BUFFERS-def`/`#L168-L192` anchor
+    (What Each Field Means, the two How-The-Counters paragraphs, Evidence Map,
+    Source References, Open Questions). Kept the synopsis `#BUFFERS`/`#L43` entry
+    in Context Reviewed as distinct reviewed context.
+- Added the mandatory `## Contents` table of contents (the page predated the TOC
+  rule; this review is a substantial revision, so the migration grace no longer
+  applies).
+- Confirmed-correct and left unchanged: all `bufmgr.c`/`localbuf.c`/`buffile.c`
+  counter increments and read/write timing
+  ([bufmgr.c:736-757](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L736-L757),
+  [bufmgr.c:904](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L904),
+  [bufmgr.c:2769-2772](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2769-L2772),
+  [bufmgr.c:1497-1500](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1497-L1500),
+  [localbuf.c:227](../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L227),
+  [localbuf.c:300-301](../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L300-L301),
+  [buffile.c:440-441](../raw/postgres-12/src/backend/storage/file/buffile.c#L440-L441),
+  [buffile.c:497](../raw/postgres-12/src/backend/storage/file/buffile.c#L497));
+  `show_buffer_usage` text/non-text formatting
+  ([explain.c:2867-2984](../raw/postgres-12/src/backend/commands/explain.c#L2867-L2984));
+  the snapshot/diff and wrapper instrumentation
+  ([instrument.c:71](../raw/postgres-12/src/backend/executor/instrument.c#L71),
+  [instrument.c:97-98](../raw/postgres-12/src/backend/executor/instrument.c#L97-L98),
+  [execProcnode.c:392-393](../raw/postgres-12/src/backend/executor/execProcnode.c#L392-L393),
+  [execProcnode.c:455-466](../raw/postgres-12/src/backend/executor/execProcnode.c#L455-L466));
+  the parallel and per-worker paths
+  ([explain.c:1864-1931](../raw/postgres-12/src/backend/commands/explain.c#L1864-L1931));
+  the trigger path ([execMain.c:1302-1303](../raw/postgres-12/src/backend/executor/execMain.c#L1302-L1303),
+  [trigger.c:2410-2461](../raw/postgres-12/src/backend/commands/trigger.c#L2410-L2461),
+  [explain.c:951-955](../raw/postgres-12/src/backend/commands/explain.c#L951-L955));
+  `track_io_timing` PGC_SUSET/default-false
+  ([guc.c:1402-1407](../raw/postgres-12/src/backend/utils/misc/guc.c#L1402-L1407));
+  and all Tests-And-Examples claims, including the verified absence of any
+  literal `Buffers:` EXPLAIN output in `expected/*.out` and isolation specs.
+- `verified_by_agent` stays `not yet` and the title keeps `(unverified)`
+  (`verified:` is human-only). Every claim and citation was re-checked against
+  pinned source in this pass.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-19] open-question v18 | RLS minor-release first-appearance labels assigned
 
 - Resolved the remaining `## Open Questions` item on [Row-Level Security (RLS) in
