@@ -2,6 +2,32 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY can-a-failure-leave-invalid-name section
+
+- Reviewed the `### Can a failure leave an invalid index with the original index
+  name?` section of [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL
+  12 (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the central "healthy index name is never left invalid" claim. The
+  phase-4 swap is the only step that touches the original's name *and* its
+  `indisvalid` (renames + flips both flags) via transactional `CatalogTupleUpdate`
+  in one transaction
+  ([index.c:1490-1492](../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492),
+  [index.c:1531-1537](../raw/postgres-12/src/backend/catalog/index.c#L1531-L1537),
+  [indexcmds.c:3212-3261](../raw/postgres-12/src/backend/commands/indexcmds.c#L3212-L3261));
+  phase 5 set-dead touches only the already-renamed `_ccold`'s
+  `indisready`/`indislive`, not its name or `indisvalid`. Confirmed the verbatim
+  intent comment
+  ([indexcmds.c:3207-3209](../raw/postgres-12/src/backend/commands/indexcmds.c#L3207-L3209)).
+- Confirmed the repair-exception regression citations
+  ([create_index.out:2317-2333](../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2333),
+  [create_index.out:2335-2358](../raw/postgres-12/src/test/regress/expected/create_index.out#L2335-L2358))
+  and that the two internal anchors (`#failure-scenarios-and-the-outcome-on-the-table`,
+  `#open-questions`) resolve.
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY failure-scenarios section
 
 - Reviewed the `### Failure scenarios and the outcome on the table` section of
