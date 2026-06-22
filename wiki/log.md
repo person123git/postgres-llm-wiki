@@ -2,6 +2,31 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes DROP INDEX CONCURRENTLY quote citation
+
+- Continued the section-by-section review of [All Outcomes That Leave an Invalid
+  Index in PostgreSQL 12, Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- `### 3. A failed or interrupted DROP INDEX CONCURRENTLY`: the section quotes
+  "more or less the reverse" and paraphrases the keep-`indisready` rationale, but
+  its only inline citation
+  ([index.c:2089-2192](../raw/postgres-12/src/backend/catalog/index.c#L2089-L2192))
+  starts after both. Added the `index_drop` overview-comment citation
+  ([index.c:2058-2067](../raw/postgres-12/src/backend/catalog/index.c#L2058-L2067)),
+  which holds the verbatim "more or less the reverse process of Create Index
+  Concurrently" line and the "keep indisready = true so transactions that are
+  still scanning the index can continue to see valid index contents" rationale.
+  No claim changed.
+- Rest of the DROP INDEX CONCURRENTLY section re-verified and unchanged: the
+  4-step `index_drop` concurrent sequence (clear-valid + commit, WaitForLockers,
+  `index_concurrently_set_dead`/`INDEX_DROP_SET_DEAD` + commit, WaitForLockers +
+  delete), the (t,t,f)->(f,f,f) states, the `RelationGetIndexList` not-live skip,
+  the retryable clear-valid, and the single-transaction non-concurrent contrast.
+- `verified_by_agent` stays `not yet`: scoped review/fix, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes RIC swap rename citation
 
 - Section-by-section review of [All Outcomes That Leave an Invalid Index in

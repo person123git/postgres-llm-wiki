@@ -175,9 +175,11 @@ asserting it here.
 
 ### 3. A failed or interrupted DROP INDEX CONCURRENTLY
 
-`DROP INDEX CONCURRENTLY` is "more or less the reverse" of CIC and also commits
-several times, so an interruption can leave the index invalid even though you
-were trying to remove it. The sequence inside `index_drop` (concurrent branch) is
+`DROP INDEX CONCURRENTLY` is "more or less the reverse" of CIC
+([index.c#dic-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L2058-L2067))
+and also commits several times, so an interruption can leave the index invalid
+even though you were trying to remove it. The sequence inside `index_drop`
+(concurrent branch) is
 ([index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2089-L2192)):
 
 1. `index_set_state_flags(INDEX_DROP_CLEAR_VALID)` — set `indisvalid = false`
