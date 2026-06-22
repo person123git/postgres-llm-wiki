@@ -323,11 +323,13 @@ The fix depends on which outcome produced it:
   [pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43),
   [index.c#UpdateIndexRelation](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996),
   [index.c#flag-store](../../../raw/postgres-12/src/backend/catalog/index.c#L610-L615).
-- The complete set of `indisvalid` writers, found by grepping `indisvalid` across
-  `src/backend` and `src/bin/pg_upgrade`: `index_create`/`UpdateIndexRelation`,
-  `index_set_state_flags`, `index_concurrently_swap`, the partitioned-parent
-  invalidation in `DefineIndex`, `validatePartitionedIndex`, and
-  `old_9_6_invalidate_hash_indexes`.
+- The complete set of `indisvalid` writers, found by grepping `indisvalid =`
+  across the whole `src` tree: the `false`-writers are
+  `index_create`/`UpdateIndexRelation` (born-invalid),
+  `index_set_state_flags(INDEX_DROP_CLEAR_VALID)`, `index_concurrently_swap`, the
+  partitioned-parent invalidation in `DefineIndex`, and
+  `old_9_6_invalidate_hash_indexes`; `validatePartitionedIndex` and the CIC
+  set-valid / non-concurrent reindex paths only ever set `true`.
 - CIC state machine and failure outcomes:
   [index.c#concurrent-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L3114-L3168),
   [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403),
@@ -378,8 +380,12 @@ The fix depends on which outcome produced it:
 ## Open Questions
 
 None for v12 source behavior — the writers of `indisvalid = false` enumerated
-above are the complete set in the pinned checkout (whole-tree grep of
-`indisvalid` over `src/backend` and `src/bin/pg_upgrade`). Two scoping notes:
+above are the complete set in the pinned checkout. A whole-source-tree scan for
+`indisvalid =` assignments confirms it: the only sites that write the catalog
+flag to `false` are the paths in the producers table above; every other match
+either sets it `true` (`validatePartitionedIndex`, the CIC set-valid and
+non-concurrent reindex paths) or is a non-write read into a local or relcache
+copy (`describe.c`, `relcache.c`, `tablecmds.c`). Two scoping notes:
 
 - **Out of scope: manual catalog edits.** A superuser can `UPDATE pg_index SET
   indisvalid = false` directly; that is catalog tampering, not an outcome of a

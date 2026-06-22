@@ -2,6 +2,46 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | all outcomes that leave an invalid index — full re-verification
+
+- Reviewed [All Outcomes That Leave an Invalid Index in PostgreSQL 12, Including
+  a Failed CREATE INDEX CONCURRENTLY (unverified)](v12/questions/invalid-index-outcomes.md)
+  against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42` — the full claim-by-claim
+  re-verification the filing entry left pending.
+- Re-checked every source citation's line range against the pin: `index.c`
+  (`UpdateIndexRelation` flag store, `index_concurrently_swap` L1531-1537,
+  `index_concurrently_set_dead`, `index_drop` concurrent branch L2089-2192,
+  `validate_index` overview L3114-3168, `index_set_state_flags` L3331-3403),
+  `indexcmds.c` (CIC first commit L1318-1320, partitioned `INDEX_CREATE_INVALID`
+  L988-998, attach-invalid-child L1243-1265, bulk-REINDEX skip L2819-2824),
+  `tablecmds.c` `validatePartitionedIndex` L16682-16768 and replica-identity
+  reject, `plancat.c` invalid/partitioned skips, `pg_index.h` flags, `index.h`
+  `INDEX_CREATE_INVALID`, `execIndexing.c`, `vacuum.c`, `cluster.c`, `matview.c`,
+  `parse_utilcmd.c`, `relcache.c`, `check.c`, `version.c`; plus the doc
+  (`create_index.sgml`) and regression (`create_index.out`, `indexing.out`)
+  evidence. All ranges resolve and support their claims.
+- Re-confirmed the page's central thesis (the closed set of `indisvalid = false`
+  producers) with a whole-source-tree scan for `indisvalid =`: the only catalog
+  `false`-writers anywhere are `index.c:612` born-invalid (CIC + partitioned
+  `ON ONLY`), `index.c:1533` (RIC swap), `index.c:3381`
+  (`INDEX_DROP_CLEAR_VALID`), `indexcmds.c:1260` (partitioned invalid child), and
+  `version.c:369` (`pg_upgrade` hash). `index_concurrently_swap` and
+  `INDEX_DROP_CLEAR_VALID` have exactly one caller each, confirming the RIC-only
+  and DROP-INDEX-CONCURRENTLY-only attributions. Verified the partitioned invalid
+  parent is born `(indislive,indisready,indisvalid) = (t,t,f)` from the
+  `index_create` flag derivation (`invalid` true, `concurrent` false).
+- Only edits were two evidence-note tightenings (no claim changed): corrected the
+  Open Questions completeness note (the prior "whole-tree grep over `src/backend`
+  and `src/bin/pg_upgrade`" wording) to describe the whole-source-tree scan and
+  name the non-write `indisvalid =` sites, and split `validatePartitionedIndex`
+  (sets `true`) out of the Context Reviewed `false`-writer list.
+- `verified_by_agent` stays `not yet`: this page's body crash/`immediate`-shutdown
+  claim for the CIC flag flips delegates its full WAL-redo proof to the sibling
+  CIC page, whose RIC crash-boundary state is still an Open Question, so not every
+  claim is independently closed on this page.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] question v12 | all outcomes that leave an invalid index
 
 - Filed [All Outcomes That Leave an Invalid Index in PostgreSQL 12, Including a
