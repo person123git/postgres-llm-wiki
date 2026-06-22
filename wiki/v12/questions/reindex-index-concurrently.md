@@ -273,7 +273,9 @@ Two lock layers act on each **heap table**, exactly as in CIC: a
 **transaction-level** `ShareUpdateExclusiveLock` re-taken inside each helper, and a
 **session-level** `ShareUpdateExclusiveLock` that spans the commit gaps. RIC
 additionally holds session `ShareUpdateExclusiveLock` on both the **old and new
-index** relations
+index** relations — their lock relids are registered in the phase-1 loop
+([indexcmds.c#index-session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3024-L3029))
+and locked alongside the heaps
 ([indexcmds.c#session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3068-L3074)).
 DML never conflicts with any of these
 ([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81)).

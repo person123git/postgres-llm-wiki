@@ -2,6 +2,40 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY steps-and-locks section
+
+- Reviewed the `### All steps and locks required on the table` section of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the phase/lock/wait table and prose. Confirmed each helper's lock
+  modes: build takes heap SUEL + new-index `RowExclusiveLock`
+  ([index.c:1411](../raw/postgres-12/src/backend/catalog/index.c#L1411),
+  [index.c:1414](../raw/postgres-12/src/backend/catalog/index.c#L1414)); validation
+  the same
+  ([index.c:3204-3206](../raw/postgres-12/src/backend/catalog/index.c#L3204-L3206));
+  set-dead heap + old-index SUEL
+  ([index.c:1738-1739](../raw/postgres-12/src/backend/catalog/index.c#L1738-L1739));
+  drop heap + old-index SUEL
+  ([index.c:2049-2050](../raw/postgres-12/src/backend/catalog/index.c#L2049-L2050)).
+- Confirmed `WaitForLockersMultiple` waits on VXIDs of current conflict holders
+  and not on later lockers
+  ([lmgr.c:850-949](../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)),
+  and the SUEL self-conflict comment
+  ([lock.c:194-196](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L194-L196)).
+- Fix: applied the same Phase-1 session-lock precision fix as the six-phases
+  section — the "RIC holds session SUEL on the old and new index relations"
+  summary cited only the acquisition loop (L3068-3074); added the index lock-relid
+  registration site
+  ([indexcmds.c:3024-3029](../raw/postgres-12/src/backend/commands/indexcmds.c#L3024-L3029))
+  so the claim is traceable within this section.
+- Follow-up (carried from the six-phases entry): the matching Evidence Map row
+  still cites only `indexcmds.c:3042-3074`; extend it to include `3024-3029` when
+  the Evidence Map section is reviewed.
+- `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY six-phases section
 
 - Reviewed the `### The six phases` section (Phase 1-6 subsections) of [How
