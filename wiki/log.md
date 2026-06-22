@@ -2,6 +2,42 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes partitioned validation driver correction
+
+- Continued the section-by-section review of [All Outcomes That Leave an Invalid
+  Index in PostgreSQL 12, Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- `### 4. An incomplete partitioned index`: corrected a factual error. The page
+  said partitioned-parent validation "is driven by `ALTER INDEX ... ATTACH
+  PARTITION` (or by `ALTER TABLE ... ATTACH PARTITION`)". The `ALTER TABLE`
+  parenthetical is wrong in v12: `validatePartitionedIndex` has exactly one
+  external caller, `ATExecAttachPartitionIdx` (the `ALTER INDEX ... ATTACH
+  PARTITION` executor)
+  ([tablecmds.c:16643](../raw/postgres-12/src/backend/commands/tablecmds.c#L16643)),
+  plus its own upward recursion
+  ([tablecmds.c:16764](../raw/postgres-12/src/backend/commands/tablecmds.c#L16764));
+  `ALTER TABLE ... ATTACH PARTITION` runs `AttachPartitionEnsureIndexes`
+  ([tablecmds.c:15771](../raw/postgres-12/src/backend/commands/tablecmds.c#L15771),
+  [tablecmds.c:15872](../raw/postgres-12/src/backend/commands/tablecmds.c#L15872)),
+  which never calls it. The sole `indisvalid = true` writer for a partitioned
+  parent is `validatePartitionedIndex`
+  ([tablecmds.c:16736](../raw/postgres-12/src/backend/commands/tablecmds.c#L16736)),
+  and the docs agree only `ALTER INDEX ... ATTACH PARTITION` marks the parent
+  valid
+  ([create_index.sgml:684-685](../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L684-L685)).
+  Removed the parenthetical and added the driver's caller citation
+  ([tablecmds.c:16636-16643](../raw/postgres-12/src/backend/commands/tablecmds.c#L16636-L16643)).
+  This also resolves an internal inconsistency: the page's "How to clear" section
+  already named only `ALTER INDEX ... ATTACH PARTITION`.
+- Rest of the partitioned-index section re-verified and unchanged: the ON ONLY
+  `INDEX_CREATE_INVALID` path, the invalid-child `invalidate_parent` path, the
+  `tuples == nparts` validity gate with upward recursion, the planner's
+  ignore-all-partitioned-indexes skip, and the two `indexing.out` lifecycles.
+- `verified_by_agent` stays `not yet`: scoped review/fix, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes DROP INDEX CONCURRENTLY quote citation
 
 - Continued the section-by-section review of [All Outcomes That Leave an Invalid

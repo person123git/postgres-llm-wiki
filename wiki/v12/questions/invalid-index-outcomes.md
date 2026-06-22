@@ -231,9 +231,10 @@ index**. Two operations can leave the parent invalid:
 The parent flips to valid only when `validatePartitionedIndex` counts a valid
 matching index on **every** partition; until then it stays invalid
 ([tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769)).
-That validation is driven by `ALTER INDEX ... ATTACH PARTITION` (or by
-`ALTER TABLE ... ATTACH PARTITION`), and it recurses upward so a multi-level
-partition hierarchy becomes valid in one chain once the last leaf is attached
+That validation is driven by `ALTER INDEX ... ATTACH PARTITION`
+([tablecmds.c#attach-validate](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16636-L16643)),
+and it recurses upward so a multi-level partition hierarchy becomes valid in one
+chain once the last leaf is attached
 ([tablecmds.c#validate-recurse](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16744-L16768)).
 
 The regression suite shows the full lifecycle: `CREATE INDEX ON ONLY` on two
