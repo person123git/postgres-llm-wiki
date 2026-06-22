@@ -431,6 +431,7 @@ a non-write read into a local or relcache copy (`describe.c`, `relcache.c`,
 - [heapam.c#heap_xlog_inplace](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)
 - [indexcmds.c#partitioned-recursion](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1040-L1276)
 - [indexcmds.c#reindex-skip-invalid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824)
+- [tablecmds.c#attach-validate](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16636-L16643)
 - [tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769)
 - [tablecmds.c#replica-identity-invalid](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L13976-L13981)
 - [plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L219)

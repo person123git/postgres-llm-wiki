@@ -2,6 +2,25 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes Source References attach-validate entry
+
+- Continued the section-by-section review of [All Outcomes That Leave an Invalid
+  Index in PostgreSQL 12, Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- `## Source References`: verified every existing entry resolves to its symbol,
+  then added the `ATExecAttachPartitionIdx` driver
+  ([tablecmds.c:16636-16643](../raw/postgres-12/src/backend/commands/tablecmds.c#L16636-L16643))
+  — the one inline citation added during this review (the
+  `### 4. An incomplete partitioned index` validation-driver correction) not
+  already covered by a broader function-level entry. The two other new inline
+  cites (`swap-names` L1490-1492 and `dic-overview` L2058-2067) are already
+  covered by the `index_concurrently_swap` (L1447-1716) and `index_drop`
+  (L2007-2276) entries.
+- `verified_by_agent` stays `not yet`: scoped review/fix, not a full-page
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | invalid-index outcomes Open Questions completeness wording
 
 - Continued the section-by-section review of [All Outcomes That Leave an Invalid
