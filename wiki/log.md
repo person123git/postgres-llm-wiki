@@ -2,6 +2,30 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY open-questions section
+
+- Reviewed the `## Open Questions` section (four items) of [How REINDEX INDEX
+  CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the source-vs-docs discrepancy in item 1: phase 6 sets
+  `PROGRESS_CREATEIDX_PHASE_WAIT_4` (value 8)
+  ([indexcmds.c:3302-3304](../raw/postgres-12/src/backend/commands/indexcmds.c#L3302-L3304)),
+  so the `WAIT_5`/value-9 view+docs text "waiting for readers before dropping"
+  ([system_views.sql:1014-1015](../raw/postgres-12/src/backend/catalog/system_views.sql#L1014-L1015),
+  [monitoring.sgml:3721-3730](../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3721-L3730))
+  is never emitted — correctly recorded as "source wins" per AGENTS.md.
+- Confirmed item 3's evidence: the `index_set_state_flags` doc comment says the
+  update "is not transactional and will not roll back"
+  ([index.c:3316-3324](../raw/postgres-12/src/backend/catalog/index.c#L3316-L3324))
+  and `heap_inplace_update` WAL-logs via `XLOG_HEAP_INPLACE`
+  ([heapam.c:5755-5773](../raw/postgres-12/src/backend/access/heap/heapam.c#L5755-L5773)).
+  Items 2 (build-scan visibility deferred to CIC core) and 4 (`ChooseRelationName`
+  truncation untraced) are accurately scoped.
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY evidence-map section
 
 - Reviewed the `## Evidence Map` section (all ~35 claim->source rows) of [How
