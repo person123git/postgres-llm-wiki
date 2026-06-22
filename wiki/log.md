@@ -2,6 +2,34 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY failure-scenarios section
+
+- Reviewed the `### Failure scenarios and the outcome on the table` section of
+  [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified the per-phase failure table and the invalid-leftover prose. The
+  planner skips `!indisvalid`
+  ([plancat.c:199-210](../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210),
+  whose comment notes the executor still inserts into invalid-but-ready indexes);
+  `RelationGetIndexList` omits only `!indislive`
+  ([relcache.c:4327-4329](../raw/postgres-12/src/backend/utils/cache/relcache.c#L4327-L4329));
+  HOT-safety still considers not-ready/not-valid indexes
+  ([relcache.c:4864-4869](../raw/postgres-12/src/backend/utils/cache/relcache.c#L4864-L4869));
+  executor insertion skips only `!ii_ReadyForInserts`
+  ([execIndexing.c:330-332](../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332)).
+- Confirmed a ready unique `_ccnew` enforces uniqueness (the `index_insert`
+  unique-check path
+  [execIndexing.c:371-400](../raw/postgres-12/src/backend/executor/execIndexing.c#L371-L400)
+  and the `_bt_check_unique` "duplicate key value violates unique constraint"
+  error [nbtinsert.c:563-568](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)),
+  and the staged regression walk (CIC leaves an invalid index, RIC fails leaving
+  `_ccnew` also INVALID, drop + repair)
+  ([create_index.out:2314-2358](../raw/postgres-12/src/test/regress/expected/create_index.out#L2314-L2358)).
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY state-flags section
 
 - Reviewed the `### State flags for the old and new index` section of [How
