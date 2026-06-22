@@ -2,6 +2,51 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] question v12 | all outcomes that leave an invalid index
+
+- Filed [All Outcomes That Leave an Invalid Index in PostgreSQL 12, Including a
+  Failed CREATE INDEX CONCURRENTLY (unverified)](v12/questions/invalid-index-outcomes.md)
+  against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+- Prompt hygiene: the user's prompt was filed lowercase
+  (`all possible outcomes that leave an invalid index, including a failed create
+  index concurrently`). Per `MANDATORY Prompt Hygiene`, asked before drafting and
+  the user approved a light cleanup (capitalize `CREATE INDEX CONCURRENTLY` and
+  the leading word, add a period); the corrected text is restated verbatim under
+  `## Question` with a prompt note.
+- Scope established by whole-tree grep of `indisvalid` over `src/backend` and
+  `src/bin/pg_upgrade`: the complete set of code paths that persist
+  `indisvalid = false` is `UpdateIndexRelation` (CIC + partitioned-invalid),
+  `index_set_state_flags(INDEX_DROP_CLEAR_VALID)`, `index_concurrently_swap`, the
+  `DefineIndex` partitioned-parent invalidation, and `pg_upgrade`'s
+  `old_9_6_invalidate_hash_indexes`. So five operational outcomes leave an invalid
+  index: (1) a failed/cancelled/crashed `CREATE INDEX CONCURRENTLY`
+  (invalid-not-ready vs invalid-ready); (2) a failed `REINDEX CONCURRENTLY`
+  (invalid `_ccnew` pre-swap or `_ccold` post-swap; healthy original name never
+  left invalid); (3) a failed/interrupted `DROP INDEX CONCURRENTLY` (clear-valid →
+  set-dead across commits; clear-valid is retryable by design,
+  `index.c:3367-3383`); (4) an incomplete partitioned parent
+  (`CREATE INDEX ON ONLY` with partitions sets `INDEX_CREATE_INVALID`
+  `indexcmds.c:988-998`, or attaching an invalid child `indexcmds.c:1243-1265`;
+  `validatePartitionedIndex` `tablecmds.c:16682-16768` flips valid once every
+  partition has a valid match); (5) `pg_upgrade` from <= 9.6 marking new-cluster
+  hash indexes invalid (`version.c:367-376`, gated `check.c:218-220`, writes
+  `reindex_hash.sql`).
+- Added the persistent `(indislive, indisready, indisvalid)` state table (and why
+  `(f,t)` is impossible via the state-flag asserts), a contrast that
+  single-transaction `CREATE INDEX`/`REINDEX`/`DROP INDEX` roll back cleanly with
+  no leftover, the cost of an invalid index (planner skips it `plancat.c:199-210`,
+  executor still maintains it when `indisready` `execIndexing.c:330-332`, VACUUM
+  still processes it `vacuum.c:1869-1880`) and the commands that reject one
+  (`CLUSTER`, `REFRESH MATERIALIZED VIEW CONCURRENTLY`, `ADD CONSTRAINT ... USING
+  INDEX`, `REPLICA IDENTITY`, bulk `REINDEX CONCURRENTLY`), and per-outcome
+  repair. Cross-links the dedicated CIC and RIC pages instead of re-deriving them;
+  regression evidence cited from `create_index.out` (CIC/RIC) and `indexing.out`
+  (partitioned invalid lifecycle).
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+  `verified_by_agent: not yet` pending a full claim-by-claim re-verification pass.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] repin v19 | fetch latest master and review all questions
 
 - Per user request ("check for new commits"), fetched upstream PostgreSQL
