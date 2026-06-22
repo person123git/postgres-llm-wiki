@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY evidence-map section
+
+- Reviewed the `## Evidence Map` section (all ~35 claim->source rows) of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-confirmed every row's citation (these are the same source ranges verified
+  during the per-section body reviews); all resolve and match their claims.
+- Fix: applied the follow-up flagged in the six-phases and steps-and-locks
+  entries — the "Session SUEL on old index, new index, and heap(s)" row cited
+  only `indexcmds.c:3042-3074` (heap relids + acquisition); added
+  [indexcmds.c:3024-3029](../raw/postgres-12/src/backend/commands/indexcmds.c#L3024-L3029)
+  where the two index lock relids are registered, and noted the
+  registration-then-lock ordering in the claim text.
+- `verified_by_agent` stays `not yet` because this was a scoped section review,
+  not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY context-reviewed section
 
 - Reviewed the `## Context Reviewed` section of [How REINDEX INDEX CONCURRENTLY
