@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY context-reviewed section
+
+- Reviewed the `## Context Reviewed` section of [How REINDEX INDEX CONCURRENTLY
+  Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Confirmed the one factual claim — the pin's commit message is "Stamp 12.2." —
+  and that every listed symbol/file exists and is used by the page:
+  `ReindexMultipleTables`
+  ([indexcmds.c:2510](../raw/postgres-12/src/backend/commands/indexcmds.c#L2510))
+  plus the other `indexcmds.c`/`index.c`/`lmgr.c`/`lock.c`/`lockdefs.h`/`utility.c`
+  symbols, the `progress.h`/`system_views.sql`/`monitoring.sgml`/`reindex.sgml`
+  docs, and the four test files.
+- This is a navigational meta-list with no behavioral claims; no page edits were
+  needed. `verified_by_agent` stays `not yet` because this was a scoped section
+  review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY test-coverage section
 
 - Reviewed the `### Test coverage` section of [How REINDEX INDEX CONCURRENTLY Is
