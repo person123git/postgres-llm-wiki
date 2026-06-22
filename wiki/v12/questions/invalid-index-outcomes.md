@@ -12,10 +12,10 @@ verified_by_agent: not yet
 
 - [Question](#question)
 - [Answer](#answer)
-  - [What makes an index invalid](#what-makes-an-index-invalid)
   - [The five outcomes at a glance](#the-five-outcomes-at-a-glance)
+  - [What makes an index invalid](#what-makes-an-index-invalid)
   - [1. A failed, cancelled, or crashed CREATE INDEX CONCURRENTLY](#1-a-failed-cancelled-or-crashed-create-index-concurrently)
-  - [2. A failed, cancelled, or crashed REINDEX CONCURRENTLY](#2-a-failed-cancelled-or-crashed-reindex-concurrently)
+  - [2. A failed or cancelled REINDEX CONCURRENTLY](#2-a-failed-or-cancelled-reindex-concurrently)
   - [3. A failed or interrupted DROP INDEX CONCURRENTLY](#3-a-failed-or-interrupted-drop-index-concurrently)
   - [4. An incomplete partitioned index](#4-an-incomplete-partitioned-index)
   - [5. pg_upgrade from PostgreSQL 9.6 or earlier](#5-pgupgrade-from-postgresql-96-or-earlier)
@@ -41,6 +41,8 @@ In PostgreSQL 12 an index is **invalid** when its `pg_index.indisvalid` flag is
 executor still maintains it on writes when `indisready` is true
 ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210),
 [execIndexing.c#skip-not-ready](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332)).
+
+### The five outcomes at a glance
 
 Only a **small, closed set** of operations can persist `indisvalid = false` on
 the table, because only a handful of code paths ever write that flag false.
@@ -133,12 +135,14 @@ The full mechanism — every failure phase, the build-vs-validate split, lock
 release, and the crash/recovery analysis — is on the dedicated page:
 [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](create-index-concurrently.md).
 
-### 2. A failed, cancelled, or crashed REINDEX CONCURRENTLY
+### 2. A failed or cancelled REINDEX CONCURRENTLY
 
 `REINDEX [INDEX | TABLE] CONCURRENTLY` (RIC) reuses CIC's build/validate state
 machine, but runs it on a **fresh copy** named `<original>_ccnew` that it creates
-next to the original, then swaps in. A failure therefore leaves an invalid copy,
-not necessarily the original:
+next to the original, then swaps in. An ordinary ERROR, cancel, or timeout
+therefore leaves an invalid copy, not necessarily the original
+([indexcmds.c#RIC-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3261),
+[reindex.sgml#failure-recovery](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L363-L390)):
 
 | Failure point | Invalid leftover |
 |---|---|
@@ -160,9 +164,12 @@ failed CIC), which the suite demonstrates by leaving **both**
 `concur_reindex_ind5` and `concur_reindex_ind5_ccnew` `INVALID`
 ([create_index.out#both-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2333)).
 
-The six phases, five waits, and per-phase failure table are on the dedicated
-page:
+The six phases, five waits, and per-phase ordinary failure table are on the
+dedicated page:
 [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](reindex-index-concurrently.md).
+That page keeps RIC's exact crash or `immediate`-shutdown recovered flag state
+under [Open Questions](reindex-index-concurrently.md#open-questions) rather than
+asserting it here.
 
 ### 3. A failed or interrupted DROP INDEX CONCURRENTLY
 
@@ -219,7 +226,7 @@ index**. Two operations can leave the parent invalid:
 
 The parent flips to valid only when `validatePartitionedIndex` counts a valid
 matching index on **every** partition; until then it stays invalid
-([tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16742)).
+([tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769)).
 That validation is driven by `ALTER INDEX ... ATTACH PARTITION` (or by
 `ALTER TABLE ... ATTACH PARTITION`), and it recurses upward so a multi-level
 partition hierarchy becomes valid in one chain once the last leaf is attached
@@ -313,7 +320,7 @@ The fix depends on which outcome produced it:
 - **Invalid partitioned parent:** create matching indexes on the partitions and
   `ALTER INDEX ... ATTACH PARTITION` them; the parent validates automatically when
   all partitions are covered
-  ([tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16742)).
+  ([tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769)).
 - **`pg_upgrade` hash indexes:** run the generated `reindex_hash.sql`
   ([version.c#reindex-script](../../../raw/postgres-12/src/bin/pg_upgrade/version.c#L394-L402)).
 
@@ -343,8 +350,8 @@ The fix depends on which outcome produced it:
   [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2089-L2192),
   [index.c#index_concurrently_set_dead](../../../raw/postgres-12/src/backend/catalog/index.c#L1719-L1761).
 - Partitioned-index validity:
-  [indexcmds.c#partitioned-recursion](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1040-L1266),
-  [tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16768),
+  [indexcmds.c#partitioned-recursion](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1040-L1276),
+  [tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769),
   [indexing.out](../../../raw/postgres-12/src/test/regress/expected/indexing.out#L256-L439).
 - `pg_upgrade` hash handling:
   [check.c](../../../raw/postgres-12/src/bin/pg_upgrade/check.c#L218-L220),
@@ -370,7 +377,7 @@ The fix depends on which outcome produced it:
 | `CREATE INDEX ON ONLY` with partitions sets `INDEX_CREATE_INVALID` | [indexcmds.c:988-998](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L988-L998), [index.h:53](../../../raw/postgres-12/src/include/catalog/index.h#L53) |
 | Docs: `ONLY` marks the partitioned index invalid until all partitions match | [create_index.sgml:671-689](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L671-L689) |
 | Attaching an invalid child marks the parent invalid | [indexcmds.c:1163-1164](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1163-L1164), [indexcmds.c:1243-1265](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1243-L1265) |
-| Parent becomes valid when every partition has a valid match (recurses upward) | [tablecmds.c:16682-16768](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16768) |
+| Parent becomes valid when every partition has a valid match (recurses upward) | [tablecmds.c:16682-16769](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769) |
 | Regression: two invalid `ON ONLY` parents validate only when a valid leaf is attached | [indexing.out:404-439](../../../raw/postgres-12/src/test/regress/expected/indexing.out#L404-L439) |
 | Planner ignores all partitioned indexes regardless of validity | [plancat.c:212-219](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L212-L219) |
 | `pg_upgrade` from ≤ 9.6 marks new-cluster hash indexes invalid + writes reindex script | [check.c:218-220](../../../raw/postgres-12/src/bin/pg_upgrade/check.c#L218-L220), [version.c:296-406](../../../raw/postgres-12/src/bin/pg_upgrade/version.c#L296-L406) |
@@ -393,21 +400,26 @@ copy (`describe.c`, `relcache.c`, `tablecmds.c`). Two scoping notes:
 - **Out of scope: physical corruption.** A structurally damaged-but-`indisvalid`
   index is a different failure mode (detected by tools such as `amcheck`), not an
   `indisvalid = false` state, and is not covered.
-- The crash/`immediate`-shutdown recovery analysis for the CIC and RIC flag flips
-  (why a half-applied flip cannot survive) is detailed on
-  [create-index-concurrently.md](create-index-concurrently.md); RIC's exact
-  recovered flag state at a crash boundary is scoped under that page's Open
-  Questions.
+- The CIC crash/`immediate`-shutdown recovery analysis is detailed on
+  [create-index-concurrently.md](create-index-concurrently.md): the relevant
+  flag updates use `index_set_state_flags`, and `heap_xlog_inplace` physically
+  replays a durable in-place tuple update
+  ([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403),
+  [heapam.c#heap_xlog_inplace](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)).
+  RIC's exact recovered flag state around set-ready, swap, and set-dead remains
+  scoped under
+  [reindex-index-concurrently.md Open Questions](reindex-index-concurrently.md#open-questions).
 
 ## Source References
 
 - [index.c#UpdateIndexRelation](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996)
 - [index.c#index_concurrently_swap](../../../raw/postgres-12/src/backend/catalog/index.c#L1447-L1716)
 - [index.c#index_concurrently_set_dead](../../../raw/postgres-12/src/backend/catalog/index.c#L1719-L1761)
-- [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197)
+- [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2007-L2276)
 - [index.c#concurrent-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L3114-L3168)
 - [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)
-- [indexcmds.c#partitioned-recursion](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1040-L1266)
+- [heapam.c#heap_xlog_inplace](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)
+- [indexcmds.c#partitioned-recursion](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1040-L1276)
 - [indexcmds.c#reindex-skip-invalid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824)
 - [tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769)
 - [tablecmds.c#replica-identity-invalid](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L13976-L13981)

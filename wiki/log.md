@@ -2,6 +2,31 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review-fix v12 | invalid-index outcomes RIC crash-scope and citation pass
+
+- Reviewed [All Outcomes That Leave an Invalid Index in PostgreSQL 12, Including
+  a Failed CREATE INDEX CONCURRENTLY (unverified)](v12/questions/invalid-index-outcomes.md)
+  against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, focusing on the closed set of
+  `indisvalid=false` writers and invalid-index consumers.
+- Reconfirmed the closed producer set with whole-`src` scans: born-invalid
+  `index_create` paths (`INDEX_CREATE_CONCURRENT` and `INDEX_CREATE_INVALID`),
+  the partitioned-parent invalid-child update, RIC's `index_concurrently_swap`,
+  `DROP INDEX CONCURRENTLY`'s `INDEX_DROP_CLEAR_VALID`, and `pg_upgrade`'s
+  old-hash-index invalidation. No extra normal-operation producer was found.
+- Fixed a scope overclaim in the RIC section: ordinary ERROR/cancel/timeout
+  outcomes remain covered by the RIC failure table, but exact crash or
+  `immediate`-shutdown recovered RIC flag state stays delegated to the sibling
+  RIC page's Open Questions. Added supporting RIC source/doc citations.
+- Tightened citation ranges for `validatePartitionedIndex`, partitioned-index
+  recursion, and `index_drop`; added a missing `The five outcomes at a glance`
+  heading so the Contents block matches the page; added `heap_xlog_inplace` to
+  Source References for the CIC crash-recovery scope note.
+- `verified_by_agent` remains `not yet`: this was a targeted review/fix pass,
+  and the RIC crash-boundary state remains intentionally scoped under the RIC
+  page's Open Questions rather than independently closed here.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | all outcomes that leave an invalid index — full re-verification
 
 - Reviewed [All Outcomes That Leave an Invalid Index in PostgreSQL 12, Including
