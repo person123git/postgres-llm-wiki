@@ -2,6 +2,46 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] repin v19 | fetch latest master and review all questions
+
+- Per user request ("check for new commits"), fetched upstream PostgreSQL
+  `master` for `raw/postgres-19/` and repinned from
+  `ff8bec8c460a13bedbb416d8697f4675a0709ce8` to
+  `9a60f295bcb186a729d04e76377b7f122b2a1dd9` (16 new commits; new tip
+  `9a60f295`, 2026-06-22, `Strip removed-relation references from PlaceHolderVars
+  at join removal`).
+- Reviewed all three v19 question pages and the mandatory codebase navigation
+  guide against the changed-file range. Intersecting the 16 commits' changed
+  files with every v19 citation, the only cited file that changed is
+  `src/backend/postmaster/autovacuum.c` (autovacuum scoring page). The only
+  changed file relevant to filed coverage is the post-`REL_19_BETA1` autovacuum
+  MXID-score division-by-zero fix `1f2297b5487` (touches `autovacuum.c` and
+  `maintenance.sgml`).
+- Updated [PostgreSQL 19 Autovacuum and VACUUM
+  (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md):
+  documented the `scores->mxid = mxid_age / Max(1, multixact_freeze_max_age)`
+  divisor guard (the `mxid` component degrades to the raw multixact age when
+  `effective_multixact_freeze_max_age` from `MultiXactMemberFreezeThreshold()`
+  reaches 0 under high multixact member-space usage) and the new member-space
+  scaling note; added `1f2297b5487` to the scoring commit-history table;
+  corrected the now-stale "no autovacuum feature files changed between
+  REL_19_BETA1 and this pin" sentence; and shifted the four `autovacuum.c`
+  citations past line 3048 (`L3064-L3078`->`L3067-L3081`,
+  `L3195-L3238`->`L3198-L3243`, `L3239-L3240`->`L3244-L3245`,
+  `L3287-L3315`->`L3292-L3320`). Verified the unchanged anchors below line 3048
+  still resolve.
+- Confirmed by `git diff` that no `pg_plan_advice`, `REPACK`, or
+  visibility-map/pruning feature files changed since `REL_19_BETA1`/the old pin,
+  so those pages and the navigation guide took only the `pinned_commit` bump
+  (plus the in-prose checkout-hash references on the pg_plan_advice and REPACK
+  pages).
+- Updated `wiki/index.md`, `wiki/v19/index.md` (incl. `Repinned: 2026-06-22`),
+  and `wiki/versions.md` (pin column, prose hash, and a new Coverage Notes
+  entry). `verified_by_agent` remains `not yet` on all v19 pages because this
+  was a repin and changed-file review, not a full claim-by-claim
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | EXPLAIN ANALYZE BUFFERS full-page citation pass + Contents TOC
 
 - Reviewed [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12

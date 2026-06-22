@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
+pinned_commit: 9a60f295bcb186a729d04e76377b7f122b2a1dd9
 verified: false
 verified_by_agent: not yet
 ---
@@ -54,7 +54,7 @@ Follow AGENTS.md. In PostgreSQL 19, create a question document to explain all th
 
 ## Short Answer
 
-All three statements are true for the pinned PostgreSQL 19 development line (post-`REL_19_BETA1` `master` commit `ff8bec8c460a13bedbb416d8697f4675a0709ce8`). They are three independent features:
+All three statements are true for the pinned PostgreSQL 19 development line (post-`REL_19_BETA1` `master` commit `9a60f295bcb186a729d04e76377b7f122b2a1dd9`). They are three independent features:
 
 1. **Parallel autovacuum.** An autovacuum worker can now hand its **index** vacuuming and index cleanup phases to parallel workers, exactly like manual `VACUUM (PARALLEL)`. The new GUC `autovacuum_max_parallel_workers` caps how many parallel workers a *single* autovacuum worker may use; it defaults to `0`, which keeps autovacuum serial. A per-table reloption `autovacuum_parallel_workers` requests a specific degree [autovacuum.c#parallel-workers](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuumparallel.c#compute-workers](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L741-L802) [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9715-L9736).
 
@@ -138,7 +138,7 @@ Before v19, an autovacuum worker processed the tables that needed work in the or
 
 ### How the score is computed
 
-`relation_needs_vacanalyze()` is the function that decides whether a table needs vacuum/analyze. v19 extended it to also fill an `AutoVacuumScores` out-parameter — a `max` plus five component scores [autovacuum.c#AutoVacuumScores](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L330-L343) [autovacuum.c#relation_needs_vacanalyze](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3064-L3078):
+`relation_needs_vacanalyze()` is the function that decides whether a table needs vacuum/analyze. v19 extended it to also fill an `AutoVacuumScores` out-parameter — a `max` plus five component scores [autovacuum.c#AutoVacuumScores](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L330-L343) [autovacuum.c#relation_needs_vacanalyze](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3067-L3081):
 
 ```c
 typedef struct
@@ -154,10 +154,10 @@ typedef struct
 
 Each component is roughly "how far past its threshold is this table," scaled by a weight:
 
-- **Freeze components.** `xid`/`mxid` = age divided by the respective `*_freeze_max_age`, then multiplied by the weight. If a table is past its (weight-adjusted) failsafe age, the score is raised aggressively via `pow()` so near-wraparound tables dominate [autovacuum.c#freeze-score](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3195-L3238).
-- **Dead-tuple / insert / analyze components.** `vac` = dead tuples ÷ vacuum threshold, `vac_ins` = inserts ÷ insert threshold, `anl` = modified tuples ÷ analyze threshold, each multiplied by its weight [autovacuum.c#vac-ins-anl-score](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3287-L3315).
+- **Freeze components.** `xid`/`mxid` = age divided by the respective `*_freeze_max_age`, then multiplied by the weight. If a table is past its (weight-adjusted) failsafe age, the score is raised aggressively via `pow()` so near-wraparound tables dominate [autovacuum.c#freeze-score](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3198-L3243). The `mxid` divisor is the per-table-clamped `effective_multixact_freeze_max_age` (from `MultiXactMemberFreezeThreshold()`), which is driven toward `0` as multixact member space fills up; v19 therefore guards it as `Max(1, multixact_freeze_max_age)`, so when the threshold reaches `0` the `mxid` component degrades to the raw multixact age instead of dividing by zero (a post-beta1 fix, `1f2297b5487`) [autovacuum.c#mxid-divisor-guard](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3198-L3208) [autovacuum.c#mxid-max-age-clamp](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3172-L3174).
+- **Dead-tuple / insert / analyze components.** `vac` = dead tuples ÷ vacuum threshold, `vac_ins` = inserts ÷ insert threshold, `anl` = modified tuples ÷ analyze threshold, each multiplied by its weight [autovacuum.c#vac-ins-anl-score](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3292-L3320).
 
-`scores->max` is the running maximum of the components, and that single number is the table's score. Note that the eligibility decision (`*dovacuum` / `*doanalyze`) is still threshold-based and independent of the weights — weights only affect ordering, except that anti-wraparound (`force_vacuum`) still forces a vacuum regardless [autovacuum.c#force-vacuum](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3239-L3240).
+`scores->max` is the running maximum of the components, and that single number is the table's score. Note that the eligibility decision (`*dovacuum` / `*doanalyze`) is still threshold-based and independent of the weights — weights only affect ordering, except that anti-wraparound (`force_vacuum`) still forces a vacuum regardless [autovacuum.c#force-vacuum](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3244-L3245).
 
 ### How tables are sorted
 
@@ -274,7 +274,7 @@ The headline commit `b46e1e54d` changed only heap access-method code and headers
 
 ## Source Commit History
 
-All hashes are ancestors of the pinned post-`REL_19_BETA1` `master` commit `ff8bec8c460a13bedbb416d8697f4675a0709ce8`. No autovacuum, parallel-vacuum, or visibility-map/pruning feature files changed between `REL_19_BETA1` and this pin. Dates are author dates.
+All hashes are ancestors of the pinned post-`REL_19_BETA1` `master` commit `9a60f295bcb186a729d04e76377b7f122b2a1dd9`. Between `REL_19_BETA1` (tagged 2026-06-01) and this pin, the only scoring/parallel-vacuum/visibility feature-file change is the post-beta1 autovacuum MXID-score division-by-zero fix `1f2297b5487` (listed under [Autovacuum table scoring](#autovacuum-table-scoring) below); no parallel-vacuum or visibility-map/pruning feature files changed in that range. Dates are author dates.
 
 ### Parallel autovacuum workers
 
@@ -297,8 +297,9 @@ The core commit `1ff3180ca01` (committed by Masahiko Sawada; the v19 release not
 | 2026-04-03 | `53b8ca6881a` | Teach relation_needs_vacanalyze() to always compute scores |
 | 2026-04-06 | `87f61f0c828` | Add pg_stat_autovacuum_scores system view |
 | 2026-04-09 | `71ff232a5bc` | Fix double-free in pg_stat_autovacuum_scores |
+| 2026-06-18 | `1f2297b5487` | Avoid division-by-zero when calculating autovacuum MXID score (post-beta1) |
 
-All by Nathan Bossart. `d7965d65fc5` introduced `AutoVacuumScores`, `TableToProcess`, the descending sort with its all-weights-zero escape hatch, and the five `*_score_weight` GUCs. `87f61f0c828` added the `pg_stat_autovacuum_scores` view and `pg_stat_get_autovacuum_scores()`; `71ff232a5bc` fixed a double-free in it.
+All by Nathan Bossart. `d7965d65fc5` introduced `AutoVacuumScores`, `TableToProcess`, the descending sort with its all-weights-zero escape hatch, and the five `*_score_weight` GUCs. `87f61f0c828` added the `pg_stat_autovacuum_scores` view and `pg_stat_get_autovacuum_scores()`; `71ff232a5bc` fixed a double-free in it. `1f2297b5487` is a post-beta1 fix that guards the `mxid` score divisor against a zero `effective_multixact_freeze_max_age` (see [How the score is computed](#how-the-score-is-computed)).
 
 ### Setting pages all-visible during reads
 
@@ -344,8 +345,8 @@ The headline commit `b46e1e54d07` added the `rel_read_only` parameter to `heap_p
 | Per-table `autovacuum_parallel_workers` reloption; -1/0/N mapping | [reloptions.c#L239-L247](../../../raw/postgres-19/src/backend/access/common/reloptions.c#L239-L247) [autovacuum.c#L2940-L2959](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuum.h#L245-L250](../../../raw/postgres-19/src/include/commands/vacuum.h#L245-L250) |
 | Cost-delay propagation to parallel autovacuum workers | [vacuumparallel.c#L21-L26](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L21-L26) [vacuumparallel.c#L644-L726](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L644-L726) [vacuum.c#L2448-L2456](../../../raw/postgres-19/src/backend/commands/vacuum.c#L2448-L2456) |
 | Parallel autovacuum TAP test | [001_parallel_autovacuum.pl#L1-L40](../../../raw/postgres-19/src/test/modules/test_autovacuum/t/001_parallel_autovacuum.pl#L1-L40) |
-| Per-table score struct and components | [autovacuum.c#L330-L343](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L330-L343) [autovacuum.c#L3064-L3078](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3064-L3078) |
-| Freeze/dead/insert/analyze score formulas | [autovacuum.c#L3195-L3238](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3195-L3238) [autovacuum.c#L3287-L3315](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3287-L3315) |
+| Per-table score struct and components | [autovacuum.c#L330-L343](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L330-L343) [autovacuum.c#L3067-L3081](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3067-L3081) |
+| Freeze/dead/insert/analyze score formulas; `mxid` divisor guarded by `Max(1, ...)` (post-beta1 `1f2297b5487`) | [autovacuum.c#L3198-L3243](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3198-L3243) [autovacuum.c#L3292-L3320](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3292-L3320) [autovacuum.c#L3172-L3174](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L3172-L3174) |
 | Descending sort; all-weights-zero escape hatch | [autovacuum.c#L1906-L1917](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L1906-L1917) [autovacuum.c#L2310-L2321](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2310-L2321) |
 | Five `*_score_weight` GUCs (PGC_SIGHUP, 1.0, 0.0–10.0) | [guc_parameters.dat#L139-L145](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L139-L145) [guc_parameters.dat#L165-L171](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L165-L171) [guc_parameters.dat#L242-L248](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L242-L248) |
 | `pg_stat_autovacuum_scores` view | [system_views.sql#L798-L814](../../../raw/postgres-19/src/backend/catalog/system_views.sql#L798-L814) [rules.out#L1863](../../../raw/postgres-19/src/test/regress/expected/rules.out#L1863) |

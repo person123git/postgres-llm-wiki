@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
+pinned_commit: 9a60f295bcb186a729d04e76377b7f122b2a1dd9
 verified: false
 verified_by_agent: not yet
 ---
@@ -369,7 +369,7 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 - `src/test/modules/test_plan_advice/test_plan_advice.c`, the `contrib` `sql/` and `expected/` regression files (including `prepared`), and the `Makefile` `REGRESS` list.
 - Core plan-cache policy in `src/backend/utils/cache/plancache.c` (`choose_custom_plan`) for the prepared-statement interaction.
 - Same-checkout docs in `doc/src/sgml/pgplanadvice.sgml`.
-- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned post-`REL_19_BETA1` `master` commit `ff8bec8c460a13bedbb416d8697f4675a0709ce8`. No `pg_plan_advice` module, doc, or test files changed between `REL_19_BETA1` and this pin, so the newest module commit remains `b1901e28` (2026-05-29).
+- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned post-`REL_19_BETA1` `master` commit `9a60f295bcb186a729d04e76377b7f122b2a1dd9`. No `pg_plan_advice` module, doc, or test files changed between `REL_19_BETA1` and this pin, so the newest module commit remains `b1901e28` (2026-05-29).
 
 ## Evidence Map
 

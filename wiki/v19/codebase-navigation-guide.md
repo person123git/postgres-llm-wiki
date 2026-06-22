@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: ff8bec8c460a13bedbb416d8697f4675a0709ce8
+pinned_commit: 9a60f295bcb186a729d04e76377b7f122b2a1dd9
 verified: false
 verified_by_agent: not yet
 ---
