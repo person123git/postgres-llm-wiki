@@ -2,6 +2,43 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY dispatch/preconditions/restrictions section
+
+- Reviewed the `### Dispatch, preconditions, and restrictions` section of [How
+  REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-verified every citation in the section (~19 links) and confirmed each quoted
+  error/notice message matches source verbatim. The `T_ReindexStmt` dispatch with
+  `PreventInTransactionBlock`/`PreventCommandDuringRecovery` is inside
+  `standard_ProcessUtility`
+  ([utility.c:773-807](../raw/postgres-12/src/backend/tcop/utility.c#L773-L807),
+  function opens at
+  [utility.c:377](../raw/postgres-12/src/backend/tcop/utility.c#L377)).
+- Confirmed `ReindexIndex` takes `ShareUpdateExclusiveLock` for concurrent vs
+  `AccessExclusiveLock` for plain, dispatches partitioned indexes, and falls back
+  to non-concurrent for temp
+  ([indexcmds.c:2356-2381](../raw/postgres-12/src/backend/commands/indexcmds.c#L2356-L2381));
+  `ReindexTable` emits the "no indexes that can be reindexed concurrently" NOTICE
+  ([indexcmds.c:2477-2484](../raw/postgres-12/src/backend/commands/indexcmds.c#L2477-L2484)).
+- Spot-checked all restriction rows: system catalog at three sites
+  ([indexcmds.c:2804-2807](../raw/postgres-12/src/backend/commands/indexcmds.c#L2804-L2807),
+  [indexcmds.c:2897-2900](../raw/postgres-12/src/backend/commands/indexcmds.c#L2897-L2900),
+  [indexcmds.c:2530-2533](../raw/postgres-12/src/backend/commands/indexcmds.c#L2530-L2533)),
+  schema/database skip
+  ([indexcmds.c:2641-2650](../raw/postgres-12/src/backend/commands/indexcmds.c#L2641-L2650)),
+  partitioned table no-op
+  ([indexcmds.c:2917-2923](../raw/postgres-12/src/backend/commands/indexcmds.c#L2917-L2923)),
+  partitioned index error
+  ([indexcmds.c:3390-3396](../raw/postgres-12/src/backend/commands/indexcmds.c#L3390-L3396)),
+  exclusion named directly
+  ([index.c:1268-1271](../raw/postgres-12/src/backend/catalog/index.c#L1268-L1271)),
+  and invalid named directly allowed
+  ([indexcmds.c:2908-2912](../raw/postgres-12/src/backend/commands/indexcmds.c#L2908-L2912)).
+- No page edits were needed. `verified_by_agent` stays `not yet` because this was
+  a scoped section review, not a full-page re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review-fix v12 | REINDEX INDEX CONCURRENTLY how-it-differs-from-CIC section
 
 - Reviewed the `### How it differs from CREATE INDEX CONCURRENTLY` section of [How
