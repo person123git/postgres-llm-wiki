@@ -2,6 +2,27 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-26] review-fix v12 | invalid-index outcomes question precision
+
+- Reviewed [All Outcomes That Leave an Invalid Index in PostgreSQL 12,
+  Including a Failed CREATE INDEX CONCURRENTLY
+  (unverified)](v12/questions/invalid-index-outcomes.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Rechecked the central completeness claim by scanning the v12 source for
+  `indisvalid` writers (`indisvalid =`, `Anum_pg_index_indisvalid`,
+  `INDEX_CREATE_INVALID`, `INDEX_DROP_CLEAR_VALID`, and
+  `index_concurrently_swap`). The five producer classes still hold: failed CIC,
+  failed RIC, interrupted DIC, incomplete partitioned parent indexes, and
+  `pg_upgrade` <= 9.6 hash-index invalidation.
+- Fixed two precision issues: replaced the over-broad `indislive` shorthand with
+  the relcache/HOT-safety semantics, and replaced the stale
+  `REINDEX [INDEX | TABLE] CONCURRENTLY` shorthand with the supported v12
+  concurrent REINDEX routing (`INDEX`, `TABLE`, `SCHEMA`, and `DATABASE`, with
+  `SYSTEM CONCURRENTLY` rejected).
+- `verified_by_agent` remains `not yet`: this was a targeted precision review,
+  not a full independent claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-26] review-fix v19 | autovacuum page review findings
 
 - Fixed review findings on [PostgreSQL 19 Autovacuum and VACUUM: Parallel

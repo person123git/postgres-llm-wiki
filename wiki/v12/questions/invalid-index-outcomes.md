@@ -49,7 +49,7 @@ the table, because only a handful of code paths ever write that flag false.
 There are exactly five:
 
 1. A **`CREATE INDEX CONCURRENTLY`** that fails, is cancelled, or is interrupted by a crash after its first commit.
-2. A **`REINDEX [INDEX | TABLE] CONCURRENTLY`** that fails, leaving an invalid `_ccnew` (before the swap) or `_ccold` (after it).
+2. A **`REINDEX CONCURRENTLY`** operation over one or more indexes that fails, leaving an invalid `_ccnew` (before the swap) or `_ccold` (after it).
 3. A **`DROP INDEX CONCURRENTLY`** that fails or is interrupted after it has marked the index invalid.
 4. An **incomplete partitioned (parent) index** — created with `ON ONLY`, or built while a partition's matching index is itself invalid.
 5. **`pg_upgrade` from PostgreSQL 9.6 or earlier**, which marks every hash index invalid in the new v12 cluster.
@@ -65,7 +65,11 @@ The single source of truth is `pg_index.indisvalid`, one of three boolean state
 flags on each index row
 ([pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)):
 
-- `indislive` — the index exists for all purposes (search, insert, HOT-safety).
+- `indislive` — the index is alive enough for backends to consider touching it
+  at all; `RelationGetIndexList` omits a non-live index, and HOT-safety checks
+  still consider live indexes even when they are not ready or valid
+  ([relcache.c#omit-not-live](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395),
+  [relcache.c#HOT-safety](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4864-L4869)).
 - `indisready` — new tuples are inserted into it on `INSERT`/non-HOT `UPDATE`.
 - `indisvalid` — the planner may use it to answer queries.
 
@@ -97,8 +101,9 @@ The persistent states these produce are:
 | `t` | `t` | `f` | invalid, ready (still maintained) | CIC failed after set-ready; DROP INDEX CONCURRENTLY after clear-valid; a ready `_ccnew`/`_ccold`; `pg_upgrade` hash index; invalid partitioned parent (no storage) |
 | `f` | `f` | `f` | dead (invalid and not live) | DROP INDEX CONCURRENTLY / REINDEX CONCURRENTLY after set-dead |
 
-The `(f,t)` combination — not ready but valid — never occurs: `index_set_state_flags`
-asserts the ladder live→ready→valid for creation and the reverse for drops
+The `indisready = false, indisvalid = true` combination never occurs:
+`index_set_state_flags` asserts the ladder live→ready→valid for creation and
+the reverse for drops
 ([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3351-L3396)).
 
 ### 1. A failed, cancelled, or crashed CREATE INDEX CONCURRENTLY
@@ -137,12 +142,22 @@ release, and the crash/recovery analysis — is on the dedicated page:
 
 ### 2. A failed or cancelled REINDEX CONCURRENTLY
 
-`REINDEX [INDEX | TABLE] CONCURRENTLY` (RIC) reuses CIC's build/validate state
-machine, but runs it on a **fresh copy** named `<original>_ccnew` that it creates
-next to the original, then swaps in. An ordinary ERROR, cancel, or timeout
-therefore leaves an invalid copy, not necessarily the original
-([indexcmds.c#RIC-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3261),
-[reindex.sgml#failure-recovery](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L363-L390)):
+`REINDEX CONCURRENTLY` (RIC) can be reached through `INDEX`, `TABLE`, `SCHEMA`,
+or `DATABASE` forms in v12; `SYSTEM CONCURRENTLY` is parsed but rejected because
+system catalogs cannot be reindexed concurrently
+([reindex.sgml#synopsis](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L22-L25),
+[indexcmds.c#ReindexMultipleTables](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2525-L2533)).
+The supported concurrent forms feed one or more target indexes into
+`ReindexRelationConcurrently`, which reuses CIC's build/validate state machine
+on a **fresh copy** named `<original>_ccnew` that it creates next to the
+original, then swaps in
+([indexcmds.c#ReindexIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2333-L2382),
+[indexcmds.c#ReindexTable](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2455-L2484),
+[indexcmds.c#ReindexMultipleTables](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2672-L2686),
+[indexcmds.c#RIC-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3261)).
+An ordinary ERROR, cancel, or timeout therefore leaves an invalid copy, not
+necessarily the original
+([reindex.sgml#failure-recovery](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L363-L390)):
 
 | Failure point | Invalid leftover |
 |---|---|
@@ -373,9 +388,10 @@ The fix depends on which outcome produced it:
 |---|---|
 | Invalid means `indisvalid = false`; planner skips it; executor maintains it when ready | [plancat.c:199-210](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210), [execIndexing.c:330-332](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L332) |
 | Initial flags: `isvalid = !concurrent && !invalid`, `isready = !concurrent` | [index.c:990-996](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996) |
-| The `(f,t)` not-ready-but-valid state is impossible (state-flag asserts) | [index.c:3351-3396](../../../raw/postgres-12/src/backend/catalog/index.c#L3351-L3396) |
+| The `indisready = false, indisvalid = true` state is impossible (state-flag asserts) | [index.c:3351-3396](../../../raw/postgres-12/src/backend/catalog/index.c#L3351-L3396) |
 | CIC creates not-ready/not-valid, flips ready then valid; failure after commit 1 leaves invalid | [index.c:3114-3168](../../../raw/postgres-12/src/backend/catalog/index.c#L3114-L3168), [indexcmds.c:1318-1320](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1318-L1320) |
 | CIC invalid leftover is shown in regression as `concur_index3 ... INVALID` | [create_index.out:1383-1417](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1417) |
+| RIC can be reached by supported `INDEX`, `TABLE`, `SCHEMA`, and `DATABASE` concurrent forms; `SYSTEM CONCURRENTLY` is rejected | [reindex.sgml:22-25](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L22-L25), [indexcmds.c:2525-2533](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2525-L2533), [indexcmds.c:2672-2686](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2672-L2686) |
 | RIC swap flips new-valid/old-invalid in one transactional update; healthy name stays valid | [index.c:1531-1537](../../../raw/postgres-12/src/backend/catalog/index.c#L1531-L1537) |
 | RIC over an already-invalid index leaves both it and `_ccnew` invalid | [create_index.out:2317-2333](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2317-L2333) |
 | DROP INDEX CONCURRENTLY marks invalid (clear-valid), then dead (set-dead), across commits | [index.c:2089-2192](../../../raw/postgres-12/src/backend/catalog/index.c#L2089-L2192), [index.c:3367-3396](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3396) |
@@ -430,6 +446,9 @@ a non-write read into a local or relcache copy (`describe.c`, `relcache.c`,
 - [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)
 - [heapam.c#heap_xlog_inplace](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835)
 - [indexcmds.c#partitioned-recursion](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1040-L1276)
+- [indexcmds.c#ReindexIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2333-L2382)
+- [indexcmds.c#ReindexTable](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2455-L2484)
+- [indexcmds.c#ReindexMultipleTables](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2525-L2705)
 - [indexcmds.c#reindex-skip-invalid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2824)
 - [tablecmds.c#attach-validate](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16636-L16643)
 - [tablecmds.c#validatePartitionedIndex](../../../raw/postgres-12/src/backend/commands/tablecmds.c#L16682-L16769)
@@ -443,6 +462,7 @@ a non-write read into a local or relcache copy (`describe.c`, `relcache.c`,
 - [parse_utilcmd.c#constraint-using-index](../../../raw/postgres-12/src/backend/parser/parse_utilcmd.c#L2068-L2072)
 - [pg_index.h#flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)
 - [index.h#INDEX_CREATE_INVALID](../../../raw/postgres-12/src/include/catalog/index.h#L47-L53)
+- [reindex.sgml#synopsis](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L22-L25)
 - [version.c#old_9_6_invalidate_hash_indexes](../../../raw/postgres-12/src/bin/pg_upgrade/version.c#L296-L406)
 - [check.c#hash-reindex-gate](../../../raw/postgres-12/src/bin/pg_upgrade/check.c#L218-L220)
 - [create_index.sgml#invalid-index](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L606)
