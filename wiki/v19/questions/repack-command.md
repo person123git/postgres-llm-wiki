@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: 9a60f295bcb186a729d04e76377b7f122b2a1dd9
+pinned_commit: cdae794af31b3e9cfc323fc654292d86fa746f77
 verified: false
 verified_by_agent: not yet
 ---
@@ -155,9 +155,9 @@ Normally a replication slot pins `restart_lsn` so WAL can't be recycled. `REPACK
 
 ## GUC: `max_repack_replication_slots`
 
-Concurrent `REPACK` consumes a logical replication slot for its lifetime. Rather than forcing users to inflate `max_replication_slots`, v19 adds a dedicated pool sized by `max_repack_replication_slots` (default `5`, min `0`) [guc_parameters.dat#max_repack_replication_slots](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2115) [slot.c#decl](../../../raw/postgres-19/src/backend/replication/slot.c#L163-L164). `ReplicationSlotCreate(..., repack = true, ...)` allocates from the extra `[max_replication_slots, max_replication_slots + max_repack_replication_slots)` band of the slot array, so REPACK slots never compete with ordinary replication slots [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
+Concurrent `REPACK` consumes a logical replication slot for its lifetime. Rather than forcing users to inflate `max_replication_slots`, v19 adds a dedicated pool sized by `max_repack_replication_slots` (default `5`, min `0`) [guc_parameters.dat#max_repack_replication_slots](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2108-L2114) [slot.c#decl](../../../raw/postgres-19/src/backend/replication/slot.c#L163-L164). `ReplicationSlotCreate(..., repack = true, ...)` allocates from the extra `[max_replication_slots, max_replication_slots + max_repack_replication_slots)` band of the slot array, so REPACK slots never compete with ordinary replication slots [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 
-**Scope:** `max_repack_replication_slots` is `PGC_POSTMASTER` — it **requires a server restart** [guc_parameters.dat#context](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2109). The decoding worker also needs a free `max_worker_processes` slot, or `REPACK (CONCURRENTLY)` errors out [repack.c#worker-slots](../../../raw/postgres-19/src/backend/commands/repack.c#L3497-L3501).
+**Scope:** `max_repack_replication_slots` is `PGC_POSTMASTER` — it **requires a server restart** [guc_parameters.dat#context](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2108-L2108). The decoding worker also needs a free `max_worker_processes` slot, or `REPACK (CONCURRENTLY)` errors out [repack.c#worker-slots](../../../raw/postgres-19/src/backend/commands/repack.c#L3497-L3501).
 
 ## I/O Impact and Throttling
 
@@ -169,16 +169,16 @@ What does exist:
 |---|---|---|
 | **BULKREAD ring buffer** (automatic) | Limits shared-buffer pollution while reading the old heap | Only on the **sequential-scan** path, and only once the relation exceeds `NBuffers/4` [heapam.c#initscan](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L396-L409). |
 | **BULKWRITE ring buffer** (automatic, CONCURRENTLY) | Limits cache pollution while inserting into the new heap | `GetBulkInsertState()` uses `BAS_BULKWRITE` [heapam.c#GetBulkInsertState](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L1934-L1942). |
-| `maintenance_work_mem` | Bounds sort / index-build memory; does **not** throttle | Sizes `tuplesort_begin_cluster` [heapam_handler.c#tuplesort](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L651-L655). It is `PGC_USERSET`, so settable per session (no restart/reload) [guc_parameters.dat#maintenance_work_mem](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1952-L1961). High values trade RAM for fewer temp-file write bursts. |
+| `maintenance_work_mem` | Bounds sort / index-build memory; does **not** throttle | Sizes `tuplesort_begin_cluster` [heapam_handler.c#tuplesort](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L651-L655). It is `PGC_USERSET`, so settable per session (no restart/reload) [guc_parameters.dat#maintenance_work_mem](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1951-L1959). High values trade RAM for fewer temp-file write bursts. |
 | `CONCURRENTLY` | Reduces **lock** contention, not I/O | Avoids the long `AccessExclusiveLock` [repack.c#overview](../../../raw/postgres-19/src/backend/commands/repack.c#L7-L21) but does *more* total I/O (decode + spill + replay). It does let old WAL recycle as it runs [repack_worker.c#WAL-recycling](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L374-L403). |
 
 The read-side ring buffer is the only automatic "niceness," and it has a sharp edge: `REPACK t USING INDEX` on a btree, when the planner chooses an **index scan** rather than scan-and-sort, fetches heap pages through the normal buffer manager with **no** ring buffer [heapam_handler.c#index-scan-branch](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L681-L686). The plain sequential-scan path keeps the `BAS_BULKREAD` ring because `table_beginscan()` always sets `SO_ALLOW_STRAT` [heapam_handler.c#seq-scan-branch](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L694-L697) [tableam.h#table_beginscan](../../../raw/postgres-19/src/include/access/tableam.h#L943-L951).
 
 Practical recipe for going easy on the disk, given no in-server throttle:
 
-- Prefer physical-order (`REPACK t`) or scan-and-sort over an index scan, so the read ring buffer stays in play. To force scan-and-sort for an ordered rewrite, set `enable_indexscan = off` for the session; `enable_indexscan` is `PGC_USERSET`, so the change is session/transaction-scoped and needs no reload or restart [guc_parameters.dat#enable_indexscan](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L937-L942).
+- Prefer physical-order (`REPACK t`) or scan-and-sort over an index scan, so the read ring buffer stays in play. To force scan-and-sort for an ordered rewrite, set `enable_indexscan = off` for the session; `enable_indexscan` is `PGC_USERSET`, so the change is session/transaction-scoped and needs no reload or restart [guc_parameters.dat#enable_indexscan](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L936-L941).
 - Repack **one table or partition at a time** rather than the bare `REPACK;` form that sweeps the whole database, to bound each burst and let you space them out.
-- If changing `maintenance_work_mem`, use a moderate value; it is `PGC_USERSET`, so the change is session/transaction-scoped and needs no reload or restart [guc_parameters.dat#maintenance_work_mem](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1952-L1961).
+- If changing `maintenance_work_mem`, use a moderate value; it is `PGC_USERSET`, so the change is session/transaction-scoped and needs no reload or restart [guc_parameters.dat#maintenance_work_mem](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1951-L1959).
 - Use `CONCURRENTLY` to protect query availability — but treat it as adding I/O, not reducing it.
 
 ## Progress reporting
@@ -191,7 +191,7 @@ Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tes
 
 ## Feature-Scope Commits
 
-These are the 42 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` `master` checkout (`9a60f295`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
+These are the 42 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` `master` checkout (`cdae794a`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
 
 ### Foundational
 
@@ -271,7 +271,7 @@ These are the 42 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` 
 - GUC/slot pool — `guc_parameters.dat`, `slot.c` [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 - Observability — `system_views.sql`, `progress.h`, `wait_event_names.txt`.
 - Tests — `contrib/test_decoding/sql/repack.sql`, `src/test/modules/injection_points` repack specs.
-- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned post-`REL_19_BETA1` `master` checkout for the 42 feature-scope commits [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
+- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned post-`REL_19_BETA1` `master` checkout `cdae794af31b3e9cfc323fc654292d86fa746f77` for the 42 feature-scope commits. No REPACK-specific source, docs, or tests changed in `9a60f295..cdae794a`; `a7f59b252a8` only removed blank lines before unrelated GUCs in `guc_parameters.dat`, shifting cited line anchors [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 
 ## Evidence Map
 
@@ -287,7 +287,7 @@ These are the 42 REPACK feature-scope commits in the pinned post-`REL_19_BETA1` 
 | Spilled tuple reconstruction validates separately stored attributes | [repack.c#L2751-L2817](../../../raw/postgres-19/src/backend/commands/repack.c#L2751-L2817) |
 | Lock upgrade + double catch-up + swap | [repack.c#L3177-L3317](../../../raw/postgres-19/src/backend/commands/repack.c#L3177-L3317) |
 | WAL recycling during REPACK | [repack_worker.c#L374-L403](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L374-L403), `45b02984` |
-| `max_repack_replication_slots` = PGC_POSTMASTER | [guc_parameters.dat#L2109-L2115](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2109-L2115) |
+| `max_repack_replication_slots` = PGC_POSTMASTER | [guc_parameters.dat#L2108-L2114](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2108-L2114) |
 | Progress view + phases | [system_views.sql#L1349-L1398](../../../raw/postgres-19/src/backend/catalog/system_views.sql#L1349-L1398), [progress.h#L77-L106](../../../raw/postgres-19/src/include/commands/progress.h#L77-L106) |
 | Tests live in test_decoding (wal_level) | [repack.sql#L1-L6](../../../raw/postgres-19/contrib/test_decoding/sql/repack.sql#L1-L6), `4b2aa4b3` |
 | No cost-delay throttle in the rewrite path | [repack.c#L520-L701](../../../raw/postgres-19/src/backend/commands/repack.c#L520-L701), [heapam_handler.c#L594-L602](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L594-L602) |

@@ -2,6 +2,29 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-26] repin v19 | fetch latest master and refresh question commit references
+
+- Fetched upstream PostgreSQL `master` and tags for `raw/postgres-19/`, checked
+  out the fetched tip, and repinned PostgreSQL 19 from
+  `9a60f295bcb186a729d04e76377b7f122b2a1dd9` to
+  `cdae794af31b3e9cfc323fc654292d86fa746f77` (26 new commits; latest commit
+  `cdae794a`, 2026-06-26, `Take into account default_tablespace during
+  MERGE/SPLIT PARTITION(S)`).
+- Reviewed all v19 question pages and the mandatory codebase navigation guide
+  against `9a60f295..cdae794a`. No `pg_plan_advice`, REPACK-specific, or
+  autovacuum/scoring/parallel-vacuum/visibility feature files changed in that
+  range, so the existing feature-scope commit counts remain 22 direct
+  `pg_plan_advice` module commits and 42 REPACK feature-scope commits.
+- Updated the v19 question pages with the new `pinned_commit:` and changed-range
+  commit references: `b3a95566` only touched out-of-scope `pg_stash_advice`,
+  `4abf411e232` touched `pg_stat_io` autovacuum-launcher accounting outside the
+  filed autovacuum feature scope, and `a7f59b252a8` only shifted cited
+  `guc_parameters.dat` line anchors.
+- Refreshed affected `guc_parameters.dat` citations in the REPACK/autovacuum
+  pages and `execnodes.h` citations in the v19 codebase navigation guide.
+  Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v19/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-22] review v12 | REINDEX INDEX CONCURRENTLY navigation section and section-by-section pass complete
 
 - Reviewed the `## Navigation` section of [How REINDEX INDEX CONCURRENTLY Is

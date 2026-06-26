@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: 9a60f295bcb186a729d04e76377b7f122b2a1dd9
+pinned_commit: cdae794af31b3e9cfc323fc654292d86fa746f77
 verified: false
 verified_by_agent: not yet
 ---
@@ -66,7 +66,7 @@ Keep these structs open when tracing behavior:
 | `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-19/src/include/nodes/plannodes.h#L59-L135). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-19/src/include/nodes/pathnodes.h#L168-L245) [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095) [pathnodes.h#Path](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1964-L2005). |
-| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L80) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L690-L785) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265). |
+| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L80) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L691-L786) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1196-L1266). |
 | `RelationData`, `TableAmRoutine`, and `IndexAmRoutine` | Relation cache state points at table and index access-method callback tables [rel.h#RelationData](../../raw/postgres-19/src/include/utils/rel.h#L55-L135) [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420) [amapi.h#IndexAmRoutine](../../raw/postgres-19/src/include/access/amapi.h#L233-L320). |
 | `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-19/src/include/nodes/memnodes.h#L117-L170). |
 
@@ -120,7 +120,7 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 - [pg_index.h#CATALOG](../../raw/postgres-19/src/include/catalog/pg_index.h#L31-L78)
 - [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207)
 - [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095)
-- [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265)
+- [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1196-L1266)
 - [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420)
 - [amapi.h#IndexAmRoutine](../../raw/postgres-19/src/include/access/amapi.h#L233-L320)
 - [regress/GNUmakefile#targets](../../raw/postgres-19/src/test/regress/GNUmakefile#L36-L103)

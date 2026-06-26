@@ -3,15 +3,15 @@
 ## Source Pin
 
 - Branch/tag: `master` (post-`REL_19_BETA1`)
-- Commit: `9a60f295bcb186a729d04e76377b7f122b2a1dd9`
+- Commit: `cdae794af31b3e9cfc323fc654292d86fa746f77`
 - Status: `active`
 - Source path: `raw/postgres-19/`
 - Added: 2026-05-30
-- Repinned: 2026-06-22
+- Repinned: 2026-06-26
 
 ## Coverage
 
-Behavioral claims cite the matching pinned checkout under `raw/postgres-19/`. PostgreSQL 19 has no `REL_19_STABLE` branch yet, so the pin tracks the post-`REL_19_BETA1` `master` commit `9a60f295` (the v19 development line). Filed coverage includes a comprehensive walkthrough of the new `pg_plan_advice` contrib module, a comprehensive walkthrough of the new in-core `REPACK` / `REPACK (CONCURRENTLY)` command with 42 feature-scope commits, and a commit-backed walkthrough of parallel autovacuum, autovacuum table scoring (now including the post-beta1 MXID-score division-by-zero fix `1f2297b5487`), and read-only scans setting all-visible VM bits.
+Behavioral claims cite the matching pinned checkout under `raw/postgres-19/`. PostgreSQL 19 has no `REL_19_STABLE` branch yet, so the pin tracks the post-`REL_19_BETA1` `master` commit `cdae794a` (the v19 development line). Filed coverage includes a comprehensive walkthrough of the new `pg_plan_advice` contrib module, a comprehensive walkthrough of the new in-core `REPACK` / `REPACK (CONCURRENTLY)` command with 42 feature-scope commits, and a commit-backed walkthrough of parallel autovacuum, autovacuum table scoring (now including the post-beta1 MXID-score division-by-zero fix `1f2297b5487`), and read-only scans setting all-visible VM bits. The 2026-06-26 repin from `9a60f295` to `cdae794a` found no new feature-scope commits for those three question topics; question pages record the relevant changed-range commit references and refreshed line anchors.
 
 - [PostgreSQL 19 Codebase Navigation Guide (unverified)](codebase-navigation-guide.md) - Mandatory root-level question-style map for navigating the pinned v19 source tree: layout, SQL statement flow, utility dispatch, generated/catalog artifacts, key structs, contrib boundaries, tests, and docs.
 
