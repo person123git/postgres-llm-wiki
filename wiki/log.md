@@ -2,6 +2,25 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-26] review-fix v19 | pg_plan_advice question issues
+
+- Fixed review findings on [How pg_plan_advice Works in PostgreSQL 19, and All
+  Its Commits (unverified)](v19/questions/pg-plan-advice.md) against pinned
+  `raw/postgres-19/` commit `cdae794af31b3e9cfc323fc654292d86fa746f77`.
+- Renamed the required question-page answer entry from `## Short Answer` to
+  `## Answer` and updated the Contents anchor.
+- Completed the scoped core planner source-history list for the feature by
+  adding the omitted planner foundation/enabling/fix commits: `e2225346`,
+  `4685977c`, `cbdf93d4`, `6e466e1e`, `8300d3ad`, and `47c110f7`, bringing the
+  core planner list to 20 commits while preserving the 22 direct
+  `contrib/pg_plan_advice/` commits.
+- Tightened evidence for feedback flags, `pgs_mask` clear-only enforcement, and
+  prepared-statement re-planning through relcache/syscache invalidation; updated
+  Context Reviewed, Evidence Map, Source References, `wiki/index.md`,
+  `wiki/v19/index.md`, and `wiki/versions.md`.
+- `verified_by_agent` remains `not yet`: this was a targeted review-fix pass,
+  not a full independent claim-by-claim re-verification.
+
 ## [2026-06-26] repin v19 | fetch latest master and refresh question commit references
 
 - Fetched upstream PostgreSQL `master` and tags for `raw/postgres-19/`, checked
