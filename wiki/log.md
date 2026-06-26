@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-26] review-fix v19 | pg_plan_advice full claim review
+
+- Reviewed [How pg_plan_advice Works in PostgreSQL 19, and All Its Commits
+  (unverified)](v19/questions/pg-plan-advice.md) against pinned
+  `raw/postgres-19/` commit `cdae794af31b3e9cfc323fc654292d86fa746f77`.
+- Rechecked the cited source ranges, direct `contrib/pg_plan_advice/` commit
+  list (22 commits), support commit list, core planner foundation/fix list (20
+  commits), GUC/load scopes, prepared-plan regression evidence, and the
+  `pg_stash_advice` advisor-hook integration.
+- Fixed two review findings: corrected the `91f33a2a` commit date from
+  `2026-03-10` to `2026-03-09`, and replaced a stale Related Pages
+  cross-reference for `pg_stash_advice` with direct source citations.
+- Made the loadable-module build evidence explicit via the module Makefile and
+  meson file, updated the Context Reviewed / Evidence Map / Source References
+  sections, removed the open question about missing full independent review, and
+  advanced `verified_by_agent` to `gpt-5-codex 2026-06-26T15:08:00Z`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-26] review-fix v19 | pg_plan_advice question issues
 
 - Fixed review findings on [How pg_plan_advice Works in PostgreSQL 19, and All

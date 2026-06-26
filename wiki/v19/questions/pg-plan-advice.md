@@ -3,7 +3,7 @@ type: question
 version: 19
 pinned_commit: cdae794af31b3e9cfc323fc654292d86fa746f77
 verified: false
-verified_by_agent: not yet
+verified_by_agent: gpt-5-codex 2026-06-26T15:08:00Z
 ---
 
 # How pg_plan_advice Works in PostgreSQL 19, and All Its Commits (unverified)
@@ -78,7 +78,7 @@ The feature's visible module landed in 22 commits that touched `contrib/pg_plan_
 
 ## Module Layout
 
-The module is a loadable library (not a `CREATE EXTENSION` extension): there is no `.control` file. It can be loaded with `LOAD`, `session_preload_libraries`, or `shared_preload_libraries`; `shared_preload_libraries` requires a server restart, while `session_preload_libraries` applies to new sessions [pgplanadvice.sgml#getting-started](../../../raw/postgres-19/doc/src/sgml/pgplanadvice.sgml#L33-L40) [syntax.sql#LOAD](../../../raw/postgres-19/contrib/pg_plan_advice/sql/syntax.sql#L1). Its source files split by responsibility:
+The module is a loadable library: the make and meson build files define a `MODULE_big` / `shared_module`, and the user-facing docs load it with `LOAD`, `session_preload_libraries`, or `shared_preload_libraries` rather than `CREATE EXTENSION` [Makefile#module](../../../raw/postgres-19/contrib/pg_plan_advice/Makefile#L3-L20) [meson.build#shared_module](../../../raw/postgres-19/contrib/pg_plan_advice/meson.build#L34-L47) [pgplanadvice.sgml#getting-started](../../../raw/postgres-19/doc/src/sgml/pgplanadvice.sgml#L33-L40) [syntax.sql#LOAD](../../../raw/postgres-19/contrib/pg_plan_advice/sql/syntax.sql#L1). `shared_preload_libraries` requires a server restart, while `session_preload_libraries` applies to new sessions [pgplanadvice.sgml#getting-started](../../../raw/postgres-19/doc/src/sgml/pgplanadvice.sgml#L33-L40). Its source files split by responsibility:
 
 ```text
 contrib/pg_plan_advice/
@@ -97,7 +97,7 @@ contrib/pg_plan_advice/
 
 (File roles taken from each file's header comment, e.g. [pgpa_walker.h#purpose](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_walker.h#L4-L5), [pgpa_trove.h#purpose](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_trove.h#L4-L5), [pgpa_output.h#purpose](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_output.h#L4-L5).)
 
-A companion module, `pg_stash_advice`, is a separate `contrib` directory that stores advice strings and feeds them back via `pg_plan_advice`'s advisor hook; it is out of scope here but noted under [Related Pages](#related-pages).
+A companion module, `pg_stash_advice`, is a separate `contrib` directory that stores advice strings in shared memory and feeds them back during planning via `pg_plan_advice`'s advisor hook [pg_stash_advice.h#overview](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.h#L4-L11) [pg_stash_advice.c#advisor-registration](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c#L138-L142) [pg_stash_advice.c#pgsa_advisor](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c#L150-L208). It remains outside this page's commit-history scope.
 
 ## Core Planner Changes (the mechanism)
 
@@ -260,7 +260,7 @@ This history has three scopes. First are the 20 same-checkout core planner found
 - `7358abcc` — Store information about Append node consolidation in the final plan (2026-02-10, Robert Haas). The `child_append_relid_sets` fields preserve partitionwise-join grouping information after Append/MergeAppend consolidation [pathnodes.h#child_append_relid_sets](../../../raw/postgres-19/src/include/nodes/pathnodes.h#L2267-L2289) [plannodes.h#Append-child-sets](../../../raw/postgres-19/src/include/nodes/plannodes.h#L402-L406).
 - `6e466e1e` — Fix `add_partial_path` interaction with `disabled_nodes` (2026-02-19, Robert Haas). This made partial paths keep the same disabled-node-first ordering as ordinary paths, so disabled parallel alternatives cannot be preferred merely because their total cost is lower [pathnode.c#add_partial_path-disabled-order](../../../raw/postgres-19/src/backend/optimizer/util/pathnode.c#L753-L900).
 - `8300d3ad` — Consider startup cost as a figure of merit for partial paths (2026-03-09, Robert Haas; co-authored by Tomas Vondra). In addition to the startup-cost change, this fixed `add_partial_path_precheck` to compare `disabled_nodes`, matching `compare_path_costs_fuzzily()` [pathnode.c#add_partial_path_precheck-disabled-nodes](../../../raw/postgres-19/src/backend/optimizer/util/pathnode.c#L912-L985).
-- `91f33a2a` — Replace `get_relation_info_hook` with `build_simple_rel_hook` (2026-03-10, Robert Haas). This produced the base-relation hook `pg_plan_advice` installs [pathnode.h#build_simple_rel_hook](../../../raw/postgres-19/src/include/optimizer/pathnode.h#L21-L24).
+- `91f33a2a` — Replace `get_relation_info_hook` with `build_simple_rel_hook` (2026-03-09, Robert Haas). This produced the base-relation hook `pg_plan_advice` installs [pathnode.h#build_simple_rel_hook](../../../raw/postgres-19/src/include/optimizer/pathnode.h#L21-L24).
 - `0fbfd37c` — Allow extensions to mark an individual index as disabled (2026-03-10, Robert Haas). `pg_plan_advice` uses this for index-name advice rather than deleting indexes from `RelOptInfo.indexlist` [pathnodes.h#IndexOptInfo.disabled](../../../raw/postgres-19/src/include/nodes/pathnodes.h#L1427-L1428) [pathnode.c#index-disabled](../../../raw/postgres-19/src/backend/optimizer/util/pathnode.c#L1126-L1131).
 - `dc47beac` — `get_memoize_path`: don't exit quickly when `PGS_NESTLOOP_PLAIN` is unset (2026-03-24, Robert Haas). This fixed a `test_plan_advice` failure where `NESTED_LOOP_MEMOIZE()` could not be enforced because core exited before costing Memoize [joinpath.c#get_memoize_path](../../../raw/postgres-19/src/backend/optimizer/path/joinpath.c#L723-L739).
 - `47c110f7` — Respect `disabled_nodes` in `fix_alternative_subplan` (2026-03-26, Robert Haas). Alternative subplans now carry and compare the disabled-node count, which matters for advice around alternative subplan selection [primnodes.h#SubPlan.disabled_nodes](../../../raw/postgres-19/src/include/nodes/primnodes.h#L1073-L1111) [setrefs.c#fix_alternative_subplan](../../../raw/postgres-19/src/backend/optimizer/plan/setrefs.c#L2235-L2268).
@@ -376,12 +376,14 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 - Core plan-cache policy in `src/backend/utils/cache/plancache.c` (`choose_custom_plan`) for the prepared-statement interaction.
 - Same-checkout docs in `doc/src/sgml/pgplanadvice.sgml`.
 - Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned post-`REL_19_BETA1` `master` commit `cdae794af31b3e9cfc323fc654292d86fa746f77`. No `pg_plan_advice` module, doc, or test files changed between `REL_19_BETA1` and this pin, so the newest module commit remains `b1901e28` (2026-05-29). In the `9a60f295..cdae794a` repin range, `b3a95566` touched only the sibling, out-of-scope `contrib/pg_stash_advice` module.
+- 2026-06-26 claim review against the unchanged pin: rechecked the cited source ranges, direct module commit list, support commit list, core planner commit list, GUC/load scopes, prepared-plan regression evidence, and `pg_stash_advice` advisor integration. The only content correction found was the `91f33a2a` commit date (`2026-03-09`, not `2026-03-10`); the stale `pg_stash_advice` Related Pages cross-reference was replaced with direct source citations.
 
 ## Evidence Map
 
 | Claim | Evidence |
 |---|---|
 | Two-way (generate + enforce), round-trip-safe design | [README#L3-L40](../../../raw/postgres-19/contrib/pg_plan_advice/README#L3-L40) |
+| Loadable-module build shape | [Makefile#L3-L20](../../../raw/postgres-19/contrib/pg_plan_advice/Makefile#L3-L20) [meson.build#L34-L47](../../../raw/postgres-19/contrib/pg_plan_advice/meson.build#L34-L47) |
 | Load methods (`LOAD`, `session_preload_libraries`, `shared_preload_libraries`) | [pgplanadvice.sgml#L33-L40](../../../raw/postgres-19/doc/src/sgml/pgplanadvice.sgml#L33-L40) |
 | `pgs_mask` bits and two enforcement styles | [pathnodes.h#L25-L97](../../../raw/postgres-19/src/include/nodes/pathnodes.h#L25-L97) |
 | Mask seeded from `enable_*` GUCs | [planner.c#L498-L529](../../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L498-L529) |
@@ -390,6 +392,7 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 | Individual index disabling for index-specific advice | [pgpa_planner.c#L1788-L1819](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L1788-L1819) [pathnodes.h#L1427-L1428](../../../raw/postgres-19/src/include/nodes/pathnodes.h#L1427-L1428) [pathnode.c#L1126-L1131](../../../raw/postgres-19/src/backend/optimizer/util/pathnode.c#L1126-L1131) |
 | Module installs hooks, GUCs, EXPLAIN option | [pg_plan_advice.c#L64-L136](../../../raw/postgres-19/contrib/pg_plan_advice/pg_plan_advice.c#L64-L136) |
 | Advisor hook chain, GUC fallback | [pg_plan_advice.c#L169-L225](../../../raw/postgres-19/contrib/pg_plan_advice/pg_plan_advice.c#L169-L225) |
+| `pg_stash_advice` feeds saved advice through the advisor hook | [pg_stash_advice.h#L4-L11](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.h#L4-L11) [pg_stash_advice.c#L138-L142](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c#L138-L142) [pg_stash_advice.c#L150-L208](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c#L150-L208) |
 | Tag enum (20 tags) | [pgpa_ast.h#L80-L102](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_ast.h#L80-L102) |
 | Relation identifier form | [README#L51-L79](../../../raw/postgres-19/contrib/pg_plan_advice/README#L51-L79) [pgpa_identifier.h#L19-L26](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_identifier.h#L19-L26) |
 | Generation triggers and flow (walk + render) | [pgpa_planner.c#L211-L221](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L211-L221) [pgpa_planner.c#L299-L398](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L299-L398) [pg_plan_advice.c#L241-L251](../../../raw/postgres-19/contrib/pg_plan_advice/pg_plan_advice.c#L241-L251) [pgpa_output.c#L79-L164](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_output.c#L79-L164) |
@@ -411,6 +414,7 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 - [pgpa_trove.h](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_trove.h) / [pgpa_output.c](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_output.c) / [pgpa_identifier.h](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_identifier.h) — advice lookup, rendering, identifiers.
 - [README](../../../raw/postgres-19/contrib/pg_plan_advice/README) — design rationale and language reference.
 - [pgplanadvice.sgml](../../../raw/postgres-19/doc/src/sgml/pgplanadvice.sgml) — user-facing docs for load methods and advice examples.
+- [pg_stash_advice.h](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.h) / [pg_stash_advice.c](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c) — sibling-module use of the public advisor hook.
 - [pathnodes.h](../../../raw/postgres-19/src/include/nodes/pathnodes.h) / [plannodes.h](../../../raw/postgres-19/src/include/nodes/plannodes.h) / [primnodes.h](../../../raw/postgres-19/src/include/nodes/primnodes.h) / [planner.c](../../../raw/postgres-19/src/backend/optimizer/plan/planner.c) / [joinpath.c](../../../raw/postgres-19/src/backend/optimizer/path/joinpath.c) / [pathnode.c](../../../raw/postgres-19/src/backend/optimizer/util/pathnode.c) / [setrefs.c](../../../raw/postgres-19/src/backend/optimizer/plan/setrefs.c) / [extendplan.h](../../../raw/postgres-19/src/include/optimizer/extendplan.h) — core `pgs_mask`, hooks, extension state, final-plan metadata, disabled-node behavior, and index disable support.
 - [plancache.c](../../../raw/postgres-19/src/backend/utils/cache/plancache.c) — `choose_custom_plan` custom-vs-generic policy governing when a prepared statement re-plans (and thus re-reads advice).
 - [test_plan_advice.c](../../../raw/postgres-19/src/test/modules/test_plan_advice/test_plan_advice.c) and contrib regression tests ([syntax.sql](../../../raw/postgres-19/contrib/pg_plan_advice/sql/syntax.sql), [prepared.sql](../../../raw/postgres-19/contrib/pg_plan_advice/sql/prepared.sql)).
@@ -418,7 +422,6 @@ The newest commit. Generic tags allow sublists (`MERGE_JOIN((x y))`) but simple 
 ## Open Questions
 
 - The README's own "Future Work" lists known gaps in the v19 feature: no control over aggregation strategy or sort order, no modeling of eager aggregation, no control over estimates (only outcomes, unlike `pg_hint_plan`), and unverified interaction with GEQO [README#Future-Work](../../../raw/postgres-19/contrib/pg_plan_advice/README#L250-L268). These are limitations of the shipped code, not of this page.
-- This page has had scoped review-fix passes against pinned source, but it has not yet had a full independent claim-by-claim re-verification pass; `verified_by_agent` remains `not yet`.
 - Scope note: this page covers `pg_plan_advice`. The sibling `contrib/pg_stash_advice` module (advice persistence) has its own commit series and is not analyzed here.
 
 ## Related Pages
