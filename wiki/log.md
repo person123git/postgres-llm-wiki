@@ -2,6 +2,26 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-26] review-fix v19 | autovacuum page review findings
+
+- Fixed review findings on [PostgreSQL 19 Autovacuum and VACUUM: Parallel
+  Workers, Table Scoring, and Setting Pages All-Visible During Reads
+  (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md)
+  against pinned `raw/postgres-19/` commit
+  `cdae794af31b3e9cfc323fc654292d86fa746f77`.
+- Added the required `## Answer` section, demoted answer-internal detail
+  headings so the Contents block lists every `##` and `###` heading, and renamed
+  `## Related Pages` to `## Navigation`.
+- Corrected the read-only scan VM wording: read scans set all-visible through
+  `HEAP_PAGE_PRUNE_SET_VM` but do not set all-frozen because they do not pass
+  `HEAP_PAGE_PRUNE_FREEZE`; `VACUUM` remains the path that passes both options.
+- Completed the Evidence Map citations for all five `*_score_weight` GUC
+  definitions, and added a direct `release-19.sgml` citation for the release-note
+  typo note about `autovacuum_vacuum_insert_score_weight`.
+- `verified_by_agent` remains `not yet`: this was a targeted review-fix pass,
+  not a full independent claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-26] review-fix v19 | pg_plan_advice full claim review
 
 - Reviewed [How pg_plan_advice Works in PostgreSQL 19, and All Its Commits
