@@ -2621,3 +2621,25 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `not yet` because this was a scoped section review, not a full-page
   re-verification.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-06-26] question v12 | database health checklist
+
+- Filed [PostgreSQL 12 Database Health Checklist
+  (unverified)](v12/questions/database-health-checklist.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- The user approved correcting the prompt's typos and grammar before filing;
+  the corrected prompt is restated under `## Question` with a prompt note.
+- Added guarded production SQL for configuration, activity, long transactions,
+  locks, database and standby counters, table maintenance, vacuum progress,
+  XID/MultiXact age, checkpoints, archiving, replication, slots,
+  `pg_stat_statements`, `pgstattuple_approx`, and `pgstatindex`.
+- Added an observability matrix that identifies required core settings,
+  contrib installation, per-database extension creation, checksum enablement,
+  and exact restart/reload/session or session-start apply scopes.
+- Added a database-log checklist for connection exhaustion, slow statements,
+  temp files, lock waits, deadlocks, timeout and recovery cancellations,
+  autovacuum and wraparound warnings, checkpoints, archiving, disk exhaustion,
+  lock-table shared memory, checksum failures, and connection/replication
+  auditing; each item includes repercussions and possible root causes.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
