@@ -13,6 +13,20 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-29: reviewed [PostgreSQL 18 Row-Level Security
+  (unverified)](v18/questions/row-level-security-rls.md) against the unchanged
+  pin `6cb307251c`. Re-verified that all 120 unique source citations bracket
+  their named symbols, spot-checked the most claim-sensitive source
+  (`row_security` GUC, `check_enable_rls()`, the RLS `COPY`/pg_dump paths, the
+  CVE-2025-8713 evidence), and independently rebuilt the fixes and
+  minor-release-first-appearance provenance from local history — all 20 fix
+  hashes, the five CVEs, the four not-back-patched fixes, every back-patch
+  reach, and every per-branch first-release tag still hold. Two value
+  corrections: the `bd3611db5a` row's 13.5/12.9 minor date `2021-11-11` ->
+  `2021-11-08` (the `REL_12_9`/`REL_13_5` stamp date, matching the page's stated
+  method), and the `CREATE POLICY`-statement count `97` -> `100` in the
+  performance section. `verified_by_agent` stays `not yet`: scoped review-fix,
+  not a full claim-by-claim re-verification.
 - 2026-06-29: moved the `raw/postgres-19/` source checkout to the declared pin
   `cdae794af31b3e9cfc323fc654292d86fa746f77`. The 2026-06-26 repin updated every
   `wiki/v19/**` page's `pinned_commit:` and line anchors to `cdae794a` but left

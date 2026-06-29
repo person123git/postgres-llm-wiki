@@ -2,6 +2,43 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-29] review-fix v18 | Row-Level Security page: citation + provenance review, two corrections
+
+- Reviewed [Row-Level Security (RLS) in PostgreSQL 18 (unverified)](v18/questions/row-level-security-rls.md)
+  against the unchanged pin `6cb307251c5c6261286c1566496920976640108e`
+  (`REL_18_3-113-g6cb307251c5`, on `REL_18_STABLE`).
+- Re-verified that all 120 unique source citations bracket their named symbols,
+  and spot-confirmed the most claim-sensitive source against the prose:
+  `row_security` is `PGC_USERSET` with default `true` (`guc_tables.c`), the
+  `check_enable_rls()` bypass/error ladder (`rls.c`), the `COPY` `from->inh =
+  false` ONLY path and `COPY FROM` rejection (`copy.c`), pg_dump's `SET
+  row_security on/off`, and the CVE-2025-8713 view-permission/selectivity
+  evidence (`planner.c`/`plancat.c`).
+- Re-verified the `### Fixes Since PostgreSQL 12` table: all 20 hashes exist,
+  subjects match, each is an ancestor of the pin and a descendant of the v13
+  stamp `615cebc94b5`; the five CVEs and the four not-back-patched fixes were
+  reconfirmed from commit messages (`6572bd55b0` explicitly declines
+  back-patching); the master commits `22424953cde`/`7dc4fa91413` of the two
+  `REL_18_STABLE` back-patches are correctly not ancestors of the pin.
+- Independently rebuilt the `### Minor-Release First Appearance` table via
+  exact-subject cherry-pick search, `git tag --contains`, and tag stamp dates.
+  Every per-branch first-release tag, back-patch reach, and stamp date matched
+  except one.
+- Correction 1: in the `bd3611db5a` row, the 13.5/12.9 date `2021-11-11` (the
+  public release date) was changed to `2021-11-08`, the `REL_12_9`/`REL_13_5`
+  `Stamp` commit date — the section's stated `git log -1 --format=%cs` method
+  and the convention every other row already follows.
+- Correction 2: in `### Scalability and Performance Issues`, the "97 `CREATE
+  POLICY` statements" count was changed to "100" (97 upper-case plus three
+  lower-case `create policy` statements in `rowsecurity.sql` at lines 2286,
+  2287, 2367; two further `create policy` mentions are comments).
+- Added a Context Reviewed bullet recording this pass. `verified_by_agent` stays
+  `not yet`: this was a scoped review that corrected two values and re-verified
+  citations/provenance, not a full line-by-line re-verification of every prose
+  claim.
+- Updated `wiki/versions.md` Coverage Notes.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-29] review-fix v19 | commit-history review of all question pages; checkout moved to declared pin
 
 - The `raw/postgres-19/` checkout was left at the prior pin
