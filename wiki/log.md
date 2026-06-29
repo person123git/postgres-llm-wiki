@@ -2,6 +2,42 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-29] review-fix v19 | commit-history review of all question pages; checkout moved to declared pin
+
+- The `raw/postgres-19/` checkout was left at the prior pin
+  `9a60f295bcb186a729d04e76377b7f122b2a1dd9` and did not contain the declared pin
+  `cdae794af31b3e9cfc323fc654292d86fa746f77` that every `wiki/v19/**` page
+  records. Fetched upstream `master`+tags and checked the checkout out at
+  `cdae794a` (26 commits ahead of `9a60f295`) so the evidence base matches the
+  pages.
+- Reviewed the commit sections of all three v19 question pages against the pin:
+  - [pg_plan_advice (unverified)](v19/questions/pg-plan-advice.md)
+    `## Source Commit History`: verified all 50 commits (20 core, 22 module, 8
+    support) for hash, subject, author, and ancestry; confirmed the exact
+    22-commit `contrib/pg_plan_advice/` completeness and the
+    unchanged-since-`REL_19_BETA1` claim.
+  - [REPACK (unverified)](v19/questions/repack-command.md)
+    `## Feature-Scope Commits`: verified all 42 commits; confirmed every
+    REPACK-file-touching and REPACK-subject commit is listed and the body-grep
+    matches that are not REPACK-scope are correctly excluded.
+  - [Autovacuum/VACUUM
+    (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md)
+    `### Source Commit History`: verified all 24 commits (5 parallel, 6 scoring,
+    13 visibility) plus `f83d709760d`/`4abf411e232`/`a7f59b252a8`; confirmed the
+    post-beta1 and repin-range claims and the `system_views.sql#L798-L814`
+    anchor.
+- One content correction, on the pg_plan_advice page: `47c110f7` had been listed
+  with its commit date `2026-03-26`; changed it to its author date `2026-03-20`
+  to match the page list's author-date convention (the autovacuum page states
+  this explicitly; REPACK follows it). Added a "Dates are author dates." note to
+  the pg_plan_advice commit-history intro and tightened the `b3a95566`
+  repin-range wording. The REPACK and autovacuum commit sections needed no
+  changes.
+- `verified_by_agent` stays `not yet` on all v19 pages: this was a
+  commit-section review plus spot-checked anchors, not a full claim-by-claim
+  re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-26] review-fix v12 | invalid-index outcomes question precision
 
 - Reviewed [All Outcomes That Leave an Invalid Index in PostgreSQL 12,

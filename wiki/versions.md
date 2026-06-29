@@ -13,6 +13,26 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-06-29: moved the `raw/postgres-19/` source checkout to the declared pin
+  `cdae794af31b3e9cfc323fc654292d86fa746f77`. The 2026-06-26 repin updated every
+  `wiki/v19/**` page's `pinned_commit:` and line anchors to `cdae794a` but left
+  the standalone source checkout at the prior pin `9a60f295` (which does not
+  contain `cdae794a`), so page citations could not be verified against the
+  evidence base. Fetched upstream `master`+tags and checked out `cdae794a`
+  (26 commits ahead of `9a60f295`; tip "Take into account default_tablespace
+  during MERGE/SPLIT PARTITION(S)"). Then reviewed the commit sections of all
+  three v19 question pages against the pin and verified every listed commit for
+  hash, subject, author, and ancestry: `pg_plan_advice` (50 commits: 20 core, 22
+  module, 8 support; exact 22-commit module completeness), `REPACK` (42
+  feature-scope commits; completeness re-checked by file-path and subject grep),
+  and autovacuum/VACUUM (24 commits plus `f83d709760d`/`4abf411e232`/
+  `a7f59b252a8`; post-beta1 and repin-range claims confirmed). One correction:
+  `pg_plan_advice` `47c110f7` had used its commit date `2026-03-26`; switched to
+  the author date `2026-03-20` to match the author-date convention the other two
+  pages use, with a "Dates are author dates." note added and the `b3a95566`
+  repin-range wording tightened. `verified_by_agent` remains `not yet` on all
+  v19 pages: this was a commit-section review, not a full claim-by-claim
+  re-verification.
 - 2026-06-26: repinned PostgreSQL 19 from `9a60f295` to
   `cdae794af31b3e9cfc323fc654292d86fa746f77` after fetching upstream `master`
   and tags (26 new commits; new tip `cdae794a`, 2026-06-26, "Take into account
