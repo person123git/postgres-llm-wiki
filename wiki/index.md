@@ -57,6 +57,13 @@ This is the global catalog for the PostgreSQL engine wiki.
 
 
 
+### PostgreSQL 14.23
+
+- [v14/index](v14/index.md) - Active version landing page. Source checkout pinned to the `REL_14_STABLE` tip commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156` (`REL_14_23-3-g5c00f4e2e3b`, three commits past the 14.23 release stamp; source version 14.23).
+- [PostgreSQL 14 Codebase Navigation Guide (unverified)](v14/codebase-navigation-guide.md) - Mandatory root-level question-style map for navigating the pinned v14 source tree: layout, SQL statement flow, utility dispatch, generated/catalog artifacts, key structs, contrib boundaries, tests, and docs.
+
+
+
 ### PostgreSQL 12.2
 
 - [v12/index](v12/index.md) - Legacy version landing page. Source checkout pinned to `REL_12_STABLE` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
