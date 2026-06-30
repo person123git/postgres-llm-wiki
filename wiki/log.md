@@ -2,6 +2,43 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-06-30] question v14 | Row-Level Security: implementation, performance, settings
+
+- Filed [Row-Level Security (RLS) in PostgreSQL 14 (unverified)](v14/questions/row-level-security-rls.md)
+  (`type: question`) against the unchanged pin `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+  This is the first question page under `wiki/v14/questions/`.
+- Restated the user prompt verbatim under `## Question`; the prompt text is
+  grammatically clean, so no prompt-hygiene correction was needed.
+- Answered all three parts inline from a claim-to-source map built directly from
+  `raw/postgres-14/`:
+  - Implementation: rewrite-time `get_row_security_policies` / `fireRIRrules`,
+    `pg_policy`/`pg_class`/`pg_authid` catalogs, relcache build
+    `RelationBuildRowSecurity` into `rd_rsdesc`, the `check_enable_rls` bypass
+    decision (`RLS_NONE`/`RLS_NONE_ENV`/`RLS_ENABLED`, `has_bypassrls_privilege`,
+    `InNoForceRLSOperation`/`SECURITY_NOFORCE_RLS`), permissive-OR /
+    restrictive-AND combination with an always-false default-deny, command/role
+    matching, the planner `security_level` machinery
+    (`process_security_barrier_quals`, `order_qual_clauses` leakproof exception),
+    executor `ExecWithCheckOptions`, plan-cache `dependsOnRLS` re-planning, the
+    inheritance/partition rule (child `securityQuals` cleared), and the
+    COPY/CTAS/RI/error-leak boundaries.
+  - Performance: per-row qual/WCO evaluation, leakproof ordering that can block
+    index use, subqueries in policies, qual-tree growth with many policies,
+    plan-cache churn on role/`row_security` change, FK bulk-check downgrade, and
+    partition fan-out.
+  - Settings: the `row_security` GUC (`PGC_USERSET`, session scope, default on),
+    the `ALTER TABLE` ENABLE/DISABLE/FORCE/NO FORCE flags, the `BYPASSRLS` role
+    attribute (superuser-only to set), the `CREATE`/`ALTER POLICY` options
+    (PERMISSIVE/ALL/PUBLIC defaults; `ALTER POLICY` cannot change AS/FOR), and
+    the two extension hooks.
+- Noted v14 has no `prepsecurity.c`; RLS quals flow through the
+  `qual_security_level` mechanism. Left two items under `## Open Questions`
+  (no in-tree RLS benchmark; 14.x fix provenance not traced).
+- Updated `wiki/index.md`, `wiki/versions.md` (table cell + Coverage Notes), and
+  `wiki/v14/index.md`. `verified_by_agent` is `not yet`: fresh draft, not a
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: pending (run below).
+
 ## [2026-06-30] version-add v14 | added PostgreSQL 14 as active version
 
 - Created the `raw/postgres-14/` source checkout pinned to the `REL_14_STABLE` tip commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156` (`REL_14_23-3-g5c00f4e2e3b`, three commits past tag `REL_14_23`; source version 14.23), matching how `raw/postgres-17/` pins to its `_STABLE` tip.

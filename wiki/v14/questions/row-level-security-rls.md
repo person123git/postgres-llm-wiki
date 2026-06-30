@@ -1,0 +1,254 @@
+---
+type: question
+version: 14
+pinned_commit: 5c00f4e2e3bcee6931ae93429d53f7c2a4f46156
+verified: false
+verified_by_agent: not yet
+---
+
+# Row-Level Security (RLS) in PostgreSQL 14: Implementation, Scalability and Performance, and Settings (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Summary](#summary)
+  - [How RLS is implemented](#how-rls-is-implemented)
+  - [Scalability and performance issues](#scalability-and-performance-issues)
+  - [Settings related to the feature](#settings-related-to-the-feature)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
+## Question
+
+In PostgreSQL 14, how is Row-Level Security (RLS) implemented? What are the possible scalability and/or performance issues? What are all settings related to the feature?
+
+## Answer
+
+### Summary
+
+Row-Level Security (RLS) in PostgreSQL 14 is a **query-rewrite feature**, not a storage or access-method feature. Policies stored in the `pg_policy` catalog are loaded into each table's relcache entry, and during the rewrite phase `get_row_security_policies()` turns the policies that apply to the current command and role into two kinds of expressions: **security-barrier `USING` quals** (which silently filter which existing rows a query can see) and **`WITH CHECK` options** (which raise an error when a new or updated row would violate a policy) [rowsecurity.c overview](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L1-L34). A central helper, `check_enable_rls()`, decides per relation whether RLS applies, is bypassed, or should error [rls.c#check_enable_rls](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L51-L133).
+
+The performance picture follows directly from that design: RLS quals run inside the plan as per-row checks, they are pinned to run before less-trusted user quals unless they are *leakproof* (which can block index use), policy expressions may contain subqueries, a relation with RLS but no applicable policy gets an always-false **default-deny** qual, and cached plans must be re-planned whenever the role or the `row_security` setting changes.
+
+The settings are: the `row_security` GUC (session-scoped), the per-table `relrowsecurity`/`relforcerowsecurity` flags set by `ALTER TABLE ... [ENABLE|DISABLE|FORCE|NO FORCE] ROW LEVEL SECURITY`, the per-role `BYPASSRLS` attribute, the per-policy options of `CREATE POLICY`/`ALTER POLICY` (permissive/restrictive, command, roles, `USING`, `WITH CHECK`), and two extension hooks.
+
+### How RLS is implemented
+
+#### Catalog storage and the policy data model
+
+Each policy is a row in the `pg_policy` system catalog. The columns are the policy name (`polname`), the owning relation (`polrelid`), the command it applies to (`polcmd`, one of the `ACL_*_CHR` characters or `'*'` for `ALL`), whether it is permissive (`polpermissive`), the roles it applies to (`polroles`, where `0` means `PUBLIC`), the `USING` expression (`polqual`), and the `WITH CHECK` expression (`polwithcheck`) [pg_policy.h#FormData_pg_policy](../../../raw/postgres-14/src/include/catalog/pg_policy.h#L29-L44). A unique index on `(polrelid, polname)` enforces unique names per table and lets the relcache load policies in name order [pg_policy.h#indexes](../../../raw/postgres-14/src/include/catalog/pg_policy.h#L55-L58).
+
+Whether a table participates in RLS at all is two booleans on `pg_class`: `relrowsecurity` (RLS enabled) and `relforcerowsecurity` (RLS also forced on the table owner), both defaulting to false [pg_class.h#relrowsecurity](../../../raw/postgres-14/src/include/catalog/pg_class.h#L107-L111). The per-role bypass right is `pg_authid.rolbypassrls` [pg_authid.h#rolbypassrls](../../../raw/postgres-14/src/include/catalog/pg_authid.h#L41).
+
+In memory, a loaded policy is a `RowSecurityPolicy` (name, command char, role array, permissive flag, `qual`, `with_check_qual`, and a cached `hassublinks` flag), and a relation's full policy set is a `RowSecurityDesc` holding its own memory context plus a list of policies [rowsecurity.h#RowSecurityPolicy](../../../raw/postgres-14/src/include/rewrite/rowsecurity.h#L20-L35).
+
+#### Building policies into the relcache
+
+`RelationBuildRowSecurity()` populates `relation->rd_rsdesc` the first time a table with `relrowsecurity` is opened. It scans `pg_policy` by `polrelid` using the `(polrelid, polname)` index (so policies are visited in name order), deserializes the stored `polqual` and `polwithcheck` node trees with `stringToNode()`, caches whether either expression contains a sublink, and reparents the descriptor's memory context under `CacheMemoryContext` so it survives until a relcache flush [policy.c#RelationBuildRowSecurity](../../../raw/postgres-14/src/backend/commands/policy.c#L195-L325). Because policy expressions are stored as fully-parsed node trees, no re-parsing happens at query time — only copying.
+
+#### The bypass decision: `check_enable_rls`
+
+`check_enable_rls(relid, checkAsUser, noError)` is the single decision point. It returns one of three values from `enum CheckEnableRlsResult` — `RLS_NONE`, `RLS_NONE_ENV`, `RLS_ENABLED` [rls.h#CheckEnableRlsResult](../../../raw/postgres-14/src/include/utils/rls.h#L41-L46). The logic is:
+
+1. Built-in relations (OID `< FirstNormalObjectId`) and tables without `relrowsecurity` return `RLS_NONE` — nothing to do, and the plan need not be invalidated for RLS reasons [rls.c#check_enable_rls](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L61-L78).
+2. Superusers and roles with `BYPASSRLS` return `RLS_NONE_ENV`: RLS is skipped now, but the answer depends on the environment (the user), so the plan must be re-checked if the role changes [rls.c#bypassrls](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L80-L88).
+3. The table owner returns `RLS_NONE_ENV` unless the table has `FORCE ROW LEVEL SECURITY` set *and* this is not a referential-integrity context (`InNoForceRLSOperation()`); RI checks intentionally still bypass forced RLS for the owner [rls.c#owner](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L90-L118).
+4. Otherwise RLS applies. As a special case, if the `row_security` GUC is off and `noError` is false, it raises a "query would be affected by row-level security policy" error instead of silently filtering [rls.c#row_security-off](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L120-L132).
+
+`has_bypassrls_privilege()` is what step 2 consults: superusers always return true, otherwise the result is `pg_authid.rolbypassrls` [aclchk.c#has_bypassrls_privilege](../../../raw/postgres-14/src/backend/catalog/aclchk.c#L5471-L5488). `InNoForceRLSOperation()` is true when the `SECURITY_NOFORCE_RLS` bit is set in the security context [miscinit.c#InNoForceRLSOperation](../../../raw/postgres-14/src/backend/utils/init/miscinit.c#L657-L661). The SQL function `row_security_active()` is just `check_enable_rls()` with `noError = true` [rls.c#row_security_active](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L141-L167).
+
+#### Rewrite-time expansion
+
+RLS is applied during query rewrite, after view expansion, in `fireRIRrules()`. For each range-table entry that is a plain table or partitioned table, it calls `get_row_security_policies()` and then:
+
+- prepends the returned security quals to the RTE's `securityQuals` list, so RLS conditions on the table take priority over barrier quals inherited from a security-barrier view [rewriteHandler.c#fireRIRrules-RLS](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L2256-L2349);
+- concatenates the returned `WITH CHECK` options into the query's `withCheckOptions`;
+- if the new quals contain sublinks, locks the referenced relations and fires RIR (view) rules on them, with recursion detection that raises "infinite recursion detected in policy for relation" [rewriteHandler.c#policy-sublinks](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L2285-L2336);
+- marks the query `hasRowSecurity` (and `hasSubLinks` if applicable), which later drives plan-cache invalidation [rewriteHandler.c#hasRowSecurity](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L2351-L2358).
+
+`get_row_security_policies()` is the core of the feature [rowsecurity.h#prototype](../../../raw/postgres-14/src/include/rewrite/rowsecurity.h#L44-L47). It only acts on `RELKIND_RELATION` and `RELKIND_PARTITIONED_TABLE` RTEs [rowsecurity.c#relkind](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L125-L128), resolves the effective user (`rte->checkAsUser` for views, else the current user) [rowsecurity.c#user_id](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L130-L134), and short-circuits on the `check_enable_rls()` result. On `RLS_NONE_ENV` it adds no quals but still sets `hasRowSecurity = true` to force re-planning if the environment changes [rowsecurity.c#RLS_NONE_ENV](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L136-L155).
+
+The command type drives which policies are selected. If the RTE is the result relation it uses the query's command type, otherwise it treats the RTE as a `SELECT` source (so `UPDATE t1 ... FROM t2` applies t1's UPDATE policies and t2's SELECT policies) [rowsecurity.c#commandType](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L157-L169). It then layers quals for the combinations that need them:
+
+- `SELECT ... FOR [KEY] UPDATE/SHARE` (the SELECT requires `ACL_UPDATE`) first adds the UPDATE `USING` quals, so a locking select cannot lock rows the user couldn't update [rowsecurity.c#select-for-update](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L190-L213).
+- `SELECT`/`UPDATE`/`DELETE` add the command's own `USING` quals as security quals [rowsecurity.c#using-quals](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L215-L232).
+- `UPDATE`/`DELETE` that also need `ACL_SELECT` (a `RETURNING` clause or a `WHERE` referencing the table) additionally add the SELECT `USING` quals [rowsecurity.c#update-needs-select](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L234-L258).
+- `INSERT`/`UPDATE` add `WITH CHECK` options for new rows; if `RETURNING` requires SELECT, SELECT policies are added as `WITH CHECK` options (not security quals) so a violation errors rather than silently dropping rows [rowsecurity.c#with-check](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L260-L303).
+- `INSERT ... ON CONFLICT DO UPDATE` adds extra conflict checks: the UPDATE `USING` clauses as `WCO_RLS_CONFLICT_CHECK`, plus the UPDATE `WITH CHECK` clauses [rowsecurity.c#on-conflict](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L305-L380).
+
+Finally it copies `checkAsUser` into the new quals (for sub-selects against other relations) and sets `hasRowSecurity = true` [rowsecurity.c#finish](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L385-L397).
+
+#### Combining policies: permissive, restrictive, and default-deny
+
+`get_policies_for_relation()` walks the relcache policy list and keeps the policies whose `polcmd` matches the command (or is `'*'`) and that apply to the user's role, splitting them into permissive and restrictive lists. Restrictive policies are sorted by name so their checks run in a defined order. Extension-hook policies are appended afterward [rowsecurity.c#get_policies_for_relation](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L407-L513). Sorting uses `strcmp` on the policy name [rowsecurity.c#row_security_policy_cmp](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L523-L545).
+
+`add_security_quals()` builds the read-side filter: all **permissive** `USING` quals are OR'd into one expression, all **restrictive** `USING` quals are AND'd on top, and the combined expression is appended to `securityQuals`. Crucially, **if there is no permissive policy, it appends a single `false` constant** — the default-deny rule that makes a row-secured table with no matching policy return nothing [rowsecurity.c#add_security_quals](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L558-L637).
+
+`add_with_check_options()` builds the write-side check the same way (permissive OR, restrictive AND), using each policy's `WITH CHECK` expression or, if absent, its `USING` expression (the `QUAL_FOR_WCO` macro). Each restrictive check becomes its own named `WithCheckOption` so violations can name the offending policy; with no permissive policy it emits a single `false` check, denying all writes [rowsecurity.c#add_with_check_options](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L654-L769).
+
+#### Command and role matching
+
+A policy applies to the current role when its role list is `PUBLIC` (`polroles[0] == ACL_ID_PUBLIC`) or the user is a member of one of the listed roles (`has_privs_of_role`), so normal role inheritance applies to policies [rowsecurity.c#check_role_for_policy](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L775-L792).
+
+#### Planner: the security-barrier qual mechanism
+
+RLS quals are placed in the RTE's `securityQuals`, the same machinery used for security-barrier views, so the planner enforces an evaluation-order rule that prevents leaking rows through cleverly-chosen user functions. Each `RestrictInfo` carries a `security_level`; a clause may not be evaluated before a clause of lower `security_level` **unless it is leakproof** [pathnodes.h#security_level](../../../raw/postgres-14/src/include/nodes/pathnodes.h#L2003-L2010). The planner computes `qual_security_level` as the maximum `securityQuals` list length across RTEs [planner.c#qual_security_level](../../../raw/postgres-14/src/backend/optimizer/plan/planner.c#L738-L747) [pathnodes.h#qual_security_level](../../../raw/postgres-14/src/include/nodes/pathnodes.h#L343-L344), and `process_security_barrier_quals()` copies each `securityQuals` sublist into the relation's `baserestrictinfo` at successively higher security levels [initsplan.c#process_security_barrier_quals](../../../raw/postgres-14/src/backend/optimizer/plan/initsplan.c#L1083-L1127).
+
+At plan-build time, `order_qual_clauses()` sorts the quals at each node: lower security level first, and within a level by estimated cost. A leakproof clause that is also cheap (under `10 * cpu_operator_cost`) is treated as security level 0 so it can be evaluated early; everything else keeps its real level [createplan.c#order_qual_clauses](../../../raw/postgres-14/src/backend/optimizer/plan/createplan.c#L5191-L5300).
+
+#### Executor: enforcing `WITH CHECK`
+
+`USING` quals become ordinary scan filters (enforced as part of the plan), so they silently exclude rows. `WITH CHECK` options are enforced separately by `ExecWithCheckOptions()`, which evaluates each option of the requested kind against the new tuple and raises an error if it returns NULL or false. For RLS kinds it reports "new row violates row-level security policy [\"name\"] for table" and, unlike view checks, deliberately does **not** include the failing row's data, because the user might not be allowed to see that row [execMain.c#ExecWithCheckOptions](../../../raw/postgres-14/src/backend/executor/execMain.c#L1977-L2086). Permission checks (`ExecCheckRTPerms`) are explicitly separate from RLS; callers that return rows must also consult `check_enable_rls()` [execMain.c#ExecCheckRTPerms](../../../raw/postgres-14/src/backend/executor/execMain.c#L548-L560).
+
+#### Plan-cache invalidation
+
+Because the policies that apply depend on the current role and the `row_security` GUC, cached plans for RLS queries are environment-sensitive [plancache.c#overview](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L16-L20). The rewriter's `hasRowSecurity` flag is harvested into the plan source's `dependsOnRLS` field via `extract_query_dependencies()` (which reuses the `dependsOnRole` slot as a collector) [setrefs.c#extract_query_dependencies](../../../raw/postgres-14/src/backend/optimizer/plan/setrefs.c#L3142-L3167) [setrefs.c#hasRowSecurity](../../../raw/postgres-14/src/backend/optimizer/plan/setrefs.c#L3219-L3221), alongside the role and `row_security` value captured at rewrite time [plancache.c#capture](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L396-L403). `RevalidateCachedQuery()` then forces a re-analysis/re-plan if `dependsOnRLS` is set and either the user id or the `row_security` setting has changed [plancache.c#RevalidateCachedQuery](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L600-L607). The built plan is likewise marked role-dependent [plancache.c#BuildCachedPlan](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L982-L994), and the fast "simple validity" revalidation path is disabled for RLS-dependent plans [plancache.c#simple-validity](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L1343-L1345).
+
+#### Inheritance and partitioning
+
+RLS works on partitioned and inherited tables, but child tables do **not** contribute their own policies. When the planner expands an inheritance/partition child RTE it sets the child's `securityQuals` to empty on purpose, so only the parent's RLS conditions apply; the parent's quals are propagated to children with the other base-restriction clauses [inherit.c#expand_single_inheritance_child](../../../raw/postgres-14/src/backend/optimizer/util/inherit.c#L457-L487). The documentation states the same rule: the parent's row-security policies are applied to rows from child tables, and a child's own policies (if any) are ignored during an inherited query [ddl.sgml#inheritance](../../../raw/postgres-14/doc/src/sgml/ddl.sgml#L3458-L3460).
+
+#### Feature boundaries (COPY, CTAS, RI, and error-message leakage)
+
+Several subsystems special-case RLS:
+
+- **COPY**: if RLS is enabled, `COPY TO` is internally rewritten as `COPY (SELECT ...)` so the normal query path applies the policies, while `COPY FROM` is rejected with "COPY FROM not supported with row-level security" (use `INSERT`) [copy.c#RLS](../../../raw/postgres-14/src/backend/commands/copy.c#L201-L227).
+- **CREATE TABLE AS / SELECT INTO**: creating into a relation that would have RLS enabled errors with "policies not yet implemented for this command" [createas.c#RLS](../../../raw/postgres-14/src/backend/commands/createas.c#L535-L546).
+- **Referential integrity**: the bulk foreign-key validation query is skipped (forcing slower per-row checks) when either table has RLS and the current role is neither the owner nor `BYPASSRLS` [ri_triggers.c#RI_Initial_Check](../../../raw/postgres-14/src/backend/utils/adt/ri_triggers.c#L1358-L1368). RI error details are also suppressed when RLS is enabled, to avoid leaking key values [ri_triggers.c#error-detail](../../../raw/postgres-14/src/backend/utils/adt/ri_triggers.c#L2444-L2455).
+- **Error-message leakage**: row and partition-key value descriptions in error messages return NULL when RLS is active, so violation messages cannot leak protected data [execMain.c#ExecBuildSlotValueDescription](../../../raw/postgres-14/src/backend/executor/execMain.c#L2142-L2148) [execPartition.c#partition-key-desc](../../../raw/postgres-14/src/backend/executor/execPartition.c#L1364-L1365).
+
+#### Extension hooks
+
+Two global hooks let an extension inject policies at rewrite time: `row_security_policy_hook_permissive` (combined with OR, like other permissive policies) and `row_security_policy_hook_restrictive` (combined with AND, name-sorted, always checked before permissive hook policies) [rowsecurity.h#hooks](../../../raw/postgres-14/src/include/rewrite/rowsecurity.h#L37-L42) [rowsecurity.c#hook-decls](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L87-L97) [rowsecurity.c#hook-application](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L473-L512).
+
+### Scalability and performance issues
+
+RLS adds correctness machinery to the plan, so its costs are paid per query and per row. The main concerns, all grounded in the implementation above:
+
+1. **Per-row evaluation.** `USING` expressions become scan-level filters and `WITH CHECK` expressions run for every inserted/updated row in `ExecWithCheckOptions()` [execMain.c#ExecWithCheckOptions](../../../raw/postgres-14/src/backend/executor/execMain.c#L1977-L2086). A policy expression that calls a function or sub-select runs that work once per candidate row.
+
+2. **Leakproof ordering can defeat indexes.** A non-leakproof qual from the user's own `WHERE` clause cannot be evaluated before the RLS qual; only leakproof (and cheap) clauses are allowed to move ahead [pathnodes.h#security_level](../../../raw/postgres-14/src/include/nodes/pathnodes.h#L2003-L2010) [createplan.c#order_qual_clauses](../../../raw/postgres-14/src/backend/optimizer/plan/createplan.c#L5191-L5300). The documentation spells out the consequence: the policy expression is evaluated before user conditions/functions, except for leakproof functions [ddl.sgml#leakproof](../../../raw/postgres-14/doc/src/sgml/ddl.sgml#L2263-L2277). This is the classic RLS performance trap — a selective user predicate using a non-leakproof operator may not be pushed to an index ahead of the policy filter.
+
+3. **Subqueries in policies.** A policy whose `USING`/`WITH CHECK` contains a sublink sets `hassublinks`, requiring the rewriter to lock and recursively process those subqueries [policy.c#hassublinks](../../../raw/postgres-14/src/backend/commands/policy.c#L301-L303) [rewriteHandler.c#policy-sublinks](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L2285-L2336), and the subquery executes as part of every row's check. Policies that look up membership tables per row are a common scalability bottleneck of this kind.
+
+4. **Many policies enlarge the qual tree.** Every applicable permissive policy is copied and OR'd, and every restrictive policy is copied and AND'd, into the per-RTE qual [rowsecurity.c#add_security_quals](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L558-L637). More policies mean larger expressions to evaluate per row and sort per node, and restrictive policies are name-sorted on each relcache build [rowsecurity.c#get_policies_for_relation](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L468-L471).
+
+5. **Plan-cache churn on role/GUC change.** Prepared statements and PL/pgSQL plans for RLS queries are re-planned whenever the role or `row_security` value differs from when they were built, and they cannot use the cheap revalidation fast path [plancache.c#RevalidateCachedQuery](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L600-L607) [plancache.c#simple-validity](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L1343-L1345). Workloads that switch roles frequently (e.g. `SET ROLE` per request on a pooled connection) pay repeated planning costs.
+
+6. **Combined `USING` sets for locking and `RETURNING`.** `SELECT ... FOR UPDATE`, and `UPDATE`/`DELETE` with `RETURNING` or table-referencing `WHERE`, layer additional `USING`/`WITH CHECK` policy sets onto the query, so these statements carry more checks than a plain read [rowsecurity.c#select-for-update](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L190-L213) [rowsecurity.c#update-needs-select](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L234-L258).
+
+7. **Foreign-key checks lose the bulk path.** With RLS on a referenced or referencing table (for a non-owner, non-`BYPASSRLS` role), the initial bulk FK validation query is skipped, leaving slower per-row RI verification [ri_triggers.c#RI_Initial_Check](../../../raw/postgres-14/src/backend/utils/adt/ri_triggers.c#L1358-L1368).
+
+8. **Default-deny is cheap; missing policies are silent.** A row-secured table with no matching permissive policy gets a single `false` constant, so it is cheap but returns no rows — easy to mistake for a data problem [rowsecurity.c#default-deny](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L626-L636).
+
+9. **Partition fan-out.** The parent's policy quals are propagated to every scanned child partition [inherit.c#expand_single_inheritance_child](../../../raw/postgres-14/src/backend/optimizer/util/inherit.c#L457-L487), so the per-row cost is multiplied across all partitions touched by a query.
+
+### Settings related to the feature
+
+There are five categories of settings.
+
+#### `row_security` (GUC)
+
+`row_security` is a boolean GUC declared `PGC_USERSET` in the `CLIENT_CONN_STATEMENT` group, defaulting to **on** [guc.c#row_security](../../../raw/postgres-14/src/backend/utils/misc/guc.c#L1722-L1730) [rls.h#row_security](../../../raw/postgres-14/src/include/utils/rls.h#L17). Because the context is `PGC_USERSET`, it is **session/transaction scoped**: any user can change it with `SET row_security = on|off` or `SET LOCAL`, and it needs no server restart or reload. It does not turn RLS off for the data — when it is `off`, a query that *would* be filtered by a policy raises an error instead (for users who are actually subject to RLS); owners and `BYPASSRLS`/superusers still bypass regardless [rls.c#row_security-off](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L120-L132). (`pg_dump` sets it `off` so a dump fails loudly rather than silently omitting rows.)
+
+#### Table-level settings (`ALTER TABLE`)
+
+Two `pg_class` booleans control RLS per table, both set through `ALTER TABLE`:
+
+| Statement | Catalog effect | Set by |
+|---|---|---|
+| `ENABLE ROW LEVEL SECURITY` / `DISABLE ROW LEVEL SECURITY` | `relrowsecurity = true/false` | [tablecmds.c#ATExecSetRowSecurity](../../../raw/postgres-14/src/backend/commands/tablecmds.c#L15835-L15857) |
+| `FORCE ROW LEVEL SECURITY` / `NO FORCE ROW LEVEL SECURITY` | `relforcerowsecurity = true/false` | [tablecmds.c#ATExecForceNoForceRowSecurity](../../../raw/postgres-14/src/backend/commands/tablecmds.c#L15862-L15883) |
+
+The four spellings are distinct `ALTER TABLE` subcommands in the grammar [gram.y#alter-table-rls](../../../raw/postgres-14/src/backend/parser/gram.y#L2659-L2685). Enabling/disabling RLS and adding policies is restricted to the table owner [ddl.sgml#owner-only](../../../raw/postgres-14/doc/src/sgml/ddl.sgml#L2287-L2289). `DISABLE ROW LEVEL SECURITY` leaves the policy rows in `pg_policy` but stops applying them; `FORCE` makes the owner subject to RLS too (except in RI contexts).
+
+#### Role-level setting (`BYPASSRLS`)
+
+The `BYPASSRLS` / `NOBYPASSRLS` role attribute maps to `pg_authid.rolbypassrls` [pg_authid.h#rolbypassrls](../../../raw/postgres-14/src/include/catalog/pg_authid.h#L41). It is given on `CREATE ROLE`/`ALTER ROLE`; the parser turns the `BYPASSRLS`/`NOBYPASSRLS` words into a `bypassrls` option [gram.y#bypassrls](../../../raw/postgres-14/src/backend/parser/gram.y#L1156-L1159), and only a superuser may set or change it [user.c#CreateRole-bypassrls](../../../raw/postgres-14/src/backend/commands/user.c#L240-L309) [user.c#AlterRole-bypassrls](../../../raw/postgres-14/src/backend/commands/user.c#L658-L737). Superusers implicitly always bypass RLS even without the attribute [aclchk.c#has_bypassrls_privilege](../../../raw/postgres-14/src/backend/catalog/aclchk.c#L5471-L5488).
+
+#### Per-policy options (`CREATE POLICY` / `ALTER POLICY`)
+
+`CREATE POLICY name ON table` accepts, in order, the per-policy "settings" that become `pg_policy` columns [gram.y#CreatePolicyStmt](../../../raw/postgres-14/src/backend/parser/gram.y#L5237-L5252):
+
+- `AS PERMISSIVE | RESTRICTIVE` — **default `PERMISSIVE`** [gram.y#permissive-default](../../../raw/postgres-14/src/backend/parser/gram.y#L5288-L5304).
+- `FOR ALL | SELECT | INSERT | UPDATE | DELETE` — **default `ALL`** [gram.y#cmd-default](../../../raw/postgres-14/src/backend/parser/gram.y#L5306-L5317).
+- `TO role[, ...]` — **default `PUBLIC`** [gram.y#to-default](../../../raw/postgres-14/src/backend/parser/gram.y#L5278-L5281); a `PUBLIC` entry mixed with named roles warns and collapses to `PUBLIC` alone [policy.c#policy_role_list_to_array](../../../raw/postgres-14/src/backend/commands/policy.c#L139-L186).
+- `USING (expr)` — the read/visibility filter (optional) [gram.y#using](../../../raw/postgres-14/src/backend/parser/gram.y#L5268-L5271).
+- `WITH CHECK (expr)` — the write check (optional; falls back to `USING` when absent) [gram.y#with-check](../../../raw/postgres-14/src/backend/parser/gram.y#L5273-L5276).
+
+`ALTER POLICY` can change only the roles, `USING`, and `WITH CHECK`; it has no `AS` or `FOR` clause, so a policy's permissive/restrictive nature and its command **cannot** be altered after creation (drop and recreate instead) [gram.y#AlterPolicyStmt](../../../raw/postgres-14/src/backend/parser/gram.y#L5254-L5266). Policy DDL requires table ownership and rejects non-tables and system catalogs [policy.c#RangeVarCallbackForPolicy](../../../raw/postgres-14/src/backend/commands/policy.c#L66-L99). Policies are visible through the `pg_policies` system view, which decodes `polpermissive`, `polroles`, and `polcmd` into readable text [system_views.sql#pg_policies](../../../raw/postgres-14/src/backend/catalog/system_views.sql#L73-L101).
+
+#### Extension hooks
+
+Not user settings, but configurable behavior: `row_security_policy_hook_permissive` and `row_security_policy_hook_restrictive` let a loaded module add policies [rowsecurity.h#hooks](../../../raw/postgres-14/src/include/rewrite/rowsecurity.h#L37-L42).
+
+## Context Reviewed
+
+- Core rewrite: [rowsecurity.c](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L1-L792) and [rowsecurity.h](../../../raw/postgres-14/src/include/rewrite/rowsecurity.h#L1-L49); the rewrite caller [rewriteHandler.c#fireRIRrules](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L2044-L2364) and the view/security-barrier handoff [rewriteHandler.c#ApplyRetrieveRule](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L1880-L1941).
+- Bypass logic and SQL wrappers: [rls.c](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L51-L167) and [rls.h](../../../raw/postgres-14/src/include/utils/rls.h#L1-L50); [aclchk.c#has_bypassrls_privilege](../../../raw/postgres-14/src/backend/catalog/aclchk.c#L5471-L5488); [miscinit.c#InNoForceRLSOperation](../../../raw/postgres-14/src/backend/utils/init/miscinit.c#L654-L661) and its declaration [miscadmin.h](../../../raw/postgres-14/src/include/miscadmin.h#L365).
+- Catalogs: [pg_policy.h](../../../raw/postgres-14/src/include/catalog/pg_policy.h#L29-L58), [pg_class.h#relrowsecurity](../../../raw/postgres-14/src/include/catalog/pg_class.h#L107-L111), [pg_authid.h#rolbypassrls](../../../raw/postgres-14/src/include/catalog/pg_authid.h#L41).
+- Policy DDL and relcache build: [policy.c](../../../raw/postgres-14/src/backend/commands/policy.c#L1-L325) and [policy.h](../../../raw/postgres-14/src/include/commands/policy.h#L22-L37).
+- Planner: [planner.c#qual_security_level](../../../raw/postgres-14/src/backend/optimizer/plan/planner.c#L738-L747), [initsplan.c#process_security_barrier_quals](../../../raw/postgres-14/src/backend/optimizer/plan/initsplan.c#L1070-L1127), [createplan.c#order_qual_clauses](../../../raw/postgres-14/src/backend/optimizer/plan/createplan.c#L5191-L5300), [pathnodes.h](../../../raw/postgres-14/src/include/nodes/pathnodes.h#L2003-L2071), [inherit.c](../../../raw/postgres-14/src/backend/optimizer/util/inherit.c#L457-L487).
+- Executor and plan cache: [execMain.c](../../../raw/postgres-14/src/backend/executor/execMain.c#L548-L2148), [execPartition.c](../../../raw/postgres-14/src/backend/executor/execPartition.c#L1352-L1365), [plancache.c](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L16-L1345), [setrefs.c#extract_query_dependencies](../../../raw/postgres-14/src/backend/optimizer/plan/setrefs.c#L3142-L3221).
+- Boundaries: [copy.c](../../../raw/postgres-14/src/backend/commands/copy.c#L195-L227), [createas.c](../../../raw/postgres-14/src/backend/commands/createas.c#L530-L546), [ri_triggers.c](../../../raw/postgres-14/src/backend/utils/adt/ri_triggers.c#L1350-L1368).
+- Settings: [guc.c#row_security](../../../raw/postgres-14/src/backend/utils/misc/guc.c#L1722-L1730), [tablecmds.c](../../../raw/postgres-14/src/backend/commands/tablecmds.c#L15832-L15883), [gram.y](../../../raw/postgres-14/src/backend/parser/gram.y#L5237-L5317), [user.c](../../../raw/postgres-14/src/backend/commands/user.c#L240-L737), [system_views.sql#pg_policies](../../../raw/postgres-14/src/backend/catalog/system_views.sql#L73-L101).
+- Docs and tests: [ddl.sgml#ddl-rowsecurity](../../../raw/postgres-14/doc/src/sgml/ddl.sgml#L2220-L2289), [create_policy.sgml](../../../raw/postgres-14/doc/src/sgml/ref/create_policy.sgml), and the regression suite [rowsecurity.sql](../../../raw/postgres-14/src/test/regress/sql/rowsecurity.sql) / [rowsecurity.out](../../../raw/postgres-14/src/test/regress/expected/rowsecurity.out).
+
+## Evidence Map
+
+| Claim | Evidence |
+|---|---|
+| RLS is applied during rewrite, producing security quals + WITH CHECK options | [rowsecurity.c overview](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L1-L34), [rewriteHandler.c#fireRIRrules-RLS](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c#L2256-L2349) |
+| `pg_policy` columns and unique `(polrelid, polname)` index | [pg_policy.h](../../../raw/postgres-14/src/include/catalog/pg_policy.h#L29-L58) |
+| Per-table flags `relrowsecurity`/`relforcerowsecurity` | [pg_class.h](../../../raw/postgres-14/src/include/catalog/pg_class.h#L107-L111) |
+| Policies loaded into relcache `rd_rsdesc`, quals deserialized, sublinks cached | [policy.c#RelationBuildRowSecurity](../../../raw/postgres-14/src/backend/commands/policy.c#L195-L325) |
+| Three-way bypass decision; `row_security` off forces an error | [rls.c#check_enable_rls](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L51-L132) |
+| Superuser always bypasses; otherwise `rolbypassrls` | [aclchk.c#has_bypassrls_privilege](../../../raw/postgres-14/src/backend/catalog/aclchk.c#L5471-L5488) |
+| Forced RLS ignored for owner during RI checks | [rls.c#owner](../../../raw/postgres-14/src/backend/utils/misc/rls.c#L90-L118), [miscinit.c#InNoForceRLSOperation](../../../raw/postgres-14/src/backend/utils/init/miscinit.c#L657-L661) |
+| Permissive OR / restrictive AND / default-deny `false` | [rowsecurity.c#add_security_quals](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L558-L637), [rowsecurity.c#add_with_check_options](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L654-L769) |
+| Command/role matching, restrictive name sort, hooks | [rowsecurity.c#get_policies_for_relation](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L407-L513), [rowsecurity.c#check_role_for_policy](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c#L775-L792) |
+| Security-level ordering; only leakproof clauses move ahead | [pathnodes.h#security_level](../../../raw/postgres-14/src/include/nodes/pathnodes.h#L2003-L2010), [createplan.c#order_qual_clauses](../../../raw/postgres-14/src/backend/optimizer/plan/createplan.c#L5191-L5300) |
+| Security quals transferred to baserestrictinfo at rising levels | [initsplan.c#process_security_barrier_quals](../../../raw/postgres-14/src/backend/optimizer/plan/initsplan.c#L1083-L1127) |
+| WITH CHECK enforced in executor; no row data leaked for RLS | [execMain.c#ExecWithCheckOptions](../../../raw/postgres-14/src/backend/executor/execMain.c#L1977-L2086) |
+| Plan re-planned on role/`row_security` change; fast path disabled | [plancache.c#RevalidateCachedQuery](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L600-L607), [plancache.c#simple-validity](../../../raw/postgres-14/src/backend/utils/cache/plancache.c#L1343-L1345) |
+| Only parent policies apply to partition/inheritance children | [inherit.c#expand_single_inheritance_child](../../../raw/postgres-14/src/backend/optimizer/util/inherit.c#L457-L487), [ddl.sgml#inheritance](../../../raw/postgres-14/doc/src/sgml/ddl.sgml#L3458-L3460) |
+| COPY FROM rejected; COPY TO becomes a query | [copy.c#RLS](../../../raw/postgres-14/src/backend/commands/copy.c#L201-L227) |
+| CREATE TABLE AS into RLS table errors | [createas.c#RLS](../../../raw/postgres-14/src/backend/commands/createas.c#L535-L546) |
+| Bulk FK check skipped under RLS for non-owner/non-bypass | [ri_triggers.c#RI_Initial_Check](../../../raw/postgres-14/src/backend/utils/adt/ri_triggers.c#L1358-L1368) |
+| `row_security` is `PGC_USERSET` boolean, default on (session scope) | [guc.c#row_security](../../../raw/postgres-14/src/backend/utils/misc/guc.c#L1722-L1730) |
+| `ALTER TABLE` ENABLE/DISABLE/FORCE/NO FORCE map to the two flags | [gram.y#alter-table-rls](../../../raw/postgres-14/src/backend/parser/gram.y#L2659-L2685), [tablecmds.c#ATExecSetRowSecurity](../../../raw/postgres-14/src/backend/commands/tablecmds.c#L15835-L15857), [tablecmds.c#ATExecForceNoForceRowSecurity](../../../raw/postgres-14/src/backend/commands/tablecmds.c#L15862-L15883) |
+| `BYPASSRLS` parsed as role option, superuser-only to set | [gram.y#bypassrls](../../../raw/postgres-14/src/backend/parser/gram.y#L1156-L1159), [user.c](../../../raw/postgres-14/src/backend/commands/user.c#L240-L737) |
+| CREATE POLICY defaults: PERMISSIVE / ALL / PUBLIC; ALTER cannot change AS/FOR | [gram.y#CreatePolicyStmt](../../../raw/postgres-14/src/backend/parser/gram.y#L5237-L5317) |
+| `pg_policies` view exposes policies | [system_views.sql#pg_policies](../../../raw/postgres-14/src/backend/catalog/system_views.sql#L73-L101) |
+
+## Open Questions
+
+- This page documents mechanisms and the source-evident performance consequences of RLS in PostgreSQL 14, but it does **not** include a quantified benchmark (rows/sec or latency per policy, role, or partition count). The pinned checkout's `rowsecurity` regression test exercises correctness, not performance [rowsecurity.sql](../../../raw/postgres-14/src/test/regress/sql/rowsecurity.sql); no in-tree benchmark quantifying RLS overhead was located.
+- The exact set and minor-release provenance of RLS-related fixes shipped within the 14.x series (the v14 checkout is pinned at `REL_14_23-3-g5c00f4e2e3b`) has not been traced here. This page describes the behavior as it stands at the pin, not its change history.
+
+## Source References
+
+- [src/backend/rewrite/rowsecurity.c](../../../raw/postgres-14/src/backend/rewrite/rowsecurity.c) — `get_row_security_policies`, `get_policies_for_relation`, `add_security_quals`, `add_with_check_options`, `check_role_for_policy`, hooks.
+- [src/include/rewrite/rowsecurity.h](../../../raw/postgres-14/src/include/rewrite/rowsecurity.h) — `RowSecurityPolicy`, `RowSecurityDesc`, hook types.
+- [src/backend/rewrite/rewriteHandler.c](../../../raw/postgres-14/src/backend/rewrite/rewriteHandler.c) — `fireRIRrules` RLS application; security-barrier view handoff.
+- [src/backend/utils/misc/rls.c](../../../raw/postgres-14/src/backend/utils/misc/rls.c) / [src/include/utils/rls.h](../../../raw/postgres-14/src/include/utils/rls.h) — `check_enable_rls`, `row_security_active`, `CheckEnableRlsResult`.
+- [src/backend/commands/policy.c](../../../raw/postgres-14/src/backend/commands/policy.c) / [src/include/commands/policy.h](../../../raw/postgres-14/src/include/commands/policy.h) — policy DDL and `RelationBuildRowSecurity`.
+- [src/include/catalog/pg_policy.h](../../../raw/postgres-14/src/include/catalog/pg_policy.h), [src/include/catalog/pg_class.h](../../../raw/postgres-14/src/include/catalog/pg_class.h), [src/include/catalog/pg_authid.h](../../../raw/postgres-14/src/include/catalog/pg_authid.h) — catalogs.
+- [src/backend/optimizer/plan/planner.c](../../../raw/postgres-14/src/backend/optimizer/plan/planner.c), [src/backend/optimizer/plan/initsplan.c](../../../raw/postgres-14/src/backend/optimizer/plan/initsplan.c), [src/backend/optimizer/plan/createplan.c](../../../raw/postgres-14/src/backend/optimizer/plan/createplan.c), [src/include/nodes/pathnodes.h](../../../raw/postgres-14/src/include/nodes/pathnodes.h), [src/backend/optimizer/util/inherit.c](../../../raw/postgres-14/src/backend/optimizer/util/inherit.c) — planner security-level machinery and inheritance.
+- [src/backend/executor/execMain.c](../../../raw/postgres-14/src/backend/executor/execMain.c), [src/backend/executor/execPartition.c](../../../raw/postgres-14/src/backend/executor/execPartition.c) — WITH CHECK enforcement and error-leak guards.
+- [src/backend/utils/cache/plancache.c](../../../raw/postgres-14/src/backend/utils/cache/plancache.c), [src/backend/optimizer/plan/setrefs.c](../../../raw/postgres-14/src/backend/optimizer/plan/setrefs.c) — plan-cache RLS dependency.
+- [src/backend/commands/copy.c](../../../raw/postgres-14/src/backend/commands/copy.c), [src/backend/commands/createas.c](../../../raw/postgres-14/src/backend/commands/createas.c), [src/backend/utils/adt/ri_triggers.c](../../../raw/postgres-14/src/backend/utils/adt/ri_triggers.c) — feature boundaries.
+- [src/backend/utils/misc/guc.c](../../../raw/postgres-14/src/backend/utils/misc/guc.c), [src/backend/commands/tablecmds.c](../../../raw/postgres-14/src/backend/commands/tablecmds.c), [src/backend/parser/gram.y](../../../raw/postgres-14/src/backend/parser/gram.y), [src/backend/commands/user.c](../../../raw/postgres-14/src/backend/commands/user.c), [src/backend/catalog/system_views.sql](../../../raw/postgres-14/src/backend/catalog/system_views.sql) — settings.
+- [doc/src/sgml/ddl.sgml](../../../raw/postgres-14/doc/src/sgml/ddl.sgml), [doc/src/sgml/ref/create_policy.sgml](../../../raw/postgres-14/doc/src/sgml/ref/create_policy.sgml) — documentation.
+- [src/test/regress/sql/rowsecurity.sql](../../../raw/postgres-14/src/test/regress/sql/rowsecurity.sql), [src/test/regress/expected/rowsecurity.out](../../../raw/postgres-14/src/test/regress/expected/rowsecurity.out) — regression coverage.
+
+## Navigation
+
+- [v14/index](../index.md)
+- [PostgreSQL 14 Codebase Navigation Guide](../codebase-navigation-guide.md)
+- [Wiki Index](../../index.md)
+- [Versions](../../versions.md)
