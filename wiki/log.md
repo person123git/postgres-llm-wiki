@@ -2,6 +2,45 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-06] expand v14 | Row-Level Security: RLS-and-the-plan-cache section
+
+- Expanded the performance coverage of [Row-Level Security (RLS) in PostgreSQL 14
+  (unverified)](v14/questions/row-level-security-rls.md) with a new `### RLS and
+  the plan cache` section answering a follow-up: does query planning have special
+  RLS caching, how it works, when it does not, and the no-cache overhead. Pin
+  unchanged (`5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`).
+- Applied prompt hygiene: the follow-up had minor grammar issues; the asker
+  approved a lightly corrected restatement, added under `## Question` with a
+  prompt note.
+- Built the section from a claim-to-source map in `raw/postgres-14/`:
+  - RLS-aware plan cache — the design comment (`plancache.c`), the
+    `CachedPlanSource` `rewriteRoleId`/`rewriteRowSecurity`/`dependsOnRLS` and
+    `CachedPlan` `planRoleId`/`dependsOnRole` fields (`plancache.h`), capture at
+    rewrite, the `RevalidateCachedQuery` role/`row_security` re-plan gate,
+    `BuildCachedPlan`/`CheckCachedPlan` role tagging, and `hasRowSecurity` ->
+    `dependsOnRLS` via `extract_query_dependencies` (`setrefs.c`).
+  - Role-independent relcache `rd_rsdesc` policy cache
+    (`RelationBuildRowSecurity` reparented under `CacheMemoryContext`;
+    `equalRSDesc`/`keep_policies` reuse; flush-time free in `relcache.c`).
+  - When caching does not help — role change (`SET ROLE`/`SET SESSION
+    AUTHORIZATION`/`SECURITY DEFINER` via `GetUserId`/`SetCurrentRoleId`/
+    `fmgr_security_definer`), `row_security` change, the never-applicable
+    simple-validity fast path (with the nuance that it is table-free-only, so an
+    RLS plan is rejected on the table check regardless), un-cached
+    simple-protocol (`exec_simple_query`) and one-shot SPI queries, the
+    first-five custom plans (`choose_custom_plan`), and policy/table DDL
+    invalidation.
+  - No-cache overhead — full `pg_analyze_and_rewrite` + `pg_plan_queries` re-run
+    that re-derives the security quals, re-locks/re-expands policy sublinks, and
+    re-orders quals for leakproofness; the `rd_rsdesc` cache still avoids
+    re-reading `pg_policy`.
+- Updated Contents, `## Question`, item 5 of the performance list, the Evidence
+  Map (10 new/updated rows), Context Reviewed, Source References, and Open
+  Questions. Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v14/index.md`.
+- `verified_by_agent` stays `not yet`: scoped section addition, not a full-page
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-06-30] question v14 | Row-Level Security: implementation, performance, settings
 
 - Filed [Row-Level Security (RLS) in PostgreSQL 14 (unverified)](v14/questions/row-level-security-rls.md)
