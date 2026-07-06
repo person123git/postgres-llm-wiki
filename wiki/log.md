@@ -2,6 +2,56 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-06] question v14 | MultiXact, foreign keys, and local-cache spill to SLRU
+
+- Filed [How MultiXact Works in PostgreSQL 14, and How Foreign Keys and Other
+  Operations Degrade Performance When the Local Cache Spills to Secondary Storage
+  (unverified)](v14/questions/multixact-foreign-keys-cache-spill.md)
+  (`type: question`) against the unchanged pin
+  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Applied prompt hygiene: the original prompt had minor grammar issues; the asker
+  approved a lightly corrected restatement, recorded under `## Question` with a
+  prompt note.
+- Answered inline from a claim-to-source map built directly from
+  `raw/postgres-14/`:
+  - How MultiXact works — `multixact.c` overview and the two SLRUs (offsets +
+    members) under `pg_multixact/`; `MultiXactStateData`, anti-wraparound limits,
+    and the per-backend `OldestMemberMXactId`/`OldestVisibleMXactId` arrays;
+    `MultiXactStatus`/`MultiXactMember` (`multixact.h`); the write path
+    (`MultiXactIdCreate`/`Expand` -> `MultiXactIdCreateFromMembers` ->
+    `GetNewMultiXactId`/`RecordNewMultiXact`, offsets then members under exclusive
+    SLRU locks); the read path (`GetMultiXactIdMembers`).
+  - The backend-local cache — `mXactCacheEnt`, `MAX_CACHE_ENTRIES` (256),
+    `MXactContext` under `TopTransactionContext` (per-transaction lifetime),
+    `mXactCacheGetById`/`GetBySet` MRU moves, and `mXactCachePut` tail eviction;
+    plus the no-cross-backend-sharing observation.
+  - Foreign keys — RI check/restrict `SELECT ... FOR KEY SHARE OF x`
+    (`ri_triggers.c`) -> executor `heapam_tuple_lock` -> `heap_lock_tuple` ->
+    `compute_new_xmax_infomask` create/expand cases; the hot-parent-row
+    escalation; the `fk-contention` isolation spec. Other creators: explicit row
+    locks, UPDATE/DELETE of locked rows, VACUUM `FreezeMultiXactId`.
+  - Degradation — cache miss -> SLRU buffer miss -> `SlruPhysicalReadPage`
+    `pg_pread`/`SLRURead`; exclusive-locked SLRU reads serializing on
+    `MultiXactOffsetSLRULock`/`MultiXactMemberSLRULock` (v14 pools only 8/16
+    buffers, no ReadOnly shared fast path for member reads), victim writes and
+    `SimpleLruWaitIO`; monotonic member-space growth ->
+    `MultiXactMemberFreezeThreshold` clamping freeze age, autovac triggers, and
+    the `multixact "members" limit exceeded` ERROR; docs' 10GB/20GB/40M/3M
+    thresholds.
+  - Observability and settings — `pg_stat_slru`, `pg_stat_activity` waits,
+    `SLRURead`, `mxid_age`, `pg_get_multixact_members`; the two `PGC_USERSET`
+    vacuum GUCs (session) and `autovacuum_multixact_freeze_max_age`
+    (`PGC_POSTMASTER`, restart); v14 has no GUC to resize the SLRU buffers or the
+    256-entry local cache.
+- Two verified read-only monitoring queries included with `wiki_`-tagged verbs
+  and session-scoped `statement_timeout`/`lock_timeout` recommendations.
+- Left two items under `## Open Questions` (no in-tree MultiXact benchmark; 14.x
+  fix provenance not traced).
+- Updated `wiki/index.md`, `wiki/versions.md` (table cell + Coverage Notes), and
+  `wiki/v14/index.md`. `verified_by_agent` is `not yet`: fresh draft, not a
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-06] expand v14 | Row-Level Security: RLS-and-the-plan-cache section
 
 - Expanded the performance coverage of [Row-Level Security (RLS) in PostgreSQL 14
