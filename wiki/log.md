@@ -2,6 +2,51 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] question v14 | functions/procedures in a WHERE clause: performance and mitigations
+
+- Filed [Performance Implications of Functions and Procedures in a WHERE Clause
+  in PostgreSQL 14, and How to Minimize the Overhead
+  (unverified)](v14/questions/functions-procedures-in-where-clause.md) against
+  the unchanged pin `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Applied prompt hygiene: the asker approved a grammar-corrected restatement
+  ("used on the where clause" -> "in the WHERE clause"; "performance
+  implication" -> "performance implications"; "the statement where clause") and
+  chose to cover procedures explicitly. The corrected prompt is restated under
+  `## Question` with a prompt note.
+- Drafted from a claim-to-source map built directly from `raw/postgres-14/`:
+  procedures (`pg_proc.prokind='p'`) are rejected in every expression by
+  `ParseFuncOrColumn` (`ERRCODE_WRONG_OBJECT_TYPE` "is a procedure") and run only
+  through the `CALL` utility statement (`gram.y` `CallStmt`, `transformCallStmt`
+  with `proc_call=true`, `standard_ProcessUtility` -> `ExecuteCallStmt`), proven
+  by `create_procedure.out`; a WHERE-clause function is a per-row cost
+  (`ExecScan` `for(;;)` -> `ExecQual` -> `EEOP_FUNCEXPR` fmgr dispatch).
+- Covered the performance implications: volatility (`VOLATILE` per row,
+  `STABLE` single-evaluation only as an index-scan runtime key via
+  `ExecReScanIndexScan`/`ExecIndexEvalRuntimeKeys`, `IMMUTABLE` constant-folded
+  with constant args via `eval_const_expressions`/`evaluate_function`); the cost
+  model (`add_function_cost` = `procost * cpu_operator_cost`, `procost` default
+  1, per-RestrictInfo cost caching); the fixed default selectivity
+  (`function_selectivity` 0.3333333 for a bare boolean function, `boolvarsel`
+  0.5 otherwise); expression-index matching (`match_index_to_operand`) and the
+  non-volatile-operand runtime-key rule (`match_opclause_to_indexcol`);
+  leakproof/security-level qual ordering (`order_qual_clauses`,
+  `RestrictInfo.security_level`, `qual_is_pushdown_safe`); and parallel safety
+  (`PROPARALLEL_*`, `planner.c` parallel-mode gate, `parallel.sgml`).
+- Covered the mitigations: correct volatility labeling, expression indexes /
+  stored generated columns, wrapping an uncorrelated call in a scalar sub-SELECT
+  (InitPlan evaluated once per execution — `build_subplan`/`make_subplan`,
+  `nodeSubplan` setParam, `ExecEvalParamExec`), SQL-function inlining
+  (`inline_function`), accurate `COST`/`ROWS`, planner `SUPPORT` functions (the
+  four `supportnodes.h` request types), `LEAKPROOF`/`PARALLEL SAFE` labeling, and
+  filtering rows first.
+- Verified every cited line range against the pinned checkout (executor, planner
+  util/path/plan, parser, catalog headers, and the `xfunc.sgml`/`indices.sgml`/
+  `parallel.sgml`/`create_function.sgml` docs).
+- Updated `wiki/index.md`, `wiki/versions.md` (v14 coverage cell + a coverage
+  note), and `wiki/v14/index.md`. `verified_by_agent` stays `not yet`: fresh
+  draft, not a claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] question-followup v14 | RLS wrapping a function call in a sub-SELECT
 
 - Answered the approved, grammar-corrected follow-up on [Row-Level Security (RLS)
