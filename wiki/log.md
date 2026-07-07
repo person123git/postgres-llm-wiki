@@ -2,32 +2,6 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
-## [2026-07-07] review-fix v14 | functions/procedures RLS sub-SELECT follow-up
-
-- Reviewed [Performance Implications of Functions and Procedures in a WHERE
-  Clause in PostgreSQL 14, and How to Minimize the Overhead
-  (unverified)](v14/questions/functions-procedures-in-where-clause.md) for the
-  follow-up: when an RLS policy or query uses a helper such as `auth.uid()` /
-  `auth.jwt()`, does `(SELECT auth.uid()) = user_id` cache the result once per
-  query instead of invoking `auth.uid() = user_id` per row?
-- Re-checked the mechanics against pinned `raw/postgres-14/` commit
-  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`: uncorrelated scalar
-  `EXPR_SUBLINK`s become InitPlans returning `PARAM_EXEC` params; the initplan is
-  lazy and once-only because `ExecSetParamPlan` clears `execPlan` after setting
-  the param value and `ExecEvalParamExec` then reuses the stored value; correlated
-  sub-SELECTs remain ordinary SubPlans.
-- Added the RLS-specific path to the functions/procedures page: policy `USING`
-  expressions become `securityQuals`, policy write checks become
-  `WithCheckOption`s, `fireRIRrules()` propagates `hasSubLinks`, and the planner
-  sends both `securityQuals` and `WITH CHECK` options through
-  `preprocess_expression(..., EXPRKIND_QUAL)` / `SS_process_sublinks`.
-- Added the follow-up prompt under `## Question`, tightened the scalar
-  sub-SELECT subsection, added source citations, updated Context Reviewed,
-  Evidence Map, Source References, Open Questions, `wiki/index.md`,
-  `wiki/v14/index.md`, and `wiki/versions.md`. `verified_by_agent` remains
-  `not yet`: scoped review-fix, not a full claim-by-claim re-verification.
-- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
-
 ## [2026-07-07] review-fix v14 | RLS sub-SELECT follow-up: WITH CHECK preprocessing citation
 
 - Reviewed the `### Wrapping a function in a subquery to evaluate it once`
