@@ -2,6 +2,31 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v14 | RLS sub-SELECT follow-up external-helper caveat
+
+- Reviewed the `### Wrapping a function in a subquery to evaluate it once`
+  section of [Row-Level Security (RLS) in PostgreSQL 14: Implementation,
+  Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) against pinned
+  `raw/postgres-14/` commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Confirmed the PostgreSQL 14 mechanism remains source-supported: an
+  uncorrelated scalar `EXPR_SUBLINK` becomes an InitPlan that stores its result
+  in a `PARAM_EXEC` parameter, `ExecSetParamPlan` clears `execPlan` after first
+  evaluation, RLS security quals and `WITH CHECK` options pass through
+  `SS_process_sublinks`, bare `STABLE`/`VOLATILE` functions are not
+  constant-folded, scan filters call `EEOP_FUNCEXPR` per tuple, and index
+  runtime keys are evaluated once per scan.
+- Fixed two review findings: narrowed the lead so the performance win is tied to
+  cases where the bare call would otherwise be a per-row filter, and removed the
+  uncited assertion tying external helpers such as `auth.uid()`/`auth.jwt()` to
+  core `current_setting()` volatility. The page now treats those external helper
+  definitions and volatility declarations as an Open Question to verify in the
+  installed schema.
+- Updated `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+  `verified_by_agent` stays `not yet`: scoped review-fix, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v14 | RLS sub-SELECT follow-up: WITH CHECK preprocessing citation
 
 - Reviewed the `### Wrapping a function in a subquery to evaluate it once`
@@ -126,9 +151,11 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   per-row `SubPlan`); an index-qualifiable comparison already evaluates a
   `STABLE` function once per scan as a runtime key (`ExecReScanIndexScan`); and
   it is a once-per-execution cache, not general memoization.
-- Anchored `auth.uid()`/`auth.jwt()` as external Supabase functions (absent from
-  the pin) of the same `STABLE` class as core `current_setting` (`pg_proc.dat`,
-  `provolatile => 's'`).
+- Noted `auth.uid()`/`auth.jwt()` as external functions absent from the pin and
+  compared the common claim-reader pattern with core `current_setting`
+  (`pg_proc.dat`, `provolatile => 's'`); a later same-day review narrows this to
+  a verification caveat because the external helper definitions are not present
+  in `raw/postgres-14/`.
 - Updated the Summary, `## Contents`, Evidence Map (five rows), Context Reviewed,
   and Source References (`subselect.c`, `nodeSubplan.c`, `execExprInterp.c`,
   `clauses.c`, `execScan.c`, `nodeIndexscan.c`, `pg_proc.dat`). Updated

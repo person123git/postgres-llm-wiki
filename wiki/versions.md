@@ -14,6 +14,17 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-07: review-fixed the same v14 RLS sub-SELECT follow-up to remove an
+  uncited external-helper assumption. The PostgreSQL 14 source still proves the
+  uncorrelated scalar sub-SELECT -> InitPlan -> `PARAM_EXEC` once-per-execution
+  behavior, including inside RLS policy expressions, but the exact definitions
+  and volatility declarations of external helpers such as `auth.uid()` and
+  `auth.jwt()` are now listed as an Open Question to verify in the installed
+  schema. Tightened the answer lead to note the main performance win is when the
+  unwrapped call would otherwise be a per-row filter; index-qualifiable
+  comparisons may already evaluate a `STABLE` function once per scan as a
+  runtime key. `verified_by_agent` stays `not yet`: scoped review-fix, not a
+  full claim-by-claim re-verification.
 - 2026-07-07: review-fixed the `### Wrapping a function in a subquery to
   evaluate it once` section of [Row-Level Security (RLS) in PostgreSQL 14
   (unverified)](v14/questions/row-level-security-rls.md) against the unchanged
@@ -89,8 +100,9 @@ This page indexes the PostgreSQL versions covered by the wiki.
   index-runtime-key nuance (a `STABLE` function on an index-qualifiable
   comparison is already evaluated once per scan); and the correlated-sub-SELECT
   and once-per-execution caveats. Noted that `auth.uid()`/`auth.jwt()` are
-  external Supabase functions (absent from the pin) of the same `STABLE`
-  volatility class as core `current_setting`. Updated `wiki/index.md`,
+  external functions absent from the pin, and originally compared the common
+  claim-reader pattern with core `current_setting`; a later same-day review note
+  above narrows that to a verification caveat. Updated `wiki/index.md`,
   `wiki/v14/index.md`, and the v14 coverage cell; `verified_by_agent` stays `not
   yet` because this was a scoped follow-up, not a full claim-by-claim
   re-verification.
