@@ -2,6 +2,38 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] question-followup v14 | RLS filter conditions in the query vs. planning
+
+- Answered the approved, grammar-corrected follow-up on [Row-Level Security (RLS)
+  in PostgreSQL 14: Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md): do all of the RLS
+  filter conditions need to appear in the query to get good performance / to
+  help query planning? Applied prompt hygiene — the asker chose the corrected
+  restatement, recorded verbatim under `## Question`.
+- Added a dedicated `### Do RLS filter conditions need to be in the query?`
+  section. Conclusion: no. A policy's `USING` expression is prepended to the
+  RTE's `securityQuals` (`rewriteHandler.c`) and transferred into the table's
+  `baserestrictinfo` at security level 0 by `process_security_barrier_quals`.
+  Because a level-0 qual satisfies `restriction_is_securely_promotable`
+  (`security_level <= baserestrict_min_security`), `match_clause_to_index` can
+  use the policy predicate as an index qualifier, and plan-time partition
+  pruning draws its quals straight from `baserestrictinfo` — both without the
+  predicate being restated in the query.
+- Documented that query-text quals get the maximum security level
+  (`qual_security_level`), so a hand-written copy of the policy predicate is
+  usable early only if leakproof and adds no planning benefit; the genuine
+  constraint is that a non-leakproof user predicate cannot be pushed to an index
+  ahead of the RLS barrier (`order_qual_clauses`, optimizer README). Noted the
+  multi-sublist case (restrictive policies, locking/`RETURNING`) where only the
+  level-0 sublist is unconditionally promotable, and that `WITH CHECK` is
+  write-side only.
+- Updated the Summary, `## Contents`, Evidence Map (two rows), Context Reviewed,
+  and Source References (added `src/backend/optimizer/util/restrictinfo.c`).
+  Updated `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+- `verified_by_agent` stays `not yet`: scoped follow-up, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v14 | RLS aggregation mitigation follow-up
 
 - Updated [Row-Level Security (RLS) in PostgreSQL 14: Implementation,
