@@ -2,6 +2,23 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v12 | sampling pgstatindex variant contents
+
+- Reviewed [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against
+  the unchanged `raw/postgres-12/` pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-checked the claim-sensitive source surfaces: `pgstatindex_impl`, v12
+  `pgstattuple_approx`, `pgstattuple` extension SQL/grants, `pageinspect`
+  `bt_metap`/`bt_page_stats`/raw-page helpers, the unsigned `oldest_xact`
+  compatibility-wrapper rationale, diagnostic timeout GUC contexts, and the SQL
+  syntax/built-ins used by the prototype. No behavioral corrections were needed.
+- Added the mandatory `## Contents` block to the question page. Index and
+  landing-page summaries remain accurate. `verified_by_agent` remains `not yet`
+  because the page still includes a proposed API and diagnostic SQL prototype,
+  not only behavior defined by the pinned checkout.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v14 | Row-Level Security plan-cache and settings corrections
 
 - Reviewed and corrected [Row-Level Security (RLS) in PostgreSQL 14:

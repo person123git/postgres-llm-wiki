@@ -8,6 +8,24 @@ verified_by_agent: not yet
 
 # Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)
 
+## Contents
+
+- [Question](#question)
+- [Answer Up Front](#answer-up-front)
+- [What pgstatindex Reads Today](#what-pgstatindex-reads-today)
+- [Proposed Function: pgstatindex_approx](#proposed-function-pgstatindexapprox)
+  - [Field plan](#field-plan)
+  - [Extension wiring](#extension-wiring)
+- [Pros](#pros)
+- [Cons](#cons)
+- [SQL Prototype Using contrib/pageinspect](#sql-prototype-using-contribpageinspect)
+- [Tests To Add](#tests-to-add)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Related Pages](#related-pages)
+
 ## Question
 
 In PostgreSQL 12, propose a `pgstatindex` variant that samples the index
