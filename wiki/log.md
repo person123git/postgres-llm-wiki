@@ -2,6 +2,30 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v14 | RLS aggregation mitigation follow-up
+
+- Updated [Row-Level Security (RLS) in PostgreSQL 14: Implementation,
+  Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) for the approved,
+  grammar-corrected follow-up asking whether RLS impact on aggregation
+  statements has mitigation.
+- Added a dedicated `### RLS and aggregation` section. Conclusion: PostgreSQL 14
+  has no aggregate-specific RLS bypass switch; RLS quals become scan-level
+  restrictions, aggregate paths consume a filtered input subplan, and `ExecAgg`
+  advances aggregate state only for tuples produced by that subplan.
+- Documented practical mitigations from source behavior: keep policy predicates
+  cheap and indexable, keep selective filters leakproof/indexable when possible,
+  use partition pruning and session-scoped `enable_partitionwise_aggregate`
+  when the security key matches partitioning, reduce repeated planning by
+  keeping role/`row_security` stable for cached statements, and use summary
+  tables or trusted reporting APIs only when the aggregate has a separate
+  security boundary.
+- Added guardrails: `row_security = off` is session-scoped but errors for users
+  who would be filtered rather than bypassing RLS, and aggregate calls are
+  rejected in policy expressions.
+- Updated `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v14 | RLS MultiXact performance follow-up
 
 - Updated [Row-Level Security (RLS) in PostgreSQL 14: Implementation,
