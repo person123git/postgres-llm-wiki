@@ -14,6 +14,20 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-07: review-fixed [Performance Implications of Functions and
+  Procedures in a WHERE Clause in PostgreSQL 14, and How to Minimize the
+  Overhead (unverified)](v14/questions/functions-procedures-in-where-clause.md)
+  for the follow-up about whether `(SELECT auth.uid()) = user_id` can cache an
+  uncorrelated JWT-helper-style function call in an RLS policy or ordinary query.
+  Verified against the unchanged pin `5c00f4e2e3b`: uncorrelated scalar
+  `EXPR_SUBLINK`s become InitPlans returning `PARAM_EXEC` params; `ExecSetParamPlan`
+  clears `execPlan` after setting the param value and `ExecEvalParamExec` reuses
+  it; correlated sub-SELECTs remain regular SubPlans; and RLS `USING`
+  `securityQuals` plus `WITH CHECK` options flow through `preprocess_expression`
+  / `SS_process_sublinks`. Added the follow-up prompt, citations, Evidence Map,
+  Context Reviewed, Source References, and an Open Questions note that external
+  JWT helper volatility/semantics are not verified here. `verified_by_agent`
+  stays `not yet`: scoped review-fix, not a full claim-by-claim re-verification.
 - 2026-07-07: review-fixed the `### Wrapping a function in a subquery to
   evaluate it once` section of [Row-Level Security (RLS) in PostgreSQL 14
   (unverified)](v14/questions/row-level-security-rls.md) against the unchanged
