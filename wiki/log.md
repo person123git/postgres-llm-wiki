@@ -2,6 +2,41 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] question-followup v14 | RLS wrapping a function call in a sub-SELECT
+
+- Answered the approved, grammar-corrected follow-up on [Row-Level Security (RLS)
+  in PostgreSQL 14: Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md): for a JWT helper like
+  `auth.uid()`/`auth.jwt()`, does wrapping the call in a subquery
+  (`(SELECT auth.uid()) = user_id`) help by caching the function call? Applied
+  prompt hygiene — the asker chose the corrected restatement, recorded under
+  `## Question`.
+- Added a `### Wrapping a function in a subquery to evaluate it once` section.
+  Conclusion: yes. An uncorrelated scalar sub-SELECT is an `EXPR_SUBLINK` that
+  `build_subplan` converts to an InitPlan returning a `PARAM_EXEC` param; the
+  InitPlan runs lazily exactly once and its result is cached in the param slot
+  (`ExecSetParamPlan` clears `execPlan`; `ExecEvalParamExec` re-uses the stored
+  value). The conversion also fires inside a policy because `preprocess_expression`
+  runs every security qual and `WITH CHECK` option through `SS_process_sublinks`.
+- Documented the contrast: a bare `STABLE` function is not constant-folded
+  (`clauses.c` — only immutable functions are pre-evaluated) and is re-invoked
+  per row when applied as a scan filter (`ExecScan` calls `ExecQual` per tuple;
+  `EEOP_FUNCEXPR` invokes the function each evaluation). Added the caveats:
+  only uncorrelated sub-SELECTs become InitPlans (a correlated one stays a
+  per-row `SubPlan`); an index-qualifiable comparison already evaluates a
+  `STABLE` function once per scan as a runtime key (`ExecReScanIndexScan`); and
+  it is a once-per-execution cache, not general memoization.
+- Anchored `auth.uid()`/`auth.jwt()` as external Supabase functions (absent from
+  the pin) of the same `STABLE` class as core `current_setting` (`pg_proc.dat`,
+  `provolatile => 's'`).
+- Updated the Summary, `## Contents`, Evidence Map (five rows), Context Reviewed,
+  and Source References (`subselect.c`, `nodeSubplan.c`, `execExprInterp.c`,
+  `clauses.c`, `execScan.c`, `nodeIndexscan.c`, `pg_proc.dat`). Updated
+  `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+- `verified_by_agent` stays `not yet`: scoped follow-up, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] question-followup v14 | RLS filter conditions in the query vs. planning
 
 - Answered the approved, grammar-corrected follow-up on [Row-Level Security (RLS)
