@@ -2,6 +2,37 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v14 | RLS sub-SELECT follow-up: WITH CHECK preprocessing citation
+
+- Reviewed the `### Wrapping a function in a subquery to evaluate it once`
+  section of [Row-Level Security (RLS) in PostgreSQL 14: Implementation,
+  Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) against pinned
+  `raw/postgres-14/` commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Re-verified every source citation in the section against the pin and found the
+  line ranges accurate: `subselect.c` `make_subplan` -> `build_subplan`
+  (uncorrelated `EXPR_SUBLINK` -> InitPlan returning a `PARAM_EXEC` param via
+  `generate_new_exec_param`; correlated stays a per-invocation `SubPlan`), the
+  initplan comments and `init_plans` attach, `ExecEvalParamExec` /
+  `ExecSetParamPlan` lazy once-only param caching (`execPlan` cleared at
+  `nodeSubplan.c:1180`), `ExecScan`/`EEOP_FUNCEXPR` per-tuple evaluation,
+  `clauses.c` `STABLE`-not-folded (only `PROVOLATILE_IMMUTABLE` pre-evaluated),
+  `ExecReScanIndexScan` runtime keys, `policy.c` `hassublinks`, `rewriteHandler.c`
+  policy-sublink locking/RIR, and `pg_proc.dat` `current_setting`
+  `provolatile => 's'`.
+- Fixed one citation-completeness gap: the claim that `WITH CHECK` options (not
+  only security quals) flow through `preprocess_expression` / `SS_process_sublinks`
+  cited only the per-`securityQuals`-element loop. Verified the `WITH CHECK`
+  preprocessing loop (`parse->withCheckOptions` -> `preprocess_expression(...,
+  EXPRKIND_QUAL)`, `planner.c` L818-L828) and added a
+  `[planner.c#withCheckOptions-preprocess]` citation in the body sentence, the
+  Evidence Map row, and the Context Reviewed bullet.
+- Updated only `wiki/v14/questions/row-level-security-rls.md`, this log, and
+  `wiki/versions.md`; `wiki/index.md` and `wiki/v14/index.md` summaries already
+  describe the section accurately and needed no change. `verified_by_agent` stays
+  `not yet`: scoped review-fix, not a full claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v14 | functions/procedures in a WHERE clause
 
 - Reviewed [Performance Implications of Functions and Procedures in a WHERE

@@ -14,6 +14,22 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-07: review-fixed the `### Wrapping a function in a subquery to
+  evaluate it once` section of [Row-Level Security (RLS) in PostgreSQL 14
+  (unverified)](v14/questions/row-level-security-rls.md) against the unchanged
+  pin `5c00f4e2e3b`. Re-verified every source citation in the section (the
+  `subselect.c` uncorrelated-`EXPR_SUBLINK`-to-InitPlan / `PARAM_EXEC` path and
+  correlated-`SubPlan` contrast, `ExecEvalParamExec`/`ExecSetParamPlan`
+  once-only param caching, `ExecScan`/`EEOP_FUNCEXPR` per-tuple evaluation, the
+  `clauses.c` `STABLE`-not-folded rule, `ExecReScanIndexScan` runtime keys,
+  `policy.c` `hassublinks`, `rewriteHandler.c` policy-sublink handling, and
+  `pg_proc.dat` `current_setting` `provolatile => 's'`); all line ranges are
+  accurate. Fixed one citation-completeness gap: the claim that `WITH CHECK`
+  options also flow through `preprocess_expression`/`SS_process_sublinks` cited
+  only the `securityQuals` loop, so added the `WITH CHECK` preprocessing loop
+  citation (`planner.c` L818-L828) in the body, Evidence Map, and Context
+  Reviewed. `verified_by_agent` stays `not yet`: scoped review-fix, not a full
+  claim-by-claim re-verification.
 - 2026-07-07: review-fixed [Performance Implications of Functions and
   Procedures in a WHERE Clause in PostgreSQL 14, and How to Minimize the
   Overhead (unverified)](v14/questions/functions-procedures-in-where-clause.md)
