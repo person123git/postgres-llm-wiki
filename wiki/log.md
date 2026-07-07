@@ -2,6 +2,29 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v14 | Row-Level Security plan-cache and settings corrections
+
+- Reviewed and corrected [Row-Level Security (RLS) in PostgreSQL 14:
+  Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) against pinned
+  `raw/postgres-14/` commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Removed the overclaim that a held cursor reuses a cached plan like prepared
+  statements/PL/pgSQL. Added the v14 cursor path evidence: SQL `DECLARE CURSOR`
+  rewrites and plans immediately into a portal with copied plan trees, prepared
+  statement execution is the path that passes a `CachedPlan`, and `WITH HOLD`
+  survives by materializing rows into a tuplestore.
+- Added `plan_cache_mode` to the settings and plan-cache sections, with its
+  `PGC_USERSET` session/transaction scope, allowed values, and `choose_custom_plan`
+  effect on RLS prepared-statement planning.
+- Corrected the role-change wording so `SET ROLE` maps to `SetCurrentRoleId()`,
+  `SET SESSION AUTHORIZATION` maps to `SetSessionAuthorization()`, and
+  `SECURITY DEFINER` maps to `SetUserIdAndSecContext()`.
+- Added direct citations for pg_dump's default `row_security = off` behavior.
+- Updated Context Reviewed, Evidence Map, Source References, `wiki/index.md`,
+  `wiki/versions.md`, and `wiki/v14/index.md`. `verified_by_agent` remains
+  `not yet` because this was a scoped review-fix, not a full-page
+  re-verification.
+
 ## [2026-07-06] review-fix v14 | MultiXact page corrections
 
 - Reviewed and corrected [How MultiXact Works in PostgreSQL 14, and How Foreign

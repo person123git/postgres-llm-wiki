@@ -14,6 +14,18 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-07: review-fixed [Row-Level Security (RLS) in PostgreSQL 14
+  (unverified)](v14/questions/row-level-security-rls.md) against the unchanged
+  pin `5c00f4e2e3b`. Corrected the RLS plan-cache section to avoid treating SQL
+  `DECLARE CURSOR` / `WITH HOLD` cursors as a saved-plan-cache reuse surface
+  (ordinary cursor planning stores copied plan trees in a portal; held cursors
+  survive by materializing rows), added `plan_cache_mode` as an RLS-relevant
+  `PGC_USERSET` setting controlling generic-vs-custom prepared-statement
+  planning, fixed the distinct `SET ROLE` vs `SET SESSION AUTHORIZATION` call
+  paths, and cited pg_dump's default `row_security = off` behavior. Updated
+  `wiki/index.md` and `wiki/v14/index.md`; `verified_by_agent` stays `not yet`
+  because this was a scoped review-fix, not a full claim-by-claim
+  re-verification.
 - 2026-07-06: filed the PostgreSQL 14 MultiXact question page, [How MultiXact
   Works in PostgreSQL 14, and How Foreign Keys and Other Operations Degrade
   Performance When the Local Cache Spills to Secondary Storage
