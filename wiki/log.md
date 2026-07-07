@@ -2,6 +2,29 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-06] review-fix v14 | MultiXact page corrections
+
+- Reviewed and corrected [How MultiXact Works in PostgreSQL 14, and How Foreign
+  Keys and Other Operations Degrade Performance When the Local Cache Spills to
+  Secondary Storage (unverified)](v14/questions/multixact-foreign-keys-cache-spill.md)
+  against pinned `raw/postgres-14/` commit
+  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Fixed the SLRU contention wording: `GetMultiXactIdMembers` enters the
+  MultiXact offset/member SLRU reads with exclusive control locks, but
+  `SimpleLruReadPage` and `SlruInternalWritePage` release the control lock
+  during physical I/O after marking the slot busy and taking the per-buffer
+  lock. Updated the answer, Evidence Map, and index summaries accordingly.
+- Narrowed the explicit row-lock creator claim to compatible coexisting row
+  locks and noted that conflicting row-lock combinations wait instead of
+  immediately becoming MultiXact co-members.
+- Corrected the RI restrict/no-action citation from the PK-match helper to the
+  `ri_restrict` child-table `FOR KEY SHARE` query.
+- Added the per-table `autovacuum_multixact_freeze_*` storage parameters and
+  their apply behavior as relation options (`ALTER TABLE ... SET`, no restart or
+  reload), alongside the existing GUC-scope table.
+- Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v14/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-06] question v14 | MultiXact, foreign keys, and local-cache spill to SLRU
 
 - Filed [How MultiXact Works in PostgreSQL 14, and How Foreign Keys and Other
