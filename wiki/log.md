@@ -2,6 +2,30 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v14 | functions/procedures in a WHERE clause
+
+- Reviewed [Performance Implications of Functions and Procedures in a WHERE
+  Clause in PostgreSQL 14, and How to Minimize the Overhead
+  (unverified)](v14/questions/functions-procedures-in-where-clause.md) against
+  pinned `raw/postgres-14/` commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Fixed the overbroad per-row claim: row-dependent or volatile WHERE-clause
+  functions still run through the `ExecScan`/`ExecQual`/`EEOP_FUNCEXPR` path for
+  each tuple reaching the function expression after earlier qual checks, but
+  no-`Var`, non-volatile quals are marked pseudoconstant, costed as startup work,
+  pulled into a gating `Result`, and executed once as an `EXPLAIN` `One-Time
+  Filter`.
+- Tightened adjacent mechanics: `STABLE` does not memoize row-dependent filters;
+  scalar sub-SELECT wrapping is useful only for genuinely uncorrelated calls when
+  once-per-execution semantics are intended and is redundant with pseudoconstant
+  quals or index runtime keys; omitted `CREATE FUNCTION COST` defaults to 1 for
+  C/internal functions and 100 otherwise; expression indexes and stored generated
+  columns require immutable expressions.
+- Updated `## Contents`, Context Reviewed, Evidence Map, Source References,
+  `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+  `verified_by_agent` remains `not yet`: scoped review-fix, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] question v14 | functions/procedures in a WHERE clause: performance and mitigations
 
 - Filed [Performance Implications of Functions and Procedures in a WHERE Clause
