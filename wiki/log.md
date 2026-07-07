@@ -2,6 +2,27 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-07] review-fix v14 | RLS MultiXact performance follow-up
+
+- Updated [Row-Level Security (RLS) in PostgreSQL 14: Implementation,
+  Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) for the approved,
+  grammar-corrected follow-up asking whether RLS has MultiXact-related
+  performance implications.
+- Added a dedicated `### RLS and MultiXact` section. Conclusion: ordinary RLS
+  policy filtering is not itself a MultiXact operation; the source-visible
+  interaction is indirect through referential integrity. Under RLS, non-owner /
+  non-`BYPASSRLS` FK validation skips the bulk `RI_Initial_Check` path and falls
+  back to per-row `RI_FKey_check_ins`; those row checks use `FOR KEY SHARE`,
+  which reaches `heap_lock_tuple` / `compute_new_xmax_infomask` and can create,
+  expand, or later read MultiXacts on hot referenced rows.
+- Added source evidence for the validation fallback, `FOR KEY SHARE` query
+  generation, heap row-lock-to-MultiXact path, the 256-entry transaction-local
+  MultiXact cache, the 8/16 MultiXact SLRU buffers, and possible `SLRURead`
+  physical I/O. Linked the v14 MultiXact page from the RLS page navigation.
+- Updated `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v12 | sampling pgstatindex variant contents
 
 - Reviewed [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
