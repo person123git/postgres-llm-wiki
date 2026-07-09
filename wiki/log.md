@@ -2,6 +2,85 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-09] restructure v12 | partitioning page reorganized by partitioning type
+
+- Reorganized [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 12
+  (unverified)](v12/questions/partitioning-planning-execution-optimizations.md)
+  at the request of the asker so the answer is structured by partitioning
+  *type*: two top-level `##` sections, one for **Inheritance-based (legacy)
+  partitioning** and one for **Declarative partitioning**, instead of the
+  previous optimization-by-optimization layout.
+- Inheritance section now leads with its setup (`INHERITS`/`CHECK`), covers
+  constraint exclusion as its one planner optimization, documents that tuple
+  routing is manual (triggers/rules) and — per the docs — slower than
+  declarative's internal routing, and lists what it does not get. Declarative
+  section keeps partition pruning (plan + run-time), per-strategy differences,
+  constraint exclusion on declarative `CHECK`s, partitionwise join/aggregate,
+  executor routing/row-movement/COPY batching, and the `ModifyTable`
+  execution-time-pruning limitation.
+- Added inheritance-specific citations from `doc/src/sgml/ddl.sgml`
+  (`Implementation Using Inheritance` section, trigger-based routing, and the
+  "triggers ... much slower than the tuple routing performed internally by
+  declarative partitioning" note); rebuilt `## Contents` and the Evidence Map;
+  same pinned checkout `45b88269a353ad93744772791feb6d01bc7e1e42`, all citations
+  re-verified.
+- No content claims changed; existing `wiki/index.md`, `wiki/v12/index.md`, and
+  `wiki/versions.md` summaries remain accurate. `verified_by_agent` stays `not
+  yet`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-07-09] question v12 | table partitioning optimizations and configuration in planning/execution
+
+- Filed [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 12
+  (unverified)](v12/questions/partitioning-planning-execution-optimizations.md)
+  against the unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Applied prompt hygiene: the asker approved a grammar-corrected restatement
+  ("parititioning" -> "partitioning"; capitalization/comma; "configuration" ->
+  "configurations"). The corrected prompt is restated under `## Question` with a
+  prompt note.
+- Drafted from a claim-to-source map built directly from `raw/postgres-12/`:
+  - Partition pruning (declarative): plan-time `prune_append_rel_partitions`
+    (gated by `enable_partition_pruning`) is called from
+    `expand_partitioned_rtentry` before child rels are built, so pruned
+    partitions are never locked/planned; run-time prune info is attached in
+    `createplan.c` for `Append`/`MergeAppend`, and the executor prunes in two
+    phases (`ExecFindInitialMatchingSubPlans` at startup,
+    `ExecFindMatchingSubPlans` per scan) driven by `nodeAppend.c`.
+  - Per-strategy pruning differs: `get_matching_hash_bounds` (equality/`IS NULL`
+    only, all keys required, no null/`DEFAULT` partition),
+    `get_matching_list_bounds` (null + `DEFAULT` partition),
+    `get_matching_range_bounds` (nulls -> `DEFAULT`), dispatched by
+    `perform_pruning_base_step`; routing mirrors this in
+    `get_partition_for_tuple`.
+  - Constraint exclusion: `relation_excluded_by_constraints` switch on
+    `constraint_exclusion` (`off`/`on`/`partition`), plan-time only, aimed at
+    legacy inheritance; the default `partition` mode deliberately does not
+    re-check a declarative partition's own bound because pruning already did.
+  - Partitionwise join (`build_joinrel_partition_info` gate +
+    `have_partkey_equi_join` + `partition_bounds_equal`) and partitionwise
+    aggregate (`create_grouping_paths` patype, `group_by_has_partkey` FULL vs
+    PARTIAL), both off by default.
+  - Executor: lazy `ExecSetupPartitionTupleRouting`/`ExecFindPartition`,
+    cross-partition UPDATE row movement (DELETE+INSERT) in `nodeModifyTable.c`,
+    and per-partition COPY multi-insert (`CIM_MULTI_CONDITIONAL`) in `copy.c`.
+  - Configuration: the four session-scoped (`PGC_USERSET`) GUCs with defaults
+    (`enable_partition_pruning=on`, `constraint_exclusion=partition`,
+    `enable_partitionwise_join=off`, `enable_partitionwise_aggregate=off`), plus
+    the documented v12 limitation that execution-time pruning covers only
+    `Append`/`MergeAppend`, not `ModifyTable`.
+- Verified every cited line range against the pinned checkout (partprune.c,
+  partbounds helpers, execPartition.c, nodeAppend.c, nodeModifyTable.c, copy.c,
+  inherit.c, createplan.c, plancat.c, relnode.c, joinrels.c, planner.c,
+  cost.h/pathnodes.h, guc.c/costsize.c, and the `ddl.sgml`/`config.sgml` docs);
+  noted regression coverage in `partition_prune.sql`/`partition_join.sql`/
+  `partition_aggregate.sql`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md` (v12
+  coverage cell + coverage note). `verified_by_agent` stays `not yet`: fresh
+  draft, not a claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-07] review-fix v14 | RLS sub-SELECT follow-up external-helper caveat
 
 - Reviewed the `### Wrapping a function in a subquery to evaluate it once`
