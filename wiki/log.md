@@ -2,6 +2,51 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-09] follow-up v12 | partitioning locking + random-I/O sensitivity per optimization
+
+- Extended [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 12
+  (unverified)](v12/questions/partitioning-planning-execution-optimizations.md)
+  with a new `## Locking reduction and random-I/O sensitivity per optimization`
+  section, answering the approved grammar-corrected follow-up ("Add an extra
+  analysis on how each optimization will reduce locking, and how each will have
+  big gains if random I/O has higher latency."). Same unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Applied prompt hygiene: recorded the follow-up under `## Question` and noted
+  both the corrected and original wording ("...and it will have big gains if the
+  random i/o has higher latency.").
+- Locking (source-verified against `raw/postgres-12/`):
+  - Expansion (and locking) runs before costing: `query_planner` calls
+    `add_other_rels_to_query` before `make_one_rel` (`planmain.c`).
+  - Plan-time partition pruning is the only optimization that reduces read
+    locks: `expand_partitioned_rtentry` calls `prune_append_rel_partitions`
+    first and only `table_open(childOID, lockmode)`s the surviving `live_parts`
+    (`inherit.c`).
+  - Constraint exclusion does not reduce locks: inheritance locks every member
+    up front via `find_all_inheritors`, and `relation_excluded_by_constraints`
+    runs later in `set_append_rel_size` on already-created/locked child rels
+    (`inherit.c`, `allpaths.c`).
+  - Run-time pruning does not reduce locks: `AcquireExecutorLocks` locks every
+    `RTE_RELATION` in the finished plan's rtable (`plancache.c`).
+  - Write path: `ExecInitPartitionInfo` takes `RowExclusiveLock` lazily per
+    touched leaf partition; cross-partition `UPDATE` (DELETE+INSERT) touches two
+    (`execPartition.c`, `nodeModifyTable.c`).
+- Random I/O (source-verified): `random_page_cost` = 4.0 vs `seq_page_cost` =
+  1.0 (`cost.h`/`costsize.c`); the docs say 4.0 assumes ~90% cache and should be
+  raised for slow random storage (`config.sgml`); index-scan heap fetches are
+  charged at `random_page_cost` (`cost_index`) and seq scans at `seq_page_cost`
+  (`cost_seqscan`), so the scan-eliminating optimizations gain most on
+  high-latency random storage. Partitionwise join/aggregate are CPU/memory/
+  locality wins, not random-I/O ones: v12 charges hash-join `BufFile` spill at
+  `seq_page_cost` (`initial_cost_hashjoin`, `nodeHash.c`) and hash aggregation is
+  in-memory (`build_hash_table`, `nodeAgg.c`).
+- Updated the page `## Contents`, Evidence Map, Context Reviewed, Open Questions,
+  and Source References; refreshed `wiki/index.md`, `wiki/v12/index.md`, and
+  `wiki/versions.md` (v12 coverage cell + coverage note).
+  `verified_by_agent` stays `not yet`: scoped follow-up, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-09] restructure v12 | partitioning page reorganized by partitioning type
 
 - Reorganized [Table Partitioning Optimizations and Configuration During Query

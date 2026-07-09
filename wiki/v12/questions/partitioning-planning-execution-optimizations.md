@@ -26,6 +26,10 @@ verified_by_agent: not yet
   - [Executor tuple routing, row movement, and COPY batching](#executor-tuple-routing-row-movement-and-copy-batching)
   - [What declarative partitioning does not optimize](#what-declarative-partitioning-does-not-optimize)
   - [Per-strategy summary](#per-strategy-summary)
+- [Locking reduction and random-I/O sensitivity per optimization](#locking-reduction-and-random-io-sensitivity-per-optimization)
+  - [Only plan-time pruning removes read locks](#only-plan-time-pruning-removes-read-locks)
+  - [Why scan-eliminating optimizations gain most under slow random I/O](#why-scan-eliminating-optimizations-gain-most-under-slow-random-io)
+  - [Partitionwise join and aggregate: CPU, memory, and locality, not random I/O](#partitionwise-join-and-aggregate-cpu-memory-and-locality-not-random-io)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -36,10 +40,15 @@ verified_by_agent: not yet
 
 During query planning or execution, what are the optimizations and configurations per type of table partitioning currently implemented?
 
+Follow-up: Add an extra analysis on how each optimization will reduce locking, and how each will have big gains if random I/O has higher latency.
+
 > Prompt note: filed as an approved grammar-corrected restatement of the original
 > question ("during query planning or execution what are the current
 > optimizations and configuration per type of table parititioning currently
-> implemented?"), per the repository's prompt-hygiene rule.
+> implemented?"), per the repository's prompt-hygiene rule. The follow-up above is
+> likewise an approved grammar-corrected restatement (original: "add an extra
+> analysis on how each optimization will reduce locking and it will have big gains
+> if the random i/o has higher latency.").
 
 ## Answer
 
@@ -188,6 +197,52 @@ Two further executor behaviors are relevant:
 
 Per-strategy pruning: [partprune.c#L3250-L3277](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L3250-L3277). Per-strategy routing: [execPartition.c#L1235-L1333](../../../raw/postgres-12/src/backend/executor/execPartition.c#L1235-L1333).
 
+## Locking reduction and random-I/O sensitivity per optimization
+
+Short answer: **only plan-time partition pruning actually reduces the locks a read query takes**, and on the write path lazy tuple routing locks only the partitions that receive rows. Constraint exclusion, run-time pruning, and partitionwise join/aggregate keep the same lock set — they cut I/O and CPU, not locks. Separately, the *scan-eliminating* optimizations (plan-time and run-time pruning, plus constraint exclusion) gain the most when random I/O is slow, because the whole-partition heap and index reads they avoid are priced at `random_page_cost`, which v12 sets to 4× `seq_page_cost` and the docs say to raise further on high-latency storage. Partitionwise join and aggregate gain from cutting CPU, memory, and cache misses rather than from avoiding random reads directly.
+
+| Optimization | Reduces locks? | Gain when random I/O latency is high |
+|---|---|---|
+| Plan-time partition pruning | **Yes** — pruned partitions are never opened or locked | **Large** — avoids each pruned partition's random index/heap fetches |
+| Run-time partition pruning | No — all plan-time-surviving partitions are locked | **Large** — skips scanning partitions at execution |
+| Constraint exclusion | No — children are already locked before it runs | Moderate — drops an excluded partition's scan, but only with a constant qual + `CHECK` |
+| Partitionwise join | No — both sides' partitions stay locked | Indirect — smaller per-join footprint; spills are modeled as sequential |
+| Partitionwise aggregate | No | Indirect — v12 hash aggregation is in-memory; benefit is CPU/memory/locality |
+| Tuple routing (write path) | Lazy — only partitions that receive a row are locked | n/a (write path) |
+
+### Only plan-time pruning removes read locks
+
+The planner expands a partitioned or inherited parent into child relations in `add_other_rels_to_query`, which runs *before* `make_one_rel` costs anything ([planmain.c#L258-L271](../../../raw/postgres-12/src/backend/optimizer/plan/planmain.c#L258-L271)). Locking happens during that expansion, and the two partitioning kinds differ:
+
+- **Declarative, plan-time pruning.** `expand_partitioned_rtentry` calls `prune_append_rel_partitions` first and records the survivors in `live_parts` ([inherit.c#L324-L335](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L324-L335)). It then loops over `live_parts` only, and `table_open(childOID, lockmode)` — the point at which a partition's lock is taken — is inside that loop ([inherit.c#L351-L361](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L351-L361)). A pruned partition is therefore never opened and never locked. Fewer locks means less lock-manager traffic and fewer objects with which later DDL (which needs a conflicting lock) can collide.
+- **Inheritance + constraint exclusion.** `expand_inherited_rtentry` locks *every* member up front via `find_all_inheritors(parentOID, lockmode, ...)` ([inherit.c#L156-L157](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L156-L157)), because each child "will be the first use of those relations in the parse/rewrite/plan pipeline" ([inherit.c#L106-L115](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L106-L115)). Constraint exclusion runs only afterward, in `set_append_rel_size`, on child rels that "were already created during `add_other_rels_to_query`," and merely marks an excluded child as a dummy (no scan) ([allpaths.c#L1013-L1039](../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L1013-L1039)). The lock was already taken, so constraint exclusion removes work, not locks.
+
+**Run-time pruning does not reduce locks either.** Every partition that survived *plan-time* pruning stays in the finished plan's range table, and `AcquireExecutorLocks` locks each `RTE_RELATION` in `plannedstmt->rtable` before the plan runs ([plancache.c#L1585-L1602](../../../raw/postgres-12/src/backend/utils/cache/plancache.c#L1585-L1602)); run-time pruning only skips subplan initialization and scanning afterward. So a prepared statement or a parameterized nested loop that prunes 99 of 100 partitions at run time still holds locks on all 100.
+
+**Partitionwise join and aggregate do not change the lock set.** They are chosen during path generation on child rels that `add_other_rels_to_query` already expanded and locked; both joined tables' partitions are locked regardless of whether the join runs partition-by-partition.
+
+**Write path: tuple routing locks lazily.** `ExecInitPartitionInfo` opens each leaf partition with `RowExclusiveLock` only the first time a row routes to it ([execPartition.c#L517-L519](../../../raw/postgres-12/src/backend/executor/execPartition.c#L517-L519)), and the routing state itself is built lazily ([execPartition.c#L197-L235](../../../raw/postgres-12/src/backend/executor/execPartition.c#L197-L235)). A bulk `INSERT`/`COPY` that touches only a few partitions therefore locks only those. A cross-partition `UPDATE` is the exception: v12 implements it as a `DELETE` on the old partition plus a routed `INSERT` into the new one, so it locks and writes two partitions for one moved row ([nodeModifyTable.c#L1139-L1208](../../../raw/postgres-12/src/backend/executor/nodeModifyTable.c#L1139-L1208)).
+
+### Why scan-eliminating optimizations gain most under slow random I/O
+
+v12's cost model prices a random page read at 4× a sequential one — `random_page_cost = 4.0` versus `seq_page_cost = 1.0` ([cost.h#L23-L26](../../../raw/postgres-12/src/include/optimizer/cost.h#L23-L26); the variables are defined in [costsize.c#L110-L111](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L110-L111)). The docs state that 4.0 already assumes ~90% of random reads hit cache, and that "if you believe a 90% cache rate is an incorrect assumption for your workload, you can increase `random_page_cost` to better reflect the true cost of random storage reads" ([config.sgml#L4737-L4749](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4737-L4749)). The slower your real random I/O (cold cache, mechanical or network storage), the higher the effective per-page penalty.
+
+Those per-page penalties are exactly what a whole-partition scan pays and what pruning/exclusion avoids:
+
+- An index scan charges `random_page_cost` for each heap page it fetches in the uncorrelated case ([costsize.c#L570-L596](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L570-L596), applied at [costsize.c#L613-L670](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L613-L670)).
+- A sequential scan charges `seq_page_cost` per page: `disk_run_cost = spc_seq_page_cost * baserel->pages` ([costsize.c#L236-L242](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L236-L242)).
+
+Because each partition is its own physical relation with its own heap and indexes, dropping a partition removes that whole relation's page fetches. When those fetches are random and slow, the eliminated cost per pruned partition is proportionally larger, so plan-time pruning, run-time pruning, and constraint exclusion deliver their biggest wall-clock wins precisely on high-latency random storage. Plan-time pruning has the added edge that it also removes the partition's planning and locking work; run-time pruning still plans and locks the partition even though it skips the scan.
+
+### Partitionwise join and aggregate: CPU, memory, and locality, not random I/O
+
+Partitionwise join and aggregate help mainly by shrinking each per-partition operation, not by avoiding random reads, and the v12 cost model reflects that:
+
+- A hash join that overflows `work_mem` spills batches to temporary `BufFile`s ([nodeHash.c#L566-L578](../../../raw/postgres-12/src/backend/executor/nodeHash.c#L566-L578)), but v12 charges that spill at `seq_page_cost` "since the I/O should be nice and sequential" ([costsize.c#L3322-L3338](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3322-L3338)). Splitting into per-partition joins that each fit in `work_mem` avoids the spill, but the avoided cost is modeled as sequential, not random.
+- v12 hash aggregation is entirely in memory: `build_hash_table` builds a `TupleHashTable` whose per-group data lives in the hash memory context, with no batch/spill path ([nodeAgg.c#L1242-L1283](../../../raw/postgres-12/src/backend/executor/nodeAgg.c#L1242-L1283)). A smaller per-partition hash-aggregate reduces memory pressure and cache misses, not disk I/O.
+
+Their tie-in to slow random I/O is therefore indirect: both consume already-pruned partition inputs, and keeping each partition's working set small improves CPU-cache and buffer-cache locality, so the random reads that *do* happen are likelier to be cached. Neither reduces the number of random page fetches the way pruning does.
+
 ## Context Reviewed
 
 - Pinned checkout `raw/postgres-12/` at commit `45b88269a353ad93744772791feb6d01bc7e1e42` (Stamp 12.2).
@@ -202,6 +257,8 @@ Per-strategy pruning: [partprune.c#L3250-L3277](../../../raw/postgres-12/src/bac
 - GUCs: `src/backend/utils/misc/guc.c`, `src/backend/optimizer/path/costsize.c`, `postgresql.conf.sample`.
 - Docs: `doc/src/sgml/ddl.sgml` (partitioning, inheritance, pruning, constraint exclusion) and `doc/src/sgml/config.sgml` (the four GUCs).
 - Tests: `src/test/regress/sql/partition_prune.sql`, `partition_join.sql`, `partition_aggregate.sql`, `hash_part.sql`.
+- Follow-up (locking): expansion/locking-before-costing order in `src/backend/optimizer/plan/planmain.c` (`query_planner`) and `src/backend/optimizer/plan/initsplan.c` (`add_other_rels_to_query`); `expand_partitioned_rtentry` prune-then-lock-live-only and `expand_inherited_rtentry` `find_all_inheritors` lock-all in `src/backend/optimizer/util/inherit.c`; `find_all_inheritors` in `src/backend/catalog/pg_inherits.c`; constraint-exclusion timing in `src/backend/optimizer/path/allpaths.c` (`set_append_rel_size`); executor plan locking in `src/backend/utils/cache/plancache.c` (`AcquireExecutorLocks`); lazy write-path `RowExclusiveLock` in `src/backend/executor/execPartition.c` (`ExecInitPartitionInfo`).
+- Follow-up (random I/O): page-cost defaults in `src/include/optimizer/cost.h`; `seq_page_cost`/`random_page_cost` variables and the `cost_seqscan`, `cost_index`, and `initial_cost_hashjoin` cost functions in `src/backend/optimizer/path/costsize.c`; `random_page_cost` documentation in `doc/src/sgml/config.sgml`; hash-join batch `BufFile` spill in `src/backend/executor/nodeHash.c`; in-memory hash-aggregation `build_hash_table` in `src/backend/executor/nodeAgg.c`.
 
 ## Evidence Map
 
@@ -257,6 +314,18 @@ Per-strategy pruning: [partprune.c#L3250-L3277](../../../raw/postgres-12/src/bac
 | Execution-time pruning only Append/MergeAppend | [ddl.sgml:4603-4611](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4603-L4611) |
 | Run-time pruning tests | [partition_prune.sql:330-561](../../../raw/postgres-12/src/test/regress/sql/partition_prune.sql#L330-L561) |
 | Partitionwise join/aggregate tests | [partition_join.sql:1-10](../../../raw/postgres-12/src/test/regress/sql/partition_join.sql#L1-L10), [partition_aggregate.sql:1-10](../../../raw/postgres-12/src/test/regress/sql/partition_aggregate.sql#L1-L10) |
+| Expansion/locking runs before costing | [planmain.c:258-271](../../../raw/postgres-12/src/backend/optimizer/plan/planmain.c#L258-L271) |
+| Plan-time pruning locks only live partitions | [inherit.c:324-335](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L324-L335), [inherit.c:351-361](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L351-L361) |
+| Inheritance locks all members up front | [inherit.c:156-157](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L156-L157), [inherit.c:106-115](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L106-L115) |
+| Constraint exclusion runs after children are locked | [allpaths.c:1013-1039](../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L1013-L1039) |
+| Executor locks all plan rtable rels (run-time pruning keeps locks) | [plancache.c:1585-1602](../../../raw/postgres-12/src/backend/utils/cache/plancache.c#L1585-L1602) |
+| Write-path lazy `RowExclusiveLock` per leaf partition | [execPartition.c:517-519](../../../raw/postgres-12/src/backend/executor/execPartition.c#L517-L519) |
+| `random_page_cost` 4.0 vs `seq_page_cost` 1.0 defaults | [cost.h:23-26](../../../raw/postgres-12/src/include/optimizer/cost.h#L23-L26), [costsize.c:110-111](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L110-L111) |
+| Docs: 4.0 assumes ~90% cache; raise for slow random I/O | [config.sgml:4737-4749](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4737-L4749) |
+| Index-scan heap fetches charged at `random_page_cost` | [costsize.c:570-596](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L570-L596), [costsize.c:613-670](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L613-L670) |
+| Sequential scan charged at `seq_page_cost` per page | [costsize.c:236-242](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L236-L242) |
+| Hash-join batch spill to `BufFile`s, charged as sequential | [nodeHash.c:566-578](../../../raw/postgres-12/src/backend/executor/nodeHash.c#L566-L578), [costsize.c:3322-3338](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3322-L3338) |
+| v12 hash aggregation is in-memory (no disk spill) | [nodeAgg.c:1242-1283](../../../raw/postgres-12/src/backend/executor/nodeAgg.c#L1242-L1283) |
 
 ## Open Questions
 
@@ -264,6 +333,9 @@ Per-strategy pruning: [partprune.c#L3250-L3277](../../../raw/postgres-12/src/bac
 - Index access-method interactions (for example, per-partition B-tree/BRIN index scan costing) are out of scope; this page covers partition-level optimizations, not intra-partition index selection.
 - The exact minor-release history of each optimization (what changed between 12.0 and the pinned 12.2, and versus v13+) is not traced here; the claims are stated only from the pinned 12.2 source and docs.
 - FDW/postgres_fdw partition pushdown for partitionwise join across foreign partitions is not examined.
+- The random-I/O analysis reasons from the v12 planner cost model (relative page costs) and the fact that each partition is a separate physical relation; it does not measure real wall-clock latency, which depends on cache-hit rates, storage type, and I/O concurrency not fully captured by `random_page_cost`.
+- Prefetch/`effective_io_concurrency` (which can hide random-read latency on bitmap heap scans) is not analyzed here; it interacts with, but is separate from, how many partitions a query must scan.
+- The claim that v12 hash aggregation cannot spill to disk is stated only from the pinned 12.2 source (`nodeAgg.c`); the later-version disk-based hash aggregation is out of scope and not cited here, per the single-version evidence rule.
 
 ## Source References
 
@@ -305,6 +377,22 @@ Per-strategy pruning: [partprune.c#L3250-L3277](../../../raw/postgres-12/src/bac
 - [config.sgml#partitioning-GUCs](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4558-L4614)
 - [config.sgml#constraint-exclusion](../../../raw/postgres-12/doc/src/sgml/config.sgml#L5158-L5217)
 - [partition_prune.sql](../../../raw/postgres-12/src/test/regress/sql/partition_prune.sql#L1-L12)
+- [planmain.c#query_planner-expand-then-cost](../../../raw/postgres-12/src/backend/optimizer/plan/planmain.c#L258-L271)
+- [initsplan.c#add_other_rels_to_query](../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L144-L164)
+- [inherit.c#expand_inherited_rtentry-locking](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L106-L157)
+- [inherit.c#expand_partitioned_rtentry-prune-then-lock](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L324-L388)
+- [pg_inherits.c#find_all_inheritors](../../../raw/postgres-12/src/backend/catalog/pg_inherits.c#L152-L165)
+- [allpaths.c#set_append_rel_size-constraint-exclusion](../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L1013-L1039)
+- [plancache.c#AcquireExecutorLocks](../../../raw/postgres-12/src/backend/utils/cache/plancache.c#L1585-L1602)
+- [execPartition.c#ExecInitPartitionInfo](../../../raw/postgres-12/src/backend/executor/execPartition.c#L501-L533)
+- [cost.h#page-cost-defaults](../../../raw/postgres-12/src/include/optimizer/cost.h#L23-L26)
+- [costsize.c#page-cost-vars](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L110-L111)
+- [costsize.c#cost_seqscan](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L236-L242)
+- [costsize.c#cost_index-random-fetch](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L566-L670)
+- [costsize.c#initial_cost_hashjoin-batch-io](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3322-L3338)
+- [config.sgml#random_page_cost](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4713-L4770)
+- [nodeHash.c#batch-files](../../../raw/postgres-12/src/backend/executor/nodeHash.c#L566-L578)
+- [nodeAgg.c#build_hash_table](../../../raw/postgres-12/src/backend/executor/nodeAgg.c#L1242-L1283)
 
 ## Navigation
 
