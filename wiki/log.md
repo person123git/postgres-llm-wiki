@@ -2,6 +2,55 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-09] question v17 | table partitioning optimizations + since-v12
+
+- Filed [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 17
+  (unverified)](v17/questions/partitioning-planning-execution-optimizations.md)
+  against pinned `raw/postgres-17/` commit
+  `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).
+- Applied prompt hygiene: the asker approved a grammar-corrected restatement of
+  the original prompt ("during query planning or execution what are the current
+  optimizations and configuration per type of table parititioning currently
+  implemented? add a section with optimization since version 12"); the corrected
+  wording is restated under `## Question` with a prompt note.
+- Drafted from a claim-to-source map built directly from `raw/postgres-17/`:
+  the inheritance-vs-declarative split; plan-time constraint exclusion
+  (`relation_excluded_by_constraints`, `get_relation_constraints`); declarative
+  plan-time pruning (`expand_partitioned_rtentry` calls
+  `prune_append_rel_partitions` then locks only `live_parts` via
+  `try_table_open`) and run-time pruning attached to `Append`/`MergeAppend`
+  (`make_partition_pruneinfo`; executor `ExecInitAppend` ->
+  `ExecInitPartitionPruning` -> unified `ExecFindMatchingSubPlans`); per-strategy
+  bound matching (`perform_pruning_base_step` switch +
+  `get_matching_hash/list/range_bounds`, `compute_partition_hash_value`);
+  partitionwise join with merged non-identical bounds
+  (`build_joinrel_partition_info`/`have_partkey_equi_join` +
+  `try_partitionwise_join`/`compute_partition_bounds` ->
+  `partition_bounds_merge`); partitionwise aggregate FULL/PARTIAL
+  (`create_grouping_paths`/`create_ordinary_grouping_paths`/`group_by_has_partkey`);
+  executor tuple routing (`ExecFindPartition`/`get_partition_for_tuple` with the
+  last-found cache, lazy per-partition `RowExclusiveLock` in
+  `ExecInitPartitionInfo`), cross-partition UPDATE row movement
+  (`ExecCrossPartitionUpdate`), and per-partition COPY multi-insert
+  (`CIM_MULTI_CONDITIONAL`); the four session-scoped (`PGC_USERSET`) GUCs with
+  defaults; and a per-strategy summary table.
+- Added the requested "optimizations since PostgreSQL 12" section, attributing
+  each change to a major version via the checkout's own `Stamp HEAD as NNdevel`
+  brackets and citing the current v17 source that implements it: v13 advanced
+  partitionwise join (`c8434d64ce0`, `981643dcdb7`); v14 run-time pruning for
+  `UPDATE`/`DELETE` via the ModifyTable rework (`86dc90056df`, with the outdated
+  doc caveat removed by `1692d0c3a3f`, and `partition_prune.out` L2906-2932 as
+  current evidence) plus `DETACH PARTITION CONCURRENTLY` (`71f4c8c6f74`); v15
+  `live_parts` bitmap (`475dbd0b718`), run-time-prune refactor (`297daa9d435`),
+  and `MERGE` (`7103ebb7aae`); v16 cached tuple routing (`3592e0ff98b`) and the
+  `PartitionPruneInfo`-into-`PlannedStmt` move (`ec386948948`); v17
+  `boolcol IS [NOT] UNKNOWN` pruning (`07c36c1333e`) and concurrent-detach
+  robustness (`11f1218ce81`, `27162a64b38`).
+- Updated `wiki/index.md`, `wiki/versions.md` (v17 coverage cell + a Coverage
+  Note), and `wiki/v17/index.md`. `verified_by_agent: not yet` pending a full
+  claim re-check pass.
+
 ## [2026-07-09] review-fix v12 | partitioning planning/execution optimizations
 
 - Reviewed [Table Partitioning Optimizations and Configuration During Query

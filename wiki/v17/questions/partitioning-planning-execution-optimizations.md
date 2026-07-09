@@ -1,0 +1,311 @@
+---
+type: question
+version: 17
+pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
+verified: false
+verified_by_agent: not yet
+---
+
+# Table Partitioning Optimizations and Configuration During Query Planning and Execution in PostgreSQL 17 (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Configuration at a glance](#configuration-at-a-glance)
+- [Inheritance-based (legacy) partitioning](#inheritance-based-legacy-partitioning)
+  - [Constraint exclusion](#constraint-exclusion)
+  - [Tuple routing is manual (triggers/rules)](#tuple-routing-is-manual-triggersrules)
+  - [What inheritance partitioning does not get](#what-inheritance-partitioning-does-not-get)
+- [Declarative partitioning](#declarative-partitioning)
+  - [Partition pruning during planning and execution](#partition-pruning-during-planning-and-execution)
+  - [How partition pruning differs by strategy](#how-partition-pruning-differs-by-strategy)
+  - [Constraint exclusion on declarative tables](#constraint-exclusion-on-declarative-tables)
+  - [Partitionwise join](#partitionwise-join)
+  - [Partitionwise aggregate and grouping](#partitionwise-aggregate-and-grouping)
+  - [Executor tuple routing, row movement, and COPY batching](#executor-tuple-routing-row-movement-and-copy-batching)
+  - [What declarative partitioning does not optimize](#what-declarative-partitioning-does-not-optimize)
+  - [Per-strategy summary](#per-strategy-summary)
+- [Optimizations since PostgreSQL 12](#optimizations-since-postgresql-12)
+  - [v13: advanced partitionwise join](#v13-advanced-partitionwise-join)
+  - [v14: run-time pruning for UPDATE/DELETE, and DETACH PARTITION CONCURRENTLY](#v14-run-time-pruning-for-updatedelete-and-detach-partition-concurrently)
+  - [v15: non-pruned-partition bitmap, run-time-prune refactor, and MERGE](#v15-non-pruned-partition-bitmap-run-time-prune-refactor-and-merge)
+  - [v16: cached tuple-routing lookups](#v16-cached-tuple-routing-lookups)
+  - [v17: boolean IS [NOT] UNKNOWN pruning and concurrent-detach robustness](#v17-boolean-is-not-unknown-pruning-and-concurrent-detach-robustness)
+  - [Since-v12 summary table](#since-v12-summary-table)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
+## Question
+
+During query planning or execution, what are the current optimizations and configurations per type of table partitioning currently implemented? Add a section with optimizations since version 12.
+
+> Prompt note: filed as an approved grammar-corrected restatement of the original
+> question ("during query planning or execution what are the current
+> optimizations and configuration per type of table parititioning currently
+> implemented? add a section with optimization since version 12"), per the
+> repository's prompt-hygiene rule.
+
+## Answer
+
+PostgreSQL 17 has **two kinds of table partitioning**, and the optimizations available differ sharply between them:
+
+- **Inheritance-based (legacy) partitioning** — plain table inheritance (`INHERITS`) plus `CHECK` constraints, wired up by hand. Its one planner optimization is **constraint exclusion**; routing rows to the right child table is your job (a trigger or rule).
+- **Declarative partitioning** (`PARTITION BY` with the RANGE / LIST / HASH strategies) — the engine knows the partition bounds, so it adds **partition pruning** (plan-time and run-time), **partitionwise join**, **partitionwise aggregate**, and automatic **tuple routing** with per-partition COPY batching and cross-partition UPDATE row movement.
+
+The documentation states this split directly: partition pruning "is a query optimization technique that improves performance for declaratively partitioned tables" ([ddl.sgml#Partition-Pruning](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4895-L4912)), while constraint exclusion "is primarily used for partitioning implemented using the legacy inheritance method" and uses `CHECK` constraints rather than "the table's partition bounds, which exist only in the case of declarative partitioning" ([ddl.sgml#Constraint-Exclusion](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5029-L5044)). The three declarative strategies are RANGE, LIST, and HASH ([ddl.sgml#Partitioning-Overview](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L3918-L3963)).
+
+The two sections below answer per partitioning type. Internally, only a declaratively partitioned table carries a `PartitionScheme` ([pathnodes.h#PartitionSchemeData](../../../raw/postgres-17/src/include/nodes/pathnodes.h#L582-L598)) plus per-relation bounds, key expressions, and child arrays on its `RelOptInfo` — `part_scheme`, `boundinfo`, `partbounds_merged`, `part_rels`, `live_parts`, and `partexprs` ([pathnodes.h#RelOptInfo-partition-fields](../../../raw/postgres-17/src/include/nodes/pathnodes.h#L1008-L1046)); those fields are what every declarative-only optimization reads, and their absence is why inheritance tables get none of them. (See [Optimizations since PostgreSQL 12](#optimizations-since-postgresql-12) for what changed across v13–v17.)
+
+### Configuration at a glance
+
+Four GUCs govern these optimizations. All four are defined with context `PGC_USERSET`, so each has **session/transaction apply scope**: change it with `SET` for the current session or `SET LOCAL` for the current transaction, with no restart or reload for that session ([guc_tables.c#partitioning-GUCs](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L922-L973), [guc_tables.c#constraint_exclusion](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4784-L4794)). A server-wide default set in `postgresql.conf` is picked up by the normal configuration reload (SIGHUP / `pg_ctl reload` / `pg_reload_conf()`); none of these four requires a restart. Tuple routing and COPY batching have no GUC — the executor always performs them for a declaratively partitioned target.
+
+| GUC | Partitioning type | Default | Phase | Definition |
+|---|---|---|---|---|
+| `constraint_exclusion` | legacy inheritance (also declarative `CHECK`s) | `partition` | planning | [guc_tables.c:4784-4794](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4784-L4794) |
+| `enable_partition_pruning` | declarative | `on` | planning + execution | [guc_tables.c:962-973](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L962-L973) |
+| `enable_partitionwise_join` | declarative | `off` | planning | [guc_tables.c:922-931](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L922-L931) |
+| `enable_partitionwise_aggregate` | declarative | `off` | planning | [guc_tables.c:932-941](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L932-L941) |
+
+The boolean variables and their compiled-in defaults live in `costsize.c`: `enable_partitionwise_join = false` and `enable_partitionwise_aggregate = false` ([costsize.c:148-149](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L148-L149)), `enable_partition_pruning = true` ([costsize.c:152](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L152)). The same defaults appear in `postgresql.conf.sample` ([postgresql.conf.sample#L413-L457](../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample#L413-L457)).
+
+## Inheritance-based (legacy) partitioning
+
+Legacy partitioning is built from ordinary table inheritance: a "parent" table with no data, "child" tables created with `INHERITS (parent)`, non-overlapping `CHECK` constraints on the children, and a trigger/rule to route inserts. The engine has no partition metadata for such a tree, so its only automatic query optimization is constraint exclusion. The documentation caps the practical size of a legacy tree: it "will work well with up to perhaps a hundred child tables; don't try to use many thousands of children" ([ddl.sgml#L5101-L5109](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5101-L5109)).
+
+### Constraint exclusion
+
+Constraint exclusion is the plan-time technique that proves a child table cannot match a query by comparing the query's restrictions against that table's constraints, and drops it from the plan. The GUC is an enum with three modes ([guc_tables.c#constraint_exclusion_options](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L326-L330)):
+
+- `off` — never use it.
+- `on` — apply to all relations.
+- `partition` (the default) — apply only to appendrel children / inheritance members and `UNION ALL` subqueries.
+
+The core logic is in `relation_excluded_by_constraints`. Regardless of the setting, it first detects constant-`FALSE`-or-`NULL` restriction clauses and excludes the relation ([plancat.c#L1602-L1621](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1602-L1621)). In the default `partition` mode it then processes only `RELOPT_OTHER_MEMBER_REL` (appendrel-member) rels — the inheritance-child case — and returns false for plain base relations ([plancat.c#L1632-L1642](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1632-L1642)). It fetches the child's `CHECK` and `NOT NULL` constraints via `get_relation_constraints` ([plancat.c#get_relation_constraints](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1272-L1290)) and asks `predicate_refuted_by` whether they contradict the query quals ([plancat.c#L1675-L1680](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1675-L1680)).
+
+Configuration and caveats (from the docs):
+
+- The default and recommended setting is `partition` ([config.sgml#guc-constraint-exclusion](../../../raw/postgres-17/doc/src/sgml/config.sgml#L6228-L6251)).
+- It is **plan-time only** — "there is no attempt to remove partitions at execution time" ([ddl.sgml#L5036-L5044](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5036-L5044)) — and it examines every child, so it does not scale past ~100 children ([ddl.sgml#L5101-L5109](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5101-L5109)). This child-count ceiling is the main scalability limit of legacy partitioning.
+
+`constraint_exclusion` is `PGC_USERSET` (session/transaction scope; `SET`/`SET LOCAL`, no restart or reload) ([guc_tables.c#L4784-L4794](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4784-L4794)).
+
+### Tuple routing is manual (triggers/rules)
+
+There is no automatic tuple routing for inheritance. To send a row inserted into the parent to the correct child, you attach a trigger (or rule). The documentation warns that such triggers "may be complicated to write, and will be much slower than the tuple routing performed internally by declarative partitioning" ([ddl.sgml#L4874-L4882](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4874-L4882)).
+
+### What inheritance partitioning does not get
+
+Because an inheritance tree has no `PartitionScheme` or partition bounds, none of the declarative-only optimizations apply to it:
+
+- **No partition pruning** (plan-time or run-time): pruning is driven by partition bounds that "exist only in the case of declarative partitioning" ([ddl.sgml#L5036-L5044](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5036-L5044)).
+- **No partitionwise join or aggregate**: both first require partitioned inputs carrying a `part_scheme`, which inheritance parents lack, so `build_joinrel_partition_info` bails immediately ([relnode.c#L2042-L2051](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2042-L2051)) and partitionwise aggregation requires `IS_PARTITIONED_REL(input_rel)` ([planner.c#L4089-L4090](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4089-L4090)).
+- **No internal tuple routing / row movement / COPY batching per partition**: those executor paths operate on the partition descriptor of a declarative table (see the declarative section).
+
+Constraint exclusion is therefore the whole story for planning against legacy partitions, and it is applied only at plan time.
+
+## Declarative partitioning
+
+Declarative partitioning (`PARTITION BY RANGE | LIST | HASH`) gives the engine the partition strategy and bounds, which unlocks the optimizations below.
+
+### Partition pruning during planning and execution
+
+Partition pruning compares query clauses against partition bounds to decide which partitions can be skipped. The module turns matching clauses into "pruning steps": a *base* step tests partition-key columns or expressions; a *combine* step joins earlier results with a Boolean AND/OR ([partprune.c#module-header](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L1-L35)). Steps are generated for one of three targets ([partprune.c#PartClauseTarget](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L91-L96)):
+
+- `PARTTARGET_PLANNER` — clauses usable at plan time (constants).
+- `PARTTARGET_INITIAL` — usable at executor startup.
+- `PARTTARGET_EXEC` — usable per scan (including `PARAM_EXEC` Params).
+
+**Plan-time pruning.** During expansion of a partitioned RTE, the planner prunes *before* it builds child relations: `expand_partitioned_rtentry` calls `prune_append_rel_partitions` and records the survivors in `live_parts`, then loops over `live_parts` only ([inherit.c#expand_partitioned_rtentry](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L352-L438)). Each surviving partition is opened — and thereby locked — with `try_table_open(childOID, lockmode)` inside that loop ([inherit.c#L389-L398](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L389-L398)). So pruned partitions are never locked, path-costed, or planned — a key scalability advantage over legacy partitioning. `prune_append_rel_partitions` short-circuits to "all partitions" when `enable_partition_pruning` is off or there are no clauses, then generates `PARTTARGET_PLANNER` steps and runs them in `get_matching_partitions` ([partprune.c#prune_append_rel_partitions](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L749-L804)).
+
+**Run-time pruning.** When a clause compares the partition key to a non-constant but non-volatile expression (a `PREPARE` parameter, a subquery value, or a nested-loop inner parameter), the planner attaches a `PartitionPruneInfo` to the `Append`/`MergeAppend` plan via `make_partition_pruneinfo`, gated again by `enable_partition_pruning` ([createplan.c#Append](../../../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1382-L1406) and [createplan.c#MergeAppend](../../../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1546-L1560)). The executor then prunes in two phases:
+
+1. **Initial pruning** at executor startup. `ExecInitAppend` calls `ExecInitPartitionPruning` when `part_prune_info` is set ([nodeAppend.c#ExecInitAppend](../../../raw/postgres-17/src/backend/executor/nodeAppend.c#L136-L163)); that function runs `ExecFindMatchingSubPlans(prunestate, true)` and returns the initially valid subplans, so unneeded subplans are never initialized ([execPartition.c#ExecInitPartitionPruning](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1806-L1852)).
+2. **Per-scan pruning** for execution parameters that change during the run (for example, the inner side of a parameterized nested loop). The Append/MergeAppend execution paths call `ExecFindMatchingSubPlans(prunestate, false)` whenever the valid-subplan set is invalidated ([nodeAppend.c#L583](../../../raw/postgres-17/src/backend/executor/nodeAppend.c#L583), [execPartition.c#ExecFindMatchingSubPlans](../../../raw/postgres-17/src/backend/executor/execPartition.c#L2308-L2371)).
+
+The documentation confirms both phases and how to observe them: initial pruning shows as "Subplans Removed" in `EXPLAIN`; per-scan pruning shows up only as `loops`/`(never executed)` in `EXPLAIN ANALYZE` ([ddl.sgml#execution-time-pruning](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4967-L4992)). `enable_partition_pruning` controls both the planner's partition elimination and the executor's run-time removal ([config.sgml#guc-enable-partition-pruning](../../../raw/postgres-17/doc/src/sgml/config.sgml#L5593-L5609)).
+
+### How partition pruning differs by strategy
+
+Both plan-time and run-time pruning funnel through `perform_pruning_base_step`, which switches on the partition strategy to a per-strategy bound-matching routine ([partprune.c#strategy-switch](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L3522-L3549)). The three routines behave differently:
+
+- **HASH** — Pruning is possible only with equality clauses or `IS NULL`, and only when the query constrains **every** partition-key position (`nvalues + nullkeys == partnatts`); otherwise all partitions are kept. It computes the row hash and picks the one partition at `rowHash % greatest_modulus`. Hash partitioning has neither a null-accepting partition nor a `DEFAULT` partition ([partprune.c#get_matching_hash_bounds](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2663-L2717)).
+- **LIST** — Single key position. Supports B-tree comparison strategies (equality and inequalities) and a special `<>` (not-equal) path that keeps every bound except the matched one ([partprune.c#L2799-L2824](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2799-L2824)). A NULL key routes to the null-accepting partition if one exists, else the `DEFAULT` partition ([partprune.c#get_matching_list_bounds](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2739-L2770)).
+- **RANGE** — Supports multi-column key prefixes and B-tree comparisons/ranges. There is no null-accepting range partition, so an `IS NULL` clause (or no usable datums) can only match the `DEFAULT` partition; a partial-prefix query also has to keep the `DEFAULT` partition ([partprune.c#get_matching_range_bounds](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2951-L3011)).
+
+The hash value used for HASH pruning and routing ignores NULL key values and combines each key's type-specific hash with a fixed seed ([partbounds.c#compute_partition_hash_value](../../../raw/postgres-17/src/backend/partitioning/partbounds.c#L4722-L4752)).
+
+### Constraint exclusion on declarative tables
+
+Constraint exclusion (see the inheritance section for the mechanism) can *also* apply to declarative tables, because you may add ordinary `CHECK` constraints to them on top of their internal partition bounds. Two nuances in `relation_excluded_by_constraints` matter here:
+
+- In the default `partition` mode, a declarative partition's own internal partition constraint is deliberately **not** re-checked, because "Partition pruning has already been applied" ([plancat.c#L1632-L1642](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1632-L1642)).
+- In `on` mode, a directly named partition base relation additionally has its internal partition constraint pulled into the constraint set (`include_partition`) ([plancat.c#L1644-L1655](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1644-L1655)).
+
+So on a declarative table, partition pruning is the primary tool; constraint exclusion is a plan-time supplement that only helps if you defined extra `CHECK` constraints or run in `on` mode. The docs point declarative users at `enable_partition_pruning` rather than `constraint_exclusion` ([config.sgml#L6228-L6251](../../../raw/postgres-17/doc/src/sgml/config.sgml#L6228-L6251)).
+
+### Partitionwise join
+
+When enabled, partitionwise join turns a join between two partitioned tables into a set of smaller joins between matching partitions. It is **off by default** because it increases planning CPU and memory and can raise the number of `work_mem`-limited nodes linearly with the partition count ([guc_tables.c#L922-L931](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L922-L931), [config.sgml#guc-enable-partitionwise-join](../../../raw/postgres-17/doc/src/sgml/config.sgml#L5611-L5633)).
+
+The applicability test lives in `build_joinrel_partition_info`, which returns immediately if the GUC is off and otherwise requires that both inputs are partitioned with `consider_partitionwise_join`, share the **same** `PartitionScheme`, and have an equi-join on the partition keys (`have_partkey_equi_join`) ([relnode.c#build_joinrel_partition_info](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2017-L2080)). The equi-join check requires a usable equality clause for **every** partition key, matching operator families, and matching collation ([relnode.c#have_partkey_equi_join](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2090-L2222)). Unlike PostgreSQL 12, the partition bounds no longer have to be identical at this point; `try_partitionwise_join` computes the join's partition bounds in `compute_partition_bounds`, using the inputs' bounds directly when they match exactly and otherwise **merging** them with `partition_bounds_merge` ([joinrels.c#try_partitionwise_join](../../../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L1479-L1560), [joinrels.c#compute_partition_bounds](../../../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L1790-L1849)). See [v13: advanced partitionwise join](#v13-advanced-partitionwise-join). The documented requirement matches: partitionwise join "applies only when the join conditions include all the partition keys, which must be of the same data type and have one-to-one matching sets of child partitions" ([config.sgml#L5611-L5633](../../../raw/postgres-17/doc/src/sgml/config.sgml#L5611-L5633)).
+
+### Partitionwise aggregate and grouping
+
+Partitionwise aggregation performs grouping/aggregation per partition, then appends the results. It is **off by default** for the same planning-cost reason ([guc_tables.c#L932-L941](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L932-L941), [config.sgml#guc-enable-partitionwise-aggregate](../../../raw/postgres-17/doc/src/sgml/config.sgml#L5635-L5658)).
+
+`create_grouping_paths` marks the query as a candidate for **full** partitionwise aggregation only when `enable_partitionwise_aggregate` is set and there are no grouping sets ([planner.c#L3904-L3917](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L3904-L3917)). `create_ordinary_grouping_paths` then picks the concrete strategy on a partitioned input ([planner.c#L4081-L4147](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4081-L4147)):
+
+- **FULL** partitionwise aggregation if the `GROUP BY` clause contains all partition-key columns or expressions with matching collation, verified by `group_by_has_partkey` ([planner.c#group_by_has_partkey](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L8113-L8186)). Each partition is aggregated independently and the results appended.
+- **PARTIAL** partitionwise aggregation otherwise (when partial aggregation is possible at all): each partition is partially aggregated, then a finalize step combines them. This matches the documented behavior that "if the `GROUP BY` clause does not include the partition keys, only partial aggregation can be performed on a per-partition basis, and finalization must be performed later" ([config.sgml#L5635-L5658](../../../raw/postgres-17/doc/src/sgml/config.sgml#L5635-L5658)).
+
+The per-partition paths are built by `create_partitionwise_grouping_paths` ([planner.c#L7975-L8105](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L7975-L8105)).
+
+### Executor tuple routing, row movement, and COPY batching
+
+Writing into a declaratively partitioned table needs no GUC; the executor always routes each row to the correct leaf partition. `ExecSetupPartitionTupleRouting` builds the routing state lazily ([execPartition.c#ExecSetupPartitionTupleRouting](../../../raw/postgres-17/src/backend/executor/execPartition.c#L202-L215)), and `ExecFindPartition` descends the partition hierarchy from the root, checking the root partition constraint first, to find the leaf for a tuple ([execPartition.c#ExecFindPartition](../../../raw/postgres-17/src/backend/executor/execPartition.c#L262-L316)). The per-strategy leaf lookup is `get_partition_for_tuple` ([execPartition.c#get_partition_for_tuple](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1396-L1600)):
+
+- **HASH** — `boundinfo->indexes[rowHash % nindexes]`, after computing a hash value that ignores NULL key values; no `DEFAULT` and no caching ([execPartition.c#L1419-L1434](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1419-L1434)).
+- **LIST** — a null key routes to `null_index` (if the table accepts nulls); otherwise a binary search on the list bounds, with a last-found-partition cache tried first ([execPartition.c#L1436-L1484](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1436-L1484)).
+- **RANGE** — any null key position routes to the `DEFAULT` partition (ranges never accept null); otherwise a cached-then-binary-search on the range bounds ([execPartition.c#L1486-L1563](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1486-L1563)).
+
+Any tuple that matches no partition falls to `default_index`, and a still-unmatched row raises an error ([execPartition.c#L1575-L1583](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1575-L1583)). The LIST/RANGE last-found cache (`PARTITION_CACHED_FIND_THRESHOLD`) speeds up bulk loads where consecutive rows land in the same partition; see [v16: cached tuple-routing lookups](#v16-cached-tuple-routing-lookups).
+
+Two further executor behaviors are relevant:
+
+- **Cross-partition UPDATE (row movement).** If an `UPDATE` changes the partition key so the row no longer satisfies its partition's constraint, `ExecCrossPartitionUpdate` moves it by performing a `DELETE` on the old partition and re-routing an `INSERT` back through the root table into the new partition ([nodeModifyTable.c#row-movement](../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2049-L2114), [nodeModifyTable.c#ExecCrossPartitionUpdate](../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L1744-L1801)). The write path opens each touched leaf partition lazily with `RowExclusiveLock` the first time a row routes to it, via `ExecInitPartitionInfo` ([execPartition.c#L515-L517](../../../raw/postgres-17/src/backend/executor/execPartition.c#L515-L517)).
+- **Per-partition COPY batching.** `COPY FROM` into a partitioned table uses the `CIM_MULTI_CONDITIONAL` insert method so it can multi-insert into each leaf partition, deciding per partition whether to batch (disabled for a partition that is a non-batching foreign table or has BEFORE/INSTEAD-OF row triggers) ([copyfrom.c#L896-L918](../../../raw/postgres-17/src/backend/commands/copyfrom.c#L896-L918)).
+
+### What declarative partitioning does not optimize
+
+- **Partitionwise join/aggregate still need matching partition schemes and an all-partition-key equi-join / grouping.** Tables with different `PartitionScheme`s do not qualify ([relnode.c#L2042-L2051](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2042-L2051)); a join missing an equi-join on any partition key is rejected ([relnode.c#L2214-L2219](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2214-L2219)); full partitionwise aggregation needs all partition keys in `GROUP BY` ([planner.c#L4105-L4112](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4105-L4112)).
+- **Hash pruning needs all key positions** and only equality/`IS NULL`; a range or partial-key predicate cannot prune a hash-partitioned table ([partprune.c#L2680-L2708](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2680-L2708)).
+- **Both partitionwise settings default to off** and inflate planning CPU/memory when enabled, growing `work_mem`-limited nodes with the partition count ([config.sgml#L5611-L5658](../../../raw/postgres-17/doc/src/sgml/config.sgml#L5611-L5658)).
+
+### Per-strategy summary
+
+| Aspect | RANGE | LIST | HASH |
+|---|---|---|---|
+| Pruning clauses used | equality + range/inequality (prefix of keys) | equality + inequality + `<>` | equality / `IS NULL` only, **all** keys required |
+| NULL handling in pruning/routing | `DEFAULT` only (no null partition) | null partition, else `DEFAULT` | NULL keys ignored by the hash computation; no null/`DEFAULT` partition |
+| `DEFAULT` partition | yes | yes | no |
+| Plan-time + run-time pruning | yes | yes | yes |
+| Constraint exclusion applies | via extra `CHECK` (or `constraint_exclusion=on`) | same | same |
+| Partitionwise join/aggregate | if schemes match + all-key equi-join / grouping | same | same |
+| Tuple routing | cached range bsearch | cached list bsearch / null_index | `hash % nindexes` |
+
+Per-strategy pruning: [partprune.c#L3522-L3549](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L3522-L3549). Per-strategy routing: [execPartition.c#L1396-L1600](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1396-L1600).
+
+## Optimizations since PostgreSQL 12
+
+This section lists the partitioning planning/execution optimizations added after PostgreSQL 12. Each behavioral claim is cited to the current v17 source that implements it; the introducing major version is attributed from the v17 checkout's own commit history, bracketed by the "Stamp HEAD as NNdevel" boundary commits (`615cebc94b5` = 13devel, `d10b19e224c` = 14devel, `596b5af1d36` = 15devel, `d31d30973a1` = 16devel, `5bcc7e6dc8c` = 17devel).
+
+### v13: advanced partitionwise join
+
+PostgreSQL 12 could do partitionwise join only when both tables had **identical** partition bounds. v13 lifted that: `compute_partition_bounds` uses the inputs' bounds directly when they match exactly and otherwise **merges** them with `partition_bounds_merge`, setting `joinrel->partbounds_merged` ([joinrels.c#compute_partition_bounds](../../../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L1790-L1849), [partbounds.c#partition_bounds_merge](../../../raw/postgres-17/src/backend/partitioning/partbounds.c#L1118)). So range/list tables whose partitions only partly overlap can still join partition-by-partition. Introduced by commit `c8434d64ce0` ("Allow partitionwise joins in more cases", first released in v13); a companion fix `981643dcdb7` ("Allow partitionwise join to handle nested FULL JOIN USING cases") is also in the v13 cycle.
+
+### v14: run-time pruning for UPDATE/DELETE, and DETACH PARTITION CONCURRENTLY
+
+- **Execution-time pruning now applies to `UPDATE`/`DELETE`.** In v12, execution-time pruning worked only for `Append`/`MergeAppend` in `SELECT`, not for the `ModifyTable` node. Commit `86dc90056df` ("Rework planning and execution of UPDATE and DELETE", v14) changed `UPDATE`/`DELETE` to plan the target as a single `Append`-fed `ModifyTable`, so run-time pruning applies to them too. The v12 documentation caveat about `ModifyTable` was removed by `1692d0c3a3f` ("Doc: Remove outdated note about run-time partition pruning", v14); no such caveat remains in the v17 pruning docs ([ddl.sgml#L4967-L4992](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4967-L4992)). The regression suite demonstrates run-time pruning inside an `UPDATE` plan, with pruned partitions shown `(never executed)` ([partition_prune.out#L2906-L2932](../../../raw/postgres-17/src/test/regress/expected/partition_prune.out#L2906-L2932)).
+- **`ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY`.** Added by `71f4c8c6f74` (v14). A side effect visible in the planner: plan-time expansion opens each live partition with `try_table_open` rather than `table_open`, so a partition detached and dropped concurrently is treated as pruned instead of erroring ([inherit.c#L389-L398](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L389-L398)); the final open-failure hardening is a v17 change (see below).
+
+### v15: non-pruned-partition bitmap, run-time-prune refactor, and MERGE
+
+- **`live_parts` bitmap.** The planner now tracks the set of non-pruned partitions as a `Bitmapset` on the `RelOptInfo`, filled by `prune_append_rel_partitions` and consumed by expansion, so pruned partitions are skipped cheaply ([inherit.c#L352-L358](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L352-L358), [partprune.c#L749-L804](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L749-L804)). Introduced by `475dbd0b718` ("Track a Bitmapset of non-pruned partitions in RelOptInfo", v15).
+- **Run-time-prune code refactor.** Initial and per-scan pruning were unified behind `ExecInitPartitionPruning` and a single `ExecFindMatchingSubPlans(prunestate, initial_prune)` ([execPartition.c#L1806-L1852](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1806-L1852), [execPartition.c#L2308](../../../raw/postgres-17/src/backend/executor/execPartition.c#L2308)), replacing v12's two separate functions. From `297daa9d435` ("Refactor and cleanup runtime partition prune code a little", v15).
+- **`MERGE`.** The `MERGE` command arrived in v15 (`7103ebb7aae`) and works on partitioned tables through the same tuple-routing path, including cross-partition row movement (`ExecCrossPartitionUpdate` has an explicit `CMD_MERGE` branch) ([nodeModifyTable.c#L2102-L2114](../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2102-L2114)).
+
+### v16: cached tuple-routing lookups
+
+`ExecFindPartition`/`get_partition_for_tuple` gained a last-found-partition cache for LIST and RANGE routing: after `PARTITION_CACHED_FIND_THRESHOLD` consecutive hits on the same partition it checks that partition first, skipping the binary search ([execPartition.c#L1456-L1483](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1456-L1483), [execPartition.c#L1509-L1547](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1509-L1547), cache update at [execPartition.c#L1588-L1600](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1588-L1600)). This speeds up bulk `INSERT`/`COPY` where consecutive rows cluster into the same partition. From `3592e0ff98b` ("Have ExecFindPartition cache the last found partition", v16). v16 also moved `PartitionPruneInfo` out of individual plan nodes into `PlannedStmt` (`ec386948948`), centralizing run-time-pruning metadata.
+
+### v17: boolean IS [NOT] UNKNOWN pruning and concurrent-detach robustness
+
+- **Pruning on `boolcol IS [NOT] UNKNOWN`.** v17 extended partition pruning of boolean partition keys to handle the `IS UNKNOWN` / `IS NOT UNKNOWN` clause forms (mapped to a nullness match) in addition to `IS [NOT] TRUE/FALSE`, in the boolean-clause matcher ([partprune.c#match_boolean_partition_clause](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L3688-L3719)). From `07c36c1333e` ("Support partition pruning on boolcol IS [NOT] UNKNOWN", v17), alongside boolean-pruning correctness fixes (`4c2369ac5`).
+- **Concurrent-detach robustness for pruning/expansion.** v17 finished making plan-time expansion tolerate a partition dropped after a concurrent detach: `try_table_open` returning NULL is handled by treating the partition as pruned ([inherit.c#L389-L398](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L389-L398)), from `11f1218ce81` ("Avoid failure to open dropped detached partition", v17). Run-time pruning setup during `DETACH ... CONCURRENTLY` was also fixed (`27162a64b38`). v17 further broadened `MERGE` on partitioned tables with `WHEN NOT MATCHED BY SOURCE` (`0294df2f1f8`) and `RETURNING` (`c649fa24a42`).
+
+### Since-v12 summary table
+
+| Version | Optimization | Kind | Attribution |
+|---|---|---|---|
+| v13 | Partitionwise join with non-identical (merged) bounds | planner | `c8434d64ce0`, `981643dcdb7` |
+| v14 | Run-time pruning for `UPDATE`/`DELETE` (`ModifyTable`) | planner + executor | `86dc90056df`, doc `1692d0c3a3f` |
+| v14 | `DETACH PARTITION CONCURRENTLY` (planner opens live parts via `try_table_open`) | DDL / planner | `71f4c8c6f74` |
+| v15 | `live_parts` non-pruned-partition bitmap | planner | `475dbd0b718` |
+| v15 | Unified initial/per-scan run-time pruning | executor | `297daa9d435` |
+| v15 | `MERGE` on partitioned tables (routing + row movement) | executor | `7103ebb7aae` |
+| v16 | Cached last-found partition in tuple routing | executor | `3592e0ff98b` |
+| v16 | `PartitionPruneInfo` moved into `PlannedStmt` | planner/executor plumbing | `ec386948948` |
+| v17 | Pruning on `boolcol IS [NOT] UNKNOWN` | planner | `07c36c1333e` |
+| v17 | Concurrent-detach open-failure robustness in expansion | planner | `11f1218ce81`, `27162a64b38` |
+
+## Context Reviewed
+
+- Pinned checkout `raw/postgres-17/` at commit `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10), verified via `git rev-parse HEAD`.
+- GUCs: `src/backend/utils/misc/guc_tables.c` (the three `enable_*` blocks and `constraint_exclusion` + its enum options; all `PGC_USERSET`), `src/backend/optimizer/path/costsize.c` (compiled defaults), `src/backend/utils/misc/postgresql.conf.sample`, and `doc/src/sgml/config.sgml` GUC blocks.
+- Inheritance/constraint exclusion: `src/backend/optimizer/util/plancat.c` (`relation_excluded_by_constraints`, `get_relation_constraints`), and the `doc/src/sgml/ddl.sgml` "Partition Pruning", "Partitioning and Constraint Exclusion", inheritance-caveats, and partitioning-overview sections.
+- Partition pruning core: `src/backend/partitioning/partprune.c` — module header, `PartClauseTarget`, `prune_append_rel_partitions`, `get_matching_partitions`, `perform_pruning_base_step` (strategy switch), and the per-strategy `get_matching_hash_bounds` / `get_matching_list_bounds` / `get_matching_range_bounds`; `src/backend/partitioning/partbounds.c` for `compute_partition_hash_value` and `partition_bounds_merge`.
+- Plan-time integration: `src/backend/optimizer/util/inherit.c` `expand_partitioned_rtentry` (prune-before-expand, `live_parts`, `try_table_open`); run-time prune-info attach in `src/backend/optimizer/plan/createplan.c` (`Append`/`MergeAppend`).
+- Run-time pruning executor path: `src/backend/executor/execPartition.c` (`ExecInitPartitionPruning`, `CreatePartitionPruneState`, `ExecFindMatchingSubPlans`) and `src/backend/executor/nodeAppend.c` (`ExecInitAppend` and the per-scan `ExecFindMatchingSubPlans(..., false)` call sites).
+- Partitionwise join: `src/backend/optimizer/util/relnode.c` (`build_joinrel_partition_info`, `have_partkey_equi_join`), `src/backend/optimizer/path/joinrels.c` (`try_partitionwise_join`, `compute_partition_bounds`).
+- Partitionwise aggregate: `src/backend/optimizer/plan/planner.c` (`create_grouping_paths`, `create_ordinary_grouping_paths`, `group_by_has_partkey`, `create_partitionwise_grouping_paths`).
+- Executor routing/DML: `src/backend/executor/execPartition.c` (`ExecSetupPartitionTupleRouting`, `ExecFindPartition`, `get_partition_for_tuple`, `ExecInitPartitionInfo`), `src/backend/executor/nodeModifyTable.c` (`ExecCrossPartitionUpdate`, row movement), `src/backend/commands/copyfrom.c` (`CIM_MULTI_CONDITIONAL`).
+- Since-v12 history: `git log`/`git merge-base --is-ancestor` against the `Stamp HEAD as NNdevel` boundary commits for `c8434d64ce0`, `981643dcdb7`, `86dc90056df`, `1692d0c3a3f`, `71f4c8c6f74`, `475dbd0b718`, `297daa9d435`, `7103ebb7aae`, `3592e0ff98b`, `ec386948948`, `07c36c1333e`, `11f1218ce81`, `27162a64b38`; regression evidence in `src/test/regress/expected/partition_prune.out`.
+
+## Evidence Map
+
+| Claim | Evidence |
+|---|---|
+| Two partitioning kinds; pruning is declarative-only, constraint exclusion is legacy-inheritance-primary | [ddl.sgml#L4895-L4912](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4895-L4912), [ddl.sgml#L5029-L5044](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5029-L5044) |
+| Four GUCs, all `PGC_USERSET` (session/transaction scope); defaults | [guc_tables.c#L922-L973](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L922-L973), [guc_tables.c#L4784-L4794](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4784-L4794), [costsize.c#L148-L152](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L148-L152) |
+| Constraint exclusion modes, const-FALSE, partition/on handling; plan-time only | [plancat.c#L1602-L1655](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1602-L1655), [ddl.sgml#L5036-L5044](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L5036-L5044) |
+| Plan-time pruning prunes before locking; only live parts locked via `try_table_open` | [inherit.c#L352-L438](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L352-L438), [partprune.c#L749-L804](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L749-L804) |
+| Run-time pruning attached to Append/MergeAppend; two executor phases | [createplan.c#L1382-L1406](../../../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1382-L1406), [nodeAppend.c#L136-L163](../../../raw/postgres-17/src/backend/executor/nodeAppend.c#L136-L163), [execPartition.c#L1806-L1852](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1806-L1852) |
+| Per-strategy pruning (HASH all-keys/equality; LIST incl. `<>`; RANGE prefix + DEFAULT) | [partprune.c#L3522-L3549](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L3522-L3549), [partprune.c#L2663-L2717](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2663-L2717), [partprune.c#L2739-L2835](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2739-L2835), [partprune.c#L2951-L3011](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L2951-L3011) |
+| Partitionwise join gate; all-key equi-join; merged bounds | [relnode.c#L2017-L2080](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2017-L2080), [relnode.c#L2090-L2222](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2090-L2222), [joinrels.c#L1790-L1849](../../../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L1790-L1849) |
+| Partitionwise aggregate FULL/PARTIAL/NONE; needs partitioned input + all keys in GROUP BY | [planner.c#L3904-L3917](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L3904-L3917), [planner.c#L4081-L4147](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4081-L4147), [planner.c#L8113-L8186](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L8113-L8186) |
+| Tuple routing, per-strategy leaf lookup, DEFAULT fallback, lazy `RowExclusiveLock` | [execPartition.c#L262-L316](../../../raw/postgres-17/src/backend/executor/execPartition.c#L262-L316), [execPartition.c#L1396-L1600](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1396-L1600), [execPartition.c#L515-L517](../../../raw/postgres-17/src/backend/executor/execPartition.c#L515-L517) |
+| Cross-partition UPDATE = DELETE + re-route INSERT; COPY `CIM_MULTI_CONDITIONAL` | [nodeModifyTable.c#L2049-L2114](../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2049-L2114), [copyfrom.c#L896-L918](../../../raw/postgres-17/src/backend/commands/copyfrom.c#L896-L918) |
+| v13 advanced PWJ (`partition_bounds_merge`) | [joinrels.c#L1790-L1849](../../../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L1790-L1849), [partbounds.c#L1118](../../../raw/postgres-17/src/backend/partitioning/partbounds.c#L1118); commit `c8434d64ce0` |
+| v14 run-time pruning for UPDATE/DELETE; doc caveat removed | [ddl.sgml#L4967-L4992](../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4967-L4992), [partition_prune.out#L2906-L2932](../../../raw/postgres-17/src/test/regress/expected/partition_prune.out#L2906-L2932); commits `86dc90056df`, `1692d0c3a3f` |
+| v15 `live_parts`; v16 routing cache; v17 boolcol IS [NOT] UNKNOWN | [inherit.c#L352-L358](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c#L352-L358), [execPartition.c#L1456-L1547](../../../raw/postgres-17/src/backend/executor/execPartition.c#L1456-L1547), [partprune.c#L3688-L3719](../../../raw/postgres-17/src/backend/partitioning/partprune.c#L3688-L3719); commits `475dbd0b718`, `3592e0ff98b`, `07c36c1333e` |
+
+## Open Questions
+
+- Since-v12 attribution uses the "Stamp HEAD as NNdevel" boundary commits to identify the introducing **major** version. The exact **minor** release (e.g. which 17.x first shipped `11f1218ce81` / `27162a64b38`) was not traced, and this checkout carries no release tags for a `git tag --contains` cross-check.
+- The LIST/RANGE `<>` (not-equal) pruning path exists in v17 (`InvalidStrategy` handling), but its first-introduction version relative to v12 was not pinned down; a v14 step-generation fix (`13838740f61`) touched the `op_is_ne` path, which is a fix, not necessarily the origin.
+- The since-v12 survey targeted the core partitioning/pruning/partitionwise files (`partprune.c`, `partbounds.c`, `inherit.c`, `relnode.c`, `joinrels.c`, `planner.c`, `execPartition.c`, `nodeAppend.c`, `createplan.c`); minor per-cycle optimizations outside those files may not be captured.
+- `verified_by_agent: not yet`: this is a fresh draft built from a claim-to-source map, not a second claim-by-claim re-verification pass.
+
+## Source References
+
+- [guc_tables.c](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c) — the four partitioning GUCs and `constraint_exclusion` enum (`PGC_USERSET`).
+- [costsize.c](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c) — compiled-in GUC defaults.
+- [postgresql.conf.sample](../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample) — sample defaults.
+- [plancat.c](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c) — `relation_excluded_by_constraints`, `get_relation_constraints`.
+- [partprune.c](../../../raw/postgres-17/src/backend/partitioning/partprune.c) — pruning module, `prune_append_rel_partitions`, `perform_pruning_base_step`, per-strategy bound matching.
+- [partbounds.c](../../../raw/postgres-17/src/backend/partitioning/partbounds.c) — `compute_partition_hash_value`, `partition_bounds_merge`.
+- [inherit.c](../../../raw/postgres-17/src/backend/optimizer/util/inherit.c) — `expand_partitioned_rtentry` plan-time pruning, `live_parts`, `try_table_open`.
+- [createplan.c](../../../raw/postgres-17/src/backend/optimizer/plan/createplan.c) — run-time prune-info attach for `Append`/`MergeAppend`.
+- [nodeAppend.c](../../../raw/postgres-17/src/backend/executor/nodeAppend.c) — `ExecInitAppend`, per-scan pruning.
+- [execPartition.c](../../../raw/postgres-17/src/backend/executor/execPartition.c) — run-time pruning, tuple routing, `get_partition_for_tuple`, `ExecInitPartitionInfo`.
+- [relnode.c](../../../raw/postgres-17/src/backend/optimizer/util/relnode.c) — `build_joinrel_partition_info`, `have_partkey_equi_join`.
+- [joinrels.c](../../../raw/postgres-17/src/backend/optimizer/path/joinrels.c) — `try_partitionwise_join`, `compute_partition_bounds`.
+- [planner.c](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c) — partitionwise aggregate paths.
+- [nodeModifyTable.c](../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c) — cross-partition UPDATE row movement.
+- [copyfrom.c](../../../raw/postgres-17/src/backend/commands/copyfrom.c) — per-partition COPY multi-insert.
+- [ddl.sgml](../../../raw/postgres-17/doc/src/sgml/ddl.sgml) — partitioning, pruning, constraint exclusion, inheritance caveats.
+- [config.sgml](../../../raw/postgres-17/doc/src/sgml/config.sgml) — the four GUC documentation blocks.
+- [partition_prune.out](../../../raw/postgres-17/src/test/regress/expected/partition_prune.out) — run-time pruning inside an `UPDATE` plan.
+
+## Navigation
+
+- [PostgreSQL 17 index](../index.md)
+- [PostgreSQL 17 Codebase Navigation Guide (unverified)](../codebase-navigation-guide.md)
+- Sibling: [Table Partitioning Optimizations and Configuration During Query Planning and Execution in PostgreSQL 12 (unverified)](../../v12/questions/partitioning-planning-execution-optimizations.md)
+- [Wiki index](../../index.md)
+- [Versions](../../versions.md)
