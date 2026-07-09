@@ -3415,3 +3415,41 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   auditing; each item includes repercussions and possible root causes.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-07-09] repin v19 | REL_19_STABLE branch (master became 20devel), refresh citations + feature commits
+
+- User asked to "rebase postgresql 19 raw with last commits" following AGENTS.md.
+  A user-requested `git fetch origin master` on `raw/postgres-19/` showed upstream
+  `master` had branched: it is now `20devel` (range includes `a281a3e6dbb` "Stamp
+  HEAD as 20devel."; `configure.ac`/`meson.build` read `20devel`, and
+  `doc/src/sgml/release-19.sgml` was renamed to `release-20.sgml` on `master`).
+  Pinning v19 to `master` would have made every v19 page cite v20 source.
+- Confirmed with the user, then fetched `origin REL_19_STABLE` (tip
+  `01c544e1afb99bc2a76803870010b7cd2907f3b5`, 2026-07-09, still stamped `19beta1`)
+  and repinned `raw/postgres-19/` from the former post-`REL_19_BETA1` `master` pin
+  `cdae794af31b3e9cfc323fc654292d86fa746f77` to it. The old pin is an ancestor of
+  `REL_19_STABLE` (a clean forward move; 105 new v19 commits). Switched the
+  tracked branch from `` `master` (post-19beta1) `` to `REL_19_STABLE`.
+- Reviewed the `cdae794a..01c544e1` changed range (223 files) against the three
+  v19 question pages and the codebase navigation guide. Refreshed every source
+  line anchor that shifted, using a difflib old->new line map plus a
+  content-equality check (80 whole-range-identical shifts applied automatically;
+  7 region citations whose functions grew — `rebuild_relation`,
+  `get_initial_snapshot`, `initialize_change_context`, `pgrepack.c`, and
+  `subquery_planner` in the nav guide — endpoint-verified by hand). A separate
+  integrity pass caught one stable-line content change: the release-note
+  score-weight prefix typo was fixed by `1a7fa06dbcd`, so the autovacuum page's
+  "typo" caveat was rewritten to match current source.
+- Feature-scope updates: REPACK 42 -> 45 (`fb284f2f9bd` stored generated columns,
+  `5e450df50dc` change-replay range-table init, tree-wide `da8889ccd7e`
+  `PG_MODULE_MAGIC_EXT`; title/intro/tables/source-refs updated);
+  `pg_plan_advice` module commits 22 -> 25 (`89f5f860cc5` FOREIGN_JOIN
+  single-relation fix, `ea203d371de` pgindent follow-up, `da8889ccd7e`; three new
+  `###` subsections + Contents entries). autovacuum.c did not change in the v19
+  range, so its 30 citations were untouched.
+- Reset the `pg_plan_advice` page `verified_by_agent` from the prior
+  agent-timestamp to `not yet`; the other three v19 pages were already `not yet`.
+  This was a repin and changed-range review, not a claim-by-claim re-verification.
+- Updated `wiki/index.md`, `wiki/versions.md` (v19 row + a dated coverage note),
+  `wiki/v19/index.md`, and all four v19 pages' `pinned_commit`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

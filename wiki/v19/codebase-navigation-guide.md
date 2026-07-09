@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: cdae794af31b3e9cfc323fc654292d86fa746f77
+pinned_commit: 01c544e1afb99bc2a76803870010b7cd2907f3b5
 verified: false
 verified_by_agent: not yet
 ---
@@ -40,7 +40,7 @@ Use the PostgreSQL 19 checkout as a set of subsystem maps. The top-level `src/Ma
 |---|---|---|
 | Server subsystems | `src/backend/` | `src/backend/Makefile` is the short ownership map for backend directories and build-time generated headers [backend/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/Makefile#L19-L31). |
 | Access methods | `src/backend/access/` | The access makefile separates access-method and transaction subdirectories under `src/backend/access` [access/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/access/Makefile#L11-L28). |
-| Storage and locks | `src/backend/storage/` | Storage is split by the storage makefile into directories such as buffer, file, IPC, lock-manager, page, smgr, and sync code [storage/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/storage/Makefile#L11-L27). |
+| Storage and locks | `src/backend/storage/` | Storage is split by the storage makefile into directories such as buffer, file, IPC, lock-manager, page, smgr, and sync code [storage/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/storage/Makefile#L11-L21). |
 | Client programs | `src/bin/` | Client and maintenance programs are listed under `src/bin`, with Windows `pgevent` added conditionally [bin/Makefile#SUBDIRS](../../raw/postgres-19/src/bin/Makefile#L16-L40). |
 | Frontend APIs | `src/interfaces/` | PostgreSQL 19 builds `libpq` and `ecpg`, and conditionally adds `libpq-oauth`, from `src/interfaces` [interfaces/Makefile#SUBDIRS](../../raw/postgres-19/src/interfaces/Makefile#L15-L18). |
 | Extensions | `contrib/` | The contrib makefile lists built contrib modules and adds platform/language-conditional modules such as `pgcrypto`, `uuid-ossp`, `xml2`, `sepgsql`, and PL transform modules [contrib/Makefile#SUBDIRS](../../raw/postgres-19/contrib/Makefile#L7-L89). |
@@ -49,7 +49,7 @@ Use the PostgreSQL 19 checkout as a set of subsystem maps. The top-level `src/Ma
 
 1. For the simple-query protocol, start in `exec_simple_query()`. It parses the query string with `pg_parse_query()`, then proceeds through analysis, rewrite, planning, portal setup, and execution for each raw statement [postgres.c#exec_simple_query](../../raw/postgres-19/src/backend/tcop/postgres.c#L1029-L1225) [postgres.c#pg_parse_query](../../raw/postgres-19/src/backend/tcop/postgres.c#L616-L645).
 2. Parse analysis and rewrite live behind the `pg_analyze_and_rewrite_*()` wrappers and `pg_rewrite_query()`. The normal statement path reaches `QueryRewrite()` before planning [postgres.c#pg_analyze_and_rewrite](../../raw/postgres-19/src/backend/tcop/postgres.c#L682-L851) [rewriteHandler.c#QueryRewrite](../../raw/postgres-19/src/backend/rewrite/rewriteHandler.c#L4781-L4835).
-3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-19/src/backend/tcop/postgres.c#L987-L1025) [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L333-L375) [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L775-L850).
+3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-19/src/backend/tcop/postgres.c#L987-L1025) [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L328-L370) [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L845).
 4. Execution is portal-driven. `PortalRun()` dispatches portal execution, and the executor entry points are `ExecutorStart()` and `ExecutorRun()` with hook-aware standard implementations [pquery.c#PortalRun](../../raw/postgres-19/src/backend/tcop/pquery.c#L681-L850) [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345).
 5. Utility commands are routed outside normal plan execution. `ProcessUtility()` exposes `ProcessUtility_hook`; without a hook it calls `standard_ProcessUtility()` [utility.c#ProcessUtility](../../raw/postgres-19/src/backend/tcop/utility.c#L504-L600).
 
@@ -66,9 +66,9 @@ Keep these structs open when tracing behavior:
 | `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-19/src/include/nodes/plannodes.h#L59-L135). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-19/src/include/nodes/pathnodes.h#L168-L245) [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095) [pathnodes.h#Path](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1964-L2005). |
-| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L80) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L691-L786) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1196-L1266). |
+| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L58) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L691-L786) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1196-L1266). |
 | `RelationData`, `TableAmRoutine`, and `IndexAmRoutine` | Relation cache state points at table and index access-method callback tables [rel.h#RelationData](../../raw/postgres-19/src/include/utils/rel.h#L55-L135) [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420) [amapi.h#IndexAmRoutine](../../raw/postgres-19/src/include/access/amapi.h#L233-L320). |
-| `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-19/src/include/nodes/memnodes.h#L117-L170). |
+| `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-19/src/include/nodes/memnodes.h#L117-L134). |
 
 ### Tests And Docs
 
@@ -113,8 +113,8 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 - [postgres.c#pg_plan_queries](../../raw/postgres-19/src/backend/tcop/postgres.c#L987-L1025)
 - [pquery.c#PortalRun](../../raw/postgres-19/src/backend/tcop/pquery.c#L681-L850)
 - [utility.c#ProcessUtility](../../raw/postgres-19/src/backend/tcop/utility.c#L504-L600)
-- [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L333-L375)
-- [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L775-L850)
+- [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L328-L370)
+- [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L845)
 - [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345)
 - [backend/Makefile#generated-headers](../../raw/postgres-19/src/backend/Makefile#L183-L188)
 - [pg_index.h#CATALOG](../../raw/postgres-19/src/include/catalog/pg_index.h#L31-L78)

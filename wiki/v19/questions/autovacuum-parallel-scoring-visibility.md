@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: cdae794af31b3e9cfc323fc654292d86fa746f77
+pinned_commit: 01c544e1afb99bc2a76803870010b7cd2907f3b5
 verified: false
 verified_by_agent: not yet
 ---
@@ -33,9 +33,9 @@ Follow AGENTS.md. In PostgreSQL 19, create a question document to explain all th
 
 ### Short Answer
 
-All three statements are true for the pinned PostgreSQL 19 development line (post-`REL_19_BETA1` `master` commit `cdae794af31b3e9cfc323fc654292d86fa746f77`). They are three independent features:
+All three statements are true for the pinned PostgreSQL 19 line (the `REL_19_STABLE` branch, commit `01c544e1afb99bc2a76803870010b7cd2907f3b5`). They are three independent features:
 
-1. **Parallel autovacuum.** An autovacuum worker can now hand its **index** vacuuming and index cleanup phases to parallel workers, exactly like manual `VACUUM (PARALLEL)`. The new GUC `autovacuum_max_parallel_workers` caps how many parallel workers a *single* autovacuum worker may use; it defaults to `0`, which keeps autovacuum serial. A per-table reloption `autovacuum_parallel_workers` requests a specific degree [autovacuum.c#parallel-workers](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuumparallel.c#compute-workers](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L741-L802) [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9715-L9736).
+1. **Parallel autovacuum.** An autovacuum worker can now hand its **index** vacuuming and index cleanup phases to parallel workers, exactly like manual `VACUUM (PARALLEL)`. The new GUC `autovacuum_max_parallel_workers` caps how many parallel workers a *single* autovacuum worker may use; it defaults to `0`, which keeps autovacuum serial. A per-table reloption `autovacuum_parallel_workers` requests a specific degree [autovacuum.c#parallel-workers](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuumparallel.c#compute-workers](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L741-L802) [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9717-L9738).
 
 2. **Table scoring (prioritization).** When an autovacuum worker has collected the tables that need work in a database, it now computes a numeric **score** per table and processes them in descending score order, so the most urgent tables go first. Five `*_score_weight` GUCs tune the components, and setting all five to `0.0` disables sorting entirely [autovacuum.c#AutoVacuumScores](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L330-L343) [autovacuum.c#sort-by-score](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2310-L2321) [autovacuum.c#score-comparator](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L1906-L1917).
 
@@ -51,7 +51,7 @@ The three features touch different layers (the autovacuum daemon, the autovacuum
 
 Parallel vacuum (parallelizing the **index** bulk-delete and index cleanup phases across worker processes) has existed for manual `VACUUM` since v13. PostgreSQL 19 lets the autovacuum daemon use the same machinery. The file that implements it now says so in its header: it is "Support routines for parallel vacuum and autovacuum execution" [vacuumparallel.c#header](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L1-L34).
 
-Only the index phases are parallelized; the heap scan is not. The new GUC documentation makes this explicit: the limit "applies specifically to the index vacuuming and index cleanup phases," and it is "the per-autovacuum worker equivalent of the `PARALLEL` option of the `VACUUM` command" [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9715-L9736).
+Only the index phases are parallelized; the heap scan is not. The new GUC documentation makes this explicit: the limit "applies specifically to the index vacuuming and index cleanup phases," and it is "the per-autovacuum worker equivalent of the `PARALLEL` option of the `VACUUM` command" [config.sgml#autovacuum_max_parallel_workers](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9717-L9738).
 
 #### How a table gets parallel workers (normal path)
 
@@ -81,7 +81,7 @@ if (!IsUnderPostmaster || max_workers == 0)
     return 0;
 ```
 
-So a `max_workers` of `0` short-circuits to no parallelism. Because `autovacuum_max_parallel_workers` defaults to `0`, **autovacuum is serial out of the box**; you opt in by raising the GUC [globals.c#default-0](../../../raw/postgres-19/src/backend/utils/init/globals.c#L148). The function also requires at least two indexes large enough (`> min_parallel_index_scan_size`) and that support parallel vacuum, then caps the result by `max_workers` [vacuumparallel.c#cap](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L765-L801). The total is further bounded system-wide by `max_parallel_workers` and the available background-worker slots, as the docs note [config.sgml#further-limited](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9728-L9729).
+So a `max_workers` of `0` short-circuits to no parallelism. Because `autovacuum_max_parallel_workers` defaults to `0`, **autovacuum is serial out of the box**; you opt in by raising the GUC [globals.c#default-0](../../../raw/postgres-19/src/backend/utils/init/globals.c#L148). The function also requires at least two indexes large enough (`> min_parallel_index_scan_size`) and that support parallel vacuum, then caps the result by `max_workers` [vacuumparallel.c#cap](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L765-L801). The total is further bounded system-wide by `max_parallel_workers` and the available background-worker slots, as the docs note [config.sgml#further-limited](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9730-L9731).
 
 #### Cost-delay propagation to parallel workers (new infrastructure)
 
@@ -160,7 +160,7 @@ There is one weight per component, all `real`, `PGC_SIGHUP` (reload), default `1
 
 Setting **all five** weights to `0.0` is a deliberate escape hatch: `do_autovacuum()` skips `list_sort()` entirely in that case, restoring the old unsorted behavior [autovacuum.c#escape-hatch](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2310-L2321).
 
-> Documentation note: the v19 release notes' link text spells one GUC `vacuum_insert_score_weight`, but the actual parameter is `autovacuum_vacuum_insert_score_weight` [release-19.sgml#score-weight-typo](../../../raw/postgres-19/doc/src/sgml/release-19.sgml#L1320-L1322) [guc_parameters.dat#vacuum-insert-score-weight](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L241-L247). Per AGENTS.md, source wins; the variable is defined as `autovacuum_vacuum_insert_score_weight` [autovacuum.c#weight-globals](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L137-L141).
+> Documentation note: the v19 release notes list all five score-weight parameters, including `autovacuum_vacuum_insert_score_weight` [release-19.sgml#score-weight-list](../../../raw/postgres-19/doc/src/sgml/release-19.sgml#L1320-L1322) [guc_parameters.dat#vacuum-insert-score-weight](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L241-L247), matching the source definition [autovacuum.c#weight-globals](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L137-L141). At the previous pin the release-note link text dropped the `autovacuum_` prefix from this one parameter; that typo was fixed on the v19 line by `1a7fa06dbcd` (in the `cdae794a..01c544e1` repin range).
 
 #### Monitoring: `pg_stat_autovacuum_scores`
 
@@ -253,7 +253,7 @@ The headline commit `b46e1e54d` changed only heap access-method code and headers
 
 ### Source Commit History
 
-All hashes are ancestors of the pinned post-`REL_19_BETA1` `master` commit `cdae794af31b3e9cfc323fc654292d86fa746f77`. Between `REL_19_BETA1` (tagged 2026-06-01) and this pin, the only scoring/parallel-vacuum/visibility feature-file change after beta1 is the post-beta1 autovacuum MXID-score division-by-zero fix `1f2297b5487` (listed under [Autovacuum table scoring](#autovacuum-table-scoring) below); no parallel-vacuum or visibility-map/pruning feature files changed after beta1. In the `9a60f295..cdae794a` repin range, no files in these three feature clusters changed. The only autovacuum-named commit in that range, `4abf411e232` (`pg_stat_io: Don't flag extends by autovacuum launcher`), changed `pgstat_io.c` and is outside this page's scoring/parallel-vacuum/VM-read-scan scope; `a7f59b252a8` only shifted `guc_parameters.dat` line anchors. Dates are author dates.
+All hashes are ancestors of the pinned `REL_19_STABLE` commit `01c544e1afb99bc2a76803870010b7cd2907f3b5`. Between `REL_19_BETA1` (tagged 2026-06-01) and this pin, the only scoring/parallel-vacuum/visibility feature-code change after beta1 is the post-beta1 autovacuum MXID-score division-by-zero fix `1f2297b5487` (listed under [Autovacuum table scoring](#autovacuum-table-scoring) below); no parallel-vacuum or visibility-map/pruning feature files changed after beta1. In the `cdae794a..01c544e1` repin range (the 2026-07-09 move from the former `master` pin onto the new `REL_19_STABLE` branch), no scoring/parallel-vacuum/VM feature code changed; the one touch to this page's area was the release-note prefix typo fix `1a7fa06dbcd` in `release-19.sgml`, and the cited `config.sgml`/`guc_parameters.dat` line anchors were refreshed. Dates are author dates.
 
 #### Parallel autovacuum workers
 
@@ -312,7 +312,7 @@ The headline commit `b46e1e54d07` added the `rel_read_only` parameter to `heap_p
 - Executor scan nodes and `ScanRelIsReadOnly`: `src/backend/executor/execUtils.c`, `nodeSeqscan.c`, `nodeIndexscan.c`, `nodeIndexonlyscan.c`, `nodeSamplescan.c`, `nodeTidrangescan.c`, `nodeBitmapHeapscan.c`, `src/include/executor/executor.h`.
 - Catalog/monitoring: `src/backend/catalog/system_views.sql`, `src/test/regress/expected/rules.out`.
 - Same-checkout docs (`doc/src/sgml/config.sgml`, `release-19.sgml`) used to locate features and their commits; behavioral claims are cited to source.
-- `git log` on the pinned checkout for the three commit clusters above, plus the `9a60f295..cdae794a` changed-file review.
+- `git log` on the pinned checkout for the three commit clusters above, plus the `cdae794a..01c544e1` repin changed-file review.
 
 ## Evidence Map
 
@@ -320,7 +320,7 @@ The headline commit `b46e1e54d07` added the `rel_read_only` parameter to `heap_p
 |---|---|
 | Autovacuum can use parallel index-vacuum workers | [vacuumparallel.c#L1-L34](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L1-L34) [vacuumparallel.c#L741-L802](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L741-L802) |
 | Cap source differs: autovacuum vs manual VACUUM | [vacuumparallel.c#L751-L753](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L751-L753) |
-| `autovacuum_max_parallel_workers` GUC, PGC_SIGHUP, default 0 | [guc_parameters.dat#L172-L178](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L172-L178) [globals.c#L148](../../../raw/postgres-19/src/backend/utils/init/globals.c#L148) [config.sgml#L9715-L9736](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9715-L9736) |
+| `autovacuum_max_parallel_workers` GUC, PGC_SIGHUP, default 0 | [guc_parameters.dat#L172-L178](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L172-L178) [globals.c#L148](../../../raw/postgres-19/src/backend/utils/init/globals.c#L148) [config.sgml#L9717-L9738](../../../raw/postgres-19/doc/src/sgml/config.sgml#L9717-L9738) |
 | Per-table `autovacuum_parallel_workers` reloption; -1/0/N mapping | [reloptions.c#L239-L247](../../../raw/postgres-19/src/backend/access/common/reloptions.c#L239-L247) [autovacuum.c#L2940-L2959](../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2940-L2959) [vacuum.h#L245-L250](../../../raw/postgres-19/src/include/commands/vacuum.h#L245-L250) |
 | Cost-delay propagation to parallel autovacuum workers | [vacuumparallel.c#L21-L26](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L21-L26) [vacuumparallel.c#L644-L726](../../../raw/postgres-19/src/backend/commands/vacuumparallel.c#L644-L726) [vacuum.c#L2448-L2456](../../../raw/postgres-19/src/backend/commands/vacuum.c#L2448-L2456) |
 | Parallel autovacuum TAP test | [001_parallel_autovacuum.pl#L1-L40](../../../raw/postgres-19/src/test/modules/test_autovacuum/t/001_parallel_autovacuum.pl#L1-L40) |
