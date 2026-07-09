@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: gpt-5-codex 2026-07-09T12:48:19Z
 ---
 
 # Table Partitioning Optimizations and Configuration During Query Planning and Execution in PostgreSQL 12 (unverified)
@@ -59,11 +59,11 @@ PostgreSQL 12 has **two kinds of table partitioning**, and the optimizations ava
 
 The documentation states this split directly: partition pruning "improves performance for declaratively partitioned tables" ([ddl.sgml#L4479-L4497](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4479-L4497)), while constraint exclusion "is primarily used for partitioning implemented using the legacy inheritance method" and uses `CHECK` constraints rather than the "partition bounds, which exist only in the case of declarative partitioning" ([ddl.sgml#L4621-L4636](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4621-L4636)).
 
-The two sections below answer per partitioning type. Internally, only a declaratively partitioned table carries a `PartitionScheme` (strategy, number of key columns, key type info — but not the specific bounds) plus per-relation bounds and child arrays on its `RelOptInfo` ([pathnodes.h#PartitionSchemeData](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L389-L405), [pathnodes.h#RelOptInfo-partition-fields](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L707-L722)); those fields are what every declarative-only optimization reads, and their absence is why inheritance tables get none of them.
+The two sections below answer per partitioning type. Internally, only a declaratively partitioned table carries a `PartitionScheme` (strategy, number of key positions, key type info — but not the specific bounds) plus per-relation bounds, key expressions, and child arrays on its `RelOptInfo` ([pathnodes.h#PartitionSchemeData](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L389-L405), [pathnodes.h#RelOptInfo-partition-fields](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L707-L722)); those fields are what every declarative-only optimization reads, and their absence is why inheritance tables get none of them.
 
 ### Configuration at a glance
 
-Four GUCs govern these optimizations. All four are defined with context `PGC_USERSET`, so each has **session/transaction apply scope**: change it with `SET` (session) or `SET LOCAL` (current transaction) with no restart or reload, or set a server-wide default in `postgresql.conf` that takes effect on reload (SIGHUP). None require a server restart. Tuple routing and COPY batching have no GUC — the executor always performs them for a declaratively partitioned target.
+Four GUCs govern these optimizations. All four are defined with context `PGC_USERSET`, so each has **session/transaction apply scope**: change it with `SET` for the current session or `SET LOCAL` for the current transaction, with no restart or reload for that session ([guc.c#partitioning-GUCs](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1003-L1054), [guc.c#constraint_exclusion](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4243-L4252), [ref/set.sgml#SET-scope](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L33-L58)). A server-wide default in `postgresql.conf` follows normal config-file processing: the file is reread on SIGHUP / `pg_ctl reload` / `pg_reload_conf()`, but these four do not require a server restart ([config.sgml#configuration-file-reload](../../../raw/postgres-12/doc/src/sgml/config.sgml#L169-L183)). Tuple routing and COPY batching have no GUC — the executor always performs them for a declaratively partitioned target.
 
 | GUC | Partitioning type | Default | Phase | Definition |
 |---|---|---|---|---|
@@ -72,7 +72,7 @@ Four GUCs govern these optimizations. All four are defined with context `PGC_USE
 | `enable_partitionwise_join` | declarative | `off` | planning | [guc.c:1003-1012](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1003-L1012) |
 | `enable_partitionwise_aggregate` | declarative | `off` | planning | [guc.c:1013-1022](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1013-L1022) |
 
-The boolean variables and their compiled-in defaults live in `costsize.c` ([costsize.c:137-140](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L137-L140)); the same defaults appear in `postgresql.conf.sample`.
+The boolean variables and their compiled-in defaults live in `costsize.c` ([costsize.c:137-140](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L137-L140)); the same defaults appear in `postgresql.conf.sample` ([postgresql.conf.sample#partitioning-defaults](../../../raw/postgres-12/src/backend/utils/misc/postgresql.conf.sample#L361-L402)).
 
 ## Inheritance-based (legacy) partitioning
 
@@ -115,7 +115,7 @@ Declarative partitioning (`PARTITION BY RANGE | LIST | HASH`) gives the engine t
 
 ### Partition pruning during planning and execution
 
-Partition pruning compares query clauses against partition bounds to decide which partitions can be skipped. The module turns matching clauses into "pruning steps": a *base* step tests partition-key columns; a *combine* step joins earlier results with a Boolean AND/OR ([partprune.c#L1-L35](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L1-L35)). Steps are generated for one of three targets ([partprune.c#PartClauseTarget](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L91-L96)):
+Partition pruning compares query clauses against partition bounds to decide which partitions can be skipped. The module turns matching clauses into "pruning steps": a *base* step tests partition-key columns or expressions; a *combine* step joins earlier results with a Boolean AND/OR ([partprune.c#L1-L35](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L1-L35)). Steps are generated for one of three targets ([partprune.c#PartClauseTarget](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L91-L96)):
 
 - `PARTTARGET_PLANNER` — clauses usable at plan time (constants).
 - `PARTTARGET_INITIAL` — usable at executor startup (any allowable clause except `PARAM_EXEC` Params).
@@ -134,8 +134,8 @@ The documentation confirms both phases and how to observe them: initial pruning 
 
 Both plan-time and run-time pruning funnel through `perform_pruning_base_step`, which switches on the partition strategy to a per-strategy bound-matching routine ([partprune.c#L3250-L3277](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L3250-L3277)). The three routines behave differently:
 
-- **HASH** — Pruning is possible only with equality clauses or `IS NULL`, and only when the query constrains **every** partition key column; otherwise all partitions are kept. It computes the row hash and picks the one partition at `rowHash % greatest_modulus`. Hash partitioning has neither a null-accepting partition nor a `DEFAULT` partition ([partprune.c#get_matching_hash_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2389-L2445)).
-- **LIST** — Single key column. Supports B-tree comparison strategies (equality and inequalities). `NULL` routes to the null-accepting partition if one exists, else the `DEFAULT` partition ([partprune.c#get_matching_list_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2467-L2647), null handling at [L2486-L2498](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2486-L2498)).
+- **HASH** — Pruning is possible only with equality clauses or `IS NULL`, and only when the query constrains **every** partition-key position; otherwise all partitions are kept. It computes the row hash and picks the one partition at `rowHash % greatest_modulus`. `compute_partition_hash_value` ignores NULL key values while forming that hash, and hash partitioning has neither a null-accepting partition nor a `DEFAULT` partition ([partprune.c#get_matching_hash_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2389-L2445), [partbounds.c#compute_partition_hash_value](../../../raw/postgres-12/src/backend/partitioning/partbounds.c#L2738-L2759)).
+- **LIST** — Single key position. Supports B-tree comparison strategies (equality and inequalities). `NULL` routes to the null-accepting partition if one exists, else the `DEFAULT` partition ([partprune.c#get_matching_list_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2467-L2647), null handling at [L2486-L2498](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2486-L2498)).
 - **RANGE** — Supports multi-column key prefixes and B-tree comparisons/ranges. There is no null-accepting range partition, so an `IS NULL` clause (or no usable datums) can only match the `DEFAULT` partition; a partial-prefix query also has to keep the `DEFAULT` partition ([partprune.c#get_matching_range_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2678-L2769)).
 
 ### Constraint exclusion on declarative tables
@@ -159,7 +159,7 @@ Partitionwise aggregation performs grouping/aggregation per partition, then appe
 
 `create_grouping_paths` marks the query as a candidate for **full** partitionwise aggregation only when `enable_partitionwise_aggregate` is set and there are no grouping sets ([planner.c#L3886-L3889](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L3886-L3889)). `create_ordinary_grouping_paths` then picks the concrete strategy on a partitioned input ([planner.c#L4066-L4086](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L4066-L4086)):
 
-- **FULL** partitionwise aggregation if the `GROUP BY` clause contains all partition-key columns, verified by `group_by_has_partkey` ([planner.c#group_by_has_partkey](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L7361-L7405)). Each partition is aggregated independently and the results appended.
+- **FULL** partitionwise aggregation if the `GROUP BY` clause contains all partition-key columns or expressions, verified by `group_by_has_partkey` ([planner.c#group_by_has_partkey](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L7361-L7405)). Each partition is aggregated independently and the results appended.
 - **PARTIAL** partitionwise aggregation otherwise (when partial aggregation is possible at all): each partition is partially aggregated, then a finalize step combines them. This matches the documented behavior that "if the `GROUP BY` clause does not include the partition keys, only partial aggregation can be performed on a per-partition basis, and finalization must be performed later" ([config.sgml#L4596-L4614](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4596-L4614)).
 
 The three states are the `PartitionwiseAggregateType` enum (`NONE`/`FULL`/`PARTIAL`) ([pathnodes.h#PartitionwiseAggregateType](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L2411-L2416)), and the per-partition paths are built by `create_partitionwise_grouping_paths` ([planner.c#create_partitionwise_grouping_paths](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L7205-L7353)).
@@ -168,9 +168,9 @@ The three states are the `PartitionwiseAggregateType` enum (`NONE`/`FULL`/`PARTI
 
 Writing into a declaratively partitioned table needs no GUC; the executor always routes each row to the correct leaf partition. `ExecSetupPartitionTupleRouting` builds the routing state lazily — each partition's `ResultRelInfo` is created only the first time a row lands there, which keeps single-row `INSERT` fast ([execPartition.c#ExecSetupPartitionTupleRouting](../../../raw/postgres-12/src/backend/executor/execPartition.c#L197-L235)). `ExecFindPartition` descends the partition hierarchy to find the leaf for a tuple ([execPartition.c#ExecFindPartition](../../../raw/postgres-12/src/backend/executor/execPartition.c#L251-L350)), calling the per-strategy `get_partition_for_tuple`:
 
-- **HASH** — `boundinfo->indexes[rowHash % greatest_modulus]`.
+- **HASH** — `boundinfo->indexes[rowHash % greatest_modulus]`, after computing a hash value that ignores NULL key values.
 - **LIST** — a null key routes to `null_index` (if the table accepts nulls); otherwise a binary search on the list bounds.
-- **RANGE** — any null key column routes to the `DEFAULT` partition (ranges never accept null); otherwise a binary search selects the containing range. If no partition matches, the row falls to `default_index`, and a still-unmatched row raises "no partition of relation ... found for row" ([execPartition.c#get_partition_for_tuple](../../../raw/postgres-12/src/backend/executor/execPartition.c#L1235-L1333)).
+- **RANGE** — any null key position routes to the `DEFAULT` partition (ranges never accept null); otherwise a binary search selects the containing range. If no partition matches, the row falls to `default_index`, and a still-unmatched row raises "no partition of relation ... found for row" ([execPartition.c#get_partition_for_tuple](../../../raw/postgres-12/src/backend/executor/execPartition.c#L1235-L1333)).
 
 Two further executor behaviors are relevant:
 
@@ -181,14 +181,14 @@ Two further executor behaviors are relevant:
 
 - **Execution-time pruning is limited to `Append` and `MergeAppend`.** The documentation states it "is not yet implemented for the `ModifyTable` node type" in v12 ([ddl.sgml#L4603-L4611](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4603-L4611)). So an `UPDATE`/`DELETE` with run-time parameters does not benefit from execution-time pruning the way a `SELECT` does.
 - **Partitionwise join/aggregate require exactly matching partition bounds.** Tables partitioned the same way but with different bounds do not qualify ([relnode.c#L1655-L1668](../../../raw/postgres-12/src/backend/optimizer/util/relnode.c#L1655-L1668)).
-- **Hash pruning needs all key columns** and only equality/`IS NULL`; a range or partial-key predicate cannot prune a hash-partitioned table ([partprune.c#L2406-L2436](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2406-L2436)).
+- **Hash pruning needs all key positions** and only equality/`IS NULL`; a range or partial-key predicate cannot prune a hash-partitioned table ([partprune.c#L2406-L2436](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2406-L2436)).
 
 ### Per-strategy summary
 
 | Aspect | RANGE | LIST | HASH |
 |---|---|---|---|
 | Pruning clauses used | equality + range/inequality (prefix of keys) | equality + inequality | equality / `IS NULL` only, **all** keys required |
-| NULL handling in pruning/routing | `DEFAULT` only (no null partition) | null partition, else `DEFAULT` | hashed like any value; no null/`DEFAULT` partition |
+| NULL handling in pruning/routing | `DEFAULT` only (no null partition) | null partition, else `DEFAULT` | NULL keys ignored by the hash computation; no null/`DEFAULT` partition |
 | `DEFAULT` partition | yes | yes | no |
 | Plan-time + run-time pruning | yes | yes | yes |
 | Constraint exclusion applies | via extra `CHECK` (or `constraint_exclusion=on`) | same | same |
@@ -208,7 +208,7 @@ Short answer: **only plan-time partition pruning actually reduces the locks a re
 | Constraint exclusion | No — children are already locked before it runs | Moderate — drops an excluded partition's scan, but only with a constant qual + `CHECK` |
 | Partitionwise join | No — both sides' partitions stay locked | Indirect — smaller per-join footprint; spills are modeled as sequential |
 | Partitionwise aggregate | No | Indirect — v12 hash aggregation is in-memory; benefit is CPU/memory/locality |
-| Tuple routing (write path) | Lazy — only partitions that receive a row are locked | n/a (write path) |
+| Tuple routing (write path) | Routed `INSERT`/`COPY` opens leaf partitions lazily; `UPDATE`/`DELETE` scan locks are separate | n/a (write path) |
 
 ### Only plan-time pruning removes read locks
 
@@ -221,7 +221,7 @@ The planner expands a partitioned or inherited parent into child relations in `a
 
 **Partitionwise join and aggregate do not change the lock set.** They are chosen during path generation on child rels that `add_other_rels_to_query` already expanded and locked; both joined tables' partitions are locked regardless of whether the join runs partition-by-partition.
 
-**Write path: tuple routing locks lazily.** `ExecInitPartitionInfo` opens each leaf partition with `RowExclusiveLock` only the first time a row routes to it ([execPartition.c#L517-L519](../../../raw/postgres-12/src/backend/executor/execPartition.c#L517-L519)), and the routing state itself is built lazily ([execPartition.c#L197-L235](../../../raw/postgres-12/src/backend/executor/execPartition.c#L197-L235)). A bulk `INSERT`/`COPY` that touches only a few partitions therefore locks only those. A cross-partition `UPDATE` is the exception: v12 implements it as a `DELETE` on the old partition plus a routed `INSERT` into the new one, so it locks and writes two partitions for one moved row ([nodeModifyTable.c#L1139-L1208](../../../raw/postgres-12/src/backend/executor/nodeModifyTable.c#L1139-L1208)).
+**Write path: tuple routing locks lazily.** `ExecInitPartitionInfo` opens each leaf partition with `RowExclusiveLock` only the first time a row routes to it ([execPartition.c#L517-L519](../../../raw/postgres-12/src/backend/executor/execPartition.c#L517-L519)), and the routing state itself is built lazily ([execPartition.c#L197-L235](../../../raw/postgres-12/src/backend/executor/execPartition.c#L197-L235)). For routed `INSERT`/`COPY`, a statement that touches only a few partitions therefore opens and locks only those leaf partitions through the routing path. `UPDATE`/`DELETE` scan locks are determined by the scan plan; when an `UPDATE` moves a row across partitions, v12 implements the movement as a `DELETE` on the old partition plus a routed `INSERT` into the new one, so the moved row writes both partitions ([nodeModifyTable.c#L1139-L1208](../../../raw/postgres-12/src/backend/executor/nodeModifyTable.c#L1139-L1208)).
 
 ### Why scan-eliminating optimizations gain most under slow random I/O
 
@@ -247,14 +247,14 @@ Their tie-in to slow random I/O is therefore indirect: both consume already-prun
 
 - Pinned checkout `raw/postgres-12/` at commit `45b88269a353ad93744772791feb6d01bc7e1e42` (Stamp 12.2).
 - Inheritance/constraint exclusion: `src/include/optimizer/cost.h` enum, `src/backend/optimizer/util/plancat.c` (`relation_excluded_by_constraints`, `get_relation_constraints`), the call sites in `src/backend/optimizer/path/allpaths.c`, and the `doc/src/sgml/ddl.sgml` "Implementation Using Inheritance" and "Partitioning and Constraint Exclusion" sections plus `config.sgml`.
-- Partition pruning core: `src/backend/partitioning/partprune.c` — module header, `PartClauseTarget`, `prune_append_rel_partitions`, `get_matching_partitions`, `perform_pruning_base_step`, and the per-strategy `get_matching_hash_bounds` / `get_matching_list_bounds` / `get_matching_range_bounds`.
+- Partition pruning core: `src/backend/partitioning/partprune.c` — module header, `PartClauseTarget`, `prune_append_rel_partitions`, `get_matching_partitions`, `perform_pruning_base_step`, and the per-strategy `get_matching_hash_bounds` / `get_matching_list_bounds` / `get_matching_range_bounds`; `src/backend/partitioning/partbounds.c` for `compute_partition_hash_value`.
 - Plan-time integration: `src/backend/optimizer/util/inherit.c` `expand_partitioned_rtentry` (prune-before-expand); run-time prune info in `src/backend/optimizer/plan/createplan.c` (`Append`/`MergeAppend`).
 - Run-time pruning executor path: `src/backend/executor/execPartition.c` (`ExecCreatePartitionPruneState`, `ExecFindInitialMatchingSubPlans`, `ExecFindMatchingSubPlans`) and `src/backend/executor/nodeAppend.c`.
 - Partitionwise join: `src/backend/optimizer/util/relnode.c` (`build_joinrel_partition_info`), `src/backend/optimizer/path/joinrels.c` (`try_partitionwise_join`, `have_partkey_equi_join`).
 - Partitionwise aggregate: `src/backend/optimizer/plan/planner.c` (`create_grouping_paths`, `create_ordinary_grouping_paths`, `group_by_has_partkey`, `create_partitionwise_grouping_paths`).
 - Executor routing/DML: `src/backend/executor/execPartition.c` (`ExecSetupPartitionTupleRouting`, `ExecFindPartition`, `get_partition_for_tuple`), `src/backend/executor/nodeModifyTable.c` (row movement), `src/backend/commands/copy.c` (multi-insert).
 - Structs: `src/include/nodes/pathnodes.h` (`PartitionSchemeData`, `RelOptInfo` partition fields, `PartitionwiseAggregateType`).
-- GUCs: `src/backend/utils/misc/guc.c`, `src/backend/optimizer/path/costsize.c`, `postgresql.conf.sample`.
+- GUCs: `src/backend/utils/misc/guc.c`, `src/backend/optimizer/path/costsize.c`, `src/backend/utils/misc/postgresql.conf.sample`, `doc/src/sgml/ref/set.sgml`, and the configuration-file reload section in `doc/src/sgml/config.sgml`.
 - Docs: `doc/src/sgml/ddl.sgml` (partitioning, inheritance, pruning, constraint exclusion) and `doc/src/sgml/config.sgml` (the four GUCs).
 - Tests: `src/test/regress/sql/partition_prune.sql`, `partition_join.sql`, `partition_aggregate.sql`, `hash_part.sql`.
 - Follow-up (locking): expansion/locking-before-costing order in `src/backend/optimizer/plan/planmain.c` (`query_planner`) and `src/backend/optimizer/plan/initsplan.c` (`add_other_rels_to_query`); `expand_partitioned_rtentry` prune-then-lock-live-only and `expand_inherited_rtentry` `find_all_inheritors` lock-all in `src/backend/optimizer/util/inherit.c`; `find_all_inheritors` in `src/backend/catalog/pg_inherits.c`; constraint-exclusion timing in `src/backend/optimizer/path/allpaths.c` (`set_append_rel_size`); executor plan locking in `src/backend/utils/cache/plancache.c` (`AcquireExecutorLocks`); lazy write-path `RowExclusiveLock` in `src/backend/executor/execPartition.c` (`ExecInitPartitionInfo`).
@@ -266,13 +266,15 @@ Their tie-in to slow random I/O is therefore indirect: both consume already-prun
 |---|---|
 | Two partitioning kinds; pruning = declarative, CE = legacy | [ddl.sgml:4479-4497](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4479-L4497), [ddl.sgml:4621-4636](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4621-L4636) |
 | Three declarative strategies (RANGE/LIST/HASH) | [ddl.sgml:3560-3597](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L3560-L3597) |
-| `PartitionScheme` holds strategy/#cols/types, not bounds | [pathnodes.h:389-405](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L389-L405) |
+| `PartitionScheme` holds strategy/key-count/types, not bounds | [pathnodes.h:389-405](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L389-L405) |
 | `RelOptInfo` partition fields | [pathnodes.h:707-722](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L707-L722) |
 | GUC variables and defaults | [costsize.c:137-140](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L137-L140) |
+| `postgresql.conf.sample` lists the same partitioning defaults | [postgresql.conf.sample:361-402](../../../raw/postgres-12/src/backend/utils/misc/postgresql.conf.sample#L361-L402) |
 | `constraint_exclusion` default `partition`, `PGC_USERSET` | [guc.c:4243-4252](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4243-L4252) |
 | `enable_partition_pruning` default on, `PGC_USERSET` | [guc.c:1044-1054](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1044-L1054) |
 | `enable_partitionwise_join` default off, `PGC_USERSET` | [guc.c:1003-1012](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1003-L1012) |
 | `enable_partitionwise_aggregate` default off, `PGC_USERSET` | [guc.c:1013-1022](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1013-L1022) |
+| `SET`/`SET LOCAL` session and transaction scope; config-file reload | [ref/set.sgml:33-58](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L33-L58), [config.sgml:169-183](../../../raw/postgres-12/doc/src/sgml/config.sgml#L169-L183) |
 | Inheritance setup (master/children/CHECK) | [ddl.sgml:4056-4057](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4056-L4057), [ddl.sgml:4108-4149](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4108-L4149) |
 | `constraint_exclusion` enum modes | [cost.h:34-39](../../../raw/postgres-12/src/include/optimizer/cost.h#L34-L39) |
 | CE switch: partition mode targets inheritance children | [plancat.c:1435-1474](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L1435-L1474) |
@@ -295,6 +297,7 @@ Their tie-in to slow random I/O is therefore indirect: both consume already-prun
 | Run-time pruning observable in EXPLAIN | [ddl.sgml:4551-4596](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4551-L4596) |
 | Per-strategy dispatch switch | [partprune.c:3250-3277](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L3250-L3277) |
 | HASH pruning: equality/IS NULL, all keys, no null/default | [partprune.c:2389-2445](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2389-L2445) |
+| Hash partition hash computation ignores NULL keys | [partbounds.c:2738-2759](../../../raw/postgres-12/src/backend/partitioning/partbounds.c#L2738-L2759) |
 | LIST pruning: null/default handling | [partprune.c:2467-2647](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2467-L2647) |
 | RANGE pruning: null->default, prefixes | [partprune.c:2678-2769](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2678-L2769) |
 | CE also applies to declarative CHECKs; partition-mode skip | [ddl.sgml:4638-4645](../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L4638-L4645), [plancat.c:1435-1474](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L1435-L1474) |
@@ -329,7 +332,7 @@ Their tie-in to slow random I/O is therefore indirect: both consume already-prun
 
 ## Open Questions
 
-- This page treats the lower-level bound-search helpers (`partition_list_bsearch`, `partition_range_datum_bsearch`, `compute_partition_hash_value`, `get_hash_partition_greatest_modulus`) as building blocks called by the pruning and routing routines; their internal line ranges in `src/backend/partitioning/partbounds.c` are not separately cited here.
+- Except for `compute_partition_hash_value`'s NULL-handling behavior, this page treats the lower-level bound-search and modulus helpers (`partition_list_bsearch`, `partition_range_datum_bsearch`, `get_hash_partition_greatest_modulus`) as building blocks called by the pruning and routing routines; their internal line ranges in `src/backend/partitioning/partbounds.c` are not separately cited here.
 - Index access-method interactions (for example, per-partition B-tree/BRIN index scan costing) are out of scope; this page covers partition-level optimizations, not intra-partition index selection.
 - The exact minor-release history of each optimization (what changed between 12.0 and the pinned 12.2, and versus v13+) is not traced here; the claims are stated only from the pinned 12.2 source and docs.
 - FDW/postgres_fdw partition pushdown for partitionwise join across foreign partitions is not examined.
@@ -354,6 +357,7 @@ Their tie-in to slow random I/O is therefore indirect: both consume already-prun
 - [partprune.c#get_matching_hash_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2389-L2445)
 - [partprune.c#get_matching_list_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2467-L2647)
 - [partprune.c#get_matching_range_bounds](../../../raw/postgres-12/src/backend/partitioning/partprune.c#L2678-L2769)
+- [partbounds.c#compute_partition_hash_value](../../../raw/postgres-12/src/backend/partitioning/partbounds.c#L2738-L2759)
 - [inherit.c#expand_partitioned_rtentry](../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L320-L355)
 - [createplan.c#Append-prune-info](../../../raw/postgres-12/src/backend/optimizer/plan/createplan.c#L1216-L1241)
 - [execPartition.c#run-time-pruning](../../../raw/postgres-12/src/backend/executor/execPartition.c#L1490-L1539)
@@ -374,6 +378,9 @@ Their tie-in to slow random I/O is therefore indirect: both consume already-prun
 - [pathnodes.h#PartitionSchemeData](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L389-L405)
 - [pathnodes.h#RelOptInfo-partition-fields](../../../raw/postgres-12/src/include/nodes/pathnodes.h#L707-L722)
 - [guc.c#partitioning-GUCs](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1003-L1054)
+- [postgresql.conf.sample#partitioning-defaults](../../../raw/postgres-12/src/backend/utils/misc/postgresql.conf.sample#L361-L402)
+- [ref/set.sgml#SET-scope](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L33-L58)
+- [config.sgml#configuration-file-reload](../../../raw/postgres-12/doc/src/sgml/config.sgml#L169-L183)
 - [config.sgml#partitioning-GUCs](../../../raw/postgres-12/doc/src/sgml/config.sgml#L4558-L4614)
 - [config.sgml#constraint-exclusion](../../../raw/postgres-12/doc/src/sgml/config.sgml#L5158-L5217)
 - [partition_prune.sql](../../../raw/postgres-12/src/test/regress/sql/partition_prune.sql#L1-L12)

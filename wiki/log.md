@@ -2,6 +2,30 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-09] review-fix v12 | partitioning planning/execution optimizations
+
+- Reviewed [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 12
+  (unverified)](v12/questions/partitioning-planning-execution-optimizations.md)
+  against pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Fixed the hash-partitioning NULL wording: v12
+  `compute_partition_hash_value` ignores NULL partition-key values when forming
+  the hash, while `get_matching_hash_bounds` still has no special hash null
+  partition and no default hash partition.
+- Tightened the write-locking follow-up: routed `INSERT`/`COPY` opens and locks
+  leaf partitions lazily, but `UPDATE`/`DELETE` scan locks are separate; a
+  cross-partition `UPDATE` writes the old partition through DELETE and the new
+  partition through a routed INSERT.
+- Added direct citations for `SET`/`SET LOCAL` scope, configuration-file reload
+  behavior, `postgresql.conf.sample` defaults, and hash NULL computation; also
+  clarified that partition keys can be columns or expressions.
+- Advanced `verified_by_agent` to
+  `gpt-5-codex 2026-07-09T12:48:19Z`; `verified:` remains human-only `false`,
+  so the visible title keeps `(unverified)`. Existing index and version-summary
+  text remains accurate.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-09] follow-up v12 | partitioning locking + random-I/O sensitivity per optimization
 
 - Extended [Table Partitioning Optimizations and Configuration During Query
