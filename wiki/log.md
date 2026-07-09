@@ -2,6 +2,48 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-09] follow-up v17 | partitioning locking + random-I/O sensitivity
+
+- Extended [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 17
+  (unverified)](v17/questions/partitioning-planning-execution-optimizations.md)
+  with a new `## Locking reduction and random-I/O sensitivity per optimization`
+  section, against the unchanged pin
+  `54eeefaedbee0385529f3edf321bb99e49232aaa` (`REL_17_STABLE`, 17.10).
+- Prompt hygiene: the follow-up ("Add an extra analysis on how each optimization
+  will reduce locking, and how each will have big gains if random I/O has higher
+  latency") was supplied grammatically clean, so it is recorded verbatim under
+  `## Question` with a prompt note; no correction needed.
+- Locking claims from `raw/postgres-17/`: expansion/locking runs before costing
+  (`planmain.c` `query_planner` calls `add_other_rels_to_query` before
+  `make_one_rel`); plan-time pruning is the only optimization that reduces read
+  locks (`expand_partitioned_rtentry` prunes to `live_parts` before
+  `try_table_open` locks the survivors), whereas inheritance locks every member
+  up front via `find_all_inheritors` and constraint exclusion
+  (`set_append_rel_size` -> `relation_excluded_by_constraints` ->
+  `set_dummy_rel_pathlist`) runs afterward; run-time pruning keeps all locks
+  because `AcquireExecutorLocks` locks every `RTE_RELATION` in `plannedstmt->rtable`;
+  write-path routing (`ExecInitPartitionInfo`) takes `RowExclusiveLock` lazily per
+  touched leaf, and cross-partition `UPDATE` (`ExecCrossPartitionUpdate`) writes two.
+- Random-I/O claims: `random_page_cost` 4.0 vs `seq_page_cost` 1.0
+  (`cost.h`/`costsize.c`), docs advise raising for magnetic/less-cached storage;
+  index-scan heap fetches charged at `random_page_cost` (`cost_index`), seq scans
+  at `seq_page_cost` (`cost_seqscan`), so scan-eliminating optimizations win most
+  on high-latency random storage.
+- Key v17-vs-v12 difference verified in source: v17 hash aggregation spills to
+  disk (`nodeAgg.c` spill mode; limit `work_mem × hash_mem_multiplier` via
+  `get_hash_memory_limit`) and `cost_agg` prices spill writes at
+  `random_page_cost`, so v17 partitionwise aggregate has a direct random-I/O
+  tie-in (avoid the spill); hash-join batch spill stays `seq_page_cost`
+  (`initial_cost_hashjoin`). The v12 sibling's "hash agg is in-memory only"
+  conclusion does not carry over, so it was not copied.
+- Updated `## Contents`, `## Question`, Evidence Map, Context Reviewed, Open
+  Questions, and Source References; refreshed `wiki/index.md`, `wiki/v17/index.md`,
+  and the `wiki/versions.md` v17 coverage cell + a new coverage note.
+- `verified_by_agent` stays `not yet`: scoped follow-up, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-09] question v17 | table partitioning optimizations + since-v12
 
 - Filed [Table Partitioning Optimizations and Configuration During Query
