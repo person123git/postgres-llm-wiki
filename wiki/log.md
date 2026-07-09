@@ -2,6 +2,28 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-09] review-fix v17 | partitioning DETACH CONCURRENTLY attribution
+
+- Reviewed [Table Partitioning Optimizations and Configuration During Query
+  Planning and Execution in PostgreSQL 17
+  (unverified)](v17/questions/partitioning-planning-execution-optimizations.md)
+  against pinned `raw/postgres-17/` commit
+  `54eeefaedbee0385529f3edf321bb99e49232aaa`.
+- Fixed one attribution error in the since-v12 section: the v14
+  `ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY` commit (`71f4c8c6f74`)
+  added detach-pending partition-descriptor filtering via
+  `inhdetachpending`, `find_inheritance_children_extended`, and
+  `RelationGetPartitionDesc` / `RelationBuildPartitionDesc`; it did not add
+  the current `expand_partitioned_rtentry` `try_table_open` open-failure path.
+- Kept the v17 hardening attributed to `11f1218ce81` / `27162a64b38`: v17
+  treats a partition dropped after concurrent detach as pruned during
+  expansion, and fixes run-time pruning setup while detach is in progress.
+- Updated the page's since-v12 table, Context Reviewed, Evidence Map, and
+  Source References with `partdesc.c` and `pg_inherits.c` evidence.
+  `verified_by_agent` remains `not yet`: scoped review-fix, not a full
+  claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-09] follow-up v17 | partitioning locking + random-I/O sensitivity
 
 - Extended [Table Partitioning Optimizations and Configuration During Query
