@@ -2,6 +2,43 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-10] review v14 | Row-Level Security claim-to-source audit
+
+- Re-checked every claim in [Row-Level Security (RLS) in PostgreSQL 14:
+  Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) against pinned
+  `raw/postgres-14/` commit `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Corrected execution-frequency wording: scan filters and write checks are
+  normally per tuple, uncorrelated scalar sublinks can become on-demand
+  InitPlans cached after first use, SQL-function inlining can remove a call
+  boundary, and an index comparison value can become a once-per-scan runtime
+  key. Also corrected mixed restrictive/permissive policy ordering and the
+  security-level account, and narrowed partition fan-out costs to partitions
+  the operation actually touches.
+- Expanded the implementation and boundary coverage with generated
+  catalog/header artifacts, precise relcache loading, executor WCO call sites,
+  parent/child and view-owner identity, COPY/CTAS/whole-table/RI/logical
+  replication/error-detail behavior, policy-DDL locking, extension hooks,
+  inspection and dump/restore surfaces, and explicit core/hook test coverage.
+- Expanded the MultiXact discussion to distinguish policy-authored `FOR SHARE`
+  lookup locking from RLS-induced foreign-key-validation fallback to per-row
+  `FOR KEY SHARE` checks. Clarified that neither path is inherent to RLS.
+- Documented a v14 plan-cache invalidation blind spot found in the final source
+  pass: named-policy matching consults inherited role membership, but the RLS
+  cache key and plan-cache callbacks do not track `pg_auth_members`. A cached
+  statement under an unchanged effective user can therefore retain its former
+  policy set after a membership grant or revoke; session recycling or
+  `DISCARD PLANS` forces re-analysis. The in-tree cache test changes effective
+  users and does not cover this case. A temporary out-of-tree build of the
+  pinned source reproduced the stale result after `REVOKE ROLE` and the fresh
+  result after `DISCARD PLANS`; all artifacts stayed under `.wiki-runtime/`.
+- Refreshed `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md` to match
+  the reviewed scope. After a final claim-by-claim pass, set
+  `verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-10T13:47:42Z`; human
+  `verified` remains `false`. Explicit benchmark, external-helper, and 14.x
+  provenance limits remain under `## Open Questions`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-09] review-fix v17 | partitioning DETACH CONCURRENTLY attribution
 
 - Reviewed [Table Partitioning Optimizations and Configuration During Query
