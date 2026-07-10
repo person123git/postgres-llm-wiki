@@ -2,6 +2,45 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-10] follow-up v12 | CREATE INDEX CONCURRENTLY maintenance_work_mem plateau
+
+- Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42`. The user approved correcting the
+  follow-up prompt before it was restated under `## Question`.
+- Traced two sequential CIC uses: transaction 2's AM-specific first build and
+  transaction 3's full-budget serial encoded-TID sort. GIN validation can also
+  force pending-list cleanup under the same setting. Raising memory cannot
+  remove the two heap scans, index validation scan, fixed index writes, or the
+  three transaction-set waits.
+- Added an all-in-tree-AM matrix. B-tree and hash use tuplesort; hash also uses
+  the GUC to decide direct insertion versus bucket pre-sort; GiST uses it with
+  `effective_cache_size` to choose buffered-build `levelStep`; GIN uses it as
+  the build-accumulator flush threshold; SP-GiST and Bloom do not read it in the
+  first build; BRIN neither reads it there nor emits validation TIDs.
+- Added the v12 B-tree parallel boundary: only the first CIC scan can run in
+  parallel; automatic planning requires 32 MB per participant (leader included),
+  workers divide by planned scan-sort states while the participating leader uses
+  the actual participant count, the later leader merge may reuse the full
+  budget, and each parallel worker emits one tape run even when its input fits.
+  This prevents treating every parallel temp file as evidence that more memory
+  will help.
+- Answered the cutoff question directly: there is no universal byte threshold.
+  A serial sort plateaus once all input fits its one-quicksort path, while hash,
+  GiST, GIN, B-tree worker selection, and the separate validation sort have
+  different transition points. The exact fastest safe value is workload- and
+  host-specific and must stop before swapping.
+- Added practical evidence from `pg_stat_progress_create_index`, `trace_sort`,
+  `log_temp_files`, and aggregate database temp counters, with exact GUC scopes.
+  Recorded that v12 only has a non-concurrent hash correctness test forced with
+  1 MB; it has no CIC memory, spill, or plateau test.
+- Inspected same-checkout history for parallel B-tree build `9da0cc35284`, encoded
+  validation-TID sort `b648b70342f`, and hash pre-sort `787eba734be`; all are
+  ancestors of the pin. Refreshed `wiki/index.md`, `wiki/v12/index.md`, and
+  `wiki/versions.md`. Reset `verified_by_agent` to `not yet` because this was a
+  scoped expansion rather than a full-page claim re-audit.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-10] review v12 | codebase navigation guide full claim-to-source audit
 
 - Re-checked every claim in the [PostgreSQL 12 Codebase Navigation Guide
