@@ -3561,3 +3561,38 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Updated `wiki/index.md`, `wiki/versions.md` (v19 row + a dated coverage note),
   `wiki/v19/index.md`, and all four v19 pages' `pinned_commit`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-07-10] review v12 | pgstatindex full claim-to-source audit
+
+- Re-checked every claim in [How `pgstatindex` Calculates B-Tree Index
+  Statistics in PostgreSQL 12
+  (unverified)](v12/questions/how-pgstatindex-calculates-information.md) against
+  pinned `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Confirmed the prior core formulas and half-dead `empty_pages` interpretation,
+  then made their boundaries explicit: `index_size` is the one-time captured
+  main-fork block count times `BLCKSZ`; `avg_leaf_density` is summed physical
+  occupancy using `PageGetFreeSpace`, including retained `LP_DEAD` storage;
+  `leaf_fragmentation` counts live leaves whose right-link points to a lower
+  physical block; both ratios pass through `%.2f` formatting.
+- Expanded the caller/build envelope: fresh default installation follows the
+  1.4 base plus 1.4-to-1.5 update path; text/regclass wrappers, legacy and v1.5
+  privilege checks, fmgr registration, generated `pg_am_d.h`/`BTREE_AM_OID`,
+  relation/index-state acceptance, true root versus fast root, and result/error
+  construction are now covered.
+- Added the omitted concurrency and integrity boundaries: `AccessShareLock`
+  permits DML and lazy VACUUM index maintenance; ordinary pages are only
+  share-locked one at a time; relation length is captured once without the
+  extension lock; the metapage is read without a content lock or `_bt_getmeta`
+  validation; and ordinary pages bypass `_bt_checkpage`. The page now warns
+  that `pgstatindex` is neither a whole-index snapshot nor an integrity checker.
+- Built the exact 12.2 pin and `pgstattuple` under `.wiki-runtime/`. The module's
+  one declared `installcheck` passed. A populated-index spot check preserved
+  density across heap deletion before `VACUUM` and lowered density after
+  `VACUUM`, matching the source-derived physical-occupancy interpretation. The
+  temporary server was stopped.
+- Added the mandatory Contents block and refreshed `wiki/index.md`,
+  `wiki/v12/index.md`, and `wiki/versions.md`. Set `verified_by_agent:
+  GPT-5-6-Sol-Max-Thinking 2026-07-10T16:00:43Z` after the final claim pass;
+  human `verified` remains `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
