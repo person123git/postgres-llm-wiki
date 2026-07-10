@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-10T14:38:16Z
 ---
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)
@@ -12,10 +12,12 @@ verified_by_agent: not yet
 
 - [Question](#question)
 - [Answer](#answer)
-  - [Preconditions and restrictions](#preconditions-and-restrictions)
+  - [Parser, utility dispatch, and generated catalog artifacts](#parser-utility-dispatch-and-generated-catalog-artifacts)
+  - [Concurrent-specific preconditions, restrictions, and early exits](#concurrent-specific-preconditions-restrictions-and-early-exits)
   - [The three pg_index state flags](#the-three-pgindex-state-flags)
   - [Step-by-step implementation](#step-by-step-implementation)
   - [The first build scan's tuple-visibility rule](#the-first-build-scans-tuple-visibility-rule)
+  - [Index access-method and contrib boundary](#index-access-method-and-contrib-boundary)
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [How concurrent index builds interact with each other](#how-concurrent-index-builds-interact-with-each-other)
   - [All operations that can block CREATE INDEX CONCURRENTLY](#all-operations-that-can-block-create-index-concurrently)
@@ -47,20 +49,21 @@ failure scenarios and the outcome on the table, like invalid indexes, etc.
 
 ## Answer
 
-`CREATE INDEX CONCURRENTLY` (CIC) builds an index without ever taking a table
+`CREATE INDEX CONCURRENTLY` (CIC) builds an index without taking a heap-table
 lock that blocks ordinary `INSERT`/`UPDATE`/`DELETE`: v12 DML uses
 `RowExclusiveLock`, and CIC's `ShareUpdateExclusiveLock` does not conflict with
-that lock mode. It pays for that with more total work: it splits the build
-across **four internal transactions**, does **two full table scans**, and
-**waits out other transactions three times**
+that lock mode. The concurrent path pays for this with more total work: it uses
+**four internal transactions**, performs **two full table scans**, and has
+**three deliberate transaction-set waits**
 ([lockdefs.h#lockmodes](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46),
 [lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103),
 [indexcmds.c#concurrent-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1472)).
-The whole dance exists to keep the index correct under concurrent writes, since
-the build cannot freeze the table
+Those three waits are not every place the backend can sleep; they are the three
+transaction handoff barriers in the CIC state machine. The whole dance keeps
+the index correct while concurrent writes continue
 ([index.c#validate_index-overview](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174)).
 
-All of the orchestration lives in `DefineIndex()` in the concurrent path: it
+The four-phase orchestration lives in `DefineIndex()`'s concurrent branch. It
 creates not-built catalog entries with `INDEX_CREATE_CONCURRENT` and
 `INDEX_CREATE_SKIP_BUILD`, then runs the post-commit build, validation, and
 mark-valid phases
@@ -70,7 +73,7 @@ Those phases call helpers in `index.c` (`index_create`,
 `index_concurrently_build`, `validate_index`, `index_set_state_flags`) and wait
 via `WaitForLockers` / `WaitForOlderSnapshots`.
 
-The table lock chosen for a concurrent build is
+The heap-table lock chosen for a concurrent build is
 **`ShareUpdateExclusiveLock`**, both at utility dispatch and inside
 `DefineIndex`. Its conflict mask includes another `ShareUpdateExclusiveLock`,
 `ShareLock`, `ShareRowExclusiveLock`, `ExclusiveLock`, and
@@ -81,22 +84,66 @@ normal DML can proceed
 [indexcmds.c#table-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L548-L564),
 [lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81)).
 
-### Preconditions and restrictions
+### Parser, utility dispatch, and generated catalog artifacts
 
-Before any build work, v12 either rejects the concurrent form or disables
-concurrency in these cases:
+The grammar turns `CREATE [UNIQUE] INDEX [CONCURRENTLY]` into an `IndexStmt` and
+sets its `concurrent` boolean from `opt_concurrently`; `IndexStmt` also carries
+the relation, access method, keys, included columns, predicate, uniqueness, and
+`IF NOT EXISTS` state
+([gram.y#IndexStmt](../../../raw/postgres-12/src/backend/parser/gram.y#L7333-L7407),
+[parsenodes.h#IndexStmt](../../../raw/postgres-12/src/include/nodes/parsenodes.h#L2738-L2775)).
+The parser build compiles `gram.o`; its makefile makes `gram.c` the Bison target
+with `-d` and makes `gram.h` depend on that generated C output
+([parser/Makefile#generated-grammar](../../../raw/postgres-12/src/backend/parser/Makefile#L15-L54)).
 
-| Restriction | Where enforced |
+`ProcessUtilitySlow` fires any `ddl_command_start` event trigger before dispatch.
+Its `T_IndexStmt` arm then rejects an explicit transaction block, resolves and
+locks the target relation once, transforms expression/predicate syntax, and
+calls `DefineIndex`. After `DefineIndex` returns, utility code collects the
+command, closes its ALTER-style command collection, and later fires
+`ddl_command_end` before the outer command transaction commits
+([utility.c#DDL-start](../../../raw/postgres-12/src/backend/tcop/utility.c#L960-L975),
+[utility.c#IndexStmt-dispatch](../../../raw/postgres-12/src/backend/tcop/utility.c#L1301-L1393),
+[utility.c#DDL-end](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1713)).
+That caller boundary matters for both blocking and the late-failure outcome
+described below.
+
+The three persistent state booleans are catalog schema, not private
+`DefineIndex` fields. `pg_index.h` is an input to PostgreSQL's catalog generator,
+includes the generated `pg_index_d.h`, and declares the catalog OID and columns
+([pg_index.h#catalog-input](../../../raw/postgres-12/src/include/catalog/pg_index.h#L12-L29),
+[pg_index.h#state-flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)).
+The catalog makefile includes `pg_index.h` in `CATALOG_HEADERS`, derives every
+`*_d.h` name, and runs `genbki.pl`; that script emits the per-catalog definition
+headers used by compiled code
+([catalog/Makefile#generated-headers](../../../raw/postgres-12/src/backend/catalog/Makefile#L28-L57),
+[catalog/Makefile#genbki](../../../raw/postgres-12/src/backend/catalog/Makefile#L71-L99),
+[genbki.pl#definition-headers](../../../raw/postgres-12/src/backend/catalog/genbki.pl#L368-L398)).
+There is no separate generated CIC state machine: generated parser/catalog
+artifacts expose the `IndexStmt` boolean and `pg_index` identities, while the C
+code implements the transitions.
+
+### Concurrent-specific preconditions, restrictions, and early exits
+
+These are the concurrent-specific cases. The ordinary `CREATE INDEX` ownership,
+relation-kind, access-method, operator-class, option, expression, and predicate
+checks in `DefineIndex` still apply
+([indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L1288)).
+
+| Restriction or early exit | Where enforced |
 |---|---|
 | Cannot run inside a transaction block (`BEGIN; ... COMMIT;`) | `PreventInTransactionBlock(isTopLevel, "CREATE INDEX CONCURRENTLY")` ([utility.c:1307-1309](../../../raw/postgres-12/src/backend/tcop/utility.c#L1307-L1309)) |
-| Temporary tables silently fall back to a non-concurrent build | [indexcmds.c#temp-fallback](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499) |
+| Temporary tables use a non-concurrent build, but only after the utility-level transaction-block check; therefore the `CONCURRENTLY` spelling on a temp table inside `BEGIN` is still rejected | [indexcmds.c#temp-fallback](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499), [create_index.sql#temp-ordering](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L504-L525) |
+| `IF NOT EXISTS` with an already-used relation name returns an invalid OID and exits `DefineIndex` before the four-phase branch | [index.c#IF-NOT-EXISTS](../../../raw/postgres-12/src/backend/catalog/index.c#L844-L859), [indexcmds.c#early-return](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1025-L1034) |
 | Partitioned tables cannot be built concurrently | [indexcmds.c#partitioned-error](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L604-L616) |
 | System catalog tables cannot be indexed concurrently | [index.c#system-catalog](../../../raw/postgres-12/src/backend/catalog/index.c#L813-L817) |
 | Exclusion constraints cannot be built concurrently | [index.c#exclusion](../../../raw/postgres-12/src/backend/catalog/index.c#L823-L826) |
 
-The reason CIC cannot run in a transaction block is structural: the
-implementation must itself commit several times, which is impossible inside a
-user-opened transaction.
+The four-transaction description therefore applies only when the request
+reaches the real concurrent branch. The transaction-block ban is structural:
+the implementation must commit its own phases, which it cannot do inside a
+user-opened transaction
+([indexcmds.c#phase-commits](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1435)).
 
 ### The three pg_index state flags
 
@@ -328,6 +375,43 @@ table while we built the index," which is exactly why CIC then sets
 backfill the rest
 ([index.c#validate_index-second-scan](../../../raw/postgres-12/src/backend/catalog/index.c#L3134-L3168)).
 
+### Index access-method and contrib boundary
+
+Core code owns the catalogs, snapshots, locks, and state transitions, but an
+index access method (AM) owns the index's physical contents. `index_build`
+dispatches the first build through `rd_indam->ambuild`. During validation,
+`validate_index` calls `index_bulk_delete`, which dispatches to the AM's
+`ambulkdelete` callback to enumerate existing TIDs, and the heap validation scan
+calls `index_insert`, which dispatches each missing tuple to `aminsert`
+([index.c#ambuild-dispatch](../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904),
+[index.c#validation-AM-calls](../../../raw/postgres-12/src/backend/catalog/index.c#L3228-L3280),
+[indexam.c#index_insert](../../../raw/postgres-12/src/backend/access/index/indexam.c#L165-L189),
+[indexam.c#index_bulk_delete](../../../raw/postgres-12/src/backend/access/index/indexam.c#L672-L693),
+[heapam_handler.c#validation-insert](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1873-L1934)).
+
+`IndexAmRoutine` therefore requires `ambuild`, `ambuildempty`, `aminsert`, and
+`ambulkdelete`; the AM documentation requires `ambuild` to fill a new index and
+says it ordinarily uses `table_index_build_scan`, while every AM must handle
+concurrent index updates correctly
+([amapi.h#IndexAmRoutine](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229),
+[indexam.sgml#ambuild](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L232-L265),
+[indexam.sgml#index-locking](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L891-L911)).
+The first-scan trace above is exact for the six core AMs because all six call the
+heap table-AM helper. A third-party AM can implement `ambuild` differently, so
+its internal scan, waiting, and crash-durability behavior cannot be established
+from core source alone.
+
+The in-tree contrib `bloom` extension demonstrates that boundary. Its SQL
+registers an index AM, and `blbuild` uses `table_index_build_scan`; it writes its
+metapage and built pages through shared buffers with `GenericXLog` full-page
+images
+([bloom--1.0.sql#access-method](../../../raw/postgres-12/contrib/bloom/bloom--1.0.sql#L8-L13),
+[blinsert.c#blbuild](../../../raw/postgres-12/contrib/bloom/blinsert.c#L44-L159),
+[blutils.c#BloomInitMetapage](../../../raw/postgres-12/contrib/bloom/blutils.c#L445-L470),
+[generic_xlog.c#GenericXLogFinish](../../../raw/postgres-12/src/backend/access/transam/generic_xlog.c#L263-L435)).
+It participates in the same core CIC phases, but its own callbacks remain
+extension code.
+
 ### All steps and locks required on the table
 
 Two distinct lock layers act on the **heap table**:
@@ -504,22 +588,32 @@ mechanisms, not a separate v12 CIC-specific exclusion flag or side channel
 
 ### All operations that can block CREATE INDEX CONCURRENTLY
 
-CIC itself can be made to wait at four points: the initial table-lock
-acquisition, the two `WaitForLockers(ShareLock)` waits, and the
-`WaitForOlderSnapshots` wait. Each point has a different set of blockers.
+The core CIC phase choreography has four deliberate transaction-synchronization
+barriers: the initial table-lock acquisition, the two
+`WaitForLockers(ShareLock)` waits, and the `WaitForOlderSnapshots` wait. The
+four barriers give a complete lock-mode/VXID account of the handoffs between
+CIC phases. They are **not** every place the command can wait: DDL event
+triggers, index predicates and expressions, index-AM code, unique validation,
+and parallel-worker coordination can also block inside a phase, as detailed
+after the four barriers.
 
 #### Point 1 — acquiring `ShareUpdateExclusiveLock` at command start
 
-The command's first action is to look up and lock the table in
-`ShareUpdateExclusiveLock` mode
-([utility.c#CIC-lockmode](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326)).
-CIC queues until every holder of a conflicting mode —
-`ShareUpdateExclusiveLock`, `ShareLock`, `ShareRowExclusiveLock`,
-`ExclusiveLock`, or `AccessExclusiveLock`
-([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81))
-— ends its transaction. The v12 operations that take those modes on a table:
+After any `ddl_command_start` event trigger has run, the `T_IndexStmt` dispatch
+looks up and locks the table in `ShareUpdateExclusiveLock` mode
+([utility.c#DDL-start](../../../raw/postgres-12/src/backend/tcop/utility.c#L960-L975),
+[utility.c#CIC-lockmode](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326)).
+CIC queues until every conflicting `ShareUpdateExclusiveLock`, `ShareLock`,
+`ShareRowExclusiveLock`, `ExclusiveLock`, or `AccessExclusiveLock` is released
+([lock.c#SUE-conflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81)).
+The listed SQL commands normally release transaction-level locks at transaction
+end; another CIC's session-level lock instead survives its internal commits and
+is released when that CIC finishes or errors
+([indexcmds.c#session-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1307-L1319),
+[indexcmds.c#session-unlock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1465-L1468)).
+The v12 lock documentation gives these command examples:
 
-| Lock mode held by another session | Operations (v12) |
+| Lock mode held by another session | Example operations (v12) |
 |---|---|
 | `ShareUpdateExclusiveLock` | `VACUUM` (non-FULL), autovacuum, `ANALYZE`, another `CREATE INDEX CONCURRENTLY`, `REINDEX CONCURRENTLY`, `CREATE STATISTICS`, certain `ALTER TABLE`/`ALTER INDEX` variants ([mvcc.sgml#SHARE-UPDATE-EXCLUSIVE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L912-L936)) |
 | `ShareLock` | plain `CREATE INDEX` ([mvcc.sgml#SHARE](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L938-L956)) |
@@ -734,9 +828,50 @@ and Wait 3's initial VXID list is only rechecked to remove entries that no
 longer qualify, not to add new ones
 ([indexcmds.c#wait3-recheck](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L346-L383)).
 
+#### Other waits outside the four orchestration barriers
+
+The four barriers above are the complete CIC-specific transaction handoffs, but
+they are not a closed list of backend waits:
+
+- **DDL event triggers can wait before the initial relation lock and after the
+  index is marked valid.** `ProcessUtilitySlow` invokes `ddl_command_start`
+  before `T_IndexStmt` dispatch and `ddl_command_end` after `DefineIndex`
+  returns; each event trigger is a user function invoked by `FunctionCallInvoke`
+  ([utility.c#event-trigger-boundary](../../../raw/postgres-12/src/backend/tcop/utility.c#L960-L975),
+  [utility.c#DDL-end](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1713),
+  [event_trigger.c#EventTriggerInvoke](../../../raw/postgres-12/src/backend/commands/event_trigger.c#L1031-L1092)).
+- **Index predicates and expressions can wait in user code.** v12 rejects
+  functions that are not marked `IMMUTABLE`, but that marking does not prevent
+  a function from taking a lock. The `multiple-cic` isolation test deliberately
+  marks PL/pgSQL functions immutable and calls `pg_advisory_lock_shared` from a
+  partial-index predicate to suspend one CIC while another proceeds
+  ([indexcmds.c#immutable-expressions-and-predicates](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1476-L1660),
+  [multiple-cic.spec#predicate-lock](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L3-L40)).
+- **Unique validation can wait for a conflicting writer.** The second heap scan
+  inserts a missing tuple with `UNIQUE_CHECK_YES`; B-tree insertion waits on a
+  conflicting transaction or speculative insertion before retrying
+  ([heapam_handler.c#validation-insert](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1873-L1934),
+  [nbtinsert.c#unique-waits](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L252-L274)).
+- **A parallel B-tree first scan waits for its workers.** The leader waits for
+  workers to attach and finish and sleeps on a condition variable until all
+  participating tuple sorts report completion
+  ([nbtsort.c#parallel-worker-waits](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1473-L1506),
+  [nbtsort.c#parallel-scan-wait](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1521-L1561)).
+- **An index AM can have additional internal waits.** Core dispatches to
+  `ambuild`, `ambulkdelete`, and `aminsert`; an extension AM owns those callback
+  bodies, so no finite list of SQL operations can describe waits introduced by
+  arbitrary third-party AM code
+  ([amapi.h#IndexAmRoutine](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229),
+  [indexam.sgml#index-locking](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L891-L911)).
+
+These waits do not add catalog phases. If one errors or is cancelled, the
+leftover state still depends on whether `SET_READY` or `SET_VALID` has already
+run.
+
 #### Watching the waits
 
-All three waits are visible in `pg_stat_progress_create_index` as the phases
+The three core transaction-set waits are visible in
+`pg_stat_progress_create_index` as the phases
 `waiting for writers before build`, `waiting for writers before validation`,
 and `waiting for old snapshots`, with `lockers_total`, `lockers_done`, and
 `current_locker_pid` identifying who CIC is waiting on
@@ -853,12 +988,13 @@ then scans the resolved heap with `SnapshotAny`. CIC takes only
 replaces lock-blocking with the VXID waits that skip prepared xacts — which is
 exactly where the gap enters.
 
-**Scope of this assessment.** This is a static trace of the pinned 12.2 source
-paths (the three waits, the two MVCC scans, and `COMMIT PREPARED`); it was not
-reproduced on a running cluster in this environment. The source itself flags the
-underlying choice as questionable: `GetLockConflicts` notes that ignoring
-prepared transactions "is a bit more debatable but is appropriate for current
-uses of the result"
+**Scope of this assessment.** The pinned source establishes the mechanism. A
+temporary build of that exact 12.2 pin also reproduced it: after preparing an
+`INSERT`, CIC reached `(indislive, indisready, indisvalid) = (t,t,t)`; after
+`COMMIT PREPARED`, a forced index scan found zero rows while a sequential scan
+found one. The source itself flags the underlying choice as questionable:
+`GetLockConflicts` notes that ignoring prepared transactions "is a bit more
+debatable but is appropriate for current uses of the result"
 ([lock.c#GetLockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L2815-L2818)).
 Nothing in this checkout's CIC code or `CREATE INDEX` documentation guards
 against, or warns about, building an index concurrently while a conflicting
@@ -985,21 +1121,24 @@ enforces uniqueness
 
 ### Failure scenarios and the outcome on the table
 
-Because CIC commits several times, the effect of a failure on the table depends
-entirely on **which internal transaction was running when it failed**. Two facts
-fix every outcome:
+Because CIC commits several times and changes its two later state flags in
+place, the outcome depends on the **last persistent state transition reached**, not
+just the internal transaction number:
 
 - The catalog row is created in transaction 1 and only becomes durable at the
   first commit. **Any failure before commit 1 leaves no index at all** — the
   transaction simply rolls back
   ([indexcmds.c#commit1](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1318-L1320)).
-- Every leftover after that is an **invalid** index (`indisvalid = false`), which
-  the planner never uses for queries
-  ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210)).
-  Whether it is also **ready** (`indisready`) — and therefore whether it costs
-  writes and enforces uniqueness — depends only on whether the build set
-  `indisready`, which is `index_concurrently_build`'s last action
-  ([index.c#build-set-ready](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438)).
+- After commit 1 but before `SET_VALID`, a leftover is **invalid**, so the planner
+  does not use it. Whether it is ready — and therefore maintained by writes and,
+  for a unique index, enforcing uniqueness — depends on whether
+  `index_concurrently_build` reached its final `SET_READY` action
+  ([plancat.c#get_relation_info](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210),
+  [index.c#build-set-ready](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438)).
+- Once `SET_VALID` runs, the index remains valid even if later command-end work
+  errors, because the in-place update cannot roll back
+  ([index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3366),
+  [utility.c#DDL-end](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719)).
 
 #### The three persistent pg_index states
 
@@ -1007,8 +1146,8 @@ fix every outcome:
 |---|---|---|---|---|---|
 | no index | — | — | — | failure before commit 1 | `concur_index7` — rejected inside a `BEGIN; ... COMMIT;` block, so it never appears in `\d` ([create_index.out:1391-1395](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1391-L1395)) |
 | invalid, not ready | `t` | `f` | `f` | failure after commit 1, before `indisready` is set | `concur_index3` — its unique build over duplicate `f2` values failed in the build scan, leaving it `INVALID` ([create_index.out:1383-1385](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1385), [create_index.out:1415](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1415)) |
-| invalid, ready | `t` | `t` | `f` | failure after `indisready` is set, before `indisvalid` | none named in the v12 suite — it needs a duplicate appearing *during* the second scan, which the non-concurrent regression test cannot stage; the docs describe this case ([create_index.sgml:598-606](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L598-L606)) |
-| valid (success) | `t` | `t` | `t` | `index_set_state_flags(SET_VALID)` ran | `concur_index1` / `concur_index2` — built concurrently and listed without `INVALID` ([create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420)) |
+| invalid, ready | `t` | `t` | `f` | failure after `indisready` is set, before `indisvalid` | none named in the v12 suite; cancellation, timeout, deadlock, an expression error, or a concurrent duplicate after `SET_READY` can produce it ([indexcmds.c:1375-1453](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1375-L1453)), and the docs describe the unique-index case ([create_index.sgml:598-606](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L598-L606)) |
+| valid | `t` | `t` | `t` | `index_set_state_flags(SET_VALID)` ran; normally success, but a later command-end error cannot roll the flag back ([index.c:3314-3366](../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3366), [utility.c:1701-1719](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719)) | `concur_index1` / `concur_index2` — built concurrently and listed without `INVALID` ([create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420)); no in-tree late-error test |
 
 The `index_set_state_flags` asserts encode this exact ladder: `SET_READY`
 requires live / not-ready / not-valid, and `SET_VALID` requires live / ready /
@@ -1017,12 +1156,16 @@ not-valid
 
 #### The same states under REINDEX INDEX CONCURRENTLY
 
-`REINDEX INDEX CONCURRENTLY` reuses this exact build/validate state machine, but
-runs it on a **new copy** (`<original>_ccnew`) it creates next to the original and
-then swaps in, leaving an invalid `_ccnew` (before the swap) or `_ccold` (after it)
-on failure. The full six-phase walkthrough — including the two extra
-`AccessExclusiveLock` "wait for readers" phases, the swap, and the per-phase failure
-table — has its own page:
+`REINDEX INDEX CONCURRENTLY` reuses the build/validate state machine, but runs
+it on a **new copy** (`<original>_ccnew`) created next to the original, then swaps
+it in. Its phase loop calls `index_concurrently_build` and `validate_index` on
+the copy; failures leave an invalid `_ccnew` before the swap or `_ccold` after it
+([indexcmds.c#RIC-copy](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2990-L3001),
+[indexcmds.c#RIC-build-validate](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198),
+[indexcmds.c#RIC-swap-and-drop](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3199-L3342)).
+The full six-phase walkthrough — including the two extra `AccessExclusiveLock`
+"wait for readers" phases, the swap, and the per-phase failure table — has its
+own page:
 [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](reindex-index-concurrently.md).
 
 #### What each leftover costs the table
@@ -1043,10 +1186,21 @@ CIC never leaves this state.
 
 | Failure point | Example causes | Leftover on the table |
 |---|---|---|
-| Preconditions / parse / catalog insert (transaction 1, before commit 1) | runs inside a `BEGIN; ... COMMIT;` block; partitioned, system-catalog, or exclusion-constraint table; index-name collision; `lock_timeout` while acquiring the initial `ShareUpdateExclusiveLock`; any error inside `index_create` | **none** — transaction 1 rolls back |
-| Wait 1 or the build scan (transaction 2, before `indisready` is set) | deadlock / cancel (`SIGINT`) / `statement_timeout` in `WaitForLockers`; a **pre-existing duplicate** caught by the unique build sort ([tuplesort.c#dup](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056)); an error evaluating an index expression or predicate; out-of-space during the build | **invalid, not ready** index |
-| Wait 2, `validate_index`, or Wait 3 (after `indisready` committed, before `indisvalid`) | deadlock / cancel / timeout in `WaitForLockers` or `WaitForOlderSnapshots`; a **duplicate that appears concurrently** and is hit by the second scan's `index_insert` ([nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)); an expression error in the second scan | **invalid, ready** index |
-| After `index_set_state_flags(SET_VALID)` | — | none possible: the flag flip is a non-transactional in-place update that cannot roll back, after which the command only sends a relcache invalidation and releases the session lock ([index.c#set-valid](../../../raw/postgres-12/src/backend/catalog/index.c#L3360-L3366), [indexcmds.c#after-valid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1453-L1472)) |
+| Preconditions / parse / catalog insert (transaction 1, before commit 1) | an error or wait in `ddl_command_start`; runs inside a `BEGIN; ... COMMIT;` block; partitioned, system-catalog, or exclusion-constraint table; index-name collision; `lock_timeout` while acquiring the initial `ShareUpdateExclusiveLock`; any error inside `index_create` | **none** — transaction 1 rolls back |
+| Wait 1 or the build scan (transaction 2, before `indisready` is set) | deadlock / cancel (`SIGINT`) / `statement_timeout` in `WaitForLockers`; a **pre-existing duplicate** caught by the unique build sort ([tuplesort.c#dup](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056)); an error or wait in an index expression, predicate, AM callback, or parallel worker; out-of-space during the build | **invalid, not ready** index |
+| Wait 2, `validate_index`, or Wait 3 (after `indisready` committed, before `indisvalid`) | deadlock / cancel / timeout in `WaitForLockers`, unique insertion, or `WaitForOlderSnapshots`; a **duplicate that appears concurrently** and is hit by the second scan's `index_insert` ([nbtinsert.c#dup-key](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)); an expression, predicate, or AM error in the second scan | **invalid, ready** index |
+| After `index_set_state_flags(SET_VALID)` (transaction 4, before command-end commit) | an error or cancel after the in-place flip; concretely, a `ddl_command_end` event-trigger function can raise an error after `DefineIndex` returns ([utility.c#post-DefineIndex](../../../raw/postgres-12/src/backend/tcop/utility.c#L1384-L1393), [utility.c#DDL-end](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719), [event_trigger.c#EventTriggerInvoke](../../../raw/postgres-12/src/backend/commands/event_trigger.c#L1031-L1092)) | **valid** index — `SET_VALID` cannot roll back ([index.c#set-valid](../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3366)) |
+
+The final row is not theoretical. A temporary build of the exact pin reproduced
+it with a `ddl_command_end` trigger that raised an exception for `CREATE INDEX`:
+the client received an error, while the surviving index had
+`(indislive, indisready, indisvalid) = (t,t,t)` and answered a forced index scan.
+The result follows from the caller order above: `DefineIndex` performs the
+non-transactional `SET_VALID`, releases its session lock, and returns before
+utility dispatch invokes the command-end trigger
+([indexcmds.c#after-valid](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1450-L1472),
+[utility.c#post-DefineIndex](../../../raw/postgres-12/src/backend/tcop/utility.c#L1384-L1393),
+[utility.c#DDL-end](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719)).
 
 The not-ready-vs-ready split is exactly the build-scan-vs-validation-scan split,
 because `index_concurrently_build` sets `indisready` only after `index_build`
@@ -1097,16 +1251,22 @@ another CIC on the table.
 
 #### Server crash or immediate shutdown
 
-A crash or `immediate`-mode shutdown leaves **the same four states as an ERROR
-or cancel — never a half-applied flag flip, and never a valid index that is
-missing rows.** An unclean stop leaves `pg_control` in a state other than
-`DB_SHUTDOWNED`, so the next startup forces `InRecovery` and replays WAL
-automatically
+A crash or `immediate`-mode shutdown can recover the same four catalog outcomes
+as an ERROR or cancel: no index, invalid/not-ready, invalid/ready, or valid. WAL
+replay cannot produce a half-applied flag flip. For the reviewed in-tree AMs, it
+also cannot lose completed build data while retaining a later durable
+`SET_VALID` record. This is a **crash-durability** statement, not a claim that
+every valid v12 index is logically complete: the prepared-transaction defect
+above can already create a valid-but-incomplete index before any crash.
+
+An unclean stop leaves `pg_control` in a state other than `DB_SHUTDOWNED`, so the
+next startup forces `InRecovery` and replays WAL automatically
 ([xlog.c#crash-recovery](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6740-L6766)).
 Recovery is pure physical WAL replay: the recovered `pg_index` flags are
-whatever that replay produces, and v12 runs no CIC-aware repair pass — which is
-why the documented fix for an interrupted build is still a manual `DROP INDEX` /
-`REINDEX`
+whatever that replay produces, and v12 runs no CIC-aware repair pass. It neither
+repairs an invalid interrupted build nor repairs the prepared-transaction gap;
+the documented response to an interrupted invalid build is manual `DROP INDEX`
+/ retry or `REINDEX`
 ([ref/create_index.sgml#invalid-index](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596)).
 
 **Why a flip's durability is decoupled from its phase commit.**
@@ -1159,44 +1319,59 @@ Durable SET_VALID therefore implies durable SET_READY, so recovered
 | + SET_READY (`XLOG_HEAP_INPLACE`) | `indisready=t, indisvalid=f` | invalid, ready |
 | + SET_VALID (`XLOG_HEAP_INPLACE`) | `indisready=t, indisvalid=t` | valid |
 
-**A recovered valid index is always complete**, for every core access method.
-Two facts combine. First, `XLogFlush` flushes WAL through a position
-([xlog.c#XLogFlush](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798))
-and SET_VALID carries the highest LSN of the whole sequence, so a durable
-SET_VALID implies every earlier record is durable too — including the
-`validate_index` backfill inserts, which go through shared buffers and are
-WAL-logged ahead of SET_VALID under the WAL-before-data rule that forces
-`XLogFlush` up to a buffer's LSN before that buffer can reach disk
+**A durable `SET_VALID` cannot outrun completed in-tree build data.** This
+claim assumes the index was logically complete when `SET_VALID` ran; it does
+not erase the prepared-transaction defect. For the six core AMs and contrib
+Bloom, two facts prevent a crash from turning an otherwise complete valid index
+into an incomplete one.
+
+First, `XLogFlush` flushes WAL through a position
+([xlog.c#XLogFlush](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798)).
+A durable `SET_VALID` therefore makes every earlier WAL record durable too,
+including the reviewed `validate_index` backfill insert paths. Those paths use
+shared buffers, whose WAL-before-data rule flushes WAL through a buffer's page
+LSN before writing that buffer to disk
 ([bufmgr.c#FlushBuffer](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736)).
-Second, the first build's pages are themselves durable no later than the
-SET_READY flip, by one of two per-AM mechanisms:
+
+Second, each in-tree first-build path makes its pages durable before the later
+flag records can be durable:
 
 - **B-tree builds outside shared buffers**, so a concurrent checkpoint cannot
-  flush them; it therefore `smgrimmedsync`s the index file before the build
-  transaction may commit, and WAL-logs the built pages only when
-  `wal_level >= replica`
+  flush those pages. It `smgrimmedsync`s the index file before the build
+  transaction may commit, and WAL-logs the built pages when `XLogIsNeeded()`
+  and `RelationNeedsWAL()` are both true
   ([nbtsort.c#build-durability](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L34-L44),
-  [nbtsort.c#use-wal](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580),
+  [nbtsort.c#use-wal](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L576-L580),
   [nbtsort.c#immedsync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)).
 - **Hash, GiST, SP-GiST, GIN, and BRIN build through shared buffers** and
-  WAL-log their pages, so the build WAL precedes SET_READY/SET_VALID and no
-  separate immediate sync is needed: GiST, SP-GiST, and GIN emit a build-end
+  WAL-log their pages. GiST, SP-GiST, and GIN emit a build-end
   `log_newpage_range` over the main fork
   ([gistbuild.c#build-wal](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226),
   [spginsert.c#build-wal](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143),
-  [gininsert.c#build-wal](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417)),
-  while hash and BRIN WAL-log through their ordinary buffered build path
+  [gininsert.c#build-wal](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417));
+  hash and BRIN WAL-log through their ordinary buffered build paths
   ([hash.c#hashbuild](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168),
   [hashpage.c#_hash_init-wal](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402),
   [brin.c#build-wal](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709)).
+- **Contrib Bloom also builds through shared buffers.** Its metapage and cached
+  build pages use `GenericXLog` with full-page images, which sets each page LSN
+  and marks each buffer dirty after inserting the WAL record
+  ([blinsert.c#blbuild](../../../raw/postgres-12/contrib/bloom/blinsert.c#L44-L159),
+  [blutils.c#BloomInitMetapage](../../../raw/postgres-12/contrib/bloom/blutils.c#L445-L470),
+  [generic_xlog.c#GenericXLogFinish](../../../raw/postgres-12/src/backend/access/transam/generic_xlog.c#L328-L435)).
 
-Either way a permanent index always needs WAL
-([rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520)),
-so durable SET_VALID implies the build and the backfill are durable too; no
-crash window can expose a valid permanent index that is missing rows. An
-**unlogged** table is reset to its empty init fork on crash recovery — heap and
-indexes together — so a recovered valid index on one is empty exactly when its
-heap is, never incomplete
+For these permanent in-tree indexes, `RelationNeedsWAL` is true
+([rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L515-L520)).
+The ordering above means no crash window can lose their completed build or
+backfill while preserving a later durable `SET_VALID`. Core code does not prove
+that property for an arbitrary third-party AM: it delegates physical build and
+insert durability to that AM's callbacks
+([index.c#ambuild-dispatch](../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904),
+[amapi.h#IndexAmRoutine](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229)).
+
+An **unlogged** table is reset to its empty init fork on crash recovery — heap
+and indexes together — so recovery does not leave its index populated
+inconsistently with its heap
 ([xlog.c#reset-unlogged-cleanup](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884),
 [xlog.c#reset-unlogged-init](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331),
 [reinit.c#ResetUnloggedRelations](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46)).
@@ -1213,18 +1388,34 @@ the drop is retryable
 
 ### Test coverage
 
-- Functional coverage is in the regression suite: `create_index.sql` builds
-  empty-table, unique, expression, and partial indexes concurrently, defaults
-  the index name, and asserts that CIC fails inside a `BEGIN; ... COMMIT;` block
-  ([create_index.sql#cic-block](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520)).
-- The concurrency itself is exercised by an isolation test that runs two CIC
-  operations simultaneously and uses advisory locks to interleave them
-  ([multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)).
+- `create_index.sql` builds empty-table, unique, expression, and partial indexes
+  concurrently, defaults the index name, checks the explicit-transaction ban and
+  temp-table ordering, and tests a failed unique build. Its own header warns
+  that this covers only about half the paths because no concurrent updates run
+  against the table
+  ([create_index.sql#CIC-tests](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L460-L525)).
+- Separate regression blocks cover concurrent B-tree and GiST indexes with
+  included columns
+  ([index_including.sql#CIC](../../../raw/postgres-12/src/test/regress/sql/index_including.sql#L161-L168),
+  [index_including_gist.sql#CIC](../../../raw/postgres-12/src/test/regress/sql/index_including_gist.sql#L37-L44)).
+- `multiple-cic.spec` runs two CIC operations simultaneously on different tables
+  and uses advisory-locking predicates to interleave their builds; the isolation
+  schedule includes that spec
+  ([multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40),
+  [isolation_schedule:66](../../../raw/postgres-12/src/test/isolation/isolation_schedule#L66)).
 - Failure outcomes are exercised too: `create_index.sql` builds a unique index
   concurrently over duplicate rows and checks that the failed build is left
   `INVALID`, survives `VACUUM FULL`, and is repaired only after the duplicate is
   removed
   ([create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1436)).
+- A whole-checkout search of executable test inputs found no direct CIC test for
+  hash, GIN, SP-GiST, BRIN, or contrib Bloom; no prepared-transaction/CIC test;
+  no command-end-event-trigger failure after `SET_VALID`; and no crash or
+  immediate-shutdown CIC recovery test. Bloom's own SQL uses only plain
+  `CREATE INDEX`
+  ([bloom.sql#index-builds](../../../raw/postgres-12/contrib/bloom/sql/bloom.sql#L1-L95)).
+  The exact-pin temporary reproductions described above cover the prepared-write
+  gap and the late event-trigger error, but not crash timing.
 
 ## Context Reviewed
 
@@ -1232,12 +1423,26 @@ the drop is retryable
   `wiki/log.md` entries (navigation only).
 - Pinned checkout `raw/postgres-12/` at commit
   `45b88269a353ad93744772791feb6d01bc7e1e42` ("Stamp 12.2.").
+- Parser and generated-artifact path: `IndexStmt` grammar in
+  `src/backend/parser/gram.y`, `IndexStmt` in `src/include/nodes/parsenodes.h`,
+  generated grammar targets in `src/backend/parser/Makefile`, `pg_index.h` as a
+  catalog-generator input, and the `genbki.pl` / catalog Makefile path that emits
+  `pg_index_d.h`.
+- Utility caller boundary in `src/backend/tcop/utility.c`, including
+  `ddl_command_start`, the `T_IndexStmt` transform/lock/`DefineIndex` dispatch,
+  post-`DefineIndex` command collection, and `ddl_command_end`; event-trigger
+  function invocation in `src/backend/commands/event_trigger.c`.
 - `DefineIndex` concurrent branch and `WaitForOlderSnapshots` in
   `src/backend/commands/indexcmds.c`.
 - `pg_index` flag declarations in `src/include/catalog/pg_index.h`;
   `index_create`/`UpdateIndexRelation`, `BuildIndexInfo`,
   `index_concurrently_build`, `validate_index`, and `index_set_state_flags` in
   `src/backend/catalog/index.c`.
+- Index-AM boundary: `IndexAmRoutine` in `src/include/access/amapi.h`, AM
+  dispatch in `src/backend/access/index/indexam.c`, the AM contract in
+  `doc/src/sgml/indexam.sgml`, all six core `ambuild` paths, and contrib Bloom's
+  handler/build/`GenericXLog` paths in `contrib/bloom/` plus
+  `src/backend/access/transam/generic_xlog.c`.
 - Surrounding command-end commit path in `finish_xact_command` in
   `src/backend/tcop/postgres.c`.
 - `WaitForLockers`/`WaitForLockersMultiple` in
@@ -1254,7 +1459,9 @@ the drop is retryable
   `src/backend/access/transam/twophase.c`; `GetTransactionSnapshot` in
   `src/backend/utils/time/snapmgr.c`; the lock-mode/command table in
   `doc/src/sgml/mvcc.sgml`; the `pg_stat_progress_create_index` phase table in
-  `doc/src/sgml/monitoring.sgml`.
+  `doc/src/sgml/monitoring.sgml`; predicate/expression evaluation and the
+  advisory-locking `multiple-cic` test; B-tree validation waits in `nbtinsert.c`;
+  and parallel B-tree worker waits in `nbtsort.c`.
 - For the worked examples: the dump-transaction setup, timeout disabling, and
   `LOCK TABLE ... IN ACCESS SHARE MODE` statements in
   `src/bin/pg_dump/pg_dump.c`; `SnapshotResetXmin` in
@@ -1273,7 +1480,8 @@ the drop is retryable
   `heap_inplace_update` in `src/backend/access/heap/heapam.c`;
   `LockRelationIdForSession` in
   `src/backend/storage/lmgr/lmgr.c` and `ProcReleaseLocks` in
-  `src/backend/storage/lmgr/proc.c`; and the invalid-index regression evidence in
+  `src/backend/storage/lmgr/proc.c`; the post-`SET_VALID` caller path through
+  `ddl_command_end`; and the invalid-index regression evidence in
   `src/test/regress/expected/create_index.out`.
 - For the crash / immediate-shutdown recovery trace: `heap_inplace_update` and
   its redo `heap_xlog_inplace` (`XLOG_HEAP_INPLACE`) in
@@ -1286,22 +1494,34 @@ the drop is retryable
   `src/backend/access/nbtree/nbtsort.c`; the through-shared-buffers build and
   build-end WAL of the other core AMs (`gistbuild`/`spgbuild`/`ginbuild`
   `log_newpage_range`, `hashbuild`/`_hash_init`, and `brinbuild`) under
-  `src/backend/access/{gist,spgist,gin,hash,brin}/`; the `index_concurrently_build`
-  SET_READY and `DefineIndex` SET_VALID commit boundaries in
-  `src/backend/catalog/index.c` and `src/backend/commands/indexcmds.c`; the
-  `RelationNeedsWAL` macro in `src/include/utils/rel.h`; and the crash-recovery
+  `src/backend/access/{gist,spgist,gin,hash,brin}/`; contrib Bloom's
+  shared-buffer `GenericXLog` build; the `index_concurrently_build` SET_READY and
+  `DefineIndex` SET_VALID commit boundaries in `src/backend/catalog/index.c` and
+  `src/backend/commands/indexcmds.c`; the `RelationNeedsWAL` macro in
+  `src/include/utils/rel.h`; the third-party-AM boundary; and the crash-recovery
   unlogged-relation reset (`ResetUnloggedRelations` CLEANUP/INIT calls in
   `StartupXLOG`) in `src/backend/access/transam/xlog.c` and
   `src/backend/storage/file/reinit.c`.
-- Tests: `src/test/regress/sql/create_index.sql`,
-  `src/test/isolation/specs/multiple-cic.spec`, and
-  `src/test/isolation/expected/multiple-cic.out`.
+- Tests: `src/test/regress/sql/create_index.sql`, concurrent-INCLUDE blocks in
+  `index_including.sql` and `index_including_gist.sql`,
+  `src/test/isolation/specs/multiple-cic.spec`, its expected output and schedule,
+  plus a whole-checkout executable-test-input search for the explicitly recorded
+  CIC coverage absences.
+- Exact-pin temporary-build reproductions kept under `.wiki-runtime/`: the
+  prepared-`INSERT` gap (valid index scan returned zero, forced sequential scan
+  returned one after `COMMIT PREPARED`) and a failing `ddl_command_end` trigger
+  (command error with a surviving valid, ready, live index). No crash timing was
+  reproduced.
+- Source history at and before the pin: the original CIC implementation
+  (`e093dcdd2853`), VXID-based waiting foundation (`295e63983d75`), the
+  `indislive`/in-place-state fix (`3c84046490be`), the no-advertised-`xmin`
+  transaction boundary (`1dec82068b3b`), and progress reporting
+  (`ab0dfc961b6a`); each commit is an ancestor of the pin.
 - For the inter-builder follow-up: the `ReindexRelationConcurrently` adjacent
   caller in `src/backend/commands/indexcmds.c`; the `GetCurrentVirtualXIDs`
   filter contract in `src/backend/storage/ipc/procarray.c`; the v12
-  `vacuumFlags` definitions in `src/include/storage/proc.h`; and a whole
-  checkout `rg` search confirming `PROC_IN_SAFE_IC` is absent in the pinned v12
-  source.
+  `vacuumFlags` definitions in `src/include/storage/proc.h`; and a whole-checkout
+  search confirming `PROC_IN_SAFE_IC` is absent in the pinned v12 source.
 - For the first-build-scan tuple-visibility trace: `index_concurrently_build`
   and `index_build` in `src/backend/catalog/index.c`; the `ambuild` heap-scan
   callers and the B-tree serial/parallel build helpers in `nbtsort.c`, plus
@@ -1348,9 +1568,13 @@ the drop is retryable
 
 | Claim | Source |
 |---|---|
+| Grammar sets `IndexStmt.concurrent`; parser C/header and `pg_index_d.h` are generated build artifacts | [gram.y:7333-7407](../../../raw/postgres-12/src/backend/parser/gram.y#L7333-L7407), [parsenodes.h:2738-2775](../../../raw/postgres-12/src/include/nodes/parsenodes.h#L2738-L2775), [parser/Makefile:15-54](../../../raw/postgres-12/src/backend/parser/Makefile#L15-L54), [pg_index.h:12-29](../../../raw/postgres-12/src/include/catalog/pg_index.h#L12-L29), [catalog/Makefile:28-99](../../../raw/postgres-12/src/backend/catalog/Makefile#L28-L99), [genbki.pl:368-398](../../../raw/postgres-12/src/backend/catalog/genbki.pl#L368-L398) |
+| Utility dispatch runs DDL-start before relation locking and DDL-end after `DefineIndex` returns | [utility.c:960-975](../../../raw/postgres-12/src/backend/tcop/utility.c#L960-L975), [utility.c:1301-1393](../../../raw/postgres-12/src/backend/tcop/utility.c#L1301-L1393), [utility.c:1701-1719](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719) |
+| Core delegates physical build/validation to `IndexAmRoutine`; contrib Bloom uses the same phase machinery through its own shared-buffer/`GenericXLog` callbacks | [index.c:2899-2904](../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904), [indexam.c:165-189](../../../raw/postgres-12/src/backend/access/index/indexam.c#L165-L189), [indexam.c:672-693](../../../raw/postgres-12/src/backend/access/index/indexam.c#L672-L693), [amapi.h:160-229](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229), [blinsert.c:44-159](../../../raw/postgres-12/contrib/bloom/blinsert.c#L44-L159), [generic_xlog.c:328-435](../../../raw/postgres-12/src/backend/access/transam/generic_xlog.c#L328-L435) |
 | Table lock is `ShareUpdateExclusiveLock` for concurrent, `ShareLock` otherwise | [indexcmds.c:563-564](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L563-L564), [utility.c:1320-1321](../../../raw/postgres-12/src/backend/tcop/utility.c#L1320-L1321) |
 | CIC cannot run in a transaction block | [utility.c:1307-1309](../../../raw/postgres-12/src/backend/tcop/utility.c#L1307-L1309) |
-| Temp tables fall back to non-concurrent | [indexcmds.c:489-499](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499) |
+| Temp tables fall back to non-concurrent only after the utility transaction-block check; `CONCURRENTLY` on a temp table inside `BEGIN` still errors | [utility.c:1307-1309](../../../raw/postgres-12/src/backend/tcop/utility.c#L1307-L1309), [indexcmds.c:489-499](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499), [create_index.sql:504-525](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L504-L525) |
+| `IF NOT EXISTS` name collision exits before the four concurrent phases | [index.c:844-859](../../../raw/postgres-12/src/backend/catalog/index.c#L844-L859), [indexcmds.c:1025-1034](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1025-L1034) |
 | Partitioned / system-catalog / exclusion restrictions | [indexcmds.c:604-616](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L604-L616), [index.c:813-817](../../../raw/postgres-12/src/backend/catalog/index.c#L813-L817), [index.c:823-826](../../../raw/postgres-12/src/backend/catalog/index.c#L823-L826) |
 | `pg_index` state flags mean valid-for-queries / ready-for-inserts / alive-at-all; initial CIC row is live but not ready or valid | [pg_index.h:40-43](../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43), [index.c:612-615](../../../raw/postgres-12/src/backend/catalog/index.c#L612-L615), [index.c:990-996](../../../raw/postgres-12/src/backend/catalog/index.c#L990-L996) |
 | `indislive` controls whether backends may touch the index at all and whether it participates in HOT-safety decisions | [relcache.c:4388-4395](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4388-L4395), [relcache.c:4861-4870](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4861-L4870) |
@@ -1371,6 +1595,7 @@ the drop is retryable
 | CIC clears its own advertised xmin before Wait 3 to avoid inter-CIC deadlock | [indexcmds.c:1414-1448](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1414-L1448) |
 | `REINDEX CONCURRENTLY` uses analogous heap/index `ShareUpdateExclusiveLock` locks, saved heap lock tags for writer waits, and the same concurrent-build snapshot-wait boundary | [indexcmds.c:2957-3077](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2957-L3077), [indexcmds.c:3080-3198](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3198) |
 | `multiple-cic` tests two simultaneous CIC commands on different tables; the visible wait is advisory-lock-induced, and the second CIC still completes while the first is open | [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40), [multiple-cic.out:3-19](../../../raw/postgres-12/src/test/isolation/expected/multiple-cic.out#L3-L19) |
+| The four core synchronization barriers are not every backend wait: predicates can take advisory locks, unique validation can wait for transactions/speculative inserts, and parallel B-tree build waits for workers | [multiple-cic.spec:3-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L3-L40), [heapam_handler.c:1873-1934](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1873-L1934), [nbtinsert.c:252-274](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L252-L274), [nbtsort.c:1473-1561](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1473-L1561) |
 | Correctness narrative (two scans, three waits) | [index.c:3112-3174](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3174), [ref/create_index.sgml:545-572](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L572) |
 | First build scan sets `ii_Concurrent` then builds via `index_build` -> `ambuild`; serial core AM paths call `table_index_build_scan` directly, and B-tree parallel workers call it with a parallel heap scan descriptor | [index.c:1421-1427](../../../raw/postgres-12/src/backend/catalog/index.c#L1421-L1427), [index.c:2902-2903](../../../raw/postgres-12/src/backend/catalog/index.c#L2902-L2903), [index.c:2844-2854](../../../raw/postgres-12/src/backend/catalog/index.c#L2844-L2854), [nbtsort.c:487-494](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L487-L494), [nbtsort.c:1779-1786](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1779-L1786), [hash.c:166](../../../raw/postgres-12/src/backend/access/hash/hash.c#L166), [gistbuild.c:196](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L196), [spginsert.c:126](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L126), [gininsert.c:382](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L382), [brin.c:723](../../../raw/postgres-12/src/backend/access/brin/brin.c#L723) |
 | `table_index_build_scan` passes `anyvisible = false` and dispatches to `heapam_index_build_range_scan` | [tableam.h:1512-1533](../../../raw/postgres-12/src/include/access/tableam.h#L1512-L1533), [heapam_handler.c:2644](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2644) |
@@ -1387,6 +1612,7 @@ the drop is retryable
 | Build-scan dup is "could not create unique index ... is duplicated"; concurrent second-scan dup is "duplicate key ... already exists" | [tuplesort.c:4048-4056](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4048-L4056), [nbtinsert.c:563-568](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568) |
 | Regression: failed unique build left INVALID, retained through `VACUUM FULL`, then made valid by non-concurrent `REINDEX TABLE` once the duplicate is deleted | [create_index.out:1383-1417](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1383-L1417), [create_index.out:1400-1406](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1400-L1406), [create_index.out:1422-1436](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1422-L1436) |
 | Named example index per `pg_index` state: `concur_index7` (none), `concur_index3` (invalid, not ready), `concur_index1`/`concur_index2` (valid) | [create_index.out:1391-1395](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1391-L1395), [create_index.out:1413-1420](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1413-L1420) |
+| A post-`SET_VALID` error can report CIC failure while leaving a valid index: utility dispatch invokes `ddl_command_end` after `DefineIndex` returns, and the in-place flag cannot roll back | [index.c:3314-3366](../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3366), [indexcmds.c:1450-1472](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1450-L1472), [utility.c:1384-1393](../../../raw/postgres-12/src/backend/tcop/utility.c#L1384-L1393), [utility.c:1701-1719](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719), [event_trigger.c:1031-1092](../../../raw/postgres-12/src/backend/commands/event_trigger.c#L1031-L1092) |
 | A failed CIC releases its session lock (removed on `ereport(ERROR)`; abort releases session locks) | [lmgr.c:356-363](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L363), [proc.c:772-798](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798) |
 | `DROP INDEX CONCURRENTLY` is retryable: `INDEX_DROP_CLEAR_VALID` does not assert its starting flags | [index.c:3367-3383](../../../raw/postgres-12/src/backend/catalog/index.c#L3367-L3383) |
 | Crash / `immediate` shutdown triggers automatic WAL-replay recovery; recovered `pg_index` flags are whatever physical replay produces (no CIC repair pass), so the documented fix stays manual `DROP`/`REINDEX` | [xlog.c:6740-6766](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6740-L6766), [ref/create_index.sgml:574-596](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596) |
@@ -1394,9 +1620,9 @@ the drop is retryable
 | An xidless WAL-writing transaction commits asynchronously (`XLogSetAsyncXactLSN`, not `XLogFlush`) regardless of `synchronous_commit`, so a flip's durability is decoupled from its phase commit | [xact.c:1232-1392](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1232-L1392), [xlog.c:2630-2670](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2670) |
 | `heap_xlog_inplace` redoes the flip physically and unconditionally whenever its record is durable, so a flip can survive a phase that wrote no commit record | [heapam.c:8797-8835](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8797-L8835) |
 | `XLogFlush` flushes all WAL through a position, so durable SET_VALID implies durable SET_READY; recovered `(indisready, indisvalid)` is monotone, never `(f,t)` | [xlog.c:2791-2798](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2791-L2798), [index.c:1426-1438](../../../raw/postgres-12/src/backend/catalog/index.c#L1426-L1438), [indexcmds.c:1448-1463](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1448-L1463) |
-| A recovered valid index is complete for every core AM: B-tree `smgrimmedsync`s its outside-buffers build before commit (WAL-logging build pages only when `wal_level >= replica`); hash/GiST/SP-GiST/GIN/BRIN build through shared buffers and WAL-log their pages (GiST/SP-GiST/GIN via a build-end `log_newpage_range`); the `validate_index` backfill is WAL-logged ahead of SET_VALID under the WAL-before-data rule | [nbtsort.c:1288-1307](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [nbtsort.c:580](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L580), [gistbuild.c:217-226](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226), [spginsert.c:134-143](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143), [gininsert.c:408-417](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417), [hash.c:129-168](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168), [hashpage.c:346-402](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402), [brin.c:683-709](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709), [rel.h:519-520](../../../raw/postgres-12/src/include/utils/rel.h#L519-L520), [bufmgr.c:2712-2736](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736) |
-| An unlogged table's heap and indexes reset together to their empty init fork on crash recovery, so a recovered valid index on one is empty exactly when its heap is — never incomplete | [xlog.c:6878-6884](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884), [xlog.c:7323-7331](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331), [reinit.c:36-46](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46) |
-| Tests | [create_index.sql:467-520](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L467-L520), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
+| For an otherwise complete index using a reviewed in-tree AM, durable SET_VALID cannot outrun build/backfill durability: B-tree `smgrimmedsync`s its outside-buffer build; hash/GiST/SP-GiST/GIN/BRIN use shared-buffer WAL paths; Bloom uses shared-buffer `GenericXLog`; buffer flush obeys WAL-before-data. This is not a proof for third-party AM callbacks or a repair for the prepared-transaction gap | [nbtsort.c:1288-1307](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [gistbuild.c:217-226](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226), [spginsert.c:134-143](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143), [gininsert.c:408-417](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417), [hash.c:129-168](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168), [hashpage.c:346-402](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402), [brin.c:683-709](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709), [blinsert.c:44-159](../../../raw/postgres-12/contrib/bloom/blinsert.c#L44-L159), [generic_xlog.c:328-435](../../../raw/postgres-12/src/backend/access/transam/generic_xlog.c#L328-L435), [bufmgr.c:2712-2736](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2712-L2736), [amapi.h:160-229](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229) |
+| An unlogged table's heap and indexes reset together to their empty init fork on crash recovery, so recovery does not leave them physically inconsistent | [xlog.c:6878-6884](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884), [xlog.c:7323-7331](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331), [reinit.c:36-46](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46) |
+| Direct tests cover B-tree functional/failure cases, B-tree/GiST INCLUDE builds, and different-table interleaving; the base regression file explicitly says it lacks concurrent updates | [create_index.sql:460-525](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L460-L525), [index_including.sql:161-168](../../../raw/postgres-12/src/test/regress/sql/index_including.sql#L161-L168), [index_including_gist.sql:37-44](../../../raw/postgres-12/src/test/regress/sql/index_including_gist.sql#L37-L44), [multiple-cic.spec:1-40](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40) |
 | Initial lock acquisition point and its conflict set | [utility.c:1311-1326](../../../raw/postgres-12/src/backend/tcop/utility.c#L1311-L1326), [lock.c:78-81](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) |
 | Which v12 commands take each conflicting lock mode | [mvcc.sgml:890-1030](../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L890-L1030) |
 | Autovacuum blocking CIC is sent SIGINT after `deadlock_timeout`, except anti-wraparound | [proc.c:1308-1375](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375), [proc.c:1319-1324](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1319-L1324) |
@@ -1423,21 +1649,41 @@ the drop is retryable
 
 ## Open Questions
 
-None for source behavior at the pinned PostgreSQL 12 commit. The former
-crash / immediate-shutdown question is resolved inline under
-[Server crash or immediate shutdown](#server-crash-or-immediate-shutdown): the
-flag flips are xidless `heap_inplace_update` writes that commit asynchronously,
-`heap_xlog_inplace` redoes them physically on recovery, and the recovered state
-is monotone, so a crash always lands on one of the four documented leftovers and
-never on a valid-but-incomplete index. That completeness holds for every core
-index access method — B-tree via the outside-buffers `smgrimmedsync`, and hash,
-GiST, SP-GiST, GIN, and BRIN via their shared-buffer build WAL — and for
-unlogged tables, whose heap and indexes reset together on crash. This conclusion
-is a static source trace of the pinned 12.2 checkout, not a live crash
-reproduction in this environment.
+None for the reviewed in-tree source behavior at the pinned PostgreSQL 12
+commit. The prepared-transaction correctness defect and the post-`SET_VALID`
+`ddl_command_end` failure outcome were both source-traced and reproduced on a
+temporary build of the exact 12.2 pin.
+
+Two evidence boundaries remain explicit:
+
+- The [crash / immediate-shutdown analysis](#server-crash-or-immediate-shutdown)
+  is a static source trace, not a live crash-timing reproduction. It establishes
+  monotone flag replay and build/backfill durability for the six core AMs and
+  contrib Bloom. It does not claim that recovery repairs the independently
+  demonstrated prepared-transaction gap.
+- Arbitrary third-party index AM code is outside this checkout's evidence. Core
+  dispatches physical build, validation enumeration, and inserts to AM
+  callbacks, so this page does not claim to prove a third-party AM's internal
+  waits or crash durability
+  ([amapi.h#IndexAmRoutine](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229),
+  [index.c#ambuild-dispatch](../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904)).
 
 ## Source References
 
+- [gram.y#IndexStmt](../../../raw/postgres-12/src/backend/parser/gram.y#L7333-L7407)
+- [parser/Makefile#generated-grammar](../../../raw/postgres-12/src/backend/parser/Makefile#L15-L54)
+- [parsenodes.h#IndexStmt](../../../raw/postgres-12/src/include/nodes/parsenodes.h#L2738-L2775)
+- [catalog/Makefile#generated-headers](../../../raw/postgres-12/src/backend/catalog/Makefile#L28-L99)
+- [genbki.pl#definition-headers](../../../raw/postgres-12/src/backend/catalog/genbki.pl#L368-L398)
+- [utility.c#IndexStmt-dispatch-and-events](../../../raw/postgres-12/src/backend/tcop/utility.c#L960-L975)
+- [utility.c#IndexStmt-dispatch](../../../raw/postgres-12/src/backend/tcop/utility.c#L1301-L1393)
+- [utility.c#DDL-command-end](../../../raw/postgres-12/src/backend/tcop/utility.c#L1701-L1719)
+- [event_trigger.c#EventTriggerInvoke](../../../raw/postgres-12/src/backend/commands/event_trigger.c#L1031-L1092)
+- [amapi.h#IndexAmRoutine](../../../raw/postgres-12/src/include/access/amapi.h#L160-L229)
+- [indexam.c#index_insert](../../../raw/postgres-12/src/backend/access/index/indexam.c#L165-L189)
+- [indexam.c#index_bulk_delete](../../../raw/postgres-12/src/backend/access/index/indexam.c#L672-L693)
+- [indexam.sgml#ambuild](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L232-L265)
+- [indexam.sgml#index-locking](../../../raw/postgres-12/doc/src/sgml/indexam.sgml#L891-L911)
 - [indexcmds.c#DefineIndex](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L429-L1473)
 - [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L307-L402)
 - [postgres.c#finish_xact_command](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578)
@@ -1449,6 +1695,7 @@ reproduction in this environment.
 - [tableam.h#table_index_build_scan](../../../raw/postgres-12/src/include/access/tableam.h#L1485-L1533)
 - [snapshot.h#SNAPSHOT_MVCC](../../../raw/postgres-12/src/include/utils/snapshot.h#L37-L50)
 - [nbtsort.c#parallel-build-snapshot](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1360-L1427)
+- [nbtsort.c#parallel-worker-waits](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1473-L1561)
 - [nbtsort.c#parallel-worker-scan](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1779-L1786)
 - [heapam_handler.c#heapam_index_build_range_scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1150-L1703)
 - [heapam.c#heapgetpage](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L351-L461)
@@ -1497,14 +1744,23 @@ reproduction in this environment.
 - [hash.c#hashbuild](../../../raw/postgres-12/src/backend/access/hash/hash.c#L129-L168)
 - [hashpage.c#_hash_init](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402)
 - [brin.c#brinbuild](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709)
+- [bloom--1.0.sql#access-method](../../../raw/postgres-12/contrib/bloom/bloom--1.0.sql#L8-L13)
+- [blinsert.c#blbuild](../../../raw/postgres-12/contrib/bloom/blinsert.c#L44-L159)
+- [blutils.c#BloomInitMetapage](../../../raw/postgres-12/contrib/bloom/blutils.c#L445-L470)
+- [generic_xlog.c#GenericXLogFinish](../../../raw/postgres-12/src/backend/access/transam/generic_xlog.c#L263-L435)
 - [xlog.c#reset-unlogged-cleanup](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884)
 - [xlog.c#reset-unlogged-init](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331)
 - [reinit.c#ResetUnloggedRelations](../../../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L46)
 - [tuplesort.c#unique-violation](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L4040-L4056)
+- [nbtinsert.c#unique-waits](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L252-L274)
 - [nbtinsert.c#_bt_check_unique](../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L563-L568)
 - [lmgr.c#LockRelationIdForSession](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L389)
 - [proc.c#ProcReleaseLocks](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L772-L798)
+- [create_index.sql#CIC-tests](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L460-L525)
 - [create_index.out#concurrent-invalid](../../../raw/postgres-12/src/test/regress/expected/create_index.out#L1382-L1436)
+- [index_including.sql#CIC](../../../raw/postgres-12/src/test/regress/sql/index_including.sql#L161-L168)
+- [index_including_gist.sql#CIC](../../../raw/postgres-12/src/test/regress/sql/index_including_gist.sql#L37-L44)
+- [bloom.sql#index-builds](../../../raw/postgres-12/contrib/bloom/sql/bloom.sql#L1-L95)
 - [multiple-cic.spec](../../../raw/postgres-12/src/test/isolation/specs/multiple-cic.spec#L1-L40)
 - [multiple-cic.out](../../../raw/postgres-12/src/test/isolation/expected/multiple-cic.out#L3-L19)
 - [procarray.c#GetOldestXmin](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1306-L1443)

@@ -2,6 +2,44 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-10] review v12 | CREATE INDEX CONCURRENTLY full claim-to-source audit
+
+- Re-checked every claim in [How CREATE INDEX CONCURRENTLY Is Implemented in
+  PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Corrected the page's "four blocking points" scope. The initial relation-lock
+  acquisition, two `WaitForLockers(ShareLock)` calls, and
+  `WaitForOlderSnapshots` are four deliberate core transaction barriers, not
+  every place CIC can wait. Added source-backed waits in DDL event triggers,
+  immutable-marked predicate/expression functions (including the
+  advisory-locking `multiple-cic` test), AM callbacks, B-tree unique validation,
+  and parallel B-tree worker coordination.
+- Corrected the failure-state table. `SET_VALID` is not the last fallible action:
+  after `DefineIndex` returns, utility dispatch invokes `ddl_command_end`. An
+  event-trigger exception therefore reports CIC failure while the v12
+  non-transactional in-place flag remains `(indislive, indisready, indisvalid) =
+  (t,t,t)` and the index remains usable.
+- Qualified the crash conclusion. WAL replay is monotone, and for the reviewed
+  in-tree AMs a durable `SET_VALID` cannot outrun completed build/backfill data;
+  this does not repair the independently demonstrated prepared-transaction
+  valid-but-incomplete defect or prove arbitrary third-party AM callbacks. Added
+  contrib Bloom's shared-buffer `GenericXLog` path to the durability map.
+- Added the missing parser/utility/generated-catalog path (`gram.y`, `IndexStmt`,
+  generated grammar artifacts, `pg_index.h`/`pg_index_d.h`/`genbki.pl`), temp
+  fallback and `IF NOT EXISTS` ordering, the index-AM boundary, direct REINDEX
+  citations, source-history ancestry, and explicit test presence/absence.
+- Built the exact 12.2 pin under `.wiki-runtime/` and reproduced both disputed
+  edge cases. A prepared `INSERT` followed by CIC and `COMMIT PREPARED` yielded a
+  forced index-scan count of 0 versus a sequential-scan count of 1. A failing
+  `ddl_command_end` trigger left a valid, ready, live index that returned the
+  expected row despite the command error. The temporary server was stopped; no
+  crash-timing reproduction was attempted.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Set
+  `verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-10T14:38:16Z`; human
+  `verified` remains `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-10] review v14 | Row-Level Security claim-to-source audit
 
 - Re-checked every claim in [Row-Level Security (RLS) in PostgreSQL 14:
