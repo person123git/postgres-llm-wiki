@@ -2,6 +2,39 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-10] review v12 | codebase navigation guide full claim-to-source audit
+
+- Re-checked every claim in the [PostgreSQL 12 Codebase Navigation Guide
+  (unverified)](v12/codebase-navigation-guide.md) against pinned
+  `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Corrected three factual/lifecycle gaps: RIR means
+  `Retrieve-Instead-Retrieve`, not "retrieve-instead-rewrite";
+  `GucContext` includes the omitted `PGC_SU_BACKEND` / `superuser-backend`
+  value; and the executor lifecycle continues through `ExecutorEnd`, which
+  tears down the plan, snapshots, `EState`, and per-query context.
+- Corrected citation boundaries that previously stopped before Parse stored the
+  completed `CachedPlanSource`, before planner best-path selection, before
+  `create_plan_recurse()`'s aggregate and remaining dispatch cases, and before
+  complete table-AM parallel and later callback groups.
+- Expanded caller/callee and edge coverage: `main()`/`BackendRun()` into
+  `PostgresMain()`, simple-query snapshot setup, Parse/Bind/Execute/Sync,
+  `CachedPlanSource`/`CachedPlan` and portal strategies, run-to-completion versus
+  portal-owned executor cleanup, utility portal dispatch and event-trigger
+  split, failed-portal handling, and outer transaction/protocol error recovery.
+- Expanded extension and storage boundaries: parse/planner/executor/utility
+  hooks; `CREATE ACCESS METHOD` grammar and utility dispatch; `pg_am`
+  registration, relcache routine loading, table/index wrapper dispatch, heap and
+  B-tree handlers, and the `create_am` input/expected regression coverage;
+  retained the separate packaged-extension control/script path.
+- Expanded generated-file implications: backend `generated-headers`/`distprep`,
+  Bison/Flex rules, Git-checkout versus distribution-tarball outputs, catalog
+  `_d.h`/BKI/bootstrap-index generation, concrete `pg_index.h` reverse use,
+  fmgr/error/probe/LWLock generation and reverse includes, and install rules.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Set
+  `verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-10T15:06:04Z` after the
+  final claim pass; human `verified` remains `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-10] review v12 | CREATE INDEX CONCURRENTLY full claim-to-source audit
 
 - Re-checked every claim in [How CREATE INDEX CONCURRENTLY Is Implemented in
