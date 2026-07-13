@@ -2,6 +2,89 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] review-fix v14 | functions/procedures WHERE-clause full audit
+
+- Completed a full claim-to-source review of [Performance Implications of
+  Functions and Procedures in a WHERE Clause in PostgreSQL 14, and How to
+  Minimize the Overhead
+  (unverified)](v14/questions/functions-procedures-in-where-clause.md) against
+  unchanged pin `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Corrected the procedure boundary. `CALL` receives no optimizer plan and invokes
+  the procedure through fmgr, but `ExecuteCallStmt` still evaluates its argument
+  expressions separately; those standalone expressions have no parent
+  `PlanState`, so they do not enter JIT expression compilation.
+- Added parser edges omitted by the former answer: set-returning, aggregate, and
+  window functions are rejected directly in `WHERE`. Removed `ROWS` as advice
+  for scalar WHERE functions; it applies only to SRFs in legal contexts such as
+  `FunctionScan`.
+- Reworked multiplicity around actual plan placement. Residual scan quals scale
+  with candidate tuples and join quals with candidate pairs, but qual
+  short-circuiting, `STRICT` null skips, SQL inlining, constant folding,
+  expression indexes, pseudoconstant gating/reset-on-rescan, and parameterized
+  index runtime keys change function-body call counts.
+- Corrected the plain-index claim: `f(col)` does not match a plain column index
+  as its search key, but the index can still serve another purpose. Added the
+  inlining and `SupportRequestIndexCondition` exceptions, post-planning
+  immutability checks, exact expression-index statistics path, partial-index
+  exclusion, and PostgreSQL 14 extended expression statistics.
+- Split security behavior into two mechanisms: leakproof promotion for
+  pushdown/index matching has no cost threshold, while same-node runtime order
+  treats a leakproof qual as level 0 only below the strict
+  `10 * cpu_operator_cost` cutoff; selectivity is not an ordering key.
+- Added JIT eligibility/build/extension-bitcode boundaries, `track_functions`
+  accounting and views, exact session/transaction scopes, generated
+  `pg_proc_d.h`/`genbki.pl` implications, fmgr hooks with contrib `sepgsql`, key
+  executor structs/opcodes, direct regression surfaces, and explicit test
+  absences.
+- Ran exact-pin spot checks: a no-Var `STABLE` qual became a `One-Time Filter`;
+  a row-dependent function ran for 100 rows; `STRICT` skipped 50 null inputs;
+  an unwrapped volatile call ran 100 times versus once through an uncorrelated
+  scalar InitPlan; and a matching expression index supplied the search key. The
+  temporary server was stopped.
+- The full exact-pin core regression `check` passed. Refreshed `wiki/index.md`,
+  `wiki/v14/index.md`, and `wiki/versions.md`; advanced `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-13T19:41:59Z`. Human `verified` remains
+  `false`, so the title stays `(unverified)`. `wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
+## [2026-07-13] review-fix v18 | Row-Level Security full claim and history audit
+
+- Completed a full claim-to-source review of [Row-Level Security (RLS) in
+  PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since
+  PostgreSQL 12
+  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  `6cb307251c5c6261286c1566496920976640108e`.
+- Corrected two material implementation errors: MERGE INSERT uses ordinary
+  `WCO_RLS_INSERT_CHECK`, not a MERGE-specific INSERT kind; logical replication
+  checks the role selected for the action (table owner by default, subscription
+  owner with `run_as_owner = true`), not invariably the subscription owner.
+- Expanded the deep-inquiry envelope with the relcache caller and
+  `RowSecurityDesc`, generated `pg_policy_d.h`/`genbki.pl` implications,
+  reverse catalog users, policy rename/errors, extension-hook/catalog/dump and
+  contrib boundaries, inheritance parent-versus-direct-child behavior, CTAS
+  source rewrite, and direct test surfaces.
+- Reworked performance claims to distinguish fresh rewrite/planning from valid
+  plan reuse and per-tuple WCOs from visibility quals that can become safe index
+  quals, partition-pruning clauses, InitPlans, or hashed subplans. Added policy
+  and role cache boundaries, parallel safety, partition expansion, lock impact,
+  and all direct RLS settings/client/tool surfaces with exact apply scopes.
+- Reproduced the unchanged-effective-role membership boundary in an exact-pin
+  build: both revoke and grant left a prepared RLS statement on its old policy
+  set until session-local `DISCARD PLANS`; the inverse results appeared after
+  re-analysis. The temporary servers were stopped.
+- Defined a reproducible fix-history scope. Expanded the table from the former
+  20 rows to 25 by adding seven omitted in-scope changes (`5102f39440f`,
+  `3e6e86abca0`, `a83edeaf684`, `b006bcd5310`, `ef81db9697a`, `2ddbfede0c6`,
+  `dfc15bd3286`) and removing two independent additions (`cd3c45125d`,
+  `0dca5d68d7`) from the fix count. Rechecked all 25 hashes, subjects, ancestry,
+  current evidence, exact-subject cherry-picks, first tags/dates, and five
+  post-fork v18/master pairs. Corrected the old 62,317 count to mean commits
+  reachable from the pin, and separated CVE-2026-2004 from the RLS fix scope.
+- The exact-pin build and core regression `check` passed. Refreshed
+  `wiki/index.md`, `wiki/v18/index.md`, and `wiki/versions.md`; advanced
+  `verified_by_agent` to `GPT-5-6-Sol-Max-Thinking 2026-07-13T18:58:20Z`.
+  Human `verified` remains `false`, so the visible title stays `(unverified)`.
+
 ## [2026-07-13] follow-up v17 | CREATE INDEX CONCURRENTLY maintenance_work_mem plateau
 
 - Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17
