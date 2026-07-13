@@ -2,6 +2,51 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] review-fix v14 | MultiXact full claim-to-source audit
+
+- Completed a full claim-to-source review of [How MultiXact Works in PostgreSQL
+  14, and How Foreign Keys and Other Operations Degrade Performance When the
+  Local Cache Spills to Secondary Storage
+  (unverified)](v14/questions/multixact-foreign-keys-cache-spill.md) against
+  unchanged pin `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Corrected the question's technical premise in the answer. The backend-local,
+  transaction-local cache retains 256 entries; LRU eviction calls `pfree` and
+  writes nothing. A later resolving miss first reaches the shared SLRU pools:
+  8 offset pages and 16 member pages. Only an SLRU miss issues a filesystem
+  read, which may still be served by the operating-system page cache and is not
+  proof of device I/O.
+- Separated system-wide MXID/member allocation from one backend's cache
+  pressure. Added exact cache count/lifetime/reuse semantics, obsolete and range
+  error paths, immutable expansion, member conflict/wait handling, complete
+  member-array WAL/SLRU costs, checkpoint/redo, 2PC horizons, and vacuum-driven
+  `relminmxid`/`datminmxid` truncation.
+- Expanded FK and caller coverage with null and `MATCH SIMPLE` early exits,
+  partitioned referenced relations, `NO ACTION`/`RESTRICT`, compatible key-share
+  hot rows, committed updaters, explicit locks, UPDATE/DELETE and update chains,
+  `ON CONFLICT`, EvalPlanQual, triggers, logical apply, and the heap/custom-AM/FDW
+  boundary. Corrected freezing: it can create a singleton replacement MXID for
+  one surviving locker; a sole surviving updater becomes a plain XID.
+- Reworked performance and monitoring around source-visible mechanisms rather
+  than an unsupported throughput-collapse claim. Added hot-row and
+  `MultiXactGen` work, exclusive SLRU control locks, per-buffer I/O waits, both
+  the MXID-counter and member-space hard stops, aggressive-vacuum limits, and
+  `pg_stat_slru` attribution caveats. Fixed the former invalid SQL wait names:
+  generated user-visible names omit `Lock` (`MultiXactOffsetSLRU`,
+  `MultiXactMemberSLRU`, `MultiXactGen`, and `MultiXactTruncation`).
+- Added `vacuum_multixact_failsafe_age`, exact restart/reload/session or
+  transaction scopes, per-table reloptions, build/catalog/fmgr/LWLock-generated
+  artifacts, WAL tools, `pgrowlocks`/`amcheck`, and direct correctness tests plus
+  explicit cache-eviction/SLRU-performance test absence.
+- The exact-pin full `src/test/isolation` suite passed. All three filed diagnostic
+  queries and both tagged timeout statements executed successfully against the
+  isolated PostgreSQL 14 server; the server was stopped afterward.
+- Refreshed `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`; set
+  `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-13T20:08:07Z`. Human `verified` remains
+  `false`, so the visible title stays `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-13] review-fix v14 | functions/procedures WHERE-clause full audit
 
 - Completed a full claim-to-source review of [Performance Implications of
