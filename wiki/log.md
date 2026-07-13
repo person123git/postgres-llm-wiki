@@ -2,6 +2,40 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] review-fix v12 | CIC maintenance_work_mem follow-up re-audit
+
+- Re-audited the `### How maintenance_work_mem is used and where increases stop
+  helping` section of [How CREATE INDEX CONCURRENTLY Is Implemented in
+  PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`). Restated the user's
+  newly approved corrected follow-up verbatim under `## Question`.
+- Repeated a whole-checkout `maintenance_work_mem` use-site search, then traced
+  the CIC phase boundary, common validation sort, all six core AM build paths,
+  contrib Bloom, GIN forced pending-list cleanup, B-tree parallel planning and
+  tuplesort lifetimes, GUC definitions, docs, tests, and relevant source history.
+- Kept the central conclusion: there is no universal byte plateau. Tightened
+  “two allocations” into an AM-dependent first-build phase plus the common
+  serial validation-TID sort, because SP-GiST, BRIN, and Bloom do not read the
+  GUC during their first build; BRIN's validation sort is also empty.
+- Clarified that the CIC heap scan first applies MVCC visibility and then marks
+  every tuple reaching the B-tree callback alive. Generalized the automatic
+  B-tree memory thresholds (32 MB per participant, including the leader), added
+  the `PGC_USERSET` scope of `max_parallel_maintenance_workers`, and separated
+  the planned count from runtime worker availability.
+- Made three AM boundaries explicit: a true hash CIC uses the `NBuffers` cap
+  while the temporary-table non-concurrent fallback uses `NLocBuffer`; GiST
+  `auto` does not consult maintenance memory until its cache-size switch; and
+  GIN validation's forced cleanup selects `maintenance_work_mem` in a normal
+  CIC backend. Added the hash threshold/regression commit `9563d5b5e4c` to the
+  reviewed history.
+- Repaired the Contents target according to the repository's underscore-stripping
+  anchor rule. Refreshed the global, v12, and version-manifest summaries. The
+  page remains `verified_by_agent: not yet` because this was a scoped section
+  audit, not a fresh verification of every claim on the 2,000-line page.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-13] review v12 | CIC maintenance_work_mem section claim-to-source verification
 
 - Verified every claim in the `### How maintenance_work_mem is used and where
