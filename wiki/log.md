@@ -3806,3 +3806,54 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   GPT-5-6-Sol-Max-Thinking 2026-07-10T16:00:43Z` after the final claim pass;
   human `verified` remains `false`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-07-13] repin v19 | review 12 new REL_19_STABLE commits through 8055e337
+
+- Queried upstream `REL_19_STABLE` per the user's request and found 12 commits
+  after the declared/pinned `01c544e1afb99bc2a76803870010b7cd2907f3b5`.
+  Fetched the range into `.wiki-runtime/`, confirmed the old pin is an ancestor,
+  and repinned `raw/postgres-19/` to
+  `8055e3375aa1c2237181e06be26b05b964d18ed5` (2026-07-13, `Translation
+  updates`; the source remains stamped `19beta1`).
+- Reviewed every commit and changed path. The range contains LibreSSL and libpq
+  fixes (`536512f34e7`, `d9eb70c9c69`), two `postgres_fdw` statistics-import
+  fixes (`3334b0d9f25`, `2bbec7c49a6`), a `FOR PORTION OF` rewriter crash fix
+  (`5b5e99047ab`), two online-data-checksum fixes (`9d1d91a1433`,
+  `c479ea58e77`), the REPACK discovery/recheck fix (`133eba078f7`), the
+  `UnlockBufHdrExt` state-bit fix (`a1b74b7279c`), the on-access VM/FSM fix
+  (`e9eaeb04248`), the tree-wide `pg_always_inline` rename (`a474c01c876`),
+  and translation updates (`8055e3375aa`).
+- Updated [How the REPACK Command Works in PostgreSQL 19, and Its 46
+  Feature-Scope Commits
+  (unverified)](v19/questions/repack-command.md). `133eba078f7` removes
+  ineffective transaction-scoped table locks while building multi-table
+  candidate lists; each candidate is now opened with the final operation lock.
+  Dropped OIDs and OIDs now naming a non-table relkind are skipped, and
+  privileges/index state are rechecked under that lock. Added the source call
+  path, missing-relation error boundary, explicit test/doc absence, and commit
+  row; the feature count is now 46 (was 45).
+- Updated [PostgreSQL 19 Autovacuum and VACUUM: Parallel Workers, Table
+  Scoring, and Setting Pages All-Visible During Reads
+  (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md).
+  `e9eaeb04248` now captures heap free space when on-access pruning newly sets a
+  page all-visible and records it in the FSM after releasing the heap-buffer
+  lock. This prevents a later VM-based VACUUM skip from leaving stale free-space
+  data while preserving HOT-oriented nonpublication for other on-access prunes.
+  Added the `PruneFreezeResult`/`RecordPageWithFreeSpace` boundary, direct-test
+  absence, and commit-history row.
+- No commit in the range touched `contrib/pg_plan_advice/`, its docs/tests, or
+  the page's core planner files, so its 20-core/25-module/support history is
+  unchanged. The codebase guide needed only the eight-line `QueryRewrite()`
+  shift caused by the rewriter fix; the `pg_always_inline` rename did not change
+  any cited behavior.
+- Rechecked every v19 source link against the new checkout. The initial mapping
+  classified 469 ranges as unchanged, 60 as content-identical shifts, seven as
+  changed-region citations requiring manual review, and two pre-existing
+  end-line overruns (`access/Makefile`, `pg_plan_advice/README`), which were
+  corrected. The final 558-link pass resolves every range at the new pin.
+- Updated all four v19 `pinned_commit` fields, `wiki/index.md`,
+  `wiki/v19/index.md`, and `wiki/versions.md`. `verified_by_agent` remains
+  `not yet` on all four pages because this was a changed-range repin, not a
+  fresh claim-by-claim verification of each full page.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.

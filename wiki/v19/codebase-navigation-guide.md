@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: 01c544e1afb99bc2a76803870010b7cd2907f3b5
+pinned_commit: 8055e3375aa1c2237181e06be26b05b964d18ed5
 verified: false
 verified_by_agent: not yet
 ---
@@ -39,7 +39,7 @@ Use the PostgreSQL 19 checkout as a set of subsystem maps. The top-level `src/Ma
 | Need | Start here | Evidence |
 |---|---|---|
 | Server subsystems | `src/backend/` | `src/backend/Makefile` is the short ownership map for backend directories and build-time generated headers [backend/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/Makefile#L19-L31). |
-| Access methods | `src/backend/access/` | The access makefile separates access-method and transaction subdirectories under `src/backend/access` [access/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/access/Makefile#L11-L28). |
+| Access methods | `src/backend/access/` | The access makefile separates access-method and transaction subdirectories under `src/backend/access` [access/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/access/Makefile#L11-L27). |
 | Storage and locks | `src/backend/storage/` | Storage is split by the storage makefile into directories such as buffer, file, IPC, lock-manager, page, smgr, and sync code [storage/Makefile#SUBDIRS](../../raw/postgres-19/src/backend/storage/Makefile#L11-L21). |
 | Client programs | `src/bin/` | Client and maintenance programs are listed under `src/bin`, with Windows `pgevent` added conditionally [bin/Makefile#SUBDIRS](../../raw/postgres-19/src/bin/Makefile#L16-L40). |
 | Frontend APIs | `src/interfaces/` | PostgreSQL 19 builds `libpq` and `ecpg`, and conditionally adds `libpq-oauth`, from `src/interfaces` [interfaces/Makefile#SUBDIRS](../../raw/postgres-19/src/interfaces/Makefile#L15-L18). |
@@ -48,7 +48,7 @@ Use the PostgreSQL 19 checkout as a set of subsystem maps. The top-level `src/Ma
 ### SQL Statement Path
 
 1. For the simple-query protocol, start in `exec_simple_query()`. It parses the query string with `pg_parse_query()`, then proceeds through analysis, rewrite, planning, portal setup, and execution for each raw statement [postgres.c#exec_simple_query](../../raw/postgres-19/src/backend/tcop/postgres.c#L1029-L1225) [postgres.c#pg_parse_query](../../raw/postgres-19/src/backend/tcop/postgres.c#L616-L645).
-2. Parse analysis and rewrite live behind the `pg_analyze_and_rewrite_*()` wrappers and `pg_rewrite_query()`. The normal statement path reaches `QueryRewrite()` before planning [postgres.c#pg_analyze_and_rewrite](../../raw/postgres-19/src/backend/tcop/postgres.c#L682-L851) [rewriteHandler.c#QueryRewrite](../../raw/postgres-19/src/backend/rewrite/rewriteHandler.c#L4781-L4835).
+2. Parse analysis and rewrite live behind the `pg_analyze_and_rewrite_*()` wrappers and `pg_rewrite_query()`. The normal statement path reaches `QueryRewrite()` before planning [postgres.c#pg_analyze_and_rewrite](../../raw/postgres-19/src/backend/tcop/postgres.c#L682-L851) [rewriteHandler.c#QueryRewrite](../../raw/postgres-19/src/backend/rewrite/rewriteHandler.c#L4789-L4843).
 3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-19/src/backend/tcop/postgres.c#L987-L1025) [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L328-L370) [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L845).
 4. Execution is portal-driven. `PortalRun()` dispatches portal execution, and the executor entry points are `ExecutorStart()` and `ExecutorRun()` with hook-aware standard implementations [pquery.c#PortalRun](../../raw/postgres-19/src/backend/tcop/pquery.c#L681-L850) [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345).
 5. Utility commands are routed outside normal plan execution. `ProcessUtility()` exposes `ProcessUtility_hook`; without a hook it calls `standard_ProcessUtility()` [utility.c#ProcessUtility](../../raw/postgres-19/src/backend/tcop/utility.c#L504-L600).
@@ -89,6 +89,7 @@ Use `src/test/Makefile` to choose between Perl/TAP, postmaster, regression, isol
 - Query path: `postgres.c`, `pquery.c`, `utility.c`, `rewriteHandler.c`, `planner.c`, and `execMain.c`.
 - Data structures: parser, planner, executor, relation cache, table AM, index AM, and memory-context headers.
 - Generated and test surfaces: backend generated-header rules, catalog generation rules, catalog headers, regression tests, isolation tests, test modules, and SGML file lists.
+- Repin range `01c544e1..8055e337`: reviewed all 12 commits and changed paths against this guide. The `FOR PORTION OF` rewriter fix shifted `QueryRewrite()` by eight lines without changing this page's routing claim; the tree-wide `pg_always_inline` rename touched executor/storage files but not the guide's described boundaries.
 
 ## Evidence Map
 
