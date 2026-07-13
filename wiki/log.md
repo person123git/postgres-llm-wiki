@@ -2,6 +2,18 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] navigation-fix v12 | CIC maintenance_work_mem Contents anchor
+
+- Fixed the `maintenance_work_mem` Contents link in [How CREATE INDEX
+  CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md).
+- Changed the target from `#how-maintenanceworkmem-is-used-and-where-increases-stop-helping`
+  to `#how-maintenance_work_mem-is-used-and-where-increases-stop-helping`, matching
+  the existing heading's working anchor.
+- No answer claims or verification fields changed. The global and v12 landing-page
+  summaries remain accurate.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-10] follow-up v12 | CREATE INDEX CONCURRENTLY maintenance_work_mem plateau
 
 - Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12

@@ -18,7 +18,7 @@ verified_by_agent: not yet
   - [Step-by-step implementation](#step-by-step-implementation)
   - [The first build scan's tuple-visibility rule](#the-first-build-scans-tuple-visibility-rule)
   - [Index access-method and contrib boundary](#index-access-method-and-contrib-boundary)
-  - [How maintenance_work_mem is used and where increases stop helping](#how-maintenanceworkmem-is-used-and-where-increases-stop-helping)
+  - [How maintenance_work_mem is used and where increases stop helping](#how-maintenance_work_mem-is-used-and-where-increases-stop-helping)
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [How concurrent index builds interact with each other](#how-concurrent-index-builds-interact-with-each-other)
   - [All operations that can block CREATE INDEX CONCURRENTLY](#all-operations-that-can-block-create-index-concurrently)
