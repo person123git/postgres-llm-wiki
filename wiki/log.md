@@ -83,6 +83,31 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   whole page. The page title keeps `(unverified)`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
 
+## [2026-07-13] review-fix v12 | CIC maintenance_work_mem plateau boundaries
+
+- Re-reviewed the follow-up in [How CREATE INDEX CONCURRENTLY Is Implemented in
+  PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against pinned
+  `raw/postgres-12/` commit
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Preserved the central answer that no universal memory cutoff exists, while
+  correcting B-tree participant accounting: launched workers retain the planned
+  share, the leader's worker role uses the actual participant count, and every
+  actual participant emits a required tape run even when its input fits.
+- Qualified `maintenance_work_mem` as the intended primary-sort budget rather
+  than an exact total-command cap; made GIN validation cleanup conditional on a
+  nonempty pending list; documented GIN's soft thresholds, BRIN's empty
+  validation enumeration, and GiST's own temporary-file path.
+- Tightened observability to distinguish tuplesort run/merge traces from final
+  temporary-file volume, added tracking-GUC prerequisites, and corrected the
+  test statement to account for the separate CLUSTER regression while retaining
+  the absence of direct CIC memory/spill/plateau coverage.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+  `verified_by_agent` remains `not yet` because this was a scoped follow-up
+  review, not a full-page claim verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-13] navigation-fix v12 | CIC maintenance_work_mem Contents anchor
 
 - Fixed the `maintenance_work_mem` Contents link in [How CREATE INDEX
