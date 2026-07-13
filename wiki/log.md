@@ -2,6 +2,44 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] follow-up v17 | CREATE INDEX CONCURRENTLY maintenance_work_mem plateau
+
+- Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17
+  (unverified)](v17/questions/create-index-concurrently.md) against unchanged pin
+  `54eeefaedbee0385529f3edf321bb99e49232aaa`. The user approved correcting the
+  spacing in `Follow-up :` to `Follow-up:` before the prompt was restated under
+  `## Question`.
+- Traced the setting through transaction 2's AM-specific first build and
+  transaction 3's separate serial encoded-TID validation sort. GIN validation
+  can first force pending-list cleanup under the same setting; BRIN's validation
+  enumeration reports no TIDs.
+- Added the v17 B-tree/BRIN parallel boundaries: automatic planning reserves
+  32 MB per requested participant including the leader, the default two-worker
+  cap makes 96 MB the last memory-derived worker-count threshold, workers divide
+  by the planned count while the leader's worker role uses actual participants,
+  and every participant emits a required tape run even when its input fits.
+- Added a shipped-AM matrix. B-tree, hash, GiST sorted build, GIN, and parallel
+  BRIN read the setting in distinct ways; SP-GiST, serial BRIN, and contrib Bloom
+  do not read it in the first build. GiST's buffered path uses it with
+  `effective_cache_size`; GIN has soft batch thresholds and its posting-list
+  program-limit error; every applicable AM still reaches the common validation
+  sort.
+- Answered the cutoff directly: there is no universal byte value. A serial sort
+  plateaus at its one-quicksort path, while worker requests, hash path selection,
+  GiST mode/`levelStep`, GIN batches, BRIN summary sorting, and validation each
+  have different data-dependent boundaries. Added practical evidence from
+  `pg_stat_progress_create_index`, `trace_sort`, `log_temp_files`, and aggregate
+  temp counters, with exact GUC scopes and parallel-temp-file caveats.
+- Recorded the AM/extension and non-generated build boundaries and the absence
+  of a direct CIC memory/spill/plateau test. The direct memory regression is
+  non-concurrent hash; contrib `pageinspect` separately tests non-concurrent
+  parallel BRIN and worker-unavailable fallback.
+- Refreshed `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`. Reset
+  `verified_by_agent` to `not yet` because this was a scoped expansion rather
+  than a full-page claim re-audit.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-13] navigation-fix v12 | Restore VS Code underscore anchors
 
 - Fixed both underscore-bearing Contents links in [How CREATE INDEX CONCURRENTLY

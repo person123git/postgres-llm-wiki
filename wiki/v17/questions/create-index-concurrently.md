@@ -3,7 +3,7 @@ type: question
 version: 17
 pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
 verified: false
-verified_by_agent: GPT-5-5-XHigh-Thinking 2026-06-18T14:10:05Z
+verified_by_agent: not yet
 ---
 
 # How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)
@@ -13,8 +13,9 @@ verified_by_agent: GPT-5-5-XHigh-Thinking 2026-06-18T14:10:05Z
 - [Question](#question)
 - [Answer](#answer)
   - [Preconditions and restrictions](#preconditions-and-restrictions)
-  - [The three pg_index state flags](#the-three-pgindex-state-flags)
+  - [The three pg_index state flags](#the-three-pg_index-state-flags)
   - [Step-by-step implementation](#step-by-step-implementation)
+  - [How maintenance_work_mem is used and where increases stop helping](#how-maintenance_work_mem-is-used-and-where-increases-stop-helping)
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [What changed from PostgreSQL 12](#what-changed-from-postgresql-12)
   - [Failure handling](#failure-handling)
@@ -30,6 +31,10 @@ verified_by_agent: GPT-5-5-XHigh-Thinking 2026-06-18T14:10:05Z
 give a comprehensive explanation of how create index concurrently is
 implemented, add a section with all steps and locks required on the table, and
 add a section with what has changed from postgresql 12.
+
+Follow-up: Investigate how `maintenance_work_mem` is used during `CREATE INDEX
+CONCURRENTLY`, and at what point increasing it stops improving the index
+creation process.
 
 ## Answer
 
@@ -138,6 +143,298 @@ Then it sets `indisvalid = true`, sends a relcache invalidation on the parent
 table so cached plans re-plan to use the new index, and releases the session lock
 ([indexcmds.c:1757-1772](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1757-L1772)).
 This last transaction commits in the caller when the utility command finishes.
+
+### How maintenance_work_mem is used and where increases stop helping
+
+There is **no universal `maintenance_work_mem` value at which CIC stops getting
+faster**. PostgreSQL 17 can use the setting in two separate parts of the
+command:
+
+1. transaction 2's access-method-specific first build, when that index access
+   method reads the setting; and
+2. transaction 3's common, serial sort of index tuple identifiers (TIDs) during
+   validation. GIN can also use the setting for forced pending-list cleanup at
+   the start of its validation scan
+   ([indexcmds.c#build-to-validation](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1662-L1712),
+   [index.c#validate_index-sort](../../../raw/postgres-17/src/backend/catalog/index.c#L3296-L3405),
+   [ginvacuum.c#ginbulkdelete-cleanup](../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L564-L595)).
+
+An increase helps only while it changes an access-method threshold, reduces an
+external sort's runs or merge work, lets a useful B-tree or BRIN worker be
+requested, or reduces GIN accumulator batches. Once those effects and measured
+elapsed time stop changing, more memory cannot remove the first heap scan, the
+index scan and second heap scan used for validation, index-page writes, the two
+writer waits, or the old-snapshot wait
+([indexcmds.c#CIC-build-and-validation](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1626-L1757),
+[index.c#validate_index-overview](../../../raw/postgres-17/src/backend/catalog/index.c#L3233-L3295)).
+
+**Setting and application scope.** In v17, `maintenance_work_mem` is a
+`PGC_USERSET` integer measured in kilobytes. Its default is 64 MB and its range
+starts at 64 kB. It can be changed for a session or transaction and needs
+neither reload nor restart
+([guc_tables.c#maintenance_work_mem](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2459-L2473),
+[config.sgml#maintenance_work_mem](../../../raw/postgres-17/doc/src/sgml/config.sgml#L1909-L1935)).
+For one CIC run, a regular session setting is the practical scope: it survives
+CIC's internal commits. A transaction-local setting ends at commit, has no
+effect when issued outside a transaction block, and cannot enclose CIC because
+CIC is rejected inside an explicit transaction block
+([ref/set.sgml#SET-scope](../../../raw/postgres-17/doc/src/sgml/ref/set.sgml#L35-L60),
+[ref/set.sgml#LOCAL](../../../raw/postgres-17/doc/src/sgml/ref/set.sgml#L100-L117),
+[utility.c#CIC-transaction-block](../../../raw/postgres-17/src/backend/tcop/utility.c#L1452-L1462)).
+Parallel build workers restore the launching backend's serialized GUC state, so
+the session value also reaches a parallel B-tree or BRIN build
+([parallel.c#serialize-GUC-state](../../../raw/postgres-17/src/backend/access/transam/parallel.c#L376-L385),
+[parallel.c#restore-GUC-state](../../../raw/postgres-17/src/backend/access/transam/parallel.c#L1449-L1458)).
+
+The value is a working budget or threshold, not memory reserved in advance.
+Tuplesort charges allocations against an allowed-byte counter as input arrives;
+GIN checks its tracked accumulator only after processing a complete heap tuple,
+so GIN can overshoot the nominal threshold
+([tuplesort.c#sort-memory-initialization](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L680-L715),
+[tuplesort.c#spill-check](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1225-L1294),
+[gininsert.c#GIN-build-threshold](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L246-L314)).
+The v17 docs warn that setting it above genuinely available memory can cause
+swapping and make index creation slower. A shared/default increase can also be
+multiplied across maintenance sessions and autovacuum workers; a session-only
+value applies to the current session and the parallel workers it launches, not
+to unrelated sessions
+([ref/create_index.sgml#memory-warning](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L798-L804),
+[config.sgml#maintenance-memory-concurrency](../../../raw/postgres-17/doc/src/sgml/config.sgml#L1917-L1935),
+[ref/set.sgml#SET-session](../../../raw/postgres-17/doc/src/sgml/ref/set.sgml#L35-L51),
+[parallel.c#serialize-GUC-state](../../../raw/postgres-17/src/backend/access/transam/parallel.c#L376-L385)).
+
+**The transaction-2 and transaction-3 memory windows do not coexist.**
+`index_concurrently_build()` completes `index_build()` and its AM callback,
+marks the index ready, and returns. CIC commits that transaction, performs the
+second writer wait, and only then lets `validate_index()` create and consume a
+new tuplesort. The validation tuplesort is destroyed before that transaction
+commits
+([index.c#index_concurrently_build](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1540),
+[indexcmds.c#build-to-validation](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1662-L1712),
+[index.c#validation-sort-lifetime](../../../raw/postgres-17/src/backend/catalog/index.c#L3361-L3408)).
+Validation encodes each TID reported by the AM's `ambulkdelete` callback as an
+`int8`, sorts those values with the full `maintenance_work_mem`, and merge-scans
+them against the heap. The `NULL` sort coordinate makes this phase serial; the
+documentation likewise limits CIC parallelism to its first table scan
+([index.c#validate_index-sort](../../../raw/postgres-17/src/backend/catalog/index.c#L3361-L3405),
+[heapam_handler.c#validation-merge](../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1747-L1975),
+[ref/create_index.sgml#CIC-parallel-scope](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L855-L862)).
+
+**B-tree first build and the automatic worker thresholds.** A serial B-tree
+build gives its primary index-tuple sort the full setting. A parallel build
+splits the scan work among participants and later lets a leader tuplesort merge
+their output. PostgreSQL intends the setting as the whole parallel-build sort
+budget: workers receive fractions, and the leader's significant allocation
+happens after workers have released almost all of theirs
+([nbtsort.c#primary-sort](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L362-L431),
+[nbtsort.c#parallel-memory-lifetimes](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L407-L425)).
+It is not an exact cap on every byte allocated by the command: tuplesort floors
+each passed share at 64 kB, unique builds have a separate secondary sort, and
+parallel coordination plus AM allocations sit outside the primary
+`Tuplesortstate.allowedMem`
+([tuplesort.c#minimum-sort-budget](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L694-L742),
+[nbtsort.c#secondary-sort](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L433-L471),
+[config.sgml#parallel-utility-memory](../../../raw/postgres-17/doc/src/sgml/config.sgml#L2874-L2885)).
+
+For automatic worker choice, `plan_create_index_workers()` requires at least
+32 MB for each requested worker **and** another 32 MB for the leader. The memory
+cap therefore permits no worker below 64 MB, up to one worker at 64 MB, up to
+two at 96 MB, and each additional worker at another 32 MB. With the default
+`max_parallel_maintenance_workers = 2`, 96 MB is the last memory-derived
+worker-count threshold, not the overall performance plateau: the first-build or
+validation sort can still spill above 96 MB
+([planner.c#memory-worker-cap](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6993-L7018),
+[guc_tables.c#max_parallel_maintenance_workers](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3408-L3416),
+[tuplesort.c#serial-and-external-sort](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L31-L80)).
+`max_parallel_maintenance_workers` is also `PGC_USERSET`; session or transaction
+changes need neither reload nor restart. Its default is two
+([guc_tables.c#max_parallel_maintenance_workers](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3408-L3416)).
+
+Those thresholds only cap an automatic request. Table size and parallel safety
+can request fewer workers, and the worker pool can launch fewer than requested.
+A table-level `parallel_workers` reloption bypasses the size model and the
+memory-based 32 MB cap, though `max_parallel_maintenance_workers` still caps the
+request
+([planner.c#worker-prerequisites-and-override](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6908-L6985),
+[config.sgml#parallel-worker-availability](../../../raw/postgres-17/doc/src/sgml/config.sgml#L2851-L2871),
+[ref/create_index.sgml#parallel_workers-override](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L835-L844)).
+In the normal source build the leader participates. Each launched background
+worker divides by the planned participant count, while the leader's worker role
+divides by the actual launched count; if no worker launches or no dynamic shared
+memory segment is available, B-tree falls back to a serial full-budget build
+([nbtsort.c#parallel-setup-and-fallback](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1390-L1594),
+[nbtsort.c#leader-participant-share](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1683-L1725),
+[nbtsort.c#background-worker-share](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1823-L1829)).
+
+A unique B-tree build allocates a secondary dead-tuple sort using `work_mem`,
+or the smaller of `work_mem` and a participant's primary share. In CIC's MVCC
+build scan, however, the heap scan filters by snapshot and marks every tuple
+that reaches the callback alive, so no tuple enters that secondary spool; the
+leader discards it as unnecessary
+([heapam_handler.c#concurrent-build-snapshot](../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1237-L1296),
+[heapam_handler.c#concurrent-tuples-are-alive](../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1621-L1629),
+[nbtsort.c#build-callback](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L573-L600),
+[nbtsort.c#discard-empty-secondary-spool](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L500-L518),
+[nbtsort.c#parallel-secondary-sort](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1886-L1908)).
+
+**First-build behavior by shipped index AM.** The common validation phase comes
+after every first build, but transaction 2 uses the setting differently:
+
+| Index AM | First-build use of `maintenance_work_mem` | Where that first-build gain stops |
+|---|---|---|
+| B-tree | Sorts full index tuples. Serial gets the full budget; parallel scan participants divide it before the leader merge ([nbtsort.c#primary-sort](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L362-L431), [nbtsort.c#parallel-worker-sort](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1861-L1939)). | When more memory neither adds a useful worker nor reduces participant run/merge work. The separate serial validation sort must also be checked ([planner.c#memory-worker-cap](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6993-L7018), [tuplesort.c#performsort](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1381-L1465)). |
+| Hash | Computes a block-valued sort threshold `min((maintenance_work_mem * 1024) / BLCKSZ, NBuffers)` for a true CIC, and pre-sorts by target bucket when the estimated bucket count is at least that threshold. A selected sort receives the full setting. A temporary-table request has already fallen back to non-concurrent build and uses `NLocBuffer` instead ([hash.c#hashbuild-sort-choice](../../../raw/postgres-17/src/backend/access/hash/hash.c#L111-L183), [hashsort.c#_h_spoolinit](../../../raw/postgres-17/src/backend/access/hash/hashsort.c#L56-L92), [indexcmds.c#temp-fallback](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L605-L615)). | Raising memory can make the threshold exceed the estimated bucket count and disable pre-sorting. The threshold itself stops rising when `NBuffers` wins; if the bucket count still reaches that cap, sorting remains selected and more memory can still reduce its runs and merge work ([hash.c#hashbuild-sort-rationale](../../../raw/postgres-17/src/backend/access/hash/hash.c#L139-L166), [tuplesort.c#serial-and-external-sort](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L31-L80)). |
+| GiST | If every key opclass supplies `sortsupport` and buffered mode was not forced on, GiST uses a serial tuplesort with the full setting. Otherwise it inserts directly and may switch to buffered build; that path uses `maintenance_work_mem` with `effective_cache_size` to choose `levelStep`, and insufficient memory disables buffering ([gistbuild.c#strategy-selection](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L175-L248), [gistbuild.c#sorted-build](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L257-L315), [gistbuild.c#gistInitBuffering](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L617-L777)). | The sorted path plateaus like another serial sort. The direct-insert path has no gain. In buffered mode, the memory decision plateaus when `effective_cache_size`, rather than maintenance memory, prevents the next `levelStep`; the buffer hash table is not included in that calculation. Buffered GiST also creates its own temporary file and can use extra CPU, so elapsed time need not improve monotonically ([gistbuild.c#buffer-memory-boundary](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L670-L757), [gistbuildbuffers.c#temporary-buffer-file](../../../raw/postgres-17/src/backend/access/gist/gistbuildbuffers.c#L40-L81), [gist.sgml#build-methods](../../../raw/postgres-17/doc/src/sgml/gist.sgml#L1184-L1234)). |
+| GIN | Accumulates keys and posting lists in an in-memory red-black tree. After each heap tuple, it dumps when tracked allocation reaches the setting; one final dump handles what remains ([gininsert.c#GIN-build-threshold](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L246-L314), [gininsert.c#GIN-final-dump](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L316-L400), [ginbulk.c#BuildAccumulator](../../../raw/postgres-17/src/backend/access/gin/ginbulk.c#L83-L121)). | Larger memory can reduce accumulator dumps. That first-build gain ends when all input reaches the single final dump, or earlier when dump work no longer dominates. The exact point depends on extracted keys and posting lists, not just heap or final-index size ([gin/README#index-structure](../../../raw/postgres-17/src/backend/access/gin/README#L17-L26), [gin.sgml#maintenance_work_mem](../../../raw/postgres-17/doc/src/sgml/gin.sgml#L584-L592)). |
+| SP-GiST | Inserts tuples directly and resets a per-tuple temporary context; its first build does not read this setting ([spginsert.c#spgbuild](../../../raw/postgres-17/src/backend/access/spgist/spginsert.c#L55-L147)). | No transaction-2 gain. Its validation `ambulkdelete` does enumerate live TIDs, so the common transaction-3 sort can still benefit ([spgvacuum.c#validation-callback](../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L149-L165), [spgvacuum.c#spgbulkdelete](../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L908-L932)). |
+| BRIN | A serial first build summarizes page ranges directly and does not create a maintenance-memory sort. A parallel first build sorts per-worker summary tuples, dividing the setting among participants and using the full value for the leader merge ([brin.c#serial-and-parallel-build](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1091-L1245), [brin.c#parallel-participant-sort](../../../raw/postgres-17/src/backend/access/brin/brin.c#L2764-L2847), [brin.c#background-worker-share](../../../raw/postgres-17/src/backend/access/brin/brin.c#L2904-L2919)). | More memory can pass the shared 32 MB worker-request thresholds or reduce summary-sort work. It stops helping the first build once useful worker count and sort work are stable. The source itself notes that the 32 MB rule is stricter than BRIN needs. BRIN's validation sort is empty because `brinbulkdelete` reports no per-heap-tuple TIDs, so transaction 3 gets no sort-memory benefit ([brin.c#worker-threshold-caveat](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1153-L1163), [brin.c#brinbulkdelete](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1283-L1301)). |
+| contrib Bloom | Keeps a cached page plus a per-tuple context and does not read the setting in its first build ([blinsert.c#blbuild](../../../raw/postgres-17/contrib/bloom/blinsert.c#L117-L157)). | No transaction-2 gain. Bloom's `ambulkdelete` visits every stored heap TID, so its common validation sort can still benefit ([blvacuum.c#blbulkdelete](../../../raw/postgres-17/contrib/bloom/blvacuum.c#L26-L103), [index.c#validate_index_callback](../../../raw/postgres-17/src/backend/catalog/index.c#L3425-L3437)). |
+
+**GIN has an additional validation-time use.** `validate_index()` passes `NULL`
+statistics to `ginbulkdelete()`, which first invokes a forced cleanup. In the
+ordinary CIC backend that cleanup selects `maintenance_work_mem`; if the pending
+list is empty, it returns before allocating the cleanup accumulator. Otherwise
+it flushes at the list end or when a complete-row boundary finds tracked memory
+at the threshold, resets its temporary context between batches, and in
+`full_clean` mode continues until the list is empty
+([ginvacuum.c#ginbulkdelete-cleanup](../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L564-L595),
+[ginfast.c#cleanup-memory-selection](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L780-L840),
+[ginfast.c#cleanup-batching](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L843-L1009)).
+Its cleanup-specific gain therefore ends when there is no pending list or the
+list fits one batch, subject to concurrent fast-update inserts changing that
+input. GIN then enumerates posting-list and posting-tree TIDs into the common
+validation sort; one heap row represented under several GIN keys can contribute
+more than one sort item
+([ginvacuum.c#posting-list-callback](../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L52-L68),
+[gin/README#index-structure](../../../raw/postgres-17/src/backend/access/gin/README#L17-L26)).
+
+GIN also has an extreme error boundary. If one accumulator posting list has
+already grown beyond `INT_MAX` slots and must grow again, the build or cleanup
+raises `ERRCODE_PROGRAM_LIMIT_EXCEEDED` and explicitly hints to reduce
+`maintenance_work_mem`; a larger value is therefore not unconditionally safer
+for a pathological single-key workload
+([ginbulk.c#posting-list-limit](../../../raw/postgres-17/src/backend/access/gin/ginbulk.c#L28-L51)).
+
+**Extension and build boundary.** Core dispatches the first build through the
+AM's `ambuild(heap, index, IndexInfo)` callback; the callback API has no memory
+argument. In-tree AMs that need the value read the exported global, and a
+third-party AM can define a different memory policy. Core's validation
+`tuplesort`, however, remains in `validate_index()`
+([amapi.h#ambuild_function](../../../raw/postgres-17/src/include/access/amapi.h#L98-L108),
+[miscadmin.h#maintenance_work_mem](../../../raw/postgres-17/src/include/miscadmin.h#L266-L270),
+[index.c#ambuild-dispatch](../../../raw/postgres-17/src/backend/catalog/index.c#L2947-L3025),
+[index.c#validate_index-sort](../../../raw/postgres-17/src/backend/catalog/index.c#L3361-L3405)).
+The similarly named `IndexAmRoutine.amusemaintenanceworkmem` flag does not
+control `CREATE INDEX`; parallel VACUUM consults it when dividing worker memory
+([amapi.h#amusemaintenanceworkmem](../../../raw/postgres-17/src/include/access/amapi.h#L249-L260),
+[vacuumparallel.c#amusemaintenanceworkmem](../../../raw/postgres-17/src/backend/commands/vacuumparallel.c#L331-L363)).
+The GUC entry and AM API are handwritten source. `guc_tables.c` is compiled
+directly by both supported build systems, so this path has no generated catalog
+or generated-header dependency
+([utils/misc/Makefile#guc_tables](../../../raw/postgres-17/src/backend/utils/misc/Makefile#L17-L27),
+[utils/misc/meson.build#guc_tables](../../../raw/postgres-17/src/backend/utils/misc/meson.build#L1-L12)).
+
+**What “enough memory” means for a tuplesort.** A serial tuplesort accepts input
+in memory until it either finishes or crosses its accounting limit. If all
+input fits, it runs one in-memory quicksort. Otherwise it writes sorted runs to
+temporary tapes and merges them; more memory can enlarge runs, increase merge
+fan-in, and enlarge sequential-read buffers
+([tuplesort.c#algorithm](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L9-L80),
+[tuplesort.c#spill-transition](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1225-L1331),
+[tuplesort.c#performsort](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1381-L1465)).
+Once a serial sort's complete input fits, another increase cannot change that
+sort's one-quicksort path, although it can still affect another CIC phase or an
+automatic worker decision.
+
+Parallel tuplesort has a different endpoint. Every actual scan participant,
+including the leader's worker role in a normal build, must emit exactly one tape
+run even when its partial input fits in memory; the coordinator then imports one
+run per participant and merges them. Nonzero parallel-build temporary-file
+activity therefore does not by itself prove that more memory will help
+([tuplesort.c#parallel-sort-contract](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L82-L88),
+[tuplesort.c#parallel-in-memory-output](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1397-L1428),
+[tuplesort.c#leader-takes-worker-runs](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L3095-L3160)).
+There is no source-backed conversion such as “set it to the index size”:
+B-tree and GiST sort full index tuples, validation sorts pass-by-value encoded
+TIDs, BRIN sorts range summaries only in parallel, and GIN uses accumulator
+thresholds rather than tuplesort for its first build
+([index.c#encoded-validation-TIDs](../../../raw/postgres-17/src/backend/catalog/index.c#L3361-L3375),
+[brin.c#serial-and-parallel-build](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1091-L1245),
+[gininsert.c#GIN-build-threshold](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L246-L314)).
+
+**How to find the practical plateau.** Keep the data, index definition,
+concurrent workload, storage state, and worker availability comparable. Raise
+the session value in steps and observe both memory-sensitive phases:
+
+- `pg_stat_progress_create_index.phase` distinguishes `building index`,
+  `index validation: sorting tuples`, the two writer waits, and the final
+  old-snapshot wait. It reports blocks, tuples, and lockers, but not sort memory,
+  temporary bytes, or participant counts. Progress reporting requires
+  `track_activities`; that setting defaults on and is `PGC_SUSET`, so an
+  authorized session/transaction change needs neither reload nor restart
+  ([monitoring.sgml#progress-columns](../../../raw/postgres-17/doc/src/sgml/monitoring.sgml#L5832-L6016),
+  [monitoring.sgml#create-index-phases](../../../raw/postgres-17/doc/src/sgml/monitoring.sgml#L6018-L6105),
+  [backend_progress.c#track_activities](../../../raw/postgres-17/src/backend/utils/activity/backend_progress.c#L21-L60),
+  [guc_tables.c#track_activities](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1399-L1408)).
+- `trace_sort` is `PGC_USERSET`; a session/transaction change needs neither
+  reload nor restart. It identifies internal versus external sorts, worker IDs,
+  and disk blocks. PostgreSQL 17 compiles this support in by default. For a
+  parallel first build, distinguish the one mandatory output run per
+  participant from additional run and merge work
+  ([guc_tables.c#trace_sort](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1658-L1668),
+  [pg_config_manual.h#TRACE_SORT](../../../raw/postgres-17/src/include/pg_config_manual.h#L376-L380),
+  [tuplesort.c#sort-end-report](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L890-L940),
+  [tuplesort.c#performsort-trace](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1468-L1483)).
+- `log_temp_files` is `PGC_SUSET`; an authorized session/transaction change
+  needs neither reload nor restart. It logs each temporary file's final size at
+  deletion. `pg_stat_database.temp_files` and `temp_bytes` count those files
+  when `track_counts` is on; `track_counts` defaults on and is also `PGC_SUSET`,
+  with session/transaction scope and no reload or restart. The database counters
+  aggregate all causes and record file volume, not merge passes or wait time
+  ([guc_tables.c#log_temp_files](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3553-L3562),
+  [config.sgml#log_temp_files](../../../raw/postgres-17/doc/src/sgml/config.sgml#L7880-L7900),
+  [fd.c#ReportTemporaryFileUsage](../../../raw/postgres-17/src/backend/storage/file/fd.c#L1524-L1538),
+  [pgstat_database.c#temp-file-accounting](../../../raw/postgres-17/src/backend/utils/activity/pgstat_database.c#L170-L185),
+  [monitoring.sgml#database-temp-counters](../../../raw/postgres-17/doc/src/sgml/monitoring.sgml#L3360-L3381),
+  [guc_tables.c#track_counts](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1410-L1417)).
+
+Sort tracing does not expose GIN accumulator batch counts or GiST's buffered
+`levelStep` choice. GiST emits `DEBUG1` when buffering starts or cannot start,
+and buffered GiST creates its own temporary file, so controlled elapsed-time
+comparisons remain necessary for those methods
+([gistbuild.c#buffering-decision](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L743-L777),
+[gistbuild.c#buffering-switch](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L878-L900),
+[gistbuildbuffers.c#temporary-buffer-file](../../../raw/postgres-17/src/backend/access/gist/gistbuildbuffers.c#L40-L81),
+[gininsert.c#GIN-build-threshold](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L276-L314)).
+
+Stop increasing when all of the following remain stable across comparable runs:
+
+- the requested and actual useful parallel participant count;
+- every serial sort is internal;
+- parallel participants produce only their required output runs, without extra
+  run/merge work caused by exceeding their shares;
+- temporary-file volume attributable to the run no longer falls; and
+- validation-phase and total elapsed times no longer improve.
+
+Stop earlier if the host starts swapping. Even at the practical plateau, CIC
+still performs its scans, page construction and writes, and transaction waits
+([ref/create_index.sgml#memory-warning](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L798-L804),
+[indexcmds.c#CIC-build-and-validation](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1626-L1757)).
+
+**Test coverage.** The direct `CREATE INDEX` regression case that changes
+`maintenance_work_mem` sets it to 1 MB to force the **non-concurrent hash** sort
+and checks correctness. A separate `pageinspect` test uses 128 MB to permit four
+workers in a **non-concurrent parallel BRIN** build and tests serial fallback
+when workers are unavailable
+([create_index.sql#hash-tuplesort](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L364-L380),
+[pageinspect/brin.sql#parallel-build](../../../raw/postgres-17/contrib/pageinspect/sql/brin.sql#L80-L144)).
+The direct CIC regression block and CIC isolation/TAP tests exercise lifecycle,
+concurrency, and correctness but do not vary this setting or test spill,
+worker-memory thresholds, or a performance plateau
+([create_index.sql#CIC-tests](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L481-L582),
+[multiple-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/multiple-cic.spec#L1-L43),
+[prepared-transactions-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/prepared-transactions-cic.spec#L1-L37),
+[amcheck/002_cic.pl](../../../raw/postgres-17/contrib/amcheck/t/002_cic.pl#L1-L88)).
 
 ### All steps and locks required on the table
 
@@ -312,24 +609,39 @@ uniqueness
 
 ## Context Reviewed
 
-- `wiki/versions.md`, `wiki/index.md`, `wiki/v17/index.md`, and the recent
+- `wiki/versions.md`, `wiki/index.md`, `wiki/v17/index.md`, and the latest 20
   `wiki/log.md` entries (navigation only).
 - Pinned checkout `raw/postgres-17/` at commit
-  `54eeefaedbee0385529f3edf321bb99e49232aaa`.
-- `DefineIndex` concurrent branch, `WaitForOlderSnapshots`, and
+  `54eeefaedbee0385529f3edf321bb99e49232aaa`; `git rev-parse HEAD` matched the
+  manifest pin before drafting.
+- `DefineIndex`'s concurrent branch, `WaitForOlderSnapshots`, and
   `set_indexsafe_procflags` in `src/backend/commands/indexcmds.c`.
 - `UpdateIndexRelation`/`index_create`, `index_concurrently_build`,
-  `validate_index`, and `index_set_state_flags` in `src/backend/catalog/index.c`.
-- `PROC_IN_SAFE_IC` in `src/include/storage/proc.h`; the `LockConflicts` table in
+  `index_build`, `validate_index`, and `index_set_state_flags` in
+  `src/backend/catalog/index.c`; heap build/validation scans in
+  `src/backend/access/heap/heapam_handler.c`.
+- A whole-checkout `maintenance_work_mem` use-site search, followed through the
+  GUC table/global, parallel GUC serialization, worker planner, tuplesort, temp
+  file/statistics reporting, progress reporting, docs, and build files.
+- First-build and validation callbacks for B-tree, hash, GiST, GIN, SP-GiST,
+  BRIN, and contrib Bloom, including GIN pending-list cleanup and BRIN's parallel
+  summary sort and empty validation enumeration.
+- AM interfaces and flags in `src/include/access/amapi.h`, `IndexInfo` in
+  `src/include/nodes/execnodes.h`, and the `maintenance_work_mem` global in
+  `src/include/miscadmin.h`.
+- `PROC_IN_SAFE_IC` in `src/include/storage/proc.h`; `LockConflicts` in
   `src/backend/storage/lmgr/lock.c`; lock-mode definitions in
   `src/include/storage/lockdefs.h`.
-- `doc/src/sgml/ref/create_index.sgml` (CONCURRENTLY narrative).
-- Tests: `src/test/regress/sql/create_index.sql`,
-  `src/test/isolation/specs/multiple-cic.spec`,
-  `src/test/isolation/specs/prepared-transactions-cic.spec`.
-- v12 vs v17 deltas established from the `raw/postgres-17/` checkout's own commit
-  history (`c98763bf`, `f9900df5`, `e28bb885`, `83158f74d3a`, `5788e258`), each
-  verified present with `git show` / `git tag --contains`.
+- Docs: `config.sgml`, `ref/set.sgml`, `ref/create_index.sgml`,
+  `monitoring.sgml`, `gist.sgml`, `gin.sgml`, and the GIN README.
+- Tests: direct CREATE INDEX/CIC regression and isolation inputs, contrib
+  `pageinspect`'s parallel BRIN test, and contrib `amcheck`'s CIC TAP test. The
+  test-tree use-site search also checked every input that changes
+  `maintenance_work_mem` or `max_parallel_maintenance_workers`.
+- v12 vs v17 deltas established by the earlier review from the
+  `raw/postgres-17/` checkout's own commit history (`c98763bf`, `f9900df5`,
+  `e28bb885`, `83158f74d3a`, `5788e258`), each verified present with `git show`
+  / `git tag --contains`.
 
 ## Evidence Map
 
@@ -339,6 +651,20 @@ uniqueness
 | `safe_index` true only for non-expression, non-partial indexes | [indexcmds.c:1128-1130](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1128-L1130) |
 | Four-transaction structure; session lock; three waits | [indexcmds.c:1599-1772](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1599-L1772) |
 | Build sets `indisready`; validate inserts missing tuples | [index.c:1482-1539](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1539), [index.c:3296-3402](../../../raw/postgres-17/src/backend/catalog/index.c#L3296-L3402) |
+| `maintenance_work_mem` is `PGC_USERSET`, defaults to 64 MB, and has a 64 kB minimum | [guc_tables.c#maintenance_work_mem](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2459-L2473) |
+| CIC's AM build and validation memory windows are separated by a commit and writer wait | [indexcmds.c:1662-1712](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1662-L1712), [index.c:1482-1540](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1540) |
+| Validation uses a full-budget serial encoded-TID sort | [index.c:3361-3405](../../../raw/postgres-17/src/backend/catalog/index.c#L3361-L3405) |
+| Automatic B-tree/BRIN workers require 32 MB per requested participant, leader included | [planner.c:6993-7018](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6993-L7018) |
+| B-tree planned-vs-launched shares and serial fallback | [nbtsort.c:1390-1594](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1390-L1594), [nbtsort.c:1683-1725](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1683-L1725), [nbtsort.c:1823-1829](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1823-L1829) |
+| Parallel participants always emit one tape run | [tuplesort.c:1397-1428](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1397-L1428), [tuplesort.c:3095-3160](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L3095-L3160) |
+| Hash has a separate memory/buffer-capped sort-selection threshold | [hash.c:139-166](../../../raw/postgres-17/src/backend/access/hash/hash.c#L139-L166) |
+| GiST can use sorted, direct-insert, or maintenance-memory-limited buffered build | [gistbuild.c:175-315](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L175-L315), [gistbuild.c:617-777](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L617-L777) |
+| GIN first-build accumulator and validation pending-list cleanup both use the setting | [gininsert.c:246-314](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L246-L314), [ginvacuum.c:564-595](../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L564-L595), [ginfast.c:780-840](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L780-L840) |
+| BRIN's first-build memory effects are common worker planning and, if parallel, a summary sort; validation reports no TIDs | [planner.c:6993-7018](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6993-L7018), [brin.c:1091-1245](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1091-L1245), [brin.c:1283-1301](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1283-L1301) |
+| SP-GiST and Bloom do not read the setting in their first builds but enumerate TIDs in validation | [spginsert.c:55-147](../../../raw/postgres-17/src/backend/access/spgist/spginsert.c#L55-L147), [spgvacuum.c:149-165](../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L149-L165), [blinsert.c:117-157](../../../raw/postgres-17/contrib/bloom/blinsert.c#L117-L157), [blvacuum.c:26-103](../../../raw/postgres-17/contrib/bloom/blvacuum.c#L26-L103) |
+| Serial tuplesort reaches its memory plateau at the one-quicksort path | [tuplesort.c:31-80](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L31-L80), [tuplesort.c:1381-1465](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1381-L1465) |
+| Progress, sort traces, and temp-file accounting expose different parts of a tuning run | [monitoring.sgml:5832-6105](../../../raw/postgres-17/doc/src/sgml/monitoring.sgml#L5832-L6105), [tuplesort.c:890-940](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L890-L940), [fd.c:1524-1538](../../../raw/postgres-17/src/backend/storage/file/fd.c#L1524-L1538) |
+| The only direct CREATE INDEX memory regression forces non-concurrent hash sorting; direct CIC tests do not test a plateau | [create_index.sql:364-380](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L364-L380), [create_index.sql:481-582](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L481-L582) |
 | v17 state-flag flips use transactional `CatalogTupleUpdate` | [index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3440-L3518) |
 | `index_set_state_flags` transactional change came in PG14 | commit `83158f74d3a` (2020-09-14) |
 | `WaitForLockers` reads current lock holders and waits on VXIDs without taking the relation lock itself | [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L889-L900), [lmgr.c:914-923](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L914-L923), [lmgr.c:935-952](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L935-L952) |
@@ -352,13 +678,14 @@ uniqueness
 | VACUUM-ignores-CIC reverted (present in v17) | commit `e28bb885` (2022-05-31) |
 | PGXACT->PGPROC statusFlags move (PG14) | commit `5788e258` (2020-08-14) |
 | v17 restricts search path during build | [index.c:1503-1507](../../../raw/postgres-17/src/backend/catalog/index.c#L1503-L1507) |
-| Tests | [create_index.sql:488-525](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L488-L525), [multiple-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/multiple-cic.spec#L1-L43), [prepared-transactions-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/prepared-transactions-cic.spec#L1-L37) |
+| Tests | [create_index.sql:481-582](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L481-L582), [multiple-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/multiple-cic.spec#L1-L43), [prepared-transactions-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/prepared-transactions-cic.spec#L1-L37) |
 
 ## Open Questions
 
-- The exact tuple-visibility rule of the first build scan lives inside
-  `index_build` → `table_index_build_scan` (via `indexInfo->ii_Concurrent`),
-  summarized here rather than traced line-by-line.
+- The exact fastest safe value for a particular table, index definition,
+  concurrent workload, storage device, and worker pool cannot be derived from
+  source alone. It requires controlled measurements of both the first-build and
+  validation phases on that workload.
 - PostgreSQL 17 also refined REINDEX CONCURRENTLY's own `safe` determination for
   indexes with predicates/expressions (commit `cd6b2ae3`, "Fix waits of REINDEX
   CONCURRENTLY for indexes with predicates or expressions"); that is REINDEX
@@ -378,17 +705,74 @@ uniqueness
 - [index.c#UpdateIndexRelation](../../../raw/postgres-17/src/backend/catalog/index.c#L630-L648)
 - [index.c#index_create](../../../raw/postgres-17/src/backend/catalog/index.c#L697-L709)
 - [index.c#index_create-flags](../../../raw/postgres-17/src/backend/catalog/index.c#L1043-L1049)
-- [index.c#index_concurrently_build](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1539)
-- [index.c#validate_index](../../../raw/postgres-17/src/backend/catalog/index.c#L3233-L3402)
+- [index.c#index_concurrently_build](../../../raw/postgres-17/src/backend/catalog/index.c#L1482-L1540)
+- [index.c#index_build](../../../raw/postgres-17/src/backend/catalog/index.c#L2947-L3025)
+- [index.c#validate_index](../../../raw/postgres-17/src/backend/catalog/index.c#L3233-L3405)
 - [index.c#index_set_state_flags](../../../raw/postgres-17/src/backend/catalog/index.c#L3440-L3518)
+- [heapam_handler.c#heapam_index_build_range_scan](../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1171-L1744)
+- [heapam_handler.c#heapam_index_validate_scan](../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1747-L1986)
+- [nbtsort.c#_bt_spools_heapscan](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L351-L509)
+- [nbtsort.c#parallel-build](../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1390-L1956)
+- [hash.c#hashbuild](../../../raw/postgres-17/src/backend/access/hash/hash.c#L111-L194)
+- [hashsort.c#_h_spoolinit](../../../raw/postgres-17/src/backend/access/hash/hashsort.c#L56-L103)
+- [gistbuild.c#gistbuild](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L175-L355)
+- [gistbuild.c#gistInitBuffering](../../../raw/postgres-17/src/backend/access/gist/gistbuild.c#L617-L777)
+- [gistbuildbuffers.c#gistInitBuildBuffers](../../../raw/postgres-17/src/backend/access/gist/gistbuildbuffers.c#L40-L105)
+- [gininsert.c#ginbuild](../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L246-L427)
+- [ginbulk.c#BuildAccumulator](../../../raw/postgres-17/src/backend/access/gin/ginbulk.c#L24-L121)
+- [ginvacuum.c#ginbulkdelete](../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L564-L644)
+- [ginfast.c#ginInsertCleanup](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L780-L1017)
+- [gin/README#index-structure](../../../raw/postgres-17/src/backend/access/gin/README#L15-L53)
+- [spginsert.c#spgbuild](../../../raw/postgres-17/src/backend/access/spgist/spginsert.c#L55-L147)
+- [spgvacuum.c#spgbulkdelete](../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L149-L165)
+- [brin.c#brinbuild](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1091-L1261)
+- [brin.c#brinbulkdelete](../../../raw/postgres-17/src/backend/access/brin/brin.c#L1283-L1301)
+- [brin.c#parallel-build](../../../raw/postgres-17/src/backend/access/brin/brin.c#L2337-L2929)
+- [blinsert.c#blbuild](../../../raw/postgres-17/contrib/bloom/blinsert.c#L117-L157)
+- [blvacuum.c#blbulkdelete](../../../raw/postgres-17/contrib/bloom/blvacuum.c#L26-L103)
+- [planner.c#plan_create_index_workers](../../../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6876-L7019)
+- [parallel.c#GUC-state](../../../raw/postgres-17/src/backend/access/transam/parallel.c#L376-L385)
+- [parallel.c#restore-GUC-state](../../../raw/postgres-17/src/backend/access/transam/parallel.c#L1449-L1458)
+- [tuplesort.c#algorithm](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1-L88)
+- [tuplesort.c#memory-and-performsort](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L680-L742)
+- [tuplesort.c#puttuple-and-performsort](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L1225-L1486)
+- [tuplesort.c#leader_takeover_tapes](../../../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L3078-L3160)
+- [guc_tables.c#maintenance_work_mem](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2459-L2473)
+- [guc_tables.c#observability-GUCs](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1399-L1417)
+- [guc_tables.c#trace_sort](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1658-L1668)
+- [guc_tables.c#max_parallel_maintenance_workers](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3408-L3416)
+- [guc_tables.c#log_temp_files](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3553-L3562)
+- [miscadmin.h#maintenance_work_mem](../../../raw/postgres-17/src/include/miscadmin.h#L266-L270)
+- [amapi.h#ambuild-and-AM-flags](../../../raw/postgres-17/src/include/access/amapi.h#L98-L108)
+- [amapi.h#IndexAmRoutine](../../../raw/postgres-17/src/include/access/amapi.h#L230-L296)
+- [execnodes.h#IndexInfo](../../../raw/postgres-17/src/include/nodes/execnodes.h#L155-L211)
+- [vacuumparallel.c#amusemaintenanceworkmem](../../../raw/postgres-17/src/backend/commands/vacuumparallel.c#L331-L375)
+- [backend_progress.c#progress-reporting](../../../raw/postgres-17/src/backend/utils/activity/backend_progress.c#L21-L60)
+- [fd.c#ReportTemporaryFileUsage](../../../raw/postgres-17/src/backend/storage/file/fd.c#L1524-L1538)
+- [pgstat_database.c#pgstat_report_tempfile](../../../raw/postgres-17/src/backend/utils/activity/pgstat_database.c#L170-L185)
 - [proc.h#PROC_IN_SAFE_IC](../../../raw/postgres-17/src/include/storage/proc.h#L54-L78)
 - [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L889-L988)
 - [lock.c#LockConflicts](../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L64-L103)
 - [lockdefs.h#lockmodes](../../../raw/postgres-17/src/include/storage/lockdefs.h#L36-L46)
+- [utils/misc/Makefile#guc_tables](../../../raw/postgres-17/src/backend/utils/misc/Makefile#L17-L27)
+- [utils/misc/meson.build#guc_tables](../../../raw/postgres-17/src/backend/utils/misc/meson.build#L1-L12)
+- [pg_config_manual.h#TRACE_SORT](../../../raw/postgres-17/src/include/pg_config_manual.h#L376-L380)
+- [config.sgml#maintenance_work_mem](../../../raw/postgres-17/doc/src/sgml/config.sgml#L1909-L1957)
+- [config.sgml#parallel-maintenance](../../../raw/postgres-17/doc/src/sgml/config.sgml#L2851-L2885)
+- [ref/set.sgml#SET-scope](../../../raw/postgres-17/doc/src/sgml/ref/set.sgml#L35-L60)
+- [ref/set.sgml#LOCAL](../../../raw/postgres-17/doc/src/sgml/ref/set.sgml#L100-L117)
 - [ref/create_index.sgml#CONCURRENTLY](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L612-L702)
-- [create_index.sql#concurrent-indexes](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L488-L525)
+- [ref/create_index.sgml#memory-and-parallelism](../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L790-L862)
+- [monitoring.sgml#create-index-progress](../../../raw/postgres-17/doc/src/sgml/monitoring.sgml#L5832-L6105)
+- [monitoring.sgml#database-temp-counters](../../../raw/postgres-17/doc/src/sgml/monitoring.sgml#L3360-L3381)
+- [gist.sgml#build-methods](../../../raw/postgres-17/doc/src/sgml/gist.sgml#L1184-L1234)
+- [gin.sgml#maintenance_work_mem](../../../raw/postgres-17/doc/src/sgml/gin.sgml#L584-L592)
+- [create_index.sql#hash-tuplesort](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L364-L380)
+- [create_index.sql#concurrent-indexes](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L481-L582)
+- [pageinspect/brin.sql#parallel-build](../../../raw/postgres-17/contrib/pageinspect/sql/brin.sql#L80-L144)
 - [multiple-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/multiple-cic.spec#L1-L43)
 - [prepared-transactions-cic.spec](../../../raw/postgres-17/src/test/isolation/specs/prepared-transactions-cic.spec#L1-L37)
+- [amcheck/002_cic.pl](../../../raw/postgres-17/contrib/amcheck/t/002_cic.pl#L1-L88)
 
 ## Navigation
 
