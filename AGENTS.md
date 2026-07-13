@@ -230,7 +230,7 @@ Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not creat
 - List every `##` and `###` section in document order as a nested Markdown bullet list: each `##` is a top-level bullet and its `###` subsections are indented two spaces beneath it. Do not list `####` or deeper headings.
 - The `## Contents` section never lists itself.
 - Keep it in sync with the page: update the table of contents whenever a `##`/`###` section is added, removed, renamed, or reordered.
-- Link with page-internal Markdown anchors `[Section title](#slug)`. Build each `#slug` with the VS Code Markdown-preview rule: trim, lowercase, replace each whitespace run with `-`, then strip punctuation — including backticks, underscores, and em dashes (`—`). So `### The three pg_index state flags` -> `#the-three-pgindex-state-flags` and `## Open Questions` -> `#open-questions`. Suffix later duplicate slugs with `-1`, `-2`, and so on.
+- Link with page-internal Markdown anchors `[Section title](#slug)`. Build each `#slug` with the VS Code Markdown-preview rule: trim, lowercase, replace each whitespace run with `-`, then strip punctuation such as backticks and em dashes (`—`), but preserve underscores. So `### The three pg_index state flags` -> `#the-three-pg_index-state-flags`, `### How maintenance_work_mem is used` -> `#how-maintenance_work_mem-is-used`, and `## Open Questions` -> `#open-questions`. Suffix later duplicate slugs with `-1`, `-2`, and so on.
 - `scripts/wiki_lint` does not validate `#`-anchor links, so every Contents link must be checked to resolve to its heading in VS Code Markdown preview.
 
 Example (question page):

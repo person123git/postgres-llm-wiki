@@ -2,6 +2,21 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] navigation-fix v12 | Restore VS Code underscore anchors
+
+- Fixed both underscore-bearing Contents links in [How CREATE INDEX CONCURRENTLY
+  Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md): `pg_index` and
+  `maintenance_work_mem` now remain underscored in their fragment targets, as
+  required by VS Code Markdown preview.
+- Corrected the `AGENTS.md` Table of Contents rule and examples to state that VS
+  Code preserves underscores in generated heading anchors. This removes the
+  incorrect instruction that had reverted the working `maintenance_work_mem`
+  target.
+- No answer claims, source citations, front matter, or index summaries changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-13] review-fix v12 | CIC maintenance_work_mem follow-up re-audit
 
 - Re-audited the `### How maintenance_work_mem is used and where increases stop
