@@ -14,6 +14,23 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-13: completed a scoped claim-to-source verification of the
+  `maintenance_work_mem` follow-up section in [How CREATE INDEX CONCURRENTLY Is
+  Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-checked that section's claims
+  against `raw/postgres-12/`: the B-tree serial/parallel budgets and the 32 MB
+  per-participant worker cap (0/1/2 workers at below-64/64/96 MB), the full-budget
+  serial encoded-TID validation sort, the hash `sort_threshold` selection, the
+  per-AM first-build matrix, and the `trace_sort`/`log_temp_files`/progress
+  observability plus test-coverage citations all resolve to the cited lines.
+  Fixed two precision defects: the misleading `index_concurrently_build`
+  "returns before setting indisready" wording (it runs `index_build`, then sets
+  `INDEX_CREATE_SET_READY`, then returns) and the `autovacuum_work_mem = -1`
+  fallback citation (added the `config.sgml` `autovacuum_work_mem` definition).
+  The global and v12 landing-page summaries remain accurate. `verified_by_agent`
+  stays `not yet` because this re-audited only one section, not the whole page;
+  `wiki_lint`: 0 errors, 0 warnings.
 - 2026-07-10: extended [How CREATE INDEX CONCURRENTLY Is Implemented in
   PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) with
   the user-approved corrected follow-up on `maintenance_work_mem`. The new

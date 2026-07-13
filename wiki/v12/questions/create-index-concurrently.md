@@ -454,18 +454,23 @@ the threshold
 
 A high value is not free. The v12 docs warn that setting it above genuinely
 available memory can make the machine swap and slow the build. Different
-sessions can each run a maintenance operation, and a cluster-wide value can
-also be used by each autovacuum worker when `autovacuum_work_mem = -1`
+sessions can each run a maintenance operation, and when autovacuum runs, up to
+`autovacuum_max_workers` workers can each allocate this memory; each such worker
+uses `maintenance_work_mem` only while its `autovacuum_work_mem` stays at the
+default `-1`
 ([ref/create_index.sgml#memory-warning](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L707-L713),
-[config.sgml#maintenance-memory-concurrency](../../../raw/postgres-12/doc/src/sgml/config.sgml#L1693-L1712)).
+[config.sgml#maintenance-memory-concurrency](../../../raw/postgres-12/doc/src/sgml/config.sgml#L1693-L1712),
+[config.sgml#autovacuum_work_mem](../../../raw/postgres-12/doc/src/sgml/config.sgml#L1716-L1731)).
 A session-only CIC setting avoids raising the cluster-wide default or unrelated
 sessions.
 
 **Where the two CIC allocations occur.** The first-build memory state and the
-validation sort do not coexist.
-`index_concurrently_build` returns from the first AM build before setting
-`indisready`; CIC then commits that phase, completes the next writer wait, and
-only then lets `validate_index` create, consume, and destroy a new tuplesort
+validation sort do not coexist. Inside `index_concurrently_build`, the first AM
+build runs through `index_build`, which lets the access method create and
+release its own build memory before returning; the function then marks the index
+`indisready` and returns. CIC commits that phase, completes the next writer wait,
+and only then lets `validate_index` create, consume, and destroy a separate
+tuplesort
 ([index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1438),
 [indexcmds.c#build-to-validation](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L1366-L1412),
 [index.c#validate_index-sort](../../../raw/postgres-12/src/backend/catalog/index.c#L3245-L3283)).
@@ -1952,6 +1957,7 @@ Three evidence boundaries remain explicit:
 - [guc.c#trace_sort](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1635-L1645)
 - [guc.c#log_temp_files](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3153-L3162)
 - [config.sgml#maintenance_work_mem](../../../raw/postgres-12/doc/src/sgml/config.sgml#L1686-L1712)
+- [config.sgml#autovacuum_work_mem](../../../raw/postgres-12/doc/src/sgml/config.sgml#L1716-L1731)
 - [ref/create_index.sgml#memory-and-parallelism](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L707-L771)
 - [miscadmin.h#maintenance_work_mem](../../../raw/postgres-12/src/include/miscadmin.h#L243-L247)
 - [planner.c#plan_create_index_workers](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6227-L6362)

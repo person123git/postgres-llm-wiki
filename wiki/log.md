@@ -2,6 +2,53 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-13] review v12 | CIC maintenance_work_mem section claim-to-source verification
+
+- Verified every claim in the `### How maintenance_work_mem is used and where
+  increases stop helping` section of [How CREATE INDEX CONCURRENTLY Is
+  Implemented in PostgreSQL 12
+  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`). This was the scoped
+  follow-up the user asked to review; the approved clean `## Question` text was
+  kept verbatim.
+- Confirmed the load-bearing quantitative claims directly against source: the
+  serial B-tree primary sort gets full `maintenance_work_mem` while the unique
+  dead-tuple spool gets `work_mem` (`nbtsort.c` `_bt_spools_heapscan`); parallel
+  workers divide the budget by the planned `scantuplesortstates` while the
+  participating leader divides by the actual `nparticipanttuplesorts` and the
+  secondary sort caps at `Min(sortmem, work_mem)`; the planner's
+  `maintenance_work_mem / (parallel_workers + 1) < 32768L` cap yields 0 workers
+  below 64 MB, 1 at 64 MB, 2 at 96 MB (`planner.c`); a parallel worker always
+  writes one tape run even when its input fit in memory (`tuplesort.c`
+  `TSS_INITIAL`/`WORKER`); the hash `sort_threshold =
+  Min((maintenance_work_mem*1024)/BLCKSZ, NBuffers)` selection and full-budget
+  hash sort (`hash.c`/`hashsort.c`); and the four GUC definitions
+  (`maintenance_work_mem` 64 MB default / 1 MB min PGC_USERSET,
+  `max_parallel_maintenance_workers` default 2, `trace_sort`, `log_temp_files`).
+- Confirmed the per-AM first-build matrix (GiST buffered-build `levelStep` from
+  `maintenance_work_mem` + `effective_cache_size` with the uncounted buffer hash
+  table; GIN accumulator dump threshold, final dump, red-black tree, the INT_MAX
+  posting-list error hint, and validation pending-list cleanup; SP-GiST / BRIN /
+  contrib Bloom not reading the GUC; BRIN's no-TID `ambulkdelete`), the
+  full-budget serial encoded-`int8` validation TID sort, the tuplesort
+  in-memory/external transitions, and the observability plus test-coverage
+  citations. All resolved to the cited lines and the concurrent MVCC scan's
+  all-tuples-alive `else` branch was re-checked in `heapam_handler.c`.
+- Fixed two precision defects. (1) The "where the two allocations occur"
+  paragraph said `index_concurrently_build` "returns from the first AM build
+  before setting `indisready`"; source shows it runs `index_build` (which lets
+  the AM create and release its own build memory), then sets
+  `INDEX_CREATE_SET_READY`, then returns — reworded to match. (2) The
+  `autovacuum_work_mem = -1` fallback was attributed only to the
+  `maintenance_work_mem` doc entry, which does not state it; added the
+  `config.sgml` `autovacuum_work_mem` definition (`#L1716-L1731`: "defaults to
+  -1, ... maintenance_work_mem should be used instead") to the answer prose and
+  Source References, and tightened the sentence.
+- `verified_by_agent` stays `not yet`: this pass re-audited only the
+  `maintenance_work_mem` section, but that field certifies every claim on the
+  whole page. The page title keeps `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-07-13] navigation-fix v12 | CIC maintenance_work_mem Contents anchor
 
 - Fixed the `maintenance_work_mem` Contents link in [How CREATE INDEX
