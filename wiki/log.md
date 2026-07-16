@@ -2,6 +2,47 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-16] follow-up v17 | CREATE INDEX CONCURRENTLY performance GUCs
+
+- Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17
+  (unverified)](v17/questions/create-index-concurrently.md) against unchanged pin
+  `54eeefaedbee0385529f3edf321bb99e49232aaa`. The user approved correcting the
+  follow-up to “What GUCs have a performance impact on it?” before it was
+  restated under `## Question`.
+- Added a scoped source-backed GUC matrix. The primary build controls are
+  `maintenance_work_mem`, `max_parallel_maintenance_workers`,
+  `min_parallel_table_scan_size`, `max_parallel_workers`, and
+  `max_worker_processes`; GiST adds `effective_cache_size`, while GIN's
+  `gin_pending_list_limit` and `work_mem` boundary belongs to concurrent writer
+  sessions before validation's forced cleanup.
+- Traced both heap scans through v17 read streams. `io_combine_limit` caps
+  combined reads; the implementation selects tablespace
+  `effective_io_concurrency` but disables explicit advice in sequential mode.
+  It does not select `maintenance_io_concurrency`. The conflicting-looking
+  `READ_STREAM_MAINTENANCE` header comment is retained under `## Open Questions`.
+- Added direct `shared_buffers`/hash and synchronized-scan boundaries,
+  `default_tablespace` and `temp_tablespaces` placement, and
+  `temp_file_limit`'s per-process error behavior. Separated these from settings
+  that do not control CIC, including `min_parallel_index_scan_size`, query
+  `Gather` settings, the usual v17 `work_mem` B-tree spool, autovacuum memory,
+  vacuum delay, temp buffers, and the `wal_level = minimal` new-relation skip.
+- Added the WAL/checkpoint/commit envelope: forced full-page images and
+  `wal_compression`, `wal_buffers`, `wal_sync_method`, checkpoint frequency and
+  the bulk writer's checkpoint-crossing immediate sync, `synchronous_commit` /
+  synchronous standbys, and group-commit delay. Durability settings are
+  explicitly not recommended as CIC speed levers.
+- Distinguished end-to-end `statement_timeout`, per-internal-transaction
+  `transaction_timeout`, per-lock-acquisition `lock_timeout`, deadlock detection,
+  lock-wait logging, and blocker-side idle-transaction timeout. Recorded exact
+  restart, reload, or session application scope for every suggested setting.
+- The direct CIC regression, isolation, and TAP tests do not sweep this GUC
+  matrix, so the workload-specific optimum remains an open measurement question.
+  Refreshed `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`.
+  `verified_by_agent` remains `not yet` because this was a scoped expansion,
+  not a full-page claim re-audit.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-13] review-fix v14 | MultiXact full claim-to-source audit
 
 - Completed a full claim-to-source review of [How MultiXact Works in PostgreSQL
