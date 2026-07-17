@@ -14,6 +14,19 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-17: extended [Proposing a Sampling pgstatindex Variant for PostgreSQL
+  12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) with the
+  user-approved corrected follow-up requesting comparative tests, against the
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Added an executed,
+  reproducible `pageinspect`-prototype comparison over six indexes, all below
+  50 MB: uniformly sparse, contiguous-range-deleted, split/churn, sparse
+  partial, small healthy, and empty. A 100% sample matched every shared
+  standard-`pgstatindex` field in all six cases. One hundred deterministic
+  `setseed()` draws at 1% and 5% quantify leaf/deleted count MAPE, density and
+  fragmentation error, and leaf-free draws; the results expose particularly
+  high variance for deleted-page counts, fragmentation, and a one-page sample
+  of the 0.66 MiB index. Reset `verified_by_agent` to `not yet` because this was
+  a scoped follow-up rather than a new full-page audit.
 - 2026-07-17: completed a full claim-to-source review of [Proposing a Sampling
   pgstatindex Variant for PostgreSQL 12
   (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against

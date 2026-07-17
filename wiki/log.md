@@ -4474,3 +4474,39 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `false`, so the visible title stays `(unverified)`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-07-17] follow-up v12 | sampling pgstatindex comparative fixtures
+
+- Extended [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against the
+  unchanged `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`) pin. The user
+  approved correcting the follow-up to “Add a section with tests comparing the
+  proposed sampling pgstatindex variant with the standard pgstatindex across
+  multiple types of bloated indexes, empty indexes, partial indexes, and indexes
+  under 50 MB.” before it was restated under `## Question`.
+- Added a reproducible disposable fixture and seeded comparison harness for the
+  existing one-read `pageinspect` prototype. Traced the new claims through B-tree
+  VACUUM tuple removal, half-dead/deleted-page transitions, partial-index build
+  and DML predicate filtering, `setseed()`/`random()`, relation sizing, grammar,
+  fixture reloptions, timeout scopes, and the unchanged full-scan formulas.
+- Executed the SQL on an isolated exact-pin PostgreSQL 12.2 database. The six
+  indexes were all below 50 MB: 12.88 MiB uniformly sparse, 12.88 MiB
+  range-deleted, 18.25 MiB split/churn, 3.88 MiB partial sparse, 0.66 MiB small
+  healthy, and a 0.01 MiB metapage-only index. Standard `pgstatindex` observed
+  the intended low-density, deleted-page, fragmentation, partial, small, and
+  empty shapes.
+- A 100% prototype sample matched standard `pgstatindex` on every shared field
+  for all six fixtures, including all page classes and both ratios. One hundred
+  seeded draws at both 1% and 5% quantified shape-dependent error: the
+  range-deleted case's deleted-page MAPE fell from 11.73% to 5.66%, split/churn
+  fragmentation MAE fell from 7.95 to 3.56 percentage points, and the 0.66 MiB
+  index's one-page 1% sample contained no leaf in two draws.
+- Scoped the conclusion: the run tests estimator accuracy and pages selected,
+  not the proposed C implementation's speed, `BlockSampler`, buffer ring,
+  continuous lock, validation, concurrency behavior, or universal confidence
+  bounds. The isolated server was stopped.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Reset
+  `verified_by_agent` to `not yet` because this was a scoped follow-up rather
+  than a new full-page claim audit; human `verified` remains `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.

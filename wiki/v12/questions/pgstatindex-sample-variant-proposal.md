@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-17T18:12:12Z
+verified_by_agent: not yet
 ---
 
 # Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)
@@ -26,6 +26,13 @@ verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-17T18:12:12Z
   - [Setup](#setup)
   - [Compatibility helper and sampler](#compatibility-helper-and-sampler)
 - [Tests To Add](#tests-to-add)
+- [Executed Comparison with Standard `pgstatindex`](#executed-comparison-with-standard-pgstatindex)
+  - [Test scope and metrics](#test-scope-and-metrics)
+  - [Disposable fixture](#disposable-fixture)
+  - [Seeded comparison harness](#seeded-comparison-harness)
+  - [Full-scan baseline](#full-scan-baseline)
+  - [Sampling results](#sampling-results)
+  - [What the comparison establishes](#what-the-comparison-establishes)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -38,6 +45,10 @@ In PostgreSQL 12, propose a `pgstatindex` variant that samples the index
 instead of reading the whole index, include a pros and cons section, and
 provide a proposal for a SQL implementation using available extensions in
 contrib.
+
+Follow-up (2026-07-17): Add a section with tests comparing the proposed sampling pgstatindex variant with the standard pgstatindex across multiple types of bloated indexes, empty indexes, partial indexes, and indexes under 50 MB.
+
+(The follow-up wording was corrected for grammar and clarity at the user's request; meaning preserved.)
 
 ## Answer
 
@@ -799,6 +810,401 @@ sampling, concurrency, malformed-page, permissions, or statistical test and no
 module isolation or TAP target
 ([Makefile#regression-target](../../../raw/postgres-12/contrib/pgstattuple/Makefile#L1-L24),
 [pgstattuple.sql#complete-test](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L1-L119)).
+The executed SQL-prototype comparison below exercises populated, empty, partial,
+and statistical cases, but it does not add the proposed C function or an
+upstream regression test.
+
+## Executed Comparison with Standard `pgstatindex`
+
+A full sample matched standard `pgstatindex` on every shared output field for
+all six quiescent fixtures. Partial samples did not have one uniform error rate.
+Their accuracy depended on the number and physical distribution of leaf,
+internal, and deleted pages. That is the expected risk of estimating exhaustive
+page classes from a physical-block sample: standard `pgstatindex` obtains its
+counts only by classifying every captured ordinary block
+([pgstatindex.c#full-scan-and-results](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L356)).
+
+This test exercises the `pageinspect` SQL prototype above, not the unimplemented
+C proposal. It tests the estimator and random physical-block selection on these
+fixtures. It does not benchmark the proposed C path, its `BlockSampler`, its
+bulk-read ring, its continuous relation lock, or its stronger page validation.
+
+### Test scope and metrics
+
+The test ran on the pinned PostgreSQL 12.2 checkout with no concurrent fixture
+DML. Quiescence matters because standard `pgstatindex` is a page-by-page
+physical observation, not one instantaneous whole-index snapshot
+([pgstattuple.sgml#snapshot-limit](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L268-L279),
+[pgstatindex.c#page-locking](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315)).
+
+The six fixtures isolate different shapes:
+
+| Fixture | Construction | Boundary tested |
+|---|---|---|
+| `uniform_sparse` | Build 600,000 ordered keys; delete two of every three; `VACUUM` | Low live-leaf density spread uniformly across the index |
+| `range_deleted` | Build 600,000 ordered keys; delete a contiguous 420,000-key middle range; `VACUUM` | A large deleted-page class next to dense surviving leaves |
+| `split_churn` | Create the index empty; insert 600,000 keys in a deterministic permuted order; delete one quarter; `VACUUM` | Low density plus backward-right-link fragmentation |
+| `partial_sparse` | Build only rows satisfying `WHERE active`; delete two thirds of those indexed rows; `VACUUM` | A sparse partial B-tree |
+| `small_dense` | Build 30,000 ordered keys without deletes | Healthy small-index control |
+| `empty` | Build an index on an empty table | Metapage-only edge |
+
+With index cleanup enabled, lazy VACUUM opens the indexes, removes dead index
+entries, and asks B-tree VACUUM to delete an empty leaf when legal. B-tree page
+deletion first makes the page half-dead, unlinks it, and leaves a deleted page
+that cannot necessarily be reclaimed immediately
+([vacuumlazy.c#index-cleanup](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L283-L289),
+[vacuumlazy.c#remove-index-entries](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L761-L772),
+[nbtree.c#empty-page-deletion](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1327-L1359),
+[nbtpage.c#_bt_pagedel](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1285-L1517)).
+That path produced the `range_deleted` fixture's deleted-page population. The
+uniform deletes left live tuples on each leaf instead, so they primarily reduced
+live-leaf density.
+
+A partial-index predicate controls which heap tuples enter the index during a
+build and which DML operations maintain it. Once the physical B-tree exists,
+`pgstatindex` checks the relation and access-method kinds and scans its pages; it
+does not evaluate the partial predicate
+([heapam_handler.c#partial-build-predicate](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1198-L1210),
+[heapam_handler.c#partial-build-filter](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1604-L1626),
+[execIndexing.c#partial-DML-filter](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L363),
+[pgstatindex.c#guards-and-scan](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L315)).
+The partial fixture therefore tests the same physical estimator over a smaller,
+predicate-selected B-tree. It does not estimate predicate selectivity or parent-
+table bloat.
+
+For each fixture, the harness ran one `sample_fraction = 1.0` comparison and
+100 draws at both 0.01 and 0.05. It reset `setseed()` before every partial draw;
+PostgreSQL 12 documents that reseeding the current session repeats subsequent
+`random()` values, and the implementation stores the seed in backend-local
+state
+([func.sgml#setseed](../../../raw/postgres-12/doc/src/sgml/func.sgml#L1130-L1159),
+[float.c#setseed](../../../raw/postgres-12/src/backend/utils/adt/float.c#L2585-L2644)).
+The reported errors are:
+
+```text
+leaf MAPE (%) = mean(abs(approx_leaf_pages - leaf_pages) / leaf_pages) * 100
+count MAPE (%) = mean(abs(estimate - full-scan count) / full-scan count) * 100
+ratio MAE (pp) = mean(abs(sampled ratio - full-scan ratio))
+```
+
+`pp` means percentage points. Ratio errors exclude draws with no sampled live
+leaf; the table reports those draws separately because the prototype returns
+`NaN` when the leaf denominator is zero, following standard `pgstatindex`
+([pgstatindex.c#ratio-zero-cases](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L356)).
+
+### Disposable fixture
+
+Run this only in a fresh disposable database. It intentionally creates test
+relations, bulk-deletes generated rows, and leaves the objects in place for
+inspection. First run the `pageinspect` setup, compatibility helper, and sampler
+from the preceding section. The timeout changes are session-scoped and require
+neither reload nor restart
+([guc.c#diagnostic-timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2397)).
+The table reloption disables routine autovacuum so it cannot change a fixture
+between manual VACUUM and measurement; anti-wraparound autovacuum remains an
+exception
+([create_table.sgml#autovacuum_enabled](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L1383-L1403)).
+`INDEX_CLEANUP TRUE` explicitly requests dead-index-entry removal
+([vacuum.sgml#INDEX_CLEANUP](../../../raw/postgres-12/doc/src/sgml/ref/vacuum.sgml#L186-L203)).
+
+```sql
+SET /* wiki_pgstatindex_compare_timeout */ statement_timeout = '15min';
+SET /* wiki_pgstatindex_compare_timeout */ lock_timeout = '2s';
+CREATE /* wiki_pgstatindex_compare_extension */ EXTENSION IF NOT EXISTS pgstattuple;
+
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_uniform_sparse
+  (id int) WITH (autovacuum_enabled = false);
+INSERT /* wiki_pgstatindex_compare_load */ INTO samp_uniform_sparse
+SELECT i FROM generate_series(1, 600000) AS g(i);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_uniform_sparse_idx
+  ON samp_uniform_sparse (id);
+DELETE /* wiki_pgstatindex_compare_bloat */ FROM samp_uniform_sparse
+  WHERE id % 3 <> 0;
+VACUUM /* wiki_pgstatindex_compare_vacuum */
+  (ANALYZE, INDEX_CLEANUP TRUE) samp_uniform_sparse;
+
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_range_deleted
+  (id int) WITH (autovacuum_enabled = false);
+INSERT /* wiki_pgstatindex_compare_load */ INTO samp_range_deleted
+SELECT i FROM generate_series(1, 600000) AS g(i);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_range_deleted_idx
+  ON samp_range_deleted (id);
+DELETE /* wiki_pgstatindex_compare_bloat */ FROM samp_range_deleted
+  WHERE id BETWEEN 90001 AND 510000;
+VACUUM /* wiki_pgstatindex_compare_vacuum */
+  (ANALYZE, INDEX_CLEANUP TRUE) samp_range_deleted;
+
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_split_churn
+  (id int) WITH (autovacuum_enabled = false);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_split_churn_idx
+  ON samp_split_churn (id);
+INSERT /* wiki_pgstatindex_compare_load */ INTO samp_split_churn
+SELECT ((i * 104729::bigint) % 1000003)::int
+FROM generate_series(1, 600000) AS g(i);
+DELETE /* wiki_pgstatindex_compare_bloat */ FROM samp_split_churn
+  WHERE id % 4 = 0;
+VACUUM /* wiki_pgstatindex_compare_vacuum */
+  (ANALYZE, INDEX_CLEANUP TRUE) samp_split_churn;
+
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_partial_sparse
+  (id int, active boolean) WITH (autovacuum_enabled = false);
+INSERT /* wiki_pgstatindex_compare_load */ INTO samp_partial_sparse
+SELECT i, i % 5 = 0 FROM generate_series(1, 900000) AS g(i);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_partial_sparse_idx
+  ON samp_partial_sparse (id) WHERE active;
+DELETE /* wiki_pgstatindex_compare_bloat */ FROM samp_partial_sparse
+  WHERE active AND id % 15 <> 0;
+VACUUM /* wiki_pgstatindex_compare_vacuum */
+  (ANALYZE, INDEX_CLEANUP TRUE) samp_partial_sparse;
+
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_small_dense
+  (id int) WITH (autovacuum_enabled = false);
+INSERT /* wiki_pgstatindex_compare_load */ INTO samp_small_dense
+SELECT i FROM generate_series(1, 30000) AS g(i);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_small_dense_idx
+  ON samp_small_dense (id);
+
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_empty
+  (id int) WITH (autovacuum_enabled = false);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_empty_idx
+  ON samp_empty (id);
+```
+
+The partial-index `WHERE` clause and parenthesized VACUUM options are present in
+v12's grammar
+([gram.y#CREATE-INDEX](../../../raw/postgres-12/src/backend/parser/gram.y#L7335-L7397),
+[gram.y#VACUUM](../../../raw/postgres-12/src/backend/parser/gram.y#L10497-L10533)).
+
+### Seeded comparison harness
+
+The harness records one standard full-scan baseline, runs deterministic samples,
+then asserts full-sample equivalence and summarizes partial-sample errors. It
+uses the prototype's direct `index_size`, sample counts, and `approx_` fields.
+
+```sql
+CREATE /* wiki_pgstatindex_compare_cases */ TABLE samp_cases (
+  case_name text PRIMARY KEY,
+  idx regclass NOT NULL,
+  shape text NOT NULL,
+  is_partial boolean NOT NULL
+);
+INSERT /* wiki_pgstatindex_compare_cases */ INTO samp_cases VALUES
+  ('empty', 'samp_empty_idx', 'metapage only', false),
+  ('partial_sparse', 'samp_partial_sparse_idx',
+   'partial index; uniform post-delete sparsity', true),
+  ('range_deleted', 'samp_range_deleted_idx',
+   'contiguous delete; deleted-page population', false),
+  ('small_dense', 'samp_small_dense_idx',
+   'healthy small-index baseline', false),
+  ('split_churn', 'samp_split_churn_idx',
+   'random-order splits plus uniform delete', false),
+  ('uniform_sparse', 'samp_uniform_sparse_idx',
+   'uniform post-delete sparsity', false);
+
+CREATE /* wiki_pgstatindex_compare_exact */ TABLE samp_exact AS
+SELECT c.case_name,
+       c.idx,
+       c.shape,
+       c.is_partial,
+       pg_relation_size(c.idx) AS index_bytes,
+       e.version,
+       e.tree_level,
+       e.index_size,
+       e.root_block_no,
+       e.internal_pages,
+       e.leaf_pages,
+       e.empty_pages,
+       e.deleted_pages,
+       e.avg_leaf_density,
+       e.leaf_fragmentation
+FROM samp_cases AS c
+CROSS JOIN LATERAL pgstatindex(c.idx) AS e;
+
+CREATE /* wiki_pgstatindex_compare_results */ TABLE samp_results AS
+SELECT NULL::text AS case_name,
+       NULL::float8 AS sample_fraction,
+       NULL::int AS trial,
+       s.*
+FROM pgstatindex_approx_pageinspect('samp_empty_idx', 1.0) AS s
+WITH NO DATA;
+
+DO /* wiki_pgstatindex_compare_draws */ $block$
+DECLARE
+  c record;
+  f float8;
+  run int;
+  runs int;
+  seed float8;
+BEGIN
+  FOR c IN SELECT case_name, idx FROM samp_cases ORDER BY case_name LOOP
+    FOREACH f IN ARRAY ARRAY[0.01::float8, 0.05::float8, 1.0::float8] LOOP
+      runs := CASE WHEN f = 1.0 THEN 1 ELSE 100 END;
+      FOR run IN 1..runs LOOP
+        seed := 2.0 * run / (runs + 1.0) - 1.0;
+        PERFORM /* wiki_pgstatindex_compare_seed */ setseed(seed);
+        INSERT /* wiki_pgstatindex_compare_draw */ INTO samp_results
+        SELECT c.case_name, f, run, s.*
+        FROM pgstatindex_approx_pageinspect(c.idx, f) AS s;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+END
+$block$;
+
+SELECT /* wiki_pgstatindex_compare_full_assertion */
+       count(*) AS cases,
+       bool_and(r.version = e.version
+         AND r.tree_level = e.tree_level
+         AND r.index_size = e.index_size
+         AND r.root_block_no = e.root_block_no
+         AND r.sampled_pages = GREATEST(
+           e.index_size / current_setting('block_size')::int - 1, 0)
+         AND r.sampled_leaf_pages = e.leaf_pages
+         AND r.scanned_percent = CASE
+           WHEN e.index_size > current_setting('block_size')::int
+             THEN 100.0 ELSE 0.0 END
+         AND r.approx_internal_pages = e.internal_pages
+         AND r.approx_leaf_pages = e.leaf_pages
+         AND r.approx_empty_pages = e.empty_pages
+         AND r.approx_deleted_pages = e.deleted_pages
+         AND r.approx_avg_leaf_density
+             IS NOT DISTINCT FROM e.avg_leaf_density
+         AND r.approx_leaf_fragmentation
+             IS NOT DISTINCT FROM e.leaf_fragmentation)
+         AS all_full_samples_match
+FROM samp_exact AS e
+JOIN samp_results AS r USING (case_name)
+WHERE r.sample_fraction = 1.0;
+
+SELECT /* wiki_pgstatindex_compare_sample_results */
+       e.case_name,
+       r.sample_fraction,
+       min(r.sampled_pages) AS sampled_pages,
+       round(avg(abs(r.approx_leaf_pages - e.leaf_pages)::numeric
+         / nullif(e.leaf_pages, 0) * 100), 2) AS leaf_mape_pct,
+       min(r.approx_deleted_pages) AS deleted_est_min,
+       max(r.approx_deleted_pages) AS deleted_est_max,
+       round(avg(abs(r.approx_deleted_pages - e.deleted_pages)::numeric
+         / nullif(e.deleted_pages, 0) * 100), 2) AS deleted_mape_pct,
+       round(avg(CASE WHEN r.sampled_leaf_pages > 0 THEN
+         abs(r.approx_avg_leaf_density - e.avg_leaf_density)::numeric END),
+         2) AS density_mae_pp,
+       round(max(CASE WHEN r.sampled_leaf_pages > 0 THEN
+         abs(r.approx_avg_leaf_density - e.avg_leaf_density) END)::numeric,
+         2) AS density_max_error_pp,
+       round(avg(CASE WHEN r.sampled_leaf_pages > 0 THEN
+         abs(r.approx_leaf_fragmentation - e.leaf_fragmentation)::numeric END),
+         2) AS fragmentation_mae_pp,
+       round(max(CASE WHEN r.sampled_leaf_pages > 0 THEN
+         abs(r.approx_leaf_fragmentation - e.leaf_fragmentation) END)::numeric,
+         2) AS fragmentation_max_error_pp,
+       count(*) FILTER (WHERE r.sampled_leaf_pages = 0) AS leaf_free_runs
+FROM samp_exact AS e
+JOIN samp_results AS r USING (case_name)
+WHERE r.sample_fraction < 1.0
+GROUP BY e.case_name, r.sample_fraction, e.leaf_pages, e.deleted_pages,
+         e.avg_leaf_density, e.leaf_fragmentation
+ORDER BY e.case_name, r.sample_fraction;
+```
+
+`pg_relation_size(regclass)` opens the relation with `AccessShareLock` and
+calculates the selected fork's physical size; the one-argument SQL overload used
+here supplies the main fork
+([dbsize.c#pg_relation_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L310-L335),
+[pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6891)).
+
+### Full-scan baseline
+
+All six indexes were below both 50 MB and 50 MiB. The largest was 18.25 MiB.
+Standard `pgstatindex` returned this baseline:
+
+| Fixture | Size (MiB) | Partial | Internal | Live leaf | Half-dead | Deleted | Density (%) | Fragmentation (%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `empty` | 0.01 | no | 0 | 0 | 0 | 0 | `NaN` | `NaN` |
+| `partial_sparse` | 3.88 | yes | 3 | 492 | 0 | 0 | 30.21 | 0.00 |
+| `range_deleted` | 12.88 | no | 4 | 494 | 0 | 1,149 | 89.69 | 0.00 |
+| `small_dense` | 0.66 | no | 1 | 82 | 0 | 0 | 90.05 | 0.00 |
+| `split_churn` | 18.25 | no | 12 | 2,323 | 0 | 0 | 47.82 | 49.98 |
+| `uniform_sparse` | 12.88 | no | 7 | 1,640 | 0 | 0 | 30.21 | 0.00 |
+
+The 100% assertion returned `cases = 6` and
+`all_full_samples_match = true`. For every fixture, the prototype matched the
+standard version, level, size, root, four page-class counts, density, and
+fragmentation. It also reported every ordinary page and every live leaf as
+sampled, with 100% scanned for populated indexes and 0% for the metapage-only
+index. The empty result agrees with the checked-in v12 regression boundary
+([pgstattuple.out#empty-index](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L82)).
+
+This is equivalence on healthy, quiescent storage. It is not a claim that either
+function returns a transactionally consistent snapshot, and it does not cover
+the proposal's deliberately stricter malformed-page errors.
+
+### Sampling results
+
+The following values summarize 100 seeded draws per fixture and fraction.
+`mean / max` reports absolute percentage-point error. Deleted-page estimate
+ranges and MAPE are shown only where the standard count was nonzero.
+
+| Fixture | Fraction | Pages/draw | Leaf MAPE | Deleted estimate range (MAPE) | Density error, mean / max | Fragmentation error, mean / max | No-leaf draws |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `empty` | 1% | 0 | n/a | n/a | n/a | n/a | 100 |
+| `empty` | 5% | 0 | n/a | n/a | n/a | n/a | 100 |
+| `partial_sparse` | 1% | 5 | 1.18% | n/a | 0.02 / 0.02 pp | 0.00 / 0.00 pp | 0 |
+| `partial_sparse` | 5% | 25 | 1.08% | n/a | 0.02 / 0.23 pp | 0.00 / 0.00 pp | 0 |
+| `range_deleted` | 1% | 17 | 28.25% | 678-1,550 (11.73%) | 0.63 / 14.38 pp | 0.00 / 0.00 pp | 0 |
+| `range_deleted` | 5% | 83 | 13.09% | 933-1,330 (5.66%) | 0.60 / 3.19 pp | 0.00 / 0.00 pp | 0 |
+| `small_dense` | 1% | 1 | 3.20% | n/a | 0.04 / 0.04 pp | 0.00 / 0.00 pp | 2 |
+| `small_dense` | 5% | 5 | 2.32% | n/a | 0.08 / 0.60 pp | 0.00 / 0.00 pp | 0 |
+| `split_churn` | 1% | 24 | 0.89% | n/a | 0.54 / 1.84 pp | 7.95 / 20.85 pp | 0 |
+| `split_churn` | 5% | 117 | 0.57% | n/a | 0.28 / 1.13 pp | 3.56 / 14.94 pp | 0 |
+| `uniform_sparse` | 1% | 17 | 0.78% | n/a | 0.04 / 1.15 pp | 0.00 / 0.00 pp | 0 |
+| `uniform_sparse` | 5% | 83 | 0.59% | n/a | 0.03 / 0.23 pp | 0.00 / 0.00 pp | 0 |
+
+### What the comparison establishes
+
+- **Full sampling is a strong equivalence check.** On all tested page shapes,
+  sampling every ordinary block reproduced standard `pgstatindex`. This checks
+  the SQL prototype's page-type mapping, count scaling, density denominator,
+  and backward-link test against the current implementation
+  ([pgstatindex.c#classification-and-ratios](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L356)).
+- **Index size alone does not determine accuracy.** Every fixture was below
+  50 MB, but 1% meant one page for the 0.66 MiB index, five for the 3.88 MiB
+  partial index, 17 for each 12.88 MiB index, and 24 for the 18.25 MiB index.
+  The result supports exposing `sampled_pages` and allowing an explicit minimum
+  page count rather than applying a hidden size threshold.
+- **Rare or spatially distinct page classes dominate count error.** The
+  range-deleted index had 1,149 deleted pages and 494 live leaves. A 17-page
+  draw produced 28.25% leaf-count MAPE and 11.73% deleted-count MAPE; increasing
+  the draw to 83 pages reduced those errors to 13.09% and 5.66%. Standard
+  `pgstatindex` can separate those classes only because it visits every block
+  ([pgstatindex.c#classification](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L310)).
+- **Uniform density was easier than fragmented-link frequency in these
+  fixtures.** The uniformly sparse full and partial indexes had very small
+  density errors. On `split_churn`, 1% density MAE was 0.54 points, while
+  fragmentation MAE was 7.95 points and one draw missed by 20.85 points. The
+  two estimators use different page observations: density is a ratio of summed
+  free space to capacity, while fragmentation counts sampled leaves whose
+  physical right link points backward
+  ([pgstatindex.c#leaf-metrics](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L307)).
+- **A small index can produce an unsupported ratio.** At 1%, `small_dense`
+  sampled one of 83 ordinary pages. Two of 100 draws selected its sole internal
+  page, sampled no live leaf, and correctly returned `NaN`. A minimum sample-page
+  policy would address this more directly than a 50 MB cutoff.
+- **Partial indexes require no separate page decoder.** The 3.88 MiB partial
+  fixture passed full-sample equivalence and produced ordinary physical-sample
+  estimates. The result says nothing about rows excluded by `WHERE active` or
+  the parent table.
+- **The empty edge is deterministic.** A metapage-only index has no ordinary
+  sample population, so both 1% and 5% drew zero pages and returned the standard
+  zero-count/`NaN` boundary
+  ([pgstattuple.out#empty-index](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L82)).
+- **Do not use this SQL test to predict C performance.** The comparison records
+  accuracy and pages inspected, not a speedup. The SQL prototype still
+  enumerates and random-sorts all candidate block numbers and performs one
+  normal-buffer `pageinspect` call per selected page; the C proposal has a
+  different sampling, locking, validation, and buffer-access path
+  ([btreefuncs.c#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L161-L213),
+  [pgstatindex.c#buffer-strategy](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L223)).
 
 ## Context Reviewed
 
@@ -810,11 +1216,18 @@ module isolation or TAP target
 - B-tree internals: metapage and opaque structures, root metadata, page
   initialization, generic and B-tree-specific page checks, page-state macros,
   relation length, buffer access strategy, relation and content locks, DML and
-  VACUUM index locks, and generated `BTREE_AM_OID` plumbing.
-- Sampling: complete `sampling.h` and `sampling.c`, reverse callers, and the
-  v12 `ANALYZE` use of `BlockSampler`.
+  VACUUM index locks, B-tree VACUUM tuple removal, half-dead marking, page
+  unlink/deletion/recyclability, and generated `BTREE_AM_OID` plumbing.
+- Partial indexes: predicate catalog storage, serial build filtering, executor
+  DML filtering, and the physical-page boundary in `pgstatindex`.
+- Sampling: complete `sampling.h` and `sampling.c`, reverse callers, the v12
+  `ANALYZE` use of `BlockSampler`, and backend-local `random()`/`setseed()`
+  implementation and documentation.
 - `pageinspect`: control/Makefile/update SQL, `bt_metap`, `bt_page_stats`,
   `get_raw_page`, `page_header`, tuple conversion, docs, and regression wiring.
+- SQL and sizing surfaces: CREATE INDEX and VACUUM grammar, `INDEX_CLEANUP`,
+  `autovacuum_enabled`, `pg_relation_size(regclass)`, and diagnostic timeout
+  contexts.
 - Extension lifecycle: target-version path selection, install-then-update,
   fmgr V1 symbol metadata, SQL privileges, and generated catalog headers.
 - Exact-pin execution under `.wiki-runtime/`: built and installed pageinspect,
@@ -822,7 +1235,13 @@ module isolation or TAP target
   prototype on populated and metapage-only B-trees. A full sample matched
   `pgstatindex`; invalid fractions returned no rows as documented for the SQL
   prototype. The `pgstattuple` regression target and all five `pageinspect`
-  regression targets passed. The temporary server was stopped after review.
+  regression targets passed.
+- Follow-up exact-pin execution used a new disposable database with six indexes
+  from 0.01 MiB through 18.25 MiB: uniform sparse, range-deleted, split/churn,
+  partial sparse, small healthy, and empty. The 100% prototype sample matched
+  all shared standard-`pgstatindex` fields in all six cases. One hundred seeded
+  draws at each of 1% and 5% produced the filed count and ratio error summary.
+  The isolated server was stopped after the run.
 
 ## Evidence Map
 
@@ -840,6 +1259,10 @@ module isolation or TAP target
 | `BTREE_AM_OID` is an existing generated-header dependency; no new catalog is needed | [pg_am.h#generated-header](../../../raw/postgres-12/src/include/catalog/pg_am.h#L18-L29), [pg_am.dat#BTREE_AM_OID](../../../raw/postgres-12/src/include/catalog/pg_am.dat#L15-L23), [genbki.pl#OID-symbol-emission](../../../raw/postgres-12/src/backend/catalog/genbki.pl#L598-L603) |
 | The pageinspect compatibility helper avoids v1.7 `oldest_xact` conversion | [pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26), [btreefuncs.c#bt_metap-output](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L505-L575), [execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2152) |
 | The revised SQL derives valid-page capacity from one `bt_page_stats` read | [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L90-L153), [nbtpage.c#_bt_pageinit](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L920-L929), [bufpage.c#PageInit](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L35-L60) |
+| VACUUM removes dead entries and can turn empty leaves into deleted physical pages | [vacuumlazy.c#remove-index-entries](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L761-L772), [nbtree.c#empty-page-deletion](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1327-L1359), [nbtpage.c#_bt_pagedel](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1285-L1517) |
+| A partial predicate filters build and DML inputs, while `pgstatindex` reads the resulting physical B-tree | [heapam_handler.c#partial-build-filter](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1604-L1626), [execIndexing.c#partial-DML-filter](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L363), [pgstatindex.c#guards-and-scan](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L315) |
+| `setseed()` makes subsequent current-session `random()` calls repeatable | [func.sgml#setseed](../../../raw/postgres-12/doc/src/sgml/func.sgml#L1130-L1159), [float.c#setseed](../../../raw/postgres-12/src/backend/utils/adt/float.c#L2585-L2644) |
+| The existing empty-index boundary is zero ordinary pages and `NaN` ratios | [pgstattuple.out#empty-index](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L82) |
 | Existing tests do not cover sampling | [Makefile#regression-target](../../../raw/postgres-12/contrib/pgstattuple/Makefile#L1-L24), [pgstattuple.sql#complete-test](../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L1-L119) |
 
 ## Open Questions
@@ -847,7 +1270,9 @@ module isolation or TAP target
 - Would PostgreSQL accept this API, and should estimated fields include standard
   errors or confidence intervals? The pinned source cannot decide project policy.
 - Should the production API expose a seed for repeatability, and should it accept
-  a minimum sampled-page count instead of silently imposing one?
+  a minimum sampled-page or sampled-leaf count instead of silently imposing one?
+  The 0.66 MiB fixture's one-page 1% sample missed every live leaf in two of 100
+  draws, but these fixtures do not establish a universal minimum.
 - Should independently rounded page-class estimates be allowed to sum a few
   pages above or below `N`, should the API return non-integer estimates, or
   should it apply a total-preserving rounding rule?
@@ -887,6 +1312,14 @@ module isolation or TAP target
 - [pageinspect.control](../../../raw/postgres-12/contrib/pageinspect/pageinspect.control#L1-L5) and [pageinspect--1.6--1.7.sql#bt_metap](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L16-L26) - default pageinspect version and metapage SQL shape.
 - [btreefuncs.c#GetBTPageStatistics](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L90-L153), [btreefuncs.c#bt_page_stats](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L161-L237), and [btreefuncs.c#bt_metap](../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L505-L584) - SQL prototype primitives.
 - [execTuples.c#BuildTupleFromCStrings](../../../raw/postgres-12/src/backend/executor/execTuples.c#L2111-L2152) - compatibility-wrapper tuple conversion.
+- [vacuumlazy.c#index-cleanup](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L283-L289), [vacuumlazy.c#remove-index-entries](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L761-L772), and [nbtree.c#btvacuumpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1359) - manual index cleanup, tuple removal, and empty-leaf handling.
+- [nbtpage.c#_bt_pagedel](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1285-L1517) - B-tree half-dead and deleted-page transition.
+- [heapam_handler.c#partial-build-filter](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1198-L1210) and [heapam_handler.c#partial-build-scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1604-L1626) - partial-index build predicate setup and filtering.
+- [execIndexing.c#partial-DML-filter](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L363) - partial-index maintenance predicate.
+- [func.sgml#setseed](../../../raw/postgres-12/doc/src/sgml/func.sgml#L1130-L1159) and [float.c#random-and-setseed](../../../raw/postgres-12/src/backend/utils/adt/float.c#L2585-L2644) - repeatable current-session SQL sampling sequence.
+- [dbsize.c#pg_relation_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L310-L335) and [pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6891) - relation-size implementation and main-fork overload.
+- [gram.y#CREATE-INDEX](../../../raw/postgres-12/src/backend/parser/gram.y#L7335-L7397) and [gram.y#VACUUM](../../../raw/postgres-12/src/backend/parser/gram.y#L10497-L10533) - fixture DDL grammar.
+- [vacuum.sgml#INDEX_CLEANUP](../../../raw/postgres-12/doc/src/sgml/ref/vacuum.sgml#L186-L203) and [create_table.sgml#autovacuum_enabled](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L1383-L1403) - fixture cleanup and routine-autovacuum controls.
 - [guc.c#diagnostic-timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2397) - session/transaction timeout contexts.
 
 ## Navigation
