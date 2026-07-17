@@ -2,6 +2,60 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-17] review-fix v17 | sampling pgstatindex proposal and both v12 follow-ups
+
+- Completed a full claim-to-source review of [Proposing a Sampling pgstatindex
+  Variant for PostgreSQL 17
+  (unverified)](v17/questions/pgstatindex-sample-variant-proposal.md) against
+  unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
+- Carried over both user-approved corrected follow-ups from the corresponding
+  PostgreSQL 12 question: compare the proposal with standard `pgstatindex`
+  across multiple bloat shapes, empty/partial/sub-50-MB indexes; then add a
+  strict sub-100-MiB 10% effective-fraction floor, rerun, and explain the
+  small-partial-index effect.
+- Replaced the older draft's exact-versus-estimated wording with direct
+  observations versus estimates; added `sampled_pages` and
+  `sampled_leaf_pages`; corrected v17's invalid-index rejection, unlocked
+  current metapage read, one-time relation length, page-level locking, and
+  mixed-time result boundaries.
+- Reworked the preferred C path around v17 `BlockSampler`: `pg_prng_state`,
+  `uint32` seed, returned realized count, without-replacement ascending output,
+  `int` sample-size limit, potentially population-proportional skip loop, full-
+  sample bypass, cancellation boundary, and the v17 `ANALYZE` read-stream
+  precedent. Added metapage and sampled-page validation, the 256 KiB-or-smaller
+  `BAS_BULKREAD` ring, and complete privilege, generated-header, Make, Meson,
+  docs, and test implications.
+- Replaced the two-read SQL helper with a one-read `pageinspect` 1.12 prototype.
+  It evaluates main-fork size once, uses 64-bit block arguments, combines v17's
+  deleted-page `d`/`D` types, derives valid-page capacity from the fixed B-tree
+  header/special space, applies the strict 104,857,600-byte floor, and exposes
+  direct sample counts. Documented its superuser, O(N) sort, per-call lock,
+  normal-buffer, malformed-page, maximum-block, invalid-input, extension-
+  version, search-path, and helper-lifecycle boundaries.
+- Built and installed the exact pin under `.wiki-runtime/`. The one
+  `pgstattuple` regression target and all eight `pageinspect` targets passed.
+  The setup and sampler SQL blocks extracted from the filed page also parsed
+  and executed, including the documented zero-row invalid-fraction behavior.
+  The isolated comparison used six sub-50-MiB fixtures (uniform sparse,
+  range-deleted, split/churn, partial sparse, small healthy, and empty) plus a
+  107.13 MiB healthy control. Every 100% sample matched all shared standard-
+  `pgstatindex` fields; policy-target and strict synthetic threshold assertions
+  passed.
+- One hundred seeds at requested 1% and 5% showed every sub-threshold fixture
+  using the same 10% target while the large control retained 1.0064%/5.0029%.
+  The 3.88 MiB partial index moved from 5/25 pages to 50: leaf MAPE changed from
+  0.80%/0.95% to 0.81%, demonstrating that more pages do not force every fixed
+  finite-seed summary to improve. The 0.66 MiB control moved from 1/5 pages to
+  9; its leaf MAPE became 1.82%, and two leaf-free 1% draws became zero. The
+  isolated server was stopped.
+- Added the required Contents/Answer structure, claim-to-source map, complete
+  v17 citations, expanded tests, and refreshed `wiki/index.md`,
+  `wiki/v17/index.md`, and `wiki/versions.md`. Set `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T19:25:39Z`; human `verified` remains
+  `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-17] review-fix v12 | B-tree bloat REINDEX heuristic full audit
 
 - Completed a full claim-to-source review of [Finding and Prioritizing Bloated
