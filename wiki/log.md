@@ -2,6 +2,55 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-17] review-fix v17 | ATTACH PARTITION index-drop full audit
+
+- Completed a full claim-to-source review of [Can ALTER TABLE ... ATTACH
+  PARTITION Drop Indexes in PostgreSQL 17
+  (unverified)](v17/questions/attach-partition-index-drops.md) against unchanged
+  pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
+- Scoped the lead answer precisely. Core `ALTER TABLE ... ATTACH PARTITION`
+  never drops an existing index: `AttachPartitionEnsureIndexes` is
+  match-or-create. A user `ddl_command_start`/`ddl_command_end` event trigger or
+  a loadable module's `ProcessUtility_hook` can issue an independent
+  `DROP INDEX`; that custom DDL is not ATTACH semantics.
+- Corrected the old compatibility table. Matching expression and partial
+  indexes can be reused after attribute mapping; the prior test had merely
+  shown mismatches against a plain parent index. Added exact matching
+  dimensions and non-dimensions, the deliberate exclusion-index non-match,
+  same-type constraint requirement, direct invalid/already-attached guards,
+  foreign-table error, and keep-and-add behavior.
+- Added parser/utility dispatch, parent/child/default/descendant locks and their
+  conflict with both DROP modes, transactional rollback and pending-file
+  deletion, `pg_inherits`/`pg_class`/`pg_depend` and constraint re-parenting,
+  physical `ambuild` versus metadata-only reuse, multilevel recursion, object-
+  access hooks, generated parser/catalog headers, shipped utility hooks,
+  custom-AM and contrib boundaries, the companion ALTER INDEX path, and direct
+  test coverage plus explicit gaps.
+- Expanded the since-v12 history with the v13 ALTER-TABLE-on-index guard; v14
+  inheritance insertion refactor; v16 event-trigger `ObjectAddress`, recursive
+  expression/predicate matching, progress parameter, and invalid direct-index
+  skip; v17 recursive `indisvalid` propagation, exclusion constraints,
+  syscache-copy and expression-position fixes, PK-vs-UNIQUE matching, locking,
+  restricted search path; and the v17-stable cloned-statement and repeated-
+  attach validation fixes. Rechecked each hash, date, body, ancestry, patch,
+  and major-cycle stamp bracket.
+- Exact-pin smoke tests confirmed direct reuse of matching expression/partial
+  indexes, exclusion-index non-reuse, rollback after failed auto-build, a start
+  trigger dropping an extra index, and an end trigger dropping the parent and
+  cascading to its newly attached child. The server was stopped.
+- The smoke test and a second source trace exposed an open multilevel validity
+  edge: recursive creation can absorb an invalid failed-CIC leaf and invalidate
+  the new intermediate index, but no table-ATTACH path invalidates the
+  pre-existing top parent index. Current tests cover direct invalid skipping
+  and recursive CREATE INDEX propagation separately, not this combination.
+- Added the mandatory Contents block; refreshed `wiki/index.md`,
+  `wiki/v17/index.md`, and `wiki/versions.md`; set `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T19:53:21Z`; human `verified` remains
+  `false`.
+- The exact-pin core regression suite passed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-17] review-fix v17 | sampling pgstatindex proposal and both v12 follow-ups
 
 - Completed a full claim-to-source review of [Proposing a Sampling pgstatindex
