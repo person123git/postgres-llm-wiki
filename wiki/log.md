@@ -4384,3 +4384,50 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `false`, so the visible title remains `(unverified)`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-07-17] follow-up v12 | wal_sender_timeout slots and WAL retention
+
+- Extended [How `wal_sender_timeout` Is Used and What It Impacts in PostgreSQL
+  12 (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`). The user approved
+  correcting the follow-up to “How does `wal_sender_timeout` affect
+  `pg_replication_slots`, and how is WAL retained during error or failure
+  scenarios?” before it was restated under `## Question`.
+- Traced `pg_replication_slots` through `system_views.sql`, generated
+  `pg_get_replication_slots` metadata, `slotfuncs.c`, and the shared
+  `ReplicationSlot`/`ReplicationSlotPersistentData` structures. Added grouped
+  outcomes for every view field: persistent slots retain their row and become
+  `active = false` / `active_pid = NULL`; temporary slots disappear; timeout
+  itself does not rewrite identity, position, or xmin fields.
+- Distinguished the exact timeout path (`WalSndCheckTimeOut` ->
+  `WalSndShutdown` -> `proc_exit` -> `ProcKill`) from recoverable
+  `WalSndErrorCleanup`, then mapped EOF, frontend terminate, protocol/FATAL
+  errors, communication failure, orderly `CopyDone`, abnormal WAL-sender exit,
+  immediate shutdown, and startup restoration. A temporary slot remains
+  session-owned and visibly active after orderly `CopyDone`, but timeout exits
+  the session and drops it.
+- Traced WAL retention from each valid `restart_lsn` through
+  `ReplicationSlotsComputeRequiredLSN`, the shared slot-minimum LSN,
+  `KeepLogSeg`, and checkpoint/restartpoint removal. `active_pid` is not a
+  filter; the oldest allocated slot boundary wins alongside redo,
+  `wal_keep_segments`, and archive completion. A dropped slot only makes WAL
+  eligible for later removal.
+- Added the unreserved physical-slot boundary, logical
+  `confirmed_flush_lsn`-versus-`restart_lsn` distinction, heap/catalog xmin
+  horizons, v12's unbounded slot-driven `pg_wal` growth, checkpoint-delayed
+  physical slot-state persistence, logical crash-safety save ordering, and the
+  no-slot missing-WAL reconnect error.
+- Reviewed adjacent slot tests: logical persistent-slot active/inactive
+  transitions and temporary-versus-persistent session cleanup are covered, but
+  upstream has no direct sender-timeout or post-timeout WAL-removal test.
+- Ran a new isolated exact-pin smoke test with a minimal libpq replication
+  client. A temporary physical slot with reserved WAL appeared as active and
+  temporary during a silent stream; after its per-connection 20-second timeout,
+  the server logged the timeout and the slot row was absent while the client
+  process remained alive. The temporary server was stopped cleanly.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Reset
+  `verified_by_agent` to `not yet` because this was a scoped expansion rather
+  than a fresh claim-by-claim review of the full page; human `verified` remains
+  `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed; the isolated PostgreSQL 12 server is stopped.

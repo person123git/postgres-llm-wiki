@@ -14,6 +14,21 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-17: extended [How `wal_sender_timeout` Is Used and What It Impacts in
+  PostgreSQL 12 (unverified)](v12/questions/wal-sender-timeout.md) with the
+  user-approved corrected follow-up, “How does `wal_sender_timeout` affect
+  `pg_replication_slots`, and how is WAL retained during error or failure
+  scenarios?”, against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42`. Added exact shared-view row and
+  column transitions; persistent, temporary, and unreserved-slot boundaries;
+  timeout, EOF/protocol/error, orderly `CopyDone`, and crash/restart outcomes;
+  `restart_lsn` versus logical confirmation and row horizons; checkpointed
+  state and conservative crash rollback; and the checkpoint/restartpoint,
+  `wal_keep_segments`, and archive limits on eventual WAL removal. An isolated
+  exact-pin libpq smoke test observed a temporary physical slot as active with
+  reserved WAL, then absent after its silent stream reached a per-connection
+  20-second sender timeout. Reset `verified_by_agent` to `not yet` because this
+  was a scoped follow-up rather than a new full-page audit.
 - 2026-07-17: completed a full claim-to-source review of [How
   `wal_sender_timeout` Is Used and What It Impacts in PostgreSQL 12
   (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
