@@ -1,12 +1,12 @@
 ---
 type: question
 version: 19
-pinned_commit: 8055e3375aa1c2237181e06be26b05b964d18ed5
+pinned_commit: 3aa54433b0cdce48facb610a5b720208cc760654
 verified: false
 verified_by_agent: not yet
 ---
 
-# How the REPACK Command Works in PostgreSQL 19, and Its 46 Feature-Scope Commits (unverified)
+# How the REPACK Command Works in PostgreSQL 19, and Its 47 Feature-Scope Commits (unverified)
 
 ## Contents
 
@@ -54,7 +54,7 @@ In PostgreSQL 19, do a comprehensive explanation of how `pg_repack` works, expla
 - **Blocking (default).** Takes `AccessExclusiveLock`, builds a new heap, copies live tuples in the chosen order, rebuilds indexes via `REINDEX`, then swaps relfilenodes. This is the classic `CLUSTER`/`VACUUM FULL` path, now reached through `repack.c` [repack.c#rebuild_relation](../../../raw/postgres-19/src/backend/commands/repack.c#L1134-L1159).
 - **`CONCURRENTLY`.** Takes only `ShareUpdateExclusiveLock` for almost all of the work, so readers and writers keep using the table. It captures concurrent DML with **logical decoding** through a dedicated background worker and a temporary replication slot, replays those changes onto the new heap, and only upgrades to `AccessExclusiveLock` for the brief final relfilenode swap [repack.c#overview](../../../raw/postgres-19/src/backend/commands/repack.c#L7-L21) [ref/repack.sgml#CONCURRENTLY](../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L221-L234).
 
-This page tracks **46 feature-scope commits (2026-03-10 to 2026-07-10)**: commits whose subject/body explicitly references REPACK, adjacent prerequisite/support commits used by that history, and tree-wide fixes that changed REPACK-specific code or text. The bulk were authored by Antonin Houska and Álvaro Herrera, building on Houska's `pg_squeeze` extension. They are listed and explained under [Feature-Scope Commits](#feature-scope-commits).
+This page tracks **47 feature-scope commits (2026-03-10 to 2026-07-16)**: commits whose subject/body explicitly references REPACK, adjacent prerequisite/support commits used by that history, and tree-wide fixes that changed REPACK-specific code or text. The bulk were authored by Antonin Houska and Álvaro Herrera, building on Houska's `pg_squeeze` extension. They are listed and explained under [Feature-Scope Commits](#feature-scope-commits).
 
 ## Syntax and Modes
 
@@ -77,6 +77,8 @@ where `option` is `VERBOSE`, `ANALYZE`, or `CONCURRENTLY` [ref/repack.sgml#synop
 | `REPACK (CONCURRENTLY) t` | Online rewrite; requires an explicit single non-partitioned table [repack.c#multi-table-guard](../../../raw/postgres-19/src/backend/commands/repack.c#L337-L353). |
 
 `utility.c` dispatches `T_RepackStmt` to `ExecRepack()`, and reports the command tag as `REPACK` unless the statement is a legacy `CLUSTER` [utility.c#ExecRepack](../../../raw/postgres-19/src/backend/tcop/utility.c#L866-L867) [utility.c#CMDTAG](../../../raw/postgres-19/src/backend/tcop/utility.c#L2894-L2898). `VACUUM (FULL)` reaches the same engine by calling `cluster_rel(REPACK_COMMAND_VACUUMFULL, …)` from `vacuum.c` [vacuum.c#cluster_rel](../../../raw/postgres-19/src/backend/commands/vacuum.c#L2303-L2305). To run `REPACK`, the caller needs the `MAINTAIN` privilege on the table [repack.c#repack_is_permitted](../../../raw/postgres-19/src/backend/commands/repack.c#L2323-L2362) [ref/repack.sgml#Notes](../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L355-L358).
+
+The generic privilege reference now lists `REPACK` among the commands authorized by `MAINTAIN`, and the predefined `pg_maintain` role grants that right on all relations [ddl.sgml#MAINTAIN](../../../raw/postgres-19/doc/src/sgml/ddl.sgml#L2536-L2548) [user-manag.sgml#pg_maintain](../../../raw/postgres-19/doc/src/sgml/user-manag.sgml#L655-L670). At runtime, membership in `pg_maintain` adds `ACL_MAINTAIN` when the relation ACL is checked [aclchk.c#pg_class_aclmask_ext](../../../raw/postgres-19/src/backend/catalog/aclchk.c#L3419-L3428).
 
 ## Source Layout
 
@@ -176,8 +178,8 @@ What does exist:
 
 | Lever | Effect on I/O | Notes |
 |---|---|---|
-| **BULKREAD ring buffer** (automatic) | Limits shared-buffer pollution while reading the old heap | Only on the **sequential-scan** path, and only once the relation exceeds `NBuffers/4` [heapam.c#initscan](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L396-L409). |
-| **BULKWRITE ring buffer** (automatic, CONCURRENTLY) | Limits cache pollution while inserting into the new heap | `GetBulkInsertState()` uses `BAS_BULKWRITE` [heapam.c#GetBulkInsertState](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L1934-L1942). |
+| **BULKREAD ring buffer** (automatic) | Limits shared-buffer pollution while reading the old heap | Only on the **sequential-scan** path, and only once the relation exceeds `NBuffers/4` [heapam.c#initscan](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L397-L410). |
+| **BULKWRITE ring buffer** (automatic, CONCURRENTLY) | Limits cache pollution while inserting into the new heap | `GetBulkInsertState()` uses `BAS_BULKWRITE` [heapam.c#GetBulkInsertState](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L1935-L1943). |
 | `maintenance_work_mem` | Bounds sort / index-build memory; does **not** throttle | Sizes `tuplesort_begin_cluster` [heapam_handler.c#tuplesort](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L651-L655). It is `PGC_USERSET`, so settable per session (no restart/reload) [guc_parameters.dat#maintenance_work_mem](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1951-L1959). High values trade RAM for fewer temp-file write bursts. |
 | `CONCURRENTLY` | Reduces **lock** contention, not I/O | Avoids the long `AccessExclusiveLock` [repack.c#overview](../../../raw/postgres-19/src/backend/commands/repack.c#L7-L21) but does *more* total I/O (decode + spill + replay). It does let old WAL recycle as it runs [repack_worker.c#WAL-recycling](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L374-L403). |
 
@@ -200,7 +202,7 @@ Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tes
 
 ## Feature-Scope Commits
 
-These are the 46 REPACK feature-scope commits in the pinned `REL_19_STABLE` checkout (`8055e337`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
+These are the 47 REPACK feature-scope commits in the pinned `REL_19_STABLE` checkout (`3aa54433`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
 
 ### Foundational
 
@@ -262,6 +264,7 @@ These are the 46 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 | `497e92dc` | 2026-05-28 | Á. Herrera | Fix minor issues in repack `ereport()`s. |
 | `378dffaf` | 2026-05-28 | Á. Herrera | Improve REPACK (CONCURRENTLY) error messages further. |
 | `da8889ccd7e` | 2026-07-06 | R. Haas | Tree-wide (backpatch-through 19): use `PG_MODULE_MAGIC_EXT` (carrying the module name and version) instead of plain `PG_MODULE_MAGIC` in the newly added modules, including the `pgrepack` output plugin [pgrepack.c#module-magic](../../../raw/postgres-19/src/backend/replication/pgrepack/pgrepack.c#L21-L24). |
+| `8a84ddd8c63` | 2026-07-16 | Fujii Masao; patch by Shinya Kato | Add `REPACK` to the generic `MAINTAIN` privilege description and to the predefined `pg_maintain` role's command list; the runtime `ACL_MAINTAIN` membership path already covered the command [ddl.sgml#MAINTAIN](../../../raw/postgres-19/doc/src/sgml/ddl.sgml#L2536-L2548) [user-manag.sgml#pg_maintain](../../../raw/postgres-19/doc/src/sgml/user-manag.sgml#L655-L670) [aclchk.c#pg_class_aclmask_ext](../../../raw/postgres-19/src/backend/catalog/aclchk.c#L3419-L3428). |
 
 ### Tests
 
@@ -276,6 +279,7 @@ These are the 46 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 ## Context Reviewed
 
 - `ref/repack.sgml` — command reference, modes, CONCURRENTLY semantics, restrictions, resource notes [ref/repack.sgml](../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L1-L452).
+- `ddl.sgml`, `user-manag.sgml`, and `aclchk.c` — generic `MAINTAIN` documentation, predefined `pg_maintain`, and its runtime `ACL_MAINTAIN` mapping [ddl.sgml#MAINTAIN](../../../raw/postgres-19/doc/src/sgml/ddl.sgml#L2536-L2548) [user-manag.sgml#pg_maintain](../../../raw/postgres-19/doc/src/sgml/user-manag.sgml#L655-L670) [aclchk.c#pg_class_aclmask_ext](../../../raw/postgres-19/src/backend/catalog/aclchk.c#L3419-L3428).
 - `repack.c` — `ExecRepack`, `cluster_rel`, `rebuild_relation`, `copy_table_data`, concurrent finish/apply, worker control [repack.c](../../../raw/postgres-19/src/backend/commands/repack.c#L1-L32).
 - `repack_worker.c` — worker main loop, decoding setup, WAL recycling, change filtering [repack_worker.c](../../../raw/postgres-19/src/backend/commands/repack_worker.c#L1-L536).
 - `pgrepack.c` — output-plugin callbacks and tuple spill format [pgrepack.c](../../../raw/postgres-19/src/backend/replication/pgrepack/pgrepack.c#L1-L308).
@@ -284,13 +288,14 @@ These are the 46 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 - GUC/slot pool — `guc_parameters.dat`, `slot.c` [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
 - Observability — `system_views.sql`, `progress.h`, `wait_event_names.txt`.
 - Tests — `contrib/test_decoding/sql/repack.sql`, `src/test/modules/injection_points` repack specs.
-- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned `REL_19_STABLE` checkout `8055e3375aa1c2237181e06be26b05b964d18ed5` for the 46 feature-scope commits. The 2026-07-09 repin from `cdae794a` (the former `master` post-`REL_19_BETA1` pin, now the point where `REL_19_STABLE` diverged from `master`/20devel) added three REPACK feature-scope commits in `cdae794a..01c544e1`: `fb284f2f9bd` (stored generated columns) and `5e450df50dc` (change-replay range table), both backpatched through 19, plus the tree-wide `da8889ccd7e` (`PG_MODULE_MAGIC_EXT`). The 2026-07-13 repin reviewed all 12 commits in `01c544e1..8055e337`; only `133eba078f7` changed REPACK, raising the feature-scope count from 45 to 46. It removed ineffective discovery locks and hardened final per-table open/recheck behavior. No REPACK worker, output-plugin, header, test, or documentation file changed in that range. Cited `repack.c` anchors were refreshed [slot.c#ReplicationSlotCreate](../../../raw/postgres-19/src/backend/replication/slot.c#L372-L463).
+- `git log --regexp-ignore-case --grep=repack` plus source-path history for the REPACK-specific files, checked against the pinned `REL_19_STABLE` checkout `3aa54433b0cdce48facb610a5b720208cc760654` for the 47 feature-scope commits. The 2026-07-09 repin from `cdae794a` (the former `master` post-`REL_19_BETA1` pin, now the point where `REL_19_STABLE` diverged from `master`/20devel) added three REPACK feature-scope commits in `cdae794a..01c544e1`: `fb284f2f9bd` (stored generated columns) and `5e450df50dc` (change-replay range table), both backpatched through 19, plus the tree-wide `da8889ccd7e` (`PG_MODULE_MAGIC_EXT`). The 2026-07-13 repin reviewed all 12 commits in `01c544e1..8055e337`; only `133eba078f7` changed REPACK, raising the count from 45 to 46. The 31-commit `8055e337..3aa54433` range changed no REPACK implementation, worker, output-plugin, header, direct test, or command-reference file. Its one REPACK-scoped commit is `8a84ddd8c63`, which adds REPACK to generic `MAINTAIN` and `pg_maintain` documentation and raises the count from 46 to 47. Broad heap VM-WAL and logical-decoding-status fixes in the range are excluded because they change no REPACK-specific code or text. Three cited `heapam.c` ranges shifted by one line and were refreshed.
 
 ## Evidence Map
 
 | Claim | Source |
 |---|---|
 | REPACK absorbs VACUUM FULL + CLUSTER | [repack.c#L1-L22](../../../raw/postgres-19/src/backend/commands/repack.c#L1-L22), `ac58465e` |
+| `MAINTAIN` authorizes REPACK; `pg_maintain` supplies it on all relations | [ddl.sgml#L2536-L2548](../../../raw/postgres-19/doc/src/sgml/ddl.sgml#L2536-L2548) [user-manag.sgml#L655-L670](../../../raw/postgres-19/doc/src/sgml/user-manag.sgml#L655-L670) [aclchk.c#L3419-L3428](../../../raw/postgres-19/src/backend/catalog/aclchk.c#L3419-L3428), `8a84ddd8c63` |
 | Two lock levels: AEL vs SUEL | [repack.c#L498-L505](../../../raw/postgres-19/src/backend/commands/repack.c#L498-L505) |
 | Multi-table candidates are collected unlocked, then opened and rechecked under the operation lock | [repack.c#L367-L481](../../../raw/postgres-19/src/backend/commands/repack.c#L367-L481) [repack.c#L714-L768](../../../raw/postgres-19/src/backend/commands/repack.c#L714-L768) [repack.c#L2139-L2362](../../../raw/postgres-19/src/backend/commands/repack.c#L2139-L2362), `133eba078f7` |
 | CONCURRENTLY preconditions / identity index | [repack.c#L907-L998](../../../raw/postgres-19/src/backend/commands/repack.c#L907-L998) |
@@ -305,7 +310,7 @@ These are the 46 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 | Progress view + phases | [system_views.sql#L1349-L1398](../../../raw/postgres-19/src/backend/catalog/system_views.sql#L1349-L1398), [progress.h#L77-L106](../../../raw/postgres-19/src/include/commands/progress.h#L77-L106) |
 | Tests live in test_decoding (wal_level) | [repack.sql#L1-L6](../../../raw/postgres-19/contrib/test_decoding/sql/repack.sql#L1-L6), `4b2aa4b3` |
 | No cost-delay throttle in the rewrite path | [repack.c#L531-L712](../../../raw/postgres-19/src/backend/commands/repack.c#L531-L712), [heapam_handler.c#L594-L602](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c#L594-L602) |
-| Large seqscan reads via BULKREAD ring | [heapam.c#L396-L409](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L396-L409), [tableam.h#L943-L951](../../../raw/postgres-19/src/include/access/tableam.h#L943-L951) |
+| Large seqscan reads via BULKREAD ring | [heapam.c#L397-L410](../../../raw/postgres-19/src/backend/access/heap/heapam.c#L397-L410), [tableam.h#L943-L951](../../../raw/postgres-19/src/include/access/tableam.h#L943-L951) |
 
 ## Source References
 
@@ -314,6 +319,7 @@ These are the 46 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 - [pgrepack.c](../../../raw/postgres-19/src/backend/replication/pgrepack/pgrepack.c) — `pgrepack` logical-decoding output plugin and tuple spill format.
 - [repack.h](../../../raw/postgres-19/src/include/commands/repack.h) / [repack_internal.h](../../../raw/postgres-19/src/include/commands/repack_internal.h) — public API, `CLUOPT_*`, `ConcurrentChangeKind`, `RepackDecodingState`, `DecodingWorkerShared`.
 - [ref/repack.sgml](../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml) — `REPACK` reference page.
+- [ddl.sgml](../../../raw/postgres-19/doc/src/sgml/ddl.sgml) / [user-manag.sgml](../../../raw/postgres-19/doc/src/sgml/user-manag.sgml) / [aclchk.c](../../../raw/postgres-19/src/backend/catalog/aclchk.c) — generic `MAINTAIN` documentation, predefined `pg_maintain`, and runtime role-to-ACL mapping.
 - [parsenodes.h](../../../raw/postgres-19/src/include/nodes/parsenodes.h) / [gram.y](../../../raw/postgres-19/src/backend/parser/gram.y) / [utility.c](../../../raw/postgres-19/src/backend/tcop/utility.c) / [vacuum.c](../../../raw/postgres-19/src/backend/commands/vacuum.c) — `RepackStmt`/`RepackCommand`, grammar, dispatch, and `VACUUM FULL` routing.
 - [slot.c](../../../raw/postgres-19/src/backend/replication/slot.c) / [guc_parameters.dat](../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat) — `max_repack_replication_slots`, `maintenance_work_mem`, `enable_indexscan`, and the slot pool.
 - [heapam_handler.c](../../../raw/postgres-19/src/backend/access/heap/heapam_handler.c) / [heapam.c](../../../raw/postgres-19/src/backend/access/heap/heapam.c) / [tableam.h](../../../raw/postgres-19/src/include/access/tableam.h) — the table-AM heap copy, sort sizing, and the BULKREAD/BULKWRITE ring-buffer behavior relevant to I/O impact.

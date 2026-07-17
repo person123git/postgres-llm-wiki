@@ -4026,3 +4026,67 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   fresh claim-by-claim verification of each full page.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-07-17] repin v19 | review 31 REL_19_STABLE commits through 3aa54433
+
+- The user approved correcting and interpreting the request as: “Follow
+  AGENTS.md. In PostgreSQL 19, update to the latest commits on
+  REL_19_STABLE.”
+- Fetched upstream `REL_19_STABLE`, confirmed the old pin
+  `8055e3375aa1c2237181e06be26b05b964d18ed5` is an ancestor, and repinned
+  `raw/postgres-19/` to `3aa54433b0cdce48facb610a5b720208cc760654`
+  (31 commits, a clean forward move). Commit `7873db5369b` stamps the source
+  `19beta2`; the tip is `3aa54433b0c`, “Restrict pg_stat_io entries for data
+  checksum processes.”
+- Reviewed every commit body and changed path, then inspected the patches and
+  current caller/callee/test/doc paths for every page-scope intersection.
+  Besides the stamp, the range contains fixes in `postgres_fdw`, pgstats/custom
+  statistics, planner join removal, RLS relcache comparison, and release,
+  configuration, checksum, and subscription documentation. Other fixes cover
+  sequence synchronization, block-reference-table validation, LIKE selectivity,
+  pgbench, bulk-extension FSM propagation, heap/VM WAL, replication-slot
+  response validation, logical-decoding recovery status, UUIDv7 interval
+  validation, hash WAL LSNs, HOT-chain corruption checks, and data-checksum I/O
+  statistics. These are outside the existing v19 question scopes except where
+  noted below.
+- Updated [How the REPACK Command Works in PostgreSQL 19, and Its 47
+  Feature-Scope Commits
+  (unverified)](v19/questions/repack-command.md). `8a84ddd8c63` adds REPACK to
+  the generic `MAINTAIN` privilege description, the predefined `pg_maintain`
+  role documentation, and the matching `aclchk.c` comment. Runtime privilege
+  behavior was already present. This is the range's only REPACK-scoped commit,
+  so the feature history rises from 46 to 47; no REPACK implementation,
+  worker, plugin, header, direct test, or command-reference file changed.
+- Updated [PostgreSQL 19 Autovacuum and VACUUM: Parallel Workers, Table
+  Scoring, and Setting Pages All-Visible During Reads
+  (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md) for
+  adjacent VM-clear correctness commits `56bf5fa5d67`, `b01c31eef9c`, and
+  `9171f77db23`. Heap writers now hold the VM lock through the critical
+  section, register modified VM pages in heap WAL records, and let redo apply
+  the registered block or FPI; `XLOG_PAGE_MAGIC` advances to `0xD121`. The new
+  `pg_combinebackup` TAP test covers INSERT, DELETE, same/cross-page UPDATE,
+  tuple locking, COPY, WAL summaries, combined incremental-backup restore, VM
+  counts, and `pg_check_visible()`. The on-access VM-setting algorithm,
+  parallel autovacuum, and scoring did not change.
+- No commit touched `contrib/pg_plan_advice/`, its docs/tests, or the direct
+  core planner infrastructure cited by its page. Generic planner commit
+  `aae47813a14` changes `analyzejoins.c` only, so the 20-core/25-module/support
+  history remains unchanged. The mandatory codebase guide's subsystem map is
+  also unchanged; its Context Reviewed section now records the beta2 stamp and
+  new TAP test.
+- Remapped all 558 pre-repin v19 raw-source links: 12 content-identical ranges
+  shifted (five `heapam.c`, four `config.sgml`, and three `pruneheap.c`
+  citations), while the other 546 stayed at the same lines.
+  Added source links for the new REPACK privilege and VM-WAL/test coverage. A
+  final bounds/existence pass resolves all 683 current v19 raw-source links at
+  the new checkout.
+- Updated all four v19 `pinned_commit` fields, `wiki/index.md`,
+  `wiki/v19/index.md`, and `wiki/versions.md`. `verified_by_agent` remains
+  `not yet` on all four pages because this was a changed-range repin, not a
+  fresh claim-by-claim verification of each full page.
+- PostgreSQL runtime suites were not run: the pinned checkout is read-only
+  evidence, and this repository change is a source-pin/wiki update rather than
+  a PostgreSQL code change. The new upstream TAP test and its make/Meson wiring
+  were reviewed directly.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  v19 citation bounds/existence check: 683 links; `git diff --check` passed.

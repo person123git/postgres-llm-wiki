@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: 8055e3375aa1c2237181e06be26b05b964d18ed5
+pinned_commit: 3aa54433b0cdce48facb610a5b720208cc760654
 verified: false
 verified_by_agent: not yet
 ---
@@ -90,6 +90,7 @@ Use `src/test/Makefile` to choose between Perl/TAP, postmaster, regression, isol
 - Data structures: parser, planner, executor, relation cache, table AM, index AM, and memory-context headers.
 - Generated and test surfaces: backend generated-header rules, catalog generation rules, catalog headers, regression tests, isolation tests, test modules, and SGML file lists.
 - Repin range `01c544e1..8055e337`: reviewed all 12 commits and changed paths against this guide. The `FOR PORTION OF` rewriter fix shifted `QueryRewrite()` by eight lines without changing this page's routing claim; the tree-wide `pg_always_inline` rename touched executor/storage files but not the guide's described boundaries.
+- Repin range `8055e337..3aa54433`: reviewed all 31 commits and changed paths against this guide. The range stamps the source as `19beta2` in both supported build systems [configure.ac#AC_INIT](../../raw/postgres-19/configure.ac#L20) [meson.build#project](../../raw/postgres-19/meson.build#L9-L12) and adds a VM-consistency TAP test under the existing `pg_combinebackup` test tree [012_vm_consistency.pl#purpose](../../raw/postgres-19/src/bin/pg_combinebackup/t/012_vm_consistency.pl#L1-L6). Neither changes the guide's subsystem ownership map. All 58 existing source ranges remained content-identical at the same lines.
 
 ## Evidence Map
 
