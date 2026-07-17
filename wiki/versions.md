@@ -15,6 +15,19 @@ This page indexes the PostgreSQL versions covered by the wiki.
 ## Coverage Notes
 
 - 2026-07-17: extended [Proposing a Sampling pgstatindex Variant for PostgreSQL
+  12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) with a
+  second user-approved corrected follow-up: apply a 10% effective sample floor
+  when captured main-fork size is strictly below 100 MiB, rerun the comparison,
+  and explain the small-partial-index effect. Updated the C-policy formula,
+  `pageinspect` prototype, pros/cons, boundary tests, and open questions. Reused
+  the six original fixtures and added a 107.13 MiB healthy control. Exact-pin
+  execution confirmed the strict target policy, synthetic byte edges immediately
+  below/at/above 100 MiB, and full-sample equivalence across all seven indexes.
+  One hundred identical seeds at requested 1% and 5% showed the 3.88 MiB partial
+  index moving from 5/25 pages to 50 pages for either request, with leaf-count
+  MAPE changing from 1.18%/1.08% to 0.86%; density mean error stayed 0.02 points.
+  `verified_by_agent` remains `not yet` because this was another scoped follow-up.
+- 2026-07-17: extended [Proposing a Sampling pgstatindex Variant for PostgreSQL
   12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) with the
   user-approved corrected follow-up requesting comparative tests, against the
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Added an executed,

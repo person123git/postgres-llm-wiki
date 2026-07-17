@@ -4510,3 +4510,35 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   than a new full-page claim audit; human `verified` remains `false`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-07-17] follow-up v12 | sampling pgstatindex 100 MiB floor
+
+- Extended [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against the
+  unchanged `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`) pin. The user
+  approved the corrected follow-up, “Add an exception for indexes under 100 MB
+  so the effective sample ratio has a minimum of 10%. Rerun the tests and
+  explain how this changes the results for small partial indexes,” and chose
+  100 MiB (`104857600` bytes) with a strict `<` comparison.
+- Updated the C-policy formula and call path plus the executable `pageinspect`
+  prototype: validate the requested fraction first; below 100 MiB use
+  `max(requested, 0.10)`; at or above 100 MiB retain the request; preserve zero
+  ordinary pages for an empty index; and expose whole-page rounding through
+  `sampled_pages` and `scanned_percent`. Added the policy's small-draw benefit,
+  forced-I/O cost, strict-threshold discontinuity, and `BLCKSZ` portability.
+- Expanded deterministic tests with real relations on both sides of the
+  threshold and synthetic byte edges immediately below, at, and above 100 MiB.
+  Reused the six original fixtures and added a 107.13 MiB healthy index. Exact-
+  pin execution confirmed every requested target, retained 1.0064%/5.0029% on
+  the large control, and preserved full-sample equivalence for all seven
+  indexes. The isolated server was stopped.
+- Repeated 100 identical seeds at requested 1% and 5%. Every sub-threshold
+  fixture used the same effective 10% target for both requests. The 3.88 MiB
+  partial index moved from 5/25 sampled pages to 50, leaf-count MAPE changed
+  from 1.18%/1.08% to 0.86%, mean density error remained 0.02 points, and its
+  two requested fractions became identical. The 0.66 MiB healthy index moved
+  from one/five pages to nine and had no leaf-free draws.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`;
+  `verified_by_agent` remains `not yet` because this was a scoped follow-up.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.

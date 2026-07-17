@@ -31,7 +31,8 @@ verified_by_agent: not yet
   - [Disposable fixture](#disposable-fixture)
   - [Seeded comparison harness](#seeded-comparison-harness)
   - [Full-scan baseline](#full-scan-baseline)
-  - [Sampling results](#sampling-results)
+  - [Sampling results after the 10% floor](#sampling-results-after-the-10-floor)
+  - [Effect on the small partial index](#effect-on-the-small-partial-index)
   - [What the comparison establishes](#what-the-comparison-establishes)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
@@ -50,6 +51,10 @@ Follow-up (2026-07-17): Add a section with tests comparing the proposed sampling
 
 (The follow-up wording was corrected for grammar and clarity at the user's request; meaning preserved.)
 
+Follow-up (2026-07-17): Add an exception for indexes under 100 MB so the effective sample ratio has a minimum of 10%. Rerun the tests and explain how this changes the results for small partial indexes.
+
+(The follow-up wording was corrected at the user's request. The user chose to interpret `100 MB` as 100 MiB, or 104,857,600 bytes; “under” is a strict comparison.)
+
 ## Answer
 
 ### Recommendation
@@ -57,8 +62,12 @@ Follow-up (2026-07-17): Add a section with tests comparing the proposed sampling
 Add a new `pgstattuple` function named `pgstatindex_approx`. Do not change the
 existing `pgstatindex` contract. Capture the B-tree main-fork length once, then
 draw a simple random sample without replacement from physical blocks `1`
-through `nblocks - 1`. Keep metadata and sample diagnostics as direct
-observations. Prefix every extrapolated metric with `approx_`.
+through `nblocks - 1`. When the captured main-fork size is strictly below
+100 MiB, raise a requested fraction below 10% to an effective 10%; at exactly
+100 MiB or above, preserve the requested fraction. An empty metapage-only index
+still samples zero ordinary pages. Keep metadata and sample diagnostics as
+direct observations, report the realized fraction through `scanned_percent`,
+and prefix every extrapolated metric with `approx_`.
 
 PostgreSQL 12 already has a suitable first implementation building block:
 `BlockSampler`. It implements Knuth's Algorithm S, selects a requested number
@@ -172,6 +181,13 @@ percentage calculation.
 | `approx_avg_leaf_density` | ratio of sampled leaf free-space and capacity sums | estimate |
 | `approx_leaf_fragmentation` | sampled backward-right-link leaves divided by sampled live leaves | estimate |
 
+The input remains the **requested** fraction. The size rule can raise it, but
+`sampled_pages` and `scanned_percent` expose the realized sample. Rounding to a
+whole page can make `scanned_percent` exceed 10%; for example, 50 sampled pages
+out of 495 ordinary pages is 10.1010%. The threshold compares the captured main-
+fork byte size, including the metapage, with `104857600`; it does not compare
+formatted size text.
+
 `pgstattuple_approx` provides the local naming precedent: it publishes
 `scanned_percent` and `approx_` fields rather than weakening `pgstattuple`'s
 result names
@@ -207,11 +223,12 @@ GRANT /* wiki_pgstatindex_approx_permissions */ EXECUTE
 ON FUNCTION pgstatindex_approx(regclass, FLOAT8) TO pg_stat_scan_tables;
 ```
 
-This is proposed DDL, not an object in the pinned checkout. `STRICT` follows the
-existing null-input behavior. The revoke/grant follows the v1.5 permission
-model. A new API needs only the `regclass` entry point; the existing text entry
-point is retained for historical compatibility, not as a requirement for new
-functions
+This is proposed DDL, not an object in the pinned checkout. The default remains
+a requested 1%; the size policy makes its effective value 10% below 100 MiB.
+`STRICT` follows the existing null-input behavior. The revoke/grant follows the
+v1.5 permission model. A new API needs only the `regclass` entry point; the
+existing text entry point is retained for historical compatibility, not as a
+requirement for new functions
 ([pgstatindex.c#compatibility-comment](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L47-L66),
 [pgstattuple--1.4--1.5.sql#grant-model](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L119)).
 
@@ -233,6 +250,10 @@ pgstatindex_approx(regclass, float8)
   -> existing B-tree and other-session-temp guards
   -> share-lock and validate block 0; copy true-root metadata
   -> RelationGetNumberOfBlocks(rel) once
+  -> index_size = (int64) nblocks * BLCKSZ
+  -> effective_fraction = index_size < 100 MiB
+       ? max(sample_fraction, 0.10) : sample_fraction
+  -> compute sample_target from effective_fraction
   -> BlockSampler_Init(nblocks - 1, sample_target, seed)
   -> while BlockSampler_HasMore
        -> blkno = BlockSampler_Next(...) + 1
@@ -290,17 +311,28 @@ it does not validate unsampled pages or the full tree
 Let:
 
 ```text
-N = max(nblocks - 1, 0)       -- ordinary physical blocks
-k = 0                          when N = 0
-k = min(N, max(1, ceil(N*f)))  when N > 0
-f_realized = k / N             when N > 0
+S = nblocks * BLCKSZ                     -- captured main-fork bytes
+N = max(nblocks - 1, 0)                  -- ordinary physical blocks
+f_effective = max(f_requested, 0.10)     when S < 100 * 1024 * 1024
+f_effective = f_requested                when S >= 100 * 1024 * 1024
+k = 0                                    when N = 0
+k = min(N, max(1, ceil(N*f_effective)))  when N > 0
+f_realized = k / N                       when N > 0
 ```
 
-Reject any `sample_fraction` that does not satisfy `0 < f <= 1`, including NaN
-and infinities, with `ERRCODE_INVALID_PARAMETER_VALUE`. Unlike the former SQL
-prototype, do not silently replace a requested fraction with an undocumented
-larger fraction. A minimum-page policy can be added only if the API names and
-reports it as such.
+Reject any requested `sample_fraction` that does not satisfy `0 < f <= 1`,
+including NaN and infinities, with `ERRCODE_INVALID_PARAMETER_VALUE`, before
+applying the floor. The 10% minimum is a documented policy rather than a hidden
+replacement: the input name and call retain the requested value, while
+`sampled_pages` and `scanned_percent` report what was actually read. A request
+of 10% or more is unchanged. Exactly 100 MiB is also unchanged because the test
+is strict `<`, and the `N = 0` branch takes precedence for an empty index.
+The byte threshold corresponds to different page counts on builds with different
+`BLCKSZ`: v12 permits 1, 2, 4, 8, 16, or 32 KiB at build time, and exposes the
+compiled value through the internal `block_size` setting
+([configure.in#block-size](../../../raw/postgres-12/configure.in#L247-L265),
+[guc.c#block_size](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2888),
+[config.sgml#block_size](../../../raw/postgres-12/doc/src/sgml/config.sgml#L9070-L9085)).
 
 Initialize `BlockSampler` with population `N`; each returned value is in
 `[0, N - 1]`, so add one before reading the index. Algorithm S samples without
@@ -457,6 +489,12 @@ separate contrib module is needed only for the SQL prototype
   percentage, and direct sample counts reduce the chance that estimated counts
   are mistaken for a complete physical scan
   ([pgstattuple--1.4--1.5.sql#pgstattuple_approx](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L102-L119)).
+- **The 10% floor avoids extremely small draws below 100 MiB.** In the rerun,
+  it raised the 3.88 MiB partial index from 5 pages at a requested 1% to 50
+  pages, and it eliminated leaf-free draws for the 0.66 MiB healthy index
+  ([floor rerun](#sampling-results-after-the-10-floor)). `scanned_percent`
+  exposes the increase instead of presenting the requested fraction as the
+  realized one.
 - **The preferred C path can retain bounded buffer replacement.** Reusing
   `BAS_BULKREAD` keeps the v12 256 KiB-or-smaller ring behavior
   ([freelist.c#GetAccessStrategy](../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L537-L587)).
@@ -477,6 +515,12 @@ separate contrib module is needed only for the SQL prototype
   positions. A small sample can miss a region containing unusual page states or
   backward right-links
   ([pgstatindex.c#physical-loop-and-links](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315)).
+- **The size floor overrides caller cost control.** Below 100 MiB, requested 1%
+  and 5% both read at least 10% of ordinary pages. At exactly 100 MiB, the same
+  1% request reads about 1%, creating a sharp policy boundary. The fixed byte
+  threshold also maps to different page counts when PostgreSQL is built with a
+  nondefault `BLCKSZ`
+  ([configure.in#block-size](../../../raw/postgres-12/configure.in#L247-L265)).
 - **Sparse ascending reads are not the same as a dense sequential walk.** They
   retain ordered block numbers and the bulk-read ring, but gaps can reduce the
   locality of the existing block-by-block scan
@@ -549,6 +593,9 @@ The remaining limits are deliberate and visible:
   generates every candidate number and performs a random-key sort. SQL
   `random()` is volatile and parallel-restricted
   ([pg_proc.dat#random](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L3223-L3225)).
+- Below 100 MiB, requested fractions below 10% all produce the same target after
+  whole-page rounding. The floor increases sampled page reads, but it does not
+  reduce this SQL prototype's O(`N`) candidate generation and random-key sort.
 - Each `bt_page_stats` call opens and closes the relation around one normal
   buffer read. The SQL function does not hold one continuous `AccessShareLock`
   or use `BAS_BULKREAD`
@@ -657,6 +704,11 @@ size_once AS MATERIALIZED (
 bounds AS (
   SELECT idx,
        sample_fraction,
+       CASE
+         WHEN index_size < 104857600::bigint
+           THEN GREATEST(sample_fraction, 0.10::float8)
+         ELSE sample_fraction
+       END AS effective_fraction,
        index_size,
        index_size / current_setting('block_size')::int AS nblocks
   FROM size_once
@@ -668,7 +720,7 @@ sample_plan AS MATERIALIZED (
          WHEN nblocks <= 1 THEN 0::bigint
          ELSE LEAST(nblocks - 1,
                     GREATEST(1::bigint,
-                             ceil((nblocks - 1)::float8 * sample_fraction)::bigint))
+                             ceil((nblocks - 1)::float8 * effective_fraction)::bigint))
        END AS sample_target
   FROM bounds
 ),
@@ -747,6 +799,12 @@ CROSS JOIN agg AS a;
 $function$;
 ```
 
+The `bounds` CTE evaluates `pg_relation_size` once, applies the strict
+104,857,600-byte threshold, and carries both requested and effective fractions.
+The output intentionally reports only the realized `scanned_percent`; the
+comparison harness retains the requested value beside each result. The empty
+branch remains zero even though its metapage size is below the threshold.
+
 The syntax used here exists in v12: materialized CTEs, aggregate `FILTER`,
 `pg_relation_size(regclass)`, `generate_series(int8, int8)`, `random()`, and
 `ceil(float8)` are all defined in the pinned checkout
@@ -771,35 +829,40 @@ about one random 1% draw:
    boundary
    ([pgstattuple.out#empty-index](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L82)).
 3. **Argument errors and null:** reject zero, negative, values above one, NaN,
-   and infinities; verify that `STRICT` returns null for a null argument without
-   entering the C function
+   and infinities before applying the floor; verify that `STRICT` returns null
+   for a null argument without entering the C function
    ([pgstattuple--1.4--1.5.sql#STRICT](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)).
-4. **Sampling invariants:** through an exposed or test-only fixed-seed path,
+4. **Size-floor boundaries:** below 100 MiB, requests below 10% must use
+   `ceil(N * 0.10)` pages; requests of 10% or more must remain unchanged. At
+   exactly 100 MiB and above, the requested fraction must remain unchanged.
+   Verify zero ordinary pages for an empty index, whole-page rounding in
+   `scanned_percent`, and both real relations below and above the threshold.
+5. **Sampling invariants:** through an exposed or test-only fixed-seed path,
    sampled blocks must be in range, unique, and ascending; the reported sample
    counts and percentage must match the realized draw
    ([sampling.c#BlockSampler-iteration](../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L53-L112)).
-5. **No sampled leaf:** force a sample containing no live leaf and assert two
+6. **No sampled leaf:** force a sample containing no live leaf and assert two
    `NaN` ratio fields plus `sampled_leaf_pages = 0`
    ([pgstatindex.c#ratio-zero-cases](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L356)).
-6. **Object and state boundaries:** cover a wrong access method, non-index
+7. **Object and state boundaries:** cover a wrong access method, non-index
    relation kinds, partitioned index, another-session temporary index, a
    current-session temporary index, and readable invalid/not-ready B-trees
    ([pgstatindex.c#guards](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L238),
    [pg_index.h#index-state-flags](../../../raw/postgres-12/src/include/catalog/pg_index.h#L29-L44)).
-7. **Validation:** exercise an all-zero sampled page, wrong special-space size,
+8. **Validation:** exercise an all-zero sampled page, wrong special-space size,
    bad metapage magic, and unsupported B-tree version; also prove that an
    unsampled malformed page is outside the function's integrity claim
    ([nbtpage.c#B-tree-page-checks](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L111-L148),
    [nbtpage.c#_bt_checkpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L688-L720)).
-8. **Concurrency and cancellation:** cover extension after length capture, page
+9. **Concurrency and cancellation:** cover extension after length capture, page
    state changes during sampling, statement cancellation, and the long
    `BlockSampler_Next` skip-loop boundary
    ([pgstatindex.c#one-time-length-and-interrupts](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315),
    [sampling.c#skip-loop](../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L76-L111)).
-9. **Privileges and parallel placement:** test `PUBLIC` revoke,
-   `pg_stat_scan_tables` grant, and the chosen parallel marking
-   ([pgstattuple--1.4--1.5.sql#grant-model](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L119)).
-10. **Extension lifecycle:** test upgrade from 1.5 to 1.6 and a fresh default
+10. **Privileges and parallel placement:** test `PUBLIC` revoke,
+    `pg_stat_scan_tables` grant, and the chosen parallel marking
+    ([pgstattuple--1.4--1.5.sql#grant-model](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L119)).
+11. **Extension lifecycle:** test upgrade from 1.5 to 1.6 and a fresh default
     install that follows the base-plus-update path
     ([extension.c#install-path-selection](../../../raw/postgres-12/src/backend/commands/extension.c#L1297-L1400),
     [extension.c#install-then-update](../../../raw/postgres-12/src/backend/commands/extension.c#L1536-L1550)).
@@ -816,12 +879,14 @@ upstream regression test.
 
 ## Executed Comparison with Standard `pgstatindex`
 
-A full sample matched standard `pgstatindex` on every shared output field for
-all six quiescent fixtures. Partial samples did not have one uniform error rate.
-Their accuracy depended on the number and physical distribution of leaf,
-internal, and deleted pages. That is the expected risk of estimating exhaustive
-page classes from a physical-block sample: standard `pgstatindex` obtains its
-counts only by classifying every captured ordinary block
+The floor-policy rerun used the same six quiescent fixtures plus a 107.13 MiB
+healthy index above the threshold. A full sample matched standard `pgstatindex`
+on every shared output field for all seven fixtures. Requested 1% and 5% samples
+both used a 10% effective target below 100 MiB, while the above-threshold
+fixture retained its requested fractions. Partial samples still did not have one
+uniform error rate; accuracy depended on the number and physical distribution
+of leaf, internal, and deleted pages. Standard `pgstatindex` obtains its counts
+only by classifying every captured ordinary block
 ([pgstatindex.c#full-scan-and-results](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L356)).
 
 This test exercises the `pageinspect` SQL prototype above, not the unimplemented
@@ -837,7 +902,7 @@ physical observation, not one instantaneous whole-index snapshot
 ([pgstattuple.sgml#snapshot-limit](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L268-L279),
 [pgstatindex.c#page-locking](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315)).
 
-The six fixtures isolate different shapes:
+The seven fixtures isolate different shapes and both policy sides:
 
 | Fixture | Construction | Boundary tested |
 |---|---|---|
@@ -846,6 +911,7 @@ The six fixtures isolate different shapes:
 | `split_churn` | Create the index empty; insert 600,000 keys in a deterministic permuted order; delete one quarter; `VACUUM` | Low density plus backward-right-link fragmentation |
 | `partial_sparse` | Build only rows satisfying `WHERE active`; delete two thirds of those indexed rows; `VACUUM` | A sparse partial B-tree |
 | `small_dense` | Build 30,000 ordered keys without deletes | Healthy small-index control |
+| `large_dense` | Build 5,000,000 ordered keys without deletes | Healthy 107.13 MiB control above the floor threshold |
 | `empty` | Build an index on an empty table | Metapage-only edge |
 
 With index cleanup enabled, lazy VACUUM opens the indexes, removes dead index
@@ -872,11 +938,13 @@ The partial fixture therefore tests the same physical estimator over a smaller,
 predicate-selected B-tree. It does not estimate predicate selectivity or parent-
 table bloat.
 
-For each fixture, the harness ran one `sample_fraction = 1.0` comparison and
-100 draws at both 0.01 and 0.05. It reset `setseed()` before every partial draw;
-PostgreSQL 12 documents that reseeding the current session repeats subsequent
-`random()` values, and the implementation stores the seed in backend-local
-state
+For each fixture, the rerun made one requested `sample_fraction = 1.0`
+comparison and 100 draws at requested fractions 0.01 and 0.05. The updated
+prototype floored both partial requests to 0.10 for the six sub-100-MiB fixtures
+and preserved 0.01 and 0.05 for `large_dense`. It reset `setseed()` before every
+partial draw; PostgreSQL 12 documents that reseeding the current session repeats
+subsequent `random()` values, and the implementation stores the seed in backend-
+local state
 ([func.sgml#setseed](../../../raw/postgres-12/doc/src/sgml/func.sgml#L1130-L1159),
 [float.c#setseed](../../../raw/postgres-12/src/backend/utils/adt/float.c#L2585-L2644)).
 The reported errors are:
@@ -964,6 +1032,13 @@ SELECT i FROM generate_series(1, 30000) AS g(i);
 CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_small_dense_idx
   ON samp_small_dense (id);
 
+CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_large_dense
+  (id int) WITH (autovacuum_enabled = false);
+INSERT /* wiki_pgstatindex_compare_load */ INTO samp_large_dense
+SELECT i FROM generate_series(1, 5000000) AS g(i);
+CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_large_dense_idx
+  ON samp_large_dense (id);
+
 CREATE /* wiki_pgstatindex_compare_table */ TABLE samp_empty
   (id int) WITH (autovacuum_enabled = false);
 CREATE /* wiki_pgstatindex_compare_index */ INDEX samp_empty_idx
@@ -978,8 +1053,9 @@ v12's grammar
 ### Seeded comparison harness
 
 The harness records one standard full-scan baseline, runs deterministic samples,
-then asserts full-sample equivalence and summarizes partial-sample errors. It
-uses the prototype's direct `index_size`, sample counts, and `approx_` fields.
+then asserts policy targets, strict threshold edges, full-sample equivalence, and
+partial-sample errors. Its `sample_fraction` column stores the request;
+`scanned_percent` stores the realized fraction after the floor and rounding.
 
 ```sql
 CREATE /* wiki_pgstatindex_compare_cases */ TABLE samp_cases (
@@ -996,6 +1072,8 @@ INSERT /* wiki_pgstatindex_compare_cases */ INTO samp_cases VALUES
    'contiguous delete; deleted-page population', false),
   ('small_dense', 'samp_small_dense_idx',
    'healthy small-index baseline', false),
+  ('large_dense', 'samp_large_dense_idx',
+   'healthy above-threshold baseline', false),
   ('split_churn', 'samp_split_churn_idx',
    'random-order splits plus uniform delete', false),
   ('uniform_sparse', 'samp_uniform_sparse_idx',
@@ -1051,6 +1129,37 @@ BEGIN
 END
 $block$;
 
+SELECT /* wiki_pgstatindex_compare_floor_assertion */
+       bool_and(CASE
+         WHEN e.index_bytes < 104857600::bigint
+           THEN r.sampled_pages = CASE
+             WHEN e.index_size / current_setting('block_size')::int <= 1 THEN 0
+             ELSE ceil((e.index_size
+               / current_setting('block_size')::int - 1) * 0.10)::bigint
+           END
+         ELSE r.sampled_pages = ceil(
+           (e.index_size / current_setting('block_size')::int - 1)
+           * r.sample_fraction)::bigint
+       END) AS all_targets_match_policy
+FROM samp_exact AS e
+JOIN samp_results AS r USING (case_name)
+WHERE r.sample_fraction IN (0.01, 0.05);
+
+WITH /* wiki_pgstatindex_compare_threshold_edges */ cases(
+  index_size, requested, expected) AS (
+  VALUES
+    (104857599::bigint, 0.01::float8, 0.10::float8),
+    (104857599::bigint, 0.10::float8, 0.10::float8),
+    (104857599::bigint, 0.20::float8, 0.20::float8),
+    (104857600::bigint, 0.01::float8, 0.01::float8),
+    (104857601::bigint, 0.01::float8, 0.01::float8)
+)
+SELECT /* wiki_pgstatindex_compare_threshold_edges */ bool_and(
+  (CASE WHEN index_size < 104857600::bigint
+    THEN greatest(requested, 0.10::float8)
+    ELSE requested END) = expected) AS strict_threshold_cases_match
+FROM cases;
+
 SELECT /* wiki_pgstatindex_compare_full_assertion */
        count(*) AS cases,
        bool_and(r.version = e.version
@@ -1080,6 +1189,7 @@ SELECT /* wiki_pgstatindex_compare_sample_results */
        e.case_name,
        r.sample_fraction,
        min(r.sampled_pages) AS sampled_pages,
+       round(min(r.scanned_percent)::numeric, 4) AS realized_percent,
        round(avg(abs(r.approx_leaf_pages - e.leaf_pages)::numeric
          / nullif(e.leaf_pages, 0) * 100), 2) AS leaf_mape_pct,
        min(r.approx_deleted_pages) AS deleted_est_min,
@@ -1115,19 +1225,22 @@ here supplies the main fork
 
 ### Full-scan baseline
 
-All six indexes were below both 50 MB and 50 MiB. The largest was 18.25 MiB.
-Standard `pgstatindex` returned this baseline:
+The six original indexes remained below both 50 MB and 50 MiB. The new
+`large_dense` control was 107.13 MiB, so the rerun exercised both sides of the
+100 MiB policy threshold. Standard `pgstatindex` returned this baseline:
 
 | Fixture | Size (MiB) | Partial | Internal | Live leaf | Half-dead | Deleted | Density (%) | Fragmentation (%) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `empty` | 0.01 | no | 0 | 0 | 0 | 0 | `NaN` | `NaN` |
+| `large_dense` | 107.13 | no | 50 | 13,662 | 0 | 0 | 90.08 | 0.00 |
 | `partial_sparse` | 3.88 | yes | 3 | 492 | 0 | 0 | 30.21 | 0.00 |
 | `range_deleted` | 12.88 | no | 4 | 494 | 0 | 1,149 | 89.69 | 0.00 |
 | `small_dense` | 0.66 | no | 1 | 82 | 0 | 0 | 90.05 | 0.00 |
 | `split_churn` | 18.25 | no | 12 | 2,323 | 0 | 0 | 47.82 | 49.98 |
 | `uniform_sparse` | 12.88 | no | 7 | 1,640 | 0 | 0 | 30.21 | 0.00 |
 
-The 100% assertion returned `cases = 6` and
+The policy-target assertion and strict synthetic threshold-edge assertion both
+returned true. The 100% assertion returned `cases = 7` and
 `all_full_samples_match = true`. For every fixture, the prototype matched the
 standard version, level, size, root, four page-class counts, density, and
 fragmentation. It also reported every ordinary page and every live leaf as
@@ -1139,26 +1252,54 @@ This is equivalence on healthy, quiescent storage. It is not a claim that either
 function returns a transactionally consistent snapshot, and it does not cover
 the proposal's deliberately stricter malformed-page errors.
 
-### Sampling results
+### Sampling results after the 10% floor
 
-The following values summarize 100 seeded draws per fixture and fraction.
-`mean / max` reports absolute percentage-point error. Deleted-page estimate
-ranges and MAPE are shown only where the standard count was nonzero.
+The following values summarize 100 seeded draws per fixture and requested
+fraction. `Realized` is the actual `scanned_percent`; whole-page rounding makes
+it slightly exceed the target in most small fixtures. `mean / max` reports
+absolute percentage-point error. Deleted-page estimate ranges and MAPE are shown
+only where the standard count was nonzero.
 
-| Fixture | Fraction | Pages/draw | Leaf MAPE | Deleted estimate range (MAPE) | Density error, mean / max | Fragmentation error, mean / max | No-leaf draws |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `empty` | 1% | 0 | n/a | n/a | n/a | n/a | 100 |
-| `empty` | 5% | 0 | n/a | n/a | n/a | n/a | 100 |
-| `partial_sparse` | 1% | 5 | 1.18% | n/a | 0.02 / 0.02 pp | 0.00 / 0.00 pp | 0 |
-| `partial_sparse` | 5% | 25 | 1.08% | n/a | 0.02 / 0.23 pp | 0.00 / 0.00 pp | 0 |
-| `range_deleted` | 1% | 17 | 28.25% | 678-1,550 (11.73%) | 0.63 / 14.38 pp | 0.00 / 0.00 pp | 0 |
-| `range_deleted` | 5% | 83 | 13.09% | 933-1,330 (5.66%) | 0.60 / 3.19 pp | 0.00 / 0.00 pp | 0 |
-| `small_dense` | 1% | 1 | 3.20% | n/a | 0.04 / 0.04 pp | 0.00 / 0.00 pp | 2 |
-| `small_dense` | 5% | 5 | 2.32% | n/a | 0.08 / 0.60 pp | 0.00 / 0.00 pp | 0 |
-| `split_churn` | 1% | 24 | 0.89% | n/a | 0.54 / 1.84 pp | 7.95 / 20.85 pp | 0 |
-| `split_churn` | 5% | 117 | 0.57% | n/a | 0.28 / 1.13 pp | 3.56 / 14.94 pp | 0 |
-| `uniform_sparse` | 1% | 17 | 0.78% | n/a | 0.04 / 1.15 pp | 0.00 / 0.00 pp | 0 |
-| `uniform_sparse` | 5% | 83 | 0.59% | n/a | 0.03 / 0.23 pp | 0.00 / 0.00 pp | 0 |
+| Fixture | Requested | Realized | Pages/draw | Leaf MAPE | Deleted estimate range (MAPE) | Density error, mean / max | Fragmentation error, mean / max | No-leaf draws |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `empty` | 1% | 0.0000% | 0 | n/a | n/a | n/a | n/a | 100 |
+| `empty` | 5% | 0.0000% | 0 | n/a | n/a | n/a | n/a | 100 |
+| `large_dense` | 1% | 1.0064% | 138 | 0.41% | n/a | 0.02 / 0.52 pp | 0.00 / 0.00 pp | 0 |
+| `large_dense` | 5% | 5.0029% | 686 | 0.18% | n/a | 0.02 / 0.10 pp | 0.00 / 0.00 pp | 0 |
+| `partial_sparse` | 1% | 10.1010% | 50 | 0.86% | n/a | 0.02 / 0.11 pp | 0.00 / 0.00 pp | 0 |
+| `partial_sparse` | 5% | 10.1010% | 50 | 0.86% | n/a | 0.02 / 0.11 pp | 0.00 / 0.00 pp | 0 |
+| `range_deleted` | 1% | 10.0182% | 165 | 9.17% | 988-1,308 (3.92%) | 0.52 / 1.47 pp | 0.00 / 0.00 pp | 0 |
+| `range_deleted` | 5% | 10.0182% | 165 | 9.17% | 988-1,308 (3.92%) | 0.52 / 1.47 pp | 0.00 / 0.00 pp | 0 |
+| `small_dense` | 1% | 10.8434% | 9 | 1.99% | n/a | 0.08 / 0.36 pp | 0.00 / 0.00 pp | 0 |
+| `small_dense` | 5% | 10.8434% | 9 | 1.99% | n/a | 0.08 / 0.36 pp | 0.00 / 0.00 pp | 0 |
+| `split_churn` | 1% | 10.0214% | 234 | 0.38% | n/a | 0.18 / 0.72 pp | 2.54 / 7.28 pp | 0 |
+| `split_churn` | 5% | 10.0214% | 234 | 0.38% | n/a | 0.18 / 0.72 pp | 2.54 / 7.28 pp | 0 |
+| `uniform_sparse` | 1% | 10.0182% | 165 | 0.43% | n/a | 0.03 / 0.11 pp | 0.00 / 0.00 pp | 0 |
+| `uniform_sparse` | 5% | 10.0182% | 165 | 0.43% | n/a | 0.03 / 0.11 pp | 0.00 / 0.00 pp | 0 |
+
+### Effect on the small partial index
+
+The 3.88 MiB `partial_sparse` index has 495 ordinary pages: 3 internal and 492
+live leaves. The policy therefore samples `ceil(495 * 0.10) = 50` pages for both
+requested fractions below 10%. The same 100 seeds produced this before/after
+comparison:
+
+| Requested | Pages before -> after | Realized before -> after | Leaf MAPE before -> after | Density error mean / max before -> after | No-leaf draws before -> after |
+|---:|---:|---:|---:|---:|---:|
+| 1% | 5 -> 50 | 1.0101% -> 10.1010% | 1.18% -> 0.86% | 0.02 / 0.02 pp -> 0.02 / 0.11 pp | 0 -> 0 |
+| 5% | 25 -> 50 | 5.0505% -> 10.1010% | 1.08% -> 0.86% | 0.02 / 0.23 pp -> 0.02 / 0.11 pp | 0 -> 0 |
+
+The floor modestly improved the estimated leaf-page count. It did not improve
+mean density error because live-leaf occupancy was already highly uniform, and
+finite seeded draws do not make every maximum error monotonic: the 1% row's
+maximum density error rose from 0.02 to 0.11 points, while the 5% row's maximum
+fell from 0.23 to 0.11. Both requested fractions now produce identical results
+because they use the same effective target and the harness resets the same seed
+before each draw. The floor does not change partial-index semantics: it samples
+the predicate-selected physical B-tree and still says nothing about excluded
+heap rows or parent-table bloat
+([heapam_handler.c#partial-build-filter](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1604-L1626),
+[pgstatindex.c#guards-and-scan](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L315)).
 
 ### What the comparison establishes
 
@@ -1167,33 +1308,31 @@ ranges and MAPE are shown only where the standard count was nonzero.
   the SQL prototype's page-type mapping, count scaling, density denominator,
   and backward-link test against the current implementation
   ([pgstatindex.c#classification-and-ratios](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L356)).
-- **Index size alone does not determine accuracy.** Every fixture was below
-  50 MB, but 1% meant one page for the 0.66 MiB index, five for the 3.88 MiB
-  partial index, 17 for each 12.88 MiB index, and 24 for the 18.25 MiB index.
-  The result supports exposing `sampled_pages` and allowing an explicit minimum
-  page count rather than applying a hidden size threshold.
-- **Rare or spatially distinct page classes dominate count error.** The
-  range-deleted index had 1,149 deleted pages and 494 live leaves. A 17-page
-  draw produced 28.25% leaf-count MAPE and 11.73% deleted-count MAPE; increasing
-  the draw to 83 pages reduced those errors to 13.09% and 5.66%. Standard
-  `pgstatindex` can separate those classes only because it visits every block
+- **The strict size policy behaved as specified.** All six sub-100-MiB fixtures
+  used at least 10%, including requested 1% and 5%. The 107.13 MiB control kept
+  its requested fractions and realized 1.0064% and 5.0029% after page rounding.
+  Synthetic byte-size cases confirmed that 104,857,599 bytes is floored while
+  104,857,600 bytes is not.
+- **The floor reduced, but did not remove, rare-class error.** On the
+  range-deleted index, moving both requests to 165 pages reduced leaf-count MAPE
+  to 9.17% and deleted-count MAPE to 3.92%. Standard `pgstatindex` can separate
+  the page classes without sampling error only because it visits every block
   ([pgstatindex.c#classification](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L310)).
-- **Uniform density was easier than fragmented-link frequency in these
-  fixtures.** The uniformly sparse full and partial indexes had very small
-  density errors. On `split_churn`, 1% density MAE was 0.54 points, while
-  fragmentation MAE was 7.95 points and one draw missed by 20.85 points. The
-  two estimators use different page observations: density is a ratio of summed
-  free space to capacity, while fragmentation counts sampled leaves whose
-  physical right link points backward
+- **Uniform density remained easier than fragmented-link frequency.** On
+  `split_churn`, the floored draw had 0.18-point density MAE but 2.54-point
+  fragmentation MAE and a 7.28-point maximum. The estimators use different page
+  observations: density is a ratio of summed free space to capacity, while
+  fragmentation counts sampled leaves whose physical right link points backward
   ([pgstatindex.c#leaf-metrics](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L307)).
-- **A small index can produce an unsupported ratio.** At 1%, `small_dense`
-  sampled one of 83 ordinary pages. Two of 100 draws selected its sole internal
-  page, sampled no live leaf, and correctly returned `NaN`. A minimum sample-page
-  policy would address this more directly than a 50 MB cutoff.
-- **Partial indexes require no separate page decoder.** The 3.88 MiB partial
-  fixture passed full-sample equivalence and produced ordinary physical-sample
-  estimates. The result says nothing about rows excluded by `WHERE active` or
-  the parent table.
+- **The floor removed this fixture's unsupported small-index ratio.** The 0.66
+  MiB `small_dense` index moved from one sampled page and two leaf-free 1% draws
+  to nine pages and no leaf-free draws. This result does not prove that every
+  sub-100-MiB index will contain a sampled leaf; physical page composition still
+  controls that outcome.
+- **Small partial indexes receive more evidence, not different semantics.** The
+  3.88 MiB partial fixture used 50 pages for either request and improved leaf-
+  count MAPE to 0.86%. The result still says nothing about rows excluded by
+  `WHERE active` or the parent table.
 - **The empty edge is deterministic.** A metapage-only index has no ordinary
   sample population, so both 1% and 5% drew zero pages and returned the standard
   zero-count/`NaN` boundary
@@ -1226,22 +1365,25 @@ ranges and MAPE are shown only where the standard count was nonzero.
 - `pageinspect`: control/Makefile/update SQL, `bt_metap`, `bt_page_stats`,
   `get_raw_page`, `page_header`, tuple conversion, docs, and regression wiring.
 - SQL and sizing surfaces: CREATE INDEX and VACUUM grammar, `INDEX_CLEANUP`,
-  `autovacuum_enabled`, `pg_relation_size(regclass)`, and diagnostic timeout
-  contexts.
+  `autovacuum_enabled`, `pg_relation_size(regclass)`, build-time `BLCKSZ` and
+  internal `block_size`, and diagnostic timeout contexts.
 - Extension lifecycle: target-version path selection, install-then-update,
   fmgr V1 symbol metadata, SQL privileges, and generated catalog headers.
-- Exact-pin execution under `.wiki-runtime/`: built and installed pageinspect,
-  ran the original prototype, then ran the revised one-read/no-hidden-floor
-  prototype on populated and metapage-only B-trees. A full sample matched
-  `pgstatindex`; invalid fractions returned no rows as documented for the SQL
-  prototype. The `pgstattuple` regression target and all five `pageinspect`
-  regression targets passed.
-- Follow-up exact-pin execution used a new disposable database with six indexes
-  from 0.01 MiB through 18.25 MiB: uniform sparse, range-deleted, split/churn,
-  partial sparse, small healthy, and empty. The 100% prototype sample matched
-  all shared standard-`pgstatindex` fields in all six cases. One hundred seeded
-  draws at each of 1% and 5% produced the filed count and ratio error summary.
-  The isolated server was stopped after the run.
+- Earlier exact-pin execution under `.wiki-runtime/` built and installed
+  `pageinspect`, compared the pre-floor and one-read/no-floor prototypes on
+  populated and metapage-only B-trees, and confirmed full-sample equivalence.
+  Invalid fractions returned no rows as documented. The `pgstattuple` regression
+  target and all five `pageinspect` regression targets passed.
+- The first comparative run used six indexes from 0.01 MiB through 18.25 MiB:
+  uniform sparse, range-deleted, split/churn, partial sparse, small healthy, and
+  empty. It retained requested 1% and 5% fractions and supplied the before-floor
+  values used in the focused comparison.
+- The floor-policy rerun reused those fixtures and added a 107.13 MiB healthy
+  index. It executed 100 identical seeds at requested 1% and 5%, confirmed the
+  10% target on all six sub-threshold fixtures, preserved both requests above
+  the threshold, validated strict synthetic cases immediately below, at, and
+  above 100 MiB, and matched every shared standard-`pgstatindex` field at 100%
+  for all seven indexes. The isolated server was stopped after the run.
 
 ## Evidence Map
 
@@ -1252,6 +1394,7 @@ ranges and MAPE are shown only where the standard count was nonzero.
 | `BlockSampler` samples without replacement and emits ascending block numbers | [sampling.c#BlockSampler](../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L23-L112) |
 | The native sampler has an `int` sample count and a potentially long skip loop | [sampling.h#BlockSamplerData](../../../raw/postgres-12/src/include/utils/sampling.h#L26-L43), [sampling.c#skip-loop](../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L76-L111) |
 | Count estimates scale sampled exhaustive classes; ratio estimates reuse current leaf formulas | [pgstatindex.c#classification-and-leaf-metrics](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L307), [pgstatindex.c#result-formulas](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L333-L356) |
+| The floor can use captured main-fork bytes, while page counts depend on build-time `BLCKSZ` | [pgstatindex.c#captured-length](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L271), [configure.in#block-size](../../../raw/postgres-12/configure.in#L247-L265), [guc.c#block_size](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2888) |
 | `AccessShareLock` permits concurrent DML and lazy VACUUM index maintenance | [lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L61-L105), [execIndexing.c#ExecOpenIndices](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L141-L213), [vacuumlazy.c#index-locks](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L275-L292) |
 | Proposed local validation checks page shape, not whole-tree integrity | [nbtpage.c#_bt_getmeta](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L111-L148), [nbtpage.c#_bt_checkpage](../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L688-L720) |
 | The C implementation can retain a bounded bulk-read ring | [freelist.c#GetAccessStrategy](../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L537-L587) |
@@ -1267,12 +1410,17 @@ ranges and MAPE are shown only where the standard count was nonzero.
 
 ## Open Questions
 
-- Would PostgreSQL accept this API, and should estimated fields include standard
-  errors or confidence intervals? The pinned source cannot decide project policy.
-- Should the production API expose a seed for repeatability, and should it accept
-  a minimum sampled-page or sampled-leaf count instead of silently imposing one?
-  The 0.66 MiB fixture's one-page 1% sample missed every live leaf in two of 100
-  draws, but these fixtures do not establish a universal minimum.
+- Would PostgreSQL accept this API and the fixed 100-MiB/10% policy, and should
+  estimated fields include standard errors or confidence intervals? The pinned
+  source cannot decide project policy.
+- Should the production API expose a seed for repeatability and add explicit
+  requested/effective-fraction fields, even though `sampled_pages` and
+  `scanned_percent` already expose the realized work?
+- Is a fixed 10% floor below 100 MiB preferable to a minimum sampled-page or
+  sampled-leaf count? The rerun removed leaf-free draws in the tested small
+  index and reduced several errors, but these fixtures do not establish a
+  universal minimum. The strict threshold also creates a cost discontinuity at
+  exactly 100 MiB.
 - Should independently rounded page-class estimates be allowed to sum a few
   pages above or below `N`, should the API return non-integer estimates, or
   should it apply a total-preserving rounding rule?
@@ -1318,6 +1466,7 @@ ranges and MAPE are shown only where the standard count was nonzero.
 - [execIndexing.c#partial-DML-filter](../../../raw/postgres-12/src/backend/executor/execIndexing.c#L330-L363) - partial-index maintenance predicate.
 - [func.sgml#setseed](../../../raw/postgres-12/doc/src/sgml/func.sgml#L1130-L1159) and [float.c#random-and-setseed](../../../raw/postgres-12/src/backend/utils/adt/float.c#L2585-L2644) - repeatable current-session SQL sampling sequence.
 - [dbsize.c#pg_relation_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L310-L335) and [pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6891) - relation-size implementation and main-fork overload.
+- [configure.in#block-size](../../../raw/postgres-12/configure.in#L247-L265), [guc.c#block_size](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2888), and [config.sgml#block_size](../../../raw/postgres-12/doc/src/sgml/config.sgml#L9070-L9085) - build-time page-size choices and reported compiled value.
 - [gram.y#CREATE-INDEX](../../../raw/postgres-12/src/backend/parser/gram.y#L7335-L7397) and [gram.y#VACUUM](../../../raw/postgres-12/src/backend/parser/gram.y#L10497-L10533) - fixture DDL grammar.
 - [vacuum.sgml#INDEX_CLEANUP](../../../raw/postgres-12/doc/src/sgml/ref/vacuum.sgml#L186-L203) and [create_table.sgml#autovacuum_enabled](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L1383-L1403) - fixture cleanup and routine-autovacuum controls.
 - [guc.c#diagnostic-timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2397) - session/transaction timeout contexts.
