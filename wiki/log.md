@@ -4285,3 +4285,48 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   were reviewed directly.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   v19 citation bounds/existence check: 683 links; `git diff --check` passed.
+
+## [2026-07-17] review-fix v12 | query planner statistics sources full audit
+
+- Completed a full claim-to-source review of [Query Planner Statistics Sources
+  in PostgreSQL 12
+  (unverified)](v12/questions/query-planner-statistics-sources.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Confirmed the central distinction: `pg_stat_all_tables` calls collector-backed
+  `pg_stat_get_*()` functions and is not direct input for an unrelated plan.
+  Its `changes_since_analyze` source still affects plans indirectly by deciding
+  when auto-analyze refreshes `pg_class`, `pg_statistic`, and extended data.
+  Added the reverse edge: a planner B-tree histogram-endpoint probe can
+  increment an exposed index-scan counter without consuming that counter.
+- Corrected index sizing. Ordinary non-partial indexes use current physical
+  blocks plus the parent table's tuple estimate; only partial indexes enter
+  generic index-density estimation and its metapage-discount heuristic.
+  Separated CHECK constraints from `pg_attribute.attnotnull` and partition
+  constraints instead of attributing all three to `pg_constraint`.
+- Added the complete `query_planner` -> `build_simple_rel` ->
+  `get_relation_info` -> `set_baserel_size_estimates` caller/callee path and
+  the `RelOptInfo`, `VariableStatData`, `IndexOptInfo`, `StatisticExtInfo`, and
+  `ForeignKeyOptInfo` boundaries.
+- Added table-only/inherited statistics, expression-index collection and
+  matching, the narrower partial-index rule (general expression selectivity
+  ignores a partial row, while B-tree/BRIN-specific costing may read
+  correlation), all seven core slot kinds, width fallbacks, and ordinary-
+  versus-expression-index storage.
+- Expanded extended-statistics coverage to built-kind loading, MCV/dependency
+  restriction ordering, grouping ndistinct, v12's simple-column restrictions,
+  partial-`ANALYZE` stale-data retention, consistency errors, and the
+  source-visible MCV NULL-data error-label defect.
+- Added missing/stale/default/security behavior; type/operator/function/index/
+  FK/access-method metadata; table AM, FDW, four planner-statistics hooks,
+  shipped `postgres_fdw`/`file_fdw`/`intarray`/`ltree`/Bloom boundaries; and
+  generated catalog headers, syscaches, relcache caching, and invalidation.
+- Rechecked direct regression coverage and explicit negative-test absence. The
+  exact-pin core regression suite passed with exit status 0 in the isolated
+  `.wiki-runtime/pg12-build/` tree; the pinned source remained read-only.
+- Added the mandatory Contents and Context sections, refreshed
+  `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`, and set
+  `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T15:45:58Z`. Human `verified` remains
+  `false`, so the visible title remains `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
