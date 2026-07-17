@@ -2,6 +2,55 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-17] follow-up v17 | REINDEX INDEX CONCURRENTLY performance GUCs
+
+- Extended [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17
+  (unverified)](v17/questions/reindex-index-concurrently.md) against unchanged
+  pin `54eeefaedbee0385529f3edf321bb99e49232aaa`. The user approved correcting
+  the follow-up to “What GUCs have a performance impact on it?” before it was
+  restated under `## Question`.
+- Added a scoped source-backed GUC matrix. The primary B-tree controls are
+  `maintenance_work_mem`, `max_parallel_maintenance_workers`,
+  `min_parallel_table_scan_size`, `max_parallel_workers`, and
+  `max_worker_processes`. Traced B-tree, hash, GiST, GIN, SP-GiST, BRIN, and
+  contrib Bloom first-build and common validation boundaries; GiST uniquely
+  reads `effective_cache_size`, while GIN has a concurrent-writer
+  `gin_pending_list_limit` / `work_mem` boundary before forced cleanup.
+- Established the RIC-specific transaction multiplier: one
+  `ReindexRelationConcurrently` invocation has six fixed internal commits plus
+  three per index, so a one-index run has nine internal commits before the final
+  caller-owned transaction. Unlike CIC, RIC also adds two reader waits to its
+  two writer waits and old-snapshot wait.
+- Traced both heap scans through v17 sequential read streams.
+  `io_combine_limit` caps combined reads; the executable path selects the heap
+  tablespace's `effective_io_concurrency`, not `maintenance_io_concurrency`,
+  while sequential mode disables explicit prefetch advice. Retained the
+  conflicting-looking `READ_STREAM_MAINTENANCE` header example under
+  `## Open Questions`.
+- Added direct `shared_buffers`/hash and synchronized-scan boundaries,
+  temporary-file placement and failure behavior, and RIC's output rule:
+  `default_tablespace` does not place the copy; absent explicit `REINDEX
+  (TABLESPACE ...)`, RIC preserves the old index tablespace.
+- Added permanent-build WAL, forced-image compression, checkpoint-crossing
+  relation sync, worker-independent WAL controls, and commit confirmation.
+  Recorded that `synchronous_commit = off` cannot avoid phase 6's local flush
+  for deleting the old non-temporary relation.
+- Distinguished end-to-end `statement_timeout`, per-internal-transaction
+  `transaction_timeout`, per-VXID-acquisition `lock_timeout`, deadlock
+  detection/logging, and blocker-side idle-transaction timeout. Recorded exact
+  restart, reload, or session application scope for each listed setting.
+- Separated query-parallel GUCs, `maintenance_io_concurrency`, core `work_mem`
+  and autovacuum/vacuum settings, `default_tablespace`, and the
+  `wal_level = minimal` / `wal_skip_threshold` path from actual RIC controls.
+  The direct RIC tests do not sweep this matrix, so the optimum remains a
+  workload measurement question. Reset `verified_by_agent` to `not yet` because
+  this was a scoped expansion, not a full-page re-audit.
+- Refreshed `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`; removed
+  a stale Open Question claiming the sibling v17 CIC page still described
+  non-transactional flag updates.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-16] follow-up v17 | CREATE INDEX CONCURRENTLY performance GUCs
 
 - Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17
