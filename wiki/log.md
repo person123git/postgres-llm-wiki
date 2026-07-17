@@ -2,6 +2,60 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-17] review-fix v12 | B-tree bloat REINDEX heuristic full audit
+
+- Completed a full claim-to-source review of [Finding and Prioritizing Bloated
+  B-Tree Indexes for REINDEX in PostgreSQL 12
+  (unverified)](v12/questions/index-bloat-reindex-heuristic.md) against unchanged
+  pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Corrected the core estimator. The former query multiplied whole-index size by
+  a density gap hard-coded against 90, even though density covers live leaves
+  only and B-tree fillfactor is per index. The new formula reads configured
+  fillfactor, estimates target live-leaf pages, and separately adds half-dead
+  and deleted pages; it explicitly omits possible internal-page savings and
+  labels every threshold and weight as operational.
+- Exact-pin execution reproduced the defect: a freshly built
+  `fillfactor = 70` expression index reported 70.10% density but the former
+  formula falsely estimated 2,747,806 wasted bytes. The replacement estimated
+  zero, as it did for fresh default-fillfactor indexes at 89.83%. A sparse
+  post-VACUUM index rebuilt concurrently from 547 leaves at 45.15% density and
+  level 2 to 274 leaves at 89.83% and level 1.
+- Removed the false claim that expression indexes lack `pg_statistic` rows.
+  Reviewed `do_analyze_rel`/`compute_index_stats` and reproduced an
+  expression-index statistics row; ordinary column keys still have no separate
+  index-relation statistic row.
+- Reclassified `pgstatindex` as a full physical observation rather than an
+  exact snapshot. Added the separate metapage read, one-time length capture,
+  `AccessShareLock`, per-page content locks, capped 256 kB `BAS_BULKREAD` ring,
+  non-device-specific miss accounting, missing B-tree integrity validation,
+  retained-`LP_DEAD` occupancy, half-dead `empty_pages`, and
+  not-necessarily-recyclable `deleted_pages`.
+- Confirmed experimentally and from `ReadBufferExtended` that `pgstatindex`
+  advances index block-fetch/hit counters. Stage 1 now captures I/O before the
+  diagnostic; post-REINDEX runtime baselines begin after the post-rebuild
+  diagnostic.
+- Reworked priority around paired-window scan rates with a nonzero space base.
+  Corrected buffer ratios to numeric, zero-safe buffer-access rates rather than
+  distinct blocks. Independent pre/post windows no longer assume perfect
+  counter continuity across RIC: phase 4 copies the collector's published old
+  entry, while other backends can still hold pending increments.
+- Corrected B-tree split occupancy, invalid-index routing, physical versus
+  partitioned parent indexes, plain/concurrent locks, all five RIC waits,
+  exclusion/system/temp/partition restrictions, and pre-swap `_ccnew` versus
+  post-swap `_ccold` failures. Retained fragmentation only as a measured
+  workload modifier, not a byte-score term.
+- Added the mandatory Contents block, exact GUC scopes, tagged and guarded
+  production SQL, generated `BTREE_AM_OID` implications, direct tests and test
+  absences, updated Context/Evidence/Open Questions/Source References/Navigation,
+  and refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+- All four filed SQL blocks parsed and executed on the isolated exact-pin
+  server; tagged `REINDEX INDEX CONCURRENTLY` completed; the server was stopped.
+  Set `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T15:18:58Z`; human `verified` remains
+  `false`, so the title remains `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-17] follow-up v12 | CREATE INDEX CONCURRENTLY performance GUCs
 
 - Extended [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
