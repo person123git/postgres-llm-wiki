@@ -2,6 +2,54 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-17] follow-up v12 | REINDEX INDEX CONCURRENTLY performance GUCs
+
+- Extended [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
+  (unverified)](v12/questions/reindex-index-concurrently.md) against unchanged
+  pin `45b88269a353ad93744772791feb6d01bc7e1e42`. The user approved correcting
+  the follow-up to “What GUCs have a performance impact on it?” before it was
+  restated under `## Question`.
+- Added a scoped source-backed GUC matrix. The primary B-tree controls are
+  `maintenance_work_mem`, `max_parallel_maintenance_workers`,
+  `min_parallel_table_scan_size`, `max_parallel_workers`, and
+  `max_worker_processes`. Traced B-tree, hash, GiST, GIN, SP-GiST, BRIN, and
+  contrib Bloom first-build and common validation boundaries; only B-tree can
+  parallelize in v12, GiST reads `effective_cache_size`, and GIN has a
+  concurrent-writer `gin_pending_list_limit` / `work_mem` boundary.
+- Established the RIC transaction multiplier: one invocation has six fixed
+  internal commits plus three per index, so a one-index run has nine internal
+  commits before the final caller-owned transaction. Distinguished v12's
+  xidless WAL-writing phase commits, which take the asynchronous path even when
+  `synchronous_commit = on`, from XID-bearing commits and phase 6's forced local
+  flush for relation deletion.
+- Traced both heap scans through the v12 table-scan path. Large heaps can use a
+  nominal 256 kB `BAS_BULKREAD` ring capped at `NBuffers / 8`; first-build
+  synchronized scans are AM-dependent and validation disables them. There is no
+  heap read-stream layer, and `effective_io_concurrency` does not drive these
+  sequential passes.
+- Added temporary-file placement and failure behavior, `backend_flush_after`,
+  and the fixed output-placement rule: `default_tablespace` does not place the
+  copy, v12 has no `REINDEX (TABLESPACE ...)`, and RIC preserves the old index's
+  tablespace.
+- Added the v12 WAL boundary: B-tree writes outside shared buffers, uses forced
+  page-image WAL when `XLogIsNeeded()`, and immediately syncs the permanent
+  index file; the other shipped AMs build through shared buffers. Covered
+  `wal_compression`, `wal_level`, WAL buffers/sync, checkpoint settings, group
+  commit, and unsafe durability knobs with exact apply scopes.
+- Distinguished end-to-end `statement_timeout`, per-VXID-acquisition
+  `lock_timeout`, deadlock detection/logging, and blocker-side
+  `idle_in_transaction_session_timeout`. Recorded that v12 has no
+  `transaction_timeout`, `maintenance_io_concurrency`, `io_combine_limit`, or
+  `track_wal_io_timing`.
+- Separated query-parallel GUCs, core `work_mem` and autovacuum/vacuum settings,
+  observation settings, and other non-controls from actual RIC levers. The
+  direct RIC tests do not sweep this matrix, so the optimum remains a workload
+  measurement question. `verified_by_agent` remains `not yet` because this was
+  a scoped expansion, not a full-page re-audit.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-17] follow-up v17 | REINDEX INDEX CONCURRENTLY performance GUCs
 
 - Extended [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17

@@ -15,6 +15,7 @@ verified_by_agent: not yet
   - [How it differs from CREATE INDEX CONCURRENTLY](#how-it-differs-from-create-index-concurrently)
   - [Dispatch, preconditions, and restrictions](#dispatch-preconditions-and-restrictions)
   - [The six phases](#the-six-phases)
+  - [GUCs that affect REINDEX INDEX CONCURRENTLY performance](#gucs-that-affect-reindex-index-concurrently-performance)
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [State flags for the old and new index](#state-flags-for-the-old-and-new-index)
   - [Failure scenarios and the outcome on the table](#failure-scenarios-and-the-outcome-on-the-table)
@@ -46,6 +47,11 @@ such a failure the table would effectively have no usable index.
 
 (The follow-up wording was corrected from the original prompt for grammar at the
 user's request; meaning preserved.)
+
+Follow-up (2026-07-17): What GUCs have a performance impact on it?
+
+(The follow-up wording was corrected from "what GUCs have performance impact on
+it." for grammar and capitalization at the user's request; meaning preserved.)
 
 ## Answer
 
@@ -266,6 +272,223 @@ did the dead-marking and reader waits itself
 [index.c#index_drop-concurrent-lock-mode](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197)).
 Finally RIC releases all the session locks
 ([indexcmds.c#release-session-locks](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3337-L3342)).
+
+### GUCs that affect REINDEX INDEX CONCURRENTLY performance
+
+For a typical B-tree RIC, examine `maintenance_work_mem`,
+`max_parallel_maintenance_workers`, `min_parallel_table_scan_size`,
+`max_parallel_workers`, and `max_worker_processes` first. The first setting
+controls build and validation memory. The other four determine whether the first
+heap scan requests parallel workers and whether those workers can launch. In
+PostgreSQL 12, B-tree is the only access method with a parallel build path
+([index.c#B-tree-parallel-boundary](../../../raw/postgres-12/src/backend/catalog/index.c#L2844-L2854),
+[planner.c#plan_create_index_workers](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6226-L6362)).
+
+Within one `ReindexRelationConcurrently` invocation over `N` indexes, the source
+has six fixed internal commits plus three per index: one after each build, one
+after each validation scan, and one after each old-snapshot wait. A one-index
+RIC therefore executes nine internal commits, then starts the transaction that
+the utility-command caller finishes. It also has five blocker waits, including
+two reader waits that CIC lacks
+([indexcmds.c#build-and-validation-commits](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3076-L3199),
+[indexcmds.c#swap-set-dead-drop-commits](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3212-L3345),
+[postgres.c#command-end-commit](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578)).
+
+This section uses a bounded meaning of “performance impact”: the setting must
+change a core RIC phase, a shipped access method, worker availability, heap or
+temporary I/O, WAL/commit latency, or a command wait. Index expressions and
+third-party access methods can execute arbitrary code and read additional GUCs;
+the core path delegates the physical build to the access method's `ambuild`
+callback, so no core-source list can cover those additions
+([amapi.h#ambuild_function](../../../raw/postgres-12/src/include/access/amapi.h#L97-L107),
+[index.c#ambuild-dispatch](../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904)).
+
+**Application scope used below.** “Session” means a `PGC_USERSET` setting, or a
+`PGC_SUSET` setting changed by a superuser, with no reload or restart.
+Although those contexts can also be transaction-local, a session value is the
+usable per-run scope: RIC cannot run inside an explicit transaction, and its own
+commits end transaction-local values. Parallel workers restore the leader's
+serialized GUC state
+([utility.c#RIC-transaction-block](../../../raw/postgres-12/src/backend/tcop/utility.c#L773-L782),
+[ref/set.sgml#SET-scope](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L33-L115),
+[parallel.c#serialize-GUC-state](../../../raw/postgres-12/src/backend/access/transam/parallel.c#L349-L352),
+[parallel.c#restore-GUC-state](../../../raw/postgres-12/src/backend/access/transam/parallel.c#L1349-L1361)).
+
+**Build, scan, and storage settings.**
+
+| GUC | Exact RIC effect and boundary | Default and application |
+|---|---|---|
+| `maintenance_work_mem` | The main direct control. Phase 2 passes through the AM's build algorithm; phase 3 uses the setting for the serial encoded-TID validation sort. The automatic B-tree worker request also reserves at least 32 MB per participant, including the leader ([index.c#index_concurrently_build](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1438), [index.c#validation-sort](../../../raw/postgres-12/src/backend/catalog/index.c#L3228-L3283), [planner.c#memory-worker-cap](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6344-L6356)). | 64 MB, with a 1 MB minimum; session; no reload or restart ([guc.c#maintenance_work_mem](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2252)). |
+| `max_parallel_maintenance_workers` | Caps the B-tree workers requested for the first build. Zero disables parallel maintenance workers. It is a request cap, not a guarantee that workers launch ([planner.c#worker-request-cap](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6257-L6356)). | 2; session; no reload or restart ([guc.c#max_parallel_maintenance_workers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2997-L3005)). |
+| `min_parallel_table_scan_size` | The automatic model rejects a heap below this threshold, then adds workers as heap size crosses successive threefold thresholds. A table `parallel_workers` reloption bypasses both this size model and the 32 MB request test, but remains capped by `max_parallel_maintenance_workers` ([allpaths.c#compute_parallel_worker](../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L3562-L3653), [planner.c#parallel_workers-override](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6317-L6329)). | 8 MB; session; no reload or restart ([guc.c#parallel-scan-thresholds](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3119-L3139)). |
+| `max_parallel_workers`; `max_worker_processes` | The first caps active parallel workers when RIC registers them. The second sizes the shared background-worker slot array. Pool pressure can launch fewer workers than requested; B-tree then continues with the workers that launched or falls back to a serial build ([bgworker.c#worker-slot-pool](../../../raw/postgres-12/src/backend/postmaster/bgworker.c#L138-L173), [bgworker.c#parallel-and-slot-caps](../../../raw/postgres-12/src/backend/postmaster/bgworker.c#L931-L1005), [nbtsort.c#parallel-fallback](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1447-L1485)). | Both default to 8. `max_parallel_workers` is session-scoped; `max_worker_processes` is `postmaster` context and needs restart ([guc.c#max_worker_processes](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2788-L2797), [guc.c#max_parallel_workers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3018-L3026)). |
+| `effective_cache_size` | Only GiST's buffered build reads it. Together with `maintenance_work_mem`, it limits buffered subtree depth; it does not reserve cache or control the other shipped AMs ([gistbuild.c#gistInitBuffering](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L311-L417)). | 524,288 blocks, normally 4 GB at 8 kB per block; session; no reload or restart ([cost.h#DEFAULT_EFFECTIVE_CACHE_SIZE](../../../raw/postgres-12/src/include/optimizer/cost.h#L21-L32), [guc.c#effective_cache_size](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117)). |
+| `shared_buffers` | Its `NBuffers` value changes two decisions: each heap scan gets a nominal 256 kB bulk-read ring, capped at `NBuffers / 8`, only when the heap exceeds `NBuffers / 4`, and a permanent hash-index build caps its sort-selection threshold at `NBuffers`. More shared buffers can move either threshold; it is not a monotonic RIC speed control ([heapam.c#bulk-and-sync-threshold](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L296), [freelist.c#BAS_BULKREAD](../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L537-L587), [hash.c#hashbuild-sort-choice](../../../raw/postgres-12/src/backend/access/hash/hash.c#L132-L159)). | The compiled boot default is 1,024 blocks, normally 8 MB; `postmaster` context; restart ([guc.c#shared_buffers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2162)). |
+| `synchronize_seqscans` | On a sufficiently large heap, the first scan can start at another synchronized scan's location and wrap around; it still reads every page. B-tree, hash, GiST, SP-GiST, and Bloom permit this. GIN and BRIN require physical order and disable it. Validation always disables it ([heapam.c#syncscan-choice](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L267-L296), [gininsert.c#no-syncscan](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L378-L384), [brin.c#physical-order](../../../raw/postgres-12/src/backend/access/brin/brin.c#L720-L724), [heapam_handler.c#validation-order](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1751-L1763)). | On; session; no reload or restart ([guc.c#synchronize_seqscans](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1732-L1740)). |
+| `temp_tablespaces`; `temp_file_limit` | `temp_tablespaces` places tuplesort spills, parallel B-tree worker tapes, and GiST buffered-build files. `temp_file_limit` does not throttle RIC: each process errors when its accounted temporary files cross the limit. Such an error occurs before the swap and can leave an invalid `_ccnew` while preserving the original index ([tuplesort.c#PrepareTempTablespaces](../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L2468-L2475), [sharedfileset.c#parallel-temp-tablespaces](../../../raw/postgres-12/src/backend/storage/file/sharedfileset.c#L36-L68), [gistbuildbuffers.c#temporary-buffer-file](../../../raw/postgres-12/src/backend/access/gist/gistbuildbuffers.c#L44-L62), [fd.c#temp-file-limit](../../../raw/postgres-12/src/backend/storage/file/fd.c#L1933-L1958), [indexcmds.c#pre-swap-phases](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3210)). | `temp_tablespaces` defaults to the database default tablespace and is session-scoped. `temp_file_limit` defaults to unlimited (`-1`), is `PGC_SUSET`, and is session-scoped for a superuser; neither needs reload or restart ([guc.c#temp_file_limit](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2270-L2278), [guc.c#temp_tablespaces](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3646-L3655)). |
+| `backend_flush_after` | For hash, GiST, GIN, SP-GiST, BRIN, and Bloom output built through shared buffers, this setting can trigger writeback advice after this backend flushes dirty victim buffers under pressure. It does not apply to B-tree's direct-outside-shared-buffers output path, and zero disables the advice ([buf_init.c#BackendWritebackContext](../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L146-L152), [bufmgr.c#backend-writeback](../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1125-L1156), [nbtsort.c#direct-build-sync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)). | 0; session; no reload or restart ([guc.c#backend_flush_after](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2777-L2786), [pg_config_manual.h#writeback-defaults](../../../raw/postgres-12/src/include/pg_config_manual.h#L147-L163)). |
+| Writer-side `gin_pending_list_limit`; `work_mem` | Neither sizes the initial GIN build. After phase 2 makes the new copy ready, concurrent writers can append to its pending list. Their `gin_pending_list_limit`, unless the copied index reloption overrides it, decides when regular cleanup starts; regular cleanup uses the writer's `work_mem`. Phase 3 forces cleanup with the RIC backend's `maintenance_work_mem`, so writer settings can change how much work validation inherits ([index.c#copy-reloptions](../../../raw/postgres-12/src/backend/catalog/index.c#L1287-L1293), [index.c#apply-reloptions](../../../raw/postgres-12/src/backend/catalog/index.c#L1362-L1376), [gin_private.h#pending-list-limit](../../../raw/postgres-12/src/include/access/gin_private.h#L21-L39), [ginfast.c#regular-cleanup-threshold](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L438-L461), [ginfast.c#cleanup-memory-selection](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L807-L828), [ginvacuum.c#validation-cleanup](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L583-L594)). | Both default to 4 MB and are session-scoped with no reload or restart; the relevant values are in concurrent writer sessions ([guc.c#work_mem](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2230-L2241), [guc.c#gin_pending_list_limit](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3175-L3184)). |
+
+The phase-2 `maintenance_work_mem` effect depends on the access method. B-tree
+sorts index tuples; hash conditionally sorts by bucket; GiST uses the setting
+with `effective_cache_size` for buffered build; and GIN bounds its build
+accumulator. SP-GiST, BRIN, and contrib Bloom do not read it during their first
+build. Phase 3 still creates the common TID sort, although BRIN's
+`ambulkdelete` reports no per-tuple TIDs and therefore leaves that sort empty
+([nbtsort.c#primary-sort](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L378-L445),
+[hash.c#hashbuild-sort-choice](../../../raw/postgres-12/src/backend/access/hash/hash.c#L132-L177),
+[gistbuild.c#buffer-memory-boundary](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L311-L417),
+[gininsert.c#build-threshold](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L314),
+[spginsert.c#spgbuild](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L71-L149),
+[brin.c#brinbuild](../../../raw/postgres-12/src/backend/access/brin/brin.c#L658-L743),
+[blinsert.c#blbuild](../../../raw/postgres-12/contrib/bloom/blinsert.c#L119-L159),
+[brin.c#brinbulkdelete](../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784)).
+
+PostgreSQL 12 has no heap read-stream layer. Both heap passes use ordinary table
+scans; a large heap gets the bulk-read ring above, and `heapgettup` fetches the
+next block with the ordinary buffer path. `effective_io_concurrency` drives
+bitmap-heap prefetch and a tuple-deletion horizon helper, but neither concurrent
+index heap pass calls those paths; the validation callback never deletes an
+index TID
+([heapam_handler.c#build-scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1212-L1247),
+[heapam_handler.c#validation-scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1751-L1772),
+[heapam.c#sequential-next-block](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L702-L766),
+[nodeBitmapHeapscan.c#effective_io_concurrency](../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L797-L817),
+[heapam.c#deletion-horizon-prefetch](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L6970-L7040),
+[index.c#validation-callback](../../../raw/postgres-12/src/backend/catalog/index.c#L3300-L3312)).
+Thus `effective_io_concurrency` is not a direct v12 RIC control
+([guc.c#effective_io_concurrency](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2759-L2775)).
+
+`default_tablespace` also does **not** place the rebuilt copy. RIC always passes
+the old index's `reltablespace` into `index_create`, and v12 `REINDEX` has no
+`TABLESPACE` clause. Output-storage performance therefore follows the old index
+placement; changing it requires a separate operation, not a per-run GUC
+([index.c#RIC-tablespace](../../../raw/postgres-12/src/backend/catalog/index.c#L1355-L1376),
+[ref/reindex.sgml#syntax](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L22-L25),
+[guc.c#default_tablespace](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3635-L3644)).
+RIC processes each index build and validation in its own transaction rather than
+building all selected indexes in parallel, so one command does not multiply
+`maintenance_work_mem` by its number of indexes at a single instant; a B-tree
+build can still divide that one operation's budget among parallel participants
+([indexcmds.c#per-index-builds](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3128),
+[indexcmds.c#per-index-validations](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3131-L3199),
+[ref/create_index.sgml#parallel-memory](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L716-L753)).
+
+**WAL, checkpoints, and commit latency.** B-tree builds pages outside shared
+buffers, WAL-logs each page as a forced image when `XLogIsNeeded()` is true, and
+immediately syncs the permanent index file before returning. Hash, GiST, GIN,
+SP-GiST, BRIN, and Bloom build through shared buffers; GiST, GIN, and SP-GiST
+log the completed page range, while hash, BRIN, and Bloom use their ordinary
+buffered WAL paths
+([nbtsort.c#build-WAL](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L576-L580),
+[nbtsort.c#page-WAL](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L656-L662),
+[nbtsort.c#immediate-sync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307),
+[gistbuild.c#build-WAL](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L217-L226),
+[gininsert.c#build-WAL](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L408-L417),
+[spginsert.c#build-WAL](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L134-L143),
+[hash.c#hashbuild](../../../raw/postgres-12/src/backend/access/hash/hash.c#L126-L177),
+[hashpage.c#hash-build-WAL](../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L346-L402),
+[brin.c#build-WAL](../../../raw/postgres-12/src/backend/access/brin/brin.c#L683-L709),
+[blinsert.c#Bloom-build](../../../raw/postgres-12/contrib/bloom/blinsert.c#L44-L159),
+[rel.h#RelationNeedsWAL](../../../raw/postgres-12/src/include/utils/rel.h#L515-L520)).
+
+| GUC | Exact RIC effect and boundary | Default and application |
+|---|---|---|
+| `synchronous_commit`; `synchronous_standby_names` | Only internal transactions that assign an XID and write WAL can take the ordinary local-flush and synchronous-standby commit path. The v12 build, validation, and state-only phases can write WAL without an XID and therefore take the asynchronous branch even when `synchronous_commit = on`; B-tree still performs its separate data-file sync before its build returns. Phase 6's non-temporary relation deletion forces a local WAL flush even when the GUC is off ([index.c#xidless-state-updates](../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3403), [index.c#xidless-build-stats](../../../raw/postgres-12/src/backend/catalog/index.c#L2676-L2805), [xact.c#xidless-and-sync-commit](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1220-L1426), [indexcmds.c#phase-6-drop](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3296-L3332), [nbtsort.c#immediate-sync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)). | `synchronous_commit` defaults to `on`; session; no reload or restart. `synchronous_standby_names` defaults empty; `sighup` context; reload ([guc.c#synchronous_commit](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4353-L4361), [guc.c#synchronous_standby_names](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4086-L4095)). |
+| `wal_compression` | Forced and ordinary full-page images can be compressed, trading CPU for fewer WAL bytes when pages compress well. B-tree's build records use forced images, so their presence does not depend on `full_page_writes` ([xloginsert.c#full-page-compression](../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L578-L630), [xloginsert.c#forced-page-image](../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L960-L995)). | Off; `PGC_SUSET`; session for a superuser; no reload or restart ([guc.c#wal_compression](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1187-L1195)). |
+| `wal_level` | B-tree explicitly WAL-logs its privately built pages only when `XLogIsNeeded()` is true. At `minimal`, it skips those page records and relies on its final file sync. This is a restart-level cluster architecture choice, not a practical per-run RIC setting; `minimal` cannot support WAL archiving or streaming replication ([xlog.h#XLogIsNeeded](../../../raw/postgres-12/src/include/access/xlog.h#L177-L181), [nbtsort.c#build-WAL](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L576-L580), [nbtsort.c#immediate-sync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [config.sgml#wal_level](../../../raw/postgres-12/doc/src/sgml/config.sgml#L2446-L2479)). | `replica`; `postmaster` context; restart ([guc.c#wal_level](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4409-L4417)). |
+| `wal_buffers`; `wal_sync_method` | These are generic WAL-path controls: the first sizes shared WAL buffering for RIC's WAL stream; the second selects how WAL is forced to disk. Neither changes worker count or scan shape ([guc.c#wal_buffers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2602-L2611), [guc.c#wal_sync_method](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4438-L4447)). | `wal_buffers` defaults to `-1` (automatic), is `postmaster` context, and needs restart. `wal_sync_method` uses the platform default, is `sighup` context, and needs reload. |
+| `max_wal_size`; `checkpoint_timeout`; `checkpoint_completion_target`; `checkpoint_flush_after` | The first two influence automatic checkpoint frequency; the latter two pace checkpoint writes and writeback. They can change concurrent background I/O and the ordinary buffered AMs' full-page-image pattern, but B-tree's private build always performs its final immediate relation sync regardless of whether a checkpoint crossed the build ([guc.c#checkpoint-size-time-flush](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2542-L2600), [guc.c#checkpoint_completion_target](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3413-L3421), [nbtsort.c#immediate-sync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)). | Normally 1 GB, 5 minutes, `0.5`, and 32 blocks on systems with `sync_file_range` (otherwise 0); all are `sighup` context and need reload, not restart ([pg_config_manual.h#writeback-defaults](../../../raw/postgres-12/src/include/pg_config_manual.h#L147-L163)). |
+| `commit_delay`; `commit_siblings` | When enabled and enough other transactions are active, the WAL flush path deliberately sleeps before group commit. It can improve aggregate throughput while adding latency to affected XID-bearing RIC commits; xidless phase commits do not enter this flush path, and defaults add no delay ([xlog.c#group-commit-delay](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2893-L2903), [xact.c#xidless-commit](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1228-L1272)). | `commit_delay = 0`; `PGC_SUSET`, superuser session. `commit_siblings = 5`; session. Neither needs reload or restart ([guc.c#commit-delay](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2667-L2688)). |
+
+Disabling `fsync` or `full_page_writes` is not a safe production RIC tuning
+method. Both are `sighup` settings and need reload. `fsync = off` also makes
+B-tree's final `pg_fsync` call a no-op, while `REGBUF_FORCE_IMAGE` makes its
+build page images independent of `full_page_writes`
+([guc.c#fsync](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1122-L1133),
+[guc.c#full_page_writes](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1163-L1175),
+[fd.c#pg_fsync](../../../raw/postgres-12/src/backend/storage/file/fd.c#L329-L355),
+[xloginsert.c#forced-page-image](../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L960-L995)).
+
+**Wait and cancellation settings.** These settings do not make either heap scan
+faster. They bound or expose the initial relation lock and RIC's five waits:
+
+| GUC | RIC behavior | Default and application |
+|---|---|---|
+| `statement_timeout` | Covers the client statement across all internal commits, scans, and five waits. RIC calls `StartTransactionCommand` directly, so it does not restart the statement timer; the normal command-end path disables it ([postgres.c#statement-timeout-lifetime](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2546-L2578), [postgres.c#enable_statement_timeout](../../../raw/postgres-12/src/backend/tcop/postgres.c#L4680-L4716)). | 0 (disabled); session; no reload or restart ([guc.c#statement_timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2385)). |
+| `lock_timeout` | Applies to initial relation-lock acquisition and to each individual VXID lock used by all five waits. It restarts for each lock acquisition, so it is not an aggregate limit for a wait phase, blocker set, or whole command ([indexcmds.c#initial-index-lock](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2336-L2360), [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L934), [indexcmds.c#WaitForOlderSnapshots](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L339-L402), [lock.c#VirtualXactLock](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L4361-L4458), [proc.c#lock-timeout-timer](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1235-L1264)). | 0 (disabled); session; no reload or restart ([guc.c#lock_timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2396)). |
+| `deadlock_timeout`; `log_lock_waits` | The first controls when a blocked lock acquisition runs deadlock detection; lowering it does not end a non-deadlocked wait. The second logs waits that survive that interval. They are detection and observability controls, not throughput controls ([proc.c#deadlock-and-lock-timeouts](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1235-L1298), [proc.c#long-wait-logging](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1377-L1469)). | 1 second and off; both are `PGC_SUSET`, so a superuser can use session scope with no reload or restart ([guc.c#deadlock_timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2062-L2072), [guc.c#log_lock_waits](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1489-L1497)). |
+| Blocker-side `idle_in_transaction_session_timeout` | It does not fire in the actively running RIC backend. In another session it can terminate an idle-in-transaction reader or writer that blocks RIC; that is blocker policy, not a scan-speed setting ([postgres.c#idle-in-transaction-timer](../../../raw/postgres-12/src/backend/tcop/postgres.c#L4126-L4152), [postgres.c#idle-timer-stop](../../../raw/postgres-12/src/backend/tcop/postgres.c#L4203-L4210)). | 0 (disabled); session in the blocker; no reload or restart ([guc.c#idle_in_transaction_session_timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2399-L2407)). |
+
+PostgreSQL 12 has no `transaction_timeout` GUC, so there is no per-internal-
+transaction timeout counterpart to the end-to-end `statement_timeout`. It also
+has no `maintenance_io_concurrency`, `io_combine_limit`, or
+`track_wal_io_timing`; those names have no definitions in the v12 GUC registry,
+and the heap-scan path above has no read-stream interface
+([guc.c#timeout-GUCs](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2407),
+[guc.c#I/O-GUCs](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2759-L2786),
+[guc.c#I/O-timing](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1381-L1408),
+[heapam_handler.c#table-scan-interface](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1212-L1247)).
+
+A timeout or cancellation after phase 1 can leave the committed transient index
+behind. Before the atomic swap it is the invalid `_ccnew`; after the swap the
+rebuilt index has the original name and an invalid `_ccold` can remain. Timeouts
+are therefore completion policy, not free acceleration
+([indexcmds.c#phase-boundaries](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3076-L3332),
+[index.c#atomic-swap](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1537)).
+
+**Commonly confused settings and practical priority.**
+
+- `min_parallel_index_scan_size` does not participate: RIC's worker planner
+  passes `index_pages = -1`, so only `min_parallel_table_scan_size` supplies a
+  size threshold. `max_parallel_workers_per_gather` and
+  `parallel_leader_participation` govern query executor nodes, not the private
+  B-tree maintenance build; B-tree hard-codes leader participation unless a
+  compile-time test macro disables it. Planner cost GUCs likewise do not choose
+  the worker count in this size-based function
+  ([planner.c#heap-only-worker-model](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6317-L6356),
+  [allpaths.c#index-threshold-guard](../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L3591-L3647),
+  [guc.c#query-leader-participation](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1857-L1866),
+  [nbtsort.c#build-leader-participation](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1345-L1362)).
+- The RIC backend's `work_mem`, `autovacuum_work_mem`, and `vacuum_cost_*`
+  settings do not size or throttle the common validation path. Validation uses
+  `maintenance_work_mem`; its forced GIN cleanup selects that value for a normal
+  RIC backend. A unique B-tree allocates a secondary `work_mem` spool during the
+  first build, but the concurrent MVCC scan supplies no dead tuples and discards
+  it empty. `vacuum_delay_point()` returns without delaying when
+  `VacuumCostActive` is false
+  ([index.c#validation-sort](../../../raw/postgres-12/src/backend/catalog/index.c#L3228-L3283),
+  [ginfast.c#forced-cleanup-memory](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L807-L828),
+  [nbtsort.c#secondary-sort](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L447-L520),
+  [heapam_handler.c#concurrent-tuples-are-alive](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1595-L1665),
+  [vacuum.c#vacuum_delay_point](../../../raw/postgres-12/src/backend/commands/vacuum.c#L1939-L1971)).
+- `track_activities`, `trace_sort`, `log_temp_files`, and `track_counts` expose
+  progress or spills rather than changing RIC's correctness algorithm.
+  `track_io_timing` adds measurements but can add significant clock-call
+  overhead on some systems; it is `PGC_SUSET`, defaults off, and can use
+  superuser session scope without reload or restart
+  ([pgstat.c#track_activities](../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3191-L3231),
+  [guc.c#trace_sort](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1635-L1645),
+  [fd.c#temp-file-reporting](../../../raw/postgres-12/src/backend/storage/file/fd.c#L1271-L1286),
+  [guc.c#I/O-timing](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1381-L1408),
+  [config.sgml#I/O-timing-overhead](../../../raw/postgres-12/doc/src/sgml/config.sgml#L6854-L6870)).
+
+In practice, tune and measure in this order: (1) `maintenance_work_mem`; (2) for
+B-tree, the full worker request-and-availability chain; (3) AM-specific GiST or
+GIN behavior; (4) heap and temporary I/O on the existing tablespaces; and (5)
+WAL, checkpoints, and commit confirmation. Diagnose the five blocker waits
+separately, because memory and workers cannot shorten them
+([ref/create_index.sgml#memory-and-parallelism](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L707-L771),
+[ref/reindex.sgml#concurrent-cost](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L283-L296),
+[indexcmds.c#RIC-waits](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3080-L3304)).
+There is no source-derived universal best value; the direct RIC regression and
+isolation tests check lifecycle and concurrency, not comparative GUC performance
+([create_index.sql#RIC-tests](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L786-L986),
+[reindex-concurrently.spec](../../../raw/postgres-12/src/test/isolation/specs/reindex-concurrently.spec#L1-L40)).
+At the build boundary, v12 compiles the GUC registry directly in `guc.c`; its
+makefile lists `guc.o` and the generated `guc-file.c` scanner only as that
+object's dependency
+([utils/misc/Makefile#guc](../../../raw/postgres-12/src/backend/utils/misc/Makefile#L17-L33)).
 
 ### All steps and locks required on the table
 
@@ -617,10 +840,25 @@ text.
   `src/backend/catalog/system_views.sql`; the phase descriptions in
   `doc/src/sgml/monitoring.sgml`.
 - `doc/src/sgml/ref/reindex.sgml` (CONCURRENTLY steps, restrictions, recovery).
+- GUC definitions and apply contexts in `src/backend/utils/misc/guc.c`, with its
+  Makefile dependency on the generated `guc-file.c` scanner.
+- Build and validation in `index.c` and `heapam_handler.c`; B-tree, hash, GiST,
+  GIN, SP-GiST, BRIN, and contrib Bloom build and bulk-delete callbacks.
+- B-tree worker planning and launch in `planner.c`, `allpaths.c`, `nbtsort.c`,
+  `bgworker.c`, and `parallel.c`, including table reloptions and GUC restoration.
+- Heap scan strategy, synchronized scans, buffer-ring and writeback behavior,
+  tablespace placement, tuplesort and temporary-file placement/limits, WAL
+  insertion, B-tree immediate sync, checkpoints, commit synchronization, and
+  timeout/lock paths.
+- Whole-checkout searches for `transaction_timeout`,
+  `maintenance_io_concurrency`, `io_combine_limit`, and `track_wal_io_timing`;
+  none is defined in PostgreSQL 12.
+- Same-checkout configuration, `CREATE INDEX`, and `REINDEX` documentation.
 - Tests: `src/test/regress/sql/create_index.sql`,
   `src/test/regress/expected/create_index.out`,
   `src/test/isolation/specs/reindex-concurrently.spec`, and
-  `src/test/isolation/expected/reindex-concurrently.out`.
+  `src/test/isolation/expected/reindex-concurrently.out`; none directly sweeps
+  the RIC GUC matrix.
 
 ## Evidence Map
 
@@ -641,6 +879,13 @@ text.
 | Session `ShareUpdateExclusiveLock` taken on old index, new index, and heap(s) (index relids registered, then heap relids + `LOCKTAG`, then locked) | [indexcmds.c:3024-3029](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3024-L3029), [indexcmds.c:3042-3074](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3042-L3074) |
 | Phase 2: Wait 1 (`ShareLock`) then per-index build sets `indisready` | [indexcmds.c:3090-3128](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3090-L3128), [index.c:1399-1439](../../../raw/postgres-12/src/backend/catalog/index.c#L1399-L1439) |
 | Phase 3: Wait 2 (`ShareLock`), `validate_index`, then Wait 3 (`WaitForOlderSnapshots`) | [indexcmds.c:3139-3199](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3139-L3199) |
+| One invocation has six fixed internal commits plus three per index; a one-index RIC has nine before the final caller-owned transaction | [indexcmds.c:3076-3199](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3076-L3199), [indexcmds.c:3212-3345](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3212-L3345), [postgres.c:2569-2578](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2569-L2578) |
+| Direct build controls are AM-dependent `maintenance_work_mem` plus the B-tree-only worker request and pool chain | [index.c:2844-2854](../../../raw/postgres-12/src/backend/catalog/index.c#L2844-L2854), [index.c:3228-3283](../../../raw/postgres-12/src/backend/catalog/index.c#L3228-L3283), [planner.c:6226-6362](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6226-L6362), [bgworker.c:931-1005](../../../raw/postgres-12/src/backend/postmaster/bgworker.c#L931-L1005) |
+| Large RIC heap passes can use `BAS_BULKREAD` and synchronized scanning, but v12 has no heap read streams and `effective_io_concurrency` does not drive these sequential passes | [heapam.c:233-296](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L296), [heapam_handler.c:1212-1247](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1212-L1247), [heapam_handler.c:1751-1763](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1751-L1763) |
+| RIC always preserves the old index tablespace; v12 has no `REINDEX (TABLESPACE ...)`, and `default_tablespace` does not place the copy | [index.c:1355-1376](../../../raw/postgres-12/src/backend/catalog/index.c#L1355-L1376), [reindex.sgml:22-25](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L22-L25) |
+| B-tree has private page writes, forced-image WAL when needed, and a final immediate data-file sync; the other in-tree AMs build through shared buffers | [nbtsort.c:576-662](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L576-L662), [nbtsort.c:1288-1307](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307), [rel.h:515-520](../../../raw/postgres-12/src/include/utils/rel.h#L515-L520) |
+| `synchronous_commit` affects XID-bearing WAL commits, while xidless WAL-writing phases commit asynchronously and phase 6 deletion forces a local flush | [index.c:2676-2805](../../../raw/postgres-12/src/backend/catalog/index.c#L2676-L2805), [index.c:3314-3403](../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3403), [xact.c:1220-1426](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1220-L1426) |
+| `statement_timeout` spans RIC, and `lock_timeout` applies per VXID acquisition; v12 has no `transaction_timeout` | [postgres.c:2546-2578](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2546-L2578), [lock.c:4361-4458](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L4361-L4458), [guc.c:2377-2407](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2407) |
 | Phase 4 swap: new valid + old invalid, names swapped, constraints/triggers/comment/deps/stats moved | [indexcmds.c:3212-3262](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3212-L3262), [index.c:1447-1716](../../../raw/postgres-12/src/backend/catalog/index.c#L1447-L1716) |
 | Old index renamed `_ccold`; new takes original name | [indexcmds.c:3230-3235](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3230-L3235), [index.c:1490-1492](../../../raw/postgres-12/src/backend/catalog/index.c#L1490-L1492) |
 | Per-index cumulative stats copied old->new during swap | [index.c:1683-1705](../../../raw/postgres-12/src/backend/catalog/index.c#L1683-L1705) |
@@ -664,6 +909,10 @@ text.
 
 ## Open Questions
 
+- The fastest safe values for a particular heap, index definition, access method,
+  concurrent workload, storage system, and worker pool cannot be derived from
+  source. They require controlled measurements of build, validation, commit, and
+  wait phases.
 - **The "waiting for readers before dropping" phase string is never emitted in
   v12.** `progress.h` defines `PROGRESS_CREATEIDX_PHASE_WAIT_5 = 9`, which the
   `pg_stat_progress_create_index` view and `monitoring.sgml` map to
@@ -709,6 +958,26 @@ text.
 - [index.c#index_concurrently_set_dead](../../../raw/postgres-12/src/backend/catalog/index.c#L1719-L1761)
 - [index.c#index_drop](../../../raw/postgres-12/src/backend/catalog/index.c#L2001-L2197)
 - [index.c#index_set_state_flags](../../../raw/postgres-12/src/backend/catalog/index.c#L3331-L3403)
+- [index.c#index_build](../../../raw/postgres-12/src/backend/catalog/index.c#L2810-L3005)
+- [index.c#validate_index](../../../raw/postgres-12/src/backend/catalog/index.c#L3112-L3298)
+- [heapam_handler.c#heapam_index_build_range_scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1149-L1702)
+- [heapam_handler.c#heapam_index_validate_scan](../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1705-L1947)
+- [nbtsort.c#B-tree-build](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L378-L662)
+- [hash.c#hashbuild](../../../raw/postgres-12/src/backend/access/hash/hash.c#L110-L187)
+- [gistbuild.c#gistbuild](../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L110-L226)
+- [gininsert.c#ginbuild](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L427)
+- [spginsert.c#spgbuild](../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L71-L149)
+- [brin.c#brinbuild](../../../raw/postgres-12/src/backend/access/brin/brin.c#L658-L743)
+- [blinsert.c#blbuild](../../../raw/postgres-12/contrib/bloom/blinsert.c#L119-L159)
+- [planner.c#plan_create_index_workers](../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L6226-L6363)
+- [allpaths.c#compute_parallel_worker](../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L3562-L3653)
+- [bgworker.c#RegisterDynamicBackgroundWorker](../../../raw/postgres-12/src/backend/postmaster/bgworker.c#L920-L1009)
+- [heapam.c#scan-strategy](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L203-L296)
+- [freelist.c#GetAccessStrategy](../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L535-L587)
+- [sharedfileset.c#SharedFileSetInit](../../../raw/postgres-12/src/backend/storage/file/sharedfileset.c#L36-L72)
+- [nbtsort.c#B-tree-immediate-sync](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)
+- [xact.c#commit-flush](../../../raw/postgres-12/src/backend/access/transam/xact.c#L1220-L1426)
+- [xlog.c#group-commit-delay](../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2893-L2903)
 - [heapam.c#heap_inplace_update](../../../raw/postgres-12/src/backend/access/heap/heapam.c#L5692-L5773)
 - [plancat.c#skip-invalid-index](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L210)
 - [relcache.c#RelationGetIndexList](../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4318-L4420)
@@ -717,6 +986,17 @@ text.
 - [lmgr.c#WaitForLockersMultiple](../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L850-L949)
 - [lock.c#LockConflicts](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)
 - [lockdefs.h#lockmodes](../../../raw/postgres-12/src/include/storage/lockdefs.h#L36-L46)
+- [lock.c#VirtualXactLock](../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L4361-L4458)
+- [proc.c#lock-timeouts](../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1235-L1298)
+- [postgres.c#statement-timeout](../../../raw/postgres-12/src/backend/tcop/postgres.c#L2546-L2578)
+- [guc.c#maintenance_work_mem](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2252)
+- [guc.c#timeouts](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2407)
+- [guc.c#worker-pools](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2788-L2797)
+- [guc.c#parallel-workers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2997-L3026)
+- [guc.c#I/O-settings](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2759-L2786)
+- [guc.c#planner-and-GIN-settings](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3184)
+- [guc.c#WAL-size-checkpoint-and-commit](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2542-L2688)
+- [guc.c#WAL-commit-and-level](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4338-L4447)
 - [utility.c#reindex-dispatch](../../../raw/postgres-12/src/backend/tcop/utility.c#L773-L807)
 - [progress.h#create-index-phases](../../../raw/postgres-12/src/include/commands/progress.h#L73-L82)
 - [system_views.sql#pg_stat_progress_create_index](../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1004-L1016)
