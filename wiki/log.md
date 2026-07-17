@@ -4330,3 +4330,57 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `false`, so the visible title remains `(unverified)`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-07-17] review-fix v12 | wal_sender_timeout full claim-to-source audit
+
+- Completed a full claim-to-source review of [How `wal_sender_timeout` Is Used
+  and What It Impacts in PostgreSQL 12
+  (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Tightened the central model from generic “inactive connection” wording to the
+  process-local time since the sender last processed a valid receiver message.
+  Confirmed that valid `r`, `h`, and `CopyDone` messages reset the clock without
+  requiring LSN progress, while the receiver-supplied `reply_time` is separate
+  monitoring data and cannot expose the timeout deadline.
+- Corrected the blanket “half-time keepalive, full-time disconnect” summary.
+  Half-time is the normal path only when no heartbeat is outstanding. Logical
+  `WalSndWaitForWal` can send an earlier non-requesting heartbeat and suppress
+  that request; final shutdown can request immediately. Added the slow path
+  used while a large logical transaction emits output, cooperative checks, and
+  the documented long server-stall edge.
+- Added exact activation boundaries: physical and logical `START_REPLICATION`
+  enter `WalSndLoop`; the main `BASE_BACKUP` stream, logical slot snapshot
+  build, initial table-sync `COPY`, idle replication-command connection, and
+  SQL logical-decoding functions do not. `pg_basebackup -X stream` is affected
+  only on its separate WAL-streaming connection.
+- Expanded physical and logical client coverage to cascading senders,
+  walreceiver forced replies, `pg_receivewal`, `pg_basebackup`, the main logical
+  apply worker, table-sync catch-up workers, `pg_recvlogical`, and custom
+  protocol/output-plugin boundaries. Separated publisher `wal_sender_timeout`
+  from all three reloadable subscriber-side receiver/retry settings.
+- Added the v12 `db361db2f` per-connection change, exact `PGC_USERSET`
+  session/transaction and startup-option behavior, GUC source priority, and
+  active-sender SIGHUP handling. Recorded that `START_REPLICATION` cannot carry
+  a `SET LOCAL` value because it is forbidden inside a transaction block.
+- Reworked operational consequences: sender-slot release under
+  `max_wal_senders`, physical/logical reconnect paths, the unexposed timeout
+  clock, a required synchronous sender exiting without waking commit waiters,
+  persistent slots becoming inactive while retaining WAL and horizons,
+  temporary slots being dropped at process cleanup, and no-slot archive/
+  `wal_keep_segments` risk. Corrected “active slots” to all allocated slots in
+  `ReplicationSlotsComputeRequiredLSN`.
+- Added core/generated-parser/generated-catalog and shared-module boundaries,
+  the absence of any `contrib/` symbol reference, upstream direct-test absence,
+  adjacent test scope, and the stale declaration comment that says “maximum
+  time to send one WAL data message” despite the reply-based implementation.
+- Ran an isolated exact-pin smoke test under `.wiki-runtime/`: paused a physical
+  `pg_receivewal` client, reloaded `wal_sender_timeout` from 60 seconds to 1
+  second, observed immediate timeout logging and `pg_stat_replication` row
+  removal, and confirmed that the persistent slot remained inactive with a
+  valid `restart_lsn`. The temporary server was stopped.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Set
+  `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T16:13:56Z`; human `verified` remains
+  `false`, so the visible title remains `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.

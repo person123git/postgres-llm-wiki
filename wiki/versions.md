@@ -14,6 +14,24 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-17: completed a full claim-to-source review of [How
+  `wal_sender_timeout` Is Used and What It Impacts in PostgreSQL 12
+  (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`). Corrected the
+  blanket half-time description by adding the earlier non-requesting logical
+  WAL-wait heartbeat and shutdown-request branches. Added exact activation and
+  exclusion boundaries (`START_REPLICATION` only; not the main base backup,
+  logical slot snapshot build, initial table copy, or SQL decoding functions),
+  process-local versus exposed reply timestamps, server-stall accounting,
+  physical client tools, table-sync catch-up, and receiver/retry controls.
+  Expanded operational effects to live reload, `max_wal_senders`, reconnects,
+  monitoring limits, synchronous waiters that timeout does not release,
+  persistent-versus-temporary slot cleanup, inactive-slot WAL retention, build
+  and extension boundaries, and direct-test absence. An isolated exact-pin
+  smoke test confirmed active-sender reload, timeout logging, sender-row
+  removal, and persistent-slot retention. Set `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T16:13:56Z`; human `verified` remains
+  `false`.
 - 2026-07-17: completed a full claim-to-source review of [Query Planner
   Statistics Sources in PostgreSQL 12
   (unverified)](v12/questions/query-planner-statistics-sources.md) against
