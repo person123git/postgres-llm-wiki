@@ -4431,3 +4431,46 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `false`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed; the isolated PostgreSQL 12 server is stopped.
+
+## [2026-07-17] review-fix v12 | sampling pgstatindex proposal full audit
+
+- Completed a full claim-to-source review of [Proposing a Sampling pgstatindex
+  Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+- Corrected the contract from “exact” metadata/size to direct observations made
+  at separate times, then added `sampled_pages` and `sampled_leaf_pages` so the
+  realized evidence behind ratio estimates is visible. Replaced
+  `## Answer Up Front` with the required `## Answer` and removed the broken
+  underscore-dropping Contents target.
+- Reworked the preferred C implementation around v12's native
+  `BlockSampler`: Algorithm S samples without replacement and emits ascending
+  block numbers without storing/sorting the sample. Added its `int` sample-size
+  ceiling, potentially O(number-of-blocks) skip arithmetic, no-interrupt-inside-
+  `BlockSampler_Next` boundary, full-scan fallback question, and seed policy.
+- Added the full C caller/callee and structure path; existing
+  physical-B-tree/temporary/index-state/privilege boundaries; one continuous
+  `AccessShareLock`; concurrent DML/VACUUM and mixed-time behavior; one-time
+  length capture; the 256 KiB-or-smaller `BAS_BULKREAD` ring; and proposed
+  share-locked metapage checks plus `_bt_checkpage` on sampled blocks. Kept
+  unsampled and whole-tree integrity outside the claim.
+- Completed extension wiring: fmgr symbol, 1.5-to-1.6 script and fresh-install
+  chain, control/Makefile/docs/tests, existing generated `pg_am_d.h` /
+  `BTREE_AM_OID` dependency, and the no-new-catalog/parser/AM-callback boundary.
+- Replaced the SQL prototype's hidden 10% floor below 100 MiB with the requested
+  realized fraction, evaluated relation size once, exposed sample counts, and
+  replaced the second `get_raw_page`/`page_header` read with the valid-v12-page
+  `page_size - 40` capacity derivation. Added continuous-lock, normal-buffer,
+  malformed-page, signed-`int4`, invalid-input/no-row, helper-lifecycle,
+  search-path, and old-prototype replacement limits while retaining the v1.7
+  `bt_metap.oldest_xact` compatibility shim.
+- Built and installed exact-pin `pageinspect` in `.wiki-runtime/`. Executed the
+  former and revised SQL against populated and metapage-only B-trees; the full
+  revised sample matched `pgstatindex`. The one `pgstattuple` regression target
+  and all five `pageinspect` targets passed. The temporary server is stopped.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Set
+  `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T18:12:12Z`; human `verified` remains
+  `false`, so the visible title stays `(unverified)`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.

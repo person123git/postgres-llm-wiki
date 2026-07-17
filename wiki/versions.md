@@ -14,6 +14,26 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-17: completed a full claim-to-source review of [Proposing a Sampling
+  pgstatindex Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
+  Replaced the misleading exact-versus-estimated split with separately timed
+  direct observations versus estimates and added direct sample counts. Reworked
+  the C proposal around v12's native Algorithm-S `BlockSampler`, including its
+  without-replacement ascending output, `int` sample-size ceiling, potentially
+  O(number-of-blocks) skip loop, and cancellation boundary. Added the complete
+  relation/page-lock, concurrent DML/VACUUM, one-time length, bulk-read ring,
+  metapage and sampled-page validation, privilege, extension-upgrade,
+  fmgr/generated-header, and test envelopes. Revised the `pageinspect` SQL to
+  remove the hidden sub-100-MiB 10% floor, evaluate relation size once, read each
+  sampled ordinary page once, expose sample sizes, and document its lock,
+  malformed-page, signed-`int4`, helper-lifecycle, and invalid-input limits.
+  Exact-pin execution confirmed full-sample equivalence on a populated B-tree
+  and the metapage-only edge; the one `pgstattuple` and all five `pageinspect`
+  regression targets passed. Set `verified_by_agent` to
+  `GPT-5-6-Sol-Max-Thinking 2026-07-17T18:12:12Z`; human `verified` remains
+  `false`.
 - 2026-07-17: extended [How `wal_sender_timeout` Is Used and What It Impacts in
   PostgreSQL 12 (unverified)](v12/questions/wal-sender-timeout.md) with the
   user-approved corrected follow-up, “How does `wal_sender_timeout` affect
