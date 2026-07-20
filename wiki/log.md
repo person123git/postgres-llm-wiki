@@ -2,6 +2,37 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-20] review-fix v14 | RLS implementation and all follow-ups
+
+- Rechecked the full [Row-Level Security (RLS) in PostgreSQL 14:
+  Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) page and all five
+  follow-ups against unchanged pin
+  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156` (PostgreSQL 14.23).
+- Corrected the policy catalog/relcache ordering, `ON CONFLICT DO UPDATE`
+  policy layering, base-restriction and default-deny DML behavior, partial-
+  index implication, plan-time pruning, direct policy aggregates versus
+  aggregates in subqueries, scalar-sublink per-occurrence/cardinality/lossy-
+  recheck boundaries, table/role permissions, CTAS, logical replication, RI
+  disclosure, and hook activation scope.
+- Added estimator/cost and parallel-safety effects, exact DDL lock conflicts,
+  deeper InitPlan cost/parallel consequences, and direct regression-plan
+  coverage plus explicit test gaps.
+- Expanded the plan-cache security warning from membership only to all reviewed
+  same-role authorization inputs: role grants, `INHERIT`, `BYPASSRLS`,
+  `SUPERUSER`, intermediate-role inheritance, and implicit
+  `pg_database_owner` membership. An exact-pin isolated server reproduced stale
+  prepared results in both directions for membership, `INHERIT`, `BYPASSRLS`,
+  and database-owner changes; `DISCARD PLANS` restored the current state. The
+  server was stopped after testing.
+- After the final factual, cache/settings, and structure rechecks found no page
+  blocker, recorded `verified_by_agent: GPT-5 2026-07-20T18:13:13Z`; human
+  `verified: false` and the visible `(unverified)` title remain unchanged.
+- Updated the root and v14 indexes and the version coverage notes. Full
+  `scripts/wiki_lint` still reports only the same nine pre-existing v19 broken
+  citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
+  v14 RLS or bookkeeping error was added.
+
 ## [2026-07-17] review-fix v17 | ATTACH PARTITION index-drop full audit
 
 - Completed a full claim-to-source review of [Can ALTER TABLE ... ATTACH
