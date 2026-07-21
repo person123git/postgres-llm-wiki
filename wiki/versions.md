@@ -14,6 +14,23 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-21: completed a full corrective review of [PostgreSQL 12 Database
+  Health Checklist (unverified)](v12/questions/database-health-checklist.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Reworked monitoring access and statistics-snapshot
+  semantics, client capacity and blocker/prepared-lock SQL, independent
+  vacuum/analyze and XID/MultiXact checks, checkpoint/background-writer
+  interpretation, archive/replication/slot metrics, full-capture
+  `pg_stat_statements` deltas, checksum and base-backup accounting, relation
+  diagnostics, and the operational log matrix. Added exact GUC apply scopes,
+  generated/build boundaries, direct tests and test gaps, an evidence map, and
+  explicit open questions. An out-of-tree build of the exact pin, with its
+  matching `pg_stat_statements` and `pgstattuple` modules, executed every final
+  fenced SQL statement successfully against an isolated server; diagnostic
+  relation placeholders were mapped to local heap and B-tree fixtures. The
+  server was stopped after testing. Independent final audits found no remaining
+  page defect. Agent verification was recorded as
+  `GPT-5 2026-07-21T13:34:54Z`; human verification remains false.
 - 2026-07-20: completed a new full claim-to-source review of [Row-Level Security
   (RLS) in PostgreSQL 14: Implementation, Scalability and Performance, and
   Settings (unverified)](v14/questions/row-level-security-rls.md) and all five

@@ -4676,3 +4676,36 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `verified_by_agent` remains `not yet` because this was a scoped follow-up.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-07-21] review-fix v12 | database health checklist full correction
+
+- Rechecked the complete [PostgreSQL 12 Database Health Checklist
+  (unverified)](v12/questions/database-health-checklist.md) against unchanged
+  pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Corrected monitoring-role and statistics-snapshot caveats, client-capacity
+  accounting, real blocker and prepared-transaction locks, database/checksum
+  counters, partition/TOAST/vacuum/analyze coverage, separate XID and MultiXact
+  risk, background-writer meanings, WAL/archive/replication/slot metrics, and
+  full-capture `pg_stat_statements` interval analysis. Replaced misleading or
+  invalid SQL and added production guardrails to every query group.
+- Expanded the log checklist with authentication, timeout, recovery conflict,
+  autovacuum/autoanalyze success and failure, exact XID/MultiXact, checkpoint,
+  archive/replication, WAL I/O/crash, storage, lock-table, checksum/base-backup,
+  statistics-collector, and connection-churn paths. Recorded exact
+  restart/reload/session scopes and source-versus-documentation discrepancies.
+- Added the caller/callee, data-structure, contrib/extension, generated-catalog,
+  test, and explicit test-absence boundaries required for a deep engine answer.
+  Independent final audits of SQL/structure, statistics/maintenance, and
+  logging/replication found no remaining page defect.
+- Built the exact pin out of tree under `.wiki-runtime/`, installed its matching
+  `pg_stat_statements` and `pgstattuple` modules, and executed every final fenced
+  SQL statement successfully against an isolated server. The two documented
+  relation placeholders were mapped to local heap and B-tree fixtures. The
+  temporary server was stopped after testing, and `raw/postgres-12/` remained
+  unchanged.
+- Recorded `verified_by_agent: GPT-5 2026-07-21T13:34:54Z`; human
+  `verified: false` and the visible `(unverified)` title remain unchanged.
+  Updated the root and v12 indexes plus the version coverage notes. Full
+  `scripts/wiki_lint` still reports only the same nine pre-existing v19 broken
+  citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
+  v12 checklist or bookkeeping error was added.
