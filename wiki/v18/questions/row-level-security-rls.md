@@ -3,7 +3,7 @@ type: question
 version: 18
 pinned_commit: 6cb307251c5c6261286c1566496920976640108e
 verified: false
-verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-13T18:58:20Z
+verified_by_agent: SWE-1_7-Medium 2026-07-22T13:11:54Z
 ---
 
 # Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 12 (unverified)
@@ -24,6 +24,11 @@ verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-13T18:58:20Z
   - [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12)
   - [Minor-Release First Appearance](#minor-release-first-appearance)
   - [Test Coverage](#test-coverage)
+  - [RLS and the plan cache](#rls-and-the-plan-cache)
+  - [RLS and MultiXact](#rls-and-multixact)
+  - [RLS and aggregation](#rls-and-aggregation)
+  - [Do RLS filter conditions need to be in the query?](#do-rls-filter-conditions-need-to-be-in-the-query)
+  - [Wrapping a function in a subquery to evaluate it once](#wrapping-a-function-in-a-subquery-to-evaluate-it-once)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -33,6 +38,16 @@ verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-13T18:58:20Z
 ## Question
 
 In PostgreSQL 18, how is Row-Level Security (RLS) implemented? What are the possible scalability and/or performance issues? What are all settings related to the feature? List all fixes since PostgreSQL 12.
+
+Follow-up (within the performance discussion): Does the query planning have any special caching for RLS? How does it work? In what scenarios does it not work, and what is the performance overhead of having no cache?
+
+Follow-up (within the performance discussion): For Row-Level Security (RLS) in PostgreSQL 18: Implementation, Scalability and Performance, and Settings, are there any performance implications related to MultiXact?
+
+Follow-up (within the performance discussion): For PostgreSQL 18, the use of RLS can impact aggregation statements. Is there any mitigation?
+
+Follow-up (within the performance discussion): In PostgreSQL 18, do all of the RLS filter conditions need to appear in the query to get good performance — i.e. to help query planning?
+
+Follow-up (within the performance discussion): When an RLS policy (or a query) uses a function — for example JWT helper functions like `auth.uid()` and `auth.jwt()` — does wrapping the call in a subquery, such as writing `(SELECT auth.uid()) = user_id` instead of `auth.uid() = user_id`, help performance by caching the function result so it is evaluated once per query instead of once per row?
 
 Prompt note: the original prompt contained typos, and the user approved correcting the wording before filing.
 
@@ -243,6 +258,62 @@ Extension hook coverage lives in `src/test/modules/test_rls_hooks`. Subscription
 
 No in-tree test grants or revokes policy-role membership after preparing an RLS statement under an unchanged effective role. The existing prepared-plan case changes effective role OIDs, so it does not cover that cache boundary.[rowsecurity.sql#role-plan-invalidation](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L1361-L1385)
 
+### RLS and the plan cache
+
+Yes. PostgreSQL 18 has RLS-aware plan caching, but the cache key is narrower than the full authorization state that actually selects policies or decides bypass.
+
+During rewrite, `get_row_security_policies()` tags `Query.hasRowSecurity` whenever RLS applies or could apply on an environment change (`RLS_NONE_ENV`), and `fireRIRrules()` propagates that flag into subqueries, CTEs, and view-rule actions [rowsecurity.c#RLS_NONE_ENV](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L136-L149) [rewriteHandler.c#hasRowSecurity](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2329-L2330). `extract_query_dependencies()` OR-collects the flag into `CachedPlanSource.dependsOnRLS` [setrefs.c#extract_query_dependencies](../../../raw/postgres-18/src/backend/optimizer/plan/setrefs.c#L3617-L3660) [setrefs.c#dependsOnRLS](../../../raw/postgres-18/src/backend/optimizer/plan/setrefs.c#L3710-L3714). The cached plan source records the effective role OID (`rewriteRoleId`) and the `row_security` value (`rewriteRowSecurity`) at rewrite time; `RevalidateCachedQuery()` invalidates the cached tree when either differs at reuse [plancache.h#RLS-cache-fields](../../../raw/postgres-18/src/include/utils/plancache.h#L122-L133) [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717). The built generic plan is also tagged `planRoleId`; `CheckCachedPlan()` rejects it when the current user OID differs [plancache.c#CheckCachedPlan](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L814-L819).
+
+The simple-validity fast path is unavailable for RLS plans: `CachedPlanAllowsSimpleValidityCheck()` returns false whenever `dependsOnRLS` or `dependsOnRole` is set [plancache.c#simple-validity](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L1473-L1483).
+
+The key does **not** contain the role-membership generation or role attributes that actually decide policy selection and bypass. `has_privs_of_role()` recurses through `pg_auth_members` and `pg_database_owner` membership, `has_bypassrls_privilege()` depends on `SUPERUSER`/`rolbypassrls`, and `check_enable_rls()` uses all of those plus ownership and `FORCE ROW LEVEL SECURITY` [acl.c#roles_is_member_of](../../../raw/postgres-18/src/backend/utils/adt/acl.c#L5133-L5170) [aclchk.c#has_bypassrls_privilege](../../../raw/postgres-18/src/backend/catalog/aclchk.c#L4188-L4205) [rls.c#check_enable_rls](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L51-L132). `InitPlanCache()` registers no callback for those authorization catalogs, so a prepared or PL/pgSQL plan reused under the same effective role can keep a stale policy set or bypass decision after `GRANT`/`REVOKE`, `INHERIT`/`NOINHERIT`, `BYPASSRLS`/`NOBYPASSRLS`, `SUPERUSER`/`NOSUPERUSER`, or `pg_database_owner` membership changes until the plan is invalidated by other means [plancache.c#InitPlanCache](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L141-L156). `DISCARD PLANS` resets the whole cache for the session [discard.c#DISCARD_PLANS](../../../raw/postgres-18/src/backend/commands/discard.c#L27-L41) [plancache.c#ResetPlanCache](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L2297-L2329).
+
+Ad-hoc simple-protocol queries are not cached at all: `exec_simple_query()` re-parses, re-analyzes/rewrites, and re-plans each statement [postgres.c#exec_simple_query](../../../raw/postgres-18/src/backend/tcop/postgres.c#L1190-L1194).
+
+When a cache miss occurs, `RevalidateCachedQuery()` re-runs parse analysis and rewrite, including `get_row_security_policies()` and `add_security_quals()`, and `BuildCachedPlan()` re-runs the planner [plancache.c#reanalyze](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L770-L832) [plancache.c#BuildCachedPlan](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L1071-L1075). For a pool that changes roles, that cost is paid repeatedly.
+
+### RLS and MultiXact
+
+RLS rewrite itself does not create MultiXacts; it only returns `USING`/`WITH CHECK` expression quals [rowsecurity.c#L97-L114](../../../raw/postgres-18/src/backend/rewrite/rowsecurity.c#L97-L114). MultiXact work can appear in two RLS-adjacent paths.
+
+A policy subquery that explicitly locks referenced rows — for example `SELECT ... FOR SHARE` — reaches `ExecLockRows`, which maps `ROW_MARK_SHARE` to `LockTupleShare` and calls `table_tuple_lock` [nodeLockRows.c#L159-L189](../../../raw/postgres-18/src/backend/executor/nodeLockRows.c#L159-L189). `heap_lock_tuple()` then expands an existing MultiXact or creates a new one via `MultiXactIdExpand()`/`MultiXactIdCreate()` when it prepares the tuple's new `xmax` [heapam.c#L5154-L5163](../../../raw/postgres-18/src/backend/access/heap/heapam.c#L5154-L5163) [heapam.c#L5437-L5441](../../../raw/postgres-18/src/backend/access/heap/heapam.c#L5437-L5441). How often that locking subquery runs depends on its sublink shape: a correlated subplan can execute per outer tuple, while an eligible uncorrelated scalar sublink becomes an InitPlan evaluated at most once (see [Wrapping a function in a subquery to evaluate it once](#wrapping-a-function-in-a-subquery-to-evaluate-it-once)).
+
+Foreign-key validation can also fall back from a single bulk query to per-row checks. `RI_Initial_Check()` returns false when RLS is enabled on either participating table and the validating role is not `BYPASSRLS`/owner of all RLS-enabled tables, so `validateForeignKeyConstraint()` scans the referencing table and calls `RI_FKey_check_ins()` for each row [ri_triggers.c#L1587-L1599](../../../raw/postgres-18/src/backend/utils/adt/ri_triggers.c#L1587-L1599) [tablecmds.c#L13727-L13759](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L13727-L13759). Those row checks use `FOR KEY SHARE` when a referenced key is found, producing the same heap tuple-lock/MultiXact path.
+
+Once a MultiXact is created, member lookup first consults a backend-local cache capped at 256 entries; misses read the MultiXact offset and member SLRUs through `SimpleLruReadPage` [multixact.c#L378-L403](../../../raw/postgres-18/src/backend/access/transam/multixact.c#L378-L403) [multixact.c#L1497-L1504](../../../raw/postgres-18/src/backend/access/transam/multixact.c#L1497-L1504).
+
+### RLS and aggregation
+
+Yes. RLS can slow aggregation, but it does so by changing the rows and plan that feed `ExecAgg`, not through a special RLS aggregate executor.
+
+`process_security_barrier_quals()` moves RLS `USING` expressions into `baserestrictinfo` [initsplan.c#process_security_barrier_quals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1655). `ExecAgg` then receives only the tuples that survive those restrictions from its outer subplan [nodeAgg.c#L2230-L2274](../../../raw/postgres-18/src/backend/executor/nodeAgg.c#L2230-L2274). Practical mitigations visible in v18 source are:
+
+1. **Make the predicate cheap and indexable.** Because RLS quals live in `baserestrictinfo`, `match_clause_to_index()` can promote safely-leveled clauses into index quals and `check_index_predicates()` can use them to prove partial-index predicates [indxpath.c#match_clause_to_index](../../../raw/postgres-18/src/backend/optimizer/path/indxpath.c#L2586-L2612) [indxpath.c#check_index_predicates](../../../raw/postgres-18/src/backend/optimizer/path/indxpath.c#L3921-L4059).
+2. **Use partitioning and `enable_partitionwise_aggregate`.** `prune_append_rel_partitions()` consumes `baserestrictinfo`, so an RLS predicate on the partition key can prune partitions before aggregation [partprune.c#prune_append_rel_partitions](../../../raw/postgres-18/src/backend/partitioning/partprune.c#L769-L833). `enable_partitionwise_aggregate` is `PGC_USERSET` (session/transaction scope) and lets the planner consider partitionwise aggregation when grouping sets are absent [guc_tables.c#L951-L960](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L951-L960) [planner.c#L3869-L3874](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L3869-L3874).
+3. **Keep policy functions parallel-safe.** The planner's `max_parallel_hazard()` walk descends into `securityQuals`; a parallel-unsafe policy function disables parallel mode for the aggregate query [planner.c#max_parallel_hazard](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L368-L384) [clauses.c#L721-L741](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c#L721-L741) [nodeFuncs.c#securityQuals-walk](../../../raw/postgres-18/src/backend/nodes/nodeFuncs.c#L2864-L2879).
+4. **Reuse cached plans under a stable role/`row_security` environment.** Prepared statements and PL/pgSQL avoid repeated rewrite and planning when the effective role and `row_security` value do not change (see [RLS and the plan cache](#rls-and-the-plan-cache)).
+5. **Do not use `row_security = off` as a shortcut.** For a non-bypass user it raises an error rather than disabling RLS [rls.c#L120-L132](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L120-L132).
+
+Direct aggregates and grouping operations are rejected in a policy expression itself [parse_agg.c#L409-L413](../../../raw/postgres-18/src/backend/parser/parse_agg.c#L409-L413); a subquery inside the policy can contain an aggregate, but it carries ordinary subquery planning and execution costs.
+
+### Do RLS filter conditions need to be in the query?
+
+No. PostgreSQL 18 already gives the planner every applicable `USING` expression. You do not need to copy the complete effective RLS condition into `WHERE` to make it visible to planning.
+
+`fireRIRrules()` prepends the returned RLS quals to the range-table entry's `securityQuals` [rewriteHandler.c#fireRIRrules](../../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L2242-L2334). `process_security_barrier_quals()` then transfers them into the table's `baserestrictinfo` at successively higher security levels [initsplan.c#process_security_barrier_quals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1655). The planner therefore already uses them for index paths [indxpath.c#match_clause_to_index](../../../raw/postgres-18/src/backend/optimizer/path/indxpath.c#L2586-L2612), partial-index proofs [indxpath.c#check_index_predicates](../../../raw/postgres-18/src/backend/optimizer/path/indxpath.c#L3921-L4059), and partition pruning [partprune.c#prune_append_rel_partitions](../../../raw/postgres-18/src/backend/partitioning/partprune.c#L769-L833).
+
+Restating the complete effective predicate is redundant and can be harmful. User-written `WHERE` quals are distributed at the maximum `qual_security_level` [planner.c#qual_security_level](../../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L828-L836) [initsplan.c#L1498-L1505](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1498-L1505), so a non-leakproof copy of the RLS condition cannot be evaluated before the real RLS clauses. Only genuinely leakproof query filters may be reordered earlier, and `LEAKPROOF` is a superuser-set security property, not a performance hint [create_function.sgml#LEAKPROOF](../../../raw/postgres-18/doc/src/sgml/ref/create_function.sgml#L356-L378) [createplan.c#order_qual_clauses](../../../raw/postgres-18/src/backend/optimizer/plan/createplan.c#L5386-L5470).
+
+### Wrapping a function in a subquery to evaluate it once
+
+Yes, when the unwrapped call would otherwise remain in a repeatedly evaluated filter. Wrapping an uncorrelated function call in a scalar sub-SELECT — `(SELECT auth.uid()) = user_id` instead of `auth.uid() = user_id` — can make PostgreSQL 18 evaluate each generated InitPlan occurrence at most once per query execution.
+
+`(SELECT auth.uid())` is an uncorrelated `EXPR_SUBLINK` with no outer reference. `build_subplan()` creates a new `PARAM_EXEC` parameter for it, marks the subplan as an InitPlan, and replaces that occurrence with the parameter [subselect.c#build_subplan](../../../raw/postgres-18/src/backend/optimizer/plan/subselect.c#L397-L411). At execution time, `ExecEvalParamExec()` runs `ExecSetParamPlan()` only on first demand and then reuses the cached result from `ecxt_param_exec_vals` [execExprInterp.c#L3056-L3070](../../../raw/postgres-18/src/backend/executor/execExprInterp.c#L3056-L3070) [nodeSubplan.c#L1064-L1081](../../../raw/postgres-18/src/backend/executor/nodeSubplan.c#L1064-L1081).
+
+Without the wrapper, a bare `STABLE` or `VOLATILE` function in a filter is not constant-folded at planning time — only `IMMUTABLE` functions are simplified — and `EEOP_FUNCEXPR` invokes the function pointer for each evaluation [clauses.c#L4488-L4500](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c#L4488-L4500) [execExprInterp.c#L928-L939](../../../raw/postgres-18/src/backend/executor/execExprInterp.c#L928-L939). A simple SQL-language wrapper may be inlined, exposing the underlying expression but not adding a cross-row cache [clauses.c#L4523-L4547](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c#L4523-L4547).
+
+Caveats: each written occurrence gets its own parameter, so there is no cross-occurrence memoization; correlated subqueries do not become InitPlans; InitPlans add cost to every path and can mark the plan parallel-unsafe [subselect.c#L2234-L2276](../../../raw/postgres-18/src/backend/optimizer/plan/subselect.c#L2234-L2276); and `auth.uid()`/`auth.jwt()` are not defined in core PostgreSQL 18, so their volatility and semantics cannot be verified from the pinned checkout.
+
 ## Context Reviewed
 
 - Required wiki navigation: [versions](../../versions.md), [wiki index](../../index.md), recent [log](../../log.md), and [v18/index](../index.md).
@@ -253,6 +324,7 @@ No in-tree test grants or revokes policy-role membership after preparing an RLS 
 - Release tracing (2026-07-13): for every listed subject, enumerated same-subject commits across refs, mapped each to its lowest containing `REL_NN_M` tag, and read stamp dates. Rechecked 62,317 commits reachable from the pin and 685 tags; this wording replaces the ambiguous old claim that the whole multi-ref repository contained only 62,317 commits. The five post-fork v18/master pairs and all first-release rows matched the table.
 - Benchmark and test-absence search: `src/bin/pgbench/`, `contrib/intarray/bench/`, `src/interfaces/ecpg/test/performance/`, and `src/test/modules/test_json_parser/` contain no RLS workload; there is no RLS isolation spec; and the RLS SQL/tests/docs contain no timing measurement. Counted 100 actual `CREATE POLICY` statements and zero `\timing`, `EXPLAIN (ANALYZE)`, or `pg_sleep` matches in the core and hook SQL tests.
 - Exact-pin verification: the configured v18 build completed, and the build tree's core regression `check` completed successfully, including `rowsecurity`, MERGE, event-trigger, and surrounding regression groups.
+- Follow-up pass (2026-07-22): rechecked the v18 source for RLS plan-cache membership/attribute boundaries, RLS-adjacent MultiXact paths, aggregation mitigations, policy-qual index/pruning use, and InitPlan behavior for uncorrelated scalar sub-SELECTs.
 
 ## Evidence Map
 
@@ -268,6 +340,11 @@ No in-tree test grants or revokes policy-role membership after preparing an RLS 
 | `row_security` is the only RLS-specific server GUC; it is session/transaction scoped. | [guc_tables.c#row_security](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1696-L1703), [config.sgml#row-security](../../../raw/postgres-18/doc/src/sgml/config.sgml#L9769-L9790) |
 | All 25 in-scope changes have current v18 evidence and verified history provenance. | [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12), [Minor-Release First Appearance](#minor-release-first-appearance), and the history procedure under [Context Reviewed](#context-reviewed). |
 | The checkout measures no RLS overhead; tests verify correctness and plan shape, while docs give qualitative guidance. | [ddl.sgml#RLS-best-performing](../../../raw/postgres-18/doc/src/sgml/ddl.sgml#L2944-L2954), [rowsecurity.sql#EXPLAIN-COSTS-OFF](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L133-L142), [test_rls_hooks.sql#EXPLAIN](../../../raw/postgres-18/src/test/modules/test_rls_hooks/sql/test_rls_hooks.sql#L61-L91) |
+| RLS plan caching is keyed on role OID and `row_security`, not membership/attributes; `DISCARD PLANS` clears it. | [plancache.h#RLS-cache-fields](../../../raw/postgres-18/src/include/utils/plancache.h#L122-L133), [plancache.c#RLS-invalidation](../../../raw/postgres-18/src/backend/utils/cache/plancache.c#L710-L717), [discard.c#DISCARD_PLANS](../../../raw/postgres-18/src/backend/commands/discard.c#L27-L41) |
+| RLS-adjacent MultiXact work can come from policy locking subqueries and FK validation fallback. | [nodeLockRows.c#L159-L189](../../../raw/postgres-18/src/backend/executor/nodeLockRows.c#L159-L189), [ri_triggers.c#L1587-L1599](../../../raw/postgres-18/src/backend/utils/adt/ri_triggers.c#L1587-L1599), [tablecmds.c#L13727-L13759](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L13727-L13759), [multixact.c#L1497-L1504](../../../raw/postgres-18/src/backend/access/transam/multixact.c#L1497-L1504) |
+| RLS affects aggregation by filtering the input to `ExecAgg`; mitigations include indexable predicates, partitionwise aggregate, parallel-safe policies, and plan-cache reuse. | [nodeAgg.c#L2230-L2274](../../../raw/postgres-18/src/backend/executor/nodeAgg.c#L2230-L2274), [indxpath.c#check_index_predicates](../../../raw/postgres-18/src/backend/optimizer/path/indxpath.c#L3921-L4059), [guc_tables.c#L951-L960](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L951-L960), [clauses.c#L721-L741](../../../raw/postgres-18/src/backend/optimizer/util/clauses.c#L721-L741) |
+| RLS `USING` quals do not need to be restated in the query; the planner already uses them for index and pruning decisions. | [initsplan.c#process_security_barrier_quals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1655), [indxpath.c#match_clause_to_index](../../../raw/postgres-18/src/backend/optimizer/path/indxpath.c#L2586-L2612), [partprune.c#prune_append_rel_partitions](../../../raw/postgres-18/src/backend/partitioning/partprune.c#L769-L833), [initsplan.c#L1498-L1505](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1498-L1505) |
+| An uncorrelated `(SELECT function())` in a policy is evaluated at most once per occurrence as an InitPlan; `STABLE`/`VOLATILE` bare calls are per-evaluation. | [subselect.c#build_subplan](../../../raw/postgres-18/src/backend/optimizer/plan/subselect.c#L397-L411), [execExprInterp.c#L3056-L3070](../../../raw/postgres-18/src/backend/executor/execExprInterp.c#L3056-L3070), [execExprInterp.c#L928-L939](../../../raw/postgres-18/src/backend/executor/execExprInterp.c#L928-L939) |
 
 ## Open Questions
 
