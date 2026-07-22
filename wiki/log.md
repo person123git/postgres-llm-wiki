@@ -4742,3 +4742,18 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `scripts/wiki_lint` still reports only the same nine pre-existing v19 broken
   citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
   v18 RLS or bookkeeping error was added.
+
+## [2026-07-22] follow-up v18 | add PostgreSQL 14 RLS follow-up questions
+
+- Added all five follow-up questions from the PostgreSQL 14 RLS page under
+  `## Question`, using the user-approved PostgreSQL 18-adapted wording.
+- Kept the five existing answer subsections and their v18 citations unchanged
+  because they already answer the follow-ups: plan caching, MultiXact,
+  aggregation, whether RLS filters must be repeated in the query, and
+  scalar-subquery InitPlan behavior.
+- Updated `wiki/index.md`, `wiki/v18/index.md`, and `wiki/versions.md`. Kept
+  `pinned_commit`, `verified`, and `verified_by_agent` unchanged because this
+  prompt-only filing adds no factual claim.
+- Full `scripts/wiki_lint` reports only the same nine pre-existing v19 broken
+  citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
+  v18 RLS or bookkeeping error was added. `git diff --check` passed.

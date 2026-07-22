@@ -38,7 +38,17 @@ verified_by_agent: GPT-5 2026-07-22T14:04:40Z
 
 In PostgreSQL 18, how is Row-Level Security (RLS) implemented? What are the possible scalability and/or performance issues? What are all settings related to the feature? List all fixes since PostgreSQL 12.
 
-Prompt note: the original prompt contained typos, and the user approved correcting the wording before filing.
+Follow-up (within the performance discussion): Does the query planning have any special caching for RLS? How does it work? In what scenarios does it not work, and what is the performance overhead of having no cache?
+
+Follow-up (within the performance discussion): For Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 12, are there any performance implications related to MultiXact?
+
+Follow-up (within the performance discussion): For PostgreSQL 18, the use of RLS can impact aggregation statements. Is there any mitigation?
+
+Follow-up (within the performance discussion): In PostgreSQL 18, do all of the RLS filter conditions need to appear in the query to get good performance — i.e. to help query planning?
+
+Follow-up (within the performance discussion): When an RLS policy (or a query) uses a function — for example JWT helper functions like `auth.uid()` and `auth.jwt()` — does wrapping the call in a subquery, such as writing `(SELECT auth.uid()) = user_id` instead of `auth.uid() = user_id`, help performance by caching the function result so it is evaluated once per query instead of once per row?
+
+Prompt note: the original prompt contained typos, and the user approved correcting the wording before filing. The five follow-up questions are PostgreSQL 18 adaptations of the already grammar-corrected PostgreSQL 14 follow-ups, added with the user's approval.
 
 ## Answer
 
