@@ -2,6 +2,38 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-22] review-fix v14 | RLS function-subquery follow-up
+
+- Rechecked the scalar-function subquery response in [Row-Level Security (RLS)
+  in PostgreSQL 14: Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) against unchanged pin
+  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Corrected the cache boundary to lazy zero-or-once per surviving InitPlan
+  occurrence and execution of its containing outer plan. Added RLS rewrite-copy
+  and planner-occurrence boundaries, fresh `EState` behavior for prepared
+  executions, residual filters, exact index runtime keys, rescans, lossy
+  rechecks, InitPlan cost/parallel effects, and scalar cardinality.
+- Added the planning tradeoffs omitted from the earlier response: bare
+  constant-input `STABLE` helpers can execute during equality estimation and
+  use MCV statistics, while wrapped `PARAM_EXEC` values remain unknown and can
+  lose skew-specific estimates or partial-index proofs. Also covered
+  truthfully `VOLATILE` and `IMMUTABLE` semantics, JWT extraction placement,
+  unchanged function privileges/security mode, and unchanged leakproof
+  classification of the enclosing comparison.
+- Exact-pin focused tests instrumented a `STABLE` helper. Five-row residual
+  direct-query and RLS-policy cases produced six bare notices (one planning,
+  five tuple evaluations) versus one wrapped notice; an exact index scan
+  produced two versus one; three rescans produced four versus one; and each
+  prepared execution evaluated its own wrapped occurrence once. A volatile
+  sequence helper changed from `{1,2,3}` bare to `{1,1,1}` wrapped, and a
+  skewed estimate changed from 9,000 rows to 10. Temporary objects were dropped
+  and the isolated server was stopped.
+- Updated `wiki/index.md`, `wiki/v14/index.md`, and `wiki/versions.md`.
+  `verified_by_agent` remains `not yet` because this was a scoped follow-up
+  review; human `verified` remains `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-22] edit v14 | align RLS sub-SELECT follow-up lead with v18
 
 - Scoped wording edit to [Row-Level Security (RLS) in PostgreSQL 14:

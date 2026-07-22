@@ -15,6 +15,20 @@ This page indexes the PostgreSQL versions covered by the wiki.
 ## Coverage Notes
 
 - 2026-07-22: source-reviewed the scalar-function subquery follow-up in
+  [Row-Level Security (RLS) in PostgreSQL 14: Implementation, Scalability and
+  Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md) against unchanged pin
+  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`. Clarified that each surviving
+  uncorrelated scalar sublink is lazy zero-or-once per occurrence and execution
+  of its containing outer plan, not a query-wide function cache. Added RLS
+  rewrite-copy, prepared-execution, residual-filter, runtime-key/rescan,
+  lossy-recheck, equality-selectivity, partial-index, volatility,
+  immutable-folding, expression-placement, privilege/leakproof, and external
+  helper boundaries. Exact-pin direct-query and RLS-policy tests reproduced
+  call-count, prepared-execution, volatile-semantic, and skewed-estimate
+  differences. This scoped follow-up review leaves `verified_by_agent: not yet`;
+  human `verified` remains `false`.
+- 2026-07-22: source-reviewed the scalar-function subquery follow-up in
   [Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance,
   Settings, and Fixes Since PostgreSQL 14
   (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
