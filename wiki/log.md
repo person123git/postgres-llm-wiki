@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-22] edit v14 | align RLS sub-SELECT follow-up lead with v18
+
+- Scoped wording edit to [Row-Level Security (RLS) in PostgreSQL 14:
+  Implementation, Scalability and Performance, and Settings
+  (unverified)](v14/questions/row-level-security-rls.md): changed the
+  `### Wrapping a function in a subquery to evaluate it once` lead from
+  "Yes, when..." to "Sometimes. A scalar subquery can turn one textual
+  occurrence into a lazily evaluated InitPlan, but this is not a general
+  function-result cache and may add work without reducing calls." The
+  mechanism, caveats, and source citations in the rest of the section were
+  left unchanged and remain tied to the v14 pinned commit
+  `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`.
+- Reset `verified_by_agent` to `not yet` because this was a prose edit, not a
+  full claim-by-claim re-verification; `verified` remains `false` and the title
+  `(unverified)` is unchanged.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-22] edit v18 | RLS page fixes re-scoped to post-PostgreSQL 14
 
 - Updated [Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 14 (unverified)](v18/questions/row-level-security-rls.md) to list fixes since PostgreSQL 14 instead of PostgreSQL 12.
