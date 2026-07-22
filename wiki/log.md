@@ -4815,3 +4815,32 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   bookkeeping error was added. All 21 v18 hashes are ancestors of the pin,
   the excluded v14 equivalent is an ancestor of `REL_14_0`, the table has 21
   unique rows, and `git diff --check` passed.
+
+## [2026-07-22] review-fix v18 | RLS function-subquery follow-up
+
+- Rechecked the scalar-function subquery response in [Row-Level Security (RLS)
+  in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since
+  PostgreSQL 14
+  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  `6cb307251c5c6261286c1566496920976640108e`.
+- Replaced the broad caching explanation with the exact boundary: each
+  surviving uncorrelated scalar sublink can become a lazy zero-or-one InitPlan
+  per occurrence and execution of its containing outer plan. Added
+  prepared-execution state, rewrite-copy and correlation boundaries,
+  residual-filter versus index runtime-key behavior, lossy rechecks, rescans,
+  equality-selectivity and partial-index tradeoffs, parallel safety,
+  `VOLATILE` semantic changes, `IMMUTABLE` folding, and the external
+  `auth.uid()` / `auth.jwt()` evidence boundary.
+- Exact-pin focused tests reproduced 100 bare residual-filter calls versus one
+  wrapped call, two calls for two wrapped occurrences, one fresh call per
+  force-generic prepared execution, planning-time `IMMUTABLE` folding, changed
+  results for a wrapped `VOLATILE` helper, and a skewed equality estimate of 93
+  rows bare versus 50,000 through `PARAM_EXEC`. Test objects were dropped, the
+  isolated server was stopped, and temporary SQL scripts were removed.
+- Updated the root index, v18 landing page, and version coverage note. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` because this was a scoped follow-up review.
+- Full `scripts/wiki_lint` still reports only the same nine pre-existing v19
+  broken citations to absent
+  `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no v18 RLS or
+  bookkeeping error was added. `git diff --check` passed.
