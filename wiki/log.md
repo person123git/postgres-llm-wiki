@@ -4709,3 +4709,36 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `scripts/wiki_lint` still reports only the same nine pre-existing v19 broken
   citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
   v12 checklist or bookkeeping error was added.
+
+## [2026-07-22] review-fix v18 | RLS implementation, performance, settings, and history
+
+- Rechecked the complete [Row-Level Security (RLS) in PostgreSQL 18:
+  Implementation, Performance, Settings, and Fixes Since PostgreSQL 12
+  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  `6cb307251c5c6261286c1566496920976640108e`.
+- Corrected command-specific policy selection, `checkAsUser` scope, recursion,
+  WCO construction and execution order, cross-partition UPDATE rechecks, RI
+  no-force and error-detail boundaries, COPY/CTAS/TRUNCATE, logical apply,
+  exact DDL lock lifetime, view and role-membership semantics, planner
+  selectivity/cost/security-ordering, and policy-function/InitPlan behavior.
+- Reworked the plan-cache section around the separate relcache, rewritten-query,
+  and generic/custom physical-plan layers. Exact-pin prepared-statement tests
+  reproduced stale same-role results after membership-edge `inherit_option`,
+  `BYPASSRLS`, superuser, and current-database-owner changes; `DISCARD PLANS`
+  made each new authorization state visible. The isolated server was stopped.
+- Corrected the history from 25 to 24 scoped post-v12 changes by removing a
+  test-only commit whose implementation fix predates the boundary. Removed the
+  earlier first-minor-release matrix because the pinned checkout lacks the
+  cross-branch refs and full tag set needed to reproduce it. Removed five
+  carry-over follow-up prompts not established as verbatim v18 user questions,
+  while retaining their source-backed topics in the answer.
+- Built and installed the exact pin under `.wiki-runtime/`. The full core
+  `make check` passed all 231 tests, and the separate `test_rls_hooks`
+  regression passed. Independent implementation, history, and
+  structure/citation audits found no remaining page defect.
+- Recorded `verified_by_agent: GPT-5 2026-07-22T14:04:40Z`; human
+  `verified: false` and the visible `(unverified)` title remain unchanged.
+  Updated the root and v18 indexes plus version coverage. Full
+  `scripts/wiki_lint` still reports only the same nine pre-existing v19 broken
+  citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
+  v18 RLS or bookkeeping error was added.
