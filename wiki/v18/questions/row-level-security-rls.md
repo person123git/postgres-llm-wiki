@@ -3,10 +3,10 @@ type: question
 version: 18
 pinned_commit: 6cb307251c5c6261286c1566496920976640108e
 verified: false
-verified_by_agent: GPT-5 2026-07-22T14:04:40Z
+verified_by_agent: not yet
 ---
 
-# Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 12 (unverified)
+# Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 14 (unverified)
 
 ## Contents
 
@@ -21,7 +21,7 @@ verified_by_agent: GPT-5 2026-07-22T14:04:40Z
   - [Partitions Views COPY and Replication](#partitions-views-copy-and-replication)
   - [Scalability and Performance Issues](#scalability-and-performance-issues)
   - [Settings and Related Surfaces](#settings-and-related-surfaces)
-  - [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12)
+  - [Fixes Since PostgreSQL 14](#fixes-since-postgresql-14)
   - [Test Coverage](#test-coverage)
   - [RLS and the plan cache](#rls-and-the-plan-cache)
   - [RLS and MultiXact](#rls-and-multixact)
@@ -36,11 +36,11 @@ verified_by_agent: GPT-5 2026-07-22T14:04:40Z
 
 ## Question
 
-In PostgreSQL 18, how is Row-Level Security (RLS) implemented? What are the possible scalability and/or performance issues? What are all settings related to the feature? List all fixes since PostgreSQL 12.
+In PostgreSQL 18, how is Row-Level Security (RLS) implemented? What are the possible scalability and/or performance issues? What are all settings related to the feature? List all fixes since PostgreSQL 14.
 
 Follow-up (within the performance discussion): Does the query planning have any special caching for RLS? How does it work? In what scenarios does it not work, and what is the performance overhead of having no cache?
 
-Follow-up (within the performance discussion): For Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 12, are there any performance implications related to MultiXact?
+Follow-up (within the performance discussion): For Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 14, are there any performance implications related to MultiXact?
 
 Follow-up (within the performance discussion): For PostgreSQL 18, the use of RLS can impact aggregation statements. Is there any mitigation?
 
@@ -64,7 +64,7 @@ The most important cache boundary is not an overhead issue but an authorization-
 
 The only RLS-specific server GUC is `row_security`; it is `PGC_USERSET`, defaults to `on`, and therefore has session or transaction scope, not reload or restart scope.[guc_tables.c#row_security](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1696-L1703) Direct related surfaces include table and policy DDL, role membership and `BYPASSRLS`, `security_invoker` views, `row_security_active()`, logical-subscription `run_as_owner`, adjacent `plan_cache_mode` and `enable_partitionwise_aggregate`, catalog/`psql` inspection, and dump/restore options.[pg_class.h#relrowsecurity](../../../raw/postgres-18/src/include/catalog/pg_class.h#L110-L114) [pg_policy.h#FormData_pg_policy](../../../raw/postgres-18/src/include/catalog/pg_policy.h#L29-L43) [reloptions.c#view_reloptions](../../../raw/postgres-18/src/backend/access/common/reloptions.c#L132-L148) [rls.c#row_security_active](../../../raw/postgres-18/src/backend/utils/misc/rls.c#L135-L167) [Settings and Related Surfaces](#settings-and-related-surfaces) states the exact scope and restart impact for each.
 
-The reproducible history audit identifies 24 in-scope corrections or RLS-specific operational/performance/documentation changes after the page's PostgreSQL 12 boundary. It excludes `7f1f72c444`, which is test-only in this lineage; its commit message points to an implementation fix before the boundary. See [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12) and [Context Reviewed](#context-reviewed).
+The reproducible history audit identifies 18 in-scope corrections or RLS-specific operational/performance/documentation changes after the page's PostgreSQL 14 boundary. See [Fixes Since PostgreSQL 14](#fixes-since-postgresql-14) and [Context Reviewed](#context-reviewed).
 
 ### Implementation Path
 
@@ -193,20 +193,14 @@ The checkout has no benchmark that quantifies overhead by policy, role, partitio
 
 Relevant ordinary planner and executor GUCs can affect the rewritten query just as they affect a query without RLS. They are not RLS controls; listing every cost, join, parallel, JIT, or partition setting as an RLS setting would therefore be misleading.[initsplan.c#process_security_barrier_quals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1655)
 
-### Fixes Since PostgreSQL 12
+### Fixes Since PostgreSQL 14
 
-The table uses a reproducible scope for “all fixes”: commits after the v13 development stamp (`615cebc94b5`, 2019-07-01) and present at the pinned v18 commit that correct RLS enforcement, RLS-aware dump/restore, policy-object metadata, or behavioral RLS documentation. It includes the RLS-specific pg_dump scalability improvement and the `run_as_owner` table-sync correction because the latter changes which role reaches `check_enable_rls()`.[pg_dump.c#getPolicies](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4124-L4258) [tablesync.c#initial-copy-user](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c#L1511-L1547) It excludes independent feature additions (covered in the implementation/settings sections), pure refactors, cosmetic message/example edits, tab completion, test-only commits, and generic WCO or planner fixes with no demonstrated RLS effect. The `Kind` column separates correctness, security, documentation, operational, and performance work.
+The table uses a reproducible scope for “all fixes”: commits after the v15 development stamp (`596b5af1d367`, 2021-06-28) and present at the pinned v18 commit that correct RLS enforcement, RLS-aware dump/restore, policy-object metadata, or behavioral RLS documentation. It includes the RLS-specific pg_dump scalability improvement and the `run_as_owner` table-sync correction because the latter changes which role reaches `check_enable_rls()`.[pg_dump.c#getPolicies](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4124-L4258) [tablesync.c#initial-copy-user](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c#L1511-L1547) It excludes independent feature additions (covered in the implementation/settings sections), pure refactors, cosmetic message/example edits, tab completion, test-only commits, and generic WCO or planner fixes with no demonstrated RLS effect. The `Kind` column separates correctness, security, documentation, operational, and performance work.
 
-All 24 hashes exist, their subjects agree with the table summaries, they are ancestors of `6cb307251c`, and they descend from `615cebc94b5`. The verification procedure and results are recorded under [Context Reviewed](#context-reviewed).
+All 18 hashes exist, their subjects agree with the table summaries, they are ancestors of `6cb307251c`, and they descend from `596b5af1d367`. The verification procedure and results are recorded under [Context Reviewed](#context-reviewed).
 
 | Commit | Kind | Area | Change and current v18 evidence |
 |---|---|---|---|
-| `5102f39440f` | Operational fix | pg_dump order | Stabilized output for same-named policies on different tables by adding table name to policy sorting.[pg_dump_sort.c#policy-order](../../../raw/postgres-18/src/bin/pg_dump/pg_dump_sort.c#L347-L365) |
-| `f31364676d` | Operational fix | pg_dump comments | Added previously omitted dumping of comments on RLS policy objects; TAP coverage checks the comment.[pg_dump.c#dumpPolicy](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4318-L4405) [002_pg_dump.pl#policy-comments](../../../raw/postgres-18/src/bin/pg_dump/t/002_pg_dump.pl#L1924-L1941) |
-| `e55f718fc4` | Correctness fix | Relcache memory | Removed `RelationBuildRowSecurity()` leaks during repeated relcache rebuilds; current code owns the descriptor in a dedicated context and frees parse strings.[policy.c#RelationBuildRowSecurity](../../../raw/postgres-18/src/backend/commands/policy.c#L192-L322) |
-| `d907bd0543` | Correctness fix | `BYPASSRLS` administration | Narrowed the old over-broad restriction so ordinary changes to an existing `BYPASSRLS` role, such as its own password, follow normal rules; only changing the attribute requires the actor to have it.[user.c#AlterRole-BYPASSRLS](../../../raw/postgres-18/src/backend/commands/user.c#L769-L817) |
-| `d21fca0843` | Correctness fix | `DROP OWNED BY` with duplicate policy roles | Prevented tuple-self-update/assertion failures by removing every duplicate role OID occurrence.[policy.c#RemoveRoleFromObjectPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L415-L560) [rowsecurity.sql#duplicate-polroles](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L2132-L2162) |
-| `5a0f1c8c01` | Correctness fix | Policy role removal | Removed needless relation-open and ownership failure cases from `RemoveRoleFromObjectPolicy()`.[policy.c#RemoveRoleFromObjectPolicy](../../../raw/postgres-18/src/backend/commands/policy.c#L415-L560) |
 | `bd3611db5a` | Performance improvement | pg_dump policy loading | Replaced per-table policy queries with one query for dumpable tables.[pg_dump.c#getPolicies](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4124-L4258) |
 | `3e6e86abca0` | Safety fix | pg_dump policy expressions | Restricted `getPolicies()` server-side before calling `pg_get_expr()`, avoiding expression deparse for tables pg_dump did not lock.[pg_dump.c#getPolicies-filter](../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L4160-L4233) |
 | `a2ab9c06ea` | Security hardening | Logical replication | Added ACL/RLS rejection so logical apply cannot circumvent target-table RLS. Later role-selection changes mean v18 checks the current action role, not invariably the subscription owner.[worker.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/worker.c#L2351-L2381) [tablesync.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c#L1511-L1547) |
@@ -305,7 +299,7 @@ Each textual occurrence gets its own parameter, so there is no cross-occurrence 
 - Build and extension boundary: confirmed that `pg_policy.h` feeds Make and Meson `genbki.pl` generation of `pg_policy_d.h` and `postgres.bki`; checked reverse catalog-header users in policy, table DDL, dependency/object-address, and event-trigger code. Whole-tree hook assignment finds only `test_rls_hooks`; the v18 `contrib` tree contains no hook consumer.
 - Exact-pin execution (2026-07-22): configured, built, and installed commit `6cb307251c5c6261286c1566496920976640108e` under `.wiki-runtime/`. The full core `make check` passed all 231 regression tests, and the separate `test_rls_hooks` regression passed. The temporary server used for focused checks was stopped.
 - Plan-cache reproduction (2026-07-22): prepared no-parameter RLS statements under one unchanged effective-role OID. After revoking an inherited policy role, the cached result remained one row and changed to zero after `DISCARD PLANS`. Changing a membership edge from `WITH INHERIT FALSE` to true remained zero, then became one after discard. Granting `BYPASSRLS`, granting superuser, and changing current-database ownership to that same role each remained zero before discard and became one after discard. The test restored database ownership and role attributes before cleanup.
-- History scope and completeness (2026-07-22): searched the 62,317 commits reachable from the pin across core RLS paths, regression/TAP paths, dump/archiver/sort paths, behavioral docs, commit subjects/bodies, and `-S`/`-G` symbol histories. Rechecked every listed subject and both ancestry bounds. The list now has 24 changes: test-only `7f1f72c444` was removed because its message identifies the implementation fix as `148e632c054`, dated before this page's boundary. The five CVE labels come from the corresponding commit messages. `git describe --tags --match 'REL_18_*' --long` returned `REL_18_3-113-g6cb307251c`.
+- History scope and completeness (2026-07-22): the prior full search of the 62,317 commits reachable from the pin across core RLS paths, regression/TAP paths, dump/archiver/sort paths, behavioral docs, commit subjects/bodies, and `-S`/`-G` symbol histories was re-scoped to post-PostgreSQL 14. The six hashes that are ancestors of `origin/REL_14_STABLE` (`5102f39440f`, `f31364676d`, `e55f718fc4`, `d907bd0543`, `d21fca0843`, `5a0f1c8c01`) were removed; the remaining 18 hashes descend from the v15 development stamp `596b5af1d367` (2021-06-28). Subjects still match the table summaries, each retained hash is an ancestor of `6cb307251c`, and `git merge-base --is-ancestor <hash> origin/REL_14_STABLE` returns non-zero for each retained hash. The five CVE labels come from the corresponding commit messages. `git describe --tags --match 'REL_18_*' --long` returned `REL_18_3-113-g6cb307251c`.
 - Cross-branch release audit boundary: the checkout currently has 111 tags and only the pinned v18 branch refs, not the 685 tags and cross-branch refs recorded by the earlier review. The unrepeatable first-minor-release matrix was removed; this page asserts only commit history reproducible from the current pinned checkout.
 - Benchmark and test-absence search: `src/bin/pgbench/`, `contrib/intarray/bench/`, `src/interfaces/ecpg/test/performance/`, and `src/test/modules/test_json_parser/` contain no RLS workload; there is no RLS isolation spec. The core and hook RLS SQL files contain 101 actual `CREATE POLICY` statements and zero `\timing`, `EXPLAIN (ANALYZE)`, or `pg_sleep` matches.
 - External-helper boundary: a whole-checkout case-insensitive search found no `auth.uid()` or `auth.jwt()` definition or use, so their implementation, volatility, parallel safety, cost, selectivity support, and semantics cannot be checked from PostgreSQL 18 source.
@@ -323,7 +317,7 @@ Each textual occurrence gets its own parameter, so there is no cross-occurrence 
 | WCOs run after BEFORE ROW/generated-value work and before ordinary constraints; routed updates recheck mapped WCOs. | [nodeModifyTable.c#ExecInsert-WCO](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L1057-L1107), [nodeModifyTable.c#cross-partition-ExecInsert](../../../raw/postgres-18/src/backend/executor/nodeModifyTable.c#L2050-L2071), [execPartition.c#ExecInitPartitionInfo-WCO](../../../raw/postgres-18/src/backend/executor/execPartition.c#L550-L614) |
 | Logical replication checks the selected action role and rejects rather than enforcing policies per row. | [worker.c#logical-replication-RLS](../../../raw/postgres-18/src/backend/replication/logical/worker.c#L2351-L2381), [worker.c#apply-action-user](../../../raw/postgres-18/src/backend/replication/logical/worker.c#L2423-L2466), [tablesync.c#initial-copy-user](../../../raw/postgres-18/src/backend/replication/logical/tablesync.c#L1511-L1547) |
 | `row_security` is the only RLS-specific server GUC; it is session/transaction scoped. | [guc_tables.c#row_security](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1696-L1703), [config.sgml#row-security](../../../raw/postgres-18/doc/src/sgml/config.sgml#L9769-L9790) |
-| All 24 in-scope changes have current v18 implementation/test/doc evidence and pin ancestry. | [Fixes Since PostgreSQL 12](#fixes-since-postgresql-12) and the history procedure under [Context Reviewed](#context-reviewed). |
+| All 18 in-scope changes have current v18 implementation/test/doc evidence and pin ancestry. | [Fixes Since PostgreSQL 14](#fixes-since-postgresql-14) and the history procedure under [Context Reviewed](#context-reviewed). |
 | The checkout measures no RLS overhead; tests verify correctness and plan shape, while docs give qualitative guidance. | [ddl.sgml#RLS-best-performing](../../../raw/postgres-18/doc/src/sgml/ddl.sgml#L2944-L2954), [rowsecurity.sql#EXPLAIN-COSTS-OFF](../../../raw/postgres-18/src/test/regress/sql/rowsecurity.sql#L133-L142), [test_rls_hooks.sql#EXPLAIN](../../../raw/postgres-18/src/test/modules/test_rls_hooks/sql/test_rls_hooks.sql#L61-L91) |
 | RLS can add MultiXact work through locking policy subqueries and the FK-validation per-row fallback. | [nodeLockRows.c#ExecLockRows](../../../raw/postgres-18/src/backend/executor/nodeLockRows.c#L159-L189), [heapam.c#compute_new_xmax_infomask](../../../raw/postgres-18/src/backend/access/heap/heapam.c#L5415-L5582), [ri_triggers.c#RI_Initial_Check-RLS](../../../raw/postgres-18/src/backend/utils/adt/ri_triggers.c#L1555-L1610), [tablecmds.c#validateForeignKeyConstraint](../../../raw/postgres-18/src/backend/commands/tablecmds.c#L13727-L13779) |
 | RLS affects aggregation through its input quals and plan choices, not a special aggregate executor. | [initsplan.c#process_security_barrier_quals](../../../raw/postgres-18/src/backend/optimizer/plan/initsplan.c#L1602-L1655), [nodeAgg.c#ExecAgg](../../../raw/postgres-18/src/backend/executor/nodeAgg.c#L2230-L2274), [guc_tables.c#enable_partitionwise_aggregate](../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L951-L960) |

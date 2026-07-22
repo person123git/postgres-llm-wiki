@@ -2,6 +2,13 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-22] edit v18 | RLS page fixes re-scoped to post-PostgreSQL 14
+
+- Updated [Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 14 (unverified)](v18/questions/row-level-security-rls.md) to list fixes since PostgreSQL 14 instead of PostgreSQL 12.
+- Dropped the six pre-v14 commits, updated the boundary to the v15 development stamp `596b5af1d367` (2021-06-28), and reset `verified_by_agent` to `not yet`.
+- Refreshed [wiki/index.md](index.md), [v18/index.md](v18/index.md), and [versions.md](versions.md) summaries to match.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings; `git diff --check` passed.
+
 ## [2026-07-20] review-fix v14 | RLS implementation and all follow-ups
 
 - Rechecked the full [Row-Level Security (RLS) in PostgreSQL 14:
