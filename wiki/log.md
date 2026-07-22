@@ -4764,3 +4764,36 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Full `scripts/wiki_lint` reports only the same nine pre-existing v19 broken
   citations to absent `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no
   v18 RLS or bookkeeping error was added. `git diff --check` passed.
+
+## [2026-07-22] review-fix v18 | RLS fixes since PostgreSQL 14
+
+- Re-audited the fixes history in [Row-Level Security (RLS) in PostgreSQL 18:
+  Implementation, Performance, Settings, and Fixes Since PostgreSQL 14
+  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  `6cb307251c5c6261286c1566496920976640108e`.
+- Replaced the v15 development stamp with the PostgreSQL 14.0 release as the
+  boundary. Removed `bd3611db5a`, whose equivalent v14 stable-branch commit
+  `a20a9f26cefc` is already an ancestor of `REL_14_0`; added the omitted
+  `f062cddafe`, `5ba4cc3090`, `cffca3665d`, and `0dca5d68d7`. The broad,
+  explicitly stated taxonomy now contains 21 changes.
+- Rechecked every retained commit's subject, parent diff, and ancestry to the
+  v18 pin. Corrected summaries and citations for pg_dump policy loading and
+  extension members, logical replication, partitioned MERGE, COPY
+  inheritance, MERGE policy selection, extended-statistics views,
+  `WHERE CURRENT OF`, cached-plan role propagation, event-trigger metadata,
+  and RLS policy documentation. Distinguished the final five v18
+  stable-branch backpatch hashes from original mainline identities.
+- Corrected the surrounding v18 logical-replication explanation: DML and
+  initial table sync select the `run_as_owner` role before ACL/RLS checks,
+  whereas replicated `TRUNCATE` checks as subscription owner before later
+  table-owner switches that cover only statement triggers.
+- Updated `wiki/index.md`, `wiki/v18/index.md`, and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` because this was a scoped history review, not a
+  full claim-by-claim re-verification.
+- Full `scripts/wiki_lint` still reports only the same nine pre-existing v19
+  broken citations to absent
+  `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no v18 RLS or
+  bookkeeping error was added. All 21 v18 hashes are ancestors of the pin,
+  the excluded v14 equivalent is an ancestor of `REL_14_0`, the table has 21
+  unique rows, and `git diff --check` passed.
