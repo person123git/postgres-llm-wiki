@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: 3aa54433b0cdce48facb610a5b720208cc760654
+pinned_commit: 99e47536bbf1a165f5dc8d504f928821ebc8df6a
 verified: false
 verified_by_agent: not yet
 ---
@@ -14,7 +14,7 @@ verified_by_agent: not yet
 - [Answer](#answer)
 - [Module Layout](#module-layout)
 - [Core Planner Changes (the mechanism)](#core-planner-changes-the-mechanism)
-  - [1. The strategy mask `pgs_mask`](#1-the-strategy-mask-pgsmask)
+  - [1. The strategy mask `pgs_mask`](#1-the-strategy-mask-pgs_mask)
   - [2. Five new planner hooks](#2-five-new-planner-hooks)
   - [3. Per-object extension state](#3-per-object-extension-state)
   - [4. Per-index disabling](#4-per-index-disabling)
@@ -32,19 +32,19 @@ verified_by_agent: not yet
 - [Round-Trip Testing](#round-trip-testing)
 - [Source Commit History](#source-commit-history)
   - [Core planner enabling and fix commits](#core-planner-enabling-and-fix-commits)
-  - [`5883ff30` — Add pg_plan_advice contrib module (2026-03-12, Robert Haas)](#5883ff30--add-pgplanadvice-contrib-module-2026-03-12-robert-haas)
+  - [`5883ff30` — Add pg_plan_advice contrib module (2026-03-12, Robert Haas)](#5883ff30--add-pg_plan_advice-contrib-module-2026-03-12-robert-haas)
   - [`be43c48c` — Initialize variable to placate compiler (2026-03-13, Nathan Bossart; patch by Sami Imseih)](#be43c48c--initialize-variable-to-placate-compiler-2026-03-13-nathan-bossart-patch-by-sami-imseih)
   - [`4f888d0f` — Fix whitespace (2026-03-16, Peter Eisentraut)](#4f888d0f--fix-whitespace-2026-03-16-peter-eisentraut)
   - [`5e72ce24` — Fix failures to accept identifier keywords (2026-03-16, Robert Haas; author Lukas Fittl)](#5e72ce24--fix-failures-to-accept-identifier-keywords-2026-03-16-robert-haas-author-lukas-fittl)
   - [`7560995a` — Fix variable type confusion (2026-03-17, Robert Haas)](#7560995a--fix-variable-type-confusion-2026-03-17-robert-haas)
-  - [`59dcc19b` — Always install pg_plan_advice.h, and in the right place (2026-03-17, Robert Haas; author Zsolt Parragi)](#59dcc19b--always-install-pgplanadviceh-and-in-the-right-place-2026-03-17-robert-haas-author-zsolt-parragi)
+  - [`59dcc19b` — Always install pg_plan_advice.h, and in the right place (2026-03-17, Robert Haas; author Zsolt Parragi)](#59dcc19b--always-install-pg_plan_adviceh-and-in-the-right-place-2026-03-17-robert-haas-author-zsolt-parragi)
   - [`01b02c0e` — Avoid a crash under GEQO (2026-03-17, Robert Haas)](#01b02c0e--avoid-a-crash-under-geqo-2026-03-17-robert-haas)
   - [`b335fe56` — Fix multiple copy-and-paste errors in test case (2026-03-18, Robert Haas; reported by Tom Lane)](#b335fe56--fix-multiple-copy-and-paste-errors-in-test-case-2026-03-18-robert-haas-reported-by-tom-lane)
-  - [`5dcb15e8` — Refactor to invent pgpa_planner_info (2026-03-26, Robert Haas)](#5dcb15e8--refactor-to-invent-pgpaplannerinfo-2026-03-26-robert-haas)
-  - [`6455e55b` — Invent DO_NOT_SCAN(relation_identifier) (2026-03-26, Robert Haas; reviewer Lukas Fittl)](#6455e55b--invent-donotscanrelationidentifier-2026-03-26-robert-haas-reviewer-lukas-fittl)
+  - [`5dcb15e8` — Refactor to invent pgpa_planner_info (2026-03-26, Robert Haas)](#5dcb15e8--refactor-to-invent-pgpa_planner_info-2026-03-26-robert-haas)
+  - [`6455e55b` — Invent DO_NOT_SCAN(relation_identifier) (2026-03-26, Robert Haas; reviewer Lukas Fittl)](#6455e55b--invent-do_not_scanrelation_identifier-2026-03-26-robert-haas-reviewer-lukas-fittl)
   - [`874da8b1` — pgindent (2026-03-26, Robert Haas; reported by Lukas Fittl)](#874da8b1--pgindent-2026-03-26-robert-haas-reported-by-lukas-fittl)
   - [`e2ee9523` — Avoid assertion failure with partitionwise aggregate (2026-03-30, Robert Haas; reported by Alexander Lakhin)](#e2ee9523--avoid-assertion-failure-with-partitionwise-aggregate-2026-03-30-robert-haas-reported-by-alexander-lakhin)
-  - [`0442f1c9` — Add a guc_check_handler to the EXPLAIN extension mechanism (2026-04-06, Robert Haas)](#0442f1c9--add-a-guccheckhandler-to-the-explain-extension-mechanism-2026-04-06-robert-haas)
+  - [`0442f1c9` — Add a guc_check_handler to the EXPLAIN extension mechanism (2026-04-06, Robert Haas)](#0442f1c9--add-a-guc_check_handler-to-the-explain-extension-mechanism-2026-04-06-robert-haas)
   - [`49ce4181` — Improve various new-to-v19 appendStringInfo calls (2026-04-13, David Rowley)](#49ce4181--improve-various-new-to-v19-appendstringinfo-calls-2026-04-13-david-rowley)
   - [`3311ccc3` — Handle non-repeatable TABLESAMPLE scans (2026-04-13, Robert Haas; reported by Alexander Lakhin)](#3311ccc3--handle-non-repeatable-tablesample-scans-2026-04-13-robert-haas-reported-by-alexander-lakhin)
   - [`1faf9dfa` — Add alternatives test to Makefile (2026-04-13, Robert Haas)](#1faf9dfa--add-alternatives-test-to-makefile-2026-04-13-robert-haas)
@@ -53,10 +53,11 @@ verified_by_agent: not yet
   - [`4321dcad` — Fix another unique-semijoin bug (2026-04-17, Robert Haas; reported by Alexander Lakhin)](#4321dcad--fix-another-unique-semijoin-bug-2026-04-17-robert-haas-reported-by-alexander-lakhin)
   - [`228a1f95` — pgindent (2026-04-17, Robert Haas; per buildfarm member koel)](#228a1f95--pgindent-2026-04-17-robert-haas-per-buildfarm-member-koel)
   - [`d3bba041` — Fix a set of typos and grammar issues across the tree (2026-04-21, Michael Paquier)](#d3bba041--fix-a-set-of-typos-and-grammar-issues-across-the-tree-2026-04-21-michael-paquier)
-  - [`b1901e28` — DO_NOT_SCAN is a simple tag, not a generic one (2026-05-29, Robert Haas; reported by Nikita Kalinin)](#b1901e28--donotscan-is-a-simple-tag-not-a-generic-one-2026-05-29-robert-haas-reported-by-nikita-kalinin)
-  - [`89f5f860cc5` — Don't generate FOREIGN_JOIN advice for a single relation (2026-07-02, Robert Haas; author Mahendra Singh Thalor)](#89f5f860cc5--dont-generate-foreignjoin-advice-for-a-single-relation-2026-07-02-robert-haas-author-mahendra-singh-thalor)
+  - [`b1901e28` — DO_NOT_SCAN is a simple tag, not a generic one (2026-05-29, Robert Haas; reported by Nikita Kalinin)](#b1901e28--do_not_scan-is-a-simple-tag-not-a-generic-one-2026-05-29-robert-haas-reported-by-nikita-kalinin)
+  - [`89f5f860cc5` — Don't generate FOREIGN_JOIN advice for a single relation (2026-07-02, Robert Haas; author Mahendra Singh Thalor)](#89f5f860cc5--dont-generate-foreign_join-advice-for-a-single-relation-2026-07-02-robert-haas-author-mahendra-singh-thalor)
   - [`ea203d371de` — pgindent fix for commit 53e6f51ee (2026-07-03, Robert Haas)](#ea203d371de--pgindent-fix-for-commit-53e6f51ee-2026-07-03-robert-haas)
-  - [`da8889ccd7e` — Use PG_MODULE_MAGIC_EXT in newly introduced modules (2026-07-06, Robert Haas; author Andreas Karlsson)](#da8889ccd7e--use-pgmodulemagicext-in-newly-introduced-modules-2026-07-06-robert-haas-author-andreas-karlsson)
+  - [`da8889ccd7e` — Use PG_MODULE_MAGIC_EXT in newly introduced modules (2026-07-06, Robert Haas; author Andreas Karlsson)](#da8889ccd7e--use-pg_module_magic_ext-in-newly-introduced-modules-2026-07-06-robert-haas-author-andreas-karlsson)
+  - [`dfde93581dc` — Fix parsing of underscores in pg_plan_advice occurrence numbers (2026-07-19, Daniel Gustafsson; author Chao Li)](#dfde93581dc--fix-parsing-of-underscores-in-pg_plan_advice-occurrence-numbers-2026-07-19-daniel-gustafsson-author-chao-li)
   - [Test, documentation, and build-tooling support commits](#test-documentation-and-build-tooling-support-commits)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
@@ -77,7 +78,7 @@ The module is mostly a front end. The main control mechanism lives in the core p
 
 A guiding rule is that advice only ever *removes* a `pgs_mask` strategy; it never sets a bit the `enable_*` GUCs left off [pgpa_planner.c#joinrel-clear-bits](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L900-L933) [pgpa_planner.c#join-path-clear-bits](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L1137-L1149) [pgpa_planner.c#scan-clear-bits](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L1845-L1858). It can still deliberately force a cost-disfavored plan by removing cheaper alternatives; the explicit non-goal is forcing plans rejected for reasons other than cost [README#goals](../../../raw/postgres-19/contrib/pg_plan_advice/README#L6-L17) [README#bad-advice](../../../raw/postgres-19/contrib/pg_plan_advice/README#L42-L49). Another rule is "no inference from absence": removing a piece of advice only ever widens the planner's freedom, so every constraint must be stated explicitly [README#Advice-Completeness](../../../raw/postgres-19/contrib/pg_plan_advice/README#L191-L202).
 
-The feature's visible module landed in 25 commits that touched `contrib/pg_plan_advice/` (2026-03-12 through 2026-07-06), but the complete scoped source history also includes 20 core planner foundation/enabling/fix commits and test/doc support commits. Those are separated under [Source Commit History](#source-commit-history).
+The feature's visible module landed in 26 commits that touched `contrib/pg_plan_advice/` (2026-03-12 through 2026-07-19), but the complete scoped source history also includes 20 core planner foundation/enabling/fix commits and test/doc support commits. Those are separated under [Source Commit History](#source-commit-history).
 
 ## Module Layout
 
@@ -145,6 +146,8 @@ A target is a relation identifier, an *ordered* sublist `( ... )`, or an *unorde
 ### Relation identifiers
 
 The hard part is naming exactly the right relation. The canonical form is `alias_name#occurrence_number/partition_schema.partition_name@plan_name`, where every component except the alias is optional and the punctuation is dropped when a component is omitted [README#Relation-Identifiers](../../../raw/postgres-19/contrib/pg_plan_advice/README#L51-L79) [pgpa_identifier.h#pgpa_identifier](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_identifier.h#L19-L26). The occurrence number disambiguates the same alias used twice in one subquery; `@plan_name` disambiguates the same alias across subqueries (it is omitted for the top-level `PlannerInfo`); `/schema.name` names a specific partition child [README#identifier-rules](../../../raw/postgres-19/contrib/pg_plan_advice/README#L66-L79).
+
+Occurrence numbers accept underscores only as separators between decimal digits, so `x#1_0` means occurrence 10. The scanner converts the token with `pg_strtoint32_safe()`, reports an integer-range error for values outside `int32`, and has a separate trailing-junk error for forms such as `x#1_0_` [pgpa_scanner.l#occurrence-integers](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_scanner.l#L83-L85) [pgpa_scanner.l#integer-conversion](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_scanner.l#L139-L154). The syntax regression covers the accepted separator, the trailing-underscore failure, and an out-of-range value [syntax.sql#occurrence-number-cases](../../../raw/postgres-19/contrib/pg_plan_advice/sql/syntax.sql#L14-L44).
 
 ### What each tag family means
 
@@ -244,7 +247,7 @@ The module's contract is round-trip safety: advice generated from a plan must re
 
 ## Source Commit History
 
-This history has three scopes. First are the 20 same-checkout core planner foundation, enabling, and fix commits that created or repaired infrastructure `pg_plan_advice` uses directly. Second are all 25 commits that touched `contrib/pg_plan_advice/`. Third are the test, docs, and build-tooling support commits that mention or change `pg_plan_advice` surfaces outside the module directory. Commit subjects and bodies are taken from the pinned `raw/postgres-19/` git history. Dates are author dates.
+This history has three scopes. First are the 20 same-checkout core planner foundation, enabling, and fix commits that created or repaired infrastructure `pg_plan_advice` uses directly. Second are all 26 commits that touched `contrib/pg_plan_advice/`. Third are the test, docs, and build-tooling support commits that mention or change `pg_plan_advice` surfaces outside the module directory. Commit subjects and bodies are taken from the pinned `raw/postgres-19/` git history. Dates are author dates.
 
 ### Core planner enabling and fix commits
 
@@ -269,7 +272,7 @@ This history has three scopes. First are the 20 same-checkout core planner found
 - `47c110f7` — Respect `disabled_nodes` in `fix_alternative_subplan` (2026-03-20, Robert Haas). Alternative subplans now carry and compare the disabled-node count, which matters for advice around alternative subplan selection [primnodes.h#SubPlan.disabled_nodes](../../../raw/postgres-19/src/include/nodes/primnodes.h#L1073-L1111) [setrefs.c#fix_alternative_subplan](../../../raw/postgres-19/src/backend/optimizer/plan/setrefs.c#L2235-L2268).
 - `26255a32` — Add an `alternative_plan_name` field to `PlannerInfo` (2026-03-26, Robert Haas). This lets advice relate alternative planning roots for `MinMaxAggPath` and hashed subplans back to their original plan names [pathnodes.h#alternative_plan_name](../../../raw/postgres-19/src/include/nodes/pathnodes.h#L323-L333).
 
-The 25 direct module commits are:
+The 26 direct module commits are:
 
 ### `5883ff30` — Add pg_plan_advice contrib module (2026-03-12, Robert Haas)
 
@@ -371,6 +374,10 @@ Mechanical reindentation of the `pgpa_scan.c` change from the preceding FOREIGN_
 
 Tree-wide cleanup, backpatched through 19: the newly added modules had used the older `PG_MODULE_MAGIC` macro. This switches `pg_plan_advice` — and its sibling `pg_stash_advice`, plus the `pgrepack` output plugin — to `PG_MODULE_MAGIC_EXT`, which records the module name and version [pg_plan_advice.c#module-magic](../../../raw/postgres-19/contrib/pg_plan_advice/pg_plan_advice.c#L31-L34).
 
+### `dfde93581dc` — Fix parsing of underscores in pg_plan_advice occurrence numbers (2026-07-19, Daniel Gustafsson; author Chao Li)
+
+The lexer already recognized underscores as decimal digit separators, but `strtoint()` did not consume them, so valid-looking advice such as `SEQ_SCAN(x#1_0)` failed. This commit switches the conversion to `pg_strtoint32_safe()`, adds an explicit trailing-junk rule, and adds accepted, malformed, and out-of-range regression cases [pgpa_scanner.l#integer-conversion](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_scanner.l#L83-L85) [pgpa_scanner.l#integer-errors](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_scanner.l#L139-L154) [syntax.sql#occurrence-number-cases](../../../raw/postgres-19/contrib/pg_plan_advice/sql/syntax.sql#L14-L44).
+
 ### Test, documentation, and build-tooling support commits
 
 - `e0e4c132` — Test `pg_plan_advice` using a new `test_plan_advice` module (2026-03-17, Robert Haas). This added the round-trip test harness that replans queries with generated advice [test_plan_advice.c#purpose](../../../raw/postgres-19/src/test/modules/test_plan_advice/test_plan_advice.c#L3-L17).
@@ -390,8 +397,9 @@ Tree-wide cleanup, backpatched through 19: the newly added modules had used the 
 - `src/test/modules/test_plan_advice/test_plan_advice.c`, the `contrib` `sql/` and `expected/` regression files (including `prepared`), and the `Makefile` `REGRESS` list.
 - Core plan-cache policy in `src/backend/utils/cache/plancache.c` (`choose_custom_plan`) for the prepared-statement interaction.
 - Same-checkout docs in `doc/src/sgml/pgplanadvice.sgml`.
-- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned `REL_19_STABLE` commit `3aa54433b0cdce48facb610a5b720208cc760654`. The newest module commit remains `da8889ccd7e` (2026-07-06). In the `cdae794a..01c544e1` repin range, three commits touched `contrib/pg_plan_advice/`: the behavioral fix `89f5f860cc5` (FOREIGN_JOIN single-relation), its `ea203d371de` pgindent follow-up, and the tree-wide `da8889ccd7e` (`PG_MODULE_MAGIC_EXT`); all three are added to the direct-module list above. None of the 12 commits in `01c544e1..8055e337` touched `contrib/pg_plan_advice/`, its docs/tests, or the core planner files used by this page.
+- Full `git log` of `contrib/pg_plan_advice/`, `doc/src/sgml/pgplanadvice.sgml`, `src/test/modules/test_plan_advice`, and the core planner files listed in [Source Commit History](#source-commit-history) on the pinned `REL_19_STABLE` commit `99e47536bbf1a165f5dc8d504f928821ebc8df6a`. The newest module commit is `dfde93581dc` (2026-07-19). In the `cdae794a..01c544e1` repin range, three commits touched `contrib/pg_plan_advice/`: the behavioral fix `89f5f860cc5` (FOREIGN_JOIN single-relation), its `ea203d371de` pgindent follow-up, and the tree-wide `da8889ccd7e` (`PG_MODULE_MAGIC_EXT`); all three are added to the direct-module list above. None of the 12 commits in `01c544e1..8055e337` touched `contrib/pg_plan_advice/`, its docs/tests, or the core planner files used by this page.
 - Repin range `8055e337..3aa54433`: reviewed all 31 commits and changed paths. No commit touched `contrib/pg_plan_advice/`, its documentation or tests, or any core planner infrastructure file cited by this page. The range's generic planner fix `aae47813a14` changes only `analyzejoins.c` and its regression test, outside this page's direct-infrastructure history. The 20-core/25-module/support history and behavioral claims therefore remain unchanged, and all 217 existing source ranges remained content-identical at the same lines.
+- Repin range `3aa54433..99e47536`: reviewed all 52 commits and changed paths. `dfde93581dc` is the only direct `pg_plan_advice` commit and raises the module count from 25 to 26; it fixes underscore-separated occurrence numbers and adds regression coverage. `72457f1df80` touches `planner.c` outside the `pgs_mask` initialization and hook boundaries used here. `4d529d77f8f` changes only `pg_stash_advice` message style, and `99e47536bbf` changes logical-decoding activation; both are outside this page's commit-history scope. The 20 core and eight support commits remain unchanged.
 - 2026-07-09 repin: upstream `master` had branched to `20devel` and the `REL_19_STABLE` branch was created, so `raw/postgres-19/` was repinned from the former post-`REL_19_BETA1` `master` pin `cdae794a` to the `REL_19_STABLE` tip `01c544e1` (a clean forward move; the old pin is an ancestor of `REL_19_STABLE`). Refreshed shifted `pg_plan_advice.c`/core-planner line anchors, grew the direct-module list from 22 to 25 (50 to 53 counting core and support), and reset `verified_by_agent` to `not yet` because a repin is not a claim-by-claim re-verification.
 - 2026-06-26 claim review against the unchanged pin: rechecked the cited source ranges, direct module commit list, support commit list, core planner commit list, GUC/load scopes, prepared-plan regression evidence, and `pg_stash_advice` advisor integration. The only content correction found was the `91f33a2a` commit date (`2026-03-09`, not `2026-03-10`); the stale `pg_stash_advice` Related Pages cross-reference was replaced with direct source citations.
 - 2026-06-29 commit-history review: the `raw/postgres-19/` checkout had been left at the prior pin `9a60f295` (which lacks `cdae794a`), so it was fetched from upstream `master` and checked out at the declared pin `cdae794af31b3e9cfc323fc654292d86fa746f77`. Re-verified all 50 listed commits (20 core, 22 module, 8 support) for hash, subject, author, and ancestry, and confirmed the exact 22-commit `contrib/pg_plan_advice/` completeness and the unchanged-since-`REL_19_BETA1` claim against the pin. Corrected the `47c110f7` date to its author date `2026-03-20` (the list uses author dates) and tightened the `b3a95566` repin-range note.
@@ -413,6 +421,7 @@ Tree-wide cleanup, backpatched through 19: the newly added modules had used the 
 | `pg_stash_advice` feeds saved advice through the advisor hook | [pg_stash_advice.h#L4-L11](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.h#L4-L11) [pg_stash_advice.c#L141-L145](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c#L141-L145) [pg_stash_advice.c#L153-L211](../../../raw/postgres-19/contrib/pg_stash_advice/pg_stash_advice.c#L153-L211) |
 | Tag enum (20 tags) | [pgpa_ast.h#L80-L102](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_ast.h#L80-L102) |
 | Relation identifier form | [README#L51-L79](../../../raw/postgres-19/contrib/pg_plan_advice/README#L51-L79) [pgpa_identifier.h#L19-L26](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_identifier.h#L19-L26) |
+| Occurrence-number underscore parsing and errors | [pgpa_scanner.l#L83-L85](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_scanner.l#L83-L85) [pgpa_scanner.l#L139-L154](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_scanner.l#L139-L154) [syntax.sql#L14-L44](../../../raw/postgres-19/contrib/pg_plan_advice/sql/syntax.sql#L14-L44) |
 | Generation triggers and flow (walk + render) | [pgpa_planner.c#L211-L221](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L211-L221) [pgpa_planner.c#L299-L398](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L299-L398) [pg_plan_advice.c#L244-L254](../../../raw/postgres-19/contrib/pg_plan_advice/pg_plan_advice.c#L244-L254) [pgpa_output.c#L79-L164](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_output.c#L79-L164) |
 | Enforcement via scan/joinrel/join-path hooks | [pgpa_planner.c#L403-L622](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L403-L622) |
 | `pgs_mask` helpers only clear bits | [pgpa_planner.c#L900-L933](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L900-L933) [pgpa_planner.c#L1137-L1149](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L1137-L1149) [pgpa_planner.c#L1845-L1858](../../../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L1845-L1858) |

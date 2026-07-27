@@ -2,6 +2,36 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-27] repin v19 | review 52 REL_19_STABLE commits through 99e47536
+
+- Fetched `REL_19_STABLE` explicitly because the source checkout's configured
+  fetch refspec covered only `master`. Repinned PostgreSQL 19 from
+  `3aa54433b0cdce48facb610a5b720208cc760654` to
+  `99e47536bbf1a165f5dc8d504f928821ebc8df6a`, a clean 52-commit fast-forward;
+  the pinned source still identifies itself as PostgreSQL 19beta2.
+- Reviewed every commit and changed path in the range. Updated
+  [pg_plan_advice: Planner-control semantics, validation, and feature history
+  (unverified)](v19/questions/pg-plan-advice.md) for underscore-separated
+  occurrence numbers and its 26th direct module commit.
+- Updated [REPACK command: mechanics and all 50 feature commits through
+  PostgreSQL 19beta2 (unverified)](v19/questions/repack-command.md) for the
+  partitioned-table index-resolution refactor and corrected worker LSN debug
+  format, plus the final concurrent logical-decoding activation race fix. The
+  REPACK feature history now contains 50 commits.
+- Updated [PostgreSQL 19 autovacuum parallelism, scoring, and visibility-map
+  changes (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md)
+  for unconditional rejection of a wrong visibility-map buffer. The reviewed
+  commits did not change the page's parallel-vacuum, scoring, or on-access
+  visibility-map algorithms.
+- Repinned and refreshed the v19 codebase navigation guide, version landing
+  page, global index, and version manifest. Correct-branch fetching also
+  restored the previously missing `012_vm_consistency.pl` evidence file, and
+  current line citations were refreshed where the new source shifted them.
+- `verified_by_agent` remains `not yet` on all affected content because this
+  was a scoped repin audit, not a complete claim-by-claim re-verification.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-22] review-fix v14 | RLS function-subquery follow-up
 
 - Rechecked the scalar-function subquery response in [Row-Level Security (RLS)

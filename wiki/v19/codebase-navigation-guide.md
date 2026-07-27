@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: 3aa54433b0cdce48facb610a5b720208cc760654
+pinned_commit: 99e47536bbf1a165f5dc8d504f928821ebc8df6a
 verified: false
 verified_by_agent: not yet
 ---
@@ -63,10 +63,10 @@ Keep these structs open when tracing behavior:
 
 | Structure | Why it matters |
 |---|---|
-| `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207). |
+| `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2183-L2206). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-19/src/include/nodes/plannodes.h#L59-L135). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-19/src/include/nodes/pathnodes.h#L168-L245) [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095) [pathnodes.h#Path](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1964-L2005). |
-| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L58) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L691-L786) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1196-L1266). |
+| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L58) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L690-L785) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265). |
 | `RelationData`, `TableAmRoutine`, and `IndexAmRoutine` | Relation cache state points at table and index access-method callback tables [rel.h#RelationData](../../raw/postgres-19/src/include/utils/rel.h#L55-L135) [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420) [amapi.h#IndexAmRoutine](../../raw/postgres-19/src/include/access/amapi.h#L233-L320). |
 | `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-19/src/include/nodes/memnodes.h#L117-L134). |
 
@@ -91,6 +91,7 @@ Use `src/test/Makefile` to choose between Perl/TAP, postmaster, regression, isol
 - Generated and test surfaces: backend generated-header rules, catalog generation rules, catalog headers, regression tests, isolation tests, test modules, and SGML file lists.
 - Repin range `01c544e1..8055e337`: reviewed all 12 commits and changed paths against this guide. The `FOR PORTION OF` rewriter fix shifted `QueryRewrite()` by eight lines without changing this page's routing claim; the tree-wide `pg_always_inline` rename touched executor/storage files but not the guide's described boundaries.
 - Repin range `8055e337..3aa54433`: reviewed all 31 commits and changed paths against this guide. The range stamps the source as `19beta2` in both supported build systems [configure.ac#AC_INIT](../../raw/postgres-19/configure.ac#L20) [meson.build#project](../../raw/postgres-19/meson.build#L9-L12) and adds a VM-consistency TAP test under the existing `pg_combinebackup` test tree [012_vm_consistency.pl#purpose](../../raw/postgres-19/src/bin/pg_combinebackup/t/012_vm_consistency.pl#L1-L6). Neither changes the guide's subsystem ownership map. All 58 existing source ranges remained content-identical at the same lines.
+- Repin range `3aa54433..99e47536`: reviewed all 52 commits and changed paths against this guide. The range adds no top-level source family and does not alter the parse/analyze/rewrite/plan/portal/utility routing described here. The `GROUP BY ALL` revert removes one `Query`/`SelectStmt` field, the `FOR PORTION OF` fix removes one executor-state field, the injection-point makefile adds the existing `nbtree` test module to autoconf builds, and the final commit hardens concurrent logical-decoding activation; affected structure anchors were refreshed. PostgreSQL remains stamped `19beta2` on `REL_19_STABLE`.
 
 ## Evidence Map
 
@@ -120,9 +121,9 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 - [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345)
 - [backend/Makefile#generated-headers](../../raw/postgres-19/src/backend/Makefile#L183-L188)
 - [pg_index.h#CATALOG](../../raw/postgres-19/src/include/catalog/pg_index.h#L31-L78)
-- [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2184-L2207)
+- [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2183-L2206)
 - [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095)
-- [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1196-L1266)
+- [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265)
 - [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420)
 - [amapi.h#IndexAmRoutine](../../raw/postgres-19/src/include/access/amapi.h#L233-L320)
 - [regress/GNUmakefile#targets](../../raw/postgres-19/src/test/regress/GNUmakefile#L36-L103)
