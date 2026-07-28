@@ -2,6 +2,14 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-28] file v12 | B-tree index bloat heuristic
+
+- Filed [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) with the user's prompt restated under `## Question`.
+- Added a `pgstatindex`-backed bloat heuristic using `avg_leaf_density`, the configured `fillfactor`, `empty_pages`, `deleted_pages`, `pg_stat_user_indexes`, and `pg_options_to_table`; includes a guarded SQL example with `statement_timeout` and `lock_timeout`.
+- Tested the SQL on the pinned v12 checkout's isolated server; a healthy default-fillfactor index returned a `bloat_ratio` near zero.
+- Updated `wiki/v12/index.md` and `wiki/index.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings; `git diff --check` passed.
+
 ## [2026-07-28] remove v12 | delete Finding and Prioritizing Bloated B-Tree Indexes for REINDEX
 
 - Removed `wiki/v12/questions/index-bloat-reindex-heuristic.md` per user request.
