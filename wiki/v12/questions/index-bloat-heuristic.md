@@ -16,6 +16,7 @@ verified_by_agent: not yet
   - [The heuristic](#the-heuristic)
   - [SQL example](#sql-example)
   - [How the thresholds work](#how-the-thresholds-work)
+  - [Why 30%](#why-30)
   - [Limits and caveats](#limits-and-caveats)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
@@ -150,6 +151,16 @@ The `i.relpages > 64` predicate keeps the expensive `pgstatindex` scan away from
 
 `idx_scan` from `pg_stat_user_indexes` is not part of the bloat ratio. It is used to order the work: an index with high `wasted_bytes` and high `idx_scan` is a better `REINDEX` target than an equally bloated index that is never scanned.
 
+### Why 30%
+
+PostgreSQL itself does not define a `bloat_ratio` or a 30 % threshold; the value is an operational guardrail, not a constant in the core code. Three source-backed observations justify why 30 % is a reasonable default.
+
+1. The v12 manual describes B-tree bloat operationally as an index that "contains many empty or nearly-empty pages" and recommends periodic `REINDEX` for indexes with mostly empty pages ([reindex.sgml#bloat](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L49-L55)). It also warns that B-trees can keep a page allocated when only a few keys remain, so patterns that delete most but not all keys in each range leave space wasted ([maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L866-L874)). A 30 % `bloat_ratio` means roughly one third of the index bytes are recoverable, which matches the "mostly wasted" intuition in those passages.
+2. The planner already penalizes bloat through the physical page count. `genericcostestimate()` estimates the number of index pages touched as `ceil(numIndexTuples * index->pages / index->tuples)`, so a 30 % larger index for the same tuple count raises the estimated I/O cost of broad scans by roughly the same fraction ([selfuncs.c#genericcostestimate-numIndexPages](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5777-L5780)). `btcostestimate()` also adds a B-tree-only descent charge so that bloated indexes do not look as cheap as unbloated ones when only a single leaf page is expected; the charge is `(tree_height + 1) * 50.0 * cpu_operator_cost` ([selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116)). A 30 % space threshold is therefore a point where the planner's cost model is materially overestimating B-tree work.
+3. A `bloat_ratio` of 0.30 means the index is about 1.43 times the size it needs to be (`1 / (1 - 0.30)`). On a 1 MB index that is only ~430 KB of waste, so the 1 MB minimum avoids noise; on a 1 GB index it is ~300 MB, which is usually worth a `REINDEX`.
+
+Because the threshold is not in the code, a site with abundant sequential I/O or cheap storage can raise it, while a site with tight buffer memory or random-workload latency can lower it.
+
 ### Limits and caveats
 
 - `pgstatindex` is B-tree only. It rejects non-B-tree indexes at the start of `pgstatindex_impl` ([pgstatindex.c#AM-check](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L224-L228)).
@@ -170,6 +181,9 @@ The `i.relpages > 64` predicate keeps the expensive `pgstatindex` scan away from
 - `src/include/catalog/pg_proc.dat` - `pg_options_to_table` function catalog.
 - `src/include/catalog/pg_class.h` - `pg_class` columns (`relpages`, `reloptions`).
 - `src/backend/access/nbtree/nbtsort.c` and `nbtsplitloc.c` - How leaf fillfactor is applied during build and split.
+- `src/backend/utils/adt/selfuncs.c` - Planner cost penalties for bloated indexes (`genericcostestimate` and `btcostestimate`).
+- `doc/src/sgml/ref/reindex.sgml` - Documentation on B-tree bloat and empty/nearly-empty pages.
+- `doc/src/sgml/maintenance.sgml` - `routine-reindex` guidance on B-tree space inefficiency.
 
 ## Evidence Map
 
@@ -186,6 +200,10 @@ The `i.relpages > 64` predicate keeps the expensive `pgstatindex` scan away from
 | `pg_options_to_table` converts a `reloptions` array to name/value rows | [pg_proc.dat#pg_options_to_table](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L3603-L3608) |
 | `pg_class` carries `relpages` and `reloptions` | [pg_class.h#relpages-reltuples](../../../raw/postgres-12/src/include/catalog/pg_class.h#L59-L66), [pg_class.h#reloptions](../../../raw/postgres-12/src/include/catalog/pg_class.h#L133-L134) |
 | Rightmost leaf pages are built/split to the leaf fillfactor | [nbtsort.c#rightmost-build](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L727-L730) |
+|| B-tree bloat is described as "many empty or nearly-empty pages" | [reindex.sgml#bloat](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L49-L55) |
+|| B-trees keep pages allocated when only a few keys remain | [maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L866-L874) |
+|| `genericcostestimate` prorates page work by `index->pages / index->tuples` | [selfuncs.c#genericcostestimate-numIndexPages](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5777-L5780) |
+|| `btcostestimate` adds `(tree_height + 1) * 50.0 * cpu_operator_cost` to penalize bloat | [selfuncs.c#btcostestimate-bloat-charge](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116) |
 
 ## Open Questions
 
@@ -205,6 +223,9 @@ The `i.relpages > 64` predicate keeps the expensive `pgstatindex` scan away from
 - [pg_class.h](../../../raw/postgres-12/src/include/catalog/pg_class.h)
 - [nbtsort.c](../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c)
 - [nbtsplitloc.c](../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c)
+- [selfuncs.c](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c)
+- [reindex.sgml](../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml)
+- [maintenance.sgml](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml)
 
 ## Navigation
 

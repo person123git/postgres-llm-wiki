@@ -2,6 +2,13 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-28] edit v12 | explain 30% bloat threshold
+
+- Extended [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) with a new `### Why 30%` section.
+- Grounds the 30 % `bloat_ratio` threshold in the v12 documentation description of bloat as "many empty or nearly-empty pages" and in the planner cost penalties in `genericcostestimate()` and `btcostestimate()`.
+- Added `selfuncs.c`, `reindex.sgml`, and `maintenance.sgml` to the Context Reviewed, Evidence Map, and Source References sections.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings; `git diff --check` passed.
+
 ## [2026-07-28] file v12 | B-tree index bloat heuristic
 
 - Filed [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) with the user's prompt restated under `## Question`.
