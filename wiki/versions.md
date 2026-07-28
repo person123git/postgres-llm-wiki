@@ -274,9 +274,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   The exact-pin core regression suite passed. Set `verified_by_agent` to
   `GPT-5-6-Sol-Max-Thinking 2026-07-17T15:45:58Z`; human `verified` remains
   `false`.
-- 2026-07-17: completed a full claim-to-source review of [Finding and
-  Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12
-  (unverified)](v12/questions/index-bloat-reindex-heuristic.md) against unchanged
+- 2026-07-17: completed a full claim-to-source review of Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified) against unchanged
   pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Replaced the former
   whole-index, hard-coded-90 density formula with a configured-fillfactor page
   estimator that separates live-leaf shortfall, half-dead pages, and deleted

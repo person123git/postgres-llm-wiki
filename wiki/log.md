@@ -2,6 +2,16 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-28] remove v12 | delete Finding and Prioritizing Bloated B-Tree Indexes for REINDEX
+
+- Removed `wiki/v12/questions/index-bloat-reindex-heuristic.md` per user request.
+- Removed the active page entry from `wiki/v12/index.md`, `wiki/index.md`, and the
+  `pgstatindex-sample-variant-proposal.md` navigation block.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` and
+  `wiki/versions.md` so they refer to the page title as plain text.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-27] repin v19 | review 52 REL_19_STABLE commits through 99e47536
 
 - Fetched `REL_19_STABLE` explicitly because the source checkout's configured
@@ -225,9 +235,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-17] review-fix v12 | B-tree bloat REINDEX heuristic full audit
 
-- Completed a full claim-to-source review of [Finding and Prioritizing Bloated
-  B-Tree Indexes for REINDEX in PostgreSQL 12
-  (unverified)](v12/questions/index-bloat-reindex-heuristic.md) against unchanged
+- Completed a full claim-to-source review of Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified) against unchanged
   pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
 - Corrected the core estimator. The former query multiplied whole-index size by
   a density gap hard-coded against 90, even though density covers live leaves
@@ -3337,7 +3345,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-06-09] research v12 | leaf_fragmentation exclusion rationale
 
-- Added `### Why leaf_fragmentation Is Not in the Priority Score` to [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md), per user follow-up.
+- Added `### Why leaf_fragmentation Is Not in the Priority Score` to Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified), per user follow-up.
 - Five cited reasons: (1) planner adjacency-blindness — `genericcostestimate` prices index page fetches at the tablespace `random_page_cost`, so fragmentation neither raises nor lowers estimated cost; (2) no byte value, incommensurable with the wasted-bytes-times-usage score; (3) metric coarseness — per-page backward-right-link test with no distance/run-length/cache information; (4) narrow, workload-conditional runtime impact via the `_bt_steppage` / `_bt_readnextpage` leaf walk, with the docs claiming only "slightly faster" adjacency; (5) density-triggered sorted rebuilds reset fragmentation for free while split-time `_bt_getbuf(P_NEW)` FSM reuse re-fragments churning indexes.
 - Spot-checked all newly cited ranges against the pinned checkout (`pgstatindex.c` fragment test, `nbtinsert.c` split right-page allocation, `nbtsearch.c` leaf walk, `selfuncs.c` tablespace page-cost fetch, `config.sgml` page-cost constants).
 - Added an `## Open Questions` bullet: no v12-derivable break-even for fragmentation-only rebuilds; page-cost constants are global/per-tablespace, never per index.
@@ -3347,7 +3355,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-06-09] research v12 | post-REINDEX improvement measurement
 
-- Added `### Measuring the Improvement After a REINDEX` to [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md), per user follow-up.
+- Added `### Measuring the Improvement After a REINDEX` to Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified), per user follow-up.
 - Three measurement layers: physical shape (`pg_relation_size` delta, one post-rebuild `pgstatindex` run, plain `EXPLAIN` cost drop), per-index counter rates (`blocks_per_scan` falls while `tuples_per_scan` stays flat as the density-win control), and query level (`EXPLAIN (ANALYZE, BUFFERS)`, `pg_stat_statements` 1.7 windows with selective reset, `track_io_timing` PGC_SUSET scope note).
 - Key v12 trace: per-index cumulative counters survive both REINDEX forms — plain `reindex_index` keeps the index relation and only swaps relfilenode; `index_concurrently_swap` copies `numscans`/tuple/block counters from the old index's collector entry into the new relation's pending stats, flushed at the next `pgstat_report_stat()`. Pending-counter loss at swap time filed under `## Open Questions` as an inference.
 - Added the `wiki_index_reindex_baseline_v12` capture snippet with session-scoped timeouts; extended Evidence Map, Context Reviewed, and Source References.
@@ -3357,7 +3365,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-06-09] answer v12 | bloated-index REINDEX triage heuristic
 
-- Filed [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified)](v12/questions/index-bloat-reindex-heuristic.md).
+- Filed Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12 (unverified).
 - Proposed a three-stage heuristic: Stage 1 shortlists from always-available statistics (`pg_class` size/tuple estimates, `pg_stat_user_tables` churn incl. non-HOT updates, `pg_stat_user_indexes.idx_scan`, `pg_statio_user_indexes`, `pg_relation_size()` `stat()` probes); Stage 2 confirms with gated `pgstatindex` runs (full block walk, `AccessShareLock`, `BAS_BULKREAD` ring); Stage 3 ranks by `est_wasted_bytes * ln(1 + idx_scan)` and executes `REINDEX (CONCURRENTLY)`.
 - Traced `idx_scan` counting to `_bt_first` only (insert-time uniqueness checks via `_bt_doinsert`/`_bt_check_unique` do not count), and the index `pg_class` staleness path through `_bt_vacuum_needs_cleanup` / `btvacuumcleanup` `NULL` return / `lazy_cleanup_index` skip, governed by `vacuum_cleanup_index_scale_factor`.
 - Verified both production SQL snippets' catalogs, views, functions, and GUC scopes against the pinned checkout; tagged them `wiki_index_bloat_shortlist_v12` and `wiki_index_bloat_pgstatindex_v12` with session-scoped timeouts.

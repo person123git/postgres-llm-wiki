@@ -1475,5 +1475,4 @@ heap rows or parent-table bloat
 
 - [PostgreSQL 12 index](../index.md)
 - [How `pgstatindex` Calculates B-Tree Index Statistics in PostgreSQL 12](how-pgstatindex-calculates-information.md)
-- [Finding and Prioritizing Bloated B-Tree Indexes for REINDEX in PostgreSQL 12](index-bloat-reindex-heuristic.md)
 - [PostgreSQL versions](../../versions.md)
