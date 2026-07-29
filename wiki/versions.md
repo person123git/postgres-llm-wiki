@@ -14,6 +14,31 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-29: completed a full corrective review of [A Heuristic to Detect
+  B-Tree Index Bloat in PostgreSQL 12
+  (unverified)](v12/questions/index-bloat-heuristic.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Repaired four
+  malformed `## Evidence Map` rows, a `nbtsplitloc.c`-labelled citation that
+  pointed at `reloptions.c`, a `pg_stat_user_indexes` column claim cited to the
+  schema filter instead of the `pg_stat_all_indexes` definition, and an
+  `idx_scan` column that never reached the query output. Corrected the
+  1.4-to-1.5 overload claim, removed the unsupported `pg_options_to_table`
+  access requirement, and narrowed the planner-overestimate claim to
+  `empty_pages`/`deleted_pages`. Added the `pg_stat_scan_tables` privilege
+  requirement, exact GUC apply scopes, lock-conflict and `BAS_BULKREAD`
+  boundaries, the `relkind` filter that excludes `pgstatindex`-rejecting
+  partitioned parents, the contrib/`genbki.pl` build boundary, the regression
+  coverage gap, and a mandatory `leaf_pages = 0` guard for the `NaN` case that
+  otherwise reports `is_bloated = t`. Documented two systematic false positives
+  with exact-pin measurements: random-key indexes settle at
+  `avg_leaf_density = 64.91` with no deletions, recover to `90.05` under a
+  `REINDEX` whose reclaimed bytes matched the prediction within 1.1 %, and drift
+  back to `67.65`; and `deleted_pages` enter the free space map only at a second
+  VACUUM, after which 430 of 685 were reused with no file growth. Every fenced
+  statement, plus fixture, privilege, and `NaN` tests, ran against an isolated
+  server built from the exact pin; the server was stopped afterwards. Agent
+  verification was recorded as `claude-opus-5-max 2026-07-29T14:57:04Z`; human
+  verification remains false.
 - 2026-07-27: repinned v19 `REL_19_STABLE` from
   `3aa54433b0cdce48facb610a5b720208cc760654` to
   `99e47536bbf1a165f5dc8d504f928821ebc8df6a` (52 new commits; a clean

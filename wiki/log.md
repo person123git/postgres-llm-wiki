@@ -2,6 +2,62 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-29] review-fix v12 | B-tree index bloat heuristic full correction
+
+- Rechecked every claim in [A Heuristic to Detect B-Tree Index Bloat in
+  PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Fixed four defects in the page as filed: four `## Evidence Map` rows started
+  with `|||` and did not render as table rows; a citation labelled
+  `nbtsplitloc.c#leaffillfactor` pointed at `reloptions.c`; the
+  `pg_stat_user_indexes` column claim cited `system_views.sql#L679-L682`, which
+  is only the schema filter, instead of the `pg_stat_all_indexes` definition at
+  `L658-L672`; and `idx_scan` was selected in the CTE but never reached the
+  output, so the stated prioritisation was not actually possible.
+- Corrected three inaccurate claims. The 1.4-to-1.5 update does not change
+  which overload callers use; it redefines both overloads on `_v1_5` entry
+  points and revokes `PUBLIC` `EXECUTE` in favour of `pg_stat_scan_tables`.
+  `pg_options_to_table` does not require special `pg_class` access; a plain
+  non-superuser ran it successfully. The planner is not "materially
+  overestimating B-tree work" at 30 % bloat in general: the pro-rata
+  `numIndexPages` estimate tracks reality for underfilled leaves and
+  overestimates only for `empty_pages`/`deleted_pages`, which carry no entries
+  yet still inflate `index->pages`.
+- Added the missing operational requirements: the `pg_stat_scan_tables`
+  privilege, `PGC_USERSET` scope for `statement_timeout`/`lock_timeout` and
+  `PGC_INTERNAL` for `block_size`, the `AccessShareLock`-only conflict set, the
+  256 KiB `BAS_BULKREAD` scan ring, the `pg_stat_all_indexes`
+  `relkind IN ('r','t','m')` filter that keeps `pgstatindex`-rejecting
+  partitioned parents out of the sweep, the per-transaction statistics
+  snapshot, the contrib/`genbki.pl` build boundary, and the exact regression
+  coverage gap.
+- Added a mandatory `leaf_pages = 0` guard to the SQL. `pgstatindex` emits
+  `NaN` for both ratios there, PostgreSQL sorts `NaN` above every float, and
+  `NaN = NaN` is true, so the previous expression silently reported
+  `bloat_ratio = NaN` with `is_bloated = t` and could not be fixed with
+  `x <> x`. Reproduced on a metapage-only index.
+- Added the two systematic false positives the page lacked, both reproduced on
+  the exact pin: non-rightmost leaf splits divide 50:50, so a 300,000-row
+  random-key index reported `avg_leaf_density = 64.91` and
+  `leaf_fragmentation = 49.96` with no row ever deleted, went to `90.05` after
+  `REINDEX` (2,629,632 bytes reclaimed against a predicted 2,601,188, a 1.1 %
+  under-estimate) and drifted back to `67.65`; and `deleted_pages` reach the
+  free space map only at a second VACUUM, after which 120,000 inserts consumed
+  430 of 685 deleted pages with the file size unchanged at 7,954,432 bytes.
+- Also recorded that VACUUM makes waste visible rather than creating it: after
+  deleting 90 % of rows the index still read `avg_leaf_density = 90.05`, and
+  `VACUUM` dropped it to `9.27` with `leaf_pages` unchanged at 820.
+- Built nothing new: reused the existing out-of-tree 12.2 install under
+  `.wiki-runtime/pg12-install` with its matching `pgstattuple`, ran every
+  fenced statement plus the fixture and privilege tests against an isolated
+  server on a private socket, then stopped the server and removed the scratch
+  SQL files.
+- Recorded `verified_by_agent: claude-opus-5-max 2026-07-29T14:57:04Z`; human
+  `verified` remains `false` and the visible `(unverified)` title is unchanged.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-28] edit v12 | explain 30% bloat threshold
 
 - Extended [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) with a new `### Why 30%` section.
