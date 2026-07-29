@@ -14,6 +14,47 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-29: completed a full corrective review of [PostgreSQL 12 Database
+  Health Checklist (unverified)](v12/questions/database-health-checklist.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Re-resolved and label-checked every citation, now 345.
+  Fixed a `checkpointer.c#ForwardFsyncRequest` label naming a symbol that does
+  not exist in v12 (`ForwardSyncRequest`, whose range also ran past the
+  function), an `analyze.c#do_analyze_rel` label whose range sits in
+  `analyze_rel` and stopped before the partition recursion, two
+  `relation_needs_vacanalyze` ranges that covered only part of the function's
+  header comment, a threshold-decision range that omitted the
+  statistics-unavailable branch, a `monitoring.sgml#pg_stat_all_tables` range
+  cited under the `pg_stat_progress_vacuum` paragraph, a progress-vacuum doc
+  range that stopped inside the `phase` row before the columns the query
+  selects, swapped `auth.c` labels (`ClientAuthentication` pointing into
+  `auth_failed`, `password-failures` pointing at the `no pg_hba.conf entry`
+  block), a `high-availability.sgml#hot_standby_feedback` citation whose lines
+  discuss `pg_last_wal_replay_lsn` instead, a `PGC_SU_BACKEND` range that cut
+  off before the code that ignores a reload in existing backends, a
+  `LogCheckpointEnd` range that cut off before the write/sync duration fields,
+  an `initdb.c` citation that only set the `system_views.sql` path, and a
+  `wait_for_stats` range that started before the function and dropped its
+  terminator. Added the missing evidence for nine replication GUC apply
+  scopes, `data_checksums`, `initdb --data-checksums`, `log_lock_waits`,
+  `log_temp_files`, the `pg_monitor` role grants, the `varsup.c` XID
+  wraparound messages, the `LogCheckpointStart`/`LogCheckpointEnd` message
+  sites, the `exec_simple_query` duration-log site, and
+  `pgstat_recv_recoveryconflict`, which also documents that a dropped-database
+  conflict is deliberately not counted. Corrected "role ownership" to the
+  actual `has_privs_of_role` membership test and the
+  `pg_stat_statements` redaction from "null" to a nulled `queryid` plus an
+  `<insufficient privilege>` text placeholder. An isolated exact-pin primary
+  and streaming standby ran all eleven fenced SQL blocks without error and
+  reproduced the `pg_monitor` progress gate (`pid` and `datname` only), a
+  recovery conflict counted as `confl_snapshot` with its client cancellation,
+  a PID-zero prepared-transaction blocker with its retained relation and
+  transaction locks, lock-wait and deadlock logging with the `deadlocks`
+  counter, temp-file logging with `temp_files`/`temp_bytes`, the v12
+  autovacuum summary's absent WAL field, and the `pg_settings` superuser-only
+  filter. Both servers were stopped and their fixtures left under
+  `.wiki-runtime/`. Agent verification was recorded as
+  `claude-opus-5-max 2026-07-29T16:53:15Z`; human verification remains false.
 - 2026-07-29: completed a full corrective review of [How wal_sender_timeout Is
   Used and What It Impacts in PostgreSQL 12
   (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin

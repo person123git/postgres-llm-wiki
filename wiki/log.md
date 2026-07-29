@@ -2,6 +2,85 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-29] review-fix v12 | database health checklist full review
+
+- Rechecked every claim and every citation in [PostgreSQL 12 Database Health
+  Checklist (unverified)](v12/questions/database-health-checklist.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+  All citations were re-resolved to their pinned files and checked
+  label-against-content; the page now carries 345.
+- Fixed label and range defects. `checkpointer.c#ForwardFsyncRequest` named a
+  symbol that does not exist in v12 (`ForwardSyncRequest`) and its range ran
+  past the function end, so both the label and `L1086-L1159` were corrected in
+  the checklist and the Evidence Map. `analyze.c#do_analyze_rel` labelled a
+  range that sits inside `analyze_rel` and stopped at `L259`, before the
+  `relhassubclass` recursion the claim depends on; it is now
+  `analyze.c#analyze_rel` `L231-L268`. The two `relation_needs_vacanalyze`
+  citations covered only part of the function's header comment (one starting
+  mid-sentence at `L2925`) and now use `L2920-L2956`, while the
+  threshold-decision range was extended to `L3026-L3091` so it includes the
+  branch that skips a table absent from the statistics hash. A
+  `monitoring.sgml#pg_stat_all_tables` range was cited under the
+  `pg_stat_progress_vacuum` paragraph and moved to the per-table reset claim it
+  actually supports, and the progress-vacuum doc range `L3742-L3788` stopped
+  inside the `phase` row, before `heap_blks_*`, `index_vacuum_count`,
+  `max_dead_tuples`, and `num_dead_tuples`; it is now `L3738-L3849`.
+- Fixed three more mis-targeted citations. In the authentication log row,
+  `auth.c#ClientAuthentication` `L279-L319` actually lies inside `auth_failed`
+  and `auth.c#password-failures` `L499-L524` is the `no pg_hba.conf entry`
+  block, so the two labels were corrected and re-ranged.
+  `high-availability.sgml#hot_standby_feedback` `L895-L903` discusses
+  `pg_last_wal_replay_lsn` versus `received_lsn`, not the GUC, and was replaced
+  by `config.sgml#hot_standby_feedback` `L4139-L4161`. The
+  `guc.c#PGC_SU_BACKEND-reload` range ended at `L6840`, inside a comment and
+  before the `if (IsUnderPostmaster && !is_reload) return -1;` that implements
+  the "existing sessions keep the old value" claim; it now ends at `L6858`.
+  `xlog.c#LogCheckpointEnd` similarly stopped at `L8435`, cutting the
+  write/sync duration fields out of the `elog` it is cited for.
+- Closed evidence gaps. The replication row asserted restart/reload/session
+  scope for nine GUCs with no citation covering them, so `archive_timeout`,
+  `archive_command`, `max_wal_senders`, `max_replication_slots`,
+  `wal_sender_timeout`, `synchronous_standby_names`, `synchronous_commit`,
+  `archive_mode`, and `wal_level` now have per-GUC ranges. Added
+  `guc.c#data_checksums`, `initdb.sgml#data-checksums`, `guc.c#log_lock_waits`,
+  `guc.c#log_temp_files`, the `system_views.sql` `pg_monitor` role grants, the
+  `pgstatstatements.sgml` access gate, `guc.c:9211` for `pending_restart`,
+  `varsup.c#GetNewTransactionId-wraparound-limits` for the two XID wraparound
+  message texts, `xlog.c#LogCheckpointStart`/`LogCheckpointEnd` and the
+  `exec_simple_query` duration-log site for quoted log lines, and
+  `procsignal.h#ProcSignalReason` plus
+  `pgstat.c#pgstat_recv_recoveryconflict`, which replaced a
+  `standby.c` range that showed only one of the five counted conflict reasons
+  and also establishes that a dropped-database conflict is deliberately not
+  counted. `initdb.c#system_views-input` only set the file path, so the
+  "installed by `initdb`" claim now cites `setup_sysviews`, and
+  `stats.sql#wait_for_stats` was moved from `L17-L77` to the function's real
+  `L27-L78`.
+- Corrected two imprecise statements. `pg_stat_get_progress_info()` applies a
+  `has_privs_of_role` membership test against the reporting role, not "role
+  ownership", and it never consults `pg_read_all_stats` even though
+  `pg_stat_get_activity` accepts either. `pg_stat_statements` does not simply
+  null redacted fields: it nulls `queryid` and substitutes
+  `<insufficient privilege>` for requested query text.
+- Verified against a running exact-pin cluster. An isolated primary plus a
+  streaming standby built from the pin ran all eleven fenced SQL blocks without
+  error, and reproduced: a `pg_monitor` member seeing only `pid` and `datname`
+  in `pg_stat_progress_vacuum` while a superuser saw `relid`, `phase`, and all
+  counters; `confl_snapshot = 1` on the standby with the client
+  `canceling statement due to conflict with recovery`; a PID-zero
+  `prepared transaction` blocker plus its retained `AccessExclusiveLock` and
+  `transactionid` lock under `virtualtransaction = '-1/495'`; the
+  `still waiting for`/`acquired ... after` lock-wait pair; `deadlock detected`
+  with `pg_stat_database.deadlocks = 1`; `temporary file: path ..., size ...`
+  with matching `temp_files`/`temp_bytes`; the v12 autovacuum summary's
+  field list with no WAL-usage entry and the analyze summary's system-usage-only
+  form; and the `pg_settings` superuser-only filter (an ordinary role saw one of
+  three probed names). Both servers were stopped afterwards and
+  `raw/postgres-12/` was untouched.
+- Recorded `verified_by_agent: claude-opus-5-max 2026-07-29T16:53:15Z`; human
+  `verified: false` and the visible `(unverified)` title remain unchanged.
+  Updated the root and v12 indexes plus the version coverage notes.
+
 ## [2026-07-29] review-fix v12 | wal_sender_timeout full review
 
 - Rechecked every claim and every citation in [How wal_sender_timeout Is Used
