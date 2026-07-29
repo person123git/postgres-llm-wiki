@@ -2,6 +2,90 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-29] review-fix v12 | leaf density 60 versus 90 query impact
+
+- Rechecked every claim and citation in [Impact of B-Tree Leaf Density (60% vs
+  90%) on Index Scan Queries in PostgreSQL 12
+  (unverified)](v12/questions/leaf-density-60-vs-90-query-impact.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+  All 67 original citation ranges were re-resolved and checked
+  label-against-content; most were re-cut, split, or replaced, and the page now
+  carries 92 distinct ranges across 30 files.
+- Range fixes: `nbtree.h#fillfactor` `L159-L171` and
+  `plancat.c#get_relation_info` `L388-L407` started mid-comment (now `L158-L171`
+  and `L387-L407`); `costsize.c#index_pages_fetched` `L787-L877` started
+  mid-comment and dropped the closing brace (now `L786-L878`);
+  `plancat.c#get_relation_info-tree-height` `L409-L417` cut off its closing
+  brace; `nbtsearch.c#_bt_readpage` `L1383-L1616` ran 19 lines past the function
+  into `_bt_saveitem` (now `L1383-L1597` plus a separate
+  `_bt_saveitem` `L1599-L1616`); `nbtsearch.c#backward-readnextpage`
+  `L1813-L1905` started mid-comment and ended before the function brace (now
+  `_bt_readnextpage-backward` `L1801-L1903`); `nbtsplitloc.c#_bt_findsplitloc`
+  `L98-L104` ended mid-sentence (now `L97-L105`);
+  `nbtsplitloc.c#fillfactor-selection` `L277-L330` started and ended mid-branch
+  (now `L275-L331`); `plancat.c#estimate_rel_size-index` `L955-L1026` spilled
+  out of the `RELKIND_INDEX` case (now split into `L955-L971` and
+  `L984-L1026`); `selfuncs.c#genericcostestimate` `L5765-L5815` ended
+  mid-statement (now `-numIndexPages` `L5765-L5780` and `-page-costs`
+  `L5782-L5835`); `bufpage.c`, `explain.c#show_buffer_usage`,
+  `nbtree.c#btgettuple`/`btgetbitmap`/`btvacuumcleanup`,
+  `indexam.c#index_getnext_tid`, `nodeIndexonlyscan.c`, `lwlock.h`,
+  `nbtsearch.c#endpoint-start`/`_bt_endpoint`/`_bt_first-position`,
+  `nbtutils.c#_bt_killitems`, `vacuumlazy.c`, `pgstatindex.c`, and the two test
+  citations were re-cut to complete units; and every multi-symbol "X and Y"
+  label was replaced by one symbol per citation.
+- Corrected two factual defects. `EXPLAIN (ANALYZE, BUFFERS)` reports hit,
+  read, dirtied, and written for shared and local buffers but only read and
+  written for temp buffers. And the planner does not read `pg_class.relpages`
+  for an ordinary index: `index->pages` is the live
+  `RelationGetNumberOfBlocks` count and `index->tuples` is the parent table
+  estimate, with the catalog-density path applying to partial indexes only.
+  Also replaced the vague "reclaimed space is not always reused on the original
+  page" claim with the actual mechanics (`_bt_delitems_delete` /
+  `_bt_delitems_vacuum` compact the page in place; only a completely empty page
+  leaves the tree through `_bt_pagedel`, then the FSM).
+- Restructured for the mandatory rules: added the `## Contents` table of
+  contents, folded `## Answer Up Front` and the following sections into a single
+  `## Answer` with `###` subsections, and renamed `## Related Pages` to
+  `## Navigation` in the canonical section order.
+- Added source-backed material the page lacked: how splits rather than deletes
+  produce 60% density (leaf fillfactor on build and rightmost splits, 50:50
+  otherwise, the split-after-new-item case, and the `RelationGetFillFactor`
+  read), `LP_DEAD` entries counting as dense, half-dead pages excluded from the
+  average but still read while deleted pages are unlinked yet still priced,
+  `NaN` on an empty index, v12 issuing no index-page prefetch, the scan-path
+  data structures (`BTPageOpaqueData`, `BTMetaPageData`, `BTScanPosData`,
+  `BTScanPosItem`, `BTScanOpaqueData`, `IndexOptInfo`, `BufferUsage`), the
+  `_bt_readpage` high-key early stop that keeps comparisons sub-proportional,
+  five `PGC_USERSET` settings with apply scope, and the build boundaries
+  (contrib `pgstattuple` module and `pg_stat_scan_tables` grant; `BTREE_AM_OID`
+  declared in `pg_am.dat` and materialized by the backend catalog
+  `GENERATED_HEADERS` rule).
+- Measured the answer on an isolated server built from the exact pin. Fixture A
+  (1,000,000 sequential `bigint` keys): `avg_leaf_density` 90.06 versus 59.90
+  gave 2733 versus 4116 leaf pages, 2745 versus 4133 blocks, and 2738 versus
+  4121 warm index-only scan buffers (50.5% more); the serial full-scan cost gap
+  `34032.43 - 28480.42 = 5552.01` equals the 1388 extra blocks at
+  `random_page_cost = 4`; a 10,000-key range measured 32 versus 45 index-only
+  buffers and 31 versus 44 `Bitmap Index Scan` buffers at identical 46 heap
+  blocks; and the equality probe was identical (cost 0.42..4.44, 4 buffers) at
+  unchanged `tree_level = 2`. Fixture B (100,000 rows, 110-byte `text` keys,
+  one index at a time): 91.31 versus 60.87 density moved `tree_level` from 2 to
+  3, the probe cost from 0.42..4.44 to 0.54..4.56 (the 0.125 descent charge),
+  and the probe from 4 to 5 buffers. Fixture C (1,000,000 random keys inserted
+  retail, no deletes): 65.58 density, 3758 leaf pages, 49.71
+  `leaf_fragmentation`. The server was stopped; its disposable data directory
+  and SQL scripts remain under `.wiki-runtime/`.
+- Applied prompt hygiene to the filed `## Question`: the stored text was an
+  imperative punctuated as a question, and the user approved rewording it to
+  "In PostgreSQL 12, what is the impact on queries that scan indexes with a leaf
+  density of 60% vs 90%?".
+- Recorded `verified_by_agent: claude-opus-5-max 2026-07-29T20:41:00Z`; human
+  `verified: false` and the visible `(unverified)` title are unchanged. Updated
+  `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md` (v12 coverage
+  row plus a new coverage note). Full `scripts/wiki_lint` reports 0 errors and
+  0 warnings.
+
 ## [2026-07-29] review-fix v12 | leaf density versus fragmentation index scan I/O
 
 - Rechecked every claim and citation in [B-Tree Leaf Density vs Fragmentation
