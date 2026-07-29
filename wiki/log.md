@@ -2,6 +2,54 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-29] review-fix v12 | wal_sender_timeout full review
+
+- Rechecked every claim and every citation in [How wal_sender_timeout Is Used
+  and What It Impacts in PostgreSQL 12
+  (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). All 364 source
+  citations were re-resolved to their pinned files and checked
+  label-against-content.
+- Fixed eight citation defects. `logicalfuncs.c#CreateDecodingContext` named a
+  symbol that lives in `logical.c` and, with its companion, covered only the
+  head of `pg_logical_slot_get_changes_guts`; both were replaced by the full
+  `L125-L368` range. Two `tablesync.c#LogicalRepSyncTableStart` ranges started at
+  `L884`, inside the function, and now start at its `L804` signature.
+  `tablesync.c#process_syncing_tables` pointed at the comment for
+  `process_syncing_tables_for_apply`, so both the comment and the executable
+  `wal_retrieve_retry_interval` throttle are now cited under the right symbol.
+  `pg_basebackup.c#StartLogStreamer L460-L566` started inside `LogStreamerMain`
+  and is now `L528-L566`. A `slotfuncs.c#pg_replication_slot_advance` label
+  pointed at `pg_physical_replication_slot_advance`, and the Source References
+  entry spanning all three functions was split into three exact entries. Two
+  single-line `file.c:line` labels carried multi-line ranges.
+- Corrected one misattributed claim: `high-availability.sgml` was cited for the
+  `requested WAL segment ... has already been removed` error text, which exists
+  only in `walsender.c#XLogRead`. The documentation citation now backs only the
+  `wal_keep_segments`/archive alternative and its bounded-`pg_wal` tradeoff.
+- Added three verified precisions: `pg_stat_replication` detail columns are
+  gated on superuser or `pg_read_all_stats` membership, and any other role sees
+  the row with `pid` alone; `pg_create_physical_replication_slot()` reserves WAL
+  only when `immediately_reserve` is true, which defaults to false in
+  `system_views.sql`; and the closest protocol test uses `SHOW work_mem`.
+- Reproduced the empirical claims on one isolated server built from the exact
+  pin. `pg_settings` showed `wal_sender_timeout` as context `user` against
+  `sighup` for the two receiver settings. Reloading 60s -> 1s killed the paused
+  `pg_receivewal` sender in the same logged millisecond, removed its
+  `pg_stat_replication` row, and left the persistent slot with `active = false`,
+  `active_pid` null, and an unchanged `restart_lsn`; on resume the client
+  reported only `server closed the connection unexpectedly`, never the server's
+  timeout text. A libpq client holding a temporary `RESERVE_WAL` slot and
+  `options=-c wal_sender_timeout=20000` survived about 20 seconds rather than 1,
+  proving startup-client precedence over the file value, and its slot row was
+  gone on the first poll after the timeout log. A plain login role saw only
+  `pid` for the live sender. The created role and slot were dropped and the
+  server was stopped.
+- Recorded `verified_by_agent: claude-opus-5-max 2026-07-29T15:30:31Z`; human
+  `verified: false` and the visible `(unverified)` title are unchanged. Updated
+  `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Full
+  `scripts/wiki_lint` reports 0 errors and 0 warnings.
+
 ## [2026-07-29] review-fix v12 | B-tree index bloat heuristic full correction
 
 - Rechecked every claim in [A Heuristic to Detect B-Tree Index Bloat in

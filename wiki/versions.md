@@ -14,6 +14,29 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-29: completed a full corrective review of [How wal_sender_timeout Is
+  Used and What It Impacts in PostgreSQL 12
+  (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Re-resolved and
+  label-checked all 364 citations. Fixed a wrong `logicalfuncs.c`
+  `CreateDecodingContext` label (that symbol lives in `logical.c`) and its
+  too-narrow ranges, two `LogicalRepSyncTableStart` ranges that started
+  mid-function, a `process_syncing_tables` label that pointed at the
+  `process_syncing_tables_for_apply` comment, a `StartLogStreamer` range that
+  started inside `LogStreamerMain`, a `pg_replication_slot_advance` label on the
+  physical helper, two single-line label forms on multi-line ranges, and a
+  `high-availability.sgml` citation attached to a `requested WAL segment ...
+  has already been removed` error text that appears only in `walsender.c`.
+  Added the `pg_stat_replication` superuser/`pg_read_all_stats` detail gate, the
+  `immediately_reserve` default that leaves a new physical slot unreserved, and
+  the `work_mem` identity of the closest protocol test. One isolated server
+  built from the exact pin reproduced the reload-driven persistent-slot timeout
+  in the same logged millisecond as the reload, the client seeing only
+  `server closed the connection unexpectedly`, the temporary-slot drop, a
+  20-second per-connection value outranking a 1-second configuration-file
+  value, and the statistics privilege split; the created role and slot were
+  dropped and the server was stopped. Agent verification was recorded as
+  `claude-opus-5-max 2026-07-29T15:30:31Z`; human verification remains false.
 - 2026-07-29: completed a full corrective review of [A Heuristic to Detect
   B-Tree Index Bloat in PostgreSQL 12
   (unverified)](v12/questions/index-bloat-heuristic.md) against unchanged pin
