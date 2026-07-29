@@ -2,6 +2,73 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-29] review-fix v12 | comprehensive plan_cache_mode analysis
+
+- Reviewed and rewrote [Comprehensive plan_cache_mode Analysis in PostgreSQL 12
+  (unverified)](v12/questions/plan-cache-mode.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). The prior page
+  was an 82-line draft with 16 distinct single-line citations, a slug title, no
+  `## Contents`, no `## Evidence Map`, no `## Navigation`, and
+  `## Open Questions` reading "Pending deep inquiry". It now carries 125 distinct
+  range citations across 21 files.
+- Renamed `wiki/v12/questions/plan_cache_mode_analysis.md` to
+  `plan-cache-mode.md` with `git mv` to match the directory's kebab-case
+  convention, and set the page title to the human title already used in the
+  indexes. Reworded the filed `## Question` from an imperative into a question
+  after explicit user approval, per prompt hygiene.
+- Corrected the draft's substance: the old "decision hierarchy" did not say that
+  `force_generic_plan`/`force_custom_plan` are evaluated *after* the one-shot,
+  no-parameter, and transaction-statement rules and therefore cannot override
+  them; the planning charge was presented without the fact that it is added to
+  custom plans only; the "correction step" cited a bare `L1200` without the
+  build-price-recheck logic around it; and `cursor_options` rule 6, the
+  `generic_cost = -1` first-pass bias, and the `INT_MAX` counter guard were
+  missing entirely.
+- Added the missing engine context: `PARAM_FLAG_CONST` folding in
+  `eval_const_expressions` and the resulting `var_eq_const` versus
+  `var_eq_non_const` selectivity split; the `CachedPlanSource` /`CachedPlan`
+  field inventory including `generation`; every `GetCachedPlan` caller
+  (Bind, `EXECUTE`, `EXPLAIN EXECUTE`, SPI saved and one-shot plans, PL/pgSQL
+  simple expressions); named versus unnamed protocol statements; retention of
+  `generic_cost`/`total_custom_cost`/`num_custom_plans` across invalidation,
+  `ANALYZE`, and `DISCARD PLANS`; the per-execution `AcquireExecutorLocks`
+  footprint of a generic plan; v12 observability limits
+  (`pg_prepared_statements` has no plan counters); error and race paths;
+  `check_guc`/sample-file and SPI extension boundaries; the single direct
+  regression test plus explicit gaps; and five ancestor commits from
+  `e6faf910d75` (origin of the 5-plan rule) to `ca0b3828504`.
+- Exact-pin measurements on an isolated 12.2 server built from the pin, with
+  `contrib/auto_explain` installed from the same build tree: the `auto` switch
+  lands exactly on execution 6 (charged custom 25.02 versus `generic_cost`
+  18.77) and `EXPLAIN EXECUTE` advances the counter; the rejected generic plan is
+  cached, proven by recovering a stale `Seq Scan` plan (18.77) under
+  `enable_seqscan = off` where a fresh generic plan costs 28.29;
+  `force_custom_plan` cannot replan a parameterless statement; PL/pgSQL static
+  SQL switches at call 6 while dynamic `EXECUTE ... USING` ignores
+  `force_generic_plan`; `DISCARD PLANS` and `ANALYZE` keep the decision while
+  `DEALLOCATE`+`PREPARE` resets it; `cpu_operator_cost = 1` flips the decision to
+  generic on its own; `pgbench -M prepared` gives 5 custom then generic while
+  `-M extended` stays custom for all 8 and `-M extended` +
+  `force_generic_plan` is generic for all 4; a four-partition generic plan holds
+  5 relation locks versus 2 for the custom plan; a six-way join costs 0.65 ms of
+  planning per execution custom versus 0.006 ms generic; a 64-partition table
+  keeps `auto` on custom plans; and the GUC's `pg_settings` row, invalid-value
+  error, `EXPLAIN (SETTINGS)` line, and reload semantics were all confirmed.
+  Both fenced SQL blocks ran verbatim with `ON_ERROR_STOP=1` and exit status 0.
+- Verified every citation mechanically: all 125 ranges resolve inside their
+  files, none starts or ends on a blank line or mid-comment, single-line
+  citations use the `file.ext:line` label form, and the `## Contents` list
+  matches all 25 `##`/`###` headings. Fixed one label pointing at
+  `SPI_prepare_cursor` while claiming `SPI_execute_with_args`, one
+  `discard.c` range past end-of-file, and one leftover placeholder URL.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and the v12 coverage cell plus a
+  dated note in `wiki/versions.md`. Recorded
+  `verified_by_agent: claude-opus-5-max 2026-07-29T21:23:49Z`; human
+  `verified: false` and the visible `(unverified)` title are unchanged.
+- The isolated server was stopped after testing; its data directory, SQL
+  scripts, and logs remain under `.wiki-runtime/`. The pinned `raw/postgres-12/`
+  checkout stayed read-only evidence.
+
 ## [2026-07-29] review-fix v12 | leaf density 60 versus 90 query impact
 
 - Rechecked every claim and citation in [Impact of B-Tree Leaf Density (60% vs
