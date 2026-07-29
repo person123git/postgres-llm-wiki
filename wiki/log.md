@@ -2,6 +2,85 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-07-29] review-fix v12 | leaf density versus fragmentation index scan I/O
+
+- Rechecked every claim and citation in [B-Tree Leaf Density vs Fragmentation
+  Impact on Index Scan I/O in PostgreSQL 12
+  (unverified)](v12/questions/leaf-density-vs-fragmentation-index-scan-io.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). All 52 original citation ranges were re-resolved and
+  checked label-against-content; 40 were re-cut or split and 12 stood, and the
+  page now carries 86 distinct ranges across 33 files.
+- Most re-cuts fixed ranges that started or ended mid-statement, mid-comment, or
+  outside the cited symbol. `cost.h#default-costs` `L20-L35` ran past the page
+  costs into an unrelated `typedef enum` (now `L21-L30`);
+  `indexam.sgml#index-costs` `L1276-L1290` opened on the "cost estimate
+  functions must be written in C" paragraph rather than the
+  `seq_page_cost`/`random_page_cost` paragraph it was cited for (now
+  `indexam.sgml#index-cost-parameters` `L1281-L1290`);
+  `nbtsearch.c#_bt_walk_left` `L1930-L2007` covered less than half of a
+  function that ends at `L2053`; `nbtree.c#btvacuumpage-recycle` `L1120-L1180`
+  started on a local declaration and ended inside an `if`, so it is now
+  `L1166-L1173` around `RecordFreeIndexPage`; and
+  `nbtpage.c#_bt_getbuf-free-page` `L790-L825` began mid-comment and ended
+  mid-block, so it is now `_bt_getbuf-fsm-reuse` `L801-L832` plus
+  `_bt_getbuf-extend` `L844-L875`. The four `config.sgml` page-cost ranges,
+  `explain.c#show_buffer_usage`, `selfuncs.c#genericcostestimate`,
+  `nbtinsert.c` split ranges, `maintenance.sgml`, `bufpage.c`,
+  `costsize.c#index_pages_fetched`, `plancat.c`, `indexam.c`,
+  `nbtree.c#btgetbitmap`, `nbtsearch.c#_bt_first`/`_bt_endpoint`/
+  `_bt_readnextpage`, and the two test citations were re-cut to complete
+  statements, and `selfuncs.c#genericcostestimate` was split into
+  `-numIndexPages` and `-page-costs`.
+- Corrected two factual defects: `EXPLAIN (ANALYZE, BUFFERS)` reports hit,
+  read, dirtied, and written counters for shared and local buffers but only
+  read and written for temp buffers, and the `R / S = 1.2` matrix cell for 60 %
+  density with 75 % fragmentation is 1.73, not 1.72.
+- Restructured for the mandatory rules: added the `## Contents` table of
+  contents, folded `## Answer Up Front` and the following sections into a
+  single `## Answer` with `###` subsections, and renamed `## Related Pages` to
+  `## Navigation` in the canonical section order.
+- Added source-backed material the page was missing: v12 issues no index-page
+  prefetch (every `PrefetchBuffer` call site is a heap fork and
+  `effective_io_concurrency` is documented as bitmap-heap-only), `_bt_killitems`
+  marks entries `LP_DEAD` in place so they keep counting as dense until
+  `_bt_vacuum_one_page` or VACUUM removes them, half-dead pages stay linked to
+  their siblings while `pgstatindex` excludes them from `leaf_pages` and
+  therefore from both columns, deleted pages are unlinked yet still inflate the
+  `index->pages` the planner prices, both columns return `NaN` on an empty
+  index, the v12 split-after-new-item case can apply the leaf fillfactor to a
+  non-rightmost split, and `seq_page_cost`, `random_page_cost`, and
+  `effective_io_concurrency` are all `PGC_USERSET` (session or transaction
+  scope, no reload or restart).
+- Measured the central claim on an isolated server built from the exact pin.
+  Same 1,000,000 `bigint` keys: `avg_leaf_density` 90.06 versus 59.90 gave 2733
+  versus 4116 leaf pages and 2738 versus 4121 warm index-only scan buffers
+  (50.5 % more, against the predicted 1.5035x), with unchanged `tree_level`.
+  A random-order retail-insert index measured `leaf_fragmentation = 49.95` and
+  3697 buffers; rebuilt at `fillfactor = 67` it measured 0 fragmentation, the
+  same 67 % density, and 3680 buffers, a 0.5 % move that tracks the 17-page size
+  difference. `pageinspect` confirmed 1845 of 3694 backward right links, a
+  1848-block mean jump, and zero links to the next physical block, so
+  `leaf_fragmentation` understates disorder. A 200,000-row index that lost 90 %
+  of its rows still reported `avg_leaf_density = 90.00` over 547 leaf pages
+  until VACUUM dropped it to 9.26 with the page count unchanged.
+- Executed the filed survey query at the pin, and hardened it after doing so.
+  `pgstatindex` rejects a `relkind = 'I'` partitioned index with
+  `relation "..." is not a btree index` (reproduced), and the first draft left
+  the access-method filter in a `WHERE` clause where an inlined plan could call
+  the function before filtering, so the query now builds its candidate list in
+  a `WITH ... AS MATERIALIZED` CTE and reports blocks from
+  `current_setting('block_size')` instead of a hardcoded 8192. The final query
+  returned only the five ordinary B-trees in a database that also held hash,
+  GiST, GIN, and BRIN indexes plus a partitioned parent index; the
+  `AS NOT MATERIALIZED` variant happened to succeed there too, which the page
+  states rather than claiming a guaranteed failure. The server was stopped; its
+  disposable data directory and SQL scripts remain under `.wiki-runtime/`.
+- Recorded `verified_by_agent: claude-opus-5-max 2026-07-29T19:54:40Z`; human
+  `verified: false` and the visible `(unverified)` title are unchanged. Updated
+  `wiki/index.md`, `wiki/v12/index.md`, and the `wiki/versions.md` coverage
+  notes.
+
 ## [2026-07-29] review-fix v12 | database health checklist full review
 
 - Rechecked every claim and every citation in [PostgreSQL 12 Database Health

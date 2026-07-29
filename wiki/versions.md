@@ -14,6 +14,42 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-07-29: completed a full corrective review of [B-Tree Leaf Density vs
+  Fragmentation Impact on Index Scan I/O in PostgreSQL 12
+  (unverified)](v12/questions/leaf-density-vs-fragmentation-index-scan-io.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Re-resolved all 52 citation ranges and re-cut or split 40
+  of them, mostly ranges that started or ended mid-statement or mid-comment,
+  including a `cost.h` range
+  that ran into an unrelated enum, an `indexam.sgml` range attached to the
+  "must be written in C" paragraph instead of the page-cost paragraph, a
+  `_bt_walk_left` range that covered less than half the function, and
+  `nbtree.c#btvacuumpage-recycle` / `nbtpage.c#_bt_getbuf-free-page` ranges
+  that missed the `RecordFreeIndexPage` and `GetFreeIndexPage` code they were
+  cited for. Corrected the `EXPLAIN BUFFERS` claim (temp buffers have only
+  read and written counters) and one rounding cell (1.72 to 1.73). Added the
+  mandatory `## Contents` block, folded the answer under a single `## Answer`
+  section, and added source-backed material the page lacked: v12 issues no
+  index-page prefetch, `LP_DEAD` entries still count as dense until an insert
+  or VACUUM removes them, half-dead pages stay in the leaf chain while being
+  excluded from both `pgstatindex` columns, deleted pages are unlinked yet
+  still priced through `index->pages`, both columns can be `NaN`, and the
+  three relevant GUCs are `PGC_USERSET`. Exact-pin measurements on an isolated
+  12.2 server reproduced the central claim: 90.06 versus 59.90 `avg_leaf_density`
+  raised warm index-only scan buffers from 2738 to 4121 (50.5 %, against a
+  predicted 1.5035x), while removing 49.95 % `leaf_fragmentation` at matched
+  density moved them only from 3697 to 3680; `pageinspect` confirmed 1845 of
+  3694 backward right links, a 1848-block mean jump, and zero links to the next
+  physical block; and a 90 %-deleted index reported `avg_leaf_density = 90.00`
+  over the same 547 leaf pages until VACUUM dropped it to 9.26. The filed
+  survey query was executed at the pin and then hardened into a
+  `WITH ... AS MATERIALIZED` candidate list so an inlined plan cannot call
+  `pgstatindex` on a hash or GiST index; it returned only the ordinary B-trees
+  in a database that also held hash, GiST, GIN, BRIN, and partitioned-parent
+  indexes. The server was stopped and
+  its disposable fixtures were left under `.wiki-runtime/`. Agent verification
+  was recorded as `claude-opus-5-max 2026-07-29T19:54:40Z`; human verification
+  remains false.
 - 2026-07-29: completed a full corrective review of [PostgreSQL 12 Database
   Health Checklist (unverified)](v12/questions/database-health-checklist.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
