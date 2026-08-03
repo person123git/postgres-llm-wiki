@@ -2,6 +2,92 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-03] answer v17 | GIN index bloat and how to measure it
+
+- Filed [How a GIN Index Becomes Bloated in PostgreSQL 17, and How to Measure It
+  (unverified)](v17/questions/gin-index-bloat.md) against unchanged pin
+  `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
+- Applied `MANDATORY Prompt Hygiene` first: the prompt contained the typo
+  "postgreql", a space before a comma, a double space, and a lowercase sentence
+  start. The user approved the corrected wording, chose contrib and core-SQL-only
+  measurement paths presented as separate sections, asked for a full exact-pin
+  empirical run, and asked for a "what changed since PostgreSQL 12" section.
+- Established seven bloat mechanisms from v17 source: pending-list accumulation
+  with the capacity-based trigger plus internal fragmentation, the
+  `ConditionalLockPage` bail-out with a `work_mem` budget, and the remembered
+  tail; an entry tree that is never deleted from; entry splits that equalize by
+  data size with no rightmost or build case; posting-tree split headroom; VACUUM's
+  refusal to re-encode posting segments or merge siblings; XID-gated posting-page
+  reuse through `GlobalVisCheckRemovableXid`; and a fork ordinary VACUUM never
+  shortens. Added the two v17 paths that skip GIN entirely, the 2%-of-pages
+  index-vacuum bypass and the wraparound failsafe.
+- Corrected a widespread assumption with measurements. Because `entrySplitPage`
+  equalizes total data size with no rightmost or build case, and `ginbuild` drains
+  its red-black accumulator in ascending key order, a fresh build settles at
+  50.31%-52.72% entry-leaf fill. `REINDEX` therefore grew a scattered-retail index
+  from 7,692,288 to 8,765,440 bytes (57.79% -> 50.73% fill, 933 -> 1063 leaves),
+  while an ascending-retail index was byte-identical to its rebuild at 7,233,536
+  bytes; `maintenance_work_mem` of 1 MB and 64 MB produced identical builds. The
+  page now states that ~50% entry-leaf fill is structure, not bloat, and that a
+  rebuild probe can legitimately report negative reclaimable bytes.
+- Filed ten measurement recipes, five contrib and five core-only:
+  `pgstatginindex` pending-list survey, a `pageinspect` page-class census that
+  separates deleted posting pages from former pending pages, a `page_header`
+  leaf-fill probe standing in for the absent GIN `avg_leaf_density`, a
+  metapage-versus-live-size staleness check mirroring `gincostestimate`'s 4x
+  cutoff, `pg_freespacemap` reusable pages, core size/fork/catalog staleness,
+  `VACUUM VERBOSE` per-index page classes, a two-`random_page_cost` `EXPLAIN`
+  probe, `gin_clean_pending_list` as an exact count, and a
+  `CREATE INDEX CONCURRENTLY` rebuild probe.
+- The `EXPLAIN` probe is new work for this pin. Because the only per-page term
+  that scales with `random_page_cost` is the page count, the cost difference
+  divided by the `random_page_cost` difference is exactly
+  `entryPagesFetched + dataPagesFetched`. Measured 591.00 against 589 pending
+  pages in a 591-page index and 101.00 against 99 pending pages in a 101-page
+  index. Also documented the single-plan form and its 4.125-per-page scale from
+  `random_page_cost + 50 * cpu_operator_cost`.
+- Exact-pin measurements: 1471 pending pages in a 12,066,816-byte index whose
+  forced `Bitmap Index Scan` cost 6260.82 with 1473 buffers, falling to 17.63 and
+  4 after `gin_clean_pending_list` returned 1471 and the main fork *grew* to
+  15,581,184 bytes with a new 24,576-byte FSM fork and 1471 pages recorded free at
+  `avail = 8160`; a 16,801,792-byte entry tree unchanged after deleting all
+  300,000 rows and two VACUUMs, then 16,384 bytes after `REINDEX`; posting leaves
+  at 7.50% fill with 76 deleted pages entering the FSM only after three
+  `txid_current()` calls advanced the horizon; a churn fixture at 93.65%
+  reclaimable whose probe `fresh_bytes` of 131,072 matched the later `REINDEX`
+  byte-for-byte; `reltuples` of 300,000 / 100,000 / 300,000 / 90,000 across
+  `CREATE INDEX`, `ANALYZE`, `REINDEX`, and VACUUM against a true entry count of
+  2,988; `idx_tup_fetch` structurally 0 with `idx_tup_read` 268; and the exact
+  rejection messages from `pgstatindex`, `pgstattuple`, `pgstattuple_approx`, and
+  `bt_index_check`.
+- Attributed every since-v12 change to the checkout's own history, bracketed by
+  the `Stamp 12.0` through `Stamp 17.0` commits and checked with
+  `git merge-base --is-ancestor`: v13 `4d8a8d0c738`, `ec28808ba85`,
+  `4b754d6c16e`; v14 `5100010ee4d`, `3499df0dee8`, `1e55e7d1755`, `c242baa4a83`,
+  `dc7420c2c92`, `23763618390`; v16 `eb5c4e953bb`, `cd9479af2af`; v17
+  `667e65aac35`, `b4375717147`, and `13503eb5905` (noted as back-patched to
+  `REL_12_STABLE` as `975ae05537f`, so a minor-release rather than major-version
+  difference). Listed what is unchanged, including the absence of parallel GIN
+  build, GIN `amcheck` support, and a GIN `fillfactor`.
+- All nine filed SQL blocks ran verbatim with `ON_ERROR_STOP=1` on an isolated
+  exact-pin 17.10 server built from the pinned checkout under `.wiki-runtime/`,
+  with `pgstattuple`, `pageinspect`, `pg_freespacemap`, `amcheck`, `btree_gin`,
+  and `pg_trgm` installed. The server was stopped; disposable SQL, logs, and the
+  cluster remain under `.wiki-runtime/`.
+- Audited all 177 distinct citation ranges programmatically for existence and
+  bounds, then re-cut every range whose first line fell mid-comment or on the
+  wrong symbol; also verified that all 39 in-page anchors resolve and that
+  `## Contents` lists every `##`/`###` heading in document order.
+- Filed eight `## Open Questions`, including the unmeasured autovacuum partial
+  clean, the `int[]`-only density fixtures, the absence of any bloat threshold in
+  the pinned tree, the `indexfsm.c` `BLCKSZ - 1` comment versus the measured 8160,
+  and the probe's untested accuracy on an index with fresh metapage statistics.
+- Updated `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet`, because the per-claim re-verification pass has not
+  been done as a separate review.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-03] follow-up v12 | GIN wasted bytes from core SQL only
 
 - Filed a core-SQL-only follow-up on [How a GIN Index Becomes Bloated in
