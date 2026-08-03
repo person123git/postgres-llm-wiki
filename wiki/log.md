@@ -2,6 +2,46 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-03] review-fix v12 | GIN index bloat and how to measure it
+
+- Re-audited [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to
+  Measure It (unverified)](v12/questions/gin-index-bloat.md) claim by claim against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Corrected four material overstatements. Posting-page split behavior is expressed
+  as segment-balancing and append/build heuristics, not exact 50%/75%/100%
+  occupancy. An autovacuum partial clean stops at its remembered tail but can
+  still empty the pre-existing list without concurrent append. Ordinary VACUUM
+  does not truncate a GIN main fork, but `VACUUM FULL`, `CLUSTER`, and `TRUNCATE`
+  can rebuild or reset index storage. Deleted posting-tree pages and deleted
+  former pending-list pages now have separate census classes, and FSM-recorded
+  reuse is reported independently from the persistent `GIN_DELETED` flag.
+- Added a second entry-tree retention mechanism: in-line posting tuples can grow
+  enough to split entry pages, then shrink to posting-tree pointers without those
+  entry pages ever merging. Qualified posting-leaf VACUUM as per-segment
+  recompression within the former byte budget, the index-cleanup caller gate, FSM
+  hints and candidate validation, the planner's strict one-quarter statistics
+  test, and the core/generated-header/extension boundaries.
+- Reworked all five production measurement recipes: every leading SQL verb has a
+  wiki tag, session-scoped `statement_timeout` and `lock_timeout` bounds are stated,
+  the census distinguishes both deleted page origins and FSM state, and the
+  rebuild probe reproduces the exact logical index definition and calls out its
+  concurrent-build overhead and snapshot limitation. All five snippets ran
+  verbatim with `ON_ERROR_STOP` against the exact pin, including concurrent probe
+  creation and removal.
+- Reran deterministic exact-pin fixtures. Results include 411 pending pages
+  cleaned into reusable high-water space; a 16,801,792-byte, 300,000-key entry
+  tree surviving deletion of every row; 8.2% reclaimed from retained entry pages
+  while posting-page counts stayed equal; a sparse posting tree shrinking from
+  1,654,784 to 98,304 bytes only on `REINDEX`; 12 deleted posting pages moving
+  from zero to 12 FSM records after the horizon advanced; and a 1471-page pending
+  list moving the forced bitmap-index cost from 27.25 to 5903.25.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Recorded
+  `verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-08-03T18:24:11Z`; human
+  `verified: false` and the visible `(unverified)` title remain unchanged. The
+  isolated server was stopped; disposable evidence remains under `.wiki-runtime/`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-03] answer v12 | GIN index bloat and how to measure it
 
 - Filed [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It

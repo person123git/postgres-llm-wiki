@@ -14,48 +14,30 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
-- 2026-08-03: filed [How a GIN Index Becomes Bloated in PostgreSQL 12, and How
-  to Measure It (unverified)](v12/questions/gin-index-bloat.md) against unchanged
-  pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). The page
-  separates six bloat mechanisms and states which VACUUM can reverse: pending-list
-  (`fastupdate`) accumulation whose trigger compares `nPendingPages *
-  GIN_PAGE_FREESIZE` against `gin_pending_list_limit` (page capacity, not bytes
-  used), an entry tree that is never deleted from (`ginVacuumEntryPage` rewrites an
-  emptied entry tuple with a null posting list rather than removing it, and the GIN
-  `README` states the rule three times), posting-tree leaves that split 50/50 or
-  75% when appending but are packed full when `btree->isBuild`, VACUUM's documented
-  refusal to re-encode sparse segments or merge sibling pages plus the
-  only-fully-empty-and-never-edge deletion predicate, deleted pages gated on
-  `RecentGlobalXmin` passing the `ReadNewTransactionId()` stamp, and a relation GIN
-  never truncates. Also records the autovacuum asymmetry (`full_clean =
-  !IsAutoVacuumWorkerProcess()`, so only a manual `VACUUM` or
-  `gin_clean_pending_list()` does a full clean, while autoanalyze cleans the list
-  and manual `ANALYZE` does not) and the `gincostestimate` coupling: every pending
-  page is charged at `random_page_cost` as startup I/O, and metapage statistics are
-  trusted only while the index has not grown past 4x `nTotalPages`. Measurement
-  coverage documents the v12 tool matrix - `pgstatginindex` reads only the metapage
-  and returns three fields, `pgstatindex` / `pgstattuple` / `pgstattuple_approx` /
-  `amcheck` all reject a GIN index with verified error text, `pg_freespace` is
-  binary for indexes because `RecordFreeIndexPage` writes `BLCKSZ - 1`, and
-  `idx_tup_fetch` is structurally 0 because GIN sets `amgettuple = NULL` - and
-  supplies five SQL recipes (pending-list survey, `pageinspect` per-page census,
-  metapage-versus-live, FSM free pages, rebuild ground truth), all executed
-  verbatim at the pin with `ON_ERROR_STOP=1`. Exact-pin measurements on an isolated
-  12.2 server: a 300,000-key index kept 16,801,792 bytes and a metapage count of
-  300,000 entries after every row was deleted and two VACUUMs ran, then `REINDEX`
-  reduced it to 16,384 bytes (1025x); deleting 760,000 of 800,000 rows freed zero
-  bytes, and VACUUM #1, #2 and #3 recorded no free pages until three
-  `txid_current()` calls moved the counter past the delete XID 511, after which one
-  VACUUM recorded all 80 pages at `avail = 8160` and 60,000 new rows consumed them
-  without extending the file for those blocks; 800,000 rows inserted in random key
-  order left the index 27.8% larger with 24.4% more posting-tree leaves than the
-  same rows after `REINDEX`, with no dead rows involved; a 1471-page pending list
-  raised a `Bitmap Index Scan` estimate from 27.25 to 5903.25 and its buffers from
-  4 to 1473 (9.793 ms versus 0.027 ms), and both costs were reproduced exactly from
-  the invented-statistics branch of the source formula; and `ALTER INDEX ... SET
-  (fastupdate = off)` left all 246 pending pages in place. Agent verification is
-  `not yet`; human `verified: false` and the visible `(unverified)` title are
-  unchanged. `scripts/wiki_lint` reports 0 errors and 0 warnings.
+- 2026-08-03: completed a full corrective review of [How a GIN Index Becomes
+  Bloated in PostgreSQL 12, and How to Measure It
+  (unverified)](v12/questions/gin-index-bloat.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Corrected four
+  material overstatements: build and retail posting-page split policies are
+  segment-based heuristics rather than exact fill percentages; an autovacuum
+  partial clean can still empty the pre-existing list when there is no concurrent
+  append; ordinary VACUUM does not truncate the GIN fork, but `VACUUM FULL`,
+  `CLUSTER`, and `TRUNCATE` can rebuild or reset index storage; and a raw deleted
+  page count mixes XID-delayed posting-tree pages with former pending-list pages
+  that `shiftList` can record in the FSM immediately. Added the separate retained
+  entry-page pattern caused when growing in-line posting tuples split entry pages
+  before becoming small posting-tree pointers, qualified VACUUM's segment
+  recompression and index-cleanup caller gates, and corrected the measurement and
+  generated-header boundaries. All five production SQL recipes ran verbatim on an
+  isolated exact-pin server. Deterministic fixtures reproduced pending-list growth
+  and cleanup, a 16,801,792-byte entry tree surviving deletion of all 300,000 rows,
+  an 8.2% retail entry-tree gap with identical posting-page counts after rebuild,
+  sparse posting trees falling from 1,654,784 to 98,304 bytes only after rebuild,
+  XID-delayed FSM publication for 12 deleted posting pages, and the planner cost
+  shift from 5903.25 to 27.25 when a 1471-page pending list was cleaned. Recorded
+  `verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-08-03T18:24:11Z`; human
+  `verified: false` and the visible `(unverified)` title remain unchanged.
+  `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-07-29: completed a full corrective review of [Comprehensive
   plan_cache_mode Analysis in PostgreSQL 12
   (unverified)](v12/questions/plan-cache-mode.md) against unchanged pin
