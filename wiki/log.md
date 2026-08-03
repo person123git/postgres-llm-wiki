@@ -2,6 +2,73 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-03] answer v12 | GIN index bloat and how to measure it
+
+- Filed [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It
+  (unverified)](v12/questions/gin-index-bloat.md) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Applied
+  `MANDATORY Prompt Hygiene` first: the prompt contained the typo "postgreql" and
+  phrased its first clause as an imperative with a question mark, and the user
+  approved the corrected wording before drafting.
+- Separated six bloat mechanisms from source: pending-list (`fastupdate`)
+  accumulation with a capacity-based trigger plus three ways the trim falls short
+  (per-row page dedication, `ConditionalLockPage` bail-out, and stopping at the
+  remembered tail); an entry tree that is never deleted from, where
+  `ginVacuumEntryPage` rewrites an emptied entry tuple with a null posting list;
+  posting-tree leaf splits at 50/50 or 75% outside a build against full packing
+  when `btree->isBuild`; VACUUM's documented refusal to re-encode sparse segments,
+  with no sibling merging anywhere and deletion restricted to fully empty
+  non-edge pages; deleted pages gated on `RecentGlobalXmin` rather than on a
+  VACUUM count; and a relation GIN never truncates.
+- Recorded the autovacuum asymmetry (`full_clean = !IsAutoVacuumWorkerProcess()`
+  in both VACUUM entry points, autoanalyze cleaning the pending list while manual
+  `ANALYZE` does not), the `gincostestimate` pending-page charge at
+  `random_page_cost`, the 4x `nTotalPages` staleness cutoff and its
+  invented-statistics fallback, the live-block-count planner input with
+  `tree_height = -1` for GIN, and apply scopes: `gin_pending_list_limit` is
+  `PGC_USERSET` (session/transaction, no restart or reload, confirmed as
+  `context = user` in `pg_settings`), while the `fastupdate` and per-index
+  `gin_pending_list_limit` reloptions take `AccessExclusiveLock`.
+- Documented the measurement surface, including the negative findings:
+  `pgstatginindex` reads only the metapage and returns `version`,
+  `pending_pages`, `pending_tuples`; `pgstatindex`, `pgstattuple`,
+  `pgstattuple_approx` and `amcheck` all reject a GIN index; `pg_freespace` is
+  binary for indexes because `RecordFreeIndexPage` writes `BLCKSZ - 1`;
+  `idx_tup_fetch` is structurally 0 because GIN sets `amgettuple = NULL`; and
+  `pageinspect`'s `gin_page_opaque_info` validates nothing while `maxoff` is not
+  an entry-tuple count. Corrected a research claim that v12 `pageinspect` lacks
+  GIN functions: `contrib/pageinspect/ginfuncs.c` defines all three.
+- Built the exact pin out of tree under `.wiki-runtime/` and added
+  `pg_freespacemap`, `amcheck`, `btree_gin`, and `pg_trgm` to the existing
+  install. All five filed SQL recipes ran verbatim with `ON_ERROR_STOP=1`, and
+  the pending-list survey returned only GIN indexes in a database that also held
+  B-tree, hash, GiST and BRIN indexes.
+- Exact-pin measurements: a 300,000-distinct-key index held 16,801,792 bytes and
+  still reported 300,000 metapage entries after every row was deleted and two
+  VACUUMs ran, then `REINDEX` cut it to 16,384 bytes; deleting 760,000 of 800,000
+  rows freed no bytes, and VACUUM #1/#2/#3 recorded no free pages until three
+  `txid_current()` calls advanced the counter past delete XID 511, after which one
+  VACUUM recorded all 80 pages at `avail = 8160`; 60,000 subsequent rows consumed
+  those 80 recycled pages; 800,000 rows inserted in random key order left the
+  index 27.8% larger with 24.4% more posting-tree leaves than after `REINDEX`,
+  with no dead rows; a 1471-page pending list raised a `Bitmap Index Scan`
+  estimate from 27.25 to 5903.25 and buffers from 4 to 1473 (0.027 ms versus
+  9.793 ms), both costs reproduced exactly from the source formula; and
+  `ALTER INDEX ... SET (fastupdate = off)` left all 246 pending pages in place.
+- Filed six `## Open Questions`, including the inverted `indexfsm.c` header
+  comment (it describes `BLCKSZ - 1` as marking used pages, while
+  `RecordFreeIndexPage` uses it for free pages and the exact-pin run agrees with
+  the code), the absence of any steady-state occupancy figure or bloat threshold
+  in the pinned tree, the unmeasured autovacuum partial clean, and within-leaf
+  slack not quantified via `gin_leafpage_items`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet`, because the page's per-claim re-verification pass
+  has not been done as a separate review. The isolated 12.2 server was stopped
+  and its disposable fixtures were left under `.wiki-runtime/`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-07-29] review-fix v12 | comprehensive plan_cache_mode analysis
 
 - Reviewed and rewrote [Comprehensive plan_cache_mode Analysis in PostgreSQL 12
