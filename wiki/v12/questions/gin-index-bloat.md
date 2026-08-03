@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-08-03T18:24:11Z
+verified_by_agent: not yet
 ---
 
 # How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It (unverified)
@@ -35,6 +35,18 @@ verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-08-03T18:24:11Z
   - [Caller and callee boundary](#caller-and-callee-boundary)
   - [Build, generated-header, and extension boundary](#build-generated-header-and-extension-boundary)
   - [Tests and explicit test absence](#tests-and-explicit-test-absence)
+  - [Follow-up: measuring wasted bytes with core SQL only](#follow-up-measuring-wasted-bytes-with-core-sql-only)
+  - [Why core SQL cannot see inside a GIN index](#why-core-sql-cannot-see-inside-a-gin-index)
+  - [What core SQL does expose](#what-core-sql-does-expose)
+  - [Core method A: rebuild probe, exact](#core-method-a-rebuild-probe-exact)
+  - [Core method B: recorded baseline bytes per row](#core-method-b-recorded-baseline-bytes-per-row)
+  - [The reltuples trap](#the-reltuples-trap)
+  - [Core method C: sampled probe, rejected](#core-method-c-sampled-probe-rejected)
+  - [Which size to divide by](#which-size-to-divide-by)
+  - [Core-only pending-list probes](#core-only-pending-list-probes)
+  - [Accuracy measured at the pin](#accuracy-measured-at-the-pin)
+  - [Settings for the core-only recipes](#settings-for-the-core-only-recipes)
+  - [Test coverage for the core-only path](#test-coverage-for-the-core-only-path)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -44,6 +56,10 @@ verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-08-03T18:24:11Z
 ## Question
 
 In PostgreSQL 12, how can a GIN index become bloated? How do you measure whether a GIN index is bloated?
+
+Follow-up:
+
+How, using SQL and no extra contrib extension, can I measure the wasted bytes of a GIN index and provide a bloat percentage based on wasted bytes?
 
 ## Answer
 
@@ -557,6 +573,364 @@ What is explicitly not covered:
 - **`contrib/pg_freespacemap` has no regression tests** — its `Makefile` has no `REGRESS` line ([pg_freespacemap/Makefile](../../../raw/postgres-12/contrib/pg_freespacemap/Makefile#L1-L20)).
 - **`src/test/regress/sql/vacuum.sql` has no GIN index**, and `src/test/modules/` has no GIN coverage.
 
+### Follow-up: measuring wasted bytes with core SQL only
+
+Define **wasted bytes** as the bytes the index occupies beyond what rebuilding the same index over the same table contents right now would occupy. That is the number `REINDEX` can hand back, and it is the only definition core SQL can be held to, because nothing in core reports free space *inside* a GIN page.
+
+With no contrib extension installed, v12 gives you three usable methods. Only the first is exact.
+
+| # | Method | Result | Writes? | Cost | Measured accuracy at the pin |
+|---|---|---|---|---|---|
+| A | Build a duplicate index and subtract | **Exact** | Creates and drops a second index | One full index build, plus the probe's disk | `fresh_bytes` matched the later `REINDEX` size byte-for-byte on all five fixtures |
+| B | Compare against a bytes-per-row baseline you recorded after the last rebuild | Estimate | Reads only; you maintain one small table | Two catalog lookups | Within **2.75 percentage points** of truth on all four fixtures across two churn rounds; exactly 0.00 on the untouched control |
+| C | Build a GIN index over a `TABLESAMPLE` subset and extrapolate | **Unusable** | Creates a temp table and index | A fraction of one build | Off by **+17% to +455%** on fresh size; reported −384% bloat on a 0%-bloated index |
+
+Use A when you can afford a build and need a number you will act on. Use B for routine monitoring. Do not use C; the measurements are below so the failure is on the record rather than assumed.
+
+The v12 documentation frames the same limitation: "The potential for bloat in non-B-tree indexes has not been well researched. It is a good idea to periodically monitor the index's physical size when using any non-B-tree index type." ([maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L876-L880))
+
+### Why core SQL cannot see inside a GIN index
+
+Three separate gaps, each verifiable in the pinned tree.
+
+1. **No core function reads an index page.** `pg_proc.dat` contains no raw-page, page-header, metapage, or FSM-contents function; the GIN inspectors are contrib (`gin_metapage_info`, `gin_page_opaque_info`, `gin_leafpage_items` at [ginfuncs.c#gin_metapage_info](../../../raw/postgres-12/contrib/pageinspect/ginfuncs.c#L34-L87), [ginfuncs.c#gin_page_opaque_info](../../../raw/postgres-12/contrib/pageinspect/ginfuncs.c#L90-L154), [ginfuncs.c#gin_leafpage_items](../../../raw/postgres-12/contrib/pageinspect/ginfuncs.c#L163-L265)), as is `pg_freespace` ([pg_freespacemap.c#pg_freespace](../../../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap.c#L17-L41)). The one general-purpose escape hatch, `pg_read_binary_file` ([genfile.c#pg_read_binary_file](../../../raw/postgres-12/src/backend/utils/adt/genfile.c#L288-L300)), has no page-format awareness, bypasses shared buffers, and needs elevated privileges; it is a boundary, not a recipe.
+2. **The GIN metapage counters are C-only.** `GinStatsData` carries `nTotalPages`, `nEntryPages`, `nDataPages`, and `nEntries` ([gin.h#GinStatsData](../../../raw/postgres-12/src/include/access/gin.h#L38-L49)); `ginGetStats` reads them ([ginutil.c#ginGetStats](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L631-L657)), and its only callers are the planner and GIN's own scan setup ([selfuncs.c#gincostestimate-ginGetStats](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6700-L6714)). No core SQL wrapper exists.
+3. **No statistic counts GIN keys.** `pg_statistic` has five generic slots ([pg_statistic.h#STATISTIC_NUM_SLOTS](../../../raw/postgres-12/src/include/catalog/pg_statistic.h#L120-L126)) and none holds a column-wide distinct-*element* cardinality. `array_typanalyze` gets closest: the last member of the distinct-element-count histogram is the average number of distinct non-null elements per row ([array_typanalyze.c#compute_array_stats-avg-count](../../../raw/postgres-12/src/backend/utils/adt/array_typanalyze.c#L605-L614), specified at [pg_statistic.h#STATISTIC_KIND_DECHIST](../../../raw/postgres-12/src/include/catalog/pg_statistic.h#L236-L249), surfaced as `pg_stats.elem_count_histogram` at [system_views.sql#pg_stats-elem_count_histogram](../../../raw/postgres-12/src/backend/catalog/system_views.sql#L240-L246) and documented at [catalogs.sgml#elem_count_histogram](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L10921-L10930)). That gives *postings per row*, not distinct keys, and it is array-only: `ts_typanalyze` fills a most-common-elements slot and nothing else ([ts_typanalyze.c#compute_tsvector_stats-mcelem](../../../raw/postgres-12/src/backend/tsearch/ts_typanalyze.c#L415-L426)), and `jsonb` declares no `typanalyze` at all ([pg_type.dat:438-442](../../../raw/postgres-12/src/include/catalog/pg_type.dat#L438-L442)), so it falls through to `std_typanalyze` ([analyze.c#typanalyze-dispatch](../../../raw/postgres-12/src/backend/commands/analyze.c#L955-L963)).
+
+So a self-contained absolute estimate is out of reach. Every core-only number below is either a measured difference against a real fresh build, or a difference against a fresh build you measured earlier.
+
+Two structural facts explain why a modeled "ideal" size would not help even if the key count were known. A GIN entry-tree split equalizes bytes across the two output pages with no build-time or append special case ([ginentrypage.c#entrySplitPage-balance](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L666-L689)), so even a fresh entry tree is not densely packed; and posting-list bytes per heap TID are data-dependent, ranging from 1 to 7 bytes of varbyte delta plus an 8-byte per-segment header ([ginpostinglist.c#varbyte-format](../../../raw/postgres-12/src/backend/access/gin/ginpostinglist.c#L23-L72), [ginpostinglist.c#MaxBytesPerInteger](../../../raw/postgres-12/src/backend/access/gin/ginpostinglist.c#L83-L84), [ginblock.h#GinPostingList](../../../raw/postgres-12/src/include/access/ginblock.h#L334-L346)), with segments held between 128 and 384 bytes ([gindatapage.c#GinPostingListSegmentMaxSize](../../../raw/postgres-12/src/backend/access/gin/gindatapage.c#L25-L36)).
+
+### What core SQL does expose
+
+| Core object | GIN? | What it gives you |
+|---|---|---|
+| `pg_relation_size(regclass)` | Yes | main-fork bytes; the one-argument form is SQL over the two-argument form with `'main'` ([pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6884-L6891)) |
+| `pg_relation_size(regclass, text)` | Yes | one named fork: `main`, `fsm`, `vm`, or `init` ([relpath.c#forkNames](../../../raw/postgres-12/src/common/relpath.c#L33-L38)), sized by `stat()` over every segment file ([dbsize.c#calculate_relation_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L308)) |
+| `pg_table_size` / `pg_total_relation_size` | Yes | all forks of the index; the sizing code notes it "behaves sanely if applied to an index" ([dbsize.c#calculate_table_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L380-L408)) |
+| `pg_indexes_size` on an index | Yes | always 0 — "Can be applied safely to an index, but you'll just get zero" ([dbsize.c#calculate_indexes_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L410-L414)) |
+| `pg_class.relpages` (index) | Yes | block count as of the last stats refresh ([pg_class.h#relpages](../../../raw/postgres-12/src/include/catalog/pg_class.h#L57-L63), [catalogs.sgml#pg_class.relpages](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L1759-L1770)) |
+| `pg_class.reltuples` (index) | Yes, but | three different meanings — see [The reltuples trap](#the-reltuples-trap) |
+| `pg_stats.elem_count_histogram` | Array columns only | average distinct elements per row in its last element ([catalogs.sgml#elem_count_histogram](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L10921-L10930)) |
+| `gin_clean_pending_list(regclass)` | Yes | the number of pending-list pages it removed ([pg_proc.dat#gin_clean_pending_list](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L8639-L8642), [ginfast.c#gin_clean_pending_list](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L1030-L1074)) — the one GIN internal core SQL will report, and it mutates the index |
+| `EXPLAIN` on a GIN scan | Yes | a pending-page proxy, via the cost model — see [Core-only pending-list probes](#core-only-pending-list-probes) |
+| `VACUUM (VERBOSE)` | Yes | `pages_deleted` and `pages_free` as server messages, not queryable rows ([vacuumlazy.c#lazy_cleanup_index-ereport](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1817-L1827)) |
+
+`pg_relation_size` is exact, not an estimate: it `stat()`s the files. It also works on temporary relations, which method C relies on — "we can safely apply this to temp tables of other sessions, so there is no check here" ([dbsize.c#calculate_relation_size-temp](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L271)).
+
+### Core method A: rebuild probe, exact
+
+Build a second index with the same definition, subtract, drop it. This is the same rebuild comparison as [Measurement recipe 5](#measurement-recipe-5-ground-truth-by-rebuilding), expressed as wasted bytes and a percentage.
+
+```sql
+SET /* wiki_gin_waste_probe_statement_timeout */ statement_timeout = '30min';
+SET /* wiki_gin_waste_probe_lock_timeout */ lock_timeout = '5s';
+
+SELECT /* wiki_gin_waste_probe_definition */
+       pg_get_indexdef('public.arr_churn_gin'::regclass);
+
+CREATE /* wiki_gin_waste_probe_build */ INDEX CONCURRENTLY arr_churn_gin_probe
+  ON public.arr_churn USING gin (tags) WITH (fastupdate = off);
+
+SELECT /* wiki_gin_waste_probe_result */
+       'arr_churn_gin'                                          AS index_name,
+       pg_relation_size('public.arr_churn_gin')                 AS current_bytes,
+       pg_relation_size('public.arr_churn_gin_probe')            AS fresh_bytes,
+       pg_relation_size('public.arr_churn_gin')
+         - pg_relation_size('public.arr_churn_gin_probe')        AS wasted_bytes,
+       pg_size_pretty(pg_relation_size('public.arr_churn_gin')
+         - pg_relation_size('public.arr_churn_gin_probe'))       AS wasted_pretty,
+       round(100.0 * (pg_relation_size('public.arr_churn_gin')
+                      - pg_relation_size('public.arr_churn_gin_probe'))
+             / greatest(pg_relation_size('public.arr_churn_gin'), 1), 2)
+                                                                AS bloat_pct;
+
+DROP /* wiki_gin_waste_probe_drop */ INDEX CONCURRENTLY public.arr_churn_gin_probe;
+```
+
+Reproduce the original definition from `pg_get_indexdef`: columns or expressions, operator class, collation, predicate, and both GIN reloptions all move the size. `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block ([utility.c#CREATE-INDEX-CONCURRENTLY](../../../raw/postgres-12/src/backend/tcop/utility.c#L1299-L1311)) and does more total work than a plain build while permitting concurrent writes ([create_index.sgml#Building-Indexes-Concurrently](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L527-L558)), so the two sizes are read at slightly different times rather than from one snapshot. Both indexes occupy storage until the probe is dropped. A plain `CREATE INDEX` is cheaper but takes `ShareLock` on the table instead of `ShareUpdateExclusiveLock`, so only `SELECT ... FOR UPDATE/SHARE` proceeds and ordinary writers block ([indexcmds.c#DefineIndex-lockmode](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L548-L564)).
+
+Set `maintenance_work_mem` the same way for the probe as for your eventual real rebuild: the build accumulator flushes whenever it reaches that budget ([gininsert.c#ginBuildCallback-flush](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L290-L311)), and the documentation calls GIN build time "very sensitive" to it ([gin.sgml#gin-tips-maintenance_work_mem](../../../raw/postgres-12/doc/src/sgml/gin.sgml#L554-L563)).
+
+At the pin, the probe's `fresh_bytes` equalled the size the index actually had after a later `REINDEX`, for all five fixtures, to the byte. That is the strongest statement available: the probe does not approximate the rebuild, it reproduces it.
+
+### Core method B: recorded baseline bytes per row
+
+The read-only method. Record `pg_relation_size` and the table's live row count once, right after a rebuild; afterwards, scale the baseline by the current row count and subtract.
+
+```sql
+CREATE /* wiki_gin_baseline_table */ TABLE public.wiki_gin_baseline (
+  index_oid       oid PRIMARY KEY,
+  index_name      text NOT NULL,
+  recorded_at     timestamptz NOT NULL DEFAULT now(),
+  baseline_bytes  bigint NOT NULL,
+  baseline_rows   double precision NOT NULL
+);
+```
+
+Refresh a row immediately after every `REINDEX` or `REINDEX CONCURRENTLY` of that index, with the table's statistics current:
+
+```sql
+SET /* wiki_gin_baseline_statement_timeout */ statement_timeout = '30s';
+SET /* wiki_gin_baseline_lock_timeout */ lock_timeout = '5s';
+
+INSERT /* wiki_gin_record_baseline */ INTO public.wiki_gin_baseline
+       (index_oid, index_name, baseline_bytes, baseline_rows)
+SELECT c.oid, c.relname, pg_relation_size(c.oid), t.reltuples
+FROM pg_class c
+JOIN pg_index i ON i.indexrelid = c.oid
+JOIN pg_class t ON t.oid = i.indrelid
+WHERE c.relname = 'arr_churn_gin'
+ON CONFLICT (index_oid) DO UPDATE
+   SET index_name     = excluded.index_name,
+       recorded_at    = now(),
+       baseline_bytes = excluded.baseline_bytes,
+       baseline_rows  = excluded.baseline_rows;
+```
+
+Then read wasted bytes and the percentage at any time, with no writes to the index:
+
+```sql
+SET /* wiki_gin_waste_ro_statement_timeout */ statement_timeout = '30s';
+SET /* wiki_gin_waste_ro_lock_timeout */ lock_timeout = '5s';
+
+SELECT /* wiki_gin_waste_from_baseline */
+       b.index_name,
+       pg_size_pretty(pg_relation_size(b.index_oid))                    AS current_size,
+       pg_size_pretty(est.fresh_bytes)                                  AS modeled_fresh_size,
+       pg_relation_size(b.index_oid) - est.fresh_bytes                  AS wasted_bytes,
+       round(100.0 * (pg_relation_size(b.index_oid) - est.fresh_bytes)
+             / greatest(pg_relation_size(b.index_oid), 1), 2)           AS bloat_pct,
+       b.recorded_at                                                    AS baseline_recorded_at
+FROM public.wiki_gin_baseline b
+JOIN pg_index i ON i.indexrelid = b.index_oid
+JOIN pg_class t ON t.oid = i.indrelid
+CROSS JOIN LATERAL (
+  SELECT round(b.baseline_bytes / b.baseline_rows * greatest(t.reltuples, 0))::bigint
+) AS est(fresh_bytes)
+WHERE b.baseline_rows > 0
+ORDER BY 5 DESC, 1;
+```
+
+Why it works, and where it breaks:
+
+- The denominator is the **table's** `reltuples`, which has one stable meaning: live rows, refreshed by `VACUUM`, `ANALYZE`, and a few DDL commands ([catalogs.sgml#pg_class.reltuples](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L1772-L1782), written by [vacuum.c#vac_update_relstats](../../../raw/postgres-12/src/backend/commands/vacuum.c#L1180-L1191)). Using the *index's* `reltuples` would be wrong; see the next section.
+- `WHERE b.baseline_rows > 0` is load-bearing: a baseline taken on an empty table divides by zero. `greatest(t.reltuples, 0)` keeps a never-analyzed table from producing a negative modeled size.
+- It assumes the number of extracted keys per row and their cardinality have not changed since the baseline. Rewriting the indexed column with a different key distribution invalidates the baseline, not the method; re-record after the next rebuild.
+- It is only as fresh as `t.reltuples`. VACUUM skips its `pg_class` update for the *index* when it skipped any heap page ([vacuumlazy.c#lazy_cleanup_index](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815), gate at [vacuumlazy.c:1787](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1787)), and plain `ANALYZE` samples rather than counts. At the pin the post-VACUUM table estimate was 171,433 against 171,429 real live rows, and `ANALYZE` corrected it to 171,429.
+- `pg_size_pretty` accepts a negative argument, so an over-estimated baseline prints legibly rather than failing; at the pin `pg_size_pretty((-123456)::bigint)` returned `-121 kB`. A negative `wasted_bytes` means the baseline is stale, not that the index shrank below a fresh build.
+
+A useful companion signal, also read-only, is growth since the last statistics refresh. `relpages` is `RelationGetNumberOfBlocks` at that moment, so the gap against the live size is new space:
+
+```sql
+SET /* wiki_gin_growth_statement_timeout */ statement_timeout = '30s';
+SET /* wiki_gin_growth_lock_timeout */ lock_timeout = '5s';
+
+SELECT /* wiki_gin_pages_since_stats */
+       c.relname AS index_name,
+       c.relpages AS pages_at_last_stats_update,
+       (pg_relation_size(c.oid) / current_setting('block_size')::bigint) AS pages_now,
+       (pg_relation_size(c.oid) / current_setting('block_size')::bigint) - c.relpages
+         AS pages_added,
+       pg_size_pretty(pg_relation_size(c.oid, 'fsm')) AS fsm_fork_size
+FROM pg_class c
+WHERE c.relkind = 'i'
+  AND c.relam = (SELECT oid FROM pg_am WHERE amname = 'gin')
+  AND c.relpersistence <> 't'
+ORDER BY 4 DESC, 1;
+```
+
+This is a growth detector, not a waste measurement: legitimate inserts move it too. `relpersistence <> 't'` keeps other sessions' temporary indexes out. A nonzero `fsm_fork_size` means VACUUM or a pending-list clean has already recorded reusable pages inside the existing file.
+
+### The reltuples trap
+
+Do not normalize a GIN index by its own `pg_class.reltuples`. The value means three different things depending on which command last touched it.
+
+| Last operation | Index `reltuples` holds | Evidence |
+|---|---|---|
+| `CREATE INDEX` / `REINDEX` | total **extracted keys**, counted with duplicates across rows | [gininsert.c#ginBuildCallback-indtuples](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L262-L270), returned at [gininsert.c#ginbuild-index_tuples](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L419-L427), stored by [index.c#index_build-index_update_stats](../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986) |
+| `VACUUM` | the **heap** live tuple count | [ginvacuum.c#ginvacuumcleanup-num_index_tuples](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L725-L731) |
+| `ANALYZE` (without VACUUM) | `ceil(tupleFract * totalrows)`, and `tupleFract` is 1.0 for a non-partial index | [analyze.c#do_analyze_rel-index-stats](../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [analyze.c:438](../../../raw/postgres-12/src/backend/commands/analyze.c#L438) |
+| `VACUUM` that skipped heap pages | unchanged, because `estimated_count` is true | [vacuumlazy.c:1787](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1787), [vacuumlazy.c#lazy_cleanup_index](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815) |
+
+GIN's own comment explains why the VACUUM number is a heap count: "we always report the heap tuple count as the number of index entries. This is bogus if the index is partial, but it's real hard to tell how many distinct heap entries are referenced by a GIN index." ([ginvacuum.c#ginvacuumcleanup-num_index_tuples](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L725-L731))
+
+Measured at the pin on the same four indexes, immediately after `REINDEX` and then after `VACUUM (ANALYZE)`:
+
+| Index | after `REINDEX` | after `VACUUM (ANALYZE)` |
+|---|---|---|
+| `arr_churn_gin` | 799,493 | 266,667 |
+| `arr_fresh_gin` | 1,198,764 | 400,000 |
+| `arr_pending_gin` | 598,885 | 200,000 |
+| `ts_docs_gin` | 1,050,000 | 150,000 |
+
+A bytes-per-index-tuple metric therefore jumps by the keys-per-row factor at every rebuild. The table's `reltuples` does not.
+
+### Core method C: sampled probe, rejected
+
+The idea is to build a GIN index over a `TABLESAMPLE` subset in a temporary table and scale bytes per row up to the full table. It is legal, cheap, and wrong.
+
+```sql
+SET /* wiki_gin_sample_statement_timeout */ statement_timeout = '10min';
+SET /* wiki_gin_sample_lock_timeout */ lock_timeout = '5s';
+
+CREATE /* wiki_gin_sample_copy */ TEMP TABLE gin_probe_sample AS
+  SELECT * FROM public.arr_churn TABLESAMPLE SYSTEM (5) REPEATABLE (42);
+
+CREATE /* wiki_gin_sample_build */ INDEX gin_probe_sample_idx
+  ON gin_probe_sample USING gin (tags);
+
+SELECT /* wiki_gin_sample_extrapolate */
+       n.sample_rows,
+       pg_relation_size('gin_probe_sample_idx')                      AS sample_bytes,
+       t.reltuples                                                   AS table_rows,
+       round(pg_relation_size('gin_probe_sample_idx')::numeric
+             * t.reltuples / n.sample_rows)                          AS extrapolated_fresh_bytes
+FROM (SELECT count(*) AS sample_rows FROM gin_probe_sample) n
+CROSS JOIN pg_class t
+WHERE t.oid = 'public.arr_churn'::regclass
+  AND n.sample_rows > 0;
+
+DROP /* wiki_gin_sample_drop */ TABLE gin_probe_sample;
+```
+
+The mechanics are sound. `TABLESAMPLE` applies to plain tables, matviews, and partitioned tables ([parse_clause.c#transformRangeTableSample-relkind](../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1160-L1169)); `SYSTEM` picks whole blocks and `BERNOULLI` flips a coin per row, with `SYSTEM` faster but "less-random ... as a result of clustering effects" ([select.sgml#TABLESAMPLE-methods](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L404-L423), block-level behaviour at [system.c#system_nextsampletuple](../../../raw/postgres-12/src/backend/access/tablesample/system.c#L224-L235), per-row at [bernoulli.c#bernoulli_nextsampletuple](../../../raw/postgres-12/src/backend/access/tablesample/bernoulli.c#L169-L179)). An index on a temporary table is automatically temporary ([create_table.sgml#TEMPORARY-indexes](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L173-L178)), and no GIN-specific restriction applies; `CONCURRENTLY` would simply be downgraded ([indexcmds.c#DefineIndex-temp-nonconcurrent](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499)).
+
+The estimator is what fails: **GIN size is strongly sublinear in row count**, so bytes per row measured on a sample is far above the full-table value. Three source-level reasons:
+
+1. Below the promotion threshold, a key's TIDs live in-line in its entry tuple; once the compressed list no longer fits `GinMaxItemSize` (2712 bytes at an 8 kB block size), GIN moves them to a posting tree and leaves a small pointer behind ([ginblock.h#GinMaxItemSize](../../../raw/postgres-12/src/include/access/ginblock.h#L245-L256), [gininsert.c#addItemPointersToLeafTuple](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L42-L119)). A small sample keeps most keys on the expensive side of that transition.
+2. Distinct keys saturate while rows grow, so the entry tree's share shrinks with scale — and the entry tree is the part that a 50/50 split leaves half-empty ([ginentrypage.c#entrySplitPage-balance](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L666-L689)).
+3. Segment overhead amortizes: every compressed segment pays an 8-byte header and is kept at least 128 bytes ([ginblock.h#GinPostingList](../../../raw/postgres-12/src/include/access/ginblock.h#L334-L346), [gindatapage.c#GinPostingListSegmentMaxSize](../../../raw/postgres-12/src/backend/access/gin/gindatapage.c#L25-L36)), which a short posting list cannot fill efficiently.
+
+Measured on `arr_fresh_gin`, an index with **0.00% true bloat**, bytes per row fell monotonically with sample size: 64.5 at 3,430 rows, 29.4 at 20,090, 21.5 at 40,320, 16.6 at 100,730, and 13.3 at the full 400,000. Extrapolating from any of those overstates the fresh size, so the method reports large negative bloat on a perfectly packed index:
+
+| Sample | Sample rows | Sample bytes | Extrapolated fresh | True fresh | Fresh error | Reported bloat (true 0.00%) |
+|---|---|---|---|---|---|---|
+| 1% | 3,430 | 221,184 | 25,794,052 | 5,332,992 | +383.67% | −383.67% |
+| 5% | 20,090 | 589,824 | 11,743,634 | 5,332,992 | +120.21% | −120.21% |
+| 10% | 40,320 | 868,352 | 8,614,603 | 5,332,992 | +61.53% | −61.53% |
+| 25% | 100,730 | 1,671,168 | 6,636,228 | 5,332,992 | +24.44% | −24.44% |
+
+On the genuinely bloated fixtures the same bias masks real waste. `arr_churn_gin` (true 72.14%) read −54.64% / 29.39% / 50.75% / 64.10% at 1/5/10/25%; `arr_pending_gin` (true 75.73%) read −34.47% / 33.00% / 52.59% / 66.71%; `ts_docs_gin` (true 24.17%) read −246.53% / −67.19% / −27.31% / 11.02%. Copying only the indexed column instead of `SELECT *` changed `arr_churn_gin`'s answer by roughly two points (31.87% / 52.55% / 66.07%), which is noise next to the sublinearity error. A 5% sample of the all-rows-deleted `arr_uniq` returned zero rows, leaving the estimate undefined.
+
+Sampling 25% of the table to land 24 points wrong is worse than method A, which samples 100% and is exact.
+
+### Which size to divide by
+
+Pick one size function and use it on both sides of the subtraction.
+
+- `pg_relation_size(idx)` counts the **main fork only** ([pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6884-L6891)). This is the right denominator for "bytes a rebuild reclaims", because the main fork is what GIN grows and never truncates ([ginvacuum.c#ginvacuumcleanup](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L738-L794)).
+- `pg_table_size(idx)` and `pg_total_relation_size(idx)` add the FSM fork ([dbsize.c#calculate_table_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L380-L408)). Every index except hash has one ([storage.sgml#Free-Space-Map](../../../raw/postgres-12/doc/src/sgml/storage.sgml#L600-L607)), and an index has no visibility map ([storage.sgml#relation-forks](../../../raw/postgres-12/doc/src/sgml/storage.sgml#L204-L216)).
+- `pg_indexes_size(idx)` is always 0 and is not a mistake worth making twice ([dbsize.c#calculate_indexes_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L410-L414)).
+
+The forks are not interchangeable in practice. At the pin, four of the five GIN indexes had a 0-byte FSM fork, so `pg_relation_size`, `pg_table_size`, and `pg_total_relation_size` returned identical values. After `gin_clean_pending_list` recorded 883 removed pending pages, `arr_pending_gin` reported main 11,247,616 bytes, FSM 24,576 bytes, and `pg_table_size` 11,272,192 bytes — a 0.2% difference that would silently show up as extra "waste" if the two sides of the subtraction used different functions.
+
+### Core-only pending-list probes
+
+When `fastupdate` is on, most of a GIN index's excess can be pending-list pages, and core SQL can size them two ways without contrib.
+
+**Read-only, via the planner.** `gincostestimate` starts its entry-page fetch count at the metapage's pending-page count and prices those pages at `random_page_cost` ([selfuncs.c#gincostestimate-pending](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6869-L6873), [selfuncs.c#gincostestimate-startup](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6922-L6926)), then folds that into the index total cost ([selfuncs.c#gincostestimate-total](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6964-L6977)). GIN has no `amgettuple` ([ginutil.c#ginhandler](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L71-L72)), so it always plans as a `Bitmap Index Scan`, whose displayed startup cost is forced to zero and whose total cost is exactly `indextotalcost` ([createplan.c#create_bitmap_subplan-cost](../../../raw/postgres-12/src/backend/optimizer/plan/createplan.c#L3214-L3216)). So the node's total cost divided by `random_page_cost` is an upper-bound proxy for pending pages, and it is tight when the pending list dominates:
+
+```sql
+SET /* wiki_gin_pending_probe_statement_timeout */ statement_timeout = '30s';
+SET /* wiki_gin_pending_probe_lock_timeout */ lock_timeout = '5s';
+SET /* wiki_gin_pending_probe_seqscan */ enable_seqscan = off;
+
+EXPLAIN /* wiki_gin_pending_probe */ (COSTS ON)
+SELECT count(*) FROM public.arr_pending WHERE tags @> ARRAY[7];
+
+RESET /* wiki_gin_pending_probe_reset */ enable_seqscan;
+```
+
+Measured at the pin, with `random_page_cost = 4`:
+
+| Index state | Live pages | `Bitmap Index Scan` total cost | cost ÷ `random_page_cost` | Actual pending pages |
+|---|---|---|---|---|
+| `arr_pending_gin`, list intact | 1,471 | 5,886.95 | 1,471.7 | 1,469 |
+| `arr_pending_gin`, after more inserts | 1,240 | 3,550.00 | 887.5 | 883 |
+| `arr_pending_gin`, after `gin_clean_pending_list` | 1,373 | 21.04 | 5.3 | 0 |
+| `arr_fresh_gin`, no pending list | 651 | 22.20 | 5.6 | 0 |
+| `arr_churn_gin`, no pending list | 590 | 20.11 | 5.0 | 0 |
+
+Read it as a ratio against the index's page count: 71.6% and 71.2% of pages implied pending on the two loaded `arr_pending_gin` states, against 0.4% for the same index once its list was cleaned and 0.9% and 0.8% on the two indexes that never had one. `enable_seqscan = off` was needed because with the list intact the planner correctly preferred a sequential scan. The proxy is not a measurement: it also carries data-page fetches and per-tuple CPU terms, and it moves with the query's selectivity.
+
+**Destructive, but exact.** `gin_clean_pending_list` returns the number of pending pages it deleted ([ginfast.c#gin_clean_pending_list](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L1030-L1074)). At the pin it returned 883, matching the actual count, and the index then grew from 10,158,080 to 11,247,616 bytes as those entries moved into the trees — so this reports pending pages and reduces future scan cost, but does not shrink the file.
+
+### Accuracy measured at the pin
+
+All numbers come from one isolated PostgreSQL 12.2 server built from the pinned checkout, 8 kB blocks, `autovacuum = off`, `maintenance_work_mem = 64MB`, `random_page_cost = 4`. `pgstattuple` was installed **only** to cross-check the core-only pending-page proxy; no recipe above uses it. Timings are omitted as machine-dependent.
+
+Five fixtures:
+
+| Index | Table contents | Definition | Churn applied |
+|---|---|---|---|
+| `arr_churn_gin` | 400,000 rows of `ARRAY[g % 1000, g % 997, (g * 7) % 5000]` | `gin (tags) WITH (fastupdate = off)` | 320,000 non-HOT updates, then a third deleted |
+| `arr_uniq_gin` | 300,000 rows of `ARRAY[g]` | same | every row deleted |
+| `ts_docs_gin` | 200,000 seven-lexeme `tsvector` documents | `gin (body) WITH (fastupdate = off)` | half rewritten, a quarter deleted |
+| `arr_fresh_gin` | same generator as `arr_churn`, 400,000 rows | same | none — control |
+| `arr_pending_gin` | 200,000 rows inserted after index creation | `gin (tags) WITH (fastupdate = on, gin_pending_list_limit = 1048576)` | pending list never cleaned |
+
+**Method A against a real `REINDEX`.** The probe size and the post-`REINDEX` size were identical in every case:
+
+| Index | Current bytes | Probe `fresh_bytes` | Post-`REINDEX` bytes | Wasted bytes | Bloat % |
+|---|---|---|---|---|---|
+| `arr_churn_gin` | 13,524,992 | 3,768,320 | 3,768,320 | 9,756,672 | 72.14 |
+| `arr_uniq_gin` | 16,801,792 | 16,384 | 16,384 | 16,785,408 | 99.90 |
+| `ts_docs_gin` | 4,947,968 | 3,751,936 | 3,751,936 | 1,196,032 | 24.17 |
+| `arr_pending_gin` | 12,050,432 | 2,924,544 | 2,924,544 | 9,125,888 | 75.73 |
+| `arr_fresh_gin` | 5,332,992 | 5,332,992 | 5,332,992 | 0 | 0.00 |
+
+The control returning exactly 0.00% matters: the method has no systematic offset to subtract.
+
+**Method B against method A.** Baselines were recorded right after those rebuilds, dividing by the table's `reltuples`: 14.1312 bytes/row for `arr_churn_gin`, 13.3325 for `arr_fresh_gin`, 14.6227 for `arr_pending_gin`, 25.0129 for `ts_docs_gin`. Two further churn rounds followed, each ending in `VACUUM (ANALYZE)` or `ANALYZE`, with a fresh probe for truth:
+
+| Round | Index | Current bytes | Est. fresh | True fresh | Est. bloat % | True bloat % | Error (points) |
+|---|---|---|---|---|---|---|---|
+| 2 | `arr_churn_gin` | 4,833,280 | 3,229,993 | 3,293,184 | 33.17 | 31.86 | +1.31 |
+| 2 | `ts_docs_gin` | 4,243,456 | 3,751,936 | 3,768,320 | 11.58 | 11.20 | +0.38 |
+| 2 | `arr_pending_gin` | 10,158,080 | 4,679,270 | 4,399,104 | 53.94 | 56.69 | −2.75 |
+| 2 | `arr_fresh_gin` | 5,332,992 | 5,332,992 | 5,332,992 | 0.00 | 0.00 | 0.00 |
+| 3 | `arr_churn_gin` | 4,833,280 | 2,422,494 | 2,473,984 | 49.88 | 48.81 | +1.07 |
+| 3 | `ts_docs_gin` | 4,243,456 | 3,751,936 | 3,768,320 | 11.58 | 11.20 | +0.38 |
+| 3 | `arr_pending_gin` | 11,247,616 | 4,679,270 | 4,399,104 | 58.40 | 60.89 | −2.49 |
+| 3 | `arr_fresh_gin` | 5,332,992 | 5,332,992 | 5,332,992 | 0.00 | 0.00 | 0.00 |
+
+Worst error across eight comparisons: 2.75 percentage points, on the fixture whose live row count grew 60% past its baseline. The untouched control stayed at exactly 0.00%.
+
+**What `pg_stats` offered.** Only the array columns carried a distinct-element-count histogram, and its last element matched the three-element arrays:
+
+| Column | `n_distinct` | `most_common_elems` length | `elem_count_histogram` length | Average distinct elements per row |
+|---|---|---|---|---|
+| `arr_churn.tags` | −1 | 1000 | 101 | 2.9983332 |
+| `arr_fresh.tags` | −1 | 1000 | 101 | 2.9972334 |
+| `arr_pending.tags` | −1 | 1000 | 101 | 2.9947667 |
+| `ts_docs.body` | −1 | 818 | (null) | (null) |
+
+The `tsvector` column had no histogram at all, which is the array-only limit from [Why core SQL cannot see inside a GIN index](#why-core-sql-cannot-see-inside-a-gin-index) reproduced.
+
+**The filed SQL, run verbatim.** All eight fenced blocks in this follow-up executed against the pin with `ON_ERROR_STOP` set, in one pass, on the round-3 state. Method A reproduced `arr_churn_gin` at current 4,833,280 bytes, fresh 2,473,984, wasted 2,359,296 (`2304 kB`), 48.81% — the same figures as the round-3 truth table. Method B returned 0.00% because the baseline had just been recorded. The sampled probe drew 8,358 rows into 294,912 bytes and extrapolated 6,048,872 bytes against a true fresh 2,473,984, a further +144.5% overstatement. The isolated server was stopped afterwards; disposable SQL, logs, and clusters remain under `.wiki-runtime/`.
+
+### Settings for the core-only recipes
+
+| Setting | Kind | Apply scope |
+|---|---|---|
+| `statement_timeout`, `lock_timeout` | GUC, `PGC_USERSET` ([guc.c#statement-and-lock-timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2398)) | **Session/transaction** — no restart, no reload; `SET LOCAL` narrows to the current transaction ([set.sgml#SET-scope](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L38-L58)) |
+| `maintenance_work_mem` | GUC, `PGC_USERSET` ([guc.c#maintenance_work_mem](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2251)) | **Session/transaction**; keep it identical between the probe build and the eventual real rebuild ([gininsert.c#ginBuildCallback-flush](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L290-L311)) |
+| `temp_buffers` | GUC, `PGC_USERSET` ([guc.c#temp_buffers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2165-L2174)) | **Session/transaction**, but only before the session's first temporary-table access; method C's temp build reads and writes local buffers |
+| `random_page_cost` | GUC, `PGC_USERSET` ([guc.c#random_page_cost](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3217-L3226)) | **Session/transaction**; it is the divisor in the pending-page proxy |
+| `enable_seqscan` | GUC, `PGC_USERSET` ([guc.c#enable_seqscan](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L883-L890)) | **Session/transaction**; used only to force the GIN path in the `EXPLAIN` probe, never as a remedy |
+
+None of the recipes needs a restart or a reload, and none needs a `postgresql.conf` change.
+
+### Test coverage for the core-only path
+
+- **`pg_relation_size` is never asserted against a GIN index.** The only GIN use of it in the tree addresses the last block of a page-inspection fixture ([pageinspect/sql/gin.sql:16-19](../../../raw/postgres-12/contrib/pageinspect/sql/gin.sql#L16-L19)), and that file is contrib.
+- **No test compares a GIN index's size before and after `REINDEX`,** so method A's core claim has no in-tree regression coverage; the byte-for-byte match above is exact-pin measurement, not a shipped test.
+- **No test asserts `pg_class.relpages` or `reltuples` for a GIN index,** so the three-meanings behaviour in [The reltuples trap](#the-reltuples-trap) is established from source plus measurement only.
+- **No test builds a GIN index on a temporary table.** The ten `USING gin` sites in `src/test/regress/sql/` are all permanent relations, and `src/test/regress/sql/gin.sql` creates no temporary table ([regress/sql/gin.sql](../../../raw/postgres-12/src/test/regress/sql/gin.sql#L1-L36)). Method C's temp-index step rests on index persistence being inherited from the table rather than on a test.
+- **No test asserts a GIN plan cost,** because both GIN `EXPLAIN`s in the regression suite use `(costs off)` ([create_index.sql:283-284](../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L283-L284)). The pending-page proxy therefore has no shipped coverage either.
+- **`pg_stats.elem_count_histogram` is exercised for arrays** in the statistics regression tests, but no test connects it to GIN sizing.
+
 ## Context Reviewed
 
 - GIN access method: `ginfast.c`, `ginvacuum.c`, `gindatapage.c`, `ginentrypage.c`, `ginutil.c`, `gininsert.c`, `ginscan.c`, `ginget.c`, `ginpostinglist.c`, `ginxlog.c`, plus `gin.h`, `gin_private.h`, `ginblock.h`, `ginxlog.h`, and `src/backend/access/gin/README`.
@@ -569,6 +943,8 @@ What is explicitly not covered:
 - Documentation: `gin.sgml`, `maintenance.sgml`, `ref/create_index.sgml`, `ref/reindex.sgml`, `pgstattuple.sgml`, `pageinspect.sgml`, `pgfreespacemap.sgml`, `monitoring.sgml`, `func.sgml`, `catalogs.sgml`, `storage.sgml`.
 - Tests: `src/test/regress/sql/gin.sql`, `create_index.sql`, `tsearch.sql`, `vacuum.sql`, `src/test/isolation/specs/predicate-gin.spec`, `contrib/pgstattuple/sql`, `contrib/pageinspect/sql/gin.sql`, `contrib/amcheck/sql`.
 - Exact-pin execution on isolated 12.2 servers built from `raw/postgres-12/`, including the focused review cluster under `.wiki-runtime/pg12-gin-review-data-20260803`.
+- Core-only measurement follow-up: core size functions and their fork coverage (`dbsize.c`, `relpath.c`, `pg_proc.dat`), `pg_class` size/row statistics and every writer of them (`pg_class.h`, `vacuum.c`, `vacuumlazy.c`, `analyze.c`, `index.c`, `gininsert.c`, `ginvacuum.c`), column statistics for GIN-indexable types (`pg_statistic.h`, `system_views.sql`, `array_typanalyze.c`, `ts_typanalyze.c`, `pg_type.dat`), the absence of any core page/FSM reader (`pg_proc.dat`, `genfile.c`), the GIN fresh-build size model (`ginblock.h`, `ginpostinglist.c`, `gindatapage.c`, `ginentrypage.c`, `gininsert.c`), the bitmap-index-scan cost surface (`selfuncs.c`, `createplan.c`), `TABLESAMPLE` semantics and restrictions (`select.sgml`, `system.c`, `bernoulli.c`, `parse_clause.c`), temporary-relation index behaviour (`create_table.sgml`, `indexcmds.c`), and `storage.sgml` fork layout.
+- A second isolated 12.2 cluster under `.wiki-runtime/ginwaste-data` with five GIN fixtures, three churn rounds, `CREATE INDEX CONCURRENTLY` probes, `REINDEX` ground truth, and verbatim execution of every fenced SQL block in the follow-up.
 
 ## Evidence Map
 
@@ -618,6 +994,33 @@ What is explicitly not covered:
 | amcheck has no GIN support | [verify_nbtree.c#btree_index_checkable](../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L314-L323) |
 | Documentation concedes non-B-tree bloat is under-researched | [maintenance.sgml#routine-reindex](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L876-L880) |
 | `GIN_AM_OID` comes from a generated header | [pg_am.dat:27-29](../../../raw/postgres-12/src/include/catalog/pg_am.dat#L27-L29), [genbki.pl#oid_symbol-emit](../../../raw/postgres-12/src/backend/catalog/genbki.pl#L598-L603), [catalog/.gitignore](../../../raw/postgres-12/src/include/catalog/.gitignore#L1-L3) |
+| `pg_relation_size` covers one fork and is a `stat()` of the segment files | [dbsize.c#calculate_relation_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L308), [dbsize.c#pg_relation_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L310-L336) |
+| The one-argument form defaults to `'main'`; a two-argument form names the fork | [pg_proc.dat#pg_relation_size](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6884-L6891), [relpath.c#forkNames](../../../raw/postgres-12/src/common/relpath.c#L33-L38) |
+| `pg_table_size` sums every fork and is safe on an index | [dbsize.c#calculate_table_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L380-L408) |
+| `pg_indexes_size` on an index returns zero | [dbsize.c#calculate_indexes_size](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L410-L414) |
+| `pg_relation_size` works on temporary relations | [dbsize.c#calculate_relation_size-temp](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L271) |
+| Indexes have an FSM fork but no visibility map | [storage.sgml#relation-forks](../../../raw/postgres-12/doc/src/sgml/storage.sgml#L204-L216), [storage.sgml#Free-Space-Map](../../../raw/postgres-12/doc/src/sgml/storage.sgml#L600-L607) |
+| `relpages`/`reltuples` are planner estimates refreshed by VACUUM, ANALYZE, and some DDL | [pg_class.h#relpages](../../../raw/postgres-12/src/include/catalog/pg_class.h#L57-L63), [catalogs.sgml#pg_class.relpages](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L1759-L1770), [catalogs.sgml#pg_class.reltuples](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L1772-L1782) |
+| `vac_update_relstats` is the writer of both fields | [vacuum.c#vac_update_relstats-signature](../../../raw/postgres-12/src/backend/commands/vacuum.c#L1156-L1162), [vacuum.c#vac_update_relstats](../../../raw/postgres-12/src/backend/commands/vacuum.c#L1180-L1191) |
+| After `CREATE INDEX`/`REINDEX`, a GIN index's `reltuples` is the extracted-key count | [gininsert.c#ginBuildCallback-indtuples](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L262-L270), [gininsert.c#ginbuild-index_tuples](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L419-L427), [index.c#index_build-index_update_stats](../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986) |
+| ANALYZE without VACUUM sets index `reltuples` from a sampled fraction, 1.0 when non-partial | [analyze.c#do_analyze_rel-index-stats](../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [analyze.c:438](../../../raw/postgres-12/src/backend/commands/analyze.c#L438) |
+| No `pg_statistic` slot holds a column-wide distinct-element count | [pg_statistic.h#STATISTIC_NUM_SLOTS](../../../raw/postgres-12/src/include/catalog/pg_statistic.h#L120-L126) |
+| The last element of the distinct-element-count histogram is the per-row average | [array_typanalyze.c#compute_array_stats-avg-count](../../../raw/postgres-12/src/backend/utils/adt/array_typanalyze.c#L605-L614), [pg_statistic.h#STATISTIC_KIND_DECHIST](../../../raw/postgres-12/src/include/catalog/pg_statistic.h#L236-L249), [catalogs.sgml#elem_count_histogram](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L10921-L10930) |
+| `pg_stats` exposes that histogram from statistic kind 5 | [system_views.sql#pg_stats-elem_count_histogram](../../../raw/postgres-12/src/backend/catalog/system_views.sql#L240-L246) |
+| `tsvector` gets a most-common-elements slot only; `jsonb` gets no `typanalyze` | [ts_typanalyze.c#compute_tsvector_stats-mcelem](../../../raw/postgres-12/src/backend/tsearch/ts_typanalyze.c#L415-L426), [pg_type.dat:438-442](../../../raw/postgres-12/src/include/catalog/pg_type.dat#L438-L442), [analyze.c#typanalyze-dispatch](../../../raw/postgres-12/src/backend/commands/analyze.c#L955-L963) |
+| `gin_clean_pending_list` is a core SQL function returning pages deleted | [pg_proc.dat#gin_clean_pending_list](../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L8639-L8642), [ginfast.c#gin_clean_pending_list](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L1030-L1074) |
+| `pg_read_binary_file` is the only core path to raw relation bytes | [genfile.c#pg_read_binary_file](../../../raw/postgres-12/src/backend/utils/adt/genfile.c#L288-L300) |
+| A `Bitmap Index Scan` node shows zero startup and `indextotalcost` as its total | [createplan.c#create_bitmap_subplan-cost](../../../raw/postgres-12/src/backend/optimizer/plan/createplan.c#L3214-L3216) |
+| `gincostestimate` folds the pending-page charge into the index total cost | [selfuncs.c#gincostestimate-startup](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6922-L6926), [selfuncs.c#gincostestimate-total](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6964-L6977) |
+| Entry-tree splits equalize bytes with no build or append special case | [ginentrypage.c#entrySplitPage-balance](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L666-L689) |
+| An entry tuple's in-line posting list is capped by `GinMaxItemSize` before promotion | [ginblock.h#GinMaxItemSize](../../../raw/postgres-12/src/include/access/ginblock.h#L245-L256), [gininsert.c#addItemPointersToLeafTuple](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L42-L119) |
+| A posting-list segment costs an 8-byte header plus 1 to 7 varbyte bytes per later TID | [ginblock.h#GinPostingList](../../../raw/postgres-12/src/include/access/ginblock.h#L334-L346), [ginpostinglist.c#varbyte-format](../../../raw/postgres-12/src/backend/access/gin/ginpostinglist.c#L23-L72), [ginpostinglist.c#MaxBytesPerInteger](../../../raw/postgres-12/src/backend/access/gin/ginpostinglist.c#L83-L84) |
+| A GIN build allocates a metapage and root before scanning | [gininsert.c#ginbuild-meta-root](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L337-L357) |
+| The build accumulator flushes at `maintenance_work_mem`, and the docs call build time sensitive to it | [gininsert.c#ginBuildCallback-flush](../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L290-L311), [gin.sgml#gin-tips-maintenance_work_mem](../../../raw/postgres-12/doc/src/sgml/gin.sgml#L554-L563) |
+| `TABLESAMPLE` accepts only tables, matviews, and partitioned tables | [parse_clause.c#transformRangeTableSample-relkind](../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1160-L1169) |
+| `SYSTEM` samples whole blocks, `BERNOULLI` samples rows | [select.sgml#TABLESAMPLE-methods](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L404-L423), [system.c#system_nextsampletuple](../../../raw/postgres-12/src/backend/access/tablesample/system.c#L224-L235), [bernoulli.c#bernoulli_nextsampletuple](../../../raw/postgres-12/src/backend/access/tablesample/bernoulli.c#L169-L179) |
+| An index on a temporary table is automatically temporary, and CONCURRENTLY is downgraded | [create_table.sgml#TEMPORARY-indexes](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L173-L178), [indexcmds.c#DefineIndex-temp-nonconcurrent](../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499) |
+| `temp_buffers` is session-scoped | [guc.c#temp_buffers](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2165-L2174) |
 
 ## Open Questions
 
@@ -627,6 +1030,12 @@ What is explicitly not covered:
 - **Autovacuum's `full_clean = false` behavior was not measured under concurrent append.** The caller asymmetry is established from source, but the exact-pin server ran with `autovacuum = off`. Without concurrent appends, a partial clean can still reach the end of the entire pre-existing list, so no fixed residue can be inferred.
 - **`gin_leafpage_items` was not used to quantify within-leaf slack.** It would give exact per-segment byte counts for posting-tree leaves, which is the missing piece for a true density metric. Its restriction to compressed data leaves ([ginfuncs.c#gin_leafpage_items](../../../raw/postgres-12/contrib/pageinspect/ginfuncs.c#L196-L202)) means it cannot cover entry-tree leaves, so it could only ever measure part of the index.
 - **Cross-version behavior is out of scope.** Whether any of these mechanisms changed after v12 was not investigated, and per the evidence rules cannot be answered from this checkout.
+- **Method B's accuracy bound is fixture-specific, not a general guarantee.** The worst error observed was 2.75 percentage points over eight comparisons on four fixtures, and the largest error came from the fixture whose live row count grew 60% past its baseline. Nothing in the pinned tree bounds the error, and no shipped test exercises it. Treat the number as evidence that the method is usable, not as a tolerance.
+- **The bytes-per-row baseline was only tested with a stable key distribution.** All fixtures kept the same keys-per-row and roughly the same key cardinality across churn. A workload that changes the number of extracted keys per row, or moves keys across the `GinMaxItemSize` promotion boundary ([ginblock.h#GinMaxItemSize](../../../raw/postgres-12/src/include/access/ginblock.h#L245-L256)), would invalidate a baseline by an amount this review did not quantify.
+- **No core-only method was found for a first measurement with no prior rebuild.** Method A needs a build; method B needs a baseline recorded after one. An operator inheriting an un-rebuilt GIN index has no read-only way to get an absolute wasted-byte figure from core SQL, because of the three gaps in [Why core SQL cannot see inside a GIN index](#why-core-sql-cannot-see-inside-a-gin-index).
+- **The pending-page proxy has no derived error bound.** The two loaded observations landed 0.18% and 0.51% above the true pending-page count, but the `Bitmap Index Scan` total cost also carries data-page fetches and per-tuple CPU terms ([selfuncs.c#gincostestimate-total](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6964-L6977)), so its accuracy depends on the probe query's selectivity. Only an upper-bound reading is defensible.
+- **Whether a smarter sampled estimator could work was not established.** This review only tested linear extrapolation of bytes per row, which failed. A model that separates saturating entry-tree bytes from linear posting bytes is conceivable, but it needs the distinct-key count that no core statistic provides ([pg_statistic.h#STATISTIC_NUM_SLOTS](../../../raw/postgres-12/src/include/catalog/pg_statistic.h#L120-L126)), so it was not pursued.
+- **`pg_read_binary_file` was not tested as a page reader.** It is the only core path to raw relation bytes ([genfile.c#pg_read_binary_file](../../../raw/postgres-12/src/backend/utils/adt/genfile.c#L288-L300)), and decoding GIN page headers from `bytea` in SQL is arguably "core SQL only", but it bypasses shared buffers and needs elevated privileges. No attempt was made to build or validate such a decoder.
 
 ## Source References
 
@@ -635,11 +1044,14 @@ What is explicitly not covered:
 - Executor, utility, and index API: [execIndexing.c](../../../raw/postgres-12/src/backend/executor/execIndexing.c), [utility.c](../../../raw/postgres-12/src/backend/tcop/utility.c), [indexam.c](../../../raw/postgres-12/src/backend/access/index/indexam.c)
 - VACUUM, horizons, and FSM: [vacuumlazy.c](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c), [vacuum.c](../../../raw/postgres-12/src/backend/commands/vacuum.c), [procarray.c](../../../raw/postgres-12/src/backend/storage/ipc/procarray.c), [indexfsm.c](../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c), [freespace.c](../../../raw/postgres-12/src/backend/storage/freespace/freespace.c)
 - Rebuild and truncation: [index.c](../../../raw/postgres-12/src/backend/catalog/index.c), [indexcmds.c](../../../raw/postgres-12/src/backend/commands/indexcmds.c), [cluster.c](../../../raw/postgres-12/src/backend/commands/cluster.c), [tablecmds.c](../../../raw/postgres-12/src/backend/commands/tablecmds.c), [heap.c](../../../raw/postgres-12/src/backend/catalog/heap.c)
-- Planner: [selfuncs.c](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c), [plancat.c](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c), [costsize.c](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c), [subselect.c](../../../raw/postgres-12/src/backend/optimizer/plan/subselect.c)
+- Planner: [selfuncs.c](../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c), [plancat.c](../../../raw/postgres-12/src/backend/optimizer/util/plancat.c), [costsize.c](../../../raw/postgres-12/src/backend/optimizer/path/costsize.c), [subselect.c](../../../raw/postgres-12/src/backend/optimizer/plan/subselect.c), [createplan.c](../../../raw/postgres-12/src/backend/optimizer/plan/createplan.c)
+- Core size functions and relation paths: [dbsize.c](../../../raw/postgres-12/src/backend/utils/adt/dbsize.c), [relpath.c](../../../raw/postgres-12/src/common/relpath.c), [genfile.c](../../../raw/postgres-12/src/backend/utils/adt/genfile.c)
+- Catalog size and column statistics: [pg_class.h](../../../raw/postgres-12/src/include/catalog/pg_class.h), [pg_statistic.h](../../../raw/postgres-12/src/include/catalog/pg_statistic.h), [system_views.sql](../../../raw/postgres-12/src/backend/catalog/system_views.sql), [analyze.c](../../../raw/postgres-12/src/backend/commands/analyze.c), [array_typanalyze.c](../../../raw/postgres-12/src/backend/utils/adt/array_typanalyze.c), [ts_typanalyze.c](../../../raw/postgres-12/src/backend/tsearch/ts_typanalyze.c), [pg_type.dat](../../../raw/postgres-12/src/include/catalog/pg_type.dat)
+- Table sampling and temporary relations: [system.c](../../../raw/postgres-12/src/backend/access/tablesample/system.c), [bernoulli.c](../../../raw/postgres-12/src/backend/access/tablesample/bernoulli.c), [parse_clause.c](../../../raw/postgres-12/src/backend/parser/parse_clause.c)
 - Settings: [guc.c](../../../raw/postgres-12/src/backend/utils/misc/guc.c), [reloptions.c](../../../raw/postgres-12/src/backend/access/common/reloptions.c)
 - Catalog and generated-header inputs: [pg_am.dat](../../../raw/postgres-12/src/include/catalog/pg_am.dat), [pg_proc.dat](../../../raw/postgres-12/src/include/catalog/pg_proc.dat), [genbki.pl](../../../raw/postgres-12/src/backend/catalog/genbki.pl), [catalog/Makefile](../../../raw/postgres-12/src/backend/catalog/Makefile)
 - Measurement tooling: [pgstatindex.c](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c), [pgstattuple.c](../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c), [pgstatapprox.c](../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c), [ginfuncs.c](../../../raw/postgres-12/contrib/pageinspect/ginfuncs.c), [rawpage.c](../../../raw/postgres-12/contrib/pageinspect/rawpage.c), [pg_freespacemap.c](../../../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap.c), [verify_nbtree.c](../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c)
-- Documentation: [gin.sgml](../../../raw/postgres-12/doc/src/sgml/gin.sgml), [maintenance.sgml](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml), [create_index.sgml](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml), [set.sgml](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml), [pgstattuple.sgml](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml), [pageinspect.sgml](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml), [pgfreespacemap.sgml](../../../raw/postgres-12/doc/src/sgml/pgfreespacemap.sgml), [monitoring.sgml](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml)
+- Documentation: [gin.sgml](../../../raw/postgres-12/doc/src/sgml/gin.sgml), [maintenance.sgml](../../../raw/postgres-12/doc/src/sgml/maintenance.sgml), [create_index.sgml](../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml), [create_table.sgml](../../../raw/postgres-12/doc/src/sgml/ref/create_table.sgml), [select.sgml](../../../raw/postgres-12/doc/src/sgml/ref/select.sgml), [set.sgml](../../../raw/postgres-12/doc/src/sgml/ref/set.sgml), [catalogs.sgml](../../../raw/postgres-12/doc/src/sgml/catalogs.sgml), [storage.sgml](../../../raw/postgres-12/doc/src/sgml/storage.sgml), [pgstattuple.sgml](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml), [pageinspect.sgml](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml), [pgfreespacemap.sgml](../../../raw/postgres-12/doc/src/sgml/pgfreespacemap.sgml), [monitoring.sgml](../../../raw/postgres-12/doc/src/sgml/monitoring.sgml)
 - Tests: [regress/sql/gin.sql](../../../raw/postgres-12/src/test/regress/sql/gin.sql), [pageinspect/sql/gin.sql](../../../raw/postgres-12/contrib/pageinspect/sql/gin.sql), [pgstattuple/expected/pgstattuple.out](../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out), [predicate-gin.spec](../../../raw/postgres-12/src/test/isolation/specs/predicate-gin.spec)
 
 ## Navigation

@@ -2,6 +2,79 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-03] follow-up v12 | GIN wasted bytes from core SQL only
+
+- Filed a core-SQL-only follow-up on [How a GIN Index Becomes Bloated in
+  PostgreSQL 12, and How to Measure It
+  (unverified)](v12/questions/gin-index-bloat.md) against the unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Applied prompt hygiene before drafting. The user approved the corrected
+  wording, "How, using SQL and no extra contrib extension, can I measure the
+  wasted bytes of a GIN index and provide a bloat percentage based on wasted
+  bytes?", chose core-only scope (no `pgstattuple`, `pageinspect`,
+  `pg_freespacemap`, or `amcheck`), and asked for all three candidate methods
+  ranked.
+- Defined wasted bytes as rebuild-reclaimable bytes, then established from
+  source why nothing weaker is measurable: `pg_proc.dat` exposes no page,
+  page-header, metapage, or FSM-contents function; `GinStatsData` is reachable
+  only from `ginGetStats`' C callers; and no `pg_statistic` slot holds a
+  distinct-element count, so `pg_stats.elem_count_histogram` gives postings per
+  row for array columns only (`array_typanalyze.c`) and nothing for `tsvector`
+  (`ts_typanalyze.c`, MCELEM only) or `jsonb` (no `typanalyze`).
+- Ranked three methods. A: a `CREATE INDEX CONCURRENTLY` rebuild probe, exact.
+  B: a recorded bytes-per-row baseline, read-only, with a baseline table, an
+  `ON CONFLICT` refresh statement, and a growth-since-last-stats companion
+  query. C: a `TABLESAMPLE` extrapolation, rejected.
+- Measured on five deterministic fixtures (mid-cardinality arrays with churn,
+  unique-key arrays fully deleted, churned `tsvector`, an untouched control, and
+  a `fastupdate = on` index whose pending list was never cleaned). Method A's
+  `fresh_bytes` equalled the later `REINDEX` size byte-for-byte in all five
+  cases: 3,768,320 / 16,384 / 3,751,936 / 5,332,992 / 2,924,544. Method B stayed
+  within 2.75 percentage points of probe truth across eight comparisons over two
+  further churn rounds and returned exactly 0.00% on the control. Method C erred
+  by +17% to +455% on fresh size and reported −383.67% bloat on the 0%-bloated
+  control; the cause is traced to GIN size being strongly sublinear in row count
+  (bytes per row fell 64.5 -> 29.4 -> 21.5 -> 16.6 -> 13.3 as the sample grew to
+  the full 400,000 rows) through the `GinMaxItemSize` in-line-to-posting-tree
+  transition, saturating distinct keys against 50/50 entry splits, and
+  amortizing 128-to-384-byte segment overhead.
+- Documented the `pg_class.reltuples` trap for GIN: extracted keys after
+  `CREATE INDEX`/`REINDEX` (799,493 on `arr_churn_gin`), heap rows after
+  `VACUUM` (266,667 on the same index), a sampled fraction after `ANALYZE`, and
+  unchanged when VACUUM skipped heap pages. Method B therefore divides by the
+  table's `reltuples`, not the index's.
+- Added a fork-selection section: `pg_relation_size` is main-fork only,
+  `pg_table_size`/`pg_total_relation_size` add the FSM fork, and
+  `pg_indexes_size` on an index is always 0. Four of five fixtures had a 0-byte
+  FSM fork; after `gin_clean_pending_list` the fifth reported main 11,247,616
+  bytes against `pg_table_size` 11,272,192.
+- Added two core-only pending-list probes. The `Bitmap Index Scan` node's total
+  cost is exactly `indextotalcost` (`createplan.c` forces its startup to 0), and
+  `gincostestimate` seeds the entry-page fetch count from the pending-page count
+  at `random_page_cost`, so cost ÷ `random_page_cost` measured 1,471.7 and 887.5
+  against 1,469 and 883 real pending pages, and 5.3 after the list was cleaned.
+  `gin_clean_pending_list` returned 883 exactly and grew the file from
+  10,158,080 to 11,247,616 bytes.
+- All eight fenced SQL blocks ran verbatim with `ON_ERROR_STOP=1` on an isolated
+  exact-pin 12.2 server under `.wiki-runtime/ginwaste-data`. `pgstattuple` was
+  installed only to cross-check the pending-page proxy and is used by no filed
+  recipe. The server was stopped; disposable SQL, logs, and the cluster remain
+  under `.wiki-runtime/`.
+- Verified every new citation range by direct read before drafting, and checked
+  that all 42 `## Contents` entries plus the six in-body anchors resolve, in
+  document order and at the right nesting level.
+- Added seven entries under `## Open Questions`, including that no core-only
+  method produces an absolute figure for an index that has never been rebuilt,
+  that method B's 2.75-point bound is fixture-specific rather than a tolerance,
+  and that `pg_read_binary_file` was not tested as a page decoder.
+- Extended `## Context Reviewed`, `## Evidence Map` (27 new rows), and
+  `## Source References`, and refreshed `wiki/index.md`, `wiki/v12/index.md`,
+  and `wiki/versions.md`.
+- Reset `verified_by_agent` to `not yet` because this was a scoped follow-up
+  rather than a fresh full-page claim audit; human `verified: false` and the
+  visible `(unverified)` title are unchanged.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-03] review-fix v12 | GIN index bloat and how to measure it
 
 - Re-audited [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to
