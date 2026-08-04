@@ -2,6 +2,88 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-04] answer v17 | planner penalties for bloated indexes
+
+- Filed [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/bloated-indexes-query-planner.md) against the
+  unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
+  Prompt hygiene was applied before drafting: the user chose the corrected
+  wording ("In PostgreSQL 17, are there mechanisms to penalize bloated indexes
+  in the query planner? ... and what changed since PostgreSQL 12."), asked for
+  exact-pin empirical tests in addition to source, and asked for a new
+  standalone v17 page cross-linked to the existing v12 page rather than a diff
+  against it.
+- Established from source that v17 has exactly four bloat-sensitive planner
+  inputs, all filled by `get_relation_info()`: `IndexOptInfo.pages` (a live
+  `RelationGetNumberOfBlocks()` answer for a non-partial index, or
+  `estimate_rel_size()`'s `pg_class` density for a partial one),
+  `IndexOptInfo.tree_height` from `_bt_getrootheight()`'s `btm_fastlevel`, the
+  `index_pages` argument threaded into `index_pages_fetched()` and
+  `compute_parallel_worker()`, and the v17-only descent clamp
+  `num_sa_scans = Min(num_sa_scans, ceil(index->pages * 0.3333333))`. Documented
+  that `pgstatindex`'s `avg_leaf_density` and `leaf_fragmentation` are computed
+  from live leaf pages only and are read by nothing on the cost path, that
+  `pg_class` has no density or fragmentation column, and that only B-tree, hash,
+  GiST and SP-GiST route through `genericcostestimate()` while GIN and BRIN do
+  not.
+- Catalogued eight bloat shapes with per-query-shape sensitivity: low-density
+  live leaf pages, deleted/half-dead tombstone pages, extra tree levels,
+  fragmented leaf chains, non-HOT version churn, deduplication disabled,
+  VACUUM's 2% `BYPASS_THRESHOLD_PAGES` bypass and wraparound failsafe, and
+  non-B-tree bloat.
+- Built the since-v12 section from the checkout's own history. `git log -L` on
+  `genericcostestimate`, `btcostestimate`, `get_relation_info`,
+  `index_pages_fetched` and `cost_index` bounded by `REL_12_0..HEAD`, plus
+  full-function diffs against `REL_12_0`, showed `index_pages_fetched()` and
+  `cost_index()` are byte-identical and that only five commits touched
+  `btcostestimate` (three of them cosmetic). Attributed each real change to its
+  first release tag via `git tag --contains`: v13 `0d861bbb702` deduplication;
+  v14 `d168b666823` bottom-up index deletion, `9dd963ae253` same-VACUUM page
+  recycling, `5100010ee4d` index-vacuum bypass, `1e55e7d1755` wraparound
+  failsafe, `3499df0dee8` `INDEX_CLEANUP` auto, `3d351d916b2` `reltuples = -1`;
+  v16 `eb5c4e953bb` `DEFAULT_PAGE_CPU_MULTIPLIER`, `cd9479af2af` GIN page CPU
+  charges, `3c569049b7b` partitioned-index zeroing; v17 `5bf748b86bc` SAOP
+  descent clamp and `9391f71523b` `estimate_array_length()` statistics. The
+  in-tree docs and nbtree README supplied their own version boundaries ("Prior
+  to PostgreSQL 14, the only category of B-Tree deletion was simple deletion";
+  "PostgreSQL 14 added the ability for VACUUM to consider if it's possible to
+  recycle newly deleted pages").
+- Measured everything on one isolated server built from the exact pin
+  (`PostgreSQL 17.10`, autovacuum off), using `pgstattuple`, `pageinspect`
+  `bt_metap()` for the planner's fast-root height, and `pg_visibility`. Key
+  results: a closed-form cost prediction from `(pages, tuples, fastlevel)`
+  reproduced `EXPLAIN` to the cent (`123144.43` exact); a point lookup priced at
+  exactly `4.44` on both a 2,745-block/90.06%-density index and its
+  26,411-block/9.62% twin; a `1428.00` cost gap that is exactly
+  `357 * random_page_cost` between 49.73% and 0% `leaf_fragmentation`, leaving
+  zero residual for fragmentation; two 2,745-block indexes over the same 100,000
+  rows both priced at `12730.42` while `avg_leaf_density` read 9.27% for the
+  scattered-delete case and a healthy-looking 89.18% for the contiguous-delete
+  case that hides 2,465 deleted pages; a forged `pg_class.relpages = 1` that
+  left cost unchanged at `25528.42` for a non-partial index while forging a
+  partial index's `reltuples` moved it from `24140.12` to `23140.29`; a
+  `cpu_operator_cost = 1` run isolating the height charge to exactly `50.00`; a
+  plan flip to `Seq Scan` at 25% selectivity; an index dropped from a
+  `BitmapAnd` with `c = 7` demoted to a `Filter`; 4 versus 6 parallel workers;
+  a SAOP descent plateau at exactly 3 versus 19 descents; 852 versus 2,749
+  blocks with `deduplicate_items` off (gaps `68.00` and `7516.00` matching page
+  arithmetic exactly); and 583 versus 1,174 blocks of version-churn growth
+  without and with a held `REPEATABLE READ` snapshot.
+- Recorded the explicit test absence: `src/test` contains no reference to
+  `tree_height`, `btcostestimate`, or `genericcostestimate`, and the only
+  in-tree `pgstatindex` test runs against an empty index and expects `NaN` for
+  both density and fragmentation.
+- Six follow-ups recorded under `## Open Questions`, including the one-cent
+  rounding gaps in the verification SQL, the single-workload nature of the
+  churn measurement, and the un-isolated heap-versus-index share of the
+  `effective_cache_size` effect.
+- The isolated server was stopped, the blocking snapshot session terminated,
+  and disposable fixtures and SQL scripts remain under `.wiki-runtime/`.
+  Human `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are all unchanged pending a separate
+  claim-by-claim review. Updated `wiki/index.md`, `wiki/v17/index.md`, and
+  `wiki/versions.md`. `scripts/wiki_lint` reports 0 errors and 0 warnings.
+
 ## [2026-08-04] follow-up v12 | when the planner discards a GIN index for a B-tree
 
 - Extended [Planner Penalties for Bloated Indexes in PostgreSQL 12
