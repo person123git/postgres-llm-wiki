@@ -2,6 +2,73 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-04] follow-up v12 | when the planner discards a GIN index for a B-tree
+
+- Extended [Planner Penalties for Bloated Indexes in PostgreSQL 12
+  (unverified)](v12/questions/bloated-indexes-query-planner.md) against the
+  unchanged `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`) pin. Prompt
+  hygiene was applied before drafting: the user approved the corrected follow-up
+  "When might a GIN index be discarded by the query planner and a B-tree used
+  instead?", asked for source plus exact-pin tests, and approved normalizing the
+  page's `## Answer Up Front` heading to the required `## Answer` and adding a
+  `## Contents` table of contents.
+- Structured the answer around three independent gates and cited each: clause
+  matching in `match_clause_to_indexcol()` / `match_opclause_to_indexcol()`
+  (`op_in_opfamily()`, the `get_index_clause_from_support()` escape hatch, and
+  the core `pg_amop.dat` GIN operator families, none of which carry `<`, `<=`,
+  `>=`, or `>`); plan shape from `ginhandler` versus `bthandler`
+  (`amgettuple = NULL` so bitmap-only, `amcanorder`/`amcanorderbyop` false,
+  `amcanreturn = NULL`, `amsearchnulls`/`amsearcharray`/`amcanparallel` false)
+  routed through `get_relation_info()`, `get_index_paths()`,
+  `build_index_paths()`, and `check_index_only()`; and cost, contrasting
+  `gincostestimate()`'s all-`random_page_cost` page charges — pending list
+  included and no descent shortcut — with `genericcostestimate()` plus
+  `btcostestimate()`'s pro-rata page share and cheap descent, then
+  `add_path()`/`STD_FUZZ_FACTOR` and `choose_bitmap_and()` pruning.
+- Added the 4X stale-metapage-statistics branch, the keyless full-index GIN path
+  a proven partial predicate can still produce via `amoptionalkey` and
+  `GIN_SEARCH_MODE_EVERYTHING` (with the unreachable pre-9.1
+  `ginVersion < 1` error), the four `CREATE INDEX`-time AM rejections, the
+  `btree_gin` partial-match range behaviour, where GIN still wins, key data
+  structures, the caller/callee chain, build/generated-catalog and contrib
+  boundaries, eight settings with exact apply scopes (all `PGC_USERSET` plus the
+  `fastupdate` reloption), and a three-query production SQL recipe.
+- Exact-pin measurements on an isolated 12.2 server built from the checkout:
+  `n = 42` cost `12.22` through GIN and `4.65` through a B-tree on one table
+  with identical statistics (each alternative isolated by dropping the other
+  index inside a rolled-back transaction), despite the GIN index being 279 pages
+  against the B-tree's 826; B-tree also won `BETWEEN`, `n < 20`, `IN (1,2,3)`,
+  `ORDER BY … LIMIT 10` (7381x), index-only scan (25x), and `IS NULL` (634x).
+  `enable_seqscan = off` produced `disable_cost`-priced sequential scans at
+  `10000000000.00` for the three no-path cases, proving no GIN path existed. A
+  1177-page pending list moved GIN's index cost from `12.45` to `4720.55` and
+  the planner dropped GIN from the `BitmapAnd`, demoting `tsv @@ …` to a
+  `Filter`; cleaning restored it. The pending-page charge was verified exactly:
+  `pgstatginindex` reported 393 pending pages, a two-`random_page_cost` probe
+  recovered `(1588.55 - 397.55) / 3 = 397` charged pages, and
+  `gin_clean_pending_list()` returned `393`. A keyless partial-GIN path charged
+  187 pages for 186 index entries and still beat the `1834.00` sequential scan.
+  The 4X fallback under-estimated by only 1.7% (`17.58` versus `17.89`), which
+  is filed under `## Open Questions`.
+- All three filed SQL blocks ran verbatim against a fixture literally named
+  `my_table` with `my_gin_index` and `my_btree_index`, returning
+  `pending_startup_cost = 200` for 50 pending pages and a GIN cost drop from
+  `217.51` to `17.51` after cleanup. The isolated server was stopped and its
+  disposable fixtures were left under `.wiki-runtime/`.
+- Recorded explicit test absence: no core or contrib test compares a GIN plan
+  with a B-tree plan, `gincostestimate()` has no coverage, every GIN `EXPLAIN`
+  in the tree uses `COSTS OFF`, and the one asserted GIN-rejected-for-`Seq Scan`
+  case (`contrib/btree_gin/expected/bool.out`) is caused by boolean clause
+  simplification rather than costing.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Reset
+  `verified_by_agent` to `not yet` because this was a scoped follow-up rather
+  than a fresh full-page claim audit; human `verified: false` and the visible
+  `(unverified)` title are unchanged.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. All
+  201 distinct source citations on the page were re-checked for existence and
+  in-range line numbers, and every `## Contents` anchor was checked against the
+  page's headings.
+
 ## [2026-08-03] answer v17 | GIN index bloat and how to measure it
 
 - Filed [How a GIN Index Becomes Bloated in PostgreSQL 17, and How to Measure It

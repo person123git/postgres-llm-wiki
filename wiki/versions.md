@@ -14,6 +14,52 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-04: answered a filed follow-up on [Planner Penalties for Bloated
+  Indexes in PostgreSQL 12
+  (unverified)](v12/questions/bloated-indexes-query-planner.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+  Prompt hygiene applied first; the user chose corrected wording ("When might a
+  GIN index be discarded by the query planner and a B-tree used instead?"),
+  source-plus-exact-pin-tests scope, and normalization of the page's
+  `## Answer Up Front` heading to `## Answer` plus a new `## Contents` table of
+  contents. Established from source that v12 discards a GIN index at three
+  separate gates, only the last of which is cost: clause matching
+  (`op_in_opfamily()` in `match_opclause_to_indexcol()`, with
+  `get_index_clause_from_support()` as the only escape hatch, and the core
+  `pg_amop.dat` GIN families carrying no `<`/`<=`/`>=`/`>`); plan shape from
+  GIN's AM flags (`amgettuple = NULL`, `amcanorder`/`amcanorderbyop` false,
+  `amcanreturn = NULL`, `amsearchnulls`/`amsearcharray`/`amcanparallel` false),
+  which removes plain index scans, `ORDER BY` pathkeys, index-only scans,
+  `IS NULL`, native `IN (...)`, and parallel index scans; and cost, where
+  `gincostestimate()` charges `random_page_cost` for every pending, entry, and
+  data page with no descent shortcut, then `add_path()` fuzzy dominance and
+  `choose_bitmap_and()` drop the loser. Also documented the 4X
+  stale-metapage-statistics fallback, the keyless full-index path a partial GIN
+  index can still yield through `amoptionalkey` and
+  `GIN_SEARCH_MODE_EVERYTHING`, the four `CREATE INDEX` AM rejections, and where
+  GIN still wins. Exact-pin measurements on an isolated 12.2 server priced the
+  same `n = 42` predicate at `12.22` through a `btree_gin` GIN index and `4.65`
+  through a B-tree on one table with identical statistics, even though the GIN
+  index was 279 pages against the B-tree's 826; reproduced B-tree wins on
+  `BETWEEN` (`50.68` vs `15.10`), `n < 20` (`28.69` vs `13.11`), `IN (1,2,3)`
+  (`28.67` vs `13.94`), `ORDER BY … LIMIT 10` (`8045.40` vs `1.09`),
+  index-only scan (`123.74` vs `4.95`), and `IS NULL` (`5343.10` vs `8.43`);
+  proved the three no-path cases with `disable_cost`-priced sequential scans at
+  `10000000000.00`; showed a 1177-page `fastupdate` pending list moving GIN's
+  index cost from `12.45` to `4720.55` so the planner dropped it from the
+  `BitmapAnd` and demoted `tsv @@ …` to a `Filter`; and verified the page charge
+  exactly, with `pgstatginindex` reporting 393 pending pages,
+  `(1588.55 - 397.55) / 3 = 397` pages charged at two `random_page_cost`
+  settings, and `gin_clean_pending_list()` returning `393`. A separate 50-page
+  run of the three filed SQL blocks, executed verbatim against objects literally
+  named `my_table` and `my_gin_index`, reported
+  `pending_startup_cost = 200` and a GIN cost drop from `217.51` to `17.51`.
+  Recorded the explicit absence of any upstream GIN-versus-B-tree plan
+  comparison and of any `gincostestimate()` test coverage. Reset
+  `verified_by_agent` to `not yet` because this was a scoped follow-up rather
+  than a fresh full-page claim audit; human `verified: false` and the visible
+  `(unverified)` title are unchanged. `scripts/wiki_lint` reports 0 errors and
+  0 warnings.
 - 2026-08-03: filed [How a GIN Index Becomes Bloated in PostgreSQL 17, and How
   to Measure It (unverified)](v17/questions/gin-index-bloat.md) against
   unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
