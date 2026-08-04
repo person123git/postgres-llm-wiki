@@ -2,6 +2,86 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-04] answer v12 | sampling pgstatginindex variant for GIN indexes
+
+- Filed [Proposing a Sampling pgstatginindex Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatginindex-sample-variant-proposal.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2),
+  derived from the existing v12 B-tree sampling proposal but scoped to GIN only.
+- Prompt hygiene applied first. The user chose corrected wording, a GIN-native
+  page-class output contract, exact-pin empirical tests in addition to source,
+  and a GIN-specific sample policy instead of carrying over the B-tree page's
+  100 MiB / 10% floor.
+- Established from source that v12 has no physical GIN page accounting at all:
+  `pgstattuple()` rejects GIN with `"%s" (gin index) is not supported`,
+  `pgstatindex`/`pgstathashindex` reject it by access method, `pgstatginindex`
+  reads only block 0 for three columns, and every `pageinspect` GIN function
+  takes one caller-supplied raw page. Documented the complete v12 flag taxonomy
+  from `ginblock.h` with the ordering trap that `GinPageSetDeleted` ORs
+  `GIN_DELETED` onto a posting page's existing `GIN_DATA`/`GIN_LEAF` bits while
+  `shiftList` overwrites a drained pending page's flags to exactly
+  `GIN_DELETED`; the three distinct per-class capacity denominators (8160 for
+  entry and list pages, 8152 for data pages after the right-bound reservation);
+  and the data-page traps (`pd_lower` is a byte count so
+  `PageGetMaxOffsetNumber` is invalid, `maxoff` forced to
+  `InvalidOffsetNumber` on compressed leaves, untrustworthy `pd_lower` on
+  pre-9.4 uncompressed leaves). Traced `ginvacuumcleanup`'s three-way
+  classification, `ginUpdateStats`, `ginGetStats`, `GinPageIsRecyclable`,
+  `GinNewBuffer`, the absence of any `RelationTruncate` under
+  `src/backend/access/gin/`, and `gincostestimate`'s 4X scaling cutoff.
+- Designed three GIN-specific sampling rules: R1 an exact pending stratum, since
+  `nPendingPages`/`nPendingHeapTuples` are maintained in real time rather than
+  at VACUUM; R2 a post-stratified expansion `n_np / k_np` over the
+  exactly-known non-pending stratum; R3 a metapage-derived floor
+  `ceil(target * nTotalPages / nDataPages)` with a `max_sample_pages` cap.
+  Recorded that no other v12 index AM has an exactly-known page-class count in
+  its metapage, and that nothing in v12 samples an index — the only
+  `BlockSampler` call site is the table-AM-bound `acquire_sample_rows`, and
+  `IndexAmRoutine` has no sample callback.
+- Built the pinned 12.2 source out of tree under `.wiki-runtime/`, ran one
+  isolated server with `pgstattuple` 1.5 and `pageinspect` 1.7, and built seven
+  GIN fixtures spanning a 106.82 MiB entry-only control, a mixed index with all
+  six classes at once, a 246-page pending list, a 41.1%-deleted posting-tree
+  index, a small healthy index, a partial index, and an empty index. Confirmed
+  the derived capacity constants against live pages (`pagesize` 8192,
+  `special` 8184). Forcing posting trees required 8 distinct keys over 900,000
+  rows; a first attempt with 1,500 keys produced entry pages only.
+- Ran 6,100 seeded prototype runs (5,600 in the main grid, 200 for the floor
+  comparison, 300 for the derived floor). Full-sample equivalence held on all seven
+  fixtures. Post-stratification cut the `entry_leaf_pages` standard deviation
+  from 46.6 to 6.8 at a 31% pending share (mean 544.0 against a truth of 544,
+  versus a biased 537.1) and from 227.8 to 149.0 at 4.5%. Entry-leaf density at
+  1% coverage reproduced 50.44% with 0.00 maximum error over 100 seeds, while a
+  one-page class returned `NaN` in 88 of 100 runs.
+- Recorded an objective negative result rather than defending the design: the
+  page's own first proposal, a flat 50-page absolute floor, was worse than the
+  B-tree page's size-based rule. On the 68.57 MiB mixed fixture an 88-page
+  sample missed the 12-page posting-tree-internal class in 87 of 100 runs and
+  produced 36 `NaN` data densities, where the B-tree 10% rule (878 pages)
+  missed 32 and produced none. The floor was therefore replaced by the
+  metapage-derived one, which reached 1,727 pages (18.52% of the index against a
+  requested 1%) and still missed the class in 6 of 100 runs.
+- Quantified four separate ways the metapage misreports GIN structure:
+  `nDataPages = 180` conflating 108 data pages with 72 deleted ones; a second
+  VACUUM moving 168 deleted pages out of every metapage class so 41.1% of one
+  index's blocks became invisible; pending pages counted in no class
+  (`nEntryPages = 547` against 793 ordinary blocks); and `nTotalPages` reading
+  548 against 794 live blocks. Also measured a VACUUM that flushed a 393-page
+  pending list *growing* the index from 8,777 to 9,325 blocks and leaving 465
+  deleted pages.
+- Verified the exact pending-list walk (393/40,000 and 246/50,000 matching the
+  metapage exactly at `nPendingPages + 1` reads) and all prototype error paths,
+  including that a B-tree index is rejected only accidentally, by
+  `gin_metapage_info`'s `flags == GIN_META` check, which is why the proposed C
+  function must test `relam` itself.
+- All 219 source citations were machine-audited against the pinned checkout with
+  `.wiki-runtime/audit_gin12_sample.py`; 0 errors across 48 distinct files, and
+  ten range boundaries were tightened after review. Human `verified: false`, the
+  visible `(unverified)` title, and `verified_by_agent: not yet` are unchanged
+  because no claim-by-claim full-page re-verification was performed.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+  `scripts/wiki_lint` run recorded below.
+
 ## [2026-08-04] follow-up v17 | GIN discarded in favour of a B-tree
 
 - Answered a filed follow-up on [Planner Penalties for Bloated Indexes in
