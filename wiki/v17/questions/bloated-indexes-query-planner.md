@@ -60,6 +60,21 @@ verified_by_agent: not yet
 - [Caller And Callee Boundary](#caller-and-callee-boundary)
 - [Build, Generated-Header, And Extension Boundary](#build-generated-header-and-extension-boundary)
 - [Tests And Explicit Test Absence](#tests-and-explicit-test-absence)
+- [Follow-Up: When A GIN Index Is Discarded And A B-Tree Is Used Instead](#follow-up-when-a-gin-index-is-discarded-and-a-b-tree-is-used-instead)
+  - [Short answer](#short-answer)
+  - [Gate 1: the clause never matches the GIN index](#gate-1-the-clause-never-matches-the-gin-index)
+  - [Gate 2: the required plan shape rules GIN out](#gate-2-the-required-plan-shape-rules-gin-out)
+  - [Gate 3: cost, and why GIN loses on the same column](#gate-3-cost-and-why-gin-loses-on-the-same-column)
+  - [A bloated GIN index loses to a B-tree](#a-bloated-gin-index-loses-to-a-b-tree)
+  - [Stale GIN metapage statistics](#stale-gin-metapage-statistics)
+  - [The keyless full-index path on a partial GIN index](#the-keyless-full-index-path-on-a-partial-gin-index)
+  - [Jobs no GIN index can be created for](#jobs-no-gin-index-can-be-created-for)
+  - [Where GIN still wins](#where-gin-still-wins)
+  - [GIN exact-pin measurements](#gin-exact-pin-measurements)
+  - [GIN settings that move the boundary](#gin-settings-that-move-the-boundary)
+  - [GIN key data structures](#gin-key-data-structures)
+  - [GIN caller and callee boundary](#gin-caller-and-callee-boundary)
+  - [GIN tests and explicit test absence](#gin-tests-and-explicit-test-absence)
 - [Open Questions](#open-questions)
 - [Related Pages](#related-pages)
 - [Evidence Map](#evidence-map)
@@ -70,6 +85,10 @@ verified_by_agent: not yet
 ## Question
 
 In PostgreSQL 17, are there mechanisms to penalize bloated indexes in the query planner? If there are, give a comprehensive explanation with examples of types of bloated indexes and how leaf fragmentation or density affects them, and what changed since PostgreSQL 12.
+
+Follow-up:
+
+When might a GIN index be discarded by the query planner and a B-tree used instead?
 
 ## Answer
 
@@ -586,6 +605,293 @@ On the write side, the code that decides how many pages exist runs entirely insi
 - The nbtree features that limit bloat do have tests, but they test correctness, not size: deduplication and deletion are covered through `src/test/regress/sql/btree_index.sql` and `contrib/amcheck`, neither of which asserts page counts.
 - All measurements on this page were therefore produced ad hoc on an isolated exact-pin server, not by any in-tree test.
 
+## Follow-Up: When A GIN Index Is Discarded And A B-Tree Is Used Instead
+
+### Short answer
+
+PostgreSQL 17 discards a GIN index at three separate gates, and only the third one is about cost. A GIN index that clears gates 1 and 2 still loses to a B-tree on the same column for ordinary comparison predicates, because `gincostestimate()` charges `random_page_cost` for every pending, entry and data page it expects to touch and adds a `50 * cpu_operator_cost` charge per page on top ([selfuncs.c#gincostestimate](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7661-L8049)), while `genericcostestimate()` charges the B-tree only a pro-rata share of `index->pages` plus cheap CPU descent ([selfuncs.c#genericcostestimate-numIndexPages](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6716-L6731)).
+
+| Gate | Where | What makes GIN lose | Recovery |
+|---|---|---|---|
+| 1. Clause matching | `match_clause_to_indexcol()` | The query operator is not in the GIN index's operator family and no planner support function rewrites it, so no `IndexClause` and therefore no GIN path is ever built ([indxpath.c#match_clause_to_indexcol](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2203-L2269), [indxpath.c#match_opclause_to_indexcol](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2386-L2500)) | Use a matching operator, or add the operators with `contrib/btree_gin` |
+| 2. Plan shape | `build_index_paths()` / `get_index_paths()` | GIN has no `amgettuple`, no ordering, no `amcanreturn`, no null search, no native array search and no parallelism, so it cannot produce a plain `Index Scan`, satisfy `ORDER BY` pathkeys, feed an `Index Only Scan`, serve `IS NULL`, or run in parallel ([ginutil.c#ginhandler](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89), [indxpath.c#get_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L709-L767)) | None. These are AM properties, not costs |
+| 3. Cost | `gincostestimate()` versus `btcostestimate()`, then `add_path()` / `choose_bitmap_and()` | GIN's page charges are all at `random_page_cost` and include the whole pending list, as startup cost ([selfuncs.c#gincostestimate-pending](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7881-L7885), [selfuncs.c#gincostestimate-random-page-cost](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7975-L7979)) | Clean the pending list, `VACUUM`, or drop `fastupdate` |
+
+Measured at this pin on one table carrying both indexes over the same 300,000 rows, so the two `EXPLAIN` runs saw literally identical statistics: the same `n = 42` predicate cost **`12.97` through a `btree_gin` GIN index and `4.52` through a B-tree**, and the planner chose the B-tree. The GIN index was 279 blocks and the B-tree 280, so GIN lost while being the physically smaller index.
+
+### Gate 1: the clause never matches the GIN index
+
+`create_index_paths()` walks `rel->indexlist` and calls `match_restriction_clauses_to_index()` for each index before any cost model runs ([indxpath.c#create_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L234-L310)). For an `OpExpr`, `match_opclause_to_indexcol()` accepts the clause only when the index column's collation matches and `op_in_opfamily(expr_op, opfamily)` is true; otherwise it falls through to `get_index_clause_from_support()`, the planner-support-function escape hatch ([indxpath.c#match_opclause_to_indexcol-op_in_opfamily](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2433-L2459), [indxpath.c#get_index_clause_from_support](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2557-L2615)).
+
+The core GIN operator families are bootstrap catalog data, and none of them lists `<`, `<=`, `>=`, or `>`:
+
+| GIN opfamily | Operators declared | Evidence |
+|---|---|---|
+| `gin/array_ops` | `&&`, `@>`, `<@`, `=` (whole-array equality, GIN strategy 4) | [pg_amop.dat#gin-array_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1232-L1244) |
+| `gin/tsvector_ops` | `@@`, `@@@` | [pg_amop.dat#gin-tsvector_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1290-L1296) |
+| `gin/jsonb_ops` | `@>`, `?`, `?|`, `?&`, `@?`, `@@` | [pg_amop.dat#gin-jsonb_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1593-L1611) |
+| `gin/jsonb_path_ops` | `@>`, `@?`, `@@` | [pg_amop.dat#gin-jsonb_path_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1613-L1621) |
+
+So `WHERE jb = '{"k": 42}'::jsonb` cannot use a `jsonb_ops` GIN index at all: `jsonb`'s `=` lives in the B-tree and hash families, not the GIN one ([pg_amop.dat#btree-hash-jsonb_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1571-L1591)). The manual states the rule directly: "each column must be used with operators appropriate to the index type; clauses that involve other operators will not be considered" ([indices.sgml#other-operators](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L505-L508)). `contrib/pg_trgm` says the same about its own classes: "Inequality operators are not supported. Note that those indexes may not be as efficient as regular B-tree indexes for equality operator." ([pgtrgm.sgml#index-support](../../../raw/postgres-17/doc/src/sgml/pgtrgm.sgml#L413-L425)).
+
+`contrib/btree_gin` closes gate 1 deliberately. Each of its operator classes declares exactly strategies 1 through 5 — `<`, `<=`, `=`, `>=`, `>` — with the type's B-tree comparison proc as GIN support function 1 ([btree_gin--1.0.sql#int4_ops](../../../raw/postgres-17/contrib/btree_gin/btree_gin--1.0.sql#L56-L69)). Its own documentation states the conclusion this follow-up asks about: "In general, these operator classes will not outperform the equivalent standard B-tree index methods, and they lack one major feature of the standard B-tree code: the ability to enforce uniqueness." ([btree-gin.sgml#caveats](../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33)).
+
+One case that looks like a gate-1 rejection but is not: a boolean column. `WHERE i = true` is simplified to a bare boolean `Var`, so no `OpExpr` survives, but v17 still matches it. `IsBooleanOpfamily()` accepts any opfamily containing `BooleanEqualOperator`, falling back to a catcache lookup for non-built-in opfamilies ([indxpath.c#IsBooleanOpfamily](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2271-L2286), [pg_opfamily.h#IsBuiltinBooleanOpfamily](../../../raw/postgres-17/src/include/catalog/pg_opfamily.h#L59-L65)), and `match_boolean_index_clause()` rewrites the bare `Var` back into `indexkey = true` ([indxpath.c#match_boolean_index_clause](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2288-L2384)). The upstream expected output shows the resulting `Index Cond: (i = true)` on a `btree_gin` bool index ([bool.out#gin-bool-equality](../../../raw/postgres-17/contrib/btree_gin/expected/bool.out#L89-L98)), and the measurement below reproduces it for `i`, `i = true` and `i IS TRUE` alike.
+
+### Gate 2: the required plan shape rules GIN out
+
+`get_relation_info()` copies a fixed set of AM capability flags into each `IndexOptInfo`, deriving `amhasgettuple` and `amhasgetbitmap` from whether the AM supplies those callbacks ([plancat.c#get_relation_info-am-flags](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L317-L335)). GIN and B-tree differ on almost every one:
+
+| `IndexAmRoutine` field | GIN | B-tree | Planner consequence |
+|---|---|---|---|
+| `amgettuple` | `NULL` ([ginutil.c:79](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L79)) | `btgettuple` | `get_index_paths()` submits a path to `add_path()` only when `index->amhasgettuple`; a GIN path can only be collected into `*bitindexpaths` ([indxpath.c#get_index_paths-submit](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L740-L751)), and `build_index_paths()` returns `NIL` outright for `ST_INDEXSCAN` ([indxpath.c#build_index_paths-scantype](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L826-L842)) |
+| `amcanorder` / `amcanorderbyop` | `false` / `false` ([ginutil.c:44](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L44)) | `true` / `false` | `get_relation_info()` fills `sortopfamily` only for `BTREE_AM_OID` or another `amcanorder` AM ([plancat.c#get_relation_info-sortopfamily](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L340-L419)), so `index_is_ordered` is false for GIN and `useful_pathkeys` stays `NIL` ([indxpath.c#build_index_paths-pathkeys](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L905-L944)) |
+| `amcanreturn` | `NULL` ([ginutil.c:70](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L70)) | `btcanreturn` | `index_can_return()` returns false when `amcanreturn` is `NULL` ([indexam.c#index_can_return](../../../raw/postgres-17/src/backend/access/index/indexam.c#L780-L797)), so every `canreturn[i]` is false and `check_index_only()` fails ([indxpath.c#check_index_only](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1730-L1800)) |
+| `amsearchnulls` | `false` ([ginutil.c:51](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L51)) | `true` | `match_clause_to_indexcol()` accepts a `NullTest` only when `index->amsearchnulls`, so `IS NULL` never reaches GIN ([indxpath.c#match_clause_to_indexcol-nulltest](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2251-L2266)) |
+| `amsearcharray` | `false` ([ginutil.c:50](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L50)) | `true` | A `ScalarArrayOpExpr` is omitted from plain paths and re-offered only as a bitmap path ([indxpath.c#build_index_paths-saop](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L862-L885), [indxpath.c#get_index_paths-nonnative-saop](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L753-L766)), and `counts.arrayScans` multiplies the GIN estimate ([selfuncs.c#gincost_scalararrayopexpr](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7549-L7659)) |
+| `amcanparallel` | `false` ([ginutil.c:55](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L55)) | `true` | No partial GIN path; `build_index_paths()` gates parallel paths on `index->amcanparallel` ([indxpath.c#build_index_paths-parallel](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L975-L1002)) |
+
+Three consequences follow, and none can be reversed by tuning:
+
+- **No plain index scan.** The AM developer documentation explains why: `amgetbitmap` returns tuples in a bitmap that "doesn't have any specific ordering", "Ordering operators will never be supplied for such a scan", and "there is no provision for index-only scans with `amgetbitmap`, since there is no way to return the contents of index tuples" ([indexam.sgml#amgetbitmap](../../../raw/postgres-17/doc/src/sgml/indexam.sgml#L991-L1010)). Two upstream test comments say the same operationally: "GIN currently supports only bitmap scans, not plain indexscans" and "GIN only supports bitmapscan, so no need to test plain indexscan" ([create_index.sql#gin-bitmap-only](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L264-L268), [tsearch.sql#gin-bitmap-only](../../../raw/postgres-17/src/test/regress/sql/tsearch.sql#L225-L230)).
+- **No sorted output.** "Of the index types currently supported by PostgreSQL, only B-tree can produce sorted output — the other index types return matching rows in an unspecified, implementation-dependent order." ([indices.sgml#ordering](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L530-L538)). Even a bitmap plan built from a B-tree loses order, because the bitmap is laid out in physical order ([indices.sgml#bitmap-scans](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L643-L656)).
+- **No index-only scan.** "As a counterexample, GIN indexes cannot support index-only scans because each index entry typically holds only part of the original data value" ([indices.sgml#index-only-scans](../../../raw/postgres-17/doc/src/sgml/indices.sgml#L1125-L1136)), matching the `amcanreturn` contract.
+
+The upstream `amutils` regression test asserts exactly this property matrix for `gin` versus `btree`: `orderable`, `returnable`, `search_array` and `search_nulls` are all `f` for GIN while `bitmap_scan` is `t` and `index_scan` is `f`, and `can_order`, `can_unique`, `can_exclude`, `can_include` are all `f` ([amutils.out#column-properties](../../../raw/postgres-17/src/test/regress/expected/amutils.out#L96-L108), [amutils.out#index-properties](../../../raw/postgres-17/src/test/regress/expected/amutils.out#L122-L129), [amutils.out#am-properties](../../../raw/postgres-17/src/test/regress/expected/amutils.out#L152-L157)).
+
+### Gate 3: cost, and why GIN loses on the same column
+
+`cost_index()` calls the AM's `amcostestimate` through the `IndexOptInfo` function pointer, so GIN and B-tree paths for the same clause are priced by different code ([costsize.c#cost_index-amcostestimate](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L610-L621)). `gincostestimate()` builds its estimate like this:
+
+1. Read the metapage counters with `ginGetStats()`. Only `nPendingPages` is current; the rest are as of the last `VACUUM` ([selfuncs.c#gincostestimate-stats](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7696-L7710), [ginutil.c#ginGetStats](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L616-L642)).
+2. Seed the startup page count with the **entire pending list**: `entryPagesFetched = numPendingPages` ([selfuncs.c#gincostestimate-pending](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7881-L7885)).
+3. Add `ceil(counts.searchEntries * rint(pow(numEntryPages, 0.15)))` entry pages, plus a proportional share of entry and data pages for partial-match keys ([selfuncs.c#gincostestimate-entrypages](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7887-L7913)).
+4. Charge about `log2(numEntries)` comparisons per search entry for the entry-tree descent ([selfuncs.c#gincostestimate-descent](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7918-L7934)).
+5. Charge `DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost`, that is `50 * cpu_operator_cost`, for every entry and data page ([selfuncs.c#gincostestimate-page-cpu](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7936-L7954), [selfuncs.c:145](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L145)).
+6. Charge all pending and entry pages at `random_page_cost` as **startup** cost, "because logically-close pages could be far apart on disk" ([selfuncs.c#gincostestimate-random-page-cost](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7975-L7979)).
+7. Add scan-time data pages, taking the larger of the per-entry estimate and a selectivity-derived floor of `ceil(indexSelectivity * numTuples / (BLCKSZ / 3))`, again at `random_page_cost`, then per-qual CPU with no descent-height charge and no ordering support ([selfuncs.c#gincostestimate-datapages](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7981-L8028), [selfuncs.c#gincostestimate-qualcost](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8030-L8047)).
+
+`btcostestimate()` instead delegates to `genericcostestimate()`, which prorates `numIndexPages = ceil(numIndexTuples * index->pages / index->tuples)`, then adds a `log2(index->tuples)` comparison charge and the `(tree_height + 1) * 50 * cpu_operator_cost` descent charge described in [2. B-tree height carries an explicit anti-bloat charge](#2-b-tree-height-carries-an-explicit-anti-bloat-charge).
+
+That asymmetry is the whole story for a selective equality lookup, and it survives GIN being the physically smaller index. Reproducing both closed forms in SQL from the catalog and the GIN metapage matched `EXPLAIN` to the cent for `n = 42` (30 matching rows out of 300,000, `numEntryPages` 278, `numEntries` 10,000, `nDataPages` 0):
+
+- GIN: 2 entry pages plus 1 data page at `random_page_cost`, predicted total `12.9725`, printed `12.97`.
+- B-tree: `ceil(30 * 280 / 300000) = 1` page at `4.0`, plus `ceil(log2(300000)) = 19` comparisons, plus `(1 + 1) * 50 * 0.0025 = 0.25`, plus `30 * (0.005 + 0.0025)`, predicted total `4.5225`, printed `4.52`.
+
+The losing path is then dropped by ordinary path pruning. `add_path()` compares candidates with `compare_path_costs_fuzzily()` at `STD_FUZZ_FACTOR = 1.01` and refuses or removes a dominated path ([pathnode.c#add_path](../../../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L419-L453), [pathnode.c#STD_FUZZ_FACTOR](../../../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L42-L47)). Because a GIN path is only ever a bitmap input, the decisive filter is usually `choose_bitmap_and()`: it first keeps only the cheapest path in each group of paths using identical clause sets, sorts the survivors by index access cost, and then adds a further index to the AND group only when `bitmap_and_cost_est()` reports a lower total ([indxpath.c#choose_bitmap_and](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1287-L1489), [indxpath.c#choose_bitmap_and-accept-reject](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1418-L1489), [indxpath.c#bitmap_and_cost_est](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1560-L1571)). A GIN index whose own scan cost exceeds the saving it produces is therefore dropped from the bitmap tree entirely, and its predicate reappears as a `Filter` above the surviving B-tree bitmap scan.
+
+### A bloated GIN index loses to a B-tree
+
+This is the case that connects the follow-up back to this page's subject. GIN bloat in the `fastupdate` pending list is charged to the planner in full and immediately, because `nPendingPages` is the one metapage counter `gincostestimate()` treats as current ([selfuncs.c#gincostestimate-stats](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7696-L7710)). The manual states the runtime consequence: "searches must scan the list of pending entries in addition to searching the regular index, and so a large list of pending entries will slow searches significantly" ([gin.sgml#fast-update](../../../raw/postgres-17/doc/src/sgml/gin.sgml#L521-L529)).
+
+Measured at the pin on a 200,000-row table with a `tsvector` GIN index (`fastupdate = on`) and a B-tree index on an `int` category column, querying `tsv @@ to_tsquery('simple','zebracorn') AND cat = 7`:
+
+| Pending pages (`pgstatginindex`) | GIN blocks | GIN scan cost for `tsv @@ …` | Plan chosen | Plan total cost |
+|---:|---:|---:|---|---:|
+| 0 | 228 | `13.80` | `BitmapAnd` of GIN and B-tree | `163.08` |
+| 982 | 1,210 | `4187.83` | B-tree bitmap scan only; `tsv @@ …` demoted to `Filter` | `4095.28` |
+| 0 after `gin_clean_pending_list()` | 1,250 | `18.59` | `BitmapAnd` of GIN and B-tree | `244.20` |
+
+The middle row's `4187.83` comes from a separate `EXPLAIN` of the GIN qual on its own, because the chosen two-clause plan no longer contains that scan node.
+
+`gin_clean_pending_list()` returned exactly `982`, matching `pgstatginindex` ([ginfast.c#gin_clean_pending_list](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1085), [pgstatindex.c#pgstatginindex_internal](../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L506-L577)).
+
+Note the direction of the sign: unlike the B-tree page-count penalty in [1. Physical page count enters index cost](#1-physical-page-count-enters-index-cost), this is not a mild pro-rata increase. Every pending page is added to **startup** cost for every scan ([selfuncs.c#gincostestimate-random-page-cost](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7975-L7979)), so it also disqualifies the GIN path from cheap-startup plans such as `LIMIT`.
+
+### Stale GIN metapage statistics
+
+`gincostestimate()` trusts the last-`VACUUM` counters only when the index has not grown too much. It requires `nTotalPages <= numPages`, `nTotalPages > numPages / 4`, `nEntryPages > 0` and `nEntries > 0`; otherwise it invents statistics from the live block count — 90% entry pages, the rest data pages, and 100 entries per entry page — after clamping the page count to at least 10 ([selfuncs.c#gincostestimate-scale-or-invent](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7712-L7766)). The source comment names the 4X cutoff and calls the 100-entries figure "rather bogus".
+
+Two details matter operationally. First, `numPages` comes from `index->pages`, which `get_relation_info()` reads live with `RelationGetNumberOfBlocks()`, so index growth reaches the cost model before any `ANALYZE` ([plancat.c#get_relation_info-index-size](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L471-L486)). Second, `numPendingPages` is discarded when it is not smaller than `numPages`, which is a sanity guard, not a cost reduction ([selfuncs.c#gincostestimate-pending-guard](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7723-L7726)).
+
+Measured: a 2,000-row table's GIN index sat at 2 blocks with metapage counters `(nTotalPages, nEntryPages, nDataPages, nEntries) = (2, 1, 0, 100)` and priced `n = 42` at `8.64`. Adding 398,000 rows without `VACUUM` grew it to 1,369 live blocks while the metapage stayed at 2, so `1369 > 2 * 4` put the estimate on the invented branch (1,232 entry pages, 137 data pages, 123,200 entries) and the cost rose to `17.10`. A later `VACUUM` rewrote the metapage to `(1369, 1368, 0, 200000)` and the cost stayed `17.10` to two decimal places.
+
+The same staleness is visible after a manual pending-list drain, which is a trap worth naming: `gin_clean_pending_list()` moves entries into the tree and grows the fork but does **not** refresh `nTotalPages`. In the measurement below, a freshly vacuumed index read `(324, 200, 123, 1001)` at 324 live blocks, and after the drain it was 1,346 live blocks with the metapage still reading `324`, so the cost model was still using invented statistics.
+
+### The keyless full-index path on a partial GIN index
+
+GIN sets `amoptionalkey = true` ([ginutil.c:49](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L49)), so `build_index_paths()` does not bail out when no clause matches the first index column ([indxpath.c#build_index_paths-amoptionalkey](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L887-L897)), and a partial index whose predicate is proven still yields a path through `useful_predicate` ([indxpath.c#build_index_paths-generate](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L954-L1003)). `gincostestimate()` then prices that clauseless path as a whole-index scan: when `fullIndexScan` is set or `indexQuals == NIL`, it sets `searchEntries = numEntries`, "as if every key in the index had been listed in the query" ([selfuncs.c#gincostestimate-fullscan](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7851-L7876)). The same branch fires when an attribute has a full scan but no normal scan, which is how `GIN_SEARCH_MODE_ALL` reaches the estimate ([gin.h#GIN_SEARCH_MODE](../../../raw/postgres-17/src/include/access/gin.h#L34-L37), [selfuncs.c#gincost_pattern-searchmode](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7453-L7488)).
+
+Measured: a **10-block** partial GIN index with 1,000 entries priced `WHERE id <= 5000` (its own predicate, no GIN-indexable clause) at `4430.35`, and the two-`random_page_cost` probe recovered exactly `1001.00` charged pages — 100 times the index's physical size, because `ceil(1000 * rint(pow(9, 0.15))) = 1000`. Adding `AND n = 42` dropped the same index's cost to `8.55`.
+
+### Jobs no GIN index can be created for
+
+Before any planner gate, four things simply cannot be built on GIN in v17, all rejected from the AM flags ([indexcmds.c#DefineIndex-am-checks](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L860-L879), [cluster.c#cluster_rel-amclusterable](../../../raw/postgres-17/src/backend/commands/cluster.c#L517-L522)). All four messages were reproduced verbatim at the pin:
+
+| Attempt | v17 error |
+|---|---|
+| `CREATE UNIQUE INDEX … USING gin` | `access method "gin" does not support unique indexes` |
+| `CREATE INDEX … USING gin (…) INCLUDE (…)` | `access method "gin" does not support included columns` |
+| `EXCLUDE USING gin (… WITH =)` | `access method "gin" does not support exclusion constraints` |
+| `CLUSTER … USING <gin index>` | `cannot cluster on index "…" because access method does not support clustering` |
+
+### Where GIN still wins
+
+- **Operators only GIN has.** Gate 1 runs in both directions: `@@`, `@>`, `?`, `&&` and the `jsonpath` operators are in GIN families and not in B-tree ones ([pg_amop.dat#gin-jsonb_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1593-L1611)), so for those predicates there is no B-tree candidate to lose to.
+- **One multicolumn GIN instead of a `BitmapAnd`.** The `btree_gin` documentation says that "for queries that test both a GIN-indexable column and a B-tree-indexable column, it might be more efficient to create a multicolumn GIN index that uses one of these operator classes than to create two separate indexes that would have to be combined via bitmap ANDing" ([btree-gin.sgml#caveats](../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33)). Measured: a `gin (tsv, cat)` index priced the two-column predicate at `21.55` and won the plan at `75.23`, against `183.18` for the `BitmapAnd` of the separate GIN and B-tree indexes at a plan cost of `236.85`.
+- **Write amortization.** The pending list exists to make GIN insertion cheap, at the documented cost of slower searches ([gin.sgml#fast-update](../../../raw/postgres-17/doc/src/sgml/gin.sgml#L503-L529)).
+
+### GIN exact-pin measurements
+
+All numbers in this follow-up come from one isolated server built from the pinned checkout (`PostgreSQL 17.10 on x86_64-pc-linux-gnu`), with `autovacuum = off`, `shared_buffers = 256MB` and default planner cost settings (`random_page_cost = 4`, `cpu_operator_cost = 0.0025`, `cpu_index_tuple_cost = 0.005`). `btree_gin` supplied the int4 GIN opclass, `pgstattuple` supplied `pgstatginindex`, and `pageinspect` supplied `gin_metapage_info()` and `bt_metap()`.
+
+| Fixture | Contents | GIN index | B-tree index |
+|---|---|---|---|
+| S | `t_both`, 300,000 rows, `n = i % 10000` | `t_both_n_gin`, `btree_gin` int4 opclass, **279 blocks**, `nEntryPages` 278, `nEntries` 10,000, `nDataPages` 0 | `t_both_n_bt`, **280 blocks**, `fastlevel` 1, 90.31% `avg_leaf_density` |
+| D | `docs`, 200,000 then 300,000 then 400,000 rows | `docs_tsv_gin` on `tsvector`, `fastupdate = on` | `docs_cat_bt` on `cat = i % 20`, 171 blocks |
+| T | `t_stale`, 2,000 then 400,000 rows | `t_stale_gin`, `fastupdate = off`, never re-vacuumed | none |
+| P | `t_part`, 100,000 rows | `t_part_gin`, partial `WHERE id <= 5000`, 10 blocks, 1,000 entries | none |
+| B | `t_bool`, 100,000 boolean rows | `t_bool_gin`, `btree_gin` bool opclass | none |
+
+#### Same table, same statistics, both indexes
+
+Each row below is two `EXPLAIN` runs on fixture S, with the *other* index dropped inside a rolled-back transaction, so `pg_statistic`, `reltuples` and every selectivity estimate are identical. `enable_seqscan` was off so that a missing index path is visible as a `disable_cost`-priced sequential scan.
+
+| Predicate | GIN | B-tree | Row estimate (both) |
+|---|---:|---:|---:|
+| `n = 42` | `12.97` | `4.52` | 30 |
+| `n BETWEEN 100 AND 200` | `67.15` | `44.31` | 3,201 |
+| `n < 20` | `28.63` | `8.89` | 612 |
+| `n IN (1,2,3)` | `30.10` | `13.57` | 90 |
+| `ORDER BY n LIMIT 10` | no index path: `Sort` over `Seq Scan`, `Limit` at `10000011688.92` | `Limit` at `0.78` | 10 |
+| `SELECT n WHERE n = 42` | no index-only scan: `Bitmap Heap Scan` at `122.86` | `Index Only Scan` at `4.82` | 30 |
+| `n IS NULL` | no index path: `Seq Scan` at `10000005206.00` | `Index Scan` at `8.31` | 1 |
+
+The three "no index path" rows are priced by `disable_cost = 1.0e10` ([costsize.c:130](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L130)), which is what a forced-off sequential scan costs when it is the only path available. They are gate-2 outcomes, not cost losses. With every `enable_*` setting at its default, the planner chose the B-tree for `n = 42`, `n BETWEEN 100 AND 200` and `n < 20` alike.
+
+#### The page charge, isolated
+
+Running the same query at `random_page_cost = 4` and `random_page_cost = 1` isolates the page count, because every other GIN charge is a CPU charge that does not scale with it:
+
+| Case | Cost at `rpc = 4` | Cost at `rpc = 1` | Difference / 3 | Reconciliation |
+|---|---:|---:|---:|---|
+| Fixture S, `n = 42` | `12.97` | `3.97` | `3.00` | 2 entry pages + 1 data page |
+| Fixture D state A, vacuumed, `nTotalPages` 324 = 324 live blocks | `14.50` | `5.50` | `3.00` | trusted stats: `ceil(rint(200^0.15)) = 2` entry pages + 1 data page |
+| Fixture D state B, 982 pending pages, 1,306 live blocks | `4188.59` | `1233.59` | `985.00` | invented stats (`1306 > 324 * 4`): 982 pending + 2 entry + 1 data page |
+| Fixture T, stale metapage, 1,369 live blocks | `17.10` | `5.10` | `4.00` | invented stats: 3 entry pages + 1 data page |
+| Fixture P, keyless partial index, 10 live blocks | `4430.35` | `1427.35` | `1001.00` | `searchEntries = numEntries = 1000` entry pages + 1 data page |
+
+Fixture D state B is the sharpest result: a `BitmapAnd` plan that cost `250.66` while the metapage and the fork agreed rose to `4501.99` once 982 pending pages appeared, an 18x increase driven entirely by pages that hold no tree structure at all. In the earlier run recorded in the table above, the same condition removed the GIN index from the `BitmapAnd` outright.
+
+#### Boolean column
+
+Fixture B priced `WHERE i`, `WHERE i = true` and `WHERE i IS TRUE` identically at `33.79` for the GIN index scan, each with `Index Cond: (i = true)`. So a bare boolean `Var` is not a gate-1 rejection in v17. `i IS TRUE` additionally left `Filter: (i IS TRUE)` on the heap node while still using the index.
+
+#### Live property matrix
+
+Queried on fixture S, `pg_index_has_property` and `pg_index_column_has_property` returned exactly the values the `amutils` expected output asserts: `index_scan`, `clusterable` and `backward_scan` false for GIN and true for B-tree; `bitmap_scan` true for both; `orderable`, `returnable`, `search_array` and `search_nulls` false for GIN and true for B-tree.
+
+#### A diagnostic pair for a live server
+
+Both blocks below were executed verbatim at the pin against objects literally named `my_table`, `my_col` and `my_gin_index`. The first reports how much of each GIN index is pending list, which is the bloat the planner charges first:
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '5s';
+
+SELECT /* wiki_gin_pending_list_share */
+       c.relname                                        AS gin_index,
+       pg_relation_size(c.oid) / current_setting('block_size')::int AS live_blocks,
+       g.pending_pages,
+       g.pending_tuples,
+       round(100.0 * g.pending_pages
+             / greatest(pg_relation_size(c.oid)
+                        / current_setting('block_size')::int, 1), 2)
+                                                        AS pending_pct_of_index
+  FROM pg_class c
+  JOIN pg_index i ON i.indexrelid = c.oid
+  JOIN pg_am    a ON a.oid = c.relam
+  CROSS JOIN LATERAL pgstatginindex(c.oid) AS g
+ WHERE a.amname = 'gin'
+   AND c.relname = 'my_gin_index'
+ ORDER BY g.pending_pages DESC;
+
+RESET statement_timeout;
+RESET lock_timeout;
+```
+
+It reported `live_blocks = 339`, `pending_pages = 246`, `pending_tuples = 50000`, `pending_pct_of_index = 72.57`. `pgstatginindex` requires `pgstattuple` and reads only the metapage ([pgstatindex.c#pgstatginindex](../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L476-L495)).
+
+The second recovers the number of pages the planner is charging, without any contrib module:
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '5s';
+SET enable_seqscan = off;
+
+SET random_page_cost = 4;
+EXPLAIN (COSTS ON, TIMING OFF) /* wiki_gin_page_charge_probe_high */
+SELECT count(*) FROM my_table
+ WHERE my_col @@ to_tsquery('simple', 'filler');
+
+SET random_page_cost = 1;
+EXPLAIN (COSTS ON, TIMING OFF) /* wiki_gin_page_charge_probe_low */
+SELECT count(*) FROM my_table
+ WHERE my_col @@ to_tsquery('simple', 'filler');
+
+RESET random_page_cost;
+RESET enable_seqscan;
+RESET statement_timeout;
+RESET lock_timeout;
+```
+
+The `Bitmap Index Scan` costs were `2030.46` and `1121.46`, so `(2030.46 - 1121.46) / 3 = 303.00` pages, of which 246 were pending list. Divide by three because the two runs differ by exactly `3.0` per charged page.
+
+### GIN settings that move the boundary
+
+| Setting | v17 default | Role in the GIN-versus-B-tree decision | Apply scope |
+|---|---|---|---|
+| `random_page_cost` | 4.0 | Multiplies every pending, entry and data page GIN expects to touch ([guc_tables.c#random_page_cost](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3685-L3695)) | session/transaction (`PGC_USERSET`) |
+| `cpu_operator_cost` | 0.0025 | Scales GIN's entry-tree descent and its `50 *` per-page CPU charge, and the B-tree's height charge ([guc_tables.c#cpu_operator_cost](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3718-L3728)) | session/transaction (`PGC_USERSET`) |
+| `gin_pending_list_limit` | 4MB | Caps how large a pending list gets before an insert drains it, so it caps the startup penalty ([guc_tables.c#gin_pending_list_limit](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3575-L3584)) | session/transaction (`PGC_USERSET`) |
+| `enable_bitmapscan` | on | Turning it off removes GIN's only plan shape entirely | session/transaction |
+
+Two per-index storage parameters change the physical shape rather than its price, and both take `AccessExclusiveLock`: `fastupdate` (default on) and a per-index `gin_pending_list_limit` override ([reloptions.c#fastupdate](../../../raw/postgres-17/src/backend/access/common/reloptions.c#L123-L130), [reloptions.c#gin_pending_list_limit](../../../raw/postgres-17/src/backend/access/common/reloptions.c#L339-L347)). `gin_clean_pending_list()` drains the list on demand and takes `RowExclusiveLock` on the index ([ginfast.c#gin_clean_pending_list](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1085)).
+
+### GIN key data structures
+
+| Structure | Field | Role |
+|---|---|---|
+| `GinQualCounts` | `partialEntries`, `exactEntries`, `searchEntries`, `arrayScans`, `attHasFullScan`, `attHasNormalScan` | The whole per-qual working set `gincostestimate()` derives from the index quals ([selfuncs.c#GinQualCounts](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7369-L7377)) |
+| `GinStatsData` | `nPendingPages`, `nTotalPages`, `nEntryPages`, `nDataPages`, `nEntries` | The metapage counters; only `nPendingPages` and `ginVersion` are current ([gin.h#GinStatsData](../../../raw/postgres-17/src/include/access/gin.h#L40-L50)) |
+| `GinMetaPageData` | same counters, on disk | Where those numbers live, and why `VACUUM` is what refreshes them ([ginblock.h#GinMetaPageData](../../../raw/postgres-17/src/include/access/ginblock.h#L55-L101)) |
+| `IndexOptInfo` | `amhasgettuple`, `amhasgetbitmap`, `amcanparallel`, `amsearcharray`, `amsearchnulls`, `amoptionalkey`, `sortopfamily`, `canreturn[]` | The gate-2 flags, all copied once in `get_relation_info()` ([plancat.c#get_relation_info-am-flags](../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L317-L335)) |
+
+### GIN caller and callee boundary
+
+```text
+create_index_paths                              indxpath.c
+  ├─ match_restriction_clauses_to_index
+  │    └─ match_clause_to_indexcol
+  │         ├─ match_boolean_index_clause       (IsBooleanOpfamily opfamilies)
+  │         ├─ match_opclause_to_indexcol       -> op_in_opfamily   GATE 1
+  │         │    └─ get_index_clause_from_support
+  │         ├─ match_saopclause_to_indexcol
+  │         └─ NullTest branch                  needs amsearchnulls GATE 2
+  ├─ get_index_paths
+  │    ├─ build_index_paths(ST_ANYSCAN)         amhasgettuple / amoptionalkey / pathkeys
+  │    │    ├─ check_index_only                 -> index_can_return  GATE 2
+  │    │    └─ create_index_path -> cost_index
+  │    │         └─ amcostestimate == gincostestimate     GATE 3
+  │    │              ├─ ginGetStats            -> GIN metapage
+  │    │              ├─ gincost_opexpr / gincost_scalararrayopexpr
+  │    │              │    └─ gincost_pattern   -> extractQuery support proc
+  │    │              └─ index_pages_fetched    (nestloop / array scans)
+  │    ├─ add_path                              amhasgettuple only
+  │    └─ build_index_paths(ST_BITMAPSCAN)       non-native SAOP retry
+  └─ choose_bitmap_and                          GATE 3, drops the loser
+       └─ bitmap_and_cost_est -> bitmap_scan_cost_est -> cost_bitmap_heap_scan
+```
+
+Symbols: [indxpath.c#create_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L234-L310), [indxpath.c#get_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L709-L767), [indxpath.c#build_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L804-L1003), [indxpath.c#choose_bitmap_and](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1287-L1489), [selfuncs.c#gincostestimate](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7661-L8049), [selfuncs.c#gincost_pattern](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7379-L7491), [ginutil.c#ginhandler](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89).
+
+### GIN tests and explicit test absence
+
+- **No in-tree test compares a GIN plan against a B-tree plan on the same column**, and none exercises `gincostestimate()`. `src/test` contains no reference to `gincostestimate`.
+- The `btree_gin` regression suite sets `enable_seqscan = off` and uses `EXPLAIN (COSTS OFF)` throughout, so it asserts plan *shape* only, never cost ([bool.sql#enable_seqscan-off](../../../raw/postgres-17/contrib/btree_gin/sql/bool.sql#L1-L9), [bool.out#gin-bool-equality](../../../raw/postgres-17/contrib/btree_gin/expected/bool.out#L89-L98)).
+- What *is* covered is the gate-2 property matrix, by `amutils` ([amutils.out#index-properties](../../../raw/postgres-17/src/test/regress/expected/amutils.out#L122-L129)), and the bitmap-only restriction, by comments and expected plans in `create_index` and `tsearch` ([create_index.sql#gin-bitmap-only](../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L264-L268), [tsearch.sql#gin-bitmap-only](../../../raw/postgres-17/src/test/regress/sql/tsearch.sql#L225-L230)).
+- Every measurement in this follow-up was therefore produced ad hoc on an isolated exact-pin server.
+
 ## Open Questions
 
 - The one-cent gaps between observed and predicted costs (`28480.42` vs `28480.43`, `8226.42` vs `8226.43`, `9654.42` vs `9654.43`) are consistent with rounding inside the verification SQL rather than in the planner, because the exact-match cases (`123144.43`) use the same expression. Reproducing the prediction in C `double` arithmetic would settle it.
@@ -594,6 +900,10 @@ On the write side, the code that decides how many pages exist runs entirely insi
 - Whether GIN's v16 `DEFAULT_PAGE_CPU_MULTIPLIER` charges make GIN bloat pricing behave qualitatively like the B-tree page charge was not investigated here; the GIN cost model is separate and is covered only to the extent needed to scope this page.
 - The claim that a custom index AM gets `tree_height = -1` unless `relam == BTREE_AM_OID` is read straight from `get_relation_info()`, but no custom-AM fixture was built to confirm what such an AM's `amcostestimate` then does with it.
 - `pgstatindex.tree_level` (`btm_level`) and the planner's `tree_height` (`btm_fastlevel`) were equal in every fixture measured here, because all fixtures were freshly built or rebuilt. A fixture that forces a fast root to diverge from the true root was not constructed.
+- The follow-up's `BitmapAnd` outcome under pending-list bloat was not stable across two runs of the same fixture family. At 982 pending pages, the first run dropped the GIN index and demoted its qual to a `Filter`; a second run on a larger, separately analyzed table kept the GIN index in the `BitmapAnd` while the plan cost rose 18x. Both are `choose_bitmap_and()` outcomes driven by the surviving B-tree's own cost and row estimate, but the boundary between them was not characterized.
+- Fixture T's `VACUUM` refreshed the GIN metapage from `(2, 1, 0, 100)` to `(1369, 1368, 0, 200000)` and the `n = 42` cost stayed `17.10` to two decimal places. The invented and trusted branches happened to produce the same charged page count here, so this fixture does not separate them; a fixture where the two branches diverge visibly was not built.
+- The GIN entry-page estimate `ceil(searchEntries * rint(pow(numEntryPages, 0.15)))` was reconciled arithmetically in every measured case, but `rint()`'s banker's rounding at exact `.5` boundaries was not exercised.
+- Whether `contrib/btree_gin`'s partial-match path (`gincost_pattern()` charging `partialEntries += 100` per key) systematically over- or under-charges a range predicate was not investigated; the measurements report only the resulting costs.
 
 ## Related Pages
 
@@ -601,7 +911,7 @@ On the write side, the code that decides how many pages exist runs entirely insi
 - [Proposing a Sampling pgstatindex Variant for PostgreSQL 17 (unverified)](pgstatindex-sample-variant-proposal.md) - why `pgstatindex` has to read every block to produce the metrics discussed here.
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](reindex-index-concurrently.md) - the online rebuild that resets every input on this page.
 - [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](partial-indexes-pros-cons.md) - more on the partial-index costing path that behaves differently here.
-- [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](../../v12/questions/bloated-indexes-query-planner.md) - the same question answered against the v12 pin.
+- [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](../../v12/questions/bloated-indexes-query-planner.md) - the same question, and the same GIN-versus-B-tree follow-up, answered against the v12 pin.
 
 ## Evidence Map
 
@@ -637,6 +947,18 @@ On the write side, the code that decides how many pages exist runs entirely insi
 | No test covers the bloat charge | no `src/test` match for `tree_height`, `btcostestimate`, `genericcostestimate` |
 | The `pgstatindex` test uses an empty index | [sql/pgstattuple.sql#pgstatindex](../../../raw/postgres-17/contrib/pgstattuple/sql/pgstattuple.sql#L18-L37), [expected/pgstattuple.out#NaN](../../../raw/postgres-17/contrib/pgstattuple/expected/pgstattuple.out#L44-L52) |
 | All four cost GUCs are session-scoped | [guc_tables.c#random_page_cost](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3685-L3695), [guc_tables.c#cpu_operator_cost](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3718-L3728), [guc_tables.c#effective_cache_size](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3507-L3517), [guc_tables.c#min_parallel_index_scan_size](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3530-L3539) |
+| GIN is discarded at clause matching when the operator is not in its opfamily | [indxpath.c#match_opclause_to_indexcol-op_in_opfamily](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2433-L2459); core GIN families carry no `<`/`<=`/`>=`/`>` ([pg_amop.dat#gin-array_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1232-L1244), [pg_amop.dat#gin-jsonb_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1593-L1611)) |
+| `btree_gin` adds strategies 1-5 but is documented not to outperform B-tree | [btree_gin--1.0.sql#int4_ops](../../../raw/postgres-17/contrib/btree_gin/btree_gin--1.0.sql#L56-L69), [btree-gin.sgml#caveats](../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33) |
+| A bare boolean `Var` still matches a GIN bool opclass in v17 | [indxpath.c#IsBooleanOpfamily](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2271-L2286), [indxpath.c#match_boolean_index_clause](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2288-L2384), [bool.out#gin-bool-equality](../../../raw/postgres-17/contrib/btree_gin/expected/bool.out#L89-L98); measured `33.79` for `i`, `i = true` and `i IS TRUE` |
+| GIN yields no plain index scan, no pathkeys, no index-only scan, no `IS NULL`, no native array scan, no parallel scan | [ginutil.c#ginhandler](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89), [indxpath.c#get_index_paths-submit](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L740-L751), [indxpath.c#build_index_paths-pathkeys](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L905-L944), [indxpath.c#check_index_only](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1730-L1800), [indxpath.c#match_clause_to_indexcol-nulltest](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2251-L2266), [amutils.out#index-properties](../../../raw/postgres-17/src/test/regress/expected/amutils.out#L122-L129); measured as `disable_cost` sequential scans |
+| GIN charges every pending, entry and data page at `random_page_cost` plus `50 * cpu_operator_cost` | [selfuncs.c#gincostestimate-page-cpu](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7936-L7954), [selfuncs.c#gincostestimate-random-page-cost](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7975-L7979); measured `12.97` GIN vs `4.52` B-tree on identical statistics, both predicted to the cent |
+| The pending list is charged to startup cost in full | [selfuncs.c#gincostestimate-pending](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7881-L7885); measured 982 pending pages moving the GIN scan from `13.80` to `4187.83` and out of the `BitmapAnd` |
+| `gin_clean_pending_list()` drains the list but leaves `nTotalPages` stale | [ginfast.c#gin_clean_pending_list](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1085), [selfuncs.c#gincostestimate-scale-or-invent](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7712-L7766); measured 1,346 live blocks against a metapage still reading 324 |
+| Stats older than 4X growth are replaced by invented ones | [selfuncs.c#gincostestimate-scale-or-invent](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7712-L7766); measured 1,369 live blocks against a metapage reading 2, charged 4 pages |
+| A keyless partial GIN path is priced as a whole-index scan | [selfuncs.c#gincostestimate-fullscan](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7851-L7876), [indxpath.c#build_index_paths-amoptionalkey](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L887-L897); measured `1001.00` charged pages on a 10-block index |
+| GIN rejects unique, `INCLUDE`, exclusion and `CLUSTER` | [indexcmds.c#DefineIndex-am-checks](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L860-L879), [cluster.c#cluster_rel-amclusterable](../../../raw/postgres-17/src/backend/commands/cluster.c#L517-L522); all four messages reproduced |
+| A multicolumn GIN can beat a `BitmapAnd` of GIN + B-tree | [btree-gin.sgml#caveats](../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33); measured `21.55` versus `183.18` |
+| No test compares GIN and B-tree plan choice, and none covers `gincostestimate` | no `src/test` match for `gincostestimate`; `btree_gin` tests use `EXPLAIN (COSTS OFF)` ([bool.sql#enable_seqscan-off](../../../raw/postgres-17/contrib/btree_gin/sql/bool.sql#L1-L9)) |
 
 ## Context Reviewed
 
@@ -655,6 +977,18 @@ Documentation: `ref/reindex.sgml`, `maintenance.sgml` (routine reindexing), `glo
 History: `git log -L` on `genericcostestimate`, `btcostestimate`, `get_relation_info`, `index_pages_fetched`, and `cost_index` bounded by `REL_12_0..HEAD`; full-file diffs of those functions against `REL_12_0`; `git tag --contains` for every attributed commit; `contrib/pgstattuple` and `src/backend/access/nbtree` history since `REL_12_0`.
 
 Empirical: one isolated PostgreSQL 17.10 server built from the pin, eight fixture scripts covering density, real deletion bloat, height, fragmentation, catalog forgery, plan flips, `BitmapAnd` pruning, parallel worker counts, the v17 SAOP clamp, version churn with and without a held snapshot, and deduplication.
+
+Follow-up (GIN versus B-tree) additions. Path generation and gating: `src/backend/optimizer/path/indxpath.c` (`create_index_paths`, `match_restriction_clauses_to_index`, `match_clause_to_indexcol`, `match_opclause_to_indexcol`, `match_saopclause_to_indexcol`, `match_boolean_index_clause`, `IsBooleanOpfamily`, `get_index_clause_from_support`, `get_index_paths`, `build_index_paths`, `check_index_only`, `choose_bitmap_and`, `bitmap_and_cost_est`), `src/backend/optimizer/util/plancat.c` (the AM capability-flag copy and the `sortopfamily` branches), `src/backend/optimizer/util/pathnode.c` (`add_path`, `STD_FUZZ_FACTOR`), `src/backend/access/index/indexam.c` (`index_can_return`), `src/backend/optimizer/path/costsize.c` (`disable_cost`).
+
+GIN internals: `src/backend/utils/adt/selfuncs.c` (`gincostestimate`, `gincost_pattern`, `gincost_opexpr`, `gincost_scalararrayopexpr`, `GinQualCounts`), `src/backend/access/gin/ginutil.c` (`ginhandler`, `ginGetStats`, `ginUpdateStats`), `src/backend/access/gin/ginfast.c` (`gin_clean_pending_list`), `src/include/access/gin.h` (`GinStatsData`, `GIN_SEARCH_MODE_*`), `src/include/access/ginblock.h` (`GinMetaPageData`).
+
+Catalogs, errors and settings: `src/include/catalog/pg_amop.dat` (the four core GIN opfamilies plus the B-tree and hash `jsonb` families), `src/include/catalog/pg_opfamily.h` (`IsBuiltinBooleanOpfamily`), `src/backend/commands/indexcmds.c` (unique/`INCLUDE`/multicolumn/exclusion AM checks), `src/backend/commands/cluster.c` (`amclusterable`), `src/backend/access/common/reloptions.c` (`fastupdate`, per-index `gin_pending_list_limit`), `src/backend/utils/misc/guc_tables.c` (`gin_pending_list_limit`).
+
+Contrib, tests and docs: `contrib/btree_gin` (`btree_gin--1.0.sql` operator classes, `sql/bool.sql`, `expected/bool.out`), `contrib/pgstattuple/pgstatindex.c` (`pgstatginindex`), `src/test/regress/expected/amutils.out`, `src/test/regress/sql/create_index.sql`, `src/test/regress/sql/tsearch.sql`, `doc/src/sgml/indices.sgml`, `doc/src/sgml/indexam.sgml`, `doc/src/sgml/gin.sgml`, `doc/src/sgml/btree-gin.sgml`, `doc/src/sgml/pgtrgm.sgml`.
+
+Follow-up history: `git log -L` on `gincostestimate` bounded by `REL_12_0..HEAD` returned exactly two commits, `cd9479af2af` and `4b754d6c16e`, whose first release tags by `git tag --contains` are `REL_16_0` and `REL_13_0`. The follow-up describes only v17 behavior and makes no cross-version claim.
+
+Follow-up empirical: one isolated PostgreSQL 17.10 server built from the pin with `btree_gin`, `pgstattuple` and `pageinspect` installed, eight scripts covering same-column GIN-versus-B-tree costing on identical statistics, closed-form reconciliation of both cost models, all six plan-shape cases, `fastupdate` pending-list bloat and drain, the 4X stale-metapage fallback, the keyless partial-index path, the boolean-column case, the live AM property matrix, the four `CREATE INDEX`/`CLUSTER` rejections, a multicolumn-GIN comparison, and verbatim execution of the two filed diagnostic blocks. Test objects were dropped, the server was stopped, and its data directory was removed.
 
 ## Source References
 
@@ -686,6 +1020,38 @@ Empirical: one isolated PostgreSQL 17.10 server built from the pin, eight fixtur
 - [glossary.sgml#Bloat](../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250)
 - [btree.sgml#bottom-up-deletion](../../../raw/postgres-17/doc/src/sgml/btree.sgml#L656-L733)
 - [expected/pgstattuple.out#NaN](../../../raw/postgres-17/contrib/pgstattuple/expected/pgstattuple.out#L44-L52)
+- [selfuncs.c#gincostestimate](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7661-L8049)
+- [selfuncs.c#gincost_pattern](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7379-L7491)
+- [selfuncs.c#GinQualCounts](../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7369-L7377)
+- [ginutil.c#ginhandler](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89)
+- [ginutil.c#ginGetStats](../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L616-L642)
+- [ginfast.c#gin_clean_pending_list](../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1085)
+- [gin.h#GinStatsData](../../../raw/postgres-17/src/include/access/gin.h#L40-L50)
+- [ginblock.h#GinMetaPageData](../../../raw/postgres-17/src/include/access/ginblock.h#L55-L101)
+- [indxpath.c#create_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L234-L310)
+- [indxpath.c#get_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L709-L767)
+- [indxpath.c#build_index_paths](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L804-L1003)
+- [indxpath.c#check_index_only](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1730-L1800)
+- [indxpath.c#match_clause_to_indexcol](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2203-L2269)
+- [indxpath.c#match_opclause_to_indexcol](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2386-L2500)
+- [indxpath.c#match_boolean_index_clause](../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2288-L2384)
+- [indexam.c#index_can_return](../../../raw/postgres-17/src/backend/access/index/indexam.c#L780-L797)
+- [pathnode.c#add_path](../../../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L419-L453)
+- [costsize.c:130](../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L130)
+- [pg_amop.dat#gin-array_ops](../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1232-L1244)
+- [pg_opfamily.h#IsBuiltinBooleanOpfamily](../../../raw/postgres-17/src/include/catalog/pg_opfamily.h#L59-L65)
+- [indexcmds.c#DefineIndex-am-checks](../../../raw/postgres-17/src/backend/commands/indexcmds.c#L860-L879)
+- [cluster.c#cluster_rel-amclusterable](../../../raw/postgres-17/src/backend/commands/cluster.c#L517-L522)
+- [reloptions.c#fastupdate](../../../raw/postgres-17/src/backend/access/common/reloptions.c#L123-L130)
+- [guc_tables.c#gin_pending_list_limit](../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3575-L3584)
+- [btree_gin--1.0.sql#int4_ops](../../../raw/postgres-17/contrib/btree_gin/btree_gin--1.0.sql#L56-L69)
+- [btree-gin.sgml#caveats](../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33)
+- [gin.sgml#fast-update](../../../raw/postgres-17/doc/src/sgml/gin.sgml#L503-L529)
+- [indexam.sgml#amgetbitmap](../../../raw/postgres-17/doc/src/sgml/indexam.sgml#L991-L1010)
+- [pgtrgm.sgml#index-support](../../../raw/postgres-17/doc/src/sgml/pgtrgm.sgml#L413-L425)
+- [pgstatindex.c#pgstatginindex](../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L476-L495)
+- [amutils.out#index-properties](../../../raw/postgres-17/src/test/regress/expected/amutils.out#L122-L129)
+- [bool.out#gin-bool-equality](../../../raw/postgres-17/contrib/btree_gin/expected/bool.out#L89-L98)
 
 ## Navigation
 

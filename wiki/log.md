@@ -2,6 +2,88 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-04] follow-up v17 | GIN discarded in favour of a B-tree
+
+- Answered a filed follow-up on [Planner Penalties for Bloated Indexes in
+  PostgreSQL 17 (unverified)](v17/questions/bloated-indexes-query-planner.md)
+  against the unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
+  (PostgreSQL 17.10). Prompt hygiene was applied before drafting: the user's
+  instruction misspelled "PostgreSQL" as "postgreql", and the user chose the
+  corrected spelling, source plus exact-pin tests, and a `## Follow-Up` section
+  on the existing v17 page rather than a new standalone page. The follow-up
+  question itself, "When might a GIN index be discarded by the query planner and
+  a B-tree used instead?", is restated verbatim under `## Question`.
+- Established from source that v17 discards a GIN index at three separate gates,
+  only the last of which is cost. Gate 1 is clause matching: `create_index_paths`
+  runs `match_restriction_clauses_to_index` before any cost model, and
+  `match_opclause_to_indexcol` requires a collation match plus
+  `op_in_opfamily()`, with `get_index_clause_from_support()` as the only escape
+  hatch; the four core `pg_amop.dat` GIN families declare no `<`/`<=`/`>=`/`>`,
+  and `contrib/btree_gin` closes the gate deliberately while documenting that it
+  will not outperform B-tree. Gate 2 is plan shape from the AM flags
+  `ginhandler` sets (`amgettuple = NULL`, `amcanorder`/`amcanorderbyop` false,
+  `amcanreturn = NULL`, `amsearchnulls`/`amsearcharray`/`amcanparallel` false),
+  traced through `get_index_paths`, `build_index_paths`, `check_index_only`,
+  `index_can_return`, and the `NullTest` branch of `match_clause_to_indexcol`.
+  Gate 3 is cost: `gincostestimate()` seeds its startup page count with the
+  entire pending list and charges every pending, entry and data page at both
+  `random_page_cost` and `DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost`, with
+  no tree-height charge, after which `add_path()` fuzzy dominance at
+  `STD_FUZZ_FACTOR` and `choose_bitmap_and()` drop the loser.
+- Also documented the 4X stale-metapage-statistics fallback and the trap that
+  `gin_clean_pending_list()` drains the list without refreshing `nTotalPages`,
+  the keyless full-index path a partial GIN index can still yield through
+  `amoptionalkey` plus the `indexQuals == NIL` branch, the four
+  `CREATE INDEX`/`CLUSTER` AM rejections, and where GIN still wins.
+- Corrected one claim rather than carrying it over from the v12 answer: in v17 a
+  bare boolean `Var` *does* match a `btree_gin` bool opclass, because
+  `IsBooleanOpfamily()` falls back to
+  `op_in_opfamily(BooleanEqualOperator, ...)` for non-built-in opfamilies and
+  `match_boolean_index_clause()` rewrites the clause to `indexkey = true`. The
+  in-tree `bool.out` expected output and an exact-pin run both show
+  `Index Cond: (i = true)`.
+- Exact-pin measurements on one isolated 17.10 server, built from the pin with
+  `btree_gin`, `pgstattuple` and `pageinspect`: the same `n = 42` predicate cost
+  `12.97` through a `btree_gin` GIN index and `4.52` through a B-tree on a
+  single table with literally identical statistics, obtained by dropping the
+  other index inside a rolled-back transaction, even though the GIN index was
+  279 blocks against the B-tree's 280. Both closed forms were reproduced in SQL
+  from the catalog and the GIN metapage and matched to the cent (`12.9725` and
+  `4.5225`). B-tree also won `BETWEEN` (`67.15` vs `44.31`), `n < 20`
+  (`28.63` vs `8.89`) and `IN (1,2,3)` (`30.10` vs `13.57`), while
+  `ORDER BY … LIMIT 10`, an index-only scan and `IS NULL` produced no GIN path
+  at all, visible as `disable_cost`-priced sequential scans.
+- A 982-page `fastupdate` pending list moved the GIN scan from `13.80` to
+  `4187.83`, and the planner dropped the index from the `BitmapAnd` and demoted
+  `tsv @@ …` to a `Filter`; `gin_clean_pending_list()` then returned exactly
+  `982`, matching `pgstatginindex`. A two-`random_page_cost` probe recovered the
+  charged page count exactly in five separate states: `3.00`, `3.00`, `985.00`
+  (982 pending + 2 entry + 1 data page, under the invented-statistics branch
+  because `1306 > 324 * 4`), `4.00`, and `1001.00` on a 10-block keyless partial
+  index. All four AM rejection messages and the live `amutils` property matrix
+  were reproduced, and a multicolumn `gin (tsv, cat)` index beat the `BitmapAnd`
+  at `21.55` versus `183.18`, confirming the `btree_gin` documentation's own
+  claim.
+- Two filed diagnostic SQL blocks were executed verbatim against objects
+  literally named `my_table`, `my_col` and `my_gin_index`, reporting
+  `pending_pct_of_index = 72.57` and `303.00` charged pages of which 246 were
+  pending. Both carry `/* wiki_... */` tags and session-scoped
+  `statement_timeout` / `lock_timeout`.
+- Recorded the explicit absence of any upstream GIN-versus-B-tree plan
+  comparison and of any `gincostestimate()` test coverage, and added five new
+  `## Open Questions`, including a `BitmapAnd` outcome that was not stable across
+  two runs of the same fixture family.
+- Test objects were dropped, the isolated server was stopped, and its data
+  directory was removed; `raw/postgres-17/` was untouched. A machine audit
+  checked all 142 citations on the page against the pinned source and fixed
+  fourteen line ranges whose boundaries started or ended outside the intended
+  symbol.
+- Updated `wiki/index.md`, `wiki/v17/index.md`, and the `wiki/versions.md` v17
+  row plus a new coverage note. `verified_by_agent` stays `not yet` because this
+  was a scoped follow-up rather than a fresh full-page claim audit; human
+  `verified: false` and the visible `(unverified)` title are unchanged.
+  `scripts/wiki_lint` reports 0 errors and 0 warnings.
+
 ## [2026-08-04] answer v17 | planner penalties for bloated indexes
 
 - Filed [Planner Penalties for Bloated Indexes in PostgreSQL 17
