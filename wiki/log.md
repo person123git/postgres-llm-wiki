@@ -2,6 +2,77 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-04] follow-up v12 | pgstatginindex sampling bloat and wasted space
+
+- Answered a filed follow-up on [Proposing a Sampling pgstatginindex Variant for
+  PostgreSQL 12
+  (unverified)](v12/questions/pgstatginindex-sample-variant-proposal.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Prompt hygiene applied first. The user approved the corrected follow-up, "Can
+  this function measure bloat? Can it measure wasted space?", and chose source
+  plus exact-pin tests and concrete new wasted-space output fields rather than a
+  diagnostic-only answer.
+- Established the central distinction from source: the function can measure free
+  space but not wasted space. GIN has no `fillfactor` (`ginoptions` parses only
+  `fastupdate` and `gin_pending_list_limit`), and `entrySplitPage` equalizes
+  entry pages by total data size with no rightmost or sorted-insert case, so
+  roughly half free is the structural steady state. `leafRepackItems` packs
+  posting-tree leaves tight only when `btree->isBuild`, which is why a low
+  data-leaf density is a real signal and a ~50% entry-leaf density is not.
+- Proposed two exact fields, `pending_space` and `total_space`, and four
+  estimates, `approx_free_space`, `approx_free_percent`,
+  `approx_recyclable_pages` and `approx_recyclable_space`, on the
+  `pgstathashindex` model of counting whole unused pages as free space and
+  excluding bookkeeping pages from the denominator; `total_space` is exact
+  because `nPendingPages` is. Recyclability comes from the delete XID GIN keeps
+  in the page header's `pd_prune_xid`, with `GetOldestXmin`/`RecentGlobalXmin`
+  precedents in `pgstatapprox.c` and `contrib/amcheck`.
+- Recorded the limits with measurements, not hedges. Deleting 360,000 of 400,000
+  rows without VACUUM moved not one output field, while `pgstattuple` reported
+  75.13% dead heap tuples; a full scan would be equally blind because GIN pages
+  carry no `LP_DEAD` line pointers, which is why `pgstathashindex` can report
+  `dead_items` and a GIN function cannot. `ginVacuumEntryPage` rebuilds an
+  emptied entry tuple with `nitems = 0` instead of deleting it, so 4,000 key
+  tuples survived VACUUM where a fresh build has 2,000, and the fork never
+  shrank. A 246-page pending list at 99.6% density was 30.98% of one index yet
+  left `free_percent` indistinguishable from a healthy index's.
+- Exact-pin measurements reused the seven existing fixtures plus two new ones on
+  the same isolated 12.2 server. Four healthy, never-deleted indexes measured
+  49.54-49.66% free, and a sibling index built over identical rows was
+  byte-identical to the original (412 blocks, 50.46% density, the same 1,688,200
+  used bytes), so a rebuild returns zero bytes against a reported 49.66% free.
+  The census's recyclability verdict matched VACUUM's own `pages_free` and
+  `pg_freespace` exactly on all seven fixtures (465, 168 and 40 blocks at avail
+  8160, zero elsewhere), and the two deletion paths were distinguishable on disk
+  (`prune_xid = 0` for 393 drained pending pages against 522 and 518 for posting
+  pages). One `f_waste` case reproduced VACUUM's own "0 are currently reusable"
+  followed by "40 are currently reusable" on a second run.
+- 1,800 further seeded runs plus nine full-sample checks established full-sample
+  equivalence on every new field, `free_percent` within 0.25 points of truth
+  from 137 of 13,672 pages, a worst case of 9.72 points on a 308-page index, and
+  a 60% alarm threshold classifying bloated versus healthy correctly in 800 of
+  800 runs inside a measured 51.22-to-62.02 gap, with a two-block empty index as
+  the one false positive. Four sibling-index rebuilds priced the fields
+  honestly: of the bytes raw free space reported, only 97.7%, 91.4%, 70.0% and
+  0.0% materialized as recovered bytes, while subtracting the structural
+  baseline predicted 96.2-98.5% of them.
+- Added eight new `## Open Questions`, including that `bufpage.h` calls
+  `pd_prune_xid` "currently unused in index pages" while GIN stores its delete
+  XID there, that no fixture mixed fresh and aged delete XIDs, that the 60%
+  threshold is fitted rather than derived, and that the baseline correction
+  needs a baseline.
+- All 292 citations on the page were machine-audited against the pinned source
+  with 0 errors across 55 files, and the filed census prototype ran verbatim and
+  reproduced the recorded numbers. New test objects (`f_waste`, `f_keys` and the
+  four sibling indexes) were dropped, the original seven fixtures are unchanged,
+  and the isolated server is stopped.
+- Refreshed `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Human
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are unchanged because this was a scoped
+  follow-up, not a fresh claim-by-claim audit of the full page.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-04] answer v12 | sampling pgstatginindex variant for GIN indexes
 
 - Filed [Proposing a Sampling pgstatginindex Variant for PostgreSQL 12

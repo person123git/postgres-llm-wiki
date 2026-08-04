@@ -44,6 +44,17 @@ verified_by_agent: not yet
   - [Metapage drift the exact fields expose](#metapage-drift-the-exact-fields-expose)
   - [Error paths](#error-paths)
   - [What the comparison establishes](#what-the-comparison-establishes)
+- [Follow-Up: Bloat and Wasted Space](#follow-up-bloat-and-wasted-space)
+  - [Short answer](#short-answer)
+  - [Why free space is not wasted space in a GIN index](#why-free-space-is-not-wasted-space-in-a-gin-index)
+  - [The three waste shapes it does measure](#the-three-waste-shapes-it-does-measure)
+  - [The waste it cannot measure](#the-waste-it-cannot-measure)
+  - [Proposed additional output fields](#proposed-additional-output-fields)
+  - [Prototype for the new fields](#prototype-for-the-new-fields)
+  - [How the new fields behave under sampling](#how-the-new-fields-behave-under-sampling)
+  - [Turning free_percent into a rebuild estimate](#turning-free_percent-into-a-rebuild-estimate)
+  - [A bloat verdict for GIN](#a-bloat-verdict-for-gin)
+  - [What the follow-up measurements establish](#what-the-follow-up-measurements-establish)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -60,6 +71,17 @@ with a new sampling pgstatindex function only for GIN indexes.
 request; meaning preserved. The user also chose a GIN-native page-class output
 contract, exact-pin empirical tests in addition to source, and a GIN-specific
 sample policy rather than carrying over the B-tree page's 100 MiB / 10% floor.)
+
+Follow-up:
+
+Can this function measure bloat? Can it measure wasted space?
+
+(The follow-up wording was corrected for capitalization and sentence structure
+at the user's request; meaning preserved. The user also chose exact-pin
+empirical tests in addition to source, and asked that the answer propose
+concrete wasted-space output fields rather than staying diagnostic-only.
+Answered in [Follow-Up: Bloat and Wasted
+Space](#follow-up-bloat-and-wasted-space).)
 
 ## Answer
 
@@ -229,6 +251,12 @@ see that drift instead of inferring it.
 
 Reporting the metapage counters next to the sampled estimates is the point of
 the design: the pair is what exposes drift, and neither number alone does.
+
+Six further fields -- `pending_space`, `total_space`, `approx_free_space`,
+`approx_free_percent`, `approx_recyclable_pages` and `approx_recyclable_space`
+-- are proposed in [Proposed additional output
+fields](#proposed-additional-output-fields), which answers the filed follow-up
+on bloat and wasted space.
 
 Proposed extension DDL:
 
@@ -1203,6 +1231,455 @@ proposed C function must test `IS_GIN(rel)` explicitly, as
 Test objects and the temporary server are disposable artifacts under
 `.wiki-runtime/`; `raw/postgres-12/` was not modified.
 
+## Follow-Up: Bloat and Wasted Space
+
+### Short answer
+
+Partly, and only if two extra fields are added and the output is read against a
+structural baseline instead of against zero.
+
+| Question | Answer |
+|---|---|
+| Can it measure bloat? | Yes as a **classifier**, once `approx_free_percent` is compared against GIN's ~50% structural baseline. At a requested 1%, an alarm threshold of 60% separated four bloated fixtures from four healthy ones in 800 of 800 seeded runs. |
+| Can it measure wasted space? | It can measure **free space**, not wasted space. The two differ by GIN's structural baseline, which is large: four healthy, never-deleted indexes each reported 49.5-49.7% free. |
+| Can it measure bloat *before* VACUUM? | No. Deleting 360,000 of 400,000 rows changed nothing at all: every page class, both densities, and `free_space` were byte-identical before and after the `DELETE`. |
+| Can it price a `REINDEX`? | Only with a baseline correction. Of the bytes raw `free_space` reported, a real rebuild returned 97.7%, 91.4%, 70.0% and 0.0% on four fixtures; subtracting the structural baseline first predicted 96.2-98.5% of the recovered bytes on the three bloated ones and exactly 0 on the healthy one. |
+
+Two new exact fields and four new estimated fields close most of the gap; see
+[Proposed additional output fields](#proposed-additional-output-fields). The
+irreducible blind spot is dead heap pointers that VACUUM has not yet removed,
+because GIN stores them as ordinary payload bytes.
+
+### Why free space is not wasted space in a GIN index
+
+GIN has no `fillfactor`. `ginoptions` parses exactly two reloptions,
+`fastupdate` and `gin_pending_list_limit`
+([ginutil.c#ginoptions](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L602-L629)),
+so there is no configured target density to compare a measured density against.
+That is the structural difference from `pgstatindex`, whose `avg_leaf_density`
+is read against the B-tree's fillfactor
+([pgstatindex.c#avg_leaf_density](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L351)).
+
+The baseline is set instead by the entry-tree split rule. `entrySplitPage`
+copies every tuple into a workspace and switches to the right page as soon as
+`lsize > totalsize / 2`, deliberately equalizing **data size**, not tuple count
+([ginentrypage.c#entrySplitPage](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L623-L689)).
+There is no rightmost-page or sorted-insertion special case, so a freshly built
+entry tree lands near half full and stays there.
+
+Measured on the pinned build, four indexes that had never had a row deleted:
+
+| Index | ordinary pages | entry-leaf density | `free_percent` |
+|---|---|---|---|
+| `f_big_gin` | 13672 | 50.44 | **49.56** |
+| `f_pending_gin` | 793 | 50.46 | **49.57** |
+| `f_small_gin` | 411 | 50.46 | **49.66** |
+| `f_partial_gin` | 164 | 50.52 | **49.54** |
+
+The decisive control is a sibling index built over identical rows. Building
+`f_small_gin2` on the same column of the same table produced a byte-identical
+result: 412 blocks, 3 entry internal, 408 entry leaf, density 50.46,
+`free_percent` 49.66, and the same 1,688,200 used bytes. A rebuild of
+`f_small_gin` would therefore recover **zero bytes** while the function reports
+**49.66% free**. Any tool that equates free space with recoverable space is
+wrong by half the index here.
+
+Posting-tree leaves behave differently, and the difference is also in source:
+`leafRepackItems` fills the left page as full as it can, and
+`dataBeginPlaceToPageLeaf` keeps that packing only when `btree->isBuild`,
+otherwise rebalancing toward 50/50 or 75% when appending
+([gindatapage.c#build-versus-split-packing](../../../raw/postgres-12/src/backend/access/gin/gindatapage.c#L617-L667)).
+Measured fresh-build data-leaf densities were 83.54% (`f_waste_gin2`) and
+93.81% (`f_bloat_gin2`), against 20.15% and 12.15% for their bloated
+counterparts. So a low data-leaf density is a real signal, while a ~50%
+entry-leaf density is not.
+
+### The three waste shapes it does measure
+
+**1. Whole deleted pages, split by reusability.** GIN stores a deleted page's
+delete XID in the page header's `pd_prune_xid`, and `GinPageIsRecyclable`
+accepts a page when it is new, or deleted with a delete XID preceding
+`RecentGlobalXmin`
+([ginblock.h#GinPageIsRecyclable](../../../raw/postgres-12/src/include/access/ginblock.h#L131-L138)).
+`pd_prune_xid` is in the standard page header
+([bufpage.h#PageHeaderData](../../../raw/postgres-12/src/include/storage/bufpage.h#L151-L164)),
+so one page read yields both the class and its reusability. Two deletion paths
+write it differently, and the difference is visible on disk:
+
+| Path | Flags written | Delete XID |
+|---|---|---|
+| posting-page deletion | `GIN_DELETED` OR'ed onto existing bits | `ReadNewTransactionId()` ([ginvacuum.c#ginDeletePage](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L187-L192)) |
+| pending-page drain | flags overwritten to exactly `GIN_DELETED` | never set, so it stays 0 ([ginfast.c#shiftList-flags](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L627-L632)) |
+
+A zero delete XID makes the page immediately recyclable, because
+`TransactionIdPrecedes` falls back to unsigned comparison when either argument
+is not a normal XID
+([transam.c#TransactionIdPrecedes](../../../raw/postgres-12/src/backend/access/transam/transam.c#L296-L313)).
+`shiftList` also records each drained page in the FSM directly
+([ginfast.c#shiftList-fsm](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L664-L665)).
+The census found exactly that split on `f_mixed_gin`: 393 deleted pages with
+`prune_xid = 0` (drained pending pages) and 72 with `prune_xid = 522` (deleted
+posting pages), plus 168 pages at `prune_xid = 518` on `f_bloat_gin`.
+
+**2. Intra-page free space, per class.** `pd_upper - pd_lower`, i.e.
+`PageGetExactFreeSpace`
+([bufpage.c#PageGetExactFreeSpace](../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L626-L647)),
+is the same quantity `pgstathashindex` accumulates
+([pgstatindex.c#GetHashPageStats](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L735-L752)).
+
+**3. The pending list, exactly.** This is the shape intra-page free space
+cannot see at all. `f_pending_gin` carries 246 pending pages, 2,015,232 bytes,
+**30.98% of the index**, yet its `free_percent` is 49.57 -- statistically
+indistinguishable from `f_big_gin`'s 49.56. The pending-list walk explains why:
+all 246 pages together hold only 7,360 free bytes, so they are 99.6% dense.
+Pending bloat is invisible in any density ratio and visible only in the exact
+metapage counters that rule R1 already reports.
+
+### The waste it cannot measure
+
+**1. Dead heap pointers before VACUUM.** This is the hard limit. Before
+VACUUM, a dead TID is ordinary payload inside a posting list, so no page-header
+arithmetic can see it. Measured on `f_waste_gin`, 400,000 rows over 16 keys,
+deleting 360,000 of them without vacuuming:
+
+| Stage | blocks | data leaf | deleted | entry density | data density | `free_space` | `free_percent` |
+|---|---|---|---|---|---|---|---|
+| built | 130 | 112 | 0 | 3.92 | 95.90 | 174560 | 16.58 |
+| 90% deleted, no VACUUM | 130 | 112 | 0 | 3.92 | 95.90 | **174560** | **16.58** |
+| after VACUUM | 130 | 72 | 40 | 3.92 | 20.15 | 932624 | 88.60 |
+
+Not one field moved at the middle stage, while `pgstattuple` on the heap
+reported 360,000 dead tuples, 75.13% dead. The waste only becomes measurable
+once `ginVacuumItemPointers` rewrites the posting lists
+([ginvacuum.c#ginVacuumItemPointers](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L47-L84)).
+This is not a sampling limitation: a full `pgstathashindex`-style scan would be
+equally blind, because GIN pages carry no `LP_DEAD` line pointers for a
+dead-item counter to read, which is why `pgstathashindex` can report
+`dead_items` and a GIN function cannot
+([pgstatindex.c#dead_items](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L742-L750)).
+
+**2. Entry tuples for keys that lost every TID.** `ginVacuumEntryPage` rebuilds
+such a tuple with `plist = NULL`, `plistsize = 0` and `nitems = 0` and puts it
+back on the page; it never deletes the tuple
+([ginvacuum.c#ginVacuumEntryPage](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L505-L556)),
+and `GinFormTuple` accepts `nipd = 0`
+([ginentrypage.c#GinFormTuple](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L44-L95)).
+Measured on `f_keys_gin`, 4,000 distinct keys, then every row of 2,000 of them
+deleted and vacuumed:
+
+| Stage | blocks | entry leaves | entry tuples | metapage `n_entries` | density | `free_percent` |
+|---|---|---|---|---|---|---|
+| built | 309 | 307 | 4000 | 4000 | 53.01 | 46.92 |
+| half the keys dead, vacuumed | 309 | 307 | **4000** | **4000** | 28.10 | 71.74 |
+| fresh sibling build | 155 | 153 | **2000** | **2000** | 53.18 | 46.92 |
+
+VACUUM freed the posting bytes but kept all 4,000 key tuples, and the fork never
+shrank. Only a rebuild dropped the 2,000 dead keys. A page-class census counts
+those tuples as used space, so this waste is reported as *occupancy*, not as
+free space.
+
+**3. Alignment padding inside an entry tuple.** `GinFormTuple` notes that
+`index_form_tuple` MAXALIGNs the tuple, so "there may well be some wasted pad
+space"
+([ginentrypage.c#GinFormTuple-padding](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L71-L80)).
+Padding lies inside the item, below `pd_lower`, so it is invisible to
+`PageGetExactFreeSpace`.
+
+**4. Whether free space is reachable.** Free space on an entry page is only
+usable by keys that route to that page, and a recyclable page is only handed
+back when the FSM offers it and `GinPageIsRecyclable` still accepts it
+([ginutil.c#GinNewBuffer](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L286-L335)).
+Nothing in the output distinguishes reachable from stranded free space.
+
+**5. Recyclability is a moment, not a property.** The census's verdict agreed
+with VACUUM's own accounting, but only after the horizon advanced. The first
+VACUUM of `f_waste` reported "40 index pages have been deleted, 0 are currently
+reusable"; a second VACUUM reported "0 index pages have been deleted, 40 are
+currently reusable", after which `pg_freespace` offered exactly 40 blocks. Those
+two numbers are `pages_deleted`, incremented in `ginDeletePage`
+([ginvacuum.c:234](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L234))
+and by `shiftList`
+([ginfast.c:588](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L588)),
+and `pages_free`, which counts only the pages that were recyclable during that
+one scan
+([ginvacuum.c:786](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L786),
+[vacuumlazy.c#index-cleanup-report](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1817-L1827)).
+
+### Proposed additional output fields
+
+Names follow the local precedent: `pgstattuple` reports `free_space` and
+`free_percent`
+([pgstattuple.sgml#free_space](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L108-L117)),
+and `pgstattuple_approx` prefixes its estimated versions
+([pgstattuple.sgml#approx_free_space](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L593-L602)).
+
+| Output | Derivation | Contract |
+|---|---|---|
+| `pending_space` | `pending_pages * BLCKSZ` | **exact**, from the metapage |
+| `total_space` | `8160 * (total_pages - 1 - pending_pages)` | **exact** |
+| `approx_free_space` | post-stratified sum of `pd_upper - pd_lower` over sampled live pages, plus `8160` per estimated deleted or new page | estimate |
+| `approx_free_percent` | `100 * approx_free_space / total_space` | estimate |
+| `approx_recyclable_pages` | sampled deleted pages passing `GinPageIsRecyclable`, post-stratified | estimate |
+| `approx_recyclable_space` | `approx_recyclable_pages * BLCKSZ` | estimate |
+
+```sql
+-- proposed additions to the pgstatginindex_approx signature
+    OUT pending_space BIGINT,
+    OUT total_space BIGINT,
+    OUT approx_free_space BIGINT,
+    OUT approx_free_percent FLOAT8,
+    OUT approx_recyclable_pages BIGINT,
+    OUT approx_recyclable_space BIGINT
+```
+
+Four design decisions, each with an in-tree precedent:
+
+- **Whole deleted and never-initialized pages count as free space.**
+  `pgstathashindex` does exactly this for unused pages
+  ([pgstatindex.c#unused-as-free](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L689-L690)).
+- **The denominator excludes bookkeeping pages.** `pgstathashindex` excludes
+  the metapage and bitmap pages
+  ([pgstatindex.c#total_space](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L692-L702));
+  the GIN analogue excludes the metapage and the pending list, which makes
+  `total_space` exact because `nPendingPages` is exact.
+- **The recyclability horizon is available to a contrib function.**
+  `RecentGlobalXmin` is `PGDLLIMPORT`
+  ([snapmgr.h#RecentGlobalXmin](../../../raw/postgres-12/src/include/utils/snapmgr.h#L59-L62)),
+  `contrib/amcheck` reads it directly
+  ([verify_nbtree.c#RecentGlobalXmin](../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L396-L400)),
+  and `pgstatapprox.c` in this very module already computes a vacuum horizon
+  with `GetOldestXmin`
+  ([pgstatapprox.c#GetOldestXmin](../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L72-L75)).
+- **One capacity constant, with a stated error.** `total_space` uses 8160 for
+  every page, but a data page's capacity is `GinDataPageMaxDataSize` = 8152
+  ([ginblock.h#GinDataPageMaxDataSize](../../../raw/postgres-12/src/include/access/ginblock.h#L319-L326)),
+  so the denominator overstates by 8 bytes per data page, at most 0.098%.
+
+The two multipliers are deliberately different. `approx_free_space` and
+`total_space` count **usable capacity** at 8160 so a whole free page is
+commensurable with the intra-page free bytes added to it, which is what
+`pgstathashindex` does when it multiplies unused pages by `hashm_bsize` rather
+than `BLCKSZ`
+([pgstatindex.c#space_per_page](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L618-L624)).
+`pending_space` and `approx_recyclable_space` count **file bytes** at `BLCKSZ`,
+because an operator comparing them against `pg_relation_size` wants whole
+blocks.
+
+### Prototype for the new fields
+
+The census helper gains `pd_prune_xid` and a recyclability verdict.
+`page_header` already exposes `prune_xid`
+([pageinspect--1.5.sql#page_header](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L19-L33),
+[rawpage.c#page_header](../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L216-L278)),
+and `age()` returns `INT_MAX` for a non-normal XID
+([xid.c#xid_age](../../../raw/postgres-12/src/backend/utils/adt/xid.c#L99-L113)),
+which reproduces `TransactionIdPrecedes`'s treatment of a zero delete XID.
+
+```sql
+CREATE /* wiki_pgstatginindex_waste_census */ FUNCTION gin_waste_census(idx regclass)
+RETURNS TABLE (blkno bigint, page_class text, live boolean,
+               free_space int, capacity int,
+               prune_xid xid, recyclable boolean, entry_tuples int)
+LANGUAGE sql AS $$
+WITH n AS (
+  SELECT (pg_relation_size(idx) / current_setting('block_size')::bigint) AS nblocks,
+         age((txid_snapshot_xmin(txid_current_snapshot()) % 4294967296)::text::xid)
+           AS horizon_age
+), b AS (
+  SELECT g.i AS blkno, get_raw_page(idx::text, g.i::int) AS pg
+  FROM n, generate_series(1, n.nblocks - 1) AS g(i)
+), c AS (
+  SELECT b.blkno, o.flags, h.lower::int AS lower_off, h.upper::int AS upper_off,
+         h.special::int AS special_off, h.prune_xid, n.horizon_age
+  FROM b, n,
+       LATERAL gin_page_opaque_info(b.pg) AS o,
+       LATERAL page_header(b.pg) AS h
+)
+SELECT c.blkno,
+       CASE
+         WHEN c.upper_off = 0                    THEN 'new'
+         WHEN 'deleted' = ANY (c.flags)          THEN 'deleted'
+         WHEN 'list'    = ANY (c.flags)          THEN 'pending'
+         WHEN 'data'    = ANY (c.flags)
+              AND 'leaf' = ANY (c.flags)         THEN 'data_leaf'
+         WHEN 'data'    = ANY (c.flags)          THEN 'data_internal'
+         WHEN 'leaf'    = ANY (c.flags)          THEN 'entry_leaf'
+         ELSE                                        'entry_internal'
+       END,
+       (c.upper_off <> 0
+        AND NOT 'deleted' = ANY (c.flags)
+        AND NOT 'list'    = ANY (c.flags)),
+       (c.upper_off - c.lower_off),
+       CASE WHEN 'data' = ANY (c.flags) THEN c.special_off - 32
+            ELSE c.special_off - 24 END,
+       c.prune_xid,
+       (c.upper_off = 0
+        OR ('deleted' = ANY (c.flags) AND age(c.prune_xid) > c.horizon_age)),
+       CASE WHEN c.upper_off <> 0
+                 AND NOT 'data' = ANY (c.flags)
+                 AND NOT 'list' = ANY (c.flags)
+                 AND NOT 'deleted' = ANY (c.flags)
+            THEN (c.lower_off - 24) / 4 ELSE NULL END
+FROM c;
+$$;
+```
+
+Three prototype-only caveats. The SQL horizon is
+`txid_snapshot_xmin(txid_current_snapshot())` rather than `RecentGlobalXmin`,
+which is a proxy, valid here only because the test server ran with
+`autovacuum = off` and one session. `entry_tuples` is derived as
+`(pd_lower - 24) / 4`, the line-pointer count, because v12 `pageinspect` has no
+entry-page item decoder; the opaque `maxoff` field is not a tuple count on an
+entry page
+([ginblock.h#maxoff-meaning](../../../raw/postgres-12/src/include/access/ginblock.h#L29-L36)).
+The independent check on recyclability came from `pg_freespace`, which needs the
+separate `pg_freespacemap` extension
+([pg_freespacemap--1.1.sql#pg_freespace](../../../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap--1.1.sql#L12-L20));
+`RecordFreeIndexPage` records `BLCKSZ - 1`
+([indexfsm.c#RecordFreeIndexPage](../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L48-L55)),
+which reads back as `avail = 8160`. It matched the census exactly: 465 blocks
+for `f_mixed_gin`, 168 for `f_bloat_gin`, 40 for `f_waste_gin`, 0 for the four
+healthy indexes and for `f_keys_gin`, whose VACUUM freed intra-page space
+without deleting a single page.
+
+### How the new fields behave under sampling
+
+Nine fixtures at `sample_fraction = 1.0` reproduced the exact census on every
+new field, including `approx_free_space`, `approx_free_percent` and
+`approx_recyclable_pages`, as `BlockSampler`'s contract predicts
+([sampling.c#Algorithm-S-contract](../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L23-L35)).
+
+Then 1,800 seeded runs, 100 seeds per fixture per requested fraction, floor 50,
+post-stratified:
+
+| Index | ordinary | truth `free_percent` | pages read at 1% | mean | stddev | max abs err | `free_space` MAPE |
+|---|---|---|---|---|---|---|---|
+| `f_big_gin` | 13672 | 49.56 | 137 | 49.56 | 0.04 | 0.25 | 0.02% |
+| `f_mixed_gin` | 9324 | 64.39 | 94 | 64.59 | 0.90 | 2.52 | 1.15% |
+| `f_pending_gin` | 793 | 49.57 | 50 | 49.63 | 0.45 | 1.65 | 0.35% |
+| `f_small_gin` | 411 | 49.66 | 50 | 49.66 | 0.33 | 0.91 | 0.43% |
+| `f_bloat_gin` | 409 | 93.45 | 50 | 93.45 | 0.88 | 2.55 | 0.78% |
+| `f_keys_gin` | 308 | 71.74 | 50 | 71.63 | 3.53 | 9.72 | 3.98% |
+| `f_partial_gin` | 164 | 49.54 | 50 | 49.54 | 0.16 | 0.25 | 0.25% |
+| `f_waste_gin` | 129 | 88.60 | 50 | 88.82 | 1.58 | 5.22 | 1.42% |
+| `f_empty_gin` | 1 | 100.00 | 1 | 100.00 | 0.00 | 0.00 | 0.00% |
+
+A ratio over a dominant class is cheap and accurate: 137 of 13,672 pages fixed
+`free_percent` to within 0.25 points across 100 seeds. The worst case, 9.72
+points on a 308-page index at a forced 16% coverage, is a small-index
+finite-sample effect, not a large-index risk.
+
+The page-count estimates are noisier than the ratio, exactly as the main
+comparison found for rare classes:
+
+| Index | truth deleted | mean | min | max | missed entirely | `recyclable` disagreed with `deleted` |
+|---|---|---|---|---|---|---|
+| `f_bloat_gin` (1%) | 168 | 169.0 | 98 | 213 | 0/100 | 0/100 |
+| `f_mixed_gin` (1%) | 465 | 511.9 | 99 | 992 | 0/100 | 0/100 |
+| `f_mixed_gin` (5%) | 465 | 463.8 | 260 | 699 | 0/100 | 0/100 |
+| `f_waste_gin` (1%) | 40 | 40.2 | 21 | 62 | 0/100 | 0/100 |
+
+The recyclable split cost nothing in accuracy here, because every deleted page
+in every fixture was recyclable by measurement time. A fixture that mixes fresh
+and aged delete XIDs was not built; see
+[Open Questions](#open-questions).
+
+The classifier result is the strongest one. Over 800 runs at a requested 1%,
+excluding the empty index:
+
+| | value |
+|---|---|
+| highest `free_percent` drawn on any healthy index | **51.22** |
+| lowest `free_percent` drawn on any bloated index | **62.02** |
+| runs where a 60% threshold classified correctly | **800 / 800** |
+
+`f_empty_gin` is the one false positive: a two-block index reports 100% free in
+every run, so any threshold needs a minimum-size guard.
+
+### Turning free_percent into a rebuild estimate
+
+Raw free space is not the bytes a rebuild returns, because the rebuilt index
+keeps GIN's structural free space. Measured against sibling indexes built over
+identical live rows:
+
+| Index | current bytes | fresh bytes | actually recovered | `free_space` reported | naive accuracy | baseline-corrected prediction | corrected accuracy |
+|---|---|---|---|---|---|---|---|
+| `f_small_gin` | 3375104 | 3375104 | **0** | 1665560 | **0.0%** | **0** | exact |
+| `f_bloat_gin` | 3358720 | 311296 | 3047424 | 3118968 | 97.7% | 3001344 | **98.5%** |
+| `f_keys_gin` | 2531328 | 1269760 | 1261568 | 1803140 | **70.0%** | 1213560 | **96.2%** |
+| `f_waste_gin` | 1064960 | 212992 | 851968 | 932624 | 91.4% | 838096 | **98.4%** |
+
+The correction is `reported_free_space - baseline_free_space`, where the
+baseline is the free space a fresh build of the same data carries. The naive
+reading is worst exactly where the entry tree dominates, because that is where
+the ~50% baseline is largest: 70.0% on the entry-tree-only `f_keys_gin`, 97.7%
+on the posting-tree-dominated `f_bloat_gin`, and meaningless on the healthy
+index. The corrected form landed within 1.5-3.8% on all three bloated
+fixtures and was exactly right on the healthy one.
+
+The baseline is not free to obtain -- it comes from a build -- so the practical
+form is a per-class density comparison, not a byte subtraction. Fresh-build
+baselines measured here were 50.4-53.2% for entry leaves and 83.5-93.8% for
+posting-tree leaves, but only where the class held more than one page. On a
+one-page entry tree the number is meaningless: fresh `f_bloat_gin2` measured
+2.94% and fresh `f_waste_gin2` 1.96% on their single entry leaf, so the bloated
+`f_bloat_gin`'s 5.88% is *higher* than its own rebuild's.
+
+### A bloat verdict for GIN
+
+Read the output in this order. Every rule below rests on a measurement above.
+
+1. **`pending_space` first.** It is exact, and 30.98% of one fixture's bytes
+   were pending pages that no density ratio revealed.
+2. **`approx_recyclable_space` next.** Whole pages, already reusable, that no
+   v12 view reports; the metapage hides them entirely
+   ([ginvacuum.c#classification-loop](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L746-L777)).
+3. **`approx_data_leaf_density` against ~85-95%, not against 100%.** Fresh
+   builds measured 83.54% and 93.81%; bloated ones 20.15% and 12.15%.
+4. **`approx_entry_leaf_density` against ~50%, not against 100%,** and only when
+   `approx_entry_leaf_pages > 1`. Four healthy multi-leaf indexes measured
+   50.44-50.52% and a rebuild of one recovered zero bytes, while on a one-page
+   entry tree a rebuild moved the number the wrong way (5.88% bloated versus
+   2.94% fresh).
+5. **`approx_free_percent` above 60% as the single-number alarm**, with a
+   minimum-size guard. It separated bloated from healthy in 800 of 800 runs.
+6. **Never conclude "no bloat" from a healthy reading**, because a pre-VACUUM
+   index with 90% of its entries dead reported numbers identical to its own
+   freshly built state.
+
+The corresponding session settings are unchanged from the prototype's:
+`statement_timeout` and `lock_timeout` are both `PGC_USERSET`, so they apply to
+the session only and need neither reload nor restart
+([guc.c#statement_timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386),
+[guc.c#lock_timeout](../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2397)).
+
+### What the follow-up measurements establish
+
+1. Free space is not wasted space in GIN: four healthy, never-deleted indexes
+   sat at 49.5-49.7% free, and one of them was byte-identical to a fresh build
+   of the same rows.
+2. The function can classify bloat reliably at a 1% sample -- 800 of 800 runs
+   -- once the threshold sits above the structural baseline.
+3. It cannot see dead entries before VACUUM at all: deleting 90% of the rows
+   changed no output field by even one byte.
+4. Entry tuples for keys that lost every TID survive VACUUM and are reported as
+   used space, not as waste: 4,000 tuples retained where a fresh build has
+   2,000.
+5. The two new exact fields, `pending_space` and `total_space`, and the four new
+   estimates reproduce the exact census at full sample and stay within 0.25
+   points of truth at 1% on a 13,672-page index.
+6. Priced against real rebuilds, only 97.7%, 91.4% and 70.0% of the reported
+   free space materialized as recovered bytes on three bloated fixtures, and
+   0.0% on a healthy one; the baseline-corrected form predicted 96.2-98.5% of
+   the recovered bytes and was exact on the healthy index.
+
+New test objects created for this follow-up (the `f_waste` and `f_keys` tables
+and the four sibling indexes `f_waste_gin2`, `f_keys_gin2`, `f_bloat_gin2` and
+`f_small_gin2`) were dropped afterwards, so the fixture set described in
+[Executed Comparison With the Exact
+Census](#executed-comparison-with-the-exact-census) is unchanged. The temporary
+server was stopped and `raw/postgres-12/` was not modified.
+
 ## Context Reviewed
 
 - GIN on-disk layout: `ginblock.h` in full, plus `gin_private.h`, `gin.h`.
@@ -1225,6 +1702,25 @@ Test objects and the temporary server are disposable artifacts under
 - Catalog/build: `pg_am.dat`, `genbki.pl`, `extension.c`, `fmgr.h`.
 - Related wiki pages: the v12 B-tree sampling proposal and the v12 GIN bloat
   page, used for scope comparison only, not as factual support.
+
+Added for the bloat / wasted-space follow-up:
+
+- Page-header storage of the GIN delete XID: `bufpage.h` `PageHeaderData` and
+  the `pd_prune_xid` comment, `storage.sgml`'s page-layout table.
+- XID comparison: `transam.c` `TransactionIdPrecedes`, `xid.c` `xid_age`,
+  `snapmgr.h` for `RecentGlobalXmin`'s linkage.
+- Fill policy: `ginutil.c` `ginoptions` for the absent `fillfactor`,
+  `ginentrypage.c` `entrySplitPage`, `gindatapage.c` build-versus-split
+  packing.
+- VACUUM accounting: `ginvacuum.c` `ginVacuumItemPointers` /
+  `ginVacuumEntryPage` / `pages_deleted` / `pages_free`, `ginfast.c`
+  `shiftList` FSM recording, `vacuumlazy.c`'s index cleanup report.
+- Free-space precedent: `pgstatindex.c` `GetHashPageStats` and
+  `pgstathashindex`'s `free_percent`/`dead_items`, `pgstatapprox.c`
+  `GetOldestXmin`, `pgstattuple.sgml`'s `free_space` and `approx_free_space`
+  column definitions.
+- FSM cross-check: `contrib/pg_freespacemap` SQL and C, `indexfsm.c`.
+- Horizon precedent outside this module: `contrib/amcheck` `verify_nbtree.c`.
 
 ## Evidence Map
 
@@ -1267,6 +1763,35 @@ Measured claims (seven fixtures, 6,100 seeded runs, exact-pin 12.2 server) are
 reported in [Executed Comparison With the Exact
 Census](#executed-comparison-with-the-exact-census) and are not source claims.
 
+Added for the bloat / wasted-space follow-up:
+
+| Claim | Evidence |
+|---|---|
+| GIN has no `fillfactor`; only two reloptions exist | [ginutil.c#ginoptions](../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L602-L629) |
+| Entry pages split by equal data size, with no sorted-insert case | [ginentrypage.c#entrySplitPage](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L623-L689) |
+| Data leaves are packed tight only during a build | [gindatapage.c#build-versus-split-packing](../../../raw/postgres-12/src/backend/access/gin/gindatapage.c#L617-L667) |
+| The GIN delete XID lives in the page header's `pd_prune_xid` | [ginblock.h#GinPageGetDeleteXid](../../../raw/postgres-12/src/include/access/ginblock.h#L131-L138), [bufpage.h#PageHeaderData](../../../raw/postgres-12/src/include/storage/bufpage.h#L151-L164) |
+| A zero delete XID compares as older than any normal XID | [transam.c#TransactionIdPrecedes](../../../raw/postgres-12/src/backend/access/transam/transam.c#L296-L313) |
+| `age()` reports a non-normal XID as `INT_MAX` old | [xid.c#xid_age](../../../raw/postgres-12/src/backend/utils/adt/xid.c#L99-L113) |
+| Drained pending pages are put in the FSM immediately | [ginfast.c#shiftList-fsm](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L664-L665) |
+| Dead TIDs leave a posting list only when VACUUM rewrites it | [ginvacuum.c#ginVacuumItemPointers](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L47-L84) |
+| An entry tuple with zero remaining TIDs is rebuilt, not deleted | [ginvacuum.c#ginVacuumEntryPage](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L505-L556), [ginentrypage.c#GinFormTuple](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L44-L95) |
+| `GinFormTuple` can leave MAXALIGN pad space inside a tuple | [ginentrypage.c#GinFormTuple-padding](../../../raw/postgres-12/src/backend/access/gin/ginentrypage.c#L71-L80) |
+| `pgstathashindex` counts whole unused pages as free space | [pgstatindex.c#unused-as-free](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L689-L690) |
+| Its `free_percent` denominator excludes bookkeeping pages | [pgstatindex.c#total_space](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L692-L702) |
+| Hash can count `dead_items` from line pointers; GIN has none | [pgstatindex.c#dead_items](../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L742-L750) |
+| `free_space` / `approx_free_space` naming precedent | [pgstattuple.sgml#free_space](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L108-L117), [pgstattuple.sgml#approx_free_space](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L593-L602) |
+| A vacuum horizon is already computed inside this module | [pgstatapprox.c#GetOldestXmin](../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L72-L75) |
+| `RecentGlobalXmin` is reachable from a contrib module | [snapmgr.h#RecentGlobalXmin](../../../raw/postgres-12/src/include/utils/snapmgr.h#L59-L62), [verify_nbtree.c#RecentGlobalXmin](../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L396-L400) |
+| VACUUM's two index numbers are `pages_deleted` and `pages_free` | [ginvacuum.c:234](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L234), [ginvacuum.c:786](../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L786), [ginfast.c:588](../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L588), [vacuumlazy.c#index-cleanup-report](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1817-L1827) |
+| `page_header` exposes `prune_xid` to SQL | [pageinspect--1.5.sql#page_header](../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L19-L33), [rawpage.c#page_header](../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L216-L278) |
+| A free index page reads back from the FSM as 8160 | [indexfsm.c#RecordFreeIndexPage](../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L48-L55), [pg_freespacemap--1.1.sql#pg_freespace](../../../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap--1.1.sql#L12-L20) |
+
+Follow-up measured claims (nine fixtures, 1,800 further seeded runs, four
+sibling-index rebuilds, same exact-pin 12.2 server) are reported in
+[Follow-Up: Bloat and Wasted Space](#follow-up-bloat-and-wasted-space) and are
+not source claims.
+
 ## Open Questions
 
 - **No `new` page was produced by any fixture.** The `approx_new_pages` class
@@ -1308,6 +1833,54 @@ Census](#executed-comparison-with-the-exact-census) and are not source claims.
 - **Whether upstream ever added GIN support to `pgstattuple` or an index
   sampler after v12 was not investigated**, since cross-version evidence is out
   of scope for this page.
+
+From the bloat / wasted-space follow-up:
+
+- **`bufpage.h` says `pd_prune_xid` "is currently unused in index pages"**
+  ([bufpage.h#pd_prune_xid-comment](../../../raw/postgres-12/src/include/storage/bufpage.h#L132-L136)),
+  and `storage.sgml` describes it as the "Oldest unpruned XMAX on page"
+  ([storage.sgml#pd_prune_xid](../../../raw/postgres-12/doc/src/sgml/storage.sgml#L872-L877)),
+  yet GIN stores a deleted page's delete XID there
+  ([ginblock.h#GinPageGetDeleteXid](../../../raw/postgres-12/src/include/access/ginblock.h#L135-L136)).
+  Source wins over both comments, but whether any other index AM relies on the
+  field being untouched was not established, so a new reader of the field
+  should not assume the comment.
+- **No fixture mixed fresh and aged delete XIDs.** Every deleted page in every
+  fixture was recyclable by measurement time, so
+  `approx_recyclable_pages` never disagreed with `approx_deleted_pages` in
+  1,800 runs. The split's accuracy when the two differ is untested.
+- **The prototype's horizon is a proxy.** It uses
+  `txid_snapshot_xmin(txid_current_snapshot())` rather than
+  `RecentGlobalXmin`, which coincided only because the test server ran
+  `autovacuum = off` with one session. A C implementation should use
+  `GetOldestXmin` as `pgstatapprox.c` does
+  ([pgstatapprox.c#GetOldestXmin](../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L72-L75)),
+  and the two horizons' divergence under concurrency was not measured.
+- **The 60% alarm threshold is fitted, not derived.** It sits inside a measured
+  gap between 51.22 and 62.02 on nine fixtures. Nothing establishes that gap on
+  other opclasses, on multicolumn GIN indexes, or on `jsonb`/`tsvector` data,
+  where key-size distribution differs and the entry-tree baseline may not be
+  near 50%.
+- **The baseline correction needs a baseline.** Turning
+  `approx_free_percent` into recoverable bytes required a fresh sibling index.
+  No way to derive the per-class baseline density from the index itself was
+  established, and the measured entry-leaf baselines already spanned
+  50.4-53.2%.
+- **`f_empty_gin` is a false positive at any threshold.** A two-block index
+  reports 100% free space. The minimum-size guard was not calibrated.
+- **Entry-leaf density is uninterpretable on a one-page entry tree**, and the
+  proposed output gives no direct warning. Fresh `f_bloat_gin2` measured 2.94%
+  against the bloated `f_bloat_gin`'s 5.88%, so the metric moved the wrong way.
+  An `approx_entry_leaf_pages > 1` precondition is proposed but was not turned
+  into an output flag.
+- **Whether `total_space` should use per-class capacities** rather than a flat
+  8160, accepting a 0.098% overstatement per data page, was decided for
+  simplicity and not tested against an index whose blocks are almost all data
+  pages.
+- **The pending list's contribution to a bloat verdict is unresolved.** It is
+  reported exactly and excluded from `total_space`, but a large pending list is
+  itself a cost, and this page's own earlier measurement showed flushing one
+  can grow the index. No combined score was proposed.
 
 ## Source References
 
@@ -1356,10 +1929,17 @@ Census](#executed-comparison-with-the-exact-census) and are not source claims.
 - [fmgr.h](../../../raw/postgres-12/src/include/fmgr.h)
 - [pg_am.dat](../../../raw/postgres-12/src/include/catalog/pg_am.dat)
 - [genbki.pl](../../../raw/postgres-12/src/backend/catalog/genbki.pl)
+- [transam.c](../../../raw/postgres-12/src/backend/access/transam/transam.c)
+- [xid.c](../../../raw/postgres-12/src/backend/utils/adt/xid.c)
+- [snapmgr.h](../../../raw/postgres-12/src/include/utils/snapmgr.h)
+- [vacuumlazy.c](../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c)
+- [verify_nbtree.c](../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c)
+- [pg_freespacemap--1.1.sql](../../../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap--1.1.sql)
 - [pgstattuple.sgml](../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml)
 - [pageinspect.sgml](../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml)
 - [config.sgml](../../../raw/postgres-12/doc/src/sgml/config.sgml)
 - [gin.sgml](../../../raw/postgres-12/doc/src/sgml/gin.sgml)
+- [storage.sgml](../../../raw/postgres-12/doc/src/sgml/storage.sgml)
 
 ## Navigation
 

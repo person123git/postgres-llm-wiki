@@ -14,6 +14,51 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-04: answered a filed follow-up on [Proposing a Sampling
+  pgstatginindex Variant for PostgreSQL 12
+  (unverified)](v12/questions/pgstatginindex-sample-variant-proposal.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene applied first; the user chose corrected
+  wording, source plus exact-pin tests, and concrete new wasted-space output
+  fields rather than a diagnostic-only answer. Established the central
+  distinction from source: the function can measure free space but not wasted
+  space, because GIN has no `fillfactor` (`ginoptions` parses only `fastupdate`
+  and `gin_pending_list_limit`) and `entrySplitPage` equalizes entry pages by
+  data size with no sorted-insert case, so ~50% free is the structural steady
+  state. Four healthy, never-deleted fixtures measured 49.54-49.66% free, and
+  a sibling index built over identical rows was byte-identical to the original
+  (412 blocks, 50.46% density, same 1,688,200 used bytes), so a rebuild would
+  return zero bytes against a reported 49.66% free. Proposed two exact fields
+  (`pending_space`, `total_space`) and four estimates (`approx_free_space`,
+  `approx_free_percent`, `approx_recyclable_pages`, `approx_recyclable_space`)
+  on the `pgstathashindex` model of counting whole unused pages as free and
+  excluding bookkeeping pages from the denominator, reading the delete XID out
+  of `pd_prune_xid` to split recyclable from stuck pages. The census's
+  recyclability verdict matched VACUUM's own `pages_free` and `pg_freespace`
+  exactly on all seven fixtures (465, 168 and 40 blocks at avail 8160, zero
+  elsewhere), and the two deletion paths were distinguishable on disk
+  (`prune_xid = 0` for 393 drained pending pages against 522 and 518 for
+  posting pages deleted by `ginDeletePage`). Recorded the hard limits with
+  measurements: deleting 360,000 of 400,000 rows without VACUUM moved not one
+  output field while `pgstattuple` reported 75.13% dead heap tuples; entry
+  tuples for keys that lost every TID survive VACUUM, 4,000 retained where a
+  fresh build has 2,000, with the fork never shrinking; and a 246-page pending
+  list at 99.6% density was 30.98% of one index yet left `free_percent`
+  indistinguishable from a healthy index's. 1,800 further seeded runs plus
+  nine full-sample checks established full-sample equivalence on every new
+  field, `free_percent` within 0.25 points of truth from 137 of 13,672 pages,
+  a worst case of 9.72 points on a 308-page index, and a 60% alarm threshold
+  classifying bloated versus healthy correctly in 800 of 800 runs inside a
+  measured 51.22-to-62.02 gap, with an empty index as the one false positive.
+  Four sibling-index rebuilds priced the fields honestly: of the bytes raw free
+  space reported, only 97.7%, 91.4%, 70.0% and 0.0% materialized as recovered
+  bytes, while a baseline-corrected form predicted 96.2-98.5% of them. All 292
+  citations on the page were machine-audited against the pinned source with 0
+  errors across 55 files, and the filed census prototype ran verbatim and
+  reproduced the recorded numbers. New test objects were dropped, the isolated
+  server was stopped, and human `verified: false`, the visible `(unverified)`
+  title, and `verified_by_agent: not yet` are unchanged because this was a
+  scoped follow-up. `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-08-04: filed [Proposing a Sampling pgstatginindex Variant for PostgreSQL
   12 (unverified)](v12/questions/pgstatginindex-sample-variant-proposal.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
