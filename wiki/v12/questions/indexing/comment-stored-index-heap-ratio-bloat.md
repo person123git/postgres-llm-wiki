@@ -29,6 +29,7 @@ verified_by_agent: not yet
   - [Cost of the survey, and the relpages variant](#cost-of-the-survey-and-the-relpages-variant)
   - [Partitioned indexes](#partitioned-indexes)
   - [Fixture thresholds, and what to do with a flagged index](#fixture-thresholds-and-what-to-do-with-a-flagged-index)
+  - [Follow-up: drift past a stored baseline versus "reindex when the index is larger than the heap"](#follow-up-drift-past-a-stored-baseline-versus-reindex-when-the-index-is-larger-than-the-heap)
   - [Why this exists: the contrib boundary](#why-this-exists-the-contrib-boundary)
   - [Catalog, generated-header, and extension boundary](#catalog-generated-header-and-extension-boundary)
   - [Tests in the pinned checkout](#tests-in-the-pinned-checkout)
@@ -43,6 +44,8 @@ verified_by_agent: not yet
 In PostgreSQL 12, propose a way to detect bloat in all types of indexes by using the `COMMENT` command to store the ratio between the table heap and the index.
 
 Prompt note: the user's original wording was "in postgreql 12 , question: propose a way to detect bloat to all types of indexes by using the comment command to store the ratio between the table heap and the index". The user approved correcting the spelling, the preposition, and the command capitalization before filing.
+
+Follow-up: How reliable is it to use the index-to-heap size ratio, stored as a comment on the index right after the index is rebuilt or created, as a proxy for index bloat? Let's say the initial ratio is 1, so a maintenance process would recalculate the ratio and get 1.4 as a result, so from 1 to 1.4 is a ~40% increase, and the maintenance process decides to reindex. Compare this to a rule that only reindexes if the index is larger than the heap.
 
 ## Answer
 
@@ -62,6 +65,8 @@ reclaimable_fraction = (current_index_bytes - rebuilt_index_bytes)
 ```
 
 The tables below use that fraction where they report rebuild-reclaimable space. The delete-and-reload table instead reports excess bytes relative to the rebuilt size, because that denominator is directly comparable to growth from the initial build.
+
+The follow-up question is answered in [Follow-up: drift past a stored baseline versus "reindex when the index is larger than the heap"](#follow-up-drift-past-a-stored-baseline-versus-reindex-when-the-index-is-larger-than-the-heap), which scores both decision rules against `REINDEX` ground truth over 49 exact-pin cells.
 
 ### The proposal
 
@@ -587,6 +592,284 @@ A flagged index means only “the index grew faster than its heap since the base
 
 The scheme's blind spot cannot be fixed by tuning the threshold: in the mass-delete fixture, ordinary `VACUUM` left drift at exactly 1.000 while a rebuild reclaimed up to 80% of the index file. Do not make this ratio the installation's only retained-space monitor.
 
+### Follow-up: drift past a stored baseline versus "reindex when the index is larger than the heap"
+
+The stored-ratio drift rule is unreliable but usable; "reindex when the index is larger than the heap" is worse on every measurement below and should not be used at all. Scored over 49 exact-pin cells — seven workloads times seven access methods, with a rebuild supplying ground truth — `drift >= 1.40` caught 13 of the 24 genuinely rebuild-worthy indexes with 1 false alarm, while `index > heap` caught 6 with 2 false alarms. Neither rule is a bloat measurement. Both read the same two numbers, so the second rule is not an independent check on the first.
+
+The maintenance process in question rebuilds with `REINDEX INDEX CONCURRENTLY`. That does not change any score: on an idle table, `REINDEX INDEX CONCURRENTLY` and plain `REINDEX INDEX` produced byte-identical files on all seven access methods, so the ground truth below stands either way. What it does change is the cost of a false positive and the failure modes of an automated loop; see [What changes when the rebuild is REINDEX INDEX CONCURRENTLY](#what-changes-when-the-rebuild-is-reindex-index-concurrently).
+
+The decisive objection to the absolute rule is arithmetic, not empirical. Because `drift = current_ratio / baseline_ratio`, the condition `index_bytes > heap_bytes` is identical to:
+
+```text
+current_ratio > 1   <=>   drift > 1 / baseline_ratio
+```
+
+So "the index is larger than the heap" *is* a drift rule. Its threshold is just not a number anyone chose: it is the reciprocal of whatever ratio the index happened to have on the day it was built.
+
+#### The question's own numbers
+
+The follow-up posits a baseline ratio of 1. That case was built directly: 200,000 rows, seven indexes on one heap, `pad` sized so the freshly built GIN index lands on **1.004900** (4,102 index blocks against a 4,082-block heap). Indexed keys were then re-written in 10% slices with a `VACUUM` after each round.
+
+At a baseline ratio of exactly 1, the two rules collapse onto the same axis and the absolute rule becomes the *more* trigger-happy of the two — it fires at `drift > 1.00`, so any growth at all trips it:
+
+| churn | GIN index blocks | current ratio | drift | rebuild reclaims | `drift >= 1.40` | `index > heap` |
+|---|---|---|---|---|---|---|
+| 0% (just built) | 4102 | 1.004900 | 1.000 | **0.0%** | no | **yes** |
+| 10% | 4660 | 1.037862 | 1.033 | 12.0% | no | yes |
+| 30% | 5481 | 1.220713 | 1.215 | 25.2% | no | yes |
+| 50% | 6301 | 1.403341 | 1.396 | 34.9% | no | yes |
+| 60% | 6711 | 1.494655 | 1.487 | 38.9% | yes | yes |
+
+The first row is the whole argument. The absolute rule ordered a rebuild of an index that had just been built and had 0.0% reclaimable space, and it kept ordering one at every later step, so it carried no information about the index's condition at any point. The drift rule stayed quiet until the rebuild was worth 38.9%.
+
+The rebuild reference in that table is a second index of the same definition built on the same live table and then dropped, which is the same work `REINDEX` performs without destroying the state under test ([index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3436-L3515)). `REINDEX INDEX CONCURRENTLY` produced the same sizes on all seven access methods, so the "rebuild reclaims" column applies to a concurrent rebuild too; see [What changes when the rebuild is REINDEX INDEX CONCURRENTLY](#what-changes-when-the-rebuild-is-reindex-index-concurrently).
+
+#### What a drift of 1.4 was actually worth
+
+Same fixture, all seven access methods. "First crossing" is the first churn round at which drift reached 1.40:
+
+| AM | first crossing | drift there | rebuild reclaims there | outcome |
+|---|---|---|---|---|
+| spgist | 30% churn | 1.403 | 25.2% | fired, modest payoff |
+| btree | 60% churn | 1.452 | 37.4% | fired, real payoff |
+| gin | 60% churn | 1.487 | 38.9% | fired, real payoff |
+| gist | never (1.399 at 60%) | 1.399 | **35.4%** | missed by 0.001 |
+| hash | never (1.095 plateau) | 1.095 | 18.4% | missed |
+| bloom | never (1.001 flat) | 1.001 | 9.2% | missed |
+| brin | never (0.909) | 0.909 | 0.0% | correctly quiet |
+
+So the answer to "I saw 1.4, should I reindex?" is: in this fixture, yes — a rebuild reclaimed 25-39% of the index file wherever the threshold fired. The failure is on the other side. GiST reached 1.399 with 35.4% reclaimable and was never flagged, and hash and `bloom` accumulated 18.4% and 9.2% while their drift sat at 1.095 and 1.001. `bloom`'s index grew from 394 to 434 blocks in round 1, but the heap grew from 4,082 to 4,490 blocks in the same round, and the two factors cancelled.
+
+#### Day zero: the absolute rule's threshold is set by heap row width
+
+The reason `index > heap` behaves so erratically is that a freshly built index's ratio is a property of the *table's row width*, not of the index's health. Three tables, 200,000 rows each, identical index definitions, differing only in a `pad` column that no index references:
+
+| AM | index blocks (all three) | ratio, heap 2858 blk | ratio, heap 3847 blk | ratio, heap 13334 blk |
+|---|---|---|---|---|
+| gin | 4102 | **1.435269** | **1.066285** | 0.307635 |
+| gist | 1538 | 0.538139 | 0.399792 | 0.115344 |
+| spgist | 1082 | 0.378586 | 0.281258 | 0.081146 |
+| hash | 822 | 0.287614 | 0.213673 | 0.061647 |
+| btree | 551 | 0.192792 | 0.143228 | 0.041323 |
+| bloom | 394 | 0.137859 | 0.102417 | 0.029549 |
+| brin | 3 | 0.001050 | 0.000780 | 0.000225 |
+
+Every index block count is identical down the column. Only the denominator moved. That follows from the tuple layouts: an index tuple carries an 8-byte header holding just the heap TID and a length/flags word, followed by the indexed attributes only ([itup.h#IndexTupleData](../../../../raw/postgres-12/src/include/access/itup.h#L35-L53), [itup.h#IndexInfoFindDataOffset](../../../../raw/postgres-12/src/include/access/itup.h#L80-L90)), whereas a heap tuple carries a 23-byte header plus every column in the row ([htup_details.h#HeapTupleHeaderData](../../../../raw/postgres-12/src/include/access/htup_details.h#L152-L184)). Widening an unindexed column grows the heap and leaves the index untouched.
+
+Converting each fresh ratio into the drift threshold the absolute rule implies, `1 / baseline_ratio`:
+
+| AM | narrow heap | medium heap | wide heap |
+|---|---|---|---|
+| gin | **0.70** | **0.94** | 3.25 |
+| gist | 1.86 | 2.50 | 8.67 |
+| spgist | 2.64 | 3.56 | 12.32 |
+| hash | 3.48 | 4.68 | 16.22 |
+| btree | 5.19 | 6.98 | 24.20 |
+| bloom | 7.25 | 9.76 | 33.84 |
+| brin | 952.38 | 1282.05 | 4444.44 |
+
+On one table the rule demands anywhere from a 0.94x to a 1282x change before it reacts, a spread of `1.066285 / 0.000780` = 1367x that is driven entirely by access method and row width. The two GIN cells below 1.00 are indexes the rule condemns before any workload runs. BRIN's column is unreachable in practice: its file stayed at 3 blocks at every scale measured on this page.
+
+A related trap for *both* rules: the baseline is only stable once the table is large. A fresh B-tree on `(k)` over a `pad`-40 table measures:
+
+| rows | heap blocks | index blocks | fresh ratio |
+|---|---|---|---|
+| 0 | 0 | 1 | undefined |
+| 1 | 1 | 2 | 2.000000 |
+| 10 | 1 | 2 | 2.000000 |
+| 100 | 2 | 2 | 1.000000 |
+| 1,000 | 11 | 5 | 0.454545 |
+| 10,000 | 104 | 30 | 0.288462 |
+| 100,000 | 1031 | 276 | 0.267701 |
+| 1,000,000 | 10310 | 2745 | 0.266246 |
+
+An empty index is one metapage block, written last by the build ([nbtree.h#BTREE_METAPAGE](../../../../raw/postgres-12/src/include/access/nbtree.h#L131-L133), [nbtsort.c#_bt_uppershutdown-metapage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1128-L1137)). A baseline captured at 1,000 rows and re-checked at 1,000,000 shows drift of 0.586 — a 41% *decrease* with no bloat anywhere — purely because the metapage and internal levels amortize away. Capture the baseline on a table that is already at working size.
+
+#### The scored fixture matrix
+
+Seven workloads, each a single 200,000-row heap carrying all seven indexes, each with the baseline captured immediately after `CREATE INDEX`, then `REINDEX TABLE` for ground truth. Labelling an index "rebuild-worthy" when the rebuild reclaims at least 25% of its current file:
+
+| rule | true positive | false positive | false negative | true negative |
+|---|---|---|---|---|
+| `drift >= 1.40` | **13** | **1** | 11 | 24 |
+| `index > heap` | 6 | 2 | **18** | 23 |
+
+The 49 cells, condensed. "Rebuild-worthy AMs" lists the access methods whose rebuild reclaimed at least 25%; the drift column is the drift range over just those access methods, and the last column is which access methods `index > heap` flagged, whether or not they were rebuild-worthy:
+
+| fixture | heap change | rebuild-worthy AMs | drift over those AMs | `index > heap` flagged |
+|---|---|---|---|---|
+| ascending growth 4x | 962 -> 3847 blk | none | — (0.250-1.074 overall) | gin (**false alarm**) |
+| random growth 4x | 962 -> 3847 blk | none | — (0.250-1.074 overall) | gin (**false alarm**) |
+| key churn, 5 x 20% | 3847 -> 4616 blk | btree, gist, gin, spgist, hash | 1.167-2.105 | gin |
+| scattered delete 80% | unchanged | btree, gist, gin, spgist, hash, bloom | **1.000 on all seven** | gin |
+| heap tail truncate 75% | 3847 -> 962 blk | btree, gist, gin, spgist, hash, bloom | 3.999 on all seven | gin, gist, spgist |
+| widen rows 40->400 | 3847 -> 17180 blk | btree, spgist, hash, bloom | **0.447-0.670** | none |
+| delete-all + reload | unchanged | btree, gist, gin | 1.827-1.993 | gin |
+
+Four readings:
+
+- **The absolute rule's positives are almost all one index.** It flagged 6 of GIN's 7 cells, 1 of GiST's, 1 of SP-GiST's, and none of the other four access methods' 28 cells. Four of its six true positives are GIN cells, and GIN was over the line at build time, so on that index the rule is a constant "yes" that happened to be right two-thirds of the time. Both of its false positives are also GIN.
+- **The absolute rule never fires for B-tree, hash, `bloom`, or BRIN, at any bloat level in these fixtures.** In the scattered-delete fixture a rebuild reclaimed 79.7% of both the B-tree and the `bloom` index, whose current ratios were 0.143228 and 0.102417; the rule stayed silent on both.
+- **Two fixtures defeat the drift rule outright, and the absolute rule barely rescues them.** A scattered 80% delete followed by `VACUUM` moved neither file, so drift is exactly 1.000 on all seven access methods against reclaimable fractions up to 80.0%; the absolute rule caught only the GIN index there, 1 of the 6 that were rebuild-worthy. Widening every row drove drift *down* to 0.447-0.670 while a rebuild would have reclaimed 49.9-66.6%, and the absolute rule caught none of those four.
+- **The drift rule's one false positive is BRIN** in the tail-truncation fixture: drift 3.999 against a 0.000 reclaimable fraction, because `brinbulkdelete()` removes nothing ([brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784)).
+
+#### The 40% threshold is not the weak part
+
+Sweeping the drift threshold over the same 49 cells, with ground truth fixed at "a rebuild reclaims >= 25%":
+
+| threshold | TP | FP | FN | TN |
+|---|---|---|---|---|
+| 1.10 | 14 | 1 | 10 | 24 |
+| 1.20 | 13 | 1 | 11 | 24 |
+| 1.30 | 13 | 1 | 11 | 24 |
+| **1.40** | **13** | **1** | **11** | **24** |
+| 1.50 | 13 | 1 | 11 | 24 |
+| 1.75 | 10 | 1 | 14 | 24 |
+| 2.00 | 7 | 1 | 17 | 24 |
+
+Everything from 1.10 to 1.50 scores identically. The rule's misses are structural, not a tuning error: they are the fixtures where the two file sizes move together or where the index side does not move at all. Moving the ground-truth threshold instead leaves the ranking unchanged — at 10%, 25%, 40% and 50% reclaimable, the drift rule scores 13/1, 13/1, 13/1 and 8/6 true/false positives against the absolute rule's 6/2, 6/2, 6/2 and 5/3.
+
+The sharpest single statement of the ratio's unreliability is the band around drift 1.00. Of the 22 cells with drift between 0.90 and 1.10, the true reclaimable fraction ranges from **-8.5%** (a GiST index that `REINDEX` made *larger*) to **80.0%**. A drift reading of "no change" is consistent with the entire ground-truth range.
+
+#### Why drift moves at all: decompose before acting
+
+Every drift number is a quotient of two independent factors, and a large drift, a large index-side change, and a large reclaimable fraction are three different things. Measured `idx_factor` and `heap_factor` from the matrix:
+
+| case | idx_factor | heap_factor | drift | reclaimable |
+|---|---|---|---|---|
+| B-tree key churn: real index growth, heap also grew | 1.995 | 1.200 | 1.662 | 49.9% |
+| BRIN heap truncation: index never moved, heap shrank | 1.000 | 0.250 | **3.999** | **0.0%** |
+| `bloom` key churn: index grew 20%, heap grew 20% | 1.201 | 1.200 | **1.001** | 16.7% |
+
+The middle row is a maximal drift reading produced entirely by the denominator. The bottom row is a null drift reading produced by two real changes that cancelled.
+
+A bare stored ratio cannot separate these, because it discards the two components at capture time. If this scheme is kept, store the index and heap byte counts rather than their quotient, and treat drift as a trigger to look at the components rather than as a decision.
+
+#### Comparing both rules from the stored baseline
+
+Read-only. Verified against the pinned 12.2 build, including an index whose comment is human text rather than a number:
+
+```sql
+BEGIN;
+SET LOCAL statement_timeout = '30s';
+SET LOCAL lock_timeout = '5s';
+
+WITH candidates AS MATERIALIZED (
+    SELECT /* wiki_index_rule_compare_candidates */
+           i.indexrelid,
+           i.indrelid,
+           n.nspname AS schema_name,
+           ic.relname AS index_name,
+           am.amname AS index_am,
+           CASE WHEN d.description ~ '^[0-9]+([.][0-9]+)?$'
+                THEN d.description::numeric END AS baseline_ratio
+    FROM pg_index i
+    JOIN pg_class ic ON ic.oid = i.indexrelid
+    JOIN pg_namespace n ON n.oid = ic.relnamespace
+    JOIN pg_am am ON am.oid = ic.relam
+    LEFT JOIN pg_description d
+           ON d.objoid = i.indexrelid
+          AND d.classoid = 'pg_class'::regclass
+          AND d.objsubid = 0
+    WHERE ic.relkind = 'i'
+      AND n.nspname !~ '^pg_'
+      AND n.nspname <> 'information_schema'
+), measured AS MATERIALIZED (
+    SELECT /* wiki_index_rule_compare_measure */
+           c.*,
+           pg_relation_size(c.indexrelid) AS index_bytes,
+           pg_relation_size(c.indrelid) AS heap_bytes
+    FROM candidates c
+)
+SELECT /* wiki_index_rule_compare */
+       m.schema_name,
+       m.index_name,
+       m.index_am,
+       m.baseline_ratio,
+       round(m.index_bytes::numeric / nullif(m.heap_bytes, 0), 6) AS current_ratio,
+       round((m.index_bytes::numeric / nullif(m.heap_bytes, 0))
+             / nullif(m.baseline_ratio, 0), 3) AS drift,
+       round(1.0 / nullif(m.baseline_ratio, 0), 2) AS index_gt_heap_needs_drift,
+       (m.index_bytes::numeric / nullif(m.heap_bytes, 0))
+             / nullif(m.baseline_ratio, 0) >= 1.4 AS fires_drift_40pct,
+       m.index_bytes > m.heap_bytes AS fires_index_gt_heap,
+       pg_size_pretty(m.index_bytes) AS index_size,
+       pg_size_pretty(m.heap_bytes) AS heap_main_size
+FROM measured m
+ORDER BY drift DESC NULLS LAST;
+COMMIT;
+```
+
+`index_gt_heap_needs_drift` is the point of the query: it prints, per index, the drift the absolute rule is silently demanding. On the follow-up fixture it returned 1.00 for GIN, 2.65 for GiST, 3.77 for SP-GiST, 4.97 for hash, 7.41 for B-tree and 10.36 for `bloom`. The BRIN row carried a human comment, so its baseline and both rule columns came back `NULL` while the query still succeeded; the `CASE` guard is what makes that safe ([syntax.sgml#expression-evaluation](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L2500-L2527)).
+
+#### What changes when the rebuild is REINDEX INDEX CONCURRENTLY
+
+The scoring above is unaffected and the baseline survives, but an automated `REINDEX INDEX CONCURRENTLY` (RIC) loop carries costs and failure modes a plain-`REINDEX` loop does not.
+
+**The ground truth does not move.** Two byte-identical 200,000-row tables carrying all seven indexes were put through the same deterministic five-round key churn, then one was rebuilt with `REINDEX INDEX CONCURRENTLY` and the other with plain `REINDEX INDEX`:
+
+| AM | churned blocks | after RIC | after plain `REINDEX` | same | reclaimed |
+|---|---|---|---|---|---|
+| btree | 1537 | 551 | 551 | yes | 64.2% |
+| spgist | 3062 | 1247 | 1247 | yes | 59.3% |
+| gin | 7678 | 4102 | 4102 | yes | 46.6% |
+| gist | 2641 | 1536 | 1536 | yes | 41.8% |
+| hash | 1150 | 824 | 824 | yes | 28.3% |
+| bloom | 473 | 394 | 394 | yes | 16.7% |
+| brin | 3 | 3 | 3 | yes | 0.0% |
+
+Identical on all seven, so every reclaimable fraction on this page describes what RIC would recover too. That equality was measured on a quiescent table; RIC's `validate_index` step inserts any tuples the concurrent build missed, so a table taking writes during the rebuild can finish larger.
+
+**The baseline survives, and the index OID does not.** All seven comments came through the rebuild intact while every OID changed, because `index_concurrently_swap()` rewrites the `pg_description` row's `objoid` onto the new index ([index.c#index_concurrently_swap-comment](../../../../raw/postgres-12/src/backend/catalog/index.c#L1612-L1656)):
+
+| AM | OID before | OID after | comment before | comment after |
+|---|---|---|---|---|
+| btree | 16410 | 16430 | `0.143228` | `0.143228` |
+| hash | 16411 | 16431 | `0.213673` | `0.213673` |
+| brin | 16412 | 16432 | `0.000780` | `0.000780` |
+| gist | 16413 | 16433 | `0.399792` | `0.399792` |
+| spgist | 16414 | 16434 | `0.281258` | `0.281258` |
+| gin | 16415 | 16435 | `1.066285` | `1.066285` |
+| bloom | 16416 | 16436 | `0.102417` | `0.102417` |
+
+This is the one place RIC is strictly better than a side table keyed on `indexrelid`, which the changed OIDs would break. It also means the process must **overwrite the comment after every rebuild**: the surviving value is the pre-rebuild baseline, which is now stale by exactly the amount that was just reclaimed.
+
+**A false positive is cheaper, but not cheap.** RIC takes `ShareUpdateExclusiveLock` rather than the `ShareLock` on the table and `AccessExclusiveLock` on the index that plain `REINDEX INDEX` takes ([indexcmds.c:2357](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2357), [indexcmds.c#RIC-locks](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2976-L2978), [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3436-L3515)), so ordinary DML keeps running. Four costs remain:
+
+- **Peak storage is old plus new.** Phase 1 creates a `_ccnew` copy ([indexcmds.c#create-copy](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L3009)) and the old index is dropped only in phase 6 ([indexcmds.c#RIC-drop-old](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3296-L3320)). A rebuild fired on a false positive temporarily *doubles* the very allocation the rule was trying to reduce.
+- **It blocks VACUUM on that table for the whole run.** Lazy VACUUM also takes `ShareUpdateExclusiveLock` on the relation ([vacuum.c#vacuum_rel-lockmode](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1675-L1685)), and `ShareUpdateExclusiveLock` conflicts with itself ([lock.c#LockConflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L60-L105)). Every unnecessary rebuild suppresses the maintenance that actually limits retained space.
+- **It waits on other sessions.** RIC has five wait points: two `WaitForLockersMultiple(..., ShareLock, ...)` calls ([indexcmds.c:3092](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3092), [indexcmds.c:3141](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3141)) and two `WaitForLockersMultiple(..., AccessExclusiveLock, ...)` calls before set-dead and drop ([indexcmds.c:3274](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3274), [indexcmds.c:3304](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3304)), plus the snapshot wait. A long-running transaction stalls the loop.
+- **It cannot run inside a transaction block** ([utility.c#PreventInTransactionBlock](../../../../raw/postgres-12/src/backend/tcop/utility.c#L773-L783)). Measured: `ERROR: REINDEX CONCURRENTLY cannot run inside a transaction block`. A maintenance job that wraps its work in `BEGIN`/`COMMIT` cannot issue it at all.
+
+**Four cases silently or loudly break the loop.** Measured on the pinned build:
+
+| case | v12 result |
+|---|---|
+| `REINDEX INDEX CONCURRENTLY` on an exclusion-constraint index | `ERROR: concurrent index creation for exclusion constraints is not supported` |
+| `REINDEX TABLE CONCURRENTLY` on a table that has one | `WARNING: cannot reindex exclusion constraint index "ric2.ex_during_excl" concurrently, skipping` ([indexcmds.c#exclusion-skip](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2825-L2830)) |
+| `REINDEX INDEX CONCURRENTLY` on a temporary index | succeeds, but silently runs the **non-concurrent** path ([indexcmds.c#temp-fallback](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2376-L2381)); the comment survived and the OID did not change |
+| `REINDEX INDEX CONCURRENTLY` on a system catalog index | `ERROR: cannot reindex system catalogs concurrently` ([indexcmds.c#catalog-error](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2897-L2900)) |
+
+The exclusion-index skip is the dangerous one for this scheme. The index is never rebuilt, so its drift keeps climbing and the monitor keeps flagging it forever, once per cycle, with only a `WARNING` to show for it.
+
+**A failed RIC leaves an index with no baseline.** A `REINDEX INDEX CONCURRENTLY` on a 3,000,000-row table, interrupted by `statement_timeout = '90ms'`, produced:
+
+| index | `indisvalid` | `indisready` | `indislive` | blocks | comment |
+|---|---|---|---|---|---|
+| `f_k` | t | t | t | 8228 | `0.123456` |
+| `f_k_ccnew` | f | f | t | 0 | *(none)* |
+
+The tracked index kept its validity and its baseline, so the monitor is not corrupted. But the `_ccnew` leftover has no comment, because the swap that would have moved one never ran. [The baseline audit query](#the-baseline-audit-query) reports it as `no baseline stored`, and it must be dropped by hand. That leftover was interrupted early enough to hold 0 blocks; how much space a later-stage interruption leaves was not measured. Note also that the leftover is invisible to the ratio: [the detection query](#the-detection-query) measures each index against the heap separately, so a 0-byte or partially built `_ccnew` never inflates the tracked index's own ratio.
+
+#### What to do with these two rules
+
+- **Do not adopt "reindex when the index is larger than the heap."** It is a drift rule with an arbitrary per-index threshold, it is unreachable for narrow-key indexes on wide tables, and it condemns healthy GIN indexes on the day they are built.
+- **Keep the drift rule only as a screen**, with the per-access-method calibration in [Fixture thresholds, and what to do with a flagged index](#fixture-thresholds-and-what-to-do-with-a-flagged-index). It fired on 14 of the 49 cells and 13 of those were rebuild-worthy, so a reading of 1.4 is worth investigating; silence is worth nothing, since 11 rebuild-worthy indexes never reached it.
+- **Never let either rule fire a rebuild on its own, even with `REINDEX INDEX CONCURRENTLY`.** RIC keeps writes running, but an unnecessary one still doubles peak index storage until phase 6, blocks VACUUM on the table for its whole duration, and waits on other sessions at five points; see [What changes when the rebuild is REINDEX INDEX CONCURRENTLY](#what-changes-when-the-rebuild-is-reindex-index-concurrently) and [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](reindex-index-concurrently.md).
+- **Re-capture the baseline as the last step of every rebuild, and handle the cases RIC refuses.** The comment survives the swap, so an un-refreshed baseline is the pre-rebuild value and the next cycle will read drift against a number that no longer describes the file. Give the loop an explicit path for exclusion-constraint indexes, which RIC errors on when named and skips with a `WARNING` under `REINDEX TABLE CONCURRENTLY`, and a step that finds and drops `_ccnew` leftovers from failed runs.
+- **Confirm with a rebuild-relative measurement before acting.** For B-tree that is `pgstatindex`; the contrib coverage gap for the other access methods is exactly why this scheme was proposed, and it is not closed by choosing a different threshold on the same two numbers ([pgstattuple.c#pgstat_relation](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L240-L313)).
+- **A rebuilt index is not a maximally dense index.** `REINDEX` fills leaf pages to the B-tree default fillfactor of 90, not 100 ([nbtree.h:169](../../../../raw/postgres-12/src/include/access/nbtree.h#L169), [nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L709-L734)), while the heap's default fillfactor is 100 ([rel.h#HEAP_DEFAULT_FILLFACTOR](../../../../raw/postgres-12/src/include/utils/rel.h#L278-L279)). The reclaimable fractions above are measured against that rebuilt reference, not against a theoretical minimum.
+
 ### Why this exists: the contrib boundary
 
 The reason a home-grown ratio is attractive at all is that v12 has no core function that reports per-index bloat, and the contrib tools do not expose one uniform result for every access method. The generic `pgstattuple(regclass)` dispatcher handles heaps plus B-tree, hash, and GiST indexes; it rejects GIN, SP-GiST, BRIN, unknown index AMs, and partitioned indexes ([pgstattuple.c#pgstat_relation](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L240-L313)). The extension does have a separate `pgstatginindex(regclass)`, but that reads only the GIN metapage version, pending-page count, and pending-tuple count—not a live/dead/free-space census ([pgstatindex.c#pgstatginindex](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L480-L506), [pgstatindex.c#pgstatginindex-fields](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L509-L564)). Installing the extension needs superuser: its control file does not set `superuser = false`, and the control-file parser defaults that field to true ([extension.c#read_extension_control_file](../../../../raw/postgres-12/src/backend/commands/extension.c#L605-L625)), enforced at script execution ([extension.c#execute_extension_script](../../../../raw/postgres-12/src/backend/commands/extension.c#L798-L810)).
@@ -623,6 +906,11 @@ At runtime, `COMMENT` writes the existing `pg_description` row through `CreateCo
 - Adjacent observability: `pg_stat_all_tables`, statistics lag and snapshot semantics, `psql` verbose index display, `track_counts`, both query timeouts, GIN's global and per-index pending-list cleanup settings, and the `pgstattuple` access-method support matrix with its extension privilege gate.
 - Prior exact-pin measurements recorded by the original page: fresh-ratio scale checks, a hash/B-tree row-count sweep, six workload scenarios, maintenance/comment lifecycle probes, lock and visibility probes, and survey timings over 300 indexes. This review rechecked the source claims and production queries; it did not independently reproduce every historical measurement table.
 - Exact-pin delete-and-reload measurements: all seven access methods at 200,000 rows; the one-, two-, and three-pass post-delete arms rerun during this review, with the one-pass arm repeated; a GIN metapage census after three passes; and a zero-byte mid-cycle heap. The rerun corrected the recorded GIN counts from 4,102/7,495 to 4,101/7,482 blocks, confirmed SP-GiST's +0.83% result, and corrected the zero-heap query behavior.
+- Tuple-layout basis for the fresh ratio: `IndexTupleData` and `IndexInfoFindDataOffset` against `HeapTupleHeaderData` and `SizeofHeapTupleHeader`, plus the B-tree and heap default fill factors and the `_bt_pagestate` leaf-page close rule that fixes a rebuilt B-tree's density.
+- Rebuild cost boundary for a rule that fires unnecessarily: the `ShareLock` on the table and `AccessExclusiveLock` on the index taken by `reindex_index`, and the empty-index metapage written by the B-tree build.
+- Exact-pin follow-up measurements comparing the two decision rules, all on the same isolated 12.2 server with `autovacuum = off`: a day-zero fresh-ratio sweep over three heap row widths at 200,000 rows; a fresh-B-tree ratio sweep from 0 to 1,000,000 rows; a 49-cell matrix of seven workloads times seven access methods with `REINDEX TABLE` ground truth; drift-threshold and ground-truth-threshold sensitivity sweeps; and a stepwise churn fixture tuned to a GIN baseline ratio of 1.004900 whose rebuild reference is a second index of the same definition built on the live table and dropped. The rule-comparison query was executed against those fixtures, including one index carrying a human comment.
+- `REINDEX INDEX CONCURRENTLY` as the maintenance process's rebuild command: `ReindexRelationConcurrently` dispatch and per-relkind branches, the `ShareUpdateExclusiveLock` table/index/session locks against `reindex_index`'s `ShareLock`/`AccessExclusiveLock` pair, the phase-1 `index_concurrently_create_copy` and phase-6 old-index drop that bracket peak storage, the four `WaitForLockersMultiple` calls, the `PreventInTransactionBlock` guard in `ProcessUtilitySlow`, the exclusion-constraint skip and system-catalog errors, the temporary-relation fallback to the non-concurrent path, and lazy VACUUM's own `ShareUpdateExclusiveLock` in `vacuum_rel`.
+- Exact-pin RIC measurements on a second isolated 12.2 server with `autovacuum = off`: two byte-identical churned 200,000-row tables rebuilt with `REINDEX INDEX CONCURRENTLY` and plain `REINDEX INDEX` respectively, compared per access method; comment survival and OID change across RIC for all seven; direct RIC on an exclusion-constraint index, on a table containing one, inside a transaction block, and on a temporary index; and a `statement_timeout`-interrupted RIC on a 3,000,000-row table, with the resulting `_ccnew` leftover run through the page's baseline audit predicate.
 
 ## Evidence Map
 
@@ -651,6 +939,16 @@ At runtime, `COMMENT` writes the existing `pg_description` row through `CreateCo
 | BRIN revmap size changes in steps as the number of summarized heap ranges crosses page capacity | [brin.h#BRIN_DEFAULT_PAGES_PER_RANGE](../../../../raw/postgres-12/src/include/access/brin.h#L39-L43), [brin_page.h#REVMAP_PAGE_MAXITEMS](../../../../raw/postgres-12/src/include/access/brin_page.h#L88-L94), [brin_revmap.c#brinRevmapExtend](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L115-L123) |
 | GIN's pending-list limit triggers a non-forced cleanup and is also a per-index reloption | [ginfast.c#pending-list-cleanup-trigger](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L438-L461), [ginutil.c#ginoptions](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L602-L624) |
 | Default fill factors differ per access method, so fresh ratios differ per access method | [nbtree.h:169](../../../../raw/postgres-12/src/include/access/nbtree.h#L169), [hash.h:279](../../../../raw/postgres-12/src/include/access/hash.h#L279), [spgist.h:25](../../../../raw/postgres-12/src/include/access/spgist.h#L25), [gist_private.h:465](../../../../raw/postgres-12/src/include/access/gist_private.h#L465) |
+| An index tuple stores an 8-byte header plus the indexed attributes only, while a heap tuple stores a 23-byte header plus every column, so widening an unindexed column moves only the ratio's denominator | [itup.h#IndexTupleData](../../../../raw/postgres-12/src/include/access/itup.h#L35-L53), [itup.h#IndexInfoFindDataOffset](../../../../raw/postgres-12/src/include/access/itup.h#L80-L90), [htup_details.h#HeapTupleHeaderData](../../../../raw/postgres-12/src/include/access/htup_details.h#L152-L184) |
+| A rebuilt B-tree is filled to fillfactor 90, not 100, while the heap default fillfactor is 100, so the rebuilt reference is not a theoretical minimum | [nbtree.h#BTREE_DEFAULT_FILLFACTOR](../../../../raw/postgres-12/src/include/access/nbtree.h#L168-L171), [nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L709-L734), [rel.h#HEAP_DEFAULT_FILLFACTOR](../../../../raw/postgres-12/src/include/utils/rel.h#L278-L279) |
+| A freshly built B-tree over no rows occupies one metapage block, written as the final build step | [nbtree.h#BTREE_METAPAGE](../../../../raw/postgres-12/src/include/access/nbtree.h#L131-L133), [nbtsort.c#_bt_uppershutdown-metapage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1128-L1137) |
+| An unnecessary `REINDEX INDEX` costs a table `ShareLock`, which blocks writes, plus an index `AccessExclusiveLock` | [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3436-L3515) |
+| `REINDEX INDEX CONCURRENTLY` instead takes `ShareUpdateExclusiveLock` on the index and heap, at transaction and session level | [indexcmds.c:2357](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2357), [indexcmds.c#RIC-locks](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2976-L2978), [indexcmds.c#RIC-session-lock](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3070-L3074) |
+| RIC holds the old and new index at once: phase 1 creates the `_ccnew` copy, phase 6 drops the old one | [indexcmds.c#create-copy](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L3009), [indexcmds.c#RIC-drop-old](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3296-L3320) |
+| RIC's `ShareUpdateExclusiveLock` on the heap conflicts with lazy VACUUM's own `ShareUpdateExclusiveLock` | [vacuum.c#vacuum_rel-lockmode](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1675-L1685), [lock.c#LockConflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L60-L105) |
+| RIC waits for lockers four times, twice at `ShareLock` and twice at `AccessExclusiveLock` | [indexcmds.c:3092](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3092), [indexcmds.c:3141](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3141), [indexcmds.c:3274](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3274), [indexcmds.c:3304](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3304) |
+| `REINDEX CONCURRENTLY` cannot run inside a transaction block | [utility.c#PreventInTransactionBlock](../../../../raw/postgres-12/src/backend/tcop/utility.c#L773-L783) |
+| `REINDEX TABLE CONCURRENTLY` skips exclusion-constraint indexes with a `WARNING`; system catalogs error; a temporary relation silently falls back to the non-concurrent path | [indexcmds.c#exclusion-skip](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2825-L2830), [indexcmds.c#catalog-error](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2897-L2900), [indexcmds.c#temp-fallback](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2376-L2381) |
 | A `CASE` guard is the documented way to force evaluation order around the numeric cast | [syntax.sgml#expression-evaluation](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L2500-L2527) |
 | Partitioned indexes are relkind `'I'` and have no storage | [pg_class.h#relkind](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L152-L163), [pg_class.h#RELKIND_HAS_STORAGE](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L185-L192) |
 | `relpages` is updated by VACUUM/ANALYZE and by relevant index-build and heap-rewrite paths, but ordinary DML can leave it stale | [vacuum.c#vac_update_relstats](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1156-L1197), [index.c#index_update_stats-relpages](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2775), [cluster.c#swap_relation_files-relpages](../../../../raw/postgres-12/src/backend/commands/cluster.c#L1131-L1148) |
@@ -672,6 +970,17 @@ At runtime, `COMMENT` writes the existing `pg_description` row through `CreateCo
 - The cycle used strictly ascending keys in both loads. Reusing the first load's values or using random keys was not measured. B-tree and GiST both ask the FSM for a reusable page before extending ([nbtpage.c#_bt_getbuf-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L801-L842), [gistutil.c#gistNewBuffer](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L802-L840)), but the resulting block counts under other key orders remain unverified.
 - Immediately after one back-to-back `DELETE`; `VACUUM` pair, `pg_stat_all_tables.n_dead_tup` read 200,000 for a zero-byte heap; two seconds later, a repeat read 0. The documented collector lag and transaction-local statistics snapshot explain why the value is not a physical heap invariant, but the precise flush ordering in that experiment was not traced ([monitoring.sgml#statistics-lag](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L229-L248)).
 - Three of the cycle's supporting measurements — the B-tree `pgstatindex` page census, the hash `hash_metapage_info` bucket and overflow comparison, and the GIN `gin_metapage_info` entry census — come from `pgstattuple` and `pageinspect`, which are exactly the contrib modules [Why this exists: the contrib boundary](#why-this-exists-the-contrib-boundary) rules out for the monitoring scheme itself. They are diagnostics for this page, not part of the proposal.
+- The 13/1/11/24 and 6/2/18/23 scorecards in [Follow-up: drift past a stored baseline versus "reindex when the index is larger than the heap"](#follow-up-drift-past-a-stored-baseline-versus-reindex-when-the-index-is-larger-than-the-heap) depend on a chosen ground-truth label, "a rebuild reclaims at least 25% of the current index file". That threshold is a labelling convention for this page, not a v12 definition of bloat; the checkout defines no such quantity. The reported sweep at 10%, 25%, 40% and 50% shows the ranking of the two rules is stable across those choices, but the absolute counts are not.
+- The seven workloads are a chosen sample of failure shapes, not a workload distribution. A different mix would move both rules' counts. In particular the fixtures contain no case where a healthy index's ratio starts above 1.0 for a reason other than GIN's multi-entry arrays, and no case where a B-tree legitimately exceeds its heap; both are constructible with a wide index key over a narrow table but were not measured.
+- The random-growth fixture randomizes only the `k` column, so its GiST, SP-GiST, GIN, `bloom` and BRIN rows are identical to the ascending-growth fixture by construction. Only the B-tree and hash rows are an independent observation of random-key insertion.
+- The stepwise scenario's ground truth is a second index built on the live table rather than an actual `REINDEX`. The two perform the same build, but the probe was not compared against a real `REINDEX` on the same state at every step, and the probe index's own build competed for the same buffer cache.
+- The scenario's churn rounds each rewrote a disjoint 10% of rows, and its heap moved once (4,082 to 4,490 blocks) and then stayed flat under `autovacuum = off`. On a server where autovacuum runs, the heap denominator would move on its own schedule and every drift number above would change.
+- Whether the drift rule's advantage survives at production scale, with concurrent transactions holding back `RecentGlobalXmin`, was not measured. The recyclability gate documented in [Why the cycle splits the access methods: the recyclability gate](#why-the-cycle-splits-the-access-methods-the-recyclability-gate) affects the index side of every cell in the matrix.
+- The `REINDEX INDEX CONCURRENTLY` versus plain `REINDEX INDEX` size equality was measured on a quiescent single-user table. RIC's second heap scan and `validate_index` step insert tuples the concurrent build missed, so under concurrent writes RIC can produce a larger file than plain `REINDEX` on the same data; that case was not measured, and the size-equality table should not be read as a general guarantee.
+- The interrupted-RIC leftover was caught early enough to hold 0 blocks. How much space a `_ccnew` holds when the interruption lands mid-build, and whether an automated loop's retries accumulate several of them, were not measured. A 2,500 ms timeout on the same fixture completed instead of failing, so the interruption point was not controlled precisely.
+- RIC's duration, and therefore how long it blocks VACUUM on the table and how long peak storage stays doubled, was not measured under any concurrent workload. On the idle test server a 3,000,000-row B-tree rebuild finished in under 2.5 seconds, which is not a useful production figure.
+- Whether reindexing a leftover `_ccnew` by name repairs or duplicates it was not tested. The `RELKIND_INDEX` branch of `ReindexRelationConcurrently` explicitly permits invalid indexes, unlike the table-level branch, which skips them with a `WARNING` ([indexcmds.c#invalid-allowed](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2902-L2912), [indexcmds.c#exclusion-skip](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2830)).
+- No upstream test in the pinned checkout compares `REINDEX CONCURRENTLY` output size against plain `REINDEX` output size, so the size-equality table has no regression coverage behind it.
 
 ## Source References
 
@@ -688,6 +997,17 @@ At runtime, `COMMENT` writes the existing `pg_description` row through `CreateCo
 - [index.c#index_concurrently_swap-comment](../../../../raw/postgres-12/src/backend/catalog/index.c#L1612-L1656)
 - [index.c#index_update_stats](../../../../raw/postgres-12/src/backend/catalog/index.c#L2655-L2775)
 - [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3436-L3515)
+- [indexcmds.c#ReindexRelationConcurrently](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2715-L2745)
+- [indexcmds.c#temp-fallback](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2376-L2381)
+- [indexcmds.c#exclusion-skip](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2819-L2830)
+- [indexcmds.c#catalog-error](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2897-L2900)
+- [indexcmds.c#invalid-allowed](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2902-L2912)
+- [indexcmds.c#create-copy](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2993-L3009)
+- [indexcmds.c#RIC-locks](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L2976-L2978)
+- [indexcmds.c#RIC-session-lock](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3070-L3074)
+- [indexcmds.c#RIC-drop-old](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3296-L3320)
+- [utility.c#PreventInTransactionBlock](../../../../raw/postgres-12/src/backend/tcop/utility.c#L773-L783)
+- [vacuum.c#vacuum_rel-lockmode](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1675-L1685)
 - [cluster.c#finish_heap_swap](../../../../raw/postgres-12/src/backend/commands/cluster.c#L1341-L1411)
 - [heap.c#RelationTruncateIndexes](../../../../raw/postgres-12/src/backend/catalog/heap.c#L3163-L3207)
 - [storage.c#RelationTruncate](../../../../raw/postgres-12/src/backend/catalog/storage.c#L229-L295)
@@ -704,6 +1024,8 @@ At runtime, `COMMENT` writes the existing `pg_description` row through `CreateCo
 - [analyze.c:419-421](../../../../raw/postgres-12/src/backend/commands/analyze.c#L419-L421)
 - [nbtree.c#btvacuumscan-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1078-L1095)
 - [nbtree.c#btvacuumpage-recycle](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1179)
+- [nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L709-L734)
+- [nbtsort.c#_bt_uppershutdown-metapage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1128-L1137)
 - [nbtpage.c#_bt_getbuf-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L801-L842)
 - [nbtpage.c#_bt_page_recyclable](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L940-L963)
 - [indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L33-L46)
@@ -729,10 +1051,16 @@ At runtime, `COMMENT` writes the existing `pg_description` row through `CreateCo
 - [hashovfl.c#_hash_getovflpage-setbit](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L313-L329)
 - [hashovfl.c:632](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L632)
 - [nbtree.h:169](../../../../raw/postgres-12/src/include/access/nbtree.h#L169)
+- [nbtree.h#BTREE_METAPAGE](../../../../raw/postgres-12/src/include/access/nbtree.h#L131-L133)
+- [nbtree.h#BTREE_DEFAULT_FILLFACTOR](../../../../raw/postgres-12/src/include/access/nbtree.h#L168-L171)
 - [hash.h:279](../../../../raw/postgres-12/src/include/access/hash.h#L279)
 - [spgist.h:25](../../../../raw/postgres-12/src/include/access/spgist.h#L25)
 - [gist_private.h:465](../../../../raw/postgres-12/src/include/access/gist_private.h#L465)
 - [rel.h:279](../../../../raw/postgres-12/src/include/utils/rel.h#L279)
+- [rel.h#HEAP_DEFAULT_FILLFACTOR](../../../../raw/postgres-12/src/include/utils/rel.h#L278-L279)
+- [itup.h#IndexTupleData](../../../../raw/postgres-12/src/include/access/itup.h#L35-L53)
+- [itup.h#IndexInfoFindDataOffset](../../../../raw/postgres-12/src/include/access/itup.h#L80-L90)
+- [htup_details.h#HeapTupleHeaderData](../../../../raw/postgres-12/src/include/access/htup_details.h#L152-L184)
 - [brin.h#BRIN_DEFAULT_PAGES_PER_RANGE](../../../../raw/postgres-12/src/include/access/brin.h#L39-L43)
 - [brin_page.h#REVMAP_PAGE_MAXITEMS](../../../../raw/postgres-12/src/include/access/brin_page.h#L88-L94)
 - [brin_revmap.c#brinRevmapExtend](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L115-L123)

@@ -2,6 +2,101 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] follow-up v12 | rebuild with REINDEX INDEX CONCURRENTLY
+
+- The user stated the maintenance process rebuilds with `REINDEX INDEX
+  CONCURRENTLY`, so the decision-rule comparison in [Detecting Bloat in All
+  Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  was extended against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- No score changes. On a second isolated 12.2 server with `autovacuum = off`,
+  two byte-identical churned 200,000-row tables were rebuilt with RIC and with
+  plain `REINDEX INDEX`; the resulting files matched block for block on all
+  seven access methods (btree 551, spgist 1247, gin 4102, gist 1536, hash 824,
+  bloom 394, brin 3), so every reclaimable fraction on the page applies to a
+  concurrent rebuild.
+- All seven stored baselines survived the swap while every index OID changed
+  (16410 -> 16430 and so on), which `index_concurrently_swap()` explains. Added
+  the operational consequence: the surviving comment is the *pre*-rebuild
+  baseline, so the loop must overwrite it as its last step.
+- Documented the cost profile that remains under RIC: `ShareUpdateExclusiveLock`
+  instead of `ShareLock`/`AccessExclusiveLock`, peak storage of old plus new
+  between phase 1's `_ccnew` copy and phase 6's drop, a lock that conflicts with
+  lazy VACUUM's own `ShareUpdateExclusiveLock`, four `WaitForLockersMultiple`
+  points, and the `PreventInTransactionBlock` ban.
+- Measured four loop-breakers: a direct RIC on an exclusion-constraint index
+  gives `ERROR: concurrent index creation for exclusion constraints is not
+  supported`; `REINDEX TABLE CONCURRENTLY` skips it with only a `WARNING`, so
+  its drift climbs forever; a temporary index silently takes the non-concurrent
+  path with an unchanged OID; and system catalogs error. A
+  `statement_timeout = '90ms'` interruption on a 3,000,000-row table left
+  `f_k_ccnew` invalid, not-ready, live, 0 blocks and with no comment, which the
+  page's baseline audit query reports as `no baseline stored`.
+- Added six Evidence Map rows, two Context Reviewed bullets, five Open
+  Questions, twelve Source References, and two rewritten recommendation
+  bullets. Updated `wiki/index.md`, `wiki/v12/index.md`, and
+  `wiki/versions.md`. No new `##`/`###` heading, so the Contents list is
+  unchanged.
+- All 16 new citations were re-resolved against the pinned checkout and every
+  in-page anchor was re-checked. Test schemas were dropped and both isolated
+  servers were stopped. Human `verified: false`, the visible `(unverified)`
+  title, and `verified_by_agent: not yet` are unchanged.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
+## [2026-08-06] follow-up v12 | ratio drift versus "reindex when index > heap"
+
+- Added a decision-rule comparison section to [Detecting Bloat in All Index
+  Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2).
+- Prompt hygiene applied before drafting. The user chose corrected wording with
+  no prompt note, the absolute reading `current ratio > 1.0` measured on main
+  forks, full exact-pin measurements, and all seven access methods.
+- Established the arithmetic identity that `index_bytes > heap_bytes` is
+  equivalent to `drift > 1 / baseline_ratio`, so the proposed alternative is
+  itself a drift rule whose per-index threshold nobody chose. Measured that
+  threshold at 0.94 (gin) to 1282 (brin) on one table, a 1367x spread, and at
+  0.70 to 4444 across three heap row widths.
+- Built a fresh isolated 12.2 server from the pinned checkout with
+  `autovacuum = off`. A day-zero sweep at 200,000 rows held every index's block
+  count identical across heaps of 2,858, 3,847 and 13,334 blocks while the GIN
+  ratio fell 1.435269 -> 1.066285 -> 0.307635, which grounds the ratio in
+  `IndexTupleData` versus `HeapTupleHeaderData` layout. A fresh-B-tree sweep
+  from 0 to 1,000,000 rows fell 2.000000 -> 0.266246, so a baseline captured at
+  1,000 rows shows drift 0.586 at a million with no bloat.
+- Scored both rules over a 49-cell matrix, seven workloads times seven access
+  methods, with `REINDEX TABLE` ground truth and the label "a rebuild reclaims
+  >= 25%": `drift >= 1.40` returned 13 true and 1 false positive against
+  `index > heap`'s 6 and 2. The absolute rule flagged 6 of GIN's 7 cells, 1
+  GiST, 1 SP-GiST and none of the other 28; four of its six true positives are
+  GIN cells that were over the line at build time. Drift-threshold sweeps from
+  1.10 to 1.50 score identically, and ground-truth sweeps at 10/25/40/50% leave
+  the ranking unchanged.
+- Reproduced the question's own premise: a GIN index tuned to baseline
+  1.004900 that `index > heap` condemns at 0.0% reclaimable space the moment it
+  is built and at every later step, while drift stayed quiet until a rebuild
+  was worth 38.9%. First 1.40 crossings reclaimed 25.2% (spgist, 30% churn),
+  37.4% (btree, 60%) and 38.9% (gin, 60%); GiST stalled at 1.399 with 35.4%
+  reclaimable. Ground truth per step came from a second index of the same
+  definition built on the live table and dropped.
+- Filed one verified read-only comparison query that prints both rules plus the
+  drift the absolute rule silently demands, exercised against an index carrying
+  a human comment so the `CASE` guard is proven.
+- Added five Evidence Map rows (index versus heap tuple layout, rebuilt-B-tree
+  fillfactor 90 against heap 100, the empty-index metapage, and `reindex_index`
+  locks), three Context Reviewed bullets, six Open Questions, one Contents
+  entry, and eight Source References. Updated `wiki/index.md`,
+  `wiki/v12/index.md`, and `wiki/versions.md`.
+- Test schemas were dropped and the isolated server was stopped. Human
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are unchanged because this was a scoped
+  follow-up, not a full page re-audit.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-06] review v12 | COMMENT-stored index/heap ratio bloat screen
 
 - Re-reviewed [Detecting Bloat in All Index Types by Storing an Index/Heap Size
