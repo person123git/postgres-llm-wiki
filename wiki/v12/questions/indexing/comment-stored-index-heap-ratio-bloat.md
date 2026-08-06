@@ -19,6 +19,7 @@ verified_by_agent: not yet
   - [The hash sawtooth](#the-hash-sawtooth)
   - [Measured detection power on seven access methods](#measured-detection-power-on-seven-access-methods)
   - [The three heap-side failure modes](#the-three-heap-side-failure-modes)
+  - [A 200k-row delete-and-reload cycle test on all seven index types](#a-200k-row-delete-and-reload-cycle-test-on-all-seven-index-types)
   - [Use the main fork, not pg_table_size](#use-the-main-fork-not-pg_table_size)
   - [The detection query](#the-detection-query)
   - [The baseline audit query](#the-baseline-audit-query)
@@ -194,6 +195,181 @@ This is the single most important limitation: the most common real-world bloat p
 | brin | 0.157 | 1.000 | 6.388 | 0.000 |
 
 **3. Heap truncation fakes bloat.** Deleting the newest 75% of rows by `id`, then `VACUUM`, let `lazy_truncate_heap()` drop the trailing heap pages while every index kept all its blocks. Drift landed at 3.995-3.998 on all seven access methods. On six of them the alarm is directionally right; on BRIN it is a pure false positive at 4.0x drift against 0.000 true bloat.
+
+### A 200k-row delete-and-reload cycle test on all seven index types
+
+This cycle is the scheme's best case, and it passes. The heap ends the cycle at exactly the size it started, so the heap growth factor is exactly 1.000 and drift collapses to pure index growth. Ratio drift matched raw index growth to the last reported digit on all seven access methods, and matched `REINDEX` ground truth on six of the seven.
+
+What the cycle actually exposes is not a flaw in the ratio. It is that **one post-delete `VACUUM` is not enough**: three of the seven indexes grew 83-99% while the row count, the row width and the heap size all ended where they began. The ratio reported that growth faithfully.
+
+#### The fixture
+
+One table, 200,000 rows, seven indexes — the six core access methods plus contrib `bloom` — on an isolated 12.2 server built from the pinned checkout with `autovacuum = off`, so the number of `VACUUM` passes is exactly what the script says. This differs from the one-table-per-access-method fixtures used earlier on this page: here all seven indexes share a single heap, so every row of the results table has the same denominator and the drift differences are entirely index-side.
+
+Every index key is a strictly increasing function of the generated series, so the reload's keys (`200001`-`400000`) are all greater than every key of the first load (`1`-`200000`). The `pad` column keeps the same 40-byte payload as the earlier fixtures.
+
+#### The script
+
+A throwaway lab script for a scratch database, not production SQL: it creates and drops a schema, bulk-loads twice, and rebuilds every index. The production path is [The detection query](#the-detection-query), which carries the session-scoped timeouts.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS bloom;
+DROP SCHEMA IF EXISTS cyc CASCADE;
+CREATE SCHEMA cyc;
+
+CREATE TABLE cyc.t (id int, k int, k2 int, r int4range, p point, a int[], pad text);
+CREATE TABLE cyc.res (phase text, obj text, am text,
+                      heap_bytes bigint, idx_bytes bigint, ratio numeric);
+
+CREATE FUNCTION cyc.snap(p_phase text) RETURNS void LANGUAGE sql AS $$
+  INSERT INTO cyc.res
+  SELECT p_phase, ic.relname, am.amname,
+         pg_relation_size(i.indrelid),
+         pg_relation_size(i.indexrelid),
+         round(pg_relation_size(i.indexrelid)::numeric
+               / nullif(pg_relation_size(i.indrelid), 0), 6)
+  FROM pg_index i
+  JOIN pg_class ic ON ic.oid = i.indexrelid
+  JOIN pg_am    am ON am.oid = ic.relam
+  WHERE i.indrelid = 'cyc.t'::regclass;
+$$;
+
+-- 1. add 200k rows
+INSERT INTO cyc.t
+SELECT g, g, g + 1000000, int4range(g, g + 10), point(g, (g * 37) % 1000),
+       ARRAY[g, g + 1000000, g + 2000000], repeat('x', 40)
+FROM generate_series(1, 200000) g;
+
+-- 2. create all indexes
+CREATE INDEX i_btree  ON cyc.t USING btree  (k);
+CREATE INDEX i_hash   ON cyc.t USING hash   (k);
+CREATE INDEX i_brin   ON cyc.t USING brin   (k);
+CREATE INDEX i_gist   ON cyc.t USING gist   (r);
+CREATE INDEX i_spgist ON cyc.t USING spgist (p);
+CREATE INDEX i_gin    ON cyc.t USING gin    (a);
+CREATE INDEX i_bloom  ON cyc.t USING bloom  (k, k2);
+
+-- 3. calculate the ratio and store it for each index
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT i.indexrelid::regclass AS idx,
+           round(pg_relation_size(i.indexrelid)::numeric
+                 / pg_relation_size(i.indrelid), 6) AS ratio
+    FROM pg_index i WHERE i.indrelid = 'cyc.t'::regclass
+  LOOP
+    EXECUTE format('COMMENT ON INDEX %s IS %L', r.idx, r.ratio::text);
+  END LOOP;
+END $$;
+SELECT cyc.snap('initial');
+
+-- 4. run vacuum
+VACUUM cyc.t;
+
+-- 5. delete all rows
+DELETE FROM cyc.t;
+
+-- 6. run vacuum
+VACUUM cyc.t;
+SELECT cyc.snap('mid_cycle');
+
+-- 7. add 200k rows again, with fresh ascending keys
+INSERT INTO cyc.t
+SELECT g, g, g + 1000000, int4range(g, g + 10), point(g, (g * 37) % 1000),
+       ARRAY[g, g + 1000000, g + 2000000], repeat('x', 40)
+FROM generate_series(200001, 400000) g;
+SELECT cyc.snap('final');
+
+-- ground truth: what a fresh index over the final 200k rows costs
+REINDEX TABLE cyc.t;
+SELECT cyc.snap('rebuilt');
+
+-- 8. report
+SELECT /* wiki_index_ratio_cycle_report */
+       i.am,
+       i.idx_bytes / 8192                                  AS initial_blocks,
+       f.idx_bytes / 8192                                  AS final_blocks,
+       round(100.0 * (f.idx_bytes - i.idx_bytes) / i.idx_bytes, 2) AS index_size_pct,
+       round(100.0 * (f.heap_bytes - i.heap_bytes) / i.heap_bytes, 2) AS heap_size_pct,
+       i.ratio                                             AS baseline_ratio,
+       f.ratio                                             AS current_ratio,
+       round(100.0 * (f.ratio - i.ratio) / i.ratio, 2)     AS ratio_pct,
+       r.idx_bytes / 8192                                  AS rebuilt_blocks,
+       round(100.0 * (f.idx_bytes - r.idx_bytes) / r.idx_bytes, 2) AS true_bloat_pct
+FROM      cyc.res i
+JOIN      cyc.res f USING (obj)
+JOIN      cyc.res r USING (obj)
+WHERE i.phase = 'initial' AND f.phase = 'final' AND r.phase = 'rebuilt'
+ORDER BY index_size_pct DESC, i.am;
+```
+
+#### Results
+
+The heap measured 3,847 blocks before the cycle and 3,847 blocks after it, so `heap_size_pct` is `0.00` on every row and the ratio column carries the index change alone. Sizes are in 8 KB blocks; `rebuilt_blocks` is the `REINDEX` ground truth.
+
+| AM | initial | final | index size % | baseline ratio | current ratio | ratio % | rebuilt | true bloat % |
+|---|---|---|---|---|---|---|---|---|
+| btree | 551 | 1098 | **+99.27** | 0.143228 | 0.285417 | **+99.27** | 551 | +99.27 |
+| gist | 1538 | 2914 | **+89.47** | 0.399792 | 0.757473 | **+89.47** | 1538 | +89.47 |
+| gin | 4102 | 7495 | **+82.72** | 1.066285 | 1.948271 | **+82.72** | 4102 | +82.72 |
+| spgist | 1082 | 1091 | +0.83 | 0.281258 | 0.283598 | +0.83 | 1082 | +0.83 |
+| bloom | 394 | 394 | 0.00 | 0.102417 | 0.102417 | 0.00 | 394 | 0.00 |
+| brin | 3 | 3 | 0.00 | 0.000780 | 0.000780 | 0.00 | 3 | 0.00 |
+| hash | 822 | 822 | 0.00 | 0.213673 | 0.213673 | 0.00 | 815 | +0.86 |
+
+Three readings matter:
+
+- **`ratio_pct` equals `index_size_pct` on all seven rows, digit for digit.** That is the arithmetic of a heap that returns to its starting size, and it is exactly the condition [What the ratio actually measures](#what-the-ratio-actually-measures) names as the only case in which drift *is* index bloat. Drift was 1.9927, 1.8947, 1.8272, 1.0083, 1.0000, 1.0000 and 1.0000, in the same order.
+- **`ratio_pct` equals `true_bloat_pct` on six of seven rows.** Hash is the single exception, and its 0.86% gap is not stale space. `pageinspect`'s `hash_metapage_info` reports `maxbucket = 767` and `ovflpoint = 11` for both the initial and the rebuilt index; they differ only in overflow pages, 53 against 46, which is exactly the 7-block gap. The bucket count is fixed by the estimated tuple count at build time ([hashpage.c#_hash_init-buckets](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L505-L525)), so two builds over 200,000 rows land on the same bucket array and differ only in how the two key sets collide.
+- **BRIN reported 0.00% on a workload that deleted and reinserted every row.** `brinbulkdelete()` is a documented no-op — "there are no per-heap-tuple index tuples in BRIN indexes, there's not a lot we can do here" ([brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784)) — so BRIN's 0.00% here is a correct reading, unlike its false positives elsewhere on this page.
+
+#### Mid-cycle, the scheme reports nothing at all
+
+Between step 6 and step 7 the heap is **0 bytes**: `DELETE` emptied every page and `lazy_truncate_heap()` dropped all 3,847 of them ([vacuumlazy.c#lazy_truncate_heap](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1955-L1970)), while all seven indexes kept every block. Measured at that point, the raw ratio is `NULL` for all seven indexes and [The detection query](#the-detection-query) returns **zero rows**, because its `pg_relation_size(i.indrelid) > 0` guard excludes them.
+
+This is a distinct failure mode from the mass delete in [The three heap-side failure modes](#the-three-heap-side-failure-modes). Deleting *most* rows leaves both files intact and pins drift at exactly 1.000; deleting *all* rows makes the ratio undefined and the index invisible to the monitor.
+
+#### Why the cycle splits the access methods: the recyclability gate
+
+Rerunning the identical cycle with two and three post-`DELETE` `VACUUM` passes instead of one isolates the cause. Only the `VACUUM` count changed:
+
+| AM | 1 VACUUM | 2 VACUUMs | 3 VACUUMs |
+|---|---|---|---|
+| btree | **+99.27%** | 0.00% | 0.00% |
+| gist | **+89.47%** | 0.00% | 0.00% |
+| gin | **+82.72%** | **+82.72%** | **+82.72%** |
+| spgist | +0.83% | +0.83% | +0.83% |
+| hash, brin, bloom | 0.00% | 0.00% | 0.00% |
+
+Three groups, and each one is visible in source.
+
+**B-tree and GiST: deleted, but not yet recyclable.** Both gate FSM reuse on `RecentGlobalXmin`. `_bt_page_recyclable()` returns true only for a page that is deleted *and* whose `btpo.xact` precedes `RecentGlobalXmin` ([nbtpage.c#_bt_page_recyclable](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L940-L963)); `gistPageRecyclable()` applies the same test to `deleteXid` ([gistutil.c#gistPageRecyclable](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L881-L906)). The `VACUUM` that deletes the pages therefore cannot recycle them in the same pass. `btvacuumpage()` takes its `else if (P_ISDELETED(opaque))` branch — commented "Already deleted, but can't recycle yet" — instead of calling `RecordFreeIndexPage()` ([nbtree.c#btvacuumpage-recycle](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1179)), and GiST's cleanup has the same two-branch shape, with `else if (GistPageIsDeleted(page))` bypassing the FSM call ([gistvacuum.c#gistvacuum-recycle](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L298-L320)).
+
+The measurement confirms it: after the single post-delete `VACUUM` the FSM fork of both indexes was **0 bytes**, while SP-GiST, bloom and BRIN each had a 24,576-byte FSM. Hash also showed 0 bytes, for the opposite reason — it never uses the index FSM at all, as below. `pgstatindex` on the B-tree tells the whole story in three snapshots:
+
+| phase | blocks | internal | leaf | deleted | avg_leaf_density |
+|---|---|---|---|---|---|
+| after build | 551 | 3 | 547 | 0 | 90.00 |
+| after DELETE + 1 VACUUM | 551 | 2 | 1 | 547 | 0.05 |
+| after reload | 1098 | 3 | 547 | 547 | 90.00 |
+
+The final 1,098 blocks are exactly `1 metapage + 3 internal + 547 leaf + 547 deleted`. Every leaf page from the first load is still allocated and still dead weight, and the reload had to extend the relation for 547 brand-new leaves.
+
+Note what this is *not*: it is not a consequence of the reload's keys being ascending. `_bt_getbuf()` takes whatever block `GetFreeIndexPage()` hands back ([nbtpage.c#_bt_getbuf-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L801-L842)), and that function just returns the first page the FSM reports with at least half a block free ([indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L33-L46)). Free-page reuse is key-order agnostic. With a second `VACUUM` before the reload the pages reached the FSM in time, the inserts reused them, and both indexes ended at *exactly* their initial 551 and 1,538 blocks.
+
+**GIN: never recovers, at any `VACUUM` count.** GIN uses the same `RecentGlobalXmin` gate ([ginblock.h#GinPageIsRecyclable](../../../../raw/postgres-12/src/include/access/ginblock.h#L131-L138), [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L744-L786)), but that is not why it stays large. `ginVacuumEntryPage()` never removes an entry tuple whose posting list becomes empty; when `nitems` reaches 0 it sets `plist = NULL, plistsize = 0` and re-adds the tuple to the page ([ginvacuum.c#ginVacuumEntryPage-empty](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L505-L556)). The entry pages are therefore neither new nor deleted, `GinPageIsRecyclable` is false for all of them, and they never reach the FSM.
+
+A `pageinspect` probe on an isolated GIN fixture measures this directly. After deleting all 200,000 rows and running `VACUUM` three times, `gin_metapage_info` still reported **600,000 entries across 4,101 entry pages** and the FSM fork was still 0 bytes. The reload then doubled the file from 4,102 to 7,495 blocks. For GIN this cycle is genuine, permanent bloat that only a rebuild clears.
+
+**SP-GiST, hash, BRIN and bloom: no xid gate to wait for.** SP-GiST records a free page whenever it is new or empty, with no transaction test ([spgvacuum.c#spgvacuum-fsm](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L650-L670)), and contrib `bloom` does the same for new or deleted pages ([blvacuum.c#blvacuumcleanup](../../../../raw/postgres-12/contrib/bloom/blvacuum.c#L189-L214)). Hash does not use the index FSM at all: `_hash_freeovflpage()` clears the page's bit in the index's own bitmap ([hashovfl.c:632](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L632)) and `_hash_getovflpage()` finds and re-marks that bit on the next allocation ([hashovfl.c#_hash_getovflpage-setbit](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L313-L329)), so reuse is immediate and unconditional. BRIN never had per-row entries to remove.
+
+#### What the cycle changes about the recommendation
+
+Nothing in the per-access-method verdict in [Thresholds, and what to do with a flagged index](#thresholds-and-what-to-do-with-a-flagged-index) moves, but two operational points sharpen:
+
+1. **For B-tree and GiST the cheap fix is a second `VACUUM`, but only before the reload.** Adding one `VACUUM` pass between the delete and the reload prevented 100% of the growth at a fraction of a rebuild's cost. Once the reload has already happened the file is committed: no index access method truncates its main fork outside a rebuild ([storage.c#RelationTruncate](../../../../raw/postgres-12/src/backend/catalog/storage.c#L229-L295), [spgvacuum.c#truncate-disabled](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L863-L886)), so a later `VACUUM` only makes those 547 pages reusable by the *next* load and leaves the current 1,098 blocks on disk. At that point `REINDEX INDEX CONCURRENTLY` is the only thing that shrinks the file. For GIN a rebuild is the only option at any point in the cycle.
+2. **Re-capture the baseline after a bulk delete-and-reload, not just after a rebuild.** [Capture discipline](#capture-discipline) already lists `REINDEX`, `VACUUM FULL`, `CLUSTER`, partition attach and row-width changes. This cycle adds a case where the *table* looks untouched — same row count, same heap size, same `pg_class` shape — while three of seven indexes carry 83-99% more blocks than their baseline describes.
 
 ### Use the main fork, not pg_table_size
 
@@ -384,7 +560,8 @@ One access-method-specific size confounder worth naming: GIN keeps a pending lis
 
 - Comment survival across `REINDEX TABLE` and `REINDEX TABLE CONCURRENTLY` is directly covered ([create_index.sql#comments-preserved](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L845-L854), [create_index.out#comments-preserved](../../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2093-L2116)).
 - The partitioned-index comment overwrite is covered, and the expected output records it as known-wrong behavior ([alter_table.sql#partitioned-comments](../../../../raw/postgres-12/src/test/regress/sql/alter_table.sql#L1421-L1440), [alter_table.out#partitioned-comments](../../../../raw/postgres-12/src/test/regress/expected/alter_table.out#L2103-L2134)).
-- There is **no** upstream test that compares index size to heap size, and none that exercises a comment as machine-readable data. Everything in the measurement tables above was produced on a purpose-built 12.2 server, not by the regression suite.
+- The closest upstream analogue of the delete-and-reload cycle is the B-tree multilevel-page-deletion case: insert 80,000 rows, add a primary key, delete all but 10, `VACUUM`, then insert 1,000 more, with a comment stating it "also creates coverage for nbtree FSM page recycling" ([btree_index.sql#multilevel-page-deletion](../../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L144-L162), [btree_index.out#multilevel-page-deletion](../../../../raw/postgres-12/src/test/regress/expected/btree_index.out#L315-L332)). It exists for WAL-record and page-deletion coverage and asserts nothing about index size, so it does not contradict or confirm the growth measured above.
+- There is **no** upstream test that compares index size to heap size, none that exercises a comment as machine-readable data, and none that asserts an index's block count after a delete-and-reload cycle. Everything in the measurement tables above was produced on a purpose-built 12.2 server, not by the regression suite.
 
 ## Context Reviewed
 
@@ -393,8 +570,10 @@ One access-method-specific size confounder worth naming: GIN keeps a pending lis
 - Comment lifecycle across DDL: `index_concurrently_swap`, `RelationTruncateIndexes`, `pg_dump`'s index comment emission, and the `create_index` and `alter_table` regression suites.
 - Size measurement: `pg_relation_size` one- and two-argument forms, `calculate_relation_size`, `calculate_table_size`, `calculate_toast_table_size`, `pg_table_size`, `pg_indexes_size`, and `vac_update_relstats` for the `relpages` alternative.
 - Per-access-method storage behavior: default fill factors for heap, B-tree, hash, GiST and SP-GiST; `_hash_init` and `_hash_expandtable` bucket allocation; BRIN pages-per-range and revmap capacity; the free-space-map reclaim paths in B-tree, GiST, GIN and SP-GiST vacuum; the disabled SP-GiST truncation block; and every `RelationTruncate`/`smgrtruncate` call site in the backend.
+- Free-page recycling per access method: the shared index FSM entry points `GetFreeIndexPage`/`RecordFreeIndexPage`; the `RecentGlobalXmin` recyclability gates in `_bt_page_recyclable`, `gistPageRecyclable` and `GinPageIsRecyclable` and their vacuum-side callers; `_bt_getbuf`'s FSM allocation loop; `ginVacuumEntryPage`'s retention of zero-posting entry tuples and `ginvacuumcleanup`'s page census; the ungated SP-GiST and contrib `bloom` cleanup paths; hash's bitmap-based overflow-page reuse in `_hash_freeovflpage`/`_hash_getovflpage`; and the BRIN `brinbulkdelete` no-op.
 - Adjacent observability: `pg_stat_all_tables`, `track_counts`, `statement_timeout`, `lock_timeout`, `gin_pending_list_limit`, and the `pgstattuple` access-method support matrix with its extension privilege gate.
 - Exact-pin measurements on an isolated PostgreSQL 12.2 server built from the pinned checkout: fresh-ratio scale invariance at three scales for seven access methods; a hash/B-tree sawtooth sweep at seven row counts; six workload scenarios across seven access methods with `REINDEX` and `VACUUM FULL` ground truth; a COMMENT durability matrix across nine operations; lock, ownership and read-visibility probes; and survey timings over 300 indexes.
+- A second exact-pin run for the delete-and-reload cycle, on an `autovacuum = off` 12.2 server built from the pinned checkout: one table carrying all seven access methods at 200,000 rows, run at one, two and three post-`DELETE` `VACUUM` passes; an independent replicate of the one-`VACUUM` arm; `pgstatindex` snapshots of the B-tree at build, mid-cycle and reload; `hash_metapage_info` bucket and overflow-page comparison between the initial and rebuilt hash indexes; a `gin_metapage_info` entry and entry-page census after three `VACUUM` passes; the mid-cycle zero-byte-heap behavior of the filed detection query; and a standalone re-run of the published script on a fresh database to confirm it reproduces every number in the results table.
 
 ## Evidence Map
 
@@ -410,6 +589,12 @@ One access-method-specific size confounder worth naming: GIN keeps a pending lis
 | `pg_table_size` adds every fork plus TOAST and its index, which destroys the ratio | [dbsize.c#calculate_table_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L380-L408), [dbsize.c#calculate_toast_table_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L338-L378), [dbsize.c#pg_table_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L450-L467) |
 | No index access method truncates its main fork; the heap can | [storage.c#RelationTruncate](../../../../raw/postgres-12/src/backend/catalog/storage.c#L229-L295), [vacuumlazy.c#lazy_truncate_heap](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1955-L1970), [heap.c#RelationTruncateIndexes](../../../../raw/postgres-12/src/backend/catalog/heap.c#L3163-L3207), [spgvacuum.c#truncate-disabled](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L863-L886) |
 | Index VACUUM recycles pages through the free space map instead of shrinking the file | [nbtree.c#btvacuumscan-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1078-L1095), [gistvacuum.c#fsm](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L255-L265), [ginvacuum.c#fsm](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L755-L790), [spgvacuum.c#fsm](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L848-L861) |
+| B-tree and GiST gate free-page reuse on `RecentGlobalXmin`, so the VACUUM that deletes a page cannot recycle it in the same pass | [nbtpage.c#_bt_page_recyclable](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L940-L963), [gistutil.c#gistPageRecyclable](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L881-L906), [nbtree.c#btvacuumpage-recycle](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1179), [gistvacuum.c#gistvacuum-recycle](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L298-L320) |
+| B-tree free-page reuse is key-order agnostic: `_bt_getbuf` takes whatever block the FSM reports with at least half a page free | [nbtpage.c#_bt_getbuf-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L801-L842), [indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L33-L46), [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L49-L55) |
+| GIN keeps entry tuples whose posting list becomes empty, so emptied entry pages are never recyclable and never reach the FSM | [ginvacuum.c#ginVacuumEntryPage-empty](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L505-L556), [ginblock.h#GinPageIsRecyclable](../../../../raw/postgres-12/src/include/access/ginblock.h#L131-L138), [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L744-L786) |
+| SP-GiST and contrib `bloom` record free pages with no transaction gate, so their space returns on the first VACUUM | [spgvacuum.c#spgvacuum-fsm](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L650-L670), [blvacuum.c#blvacuumcleanup](../../../../raw/postgres-12/contrib/bloom/blvacuum.c#L189-L214) |
+| Hash does not use the index FSM at all; it frees and reuses overflow pages through its own bitmap pages | [hashovfl.c:632](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L632), [hashovfl.c#_hash_getovflpage-setbit](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L313-L329) |
+| BRIN removes nothing on delete, so its size does not respond to a delete-and-reload cycle | [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784) |
 | A fresh B-tree is packed to fillfactor 90 and the heap to 100, so a first key-update pass splits nearly every leaf | [nbtree.h:169](../../../../raw/postgres-12/src/include/access/nbtree.h#L169), [rel.h:279](../../../../raw/postgres-12/src/include/utils/rel.h#L279) |
 | Hash index size is a step function of estimated tuples, allocated a whole splitpoint at a time at fillfactor 75 | [hashpage.c#_hash_init-buckets](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L505-L525), [hashpage.c#_hash_expandtable-splitpoint](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L785-L853), [hash.h:279](../../../../raw/postgres-12/src/include/access/hash.h#L279) |
 | BRIN size is governed by pages-per-range and revmap capacity, not row count | [brin.h#BRIN_DEFAULT_PAGES_PER_RANGE](../../../../raw/postgres-12/src/include/access/brin.h#L39-L43), [brin_page.h#REVMAP_PAGE_MAXITEMS](../../../../raw/postgres-12/src/include/access/brin_page.h#L88-L94) |
@@ -430,6 +615,10 @@ One access-method-specific size confounder worth naming: GIN keeps a pending lis
 - Whether the partitioned-child comment overwrite has a source-level fix in a later minor release of the 12 branch was not checked, and cannot be checked against another major version under this wiki's evidence rules.
 - The scheme was not tested against `CREATE ACCESS METHOD` custom index AMs, only against the six core access methods plus contrib `bloom`. `pg_relation_size` is AM-agnostic, but nothing was measured about whether a custom AM's fresh ratio is scale-invariant.
 - The 300-index survey timings were taken on a warm, idle, single-user server with all relation files in page cache. Cold-cache `stat()` cost on an installation with tens of thousands of relations was not measured.
+- The delete-and-reload cycle ran on a single-user server with `autovacuum = off` and no concurrent transactions, which is the friendliest possible setting for the `RecentGlobalXmin` gate. A long-running concurrent snapshot would hold that horizon back and delay recycling past any number of `VACUUM` passes; that case was not measured. On a real server autovacuum also decides the `VACUUM` count for you, so the one-, two- and three-pass arms bracket the behavior rather than predict it.
+- The cycle used strictly ascending keys in both loads, as chosen for this test. Reusing the first load's key values, or using random keys, will move the SP-GiST and hash numbers and may move GIN's, and was not measured. The B-tree and GiST results should not change, because their recovery depends on the FSM rather than on key order, but that was inferred from `_bt_getbuf`/`GetFreeIndexPage` rather than measured against a second key policy.
+- Immediately after the back-to-back `DELETE`; `VACUUM` pair, `pg_stat_all_tables.n_dead_tup` read 200,000 for a heap of 0 bytes; repeating the same two statements two seconds apart gave 0. The reading is therefore a statistics-collector timing artifact rather than a property of the cycle, but the flush ordering that produces it was not traced in source. It matters only because the filed detection query offers `n_dead_tup` as its heap-side sanity column.
+- Three of the cycle's supporting measurements — the B-tree `pgstatindex` page census, the hash `hash_metapage_info` bucket and overflow comparison, and the GIN `gin_metapage_info` entry census — come from `pgstattuple` and `pageinspect`, which are exactly the contrib modules [Why this exists: the contrib boundary](#why-this-exists-the-contrib-boundary) rules out for the monitoring scheme itself. They are diagnostics for this page, not part of the proposal.
 
 ## Source References
 
@@ -456,12 +645,27 @@ One access-method-specific size confounder worth naming: GIN keeps a pending lis
 - [vacuumlazy.c:283-284](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L283-L284)
 - [analyze.c:419-421](../../../../raw/postgres-12/src/backend/commands/analyze.c#L419-L421)
 - [nbtree.c#btvacuumscan-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1078-L1095)
+- [nbtree.c#btvacuumpage-recycle](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1179)
+- [nbtpage.c#_bt_getbuf-fsm](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L801-L842)
+- [nbtpage.c#_bt_page_recyclable](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L940-L963)
+- [indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L33-L46)
+- [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L49-L55)
 - [gistvacuum.c#fsm](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L255-L265)
+- [gistvacuum.c#gistvacuum-recycle](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L298-L320)
+- [gistutil.c#gistPageRecyclable](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L881-L906)
 - [ginvacuum.c#fsm](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L755-L790)
+- [ginvacuum.c#ginVacuumEntryPage-empty](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L505-L556)
+- [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L744-L786)
+- [ginblock.h#GinPageIsRecyclable](../../../../raw/postgres-12/src/include/access/ginblock.h#L131-L138)
 - [spgvacuum.c#fsm](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L848-L861)
+- [spgvacuum.c#spgvacuum-fsm](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L650-L670)
 - [spgvacuum.c#truncate-disabled](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L863-L886)
+- [blvacuum.c#blvacuumcleanup](../../../../raw/postgres-12/contrib/bloom/blvacuum.c#L189-L214)
+- [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784)
 - [hashpage.c#_hash_init-buckets](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L505-L525)
 - [hashpage.c#_hash_expandtable-splitpoint](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L785-L853)
+- [hashovfl.c#_hash_getovflpage-setbit](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L313-L329)
+- [hashovfl.c:632](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L632)
 - [nbtree.h:169](../../../../raw/postgres-12/src/include/access/nbtree.h#L169)
 - [hash.h:279](../../../../raw/postgres-12/src/include/access/hash.h#L279)
 - [spgist.h:25](../../../../raw/postgres-12/src/include/access/spgist.h#L25)
@@ -489,6 +693,8 @@ One access-method-specific size confounder worth naming: GIN keeps a pending lis
 - [create_index.out#comments-preserved](../../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2093-L2116)
 - [alter_table.sql#partitioned-comments](../../../../raw/postgres-12/src/test/regress/sql/alter_table.sql#L1421-L1440)
 - [alter_table.out#partitioned-comments](../../../../raw/postgres-12/src/test/regress/expected/alter_table.out#L2103-L2134)
+- [btree_index.sql#multilevel-page-deletion](../../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L144-L162)
+- [btree_index.out#multilevel-page-deletion](../../../../raw/postgres-12/src/test/regress/expected/btree_index.out#L315-L332)
 
 ## Navigation
 

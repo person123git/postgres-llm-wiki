@@ -2,6 +2,55 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] follow-up v12 | delete-and-reload cycle test for the COMMENT-stored ratio
+
+- Added a new `### A 200k-row delete-and-reload cycle test on all seven index
+  types` section to [Detecting Bloat in All Index Types by Storing an Index/Heap
+  Size Ratio in COMMENT in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Prompt hygiene applied before drafting. The user chose silently corrected
+  wording ("postgreql" -> "PostgreSQL", "diferences" -> "differences",
+  "add again 200k rows" -> "add 200k rows again", run-on steps punctuated), all
+  seven access methods, fresh ascending reload keys `200001`-`400000`, and
+  results plus a runnable script.
+- Built a second isolated 12.2 server from the pinned checkout
+  (`autovacuum = off`, private socket, port 54312) carrying one table with all
+  seven access methods at 200,000 rows, and ran the user's exact sequence:
+  load, build all seven indexes, capture the ratio into each comment, `VACUUM`,
+  `DELETE` every row, `VACUUM`, reload 200,000 rows with fresh ascending keys,
+  then `REINDEX TABLE` for ground truth.
+- Headline result: the heap returned to exactly 3,847 blocks, so the heap growth
+  factor is exactly 1.000 and `ratio_pct` equals raw `index_size_pct` digit for
+  digit on all seven access methods, and equals `REINDEX` ground truth on six.
+  B-tree +99.27%, GiST +89.47%, GIN +82.72%, SP-GiST +0.83%, and hash, BRIN and
+  bloom at 0.00%.
+- Ran the identical cycle at two and three post-`DELETE` `VACUUM` passes, plus an
+  independent replicate of the one-pass arm that reproduced every byte. The arms
+  split the access methods along the `RecentGlobalXmin` recyclability gate:
+  B-tree and GiST returned to exactly 551 and 1,538 blocks with two passes
+  (`_bt_page_recyclable`, `gistPageRecyclable`, and the key-order-agnostic
+  `_bt_getbuf`/`GetFreeIndexPage` reuse path); SP-GiST, bloom, hash and BRIN
+  never grew (no xid gate in `spgvacuumpage`/`blvacuumcleanup`, hash frees and
+  reuses overflow pages through its own bitmap rather than the FSM, and
+  `brinbulkdelete` is a documented no-op); GIN never recovered at any pass count
+  because `ginVacuumEntryPage` retains entry tuples whose posting list empties.
+- Supporting probes: `pgstatindex` showed the final 1,098-block B-tree is exactly
+  `1 metapage + 3 internal + 547 leaf + 547 still-deleted`; `gin_metapage_info`
+  showed 600,000 entries still on 4,101 entry pages after three `VACUUM` passes
+  with a 0-byte FSM fork; `hash_metapage_info` resolved hash's 0.86% ground-truth
+  gap to 7 overflow pages (53 versus 46) at an identical `maxbucket = 767`; and
+  mid-cycle the zero-byte heap made the raw ratio `NULL` and the filed detection
+  query return zero rows.
+- Re-ran the published fixture script standalone on a fresh database; it
+  reproduced every number in the filed results table. Test objects were dropped
+  and the isolated server was stopped.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet`, because this was a scoped addition rather than a
+  full claim-by-claim page re-audit.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-06] question v12 | COMMENT-stored index/heap ratio as a bloat detector
 
 - Filed [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
