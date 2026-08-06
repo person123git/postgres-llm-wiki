@@ -2,6 +2,24 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] remove v12 | delete A Heuristic to Detect B-Tree Index Bloat
+
+- Removed `wiki/v12/questions/index-bloat-heuristic.md` per user request.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`,
+  and the navigation links in `btree-index-bloat-core-sql-only.md`,
+  `gin-index-bloat.md`, `leaf-density-60-vs-90-query-impact.md`, and
+  `leaf-density-vs-fragmentation-index-scan-io.md`.
+- Reworded the one prose cross-reference in
+  `btree-index-bloat-core-sql-only.md` (`### Follow-up: an avg_leaf_density
+  predictor head to head`) so its `pgstatindex` density-versus-fillfactor
+  comparison no longer points at the deleted page; the section's own claims and
+  citations are unchanged.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` and
+  `wiki/versions.md` so they refer to the page title as plain text.
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-06] follow-up v12 | core-SQL bloat results versus pgstatindex
 
 - Answered a filed follow-up on [Measuring B-Tree Index Bloat With Core SQL Only
@@ -1138,9 +1156,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-29] review-fix v12 | B-tree index bloat heuristic full correction
 
-- Rechecked every claim in [A Heuristic to Detect B-Tree Index Bloat in
-  PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) against
-  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Rechecked every claim in A Heuristic to Detect B-Tree Index Bloat in
+  PostgreSQL 12 (unverified) against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
 - Fixed four defects in the page as filed: four `## Evidence Map` rows started
   with `|||` and did not render as table rows; a citation labelled
   `nbtsplitloc.c#leaffillfactor` pointed at `reloptions.c`; the
@@ -1194,14 +1212,14 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-28] edit v12 | explain 30% bloat threshold
 
-- Extended [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) with a new `### Why 30%` section.
+- Extended A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified) with a new `### Why 30%` section.
 - Grounds the 30 % `bloat_ratio` threshold in the v12 documentation description of bloat as "many empty or nearly-empty pages" and in the planner cost penalties in `genericcostestimate()` and `btcostestimate()`.
 - Added `selfuncs.c`, `reindex.sgml`, and `maintenance.sgml` to the Context Reviewed, Evidence Map, and Source References sections.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings; `git diff --check` passed.
 
 ## [2026-07-28] file v12 | B-tree index bloat heuristic
 
-- Filed [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](v12/questions/index-bloat-heuristic.md) with the user's prompt restated under `## Question`.
+- Filed A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified) with the user's prompt restated under `## Question`.
 - Added a `pgstatindex`-backed bloat heuristic using `avg_leaf_density`, the configured `fillfactor`, `empty_pages`, `deleted_pages`, `pg_stat_user_indexes`, and `pg_options_to_table`; includes a guarded SQL example with `statement_timeout` and `lock_timeout`.
 - Tested the SQL on the pinned v12 checkout's isolated server; a healthy default-fillfactor index returned a `bloat_ratio` near zero.
 - Updated `wiki/v12/index.md` and `wiki/index.md`.

@@ -421,7 +421,6 @@ No test in the pinned checkout links either column to scan I/O. The measurements
 - [v12/index](../index.md)
 - [Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12 (unverified)](leaf-density-60-vs-90-query-impact.md)
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](how-pgstatindex-calculates-information.md)
-- [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](index-bloat-heuristic.md)
 - [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](bloated-indexes-query-planner.md)
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](explain-analyze-buffers-output.md)
 - [versions](../../versions.md)

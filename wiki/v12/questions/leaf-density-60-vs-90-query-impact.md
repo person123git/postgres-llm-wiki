@@ -393,6 +393,5 @@ The measurements in this page were therefore run against a disposable server bui
 - [wiki index](../../index.md)
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](how-pgstatindex-calculates-information.md)
 - [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)](leaf-density-vs-fragmentation-index-scan-io.md)
-- [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](index-bloat-heuristic.md)
 - [How Bloated Indexes Affect the Query Planner in PostgreSQL 12 (unverified)](bloated-indexes-query-planner.md)
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](explain-analyze-buffers-output.md)

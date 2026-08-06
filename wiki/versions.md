@@ -14,6 +14,18 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-06: removed the v12 question page A Heuristic to Detect B-Tree Index
+  Bloat in PostgreSQL 12 (unverified) at the user's request, together with its
+  root-index, v12-landing-page, and cross-page navigation entries. v12 B-tree
+  bloat coverage now runs through [Measuring B-Tree Index Bloat With Core SQL
+  Only in PostgreSQL 12
+  (unverified)](v12/questions/btree-index-bloat-core-sql-only.md), [How
+  pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12
+  (unverified)](v12/questions/how-pgstatindex-calculates-information.md), and
+  [Planner Penalties for Bloated Indexes in PostgreSQL 12
+  (unverified)](v12/questions/bloated-indexes-query-planner.md). The pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` and every surviving page's
+  citations and verification fields are unchanged.
 - 2026-08-06: answered a filed follow-up on [Measuring B-Tree Index Bloat With
   Core SQL Only in PostgreSQL 12
   (unverified)](v12/questions/btree-index-bloat-core-sql-only.md) against
@@ -608,9 +620,8 @@ This page indexes the PostgreSQL versions covered by the wiki.
   value, and the statistics privilege split; the created role and slot were
   dropped and the server was stopped. Agent verification was recorded as
   `claude-opus-5-max 2026-07-29T15:30:31Z`; human verification remains false.
-- 2026-07-29: completed a full corrective review of [A Heuristic to Detect
-  B-Tree Index Bloat in PostgreSQL 12
-  (unverified)](v12/questions/index-bloat-heuristic.md) against unchanged pin
+- 2026-07-29: completed a full corrective review of A Heuristic to Detect
+  B-Tree Index Bloat in PostgreSQL 12 (unverified) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Repaired four
   malformed `## Evidence Map` rows, a `nbtsplitloc.c`-labelled citation that
   pointed at `reloptions.c`, a `pg_stat_user_indexes` column claim cited to the

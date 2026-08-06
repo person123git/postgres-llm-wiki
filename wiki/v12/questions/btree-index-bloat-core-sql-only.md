@@ -495,7 +495,7 @@ The 18 ineligible cells are exactly the three fixtures whose tables were never v
 
 ### Follow-up: an avg_leaf_density predictor head to head
 
-The obvious way to use `pgstatindex` for this job — and what the companion [bloat heuristic page](index-bloat-heuristic.md) does — is to compare leaf density with the configured fillfactor. As a size predictor that is:
+The obvious way to use `pgstatindex` for this job is to compare leaf density with the configured fillfactor. As a size predictor that is:
 
 ```text
 pgstatindex_expected_blocks = ceil(leaf_pages * avg_leaf_density / fillfactor) + internal_pages + 1
@@ -640,7 +640,6 @@ Practical rule: **treat a partial index whose table shows dead tuples or no rece
 
 - [v12/index](../index.md)
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](../codebase-navigation-guide.md)
-- [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](index-bloat-heuristic.md) - the `pgstatindex`-based counterpart to this page.
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](how-pgstatindex-calculates-information.md)
 - [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)](leaf-density-vs-fragmentation-index-scan-io.md)
 - [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](bloated-indexes-query-planner.md)

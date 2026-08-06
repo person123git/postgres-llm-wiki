@@ -1058,7 +1058,6 @@ None of the recipes needs a restart or a reload, and none needs a `postgresql.co
 
 - [v12 index](../index.md)
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](../codebase-navigation-guide.md)
-- [A Heuristic to Detect B-Tree Index Bloat in PostgreSQL 12 (unverified)](index-bloat-heuristic.md)
 - [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](bloated-indexes-query-planner.md)
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](how-pgstatindex-calculates-information.md)
 - [How NULL Values Are Handled in PostgreSQL 12 Indexes (unverified)](null-values-in-indexes.md)
