@@ -2,6 +2,59 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] answer v17 | index/heap ratio in COMMENT, copied from v12 and reviewed
+
+- Filed [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
+  in COMMENT in PostgreSQL 17
+  (unverified)](v17/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
+  (PostgreSQL 17.10), copying the v12 question of the same name.
+- Prompt hygiene applied before drafting. The user chose silently corrected
+  wording, the copy request itself as the filed `## Question`, a full
+  re-measurement on v17, and a since-v12 history section.
+- No v12 measurement was carried over. Built the exact pin out of tree under
+  `.wiki-runtime/tmp/pg17-build`, installed contrib `bloom`, `pgstattuple` and
+  `pageinspect`, and ran an isolated 17.10 server with `autovacuum = off`.
+- Reproduced every fixture family on v17: a three-scale fresh-ratio invariance
+  sweep, a day-zero sweep over three heap row widths, a seven-point hash/B-tree
+  sawtooth, a fresh-B-tree sweep from 0 to 1,000,000 rows, a 49-cell matrix of
+  seven workloads times seven access methods with `REINDEX TABLE` ground truth,
+  drift-threshold and ground-truth-threshold sweeps, a GIN
+  baseline-1.004900 stepwise churn fixture, a delete-and-reload cycle in one-,
+  two- and three-VACUUM arms with `pgstatindex`/`gin_metapage_info`/
+  `hash_metapage_info` probes, a TOAST denominator fixture, 300-index survey
+  timings against the `relpages` variant, a nine-operation comment durability
+  matrix, lock/ownership/read-visibility probes, RIC-versus-plain-`REINDEX`
+  size equality, the four RIC refusal cases, and a `statement_timeout`-
+  interrupted RIC on a 3,000,000-row table.
+- Scores: `drift >= 1.40` at 13 true / 3 false positives, `index > heap` at
+  6 / 2, with 19 cells in the drift 0.90-1.10 band spanning -8.4% to 80.0%
+  reclaimable. Verdict changed from the v12 page's: SP-GiST is now disqualified
+  in these fixtures (fresh ratio drifts 2.2787 over 16x growth at 0.0%
+  reclaimable).
+- Two new source-traced findings. `hashbuild` sizes the initial bucket array
+  from `estimate_rel_size`, so identical 200,000-row data produced 923 blocks on
+  a narrow heap, 5,122 on a wide never-analyzed one, and 822 with `ANALYZE`
+  first; this added an `ANALYZE`-first rule to Capture discipline. And v14's
+  same-VACUUM B-tree recycling is present but did not fire on an idle server —
+  the cycle still left B-tree +99.27%, GiST +89.47% and GIN +82.72% after one
+  VACUUM, while a repeat against a concurrent `txid_current()` consumer
+  populated the FSM and ended at 745 blocks instead of 1,098, matching the
+  condition stated in `_bt_pendingfsm_finalize`.
+- The since-v12 section attributes nine changes to their first release tags,
+  each verified as an ancestor of the pin. The 17.1 fix `fee8cb94734` stops
+  parent index comments propagating onto partition children; measured, a
+  partitioned `ALTER COLUMN TYPE` now empties child baselines instead of
+  silently overwriting them with the parent's, so the audit query detects it.
+- All 127 source citations were machine-checked to resolve to existing v17 files
+  with in-range line numbers; the BKI-generation citation was corrected from
+  `src/backend/catalog/Makefile` to `src/include/catalog/Makefile`, where the
+  `CATALOG_HEADERS` list and `bki-stamp` rule live in v17.
+- Test objects were dropped and the isolated server was stopped. Updated
+  `wiki/index.md`, `wiki/v17/index.md`, and `wiki/versions.md`. Human
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are as filed.
+
 ## [2026-08-06] follow-up v12 | rebuild with REINDEX INDEX CONCURRENTLY
 
 - The user stated the maintenance process rebuilds with `REINDEX INDEX
