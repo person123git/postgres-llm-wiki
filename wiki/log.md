@@ -2,6 +2,34 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] remove v17 | delete How a GIN Index Becomes Bloated
+
+- Removed `wiki/v17/questions/indexing/gin-index-bloat.md` per user request.
+  The v12 page of the same name was removed earlier the same day, so no version
+  now carries a dedicated GIN-bloat page.
+- Removed the active page entry from `wiki/index.md` and `wiki/v17/index.md`,
+  and the `## Related Pages` entry in
+  `wiki/v17/questions/query-planning/bloated-indexes-query-planner.md`.
+- Reworded the one prose cross-reference on that same planner page so the
+  non-B-tree-bloat paragraph points at the page's own
+  `## Follow-Up: When A GIN Index Is Discarded And A B-Tree Is Used Instead`
+  section instead of the deleted page. The paragraph's claims and its
+  `maintenance.sgml` citation are unchanged.
+- Dropped the GIN-bloat clause from the v17 coverage cell in `wiki/versions.md`
+  and reopened the following sentence with "Filed coverage also includes", which
+  the removed clause previously carried.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (1) and
+  `wiki/versions.md` (2) so they refer to the page title as plain text.
+- v17 GIN coverage now runs through that follow-up section of [Planner Penalties
+  for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md),
+  which prices GIN against B-tree on the same column, plus the contrib inventory
+  in [PostgreSQL 17 Contrib Extensions
+  (unverified)](v17/questions/server-administration/contrib-extensions.md).
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-06] remove | delete every pgstatindex sampling question page
 
 - Removed all three surviving `pgstatindex` sampling question pages per user
@@ -663,8 +691,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-03] answer v17 | GIN index bloat and how to measure it
 
-- Filed [How a GIN Index Becomes Bloated in PostgreSQL 17, and How to Measure It
-  (unverified)](v17/questions/indexing/gin-index-bloat.md) against unchanged pin
+- Filed How a GIN Index Becomes Bloated in PostgreSQL 17, and How to Measure It
+  (unverified) against unchanged pin
   `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
 - Applied `MANDATORY Prompt Hygiene` first: the prompt contained the typo
   "postgreql", a space before a comma, a double space, and a lowercase sentence

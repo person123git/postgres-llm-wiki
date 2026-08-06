@@ -282,7 +282,7 @@ Two v14-era escape hatches let index bloat accumulate without any VACUUM touchin
 
 ### Non-B-tree bloat
 
-The manual states plainly that "the potential for bloat in non-B-tree indexes has not been well researched" and recommends monitoring physical size ([maintenance.sgml#non-btree-bloat](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1036-L1040)). Hash, GiST and SP-GiST still get the page-count penalty through `genericcostestimate()`. GIN and BRIN do not: their cost models are separate, and for GIN the pending list is a bloat source with its own cost consequences, covered in [How a GIN Index Becomes Bloated in PostgreSQL 17 (unverified)](../indexing/gin-index-bloat.md).
+The manual states plainly that "the potential for bloat in non-B-tree indexes has not been well researched" and recommends monitoring physical size ([maintenance.sgml#non-btree-bloat](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1036-L1040)). Hash, GiST and SP-GiST still get the page-count penalty through `genericcostestimate()`. GIN and BRIN do not: their cost models are separate, and for GIN the pending list is a bloat source with its own cost consequences, covered in [Follow-Up: When A GIN Index Is Discarded And A B-Tree Is Used Instead](#follow-up-when-a-gin-index-is-discarded-and-a-b-tree-is-used-instead) below.
 
 ## How Density And Fragmentation Affect Different Queries
 
@@ -907,7 +907,6 @@ Symbols: [indxpath.c#create_index_paths](../../../../raw/postgres-17/src/backend
 
 ## Related Pages
 
-- [How a GIN Index Becomes Bloated in PostgreSQL 17, and How to Measure It (unverified)](../indexing/gin-index-bloat.md) - GIN's separate bloat mechanisms and cost model in the same version.
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](../indexing/reindex-index-concurrently.md) - the online rebuild that resets every input on this page.
 - [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](../indexing/partial-indexes-pros-cons.md) - more on the partial-index costing path that behaves differently here.
 - [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](../../../v12/questions/query-planning/bloated-indexes-query-planner.md) - the same question, and the same GIN-versus-B-tree follow-up, answered against the v12 pin.
