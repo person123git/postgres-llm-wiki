@@ -2,6 +2,73 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] remove | delete every pgstatindex sampling question page
+
+- Removed all three surviving `pgstatindex` sampling question pages per user
+  request, confirmed page by page before deleting:
+  `wiki/v17/questions/indexing/pgstatindex-sample-variant-proposal.md`,
+  `wiki/v18/questions/indexing/pgstatindex-sample-variant-proposal.md`, and
+  `wiki/v18/questions/indexing/pgstatindex-approx-sampling.md`. The third page
+  is an explanation rather than a proposal, but its filed question asks why
+  `pgstatindex` cannot sample the index like `pgstattuple_approx`, so the user
+  included it.
+- Removed the active page entries from `wiki/index.md`, `wiki/v17/index.md`,
+  and `wiki/v18/index.md`, the inbound `## Navigation` link in
+  `wiki/v17/questions/indexing/gin-index-bloat.md`, and the inbound
+  `## Related Pages` link in
+  `wiki/v17/questions/query-planning/bloated-indexes-query-planner.md`.
+- Stripped the sampling clauses from the v17 and v18 coverage cells in
+  `wiki/versions.md` at the user's request, so the coverage summary no longer
+  advertises the removed pages.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (9) and
+  `wiki/versions.md` (1) so they refer to the page titles as plain text.
+- No sampling `pgstatindex` page remains in any version; the v12 pages were
+  removed earlier the same day. Adjacent coverage is untouched: v18 keeps
+  [Computing and Storing avg_leaf_density During (Auto)VACUUM of a B-Tree Index
+  (unverified)](v18/questions/indexing/avg-leaf-density-during-vacuum.md), and
+  v12 keeps [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12
+  (unverified)](v12/questions/indexing/how-pgstatindex-calculates-information.md)
+  and [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12
+  (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
+## [2026-08-06] remove v12 | delete Proposing a Sampling pgstatindex Variant
+
+- Removed `wiki/v12/questions/indexing/pgstatindex-sample-variant-proposal.md`
+  per user request.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`,
+  the sampling-proposal clause from the v12 coverage cell in
+  `wiki/versions.md`, and the one inbound `## Navigation` link in
+  `how-pgstatindex-calculates-information.md`.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (10) and
+  `wiki/versions.md` (4) so they refer to the page title as plain text.
+- Left the v17 and v18 sampling `pgstatindex` pages and their inbound links
+  untouched. v12 keeps the exact full-scan explanation in
+  `how-pgstatindex-calculates-information.md` and the contrib-free estimate in
+  `btree-index-bloat-core-sql-only.md`.
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
+## [2026-08-06] remove v12 | delete Proposing a Sampling pgstatginindex Variant
+
+- Removed `wiki/v12/questions/indexing/pgstatginindex-sample-variant-proposal.md`
+  per user request.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`,
+  and the GIN sampling-proposal sentence from the v12 coverage cell in
+  `wiki/versions.md`. No surviving wiki page linked to the deleted page, so no
+  `## Navigation` section changed.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` and
+  `wiki/versions.md` so they refer to the page title as plain text.
+- Left the v12 B-tree page
+  `wiki/v12/questions/indexing/pgstatindex-sample-variant-proposal.md` and the
+  v17/v18 sampling `pgstatindex` pages untouched.
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-06] remove v12 | delete How a GIN Index Becomes Bloated
 
 - Removed `wiki/v12/questions/indexing/gin-index-bloat.md` per user request.
@@ -215,9 +282,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-04] follow-up v12 | pgstatginindex sampling bloat and wasted space
 
-- Answered a filed follow-up on [Proposing a Sampling pgstatginindex Variant for
-  PostgreSQL 12
-  (unverified)](v12/questions/indexing/pgstatginindex-sample-variant-proposal.md) against
+- Answered a filed follow-up on Proposing a Sampling pgstatginindex Variant for
+  PostgreSQL 12 (unverified) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
 - Prompt hygiene applied first. The user approved the corrected follow-up, "Can
   this function measure bloat? Can it measure wasted space?", and chose source
@@ -286,8 +352,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-04] answer v12 | sampling pgstatginindex variant for GIN indexes
 
-- Filed [Proposing a Sampling pgstatginindex Variant for PostgreSQL 12
-  (unverified)](v12/questions/indexing/pgstatginindex-sample-variant-proposal.md) against
+- Filed Proposing a Sampling pgstatginindex Variant for PostgreSQL 12
+  (unverified) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2),
   derived from the existing v12 B-tree sampling proposal but scoped to GIN only.
 - Prompt hygiene applied first. The user chose corrected wording, a GIN-native
@@ -1467,9 +1533,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-17] review-fix v17 | sampling pgstatindex proposal and both v12 follow-ups
 
-- Completed a full claim-to-source review of [Proposing a Sampling pgstatindex
+- Completed a full claim-to-source review of Proposing a Sampling pgstatindex
   Variant for PostgreSQL 17
-  (unverified)](v17/questions/indexing/pgstatindex-sample-variant-proposal.md) against
+  (unverified) against
   unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
 - Carried over both user-approved corrected follow-ups from the corresponding
   PostgreSQL 12 question: compare the proposal with standard `pgstatindex`
@@ -2701,8 +2767,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-07] review-fix v12 | sampling pgstatindex variant contents
 
-- Reviewed [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
-  (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against
+- Reviewed Proposing a Sampling pgstatindex Variant for PostgreSQL 12
+  (unverified) against
   the unchanged `raw/postgres-12/` pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`.
 - Re-checked the claim-sensitive source surfaces: `pgstatindex_impl`, v12
@@ -4868,7 +4934,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-05-28] review v12 | sampling pgstatindex variant proposal
 
-- Verified every behavioral claim and source citation in [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Verified every behavioral claim and source citation in Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
 - Confirmed: `pgstatindex_impl` scan loop, page classification, leaf accumulation, density/fragmentation formulas, and NaN guards (`pgstatindex.c`); `index_size` exactness via `pg_relation_size` main fork; `pgstattuple_approx` precedent (`output_type`, `scanned_percent`, non-random-sample note in `pgstatapprox.c`); extension wiring (`pgstattuple.control` 1.5, v1.5 SQL grant model in `pgstatindex.c`/`pgstattuple--1.4--1.5.sql`); pageinspect building blocks — `bt_page_stats` `d/e/l/r/i` type codes summing to pgstatindex's deleted/empty/leaf/internal, `free_size = PageGetFreeSpace`, `max_avail = pd_special - SizeOfPageHeaderData` (=24), `page_header.special`, block-0 error, superuser scope; the `bt_metap` unsigned-`oldest_xact` `int4` overflow and the 6-column compat wrapper that stops `BuildTupleFromCStrings` (loops over `tupdesc->natts`) before the unsigned column; `PGC_USERSET` timeout contexts; and all cited SQL built-ins and doc syntax.
 - Corrected one citation precision error: the `create_function.sgml#configuration-parameter` link (`SET search_path FROM CURRENT`) pointed at `#L484-L493`, which is the planner `SUPPORT` clause; retargeted both occurrences to `#L494-L505`, the `configuration_parameter` description.
 - `verified_by_agent` left at `not yet`: this is a `type: question` page and the proposed C function / SQL prototype is a design proposal, not behavior defined by the pinned checkout.
@@ -4919,31 +4985,31 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 ## [2026-05-25] fix v12 | pageinspect bt_metap integer overflow
 
 - Reviewed `ERROR: value "4145147631" is out of range for type integer` from the diagnostic `pgstatindex_approx_pageinspect` wrapper in PostgreSQL 12.
-- Updated [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) to explain that v12 pageinspect 1.7 declares `bt_metap.oldest_xact` as `int4` while the C function formats the underlying unsigned `TransactionId`.
+- Updated Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified) to explain that v12 pageinspect 1.7 declares `bt_metap.oldest_xact` as `int4` while the C function formats the underlying unsigned `TransactionId`.
 - Added `pgstatindex_pageinspect_bt_metap_compat(text)`, a six-column wrapper around the same `bt_metap` C symbol, and changed the SQL prototype to use it so the wrapper does not convert `oldest_xact`.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v12/index.md` summaries.
 
 ## [2026-05-25] fix v12 | pageinspect helper search path
 
-- Updated [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) to address `ERROR: function bt_page_stats(text, integer) does not exist` in the diagnostic `pgstatindex_approx_pageinspect` wrapper.
+- Updated Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified) to address `ERROR: function bt_page_stats(text, integer) does not exist` in the diagnostic `pgstatindex_approx_pageinspect` wrapper.
 - Clarified that v12 does define `bt_page_stats(text, int4)` and that the error points to missing `pageinspect` setup or a `search_path` that does not include the extension schema.
 - Added an extension-schema discovery query and `SET search_path FROM CURRENT` to the wrapper definition so helper lookups resolve at execution time.
 
 ## [2026-05-25] fix v12 | pageinspect pgstatindex sampling SQL return type
 
-- Fixed [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) so the diagnostic `pgstatindex_approx_pageinspect` SQL wrapper returns `scanned_percent` as `float8` instead of an inferred `numeric` expression.
+- Fixed Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified) so the diagnostic `pgstatindex_approx_pageinspect` SQL wrapper returns `scanned_percent` as `float8` instead of an inferred `numeric` expression.
 - Reset `verified_by_agent` to `not yet` because the page changed after the previous agent verification timestamp.
 
 ## [2026-05-25] verify v12 | sampling pgstatindex variant proposal
 
-- Re-checked every claim and citation in [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Re-checked every claim and citation in Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified) against pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
 - Confirmed the page-type mapping (`'d'/'e'/'l'/'i','r'`) matches `pgstatindex_impl` classification order against pageinspect `GetBTPageStatistics`, the `index_size`/`pg_relation_size` exactness reasoning, `max_avail = special - 24` (`SizeOfPageHeaderData` = `offsetof(PageHeaderData, pd_linp)` = 24), `statement_timeout`/`lock_timeout` as `PGC_USERSET` session scope, pageinspect `default_version = '1.7'` `bt_metap` shape, and the `pgstatindex` extension SQL / control-file `default_version = '1.5'`.
 - Fixed two citation imprecisions: `nbtree.h#BTPageOpaqueData` range widened to `L55-L68` to cover `btpo_next`; relabeled the NaN empty-index test citation to `pgstatindex-tests` (`L18-L45`).
 - Set `verified_by_agent: claude-opus-4-7 2026-05-25T17:36:44Z`; `verified:` stays human-only `false`, so the title keeps `(unverified)`.
 
 ## [2026-05-25] answer v12 | sampling pgstatindex variant proposal
 
-- Filed [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md).
+- Filed Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified).
 - Designed a `pgstatindex_approx` that random-samples physical B-tree blocks from pinned `raw/postgres-12/` commit `45b88269a353ad93744772791feb6d01bc7e1e42`, preserving the current `pgstatindex_impl` guards, metapage read, page classification, and leaf free-space/fragmentation accumulation.
 - Noted the v12-specific SQL prototype detail: `bt_page_stats.free_size` uses the same `PageGetFreeSpace(page)` routine as `pgstatindex_impl`, but v12 `bt_page_stats(text, int4)` does not expose `max_avail`, so the prototype also uses `page_header(get_raw_page(...))` for the page `special` offset.
 - Added pros/cons and a diagnostic SQL-language wrapper using contrib `pageinspect` helpers (`bt_metap`, `bt_page_stats`, `get_raw_page`, and `page_header`) plus session-scoped `statement_timeout` and `lock_timeout` examples.
@@ -4952,7 +5018,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-05-25] answer v17 | sampling pgstatindex variant proposal
 
-- Filed [Proposing a Sampling pgstatindex Variant for PostgreSQL 17 (unverified)](v17/questions/indexing/pgstatindex-sample-variant-proposal.md).
+- Filed Proposing a Sampling pgstatindex Variant for PostgreSQL 17 (unverified).
 - Designed a `pgstatindex_approx` that random-samples physical B-tree blocks from pinned `raw/postgres-17/` commit `54eeefaedbee0385529f3edf321bb99e49232aaa`, preserving the current `pgstatindex_impl` guards, per-page classification, and leaf accumulation.
 - Noted the v17-specific density detail: `pgstatindex_impl` uses `PageGetFreeSpace(page)`, so a `pageinspect` SQL prototype can use `bt_page_stats.free_size` directly while reading `page_header(get_raw_page(...))` only for the page `special` offset used in `max_avail`.
 - Added a diagnostic SQL-language wrapper using contrib `pageinspect` helpers (`bt_metap`, `bt_page_stats`, `get_raw_page`, and `page_header`) plus session-scoped `statement_timeout` and `lock_timeout` examples.
@@ -4977,7 +5043,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-05-25] research v18 | pageinspect sql prototype for pgstatindex sampling
 
-- Expanded [Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-sample-variant-proposal.md) with a `pageinspect`-based SQL prototype.
+- Expanded Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified) with a `pageinspect`-based SQL prototype.
 - Grounded the prototype in v18 contrib functions: `bt_metap(text)` for metapage fields, `bt_page_stats(text, bigint)` for B-tree page type and right-link data, and `get_raw_page(text, bigint)` plus `page_header(bytea)` for exact `upper - lower` sampled leaf free space.
 - Called out the key caveat: `bt_page_stats.free_size` uses `PageGetFreeSpace`, not `PageGetExactFreeSpace`, so a closer SQL approximation needs the raw page header and may read sampled blocks twice.
 - Added production diagnostic timeouts and noted that `pageinspect` is a superuser/debugging tool, not a replacement for a polished `pgstattuple` extension API.
@@ -4985,38 +5051,38 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-05-25] review-fix v18 | sampling pgstatindex variant proposal
 
-- Reviewed [Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-sample-variant-proposal.md) against the pinned `pgstatindex_impl`, `pgstattuple_approx`, extension SQL, docs, and regression-test anchors.
+- Reviewed Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified) against the pinned `pgstatindex_impl`, `pgstattuple_approx`, extension SQL, docs, and regression-test anchors.
 - Clarified the proposed sampler to random-select distinct non-metapage blocks but visit the selected blocks in ascending order, preserving the random-sample estimator while keeping the access pattern closer to the existing physical `BAS_BULKREAD` scan.
 - Reworded the I/O downside from pure random I/O to sparse ordered reads with weaker sequential readahead.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
 
 ## [2026-05-25] answer v18 | sampling pgstatindex variant proposal
 
-- Filed [Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-sample-variant-proposal.md).
+- Filed Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified).
 - Designed a `pgstatindex_approx` that random-samples physical index blocks: keeps `pgstatindex_impl`'s per-page classification/accumulation but visits only a subset of `blkno = 1..nblocks-1`, verified against pinned `raw/postgres-18/` commit `6cb307251c5c6261286c1566496920976640108e`.
 - Established the field split from source: `version`/`tree_level`/`root_block_no` stay exact (metapage read), `index_size` stays exact (`RelationGetNumberOfBlocks`), `avg_leaf_density`/`leaf_fragmentation` are page-local ratios estimable directly (no neighbor reads, no scaling), and only `internal/leaf/empty/deleted` page counts need `1/f` scaling.
 - Modeled the result shape and extension wiring on existing precedent: `pgstattuple_approx` `scanned_percent`/`approx_` columns, `PG_FUNCTION_INFO_V1` + `_v1_5` registration, a `1.5->1.6` upgrade script with `REVOKE`/`GRANT` to `pg_stat_scan_tables`, and a `default_version` bump; marked the proposed DDL as not runnable against the pin.
 - Wrote pros (real page-read reduction unlike `pgstattuple_approx`'s every-block iteration, exact-for-free columns, random-sample making linear scaling defensible per the `pgstatapprox.c` non-random-sample note) and cons (noisy rare-category counts, spatial-clustering variance, lost sequential readahead, non-snapshot, new surface area).
-- Cross-linked the sibling [Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-approx-sampling.md) and the VACUUM density page; updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v18/index.md`.
+- Cross-linked the sibling Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified) and the VACUUM density page; updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v18/index.md`.
 - Filed `verified_by_agent: not yet`; title carries `(unverified)`.
 
 ## [2026-05-25] review v18 | pgstatindex approximation limits verification
 
-- Re-checked every behavioral claim in [Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-approx-sampling.md) against pinned `raw/postgres-18/` commit `6cb307251c5c6261286c1566496920976640108e`.
+- Re-checked every behavioral claim in Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified) against pinned `raw/postgres-18/` commit `6cb307251c5c6261286c1566496920976640108e`.
 - Confirmed: `statapprox_heap` VM-skip + `GetRecordedFreeSpace` FSM path + `vac_estimate_reltuples`, `pgstattuple_approx_internal` heap-kind/heap-AM restriction, `pgstatindex_impl` full non-metapage scan with `P_ISDELETED`/`P_IGNORE`/`P_ISLEAF`/internal classification, `avg_leaf_density = 100 - free_space/max_avail*100` with `PageGetExactFreeSpace = pd_upper - pd_lower` and `max_avail = pd_special - SizeOfPageHeaderData`, `leaf_fragmentation` via `btpo_next < blkno`, NaN guards, heap visibility-map two-bit semantics, heap FSM 256-category storage, index FSM free-vs-used (`BLCKSZ - 1`/`0`) convention, `_bt_allocbuf` recyclability recheck, `btvacuumscan` all-non-metapage scan, `btvacuumpage` `_bt_upgradelockbufcleanup` cleanup lock on every leaf, `btvacuumcleanup` skip path, full regression coverage table (empty B-tree output, wrong-AM and unsupported-relation errors, partition-index success `(4,0,8192,0,0,0,0,0,NaN,NaN)`), and source history commits `5850b20f58` / `7c91a0364f` plus absence of any `pgstatindex_approx` in tree or history.
 - Corrected one citation: `pgstathashindex` is defined in `pgstattuple--1.4--1.5.sql` (the `default_version = '1.5'` upgrade), not in `pgstattuple--1.4.sql`; rewrote the test-section sentence and Source References to attribute it correctly via `pgstattuple.control` and the upgrade script.
 - Advanced `verified_by_agent` to the timestamp form; `verified:` stays human-only `false`, so the title keeps `(unverified)`.
 
 ## [2026-05-25] research v18 | pgstatindex current regression tests
 
-- Expanded [Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-approx-sampling.md) with a table of the current `pgstatindex` regression coverage.
+- Expanded Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified) with a table of the current `pgstatindex` regression coverage.
 - Documented the empty B-tree output checks across text/name/regclass entry points, wrong-index-AM errors, unsupported relation-kind errors, sequence failure, and the success case for a physical B-tree index on a partition.
 - Called out the remaining coverage gaps: no populated B-tree density/fragmentation tests, no internal/deleted/half-dead page tests, and no approximate index diagnostic function in the v18 extension SQL.
 - Updated `wiki/index.md`, `wiki/versions.md`, and `wiki/v18/index.md`.
 
 ## [2026-05-25] answer v18 | pgstatindex approximation limits
 
-- Filed [Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified)](v18/questions/indexing/pgstatindex-approx-sampling.md).
+- Filed Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified).
 - Traced `pgstatindex_impl`, `pgstattuple_approx` heap skipping, heap visibility-map semantics, heap and index FSM behavior, B-tree page flags, B-tree allocation/recycling, VACUUM scan boundaries, tests, docs, and same-checkout source history in pinned `raw/postgres-18/`.
 - Clarified that `pgstattuple_approx` is not random sampling: it skips all-visible heap pages and uses FSM values, while B-tree `pgstatindex` has no equivalent side channel for live leaf free space or leaf fragmentation.
 - Scoped a possible future `pgstatindex_approx` as a separate approximate API with explicit estimate fields, not a silent semantic change to `pgstatindex`.
@@ -5949,9 +6015,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-17] review-fix v12 | sampling pgstatindex proposal full audit
 
-- Completed a full claim-to-source review of [Proposing a Sampling pgstatindex
+- Completed a full claim-to-source review of Proposing a Sampling pgstatindex
   Variant for PostgreSQL 12
-  (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against
+  (unverified) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
 - Corrected the contract from “exact” metadata/size to direct observations made
   at separate times, then added `sampled_pages` and `sampled_leaf_pages` so the
@@ -5992,8 +6058,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-17] follow-up v12 | sampling pgstatindex comparative fixtures
 
-- Extended [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
-  (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against the
+- Extended Proposing a Sampling pgstatindex Variant for PostgreSQL 12
+  (unverified) against the
   unchanged `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`) pin. The user
   approved correcting the follow-up to “Add a section with tests comparing the
   proposed sampling pgstatindex variant with the standard pgstatindex across
@@ -6028,8 +6094,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-07-17] follow-up v12 | sampling pgstatindex 100 MiB floor
 
-- Extended [Proposing a Sampling pgstatindex Variant for PostgreSQL 12
-  (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against the
+- Extended Proposing a Sampling pgstatindex Variant for PostgreSQL 12
+  (unverified) against the
   unchanged `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`) pin. The user
   approved the corrected follow-up, “Add an exception for indexes under 100 MB
   so the effective sample ratio has a minimum of 10%. Rerun the tests and

@@ -20,8 +20,6 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-18/`.
 
 - [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 18 (unverified)](questions/indexing/create-index-concurrently.md) - Comprehensive walkthrough of the v18 `CREATE INDEX CONCURRENTLY` path: utility dispatch and restrictions, four internal transactions, two heap scans, three waits, table/session `ShareUpdateExclusiveLock`, `indislive`/`indisready`/`indisvalid` progression, failure outcomes, tests, and changes from PostgreSQL 17 (`pg_index` TOAST snapshot handling, parallel GIN build, virtual-generated-column rejection, and temporal `WITHOUT OVERLAPS` shared plumbing).
 - [Computing and Storing avg_leaf_density During (Auto)VACUUM of a B-Tree Index (unverified)](questions/indexing/avg-leaf-density-during-vacuum.md) - Reviewed design and evidence-backed cons for computing `pgstatindex`-style `avg_leaf_density` inside B-tree VACUUM, with metapage/statistics storage options and explicit caveats for skipped scans and page deletion.
-- [Why pgstatindex Cannot Use pgstattuple_approx-Style Approximation in PostgreSQL 18 (unverified)](questions/indexing/pgstatindex-approx-sampling.md) - Why `pgstattuple_approx`'s heap-only visibility-map/FSM shortcut cannot preserve `pgstatindex` semantics for B-tree pages, what a separate approximate index function could report, and what current tests cover.
-- [Proposing a Sampling pgstatindex Variant for PostgreSQL 18 (unverified)](questions/indexing/pgstatindex-sample-variant-proposal.md) - Concrete design for a `pgstatindex_approx` that random-samples physical index blocks: exact columns, direct ratio estimates, scaled page counts, a `pageinspect` SQL prototype, pros/cons, and tests to add.
 
 ### Storage and Vacuum
 

@@ -908,7 +908,6 @@ Symbols: [indxpath.c#create_index_paths](../../../../raw/postgres-17/src/backend
 ## Related Pages
 
 - [How a GIN Index Becomes Bloated in PostgreSQL 17, and How to Measure It (unverified)](../indexing/gin-index-bloat.md) - GIN's separate bloat mechanisms and cost model in the same version.
-- [Proposing a Sampling pgstatindex Variant for PostgreSQL 17 (unverified)](../indexing/pgstatindex-sample-variant-proposal.md) - why `pgstatindex` has to read every block to produce the metrics discussed here.
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](../indexing/reindex-index-concurrently.md) - the online rebuild that resets every input on this page.
 - [Pros and Cons of Partial Indexes in PostgreSQL 17 (unverified)](../indexing/partial-indexes-pros-cons.md) - more on the partial-index costing path that behaves differently here.
 - [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](../../../v12/questions/query-planning/bloated-indexes-query-planner.md) - the same question, and the same GIN-versus-B-tree follow-up, answered against the v12 pin.

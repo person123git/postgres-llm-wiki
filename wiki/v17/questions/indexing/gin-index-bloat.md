@@ -759,7 +759,6 @@ No policy inside the access method changed. Apart from the rows above, every com
 
 - [v17/index](../../index.md)
 - [PostgreSQL 17 Codebase Navigation Guide](../../codebase-navigation-guide.md)
-- [Proposing a Sampling pgstatindex Variant for PostgreSQL 17](pgstatindex-sample-variant-proposal.md)
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17](reindex-index-concurrently.md)
 - [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17](create-index-concurrently.md)
 - [PostgreSQL 17 Contrib Extensions](../server-administration/contrib-extensions.md)
