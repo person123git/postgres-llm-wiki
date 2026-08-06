@@ -531,7 +531,6 @@ No PostgreSQL 12 regression test, core or contrib, compares a GIN plan with a B-
 - [Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12 (unverified)](../indexing/leaf-density-60-vs-90-query-impact.md)
 - [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)](../indexing/leaf-density-vs-fragmentation-index-scan-io.md)
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](../indexing/how-pgstatindex-calculates-information.md)
-- [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It (unverified)](../indexing/gin-index-bloat.md)
 - [How NULL Values Are Handled in PostgreSQL 12 Indexes (unverified)](../indexing/null-values-in-indexes.md)
 - [Query Planner Statistics Sources in PostgreSQL 12 (unverified)](query-planner-statistics-sources.md)
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](../observability/explain-analyze-buffers-output.md)

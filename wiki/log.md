@@ -2,6 +2,22 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] remove v12 | delete How a GIN Index Becomes Bloated
+
+- Removed `wiki/v12/questions/indexing/gin-index-bloat.md` per user request.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`,
+  the GIN-bloat sentence from the v12 coverage cell in `wiki/versions.md`, and
+  the navigation links in `btree-index-bloat-core-sql-only.md`,
+  `pgstatginindex-sample-variant-proposal.md`, and
+  `bloated-indexes-query-planner.md`.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` and
+  `wiki/versions.md` so they refer to the page title as plain text.
+- Left the separate v17 page `wiki/v17/questions/indexing/gin-index-bloat.md`
+  and its inbound links untouched.
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-06] restructure | categorize all question documents
 
 - Added `MANDATORY Question Categories` to `AGENTS.md`. Every `type: question`
@@ -667,9 +683,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-03] follow-up v12 | GIN wasted bytes from core SQL only
 
-- Filed a core-SQL-only follow-up on [How a GIN Index Becomes Bloated in
-  PostgreSQL 12, and How to Measure It
-  (unverified)](v12/questions/indexing/gin-index-bloat.md) against the unchanged pin
+- Filed a core-SQL-only follow-up on How a GIN Index Becomes Bloated in
+  PostgreSQL 12, and How to Measure It (unverified) against the unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
 - Applied prompt hygiene before drafting. The user approved the corrected
   wording, "How, using SQL and no extra contrib extension, can I measure the
@@ -740,9 +755,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-03] review-fix v12 | GIN index bloat and how to measure it
 
-- Re-audited [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to
-  Measure It (unverified)](v12/questions/indexing/gin-index-bloat.md) claim by claim against
-  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Re-audited How a GIN Index Becomes Bloated in PostgreSQL 12, and How to
+  Measure It (unverified) claim by claim against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
 - Corrected four material overstatements. Posting-page split behavior is expressed
   as segment-balancing and append/build heuristics, not exact 50%/75%/100%
   occupancy. An autovacuum partial clean stops at its remembered tail but can
@@ -780,8 +795,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-03] answer v12 | GIN index bloat and how to measure it
 
-- Filed [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It
-  (unverified)](v12/questions/indexing/gin-index-bloat.md) against unchanged pin
+- Filed How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It
+  (unverified) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Applied
   `MANDATORY Prompt Hygiene` first: the prompt contained the typo "postgreql" and
   phrased its first clause as an imperative with a question mark, and the user

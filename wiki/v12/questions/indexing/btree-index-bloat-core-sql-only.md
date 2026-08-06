@@ -643,6 +643,5 @@ Practical rule: **treat a partial index whose table shows dead tuples or no rece
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](how-pgstatindex-calculates-information.md)
 - [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 12 (unverified)](leaf-density-vs-fragmentation-index-scan-io.md)
 - [Planner Penalties for Bloated Indexes in PostgreSQL 12 (unverified)](../query-planning/bloated-indexes-query-planner.md)
-- [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It (unverified)](gin-index-bloat.md) - the GIN core-SQL-only analogue.
 - [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](create-index-concurrently.md)
 - [versions](../../../versions.md)

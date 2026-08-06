@@ -1947,6 +1947,5 @@ From the bloat / wasted-space follow-up:
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](../../codebase-navigation-guide.md)
 - [Proposing a Sampling pgstatindex Variant for PostgreSQL 12 (unverified)](pgstatindex-sample-variant-proposal.md)
 - [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](how-pgstatindex-calculates-information.md)
-- [How a GIN Index Becomes Bloated in PostgreSQL 12, and How to Measure It (unverified)](gin-index-bloat.md)
 - [versions](../../../versions.md)
 - [wiki index](../../../index.md)
