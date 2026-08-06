@@ -2,6 +2,135 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] follow-up v12 | core-SQL bloat results versus pgstatindex
+
+- Answered a filed follow-up on [Measuring B-Tree Index Bloat With Core SQL Only
+  in PostgreSQL 12
+  (unverified)](v12/questions/btree-index-bloat-core-sql-only.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Prompt hygiene applied first. The user approved the corrected follow-up, "Add
+  sections comparing the SQL bloat results to pgstatindex results, and measure
+  what the error is with different types of index bloat and with partial and
+  non-partial indexes.", and chose the same page, bloat-relevant `pgstatindex`
+  columns only, and a wide matrix with repeats.
+- Built a second isolated 12.2 server from the same pin with a 9-bloat-type x
+  3-scale x partial/non-partial matrix: 54 indexes over 27 tables, each table
+  carrying a non-partial and a partial index over the same key so both see
+  identical churn. The predicate is `id % 5 = 0` and every delete pattern uses
+  modulus 7 or 11, coprime with 5, so the partial index loses the same
+  proportion of entries rather than all or none. Bloat types: fresh, scattered
+  delete, contiguous range delete, random-order insert, all-duplicate keys,
+  vacuumed churn, unvacuumed churn, `LP_DEAD`-killed entries, and stale
+  catalogs. Scales 200k/500k/1000k rows are the repeat dimension.
+- Method A was run from the page's own CTE chain, with only the 1 MB triage
+  filter removed, so the measured error applies to the filed SQL. Against the
+  Method C rebuild it was exact in 39 of 54 cells, within 5 blocks in 47, within
+  0.8 percentage points in 48, and wrong on 6.
+- Method B reproduced `pgstatindex.leaf_pages` exactly in all 36 cells that pass
+  the `Heap Fetches: 0` precondition, partial and non-partial alike, and
+  `avg_leaf_density` to within 0.04-0.05 points (0.14-0.15 on the all-duplicate
+  cells, where the pivot absorbs a heap TID). `blocks - leaf_est` matched
+  `internal + deleted + half-dead + metapage` exactly in all 36, and subtracting
+  the modelled internal pages recovered 2330 deleted pages within one page. The
+  18 ineligible cells are exactly the three never-vacuumed fixtures, and the
+  precondition caught every one.
+- Added a head-to-head against an `avg_leaf_density` rebuild-size predictor,
+  `ceil(leaf_pages * avg_leaf_density / fillfactor) + internal_pages + 1`. The
+  core-SQL model wins or ties in 16 of 18 type/kind cells. On the `LP_DEAD`
+  fixture the density predictor is 994.4% wrong because `pgstatindex` reports a
+  healthy-looking 90.06 density on a 2745-block index that rebuilds to 251
+  blocks: `PageGetFreeSpace` counts dead and killed entries as used, so physical
+  occupancy is not reclaimable space. Recorded explicitly that this scores
+  `pgstatindex` as a predictor it never claimed to be, and listed what it still
+  uniquely provides (deleted-versus-half-dead split, `leaf_fragmentation`,
+  `tree_level`, no dependence on the visibility map or a live row count).
+- Isolated the single large model failure: partial indexes on tables deleted
+  without VACUUM or ANALYZE, 510 blocks and 92.6 points off, reporting 0.0% to
+  −2.0% bloat against a true 89.3-90.6%, because `n_live_tup` counts the whole
+  table and cannot stand in for a partial index's `reltuples`. The non-partial
+  index on the same table was exact in every one of those cells. A plain
+  `ANALYZE` cut the worst error from 510 blocks to 1; the residual is ANALYZE's
+  sampled `tupleFract * totalrows` recording 18,337 index rows against a true
+  18,181.
+- Added five `### Follow-up:` sections, refreshed the table of contents, added
+  the follow-up prompt under `## Question`, and recorded four new open
+  questions: half-dead pages were never produced, the density-predictor formula
+  is this page's construction, the matrix varies scale rather than seed, and the
+  post-`ANALYZE` one-block residual was not chased.
+- All 97 citations were machine-audited against the pinned source with 0 broken
+  ranges. Test objects were dropped, the isolated server was stopped, and
+  `raw/postgres-12/` was left unchanged.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Human
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are unchanged because this was a scoped
+  follow-up.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-06] answer v12 | core-SQL-only B-tree index bloat measurement
+
+- Filed [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12
+  (unverified)](v12/questions/btree-index-bloat-core-sql-only.md) against
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
+- Prompt hygiene applied first. The user chose the corrected wording, "Propose a
+  SQL-only method, using no contrib extensions, to measure B-tree index bloat in
+  PostgreSQL 12.", a new question page rather than a follow-up on the existing
+  `pgstatindex` heuristic page, source plus exact-pin tests, and permission to
+  include write/DDL rebuild probes.
+- Established the negative result first: core v12 has no SQL-callable page
+  reader, FSM reader, or per-page fill function, and `pgstattuple`,
+  `pageinspect`, `pg_freespacemap`, and `amcheck` all require superuser to
+  install because their control files omit `superuser =` and
+  `read_extension_control_file` defaults it to true.
+- Derived the answer from v12's own build rule rather than from a folklore
+  formula: `_bt_pagestate` sets the leaf threshold to
+  `BLCKSZ * (100 - fillfactor) / 100` (70 for internal levels), `_bt_blnewpage`
+  pre-reserves the high-key line pointer, `PageGetFreeSpace` already subtracts
+  one line pointer, and `_bt_buildadd` starts a new page once free space falls
+  below the threshold, so
+  `tuples_per_leaf = floor((BLCKSZ - 48 - floor(BLCKSZ * (100 - ff) / 100)) / (MAXALIGN(hoff + data) + 4))`,
+  with `hoff` 8 or 16 from `IndexInfoFindDataOffset` and `data` from
+  `heap_compute_data_size` (NULL columns contribute nothing, short varlenas take
+  no alignment padding).
+- Ranked four core-only methods and measured each against an actual
+  `CREATE INDEX CONCURRENTLY` rebuild on one isolated 12.2 server with 15
+  fixtures. The 26.7 ms catalog-only sweep matched the rebuilt block count
+  exactly on 10 of 14 indexes (`idx_seq` 2745, `idx_del` 276, `idx_range` 414,
+  `idx_churn` 825, `idx_rand` 2745), within 2 blocks on 3 more, and by −4.6% on
+  a 2-to-81-character text key. A `pg_column_size` slot measurement (57.000
+  bytes full scan, 56.893 from a 1% `BERNOULLI` sample, against the
+  catalog-derived 60) corrected that case to +0.32%.
+- The `EXPLAIN (ANALYZE, BUFFERS)` index-only-scan census reproduced
+  `pgstatindex.leaf_pages` exactly on all 12 fixtures with `Heap Fetches: 0`
+  using `full_scan_blocks - descent_blocks` (2736 − 3 = 2733 on the control),
+  matched `internal + deleted + half-dead + metapage` exactly as well, and
+  rebuilt `avg_leaf_density` to within 0.03-0.14 points on 11 of them with no
+  contrib installed.
+- Recorded six measured failure modes: stale `pg_class.reltuples` reporting
+  0.0% bloat on an index whose rebuild goes 2745 → 276 blocks until
+  `pg_stat_all_tables.n_live_tup` is substituted; an all-duplicate index that a
+  rebuild *grows* from 1291 to 1376 blocks (`BTREE_SINGLEVAL_FILLFACTOR` 96
+  versus a sorted build's 90), predicted correctly as −6.4% negative bloat; a
+  random-insert index permanently at 27.0% from 50/50 non-rightmost splits; a
+  range-deleted index reading a healthy 89.83 `avg_leaf_density` while 2330 of
+  2745 blocks are deleted pages; the variable-width MAXALIGN-of-an-average bias;
+  and an unvacuumed index whose 300,000 heap fetches inflated the census from
+  3279 to 8452 leaf pages.
+- Also documented `VACUUM VERBOSE`'s exact per-index page census with its
+  `lazy_cleanup_index` message text, the observed gap where a no-op VACUUM
+  prints no index line because `btvacuumcleanup` skips the scan, and
+  `pg_relation_size(idx,'fsm') > 0` as a free deleted-page flag that was
+  non-zero for exactly the one fixture with deleted pages (24576 bytes) and zero
+  for the other 13.
+- All 95 Markdown citations were machine-audited against the pinned source with
+  0 broken ranges and label-checked, and all five filed SQL blocks were executed
+  verbatim on the pinned build with exit status 0, reproducing the recorded
+  numbers. Test objects were dropped, the isolated server was stopped, and
+  `raw/postgres-12/` was left unchanged.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Human
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are unchanged pending a claim-by-claim review.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-04] follow-up v12 | pgstatginindex sampling bloat and wasted space
 
 - Answered a filed follow-up on [Proposing a Sampling pgstatginindex Variant for
