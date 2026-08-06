@@ -14,21 +14,31 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-06: filed every question page under a category directory. All 54
+  question pages moved from `wiki/vNN/questions/<page>.md` to
+  `wiki/vNN/questions/<category>/<page>.md`, across six closed,
+  version-identical categories: `query-planning`, `indexing`,
+  `storage-and-vacuum`, `replication-and-wal`, `observability`, and
+  `server-administration`. The same question basename takes the same category
+  in every version, so cross-version coverage comparison is a directory diff.
+  Page-relative links on this page were rewritten to match. Coverage, pins,
+  citation targets, and verification fields are unchanged; see
+  `MANDATORY Question Categories` in `AGENTS.md`.
 - 2026-08-06: removed the v12 question page A Heuristic to Detect B-Tree Index
   Bloat in PostgreSQL 12 (unverified) at the user's request, together with its
   root-index, v12-landing-page, and cross-page navigation entries. v12 B-tree
   bloat coverage now runs through [Measuring B-Tree Index Bloat With Core SQL
   Only in PostgreSQL 12
-  (unverified)](v12/questions/btree-index-bloat-core-sql-only.md), [How
+  (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md), [How
   pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12
-  (unverified)](v12/questions/how-pgstatindex-calculates-information.md), and
+  (unverified)](v12/questions/indexing/how-pgstatindex-calculates-information.md), and
   [Planner Penalties for Bloated Indexes in PostgreSQL 12
-  (unverified)](v12/questions/bloated-indexes-query-planner.md). The pin
+  (unverified)](v12/questions/query-planning/bloated-indexes-query-planner.md). The pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` and every surviving page's
   citations and verification fields are unchanged.
 - 2026-08-06: answered a filed follow-up on [Measuring B-Tree Index Bloat With
   Core SQL Only in PostgreSQL 12
-  (unverified)](v12/questions/btree-index-bloat-core-sql-only.md) against
+  (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
   Prompt hygiene applied first; the user chose corrected wording, the same page,
   bloat-relevant `pgstatindex` columns only, and a wide matrix with repeats.
@@ -63,7 +73,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   scoped follow-up.
 - 2026-08-06: filed [Measuring B-Tree Index Bloat With Core SQL Only in
   PostgreSQL 12
-  (unverified)](v12/questions/btree-index-bloat-core-sql-only.md) against
+  (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
   Prompt hygiene applied first; the user chose corrected wording, a new question
   page, source plus exact-pin tests, and permission to include write/DDL rebuild
@@ -105,7 +115,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `verified_by_agent: not yet` are unchanged pending a claim-by-claim review.
 - 2026-08-04: answered a filed follow-up on [Proposing a Sampling
   pgstatginindex Variant for PostgreSQL 12
-  (unverified)](v12/questions/pgstatginindex-sample-variant-proposal.md)
+  (unverified)](v12/questions/indexing/pgstatginindex-sample-variant-proposal.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene applied first; the user chose corrected
   wording, source plus exact-pin tests, and concrete new wasted-space output
@@ -149,7 +159,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   title, and `verified_by_agent: not yet` are unchanged because this was a
   scoped follow-up. `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-08-04: filed [Proposing a Sampling pgstatginindex Variant for PostgreSQL
-  12 (unverified)](v12/questions/pgstatginindex-sample-variant-proposal.md)
+  12 (unverified)](v12/questions/indexing/pgstatginindex-sample-variant-proposal.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2), scoped to GIN only and derived from the existing v12 B-tree
   sampling proposal. Prompt hygiene applied first; the user chose corrected
@@ -199,7 +209,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   warnings.
 - 2026-08-04: answered a filed follow-up on [Planner Penalties for Bloated
   Indexes in PostgreSQL 17
-  (unverified)](v17/questions/bloated-indexes-query-planner.md) against
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) against
   unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
   Prompt hygiene applied first; the user chose corrected wording, source plus
   exact-pin tests, and a `## Follow-Up` section on the existing v17 page rather
@@ -255,7 +265,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   because this was a scoped follow-up, not a fresh full-page claim audit.
   `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-08-04: filed [Planner Penalties for Bloated Indexes in PostgreSQL 17
-  (unverified)](v17/questions/bloated-indexes-query-planner.md) against
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) against
   unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
   Prompt hygiene applied first; the user chose corrected wording, exact-pin
   empirical tests in addition to source, and a new standalone v17 page
@@ -308,7 +318,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-08-04: answered a filed follow-up on [Planner Penalties for Bloated
   Indexes in PostgreSQL 12
-  (unverified)](v12/questions/bloated-indexes-query-planner.md) against
+  (unverified)](v12/questions/query-planning/bloated-indexes-query-planner.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
   Prompt hygiene applied first; the user chose corrected wording ("When might a
   GIN index be discarded by the query planner and a B-tree used instead?"),
@@ -353,7 +363,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `(unverified)` title are unchanged. `scripts/wiki_lint` reports 0 errors and
   0 warnings.
 - 2026-08-03: filed [How a GIN Index Becomes Bloated in PostgreSQL 17, and How
-  to Measure It (unverified)](v17/questions/gin-index-bloat.md) against
+  to Measure It (unverified)](v17/questions/indexing/gin-index-bloat.md) against
   unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
   Prompt hygiene applied first; the user approved corrected wording, asked for
   contrib and core-SQL-only measurement paths split cleanly, a full exact-pin
@@ -387,7 +397,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-08-03: answered a filed core-SQL-only follow-up on [How a GIN Index
   Becomes Bloated in PostgreSQL 12, and How to Measure It
-  (unverified)](v12/questions/gin-index-bloat.md) against unchanged pin
+  (unverified)](v12/questions/indexing/gin-index-bloat.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). The user chose
   corrected prompt wording, core-only scope, and a ranked presentation of all
   three candidate methods. Established from source that core SQL cannot inspect
@@ -420,7 +430,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-08-03: completed a full corrective review of [How a GIN Index Becomes
   Bloated in PostgreSQL 12, and How to Measure It
-  (unverified)](v12/questions/gin-index-bloat.md) against unchanged pin
+  (unverified)](v12/questions/indexing/gin-index-bloat.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Corrected four
   material overstatements: build and retail posting-page split policies are
   segment-based heuristics rather than exact fill percentages; an autovacuum
@@ -444,7 +454,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `scripts/wiki_lint` reports 0 errors and 0 warnings.
 - 2026-07-29: completed a full corrective review of [Comprehensive
   plan_cache_mode Analysis in PostgreSQL 12
-  (unverified)](v12/questions/plan-cache-mode.md) against unchanged pin
+  (unverified)](v12/questions/query-planning/plan-cache-mode.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). The page was a
   thin 82-line draft whose 16 distinct citations were all single-line `#L`
   links carrying `file.c#Symbol` labels, with no `## Contents`, no
@@ -482,7 +492,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `claude-opus-5-max 2026-07-29T21:23:49Z`; human verification remains false.
 - 2026-07-29: completed a full corrective review of [Impact of B-Tree Leaf
   Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12
-  (unverified)](v12/questions/leaf-density-60-vs-90-query-impact.md) against
+  (unverified)](v12/questions/indexing/leaf-density-60-vs-90-query-impact.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
   Re-resolved all 67 original citation ranges and re-cut, split, or replaced
   most of them; the page now carries 92 distinct ranges. Typical fixes were
@@ -522,7 +532,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   remains false.
 - 2026-07-29: completed a full corrective review of [B-Tree Leaf Density vs
   Fragmentation Impact on Index Scan I/O in PostgreSQL 12
-  (unverified)](v12/questions/leaf-density-vs-fragmentation-index-scan-io.md)
+  (unverified)](v12/questions/indexing/leaf-density-vs-fragmentation-index-scan-io.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Re-resolved all 52 citation ranges and re-cut or split 40
   of them, mostly ranges that started or ended mid-statement or mid-comment,
@@ -557,7 +567,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   was recorded as `claude-opus-5-max 2026-07-29T19:54:40Z`; human verification
   remains false.
 - 2026-07-29: completed a full corrective review of [PostgreSQL 12 Database
-  Health Checklist (unverified)](v12/questions/database-health-checklist.md)
+  Health Checklist (unverified)](v12/questions/server-administration/database-health-checklist.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Re-resolved and label-checked every citation, now 345.
   Fixed a `checkpointer.c#ForwardFsyncRequest` label naming a symbol that does
@@ -599,7 +609,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `claude-opus-5-max 2026-07-29T16:53:15Z`; human verification remains false.
 - 2026-07-29: completed a full corrective review of [How wal_sender_timeout Is
   Used and What It Impacts in PostgreSQL 12
-  (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  (unverified)](v12/questions/replication-and-wal/wal-sender-timeout.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Re-resolved and
   label-checked all 364 citations. Fixed a wrong `logicalfuncs.c`
   `CreateDecodingContext` label (that symbol lives in `logical.c`) and its
@@ -660,7 +670,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-22: source-reviewed the scalar-function subquery follow-up in
   [Row-Level Security (RLS) in PostgreSQL 14: Implementation, Scalability and
   Performance, and Settings
-  (unverified)](v14/questions/row-level-security-rls.md) against unchanged pin
+  (unverified)](v14/questions/server-administration/row-level-security-rls.md) against unchanged pin
   `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`. Clarified that each surviving
   uncorrelated scalar sublink is lazy zero-or-once per occurrence and execution
   of its containing outer plan, not a query-wide function cache. Added RLS
@@ -674,7 +684,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-22: source-reviewed the scalar-function subquery follow-up in
   [Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance,
   Settings, and Fixes Since PostgreSQL 14
-  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  (unverified)](v18/questions/server-administration/row-level-security-rls.md) against unchanged pin
   `6cb307251c5c6261286c1566496920976640108e`. Clarified that a surviving
   uncorrelated scalar sublink is a lazy zero-or-one InitPlan per occurrence and
   execution of its containing outer plan, not a query-wide function cache.
@@ -688,7 +698,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   remains `not yet` and human `verified` remains `false`.
 - 2026-07-22: re-audited [Row-Level Security (RLS) in PostgreSQL 18:
   Implementation, Performance, Settings, and Fixes Since PostgreSQL 14
-  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  (unverified)](v18/questions/server-administration/row-level-security-rls.md) against unchanged pin
   `6cb307251c5c6261286c1566496920976640108e`. Replaced the v15 development
   stamp with the PostgreSQL 14.0 release as the history boundary. Removed
   `bd3611db5a`, whose v14 backpatch shipped in 14.0; added the omitted
@@ -708,7 +718,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   changed.
 - 2026-07-22: completed a full corrective review of [Row-Level Security (RLS)
   in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since
-  PostgreSQL 12 (unverified)](v18/questions/row-level-security-rls.md) against
+  PostgreSQL 12 (unverified)](v18/questions/server-administration/row-level-security-rls.md) against
   unchanged pin `6cb307251c5c6261286c1566496920976640108e`. Removed five
   carry-over follow-up prompts that were not established as verbatim v18 user
   questions while retaining their source-backed topics inside the answer.
@@ -725,7 +735,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   removed the cross-branch minor-release matrix because its required refs and
   tag set are absent from the current pinned checkout.
 - 2026-07-21: completed a full corrective review of [PostgreSQL 12 Database
-  Health Checklist (unverified)](v12/questions/database-health-checklist.md)
+  Health Checklist (unverified)](v12/questions/server-administration/database-health-checklist.md)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Reworked monitoring access and statistics-snapshot
   semantics, client capacity and blocker/prepared-lock SQL, independent
@@ -743,7 +753,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `GPT-5 2026-07-21T13:34:54Z`; human verification remains false.
 - 2026-07-20: completed a new full claim-to-source review of [Row-Level Security
   (RLS) in PostgreSQL 14: Implementation, Scalability and Performance, and
-  Settings (unverified)](v14/questions/row-level-security-rls.md) and all five
+  Settings (unverified)](v14/questions/server-administration/row-level-security-rls.md) and all five
   follow-ups against unchanged pin
   `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156` (PostgreSQL 14.23). Corrected the
   relcache policy-order description, `ON CONFLICT DO UPDATE` SELECT-policy
@@ -763,7 +773,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   verification remains false.
 - 2026-07-17: completed a full claim-to-source review of [Can ALTER TABLE ...
   ATTACH PARTITION Drop Indexes in PostgreSQL 17
-  (unverified)](v17/questions/attach-partition-index-drops.md) against unchanged
+  (unverified)](v17/questions/indexing/attach-partition-index-drops.md) against unchanged
   pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10). Scoped the
   answer precisely: core table ATTACH is match-or-create and never drops an
   existing index, while user event triggers or a `ProcessUtility_hook` can issue
@@ -786,7 +796,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `false`.
 - 2026-07-17: completed a full claim-to-source review of [Proposing a Sampling
   pgstatindex Variant for PostgreSQL 17
-  (unverified)](v17/questions/pgstatindex-sample-variant-proposal.md) against
+  (unverified)](v17/questions/indexing/pgstatindex-sample-variant-proposal.md) against
   unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10),
   and carried over both user-approved corrected follow-ups from the
   corresponding v12 question. Reworked the design around v17's
@@ -807,7 +817,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `GPT-5-6-Sol-Max-Thinking 2026-07-17T19:25:39Z`; human `verified` remains
   `false`.
 - 2026-07-17: extended [Proposing a Sampling pgstatindex Variant for PostgreSQL
-  12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) with a
+  12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) with a
   second user-approved corrected follow-up: apply a 10% effective sample floor
   when captured main-fork size is strictly below 100 MiB, rerun the comparison,
   and explain the small-partial-index effect. Updated the C-policy formula,
@@ -820,7 +830,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   MAPE changing from 1.18%/1.08% to 0.86%; density mean error stayed 0.02 points.
   `verified_by_agent` remains `not yet` because this was another scoped follow-up.
 - 2026-07-17: extended [Proposing a Sampling pgstatindex Variant for PostgreSQL
-  12 (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) with the
+  12 (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) with the
   user-approved corrected follow-up requesting comparative tests, against the
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Added an executed,
   reproducible `pageinspect`-prototype comparison over six indexes, all below
@@ -834,7 +844,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   a scoped follow-up rather than a new full-page audit.
 - 2026-07-17: completed a full claim-to-source review of [Proposing a Sampling
   pgstatindex Variant for PostgreSQL 12
-  (unverified)](v12/questions/pgstatindex-sample-variant-proposal.md) against
+  (unverified)](v12/questions/indexing/pgstatindex-sample-variant-proposal.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`).
   Replaced the misleading exact-versus-estimated split with separately timed
   direct observations versus estimates and added direct sample counts. Reworked
@@ -853,7 +863,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `GPT-5-6-Sol-Max-Thinking 2026-07-17T18:12:12Z`; human `verified` remains
   `false`.
 - 2026-07-17: extended [How `wal_sender_timeout` Is Used and What It Impacts in
-  PostgreSQL 12 (unverified)](v12/questions/wal-sender-timeout.md) with the
+  PostgreSQL 12 (unverified)](v12/questions/replication-and-wal/wal-sender-timeout.md) with the
   user-approved corrected follow-up, “How does `wal_sender_timeout` affect
   `pg_replication_slots`, and how is WAL retained during error or failure
   scenarios?”, against unchanged pin
@@ -869,7 +879,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   was a scoped follow-up rather than a new full-page audit.
 - 2026-07-17: completed a full claim-to-source review of [How
   `wal_sender_timeout` Is Used and What It Impacts in PostgreSQL 12
-  (unverified)](v12/questions/wal-sender-timeout.md) against unchanged pin
+  (unverified)](v12/questions/replication-and-wal/wal-sender-timeout.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (`REL_12_2`). Corrected the
   blanket half-time description by adding the earlier non-requesting logical
   WAL-wait heartbeat and shutdown-request branches. Added exact activation and
@@ -887,7 +897,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `false`.
 - 2026-07-17: completed a full claim-to-source review of [Query Planner
   Statistics Sources in PostgreSQL 12
-  (unverified)](v12/questions/query-planner-statistics-sources.md) against
+  (unverified)](v12/questions/query-planning/query-planner-statistics-sources.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Confirmed that
   `pg_stat_all_tables` is cumulative monitoring rather than direct planner
   input, while its underlying modification counter affects planning indirectly
@@ -921,7 +931,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `GPT-5-6-Sol-Max-Thinking 2026-07-17T15:18:58Z`; human `verified` remains
   `false`.
 - 2026-07-17: extended [How CREATE INDEX CONCURRENTLY Is Implemented in
-  PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) with
+  PostgreSQL 12 (unverified)](v12/questions/indexing/create-index-concurrently.md) with
   the user-approved corrected follow-up, “What GUCs have a performance impact
   on it?”, against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Added a source-backed matrix for
@@ -933,7 +943,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   commonly confused non-controls. `verified_by_agent` remains `not yet`
   because this was a scoped expansion, not a full-page re-audit.
 - 2026-07-17: extended [How REINDEX INDEX CONCURRENTLY Is Implemented in
-  PostgreSQL 12 (unverified)](v12/questions/reindex-index-concurrently.md) with
+  PostgreSQL 12 (unverified)](v12/questions/indexing/reindex-index-concurrently.md) with
   the user-approved corrected follow-up, “What GUCs have a performance impact
   on it?”, against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Added a source-backed matrix for
@@ -946,7 +956,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   confused non-controls. `verified_by_agent` remains `not yet` because this was
   a scoped expansion, not a full-page re-audit.
 - 2026-07-17: extended [How REINDEX INDEX CONCURRENTLY Is Implemented in
-  PostgreSQL 17 (unverified)](v17/questions/reindex-index-concurrently.md) with
+  PostgreSQL 17 (unverified)](v17/questions/indexing/reindex-index-concurrently.md) with
   the user-approved corrected follow-up, “What GUCs have a performance impact
   on it?”, against unchanged pin
   `54eeefaedbee0385529f3edf321bb99e49232aaa`. Added a source-backed matrix for
@@ -977,7 +987,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   existing ranges stayed at the same lines. `verified_by_agent` remains
   `not yet` because this was a changed-range repin, not a full-page re-audit.
 - 2026-07-16: extended [How CREATE INDEX CONCURRENTLY Is Implemented in
-  PostgreSQL 17 (unverified)](v17/questions/create-index-concurrently.md) with
+  PostgreSQL 17 (unverified)](v17/questions/indexing/create-index-concurrently.md) with
   the user-approved corrected follow-up, “What GUCs have a performance impact
   on it?”, against unchanged pin
   `54eeefaedbee0385529f3edf321bb99e49232aaa`. Added a source-backed matrix for
@@ -993,7 +1003,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-13: completed a full claim-to-source review of [How MultiXact Works
   in PostgreSQL 14, and How Foreign Keys and Other Operations Degrade
   Performance When the Local Cache Spills to Secondary Storage
-  (unverified)](v14/questions/multixact-foreign-keys-cache-spill.md) against
+  (unverified)](v14/questions/storage-and-vacuum/multixact-foreign-keys-cache-spill.md) against
   unchanged pin `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`. Corrected the
   premise: the 256-entry backend-local transaction cache evicts with `pfree`
   and never spills an entry; only a subsequent shared-SLRU miss requests a
@@ -1014,7 +1024,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-13: completed a full claim-to-source review of [Performance
   Implications of Functions and Procedures in a WHERE Clause in PostgreSQL 14,
   and How to Minimize the Overhead
-  (unverified)](v14/questions/functions-procedures-in-where-clause.md) against
+  (unverified)](v14/questions/query-planning/functions-procedures-in-where-clause.md) against
   unchanged pin `5c00f4e2e3bcee6931ae93429d53f7c2a4f46156`. Corrected the
   `CALL` boundary: it has no optimizer plan, but evaluates argument expressions
   separately before direct fmgr invocation, and those standalone expressions
@@ -1035,7 +1045,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-13: completed a full claim-to-source review of [Row-Level Security
   (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes
   Since PostgreSQL 12
-  (unverified)](v18/questions/row-level-security-rls.md) against unchanged pin
+  (unverified)](v18/questions/server-administration/row-level-security-rls.md) against unchanged pin
   `6cb307251c5c6261286c1566496920976640108e`. Corrected MERGE INSERT to use
   ordinary `WCO_RLS_INSERT_CHECK` and logical replication to check its selected
   action role (table owner by default, subscription owner with
@@ -1066,7 +1076,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `verified_by_agent` remains `not yet` because this was a changed-range repin,
   not a full claim-by-claim re-verification.
 - 2026-07-13: extended [How CREATE INDEX CONCURRENTLY Is Implemented in
-  PostgreSQL 17 (unverified)](v17/questions/create-index-concurrently.md) with
+  PostgreSQL 17 (unverified)](v17/questions/indexing/create-index-concurrently.md) with
   the user-approved corrected `maintenance_work_mem` follow-up against unchanged
   pin `54eeefaedbee0385529f3edf321bb99e49232aaa`. The source-backed section
   separates transaction 2's AM-specific first build from transaction 3's serial
@@ -1080,7 +1090,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `wiki_lint`: 0 errors, 0 warnings.
 - 2026-07-13: source-reviewed the `maintenance_work_mem` follow-up in [How
   CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
-  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  (unverified)](v12/questions/indexing/create-index-concurrently.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Corrected the parallel B-tree
   accounting to distinguish planned from launched workers and to count the
   leader's worker-role output run; qualified the setting as the intended
@@ -1093,7 +1103,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `wiki_lint`: 0 errors, 0 warnings.
 - 2026-07-13: re-audited the `maintenance_work_mem` follow-up in [How CREATE
   INDEX CONCURRENTLY Is Implemented in PostgreSQL 12
-  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  (unverified)](v12/questions/indexing/create-index-concurrently.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Preserved the no-universal-cutoff
   conclusion, but replaced the misleading “two allocations” framing with an
   AM-dependent first-build phase plus the common serial validation-TID sort.
@@ -1108,7 +1118,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-13: completed a scoped claim-to-source verification of the
   `maintenance_work_mem` follow-up section in [How CREATE INDEX CONCURRENTLY Is
   Implemented in PostgreSQL 12
-  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  (unverified)](v12/questions/indexing/create-index-concurrently.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Re-checked that section's claims
   against `raw/postgres-12/`: the B-tree serial/parallel budgets and the 32 MB
   per-participant worker cap (0/1/2 workers at below-64/64/96 MB), the full-budget
@@ -1123,7 +1133,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   stays `not yet` because this re-audited only one section, not the whole page;
   `wiki_lint`: 0 errors, 0 warnings.
 - 2026-07-10: extended [How CREATE INDEX CONCURRENTLY Is Implemented in
-  PostgreSQL 12 (unverified)](v12/questions/create-index-concurrently.md) with
+  PostgreSQL 12 (unverified)](v12/questions/indexing/create-index-concurrently.md) with
   the user-approved corrected follow-up on `maintenance_work_mem`. The new
   source-backed section separates the transaction-2 AM build from the
   transaction-3 validation TID sort, explains B-tree's serial and parallel
@@ -1141,7 +1151,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   than a full-page claim re-audit.
 - 2026-07-10: completed a full claim-to-source review of [How `pgstatindex`
   Calculates B-Tree Index Statistics in PostgreSQL 12
-  (unverified)](v12/questions/how-pgstatindex-calculates-information.md) against
+  (unverified)](v12/questions/indexing/how-pgstatindex-calculates-information.md) against
   unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Preserved the
   core formulas but made their exact boundaries explicit: `index_size` is the
   one-time captured main-fork block count times `BLCKSZ`; density is a ratio of
@@ -1178,7 +1188,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   Human `verified` remains `false`.
 - 2026-07-10: completed a full claim-to-source review of [How CREATE INDEX
   CONCURRENTLY Is Implemented in PostgreSQL 12
-  (unverified)](v12/questions/create-index-concurrently.md) against unchanged pin
+  (unverified)](v12/questions/indexing/create-index-concurrently.md) against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`. Corrected three material scope
   errors: the four explicit core synchronization barriers are not every backend
   wait (DDL event triggers, predicates/expressions, AM callbacks, B-tree unique
@@ -1199,7 +1209,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   final claim pass. Human `verified` remains `false`.
 - 2026-07-10: completed a full claim-to-source review of [Row-Level Security
   (RLS) in PostgreSQL 14: Implementation, Scalability and Performance, and
-  Settings (unverified)](v14/questions/row-level-security-rls.md) against the
+  Settings (unverified)](v14/questions/server-administration/row-level-security-rls.md) against the
   unchanged `REL_14_STABLE` pin `5c00f4e2e3b`. Corrected the blanket per-row
   wording (execution frequency depends on filter, InitPlan, SQL-function
   inlining, and index-runtime-key shape), restrictive-policy sorting phase
@@ -1239,7 +1249,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   changed-range review, not a claim-by-claim re-verification.
 - 2026-07-09: extended [Table Partitioning Optimizations and Configuration During
   Query Planning and Execution in PostgreSQL 17
-  (unverified)](v17/questions/partitioning-planning-execution-optimizations.md)
+  (unverified)](v17/questions/query-planning/partitioning-planning-execution-optimizations.md)
   with a new `## Locking reduction and random-I/O sensitivity per optimization`
   section for the follow-up ("Add an extra analysis on how each optimization will
   reduce locking, and how each will have big gains if random I/O has higher
@@ -1272,7 +1282,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   claim-by-claim re-verification.
 - 2026-07-09: filed [Table Partitioning Optimizations and Configuration During
   Query Planning and Execution in PostgreSQL 17
-  (unverified)](v17/questions/partitioning-planning-execution-optimizations.md)
+  (unverified)](v17/questions/query-planning/partitioning-planning-execution-optimizations.md)
   against pin `54eeefaedbee0385529f3edf321bb99e49232aaa`. Applied prompt hygiene:
   the asker approved a grammar-corrected restatement (recorded under
   `## Question`). Drafted from a claim-to-source map built directly from
@@ -1303,7 +1313,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   claim-by-claim re-verification.
 - 2026-07-09: extended [Table Partitioning Optimizations and Configuration During
   Query Planning and Execution in PostgreSQL 12
-  (unverified)](v12/questions/partitioning-planning-execution-optimizations.md)
+  (unverified)](v12/questions/query-planning/partitioning-planning-execution-optimizations.md)
   with a new `## Locking reduction and random-I/O sensitivity per optimization`
   section for the approved, grammar-corrected follow-up ("how each optimization
   will reduce locking, and how each will have big gains if random I/O has higher
@@ -1335,7 +1345,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   claim-by-claim re-verification.
 - 2026-07-09: filed [Table Partitioning Optimizations and Configuration During
   Query Planning and Execution in PostgreSQL 12
-  (unverified)](v12/questions/partitioning-planning-execution-optimizations.md)
+  (unverified)](v12/questions/query-planning/partitioning-planning-execution-optimizations.md)
   against the unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Applied
   prompt hygiene: the asker approved a grammar-corrected restatement (recorded
   under `## Question`). Drafted from a claim-to-source map built directly from
@@ -1371,7 +1381,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   full claim-by-claim re-verification.
 - 2026-07-07: review-fixed the `### Wrapping a function in a subquery to
   evaluate it once` section of [Row-Level Security (RLS) in PostgreSQL 14
-  (unverified)](v14/questions/row-level-security-rls.md) against the unchanged
+  (unverified)](v14/questions/server-administration/row-level-security-rls.md) against the unchanged
   pin `5c00f4e2e3b`. Re-verified every source citation in the section (the
   `subselect.c` uncorrelated-`EXPR_SUBLINK`-to-InitPlan / `PARAM_EXEC` path and
   correlated-`SubPlan` contrast, `ExecEvalParamExec`/`ExecSetParamPlan`
@@ -1387,7 +1397,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   claim-by-claim re-verification.
 - 2026-07-07: review-fixed [Performance Implications of Functions and
   Procedures in a WHERE Clause in PostgreSQL 14, and How to Minimize the
-  Overhead (unverified)](v14/questions/functions-procedures-in-where-clause.md)
+  Overhead (unverified)](v14/questions/query-planning/functions-procedures-in-where-clause.md)
   against the unchanged pin `5c00f4e2e3b`. Corrected the overbroad claim that a
   WHERE-clause function is always a per-row cost: row-dependent or volatile
   quals still run through the `ExecScan`/`ExecQual`/`EEOP_FUNCEXPR` per-row path,
@@ -1401,7 +1411,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   claim-by-claim re-verification.
 - 2026-07-07: filed [Performance Implications of Functions and Procedures in a
   WHERE Clause in PostgreSQL 14, and How to Minimize the Overhead
-  (unverified)](v14/questions/functions-procedures-in-where-clause.md) against
+  (unverified)](v14/questions/query-planning/functions-procedures-in-where-clause.md) against
   the unchanged pin `5c00f4e2e3b`. Applied prompt hygiene: the asker approved a
   grammar-corrected restatement (recorded under `## Question`) and chose to
   cover procedures explicitly. Drafted from a claim-to-source map built directly
@@ -1431,7 +1441,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   coverage cell. `verified_by_agent` stays `not yet`: fresh draft, not a
   claim-by-claim re-verification.
 - 2026-07-07: extended [Row-Level Security (RLS) in PostgreSQL 14
-  (unverified)](v14/questions/row-level-security-rls.md) with a `### Wrapping a
+  (unverified)](v14/questions/server-administration/row-level-security-rls.md) with a `### Wrapping a
   function in a subquery to evaluate it once` section for the approved,
   grammar-corrected follow-up on whether wrapping a JWT helper like `auth.uid()`
   in `(SELECT auth.uid())` caches the call. Documented from `raw/postgres-14/`:
@@ -1451,7 +1461,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   yet` because this was a scoped follow-up, not a full claim-by-claim
   re-verification.
 - 2026-07-07: review-fixed [Row-Level Security (RLS) in PostgreSQL 14
-  (unverified)](v14/questions/row-level-security-rls.md) for the approved,
+  (unverified)](v14/questions/server-administration/row-level-security-rls.md) for the approved,
   grammar-corrected aggregation follow-up. Added an `### RLS and aggregation`
   section explaining that aggregate nodes consume the RLS-filtered input
   subplan, so mitigation focuses on cheaper/indexable policy predicates,
@@ -1464,7 +1474,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `verified_by_agent` stays `not yet` because this was a scoped follow-up, not
   a full claim-by-claim re-verification.
 - 2026-07-07: review-fixed [Row-Level Security (RLS) in PostgreSQL 14
-  (unverified)](v14/questions/row-level-security-rls.md) against the unchanged
+  (unverified)](v14/questions/server-administration/row-level-security-rls.md) against the unchanged
   pin `5c00f4e2e3b`. Corrected the RLS plan-cache section to avoid treating SQL
   `DECLARE CURSOR` / `WITH HOLD` cursors as a saved-plan-cache reuse surface
   (ordinary cursor planning stores copied plan trees in a portal; held cursors
@@ -1478,7 +1488,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
 - 2026-07-06: filed the PostgreSQL 14 MultiXact question page, [How MultiXact
   Works in PostgreSQL 14, and How Foreign Keys and Other Operations Degrade
   Performance When the Local Cache Spills to Secondary Storage
-  (unverified)](v14/questions/multixact-foreign-keys-cache-spill.md), against the
+  (unverified)](v14/questions/storage-and-vacuum/multixact-foreign-keys-cache-spill.md), against the
   unchanged pin `5c00f4e2e3b`. Applied prompt hygiene: the asker approved a
   lightly grammar-corrected restatement, recorded under `## Question`. Drafted
   from a claim-to-source map built directly from `raw/postgres-14/`: the MultiXact
@@ -1495,7 +1505,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   and the v14 coverage cell above. `verified_by_agent` stays `not yet`: fresh
   draft, not a claim-by-claim re-verification.
 - 2026-06-30: filed the first PostgreSQL 14 question page, [Row-Level Security
-  (RLS) in PostgreSQL 14 (unverified)](v14/questions/row-level-security-rls.md),
+  (RLS) in PostgreSQL 14 (unverified)](v14/questions/server-administration/row-level-security-rls.md),
   against the unchanged pin `5c00f4e2e3b`. Drafted from a claim-to-source map
   built directly from the `raw/postgres-14/` checkout: the rewrite path
   (`get_row_security_policies`, `fireRIRrules`), the bypass decision
@@ -1528,7 +1538,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   `verified_by_agent` stays `not yet`: this was a version-add scaffold, not a
   claim-by-claim re-verification.
 - 2026-06-29: reviewed [PostgreSQL 18 Row-Level Security
-  (unverified)](v18/questions/row-level-security-rls.md) against the unchanged
+  (unverified)](v18/questions/server-administration/row-level-security-rls.md) against the unchanged
   pin `6cb307251c`. Re-verified that all 120 unique source citations bracket
   their named symbols, spot-checked the most claim-sensitive source
   (`row_security` GUC, `check_enable_rls()`, the RLS `COPY`/pg_dump paths, the
@@ -1585,7 +1595,7 @@ This page indexes the PostgreSQL versions covered by the wiki.
   scoring page — and only the autovacuum MXID-score division-by-zero fix
   `1f2297b5487` (post-`REL_19_BETA1`, touching `autovacuum.c` and
   `maintenance.sgml`) is relevant to filed coverage. Updated [PostgreSQL 19
-  Autovacuum and VACUUM (unverified)](v19/questions/autovacuum-parallel-scoring-visibility.md):
+  Autovacuum and VACUUM (unverified)](v19/questions/storage-and-vacuum/autovacuum-parallel-scoring-visibility.md):
   documented the `Max(1, multixact_freeze_max_age)` divisor guard and the
   member-space scaling, added `1f2297b5487` to the scoring commit history,
   corrected the now-stale "no autovacuum feature files changed since beta1"

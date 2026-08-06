@@ -60,8 +60,8 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - Use page-relative Markdown links for source citations, not Obsidian wikilinks or bare raw-file links. Canonical shapes:
 
   ```md
-  [file.c#Symbol](../../../raw/postgres-NN/path/file.c#L42-L58)
-  [file.c:42](../../../raw/postgres-NN/path/file.c#L42)
+  [file.c#Symbol](../../../../raw/postgres-NN/path/file.c#L42-L58)
+  [file.c:42](../../../../raw/postgres-NN/path/file.c#L42)
   ```
 
   A source citation is a complete Markdown inline link, not a link fragment. The opening `[`, closing `]`, opening `(`, and closing `)` are mandatory.
@@ -74,8 +74,8 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
   Invalid citation fragments include:
 
   ```md
-  file.c#Symbol](../../../raw/postgres-NN/path/file.c#L42-L58
-  [file.c#Symbol]../../../raw/postgres-NN/path/file.c#L42-L58
+  file.c#Symbol](../../../../raw/postgres-NN/path/file.c#L42-L58
+  [file.c#Symbol]../../../../raw/postgres-NN/path/file.c#L42-L58
   raw/postgres-NN/path/file.c#L42-L58
   [[raw/postgres-NN/path/file.c]]
   ```
@@ -84,7 +84,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 
   - Link text: short human label, typically `file.ext#Symbol` (function, struct, macro, GUC, or doc-section name). Use `file.ext:line` for a single-line citation.
   - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment. Single-line citations use `#L42`.
-  - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For pages under `wiki/vNN/questions/`, that prefix is `../../../raw/postgres-NN/...`.
+  - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For question pages under `wiki/vNN/questions/<category>/`, that prefix is `../../../../raw/postgres-NN/...`; see `MANDATORY Question Categories`.
   - New or edited source citations must use this page-relative format. `scripts/wiki_lint` may normalize repo-relative `raw/postgres-NN/...` URLs for validation, but that is compatibility behavior, not the citation style for new work.
   - Line numbers are stable because every page pins an exact commit via `pinned_commit:`; they jump correctly in VS Code and editors that understand Markdown line fragments.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
@@ -94,13 +94,13 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - Do not state a claim as fact unless it is backed by a source file, symbol, test file, documentation page, commit, or saved design discussion.
 - Put uncertainty under `## Open Questions`.
 
-Examples:
+Examples, as written from a question page such as `wiki/v18/questions/observability/explain-analyze-buffers-output.md`:
 
 ```md
-[explain.c#ExplainOnePlan](../../../raw/postgres-18/src/backend/commands/explain.c#L494-L598)
-[instrument.h#BufferUsage](../../../raw/postgres-18/src/include/executor/instrument.h#L24-L42)
-[ref/explain.sgml#BUFFERS](../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208)
-[bufmgr.c:4397](../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4397)
+[explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L598)
+[instrument.h#BufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L24-L42)
+[ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208)
+[bufmgr.c:4397](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4397)
 ```
 
 Migration note: existing pages that still use `[[raw/postgres-NN/...]]` wikilink citations remain valid and need not be rewritten until they are next edited. New and substantially-revised pages must use the Markdown form.
@@ -209,7 +209,7 @@ wiki/vNN/codebase-navigation-guide.md
 
 When a user asks a question, the deliverable is a single `type: question` page that holds both the question and its answer. Do not spin off a separate answer document.
 
-- File the page under `wiki/vNN/questions/`.
+- File the page under `wiki/vNN/questions/<category>/`, using a category from `MANDATORY Question Categories`. Never file a question directly under `wiki/vNN/questions/`.
 - Restate the user prompt verbatim under `## Question`.
 - Put the full answer, with matching-version raw citations, inline under `## Answer`.
 - Keep `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` on the same page when gaps exist.
@@ -221,6 +221,49 @@ Why one document per question, not a question page plus an answer page:
 - It keeps verification honest. One page carries one `verified:` / `verified_by_agent:` state over one claim-to-source map, instead of a question page that silently goes stale against its answer page.
 
 Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not create new ones. Leave existing answer pages in place until they are next substantially revised, then fold them back into their question page.
+
+## MANDATORY Question Categories
+
+Every `type: question` page lives in exactly one category directory:
+
+```text
+wiki/vNN/questions/<category>/<page>.md
+```
+
+A question page filed directly under `wiki/vNN/questions/` is misfiled. There is no uncategorized location.
+
+The category set is closed. Use exactly these six directory names, in every version:
+
+| Directory | Covers |
+|---|---|
+| `query-planning` | Planner and optimizer behavior: cost and selectivity estimation, the statistics the planner reads, join and scan strategy, partition pruning, plan caching and re-planning, plan shape, and planner-visible expression and routine semantics. |
+| `indexing` | Index access methods and their on-disk structure: index builds and rebuilds, index-specific DDL, bloat and page density, index-only scans, and per-AM behavior such as B-tree, GIN, GiST, BRIN, and hash. |
+| `storage-and-vacuum` | How rows and pages are stored and reclaimed: heap and page layout, TOAST, the buffer manager, the free space and visibility maps, VACUUM and autovacuum, REPACK and CLUSTER, and MVCC bookkeeping such as MultiXact and the xid horizon. |
+| `replication-and-wal` | WAL generation and replay: checkpoints, crash recovery, archiving, and physical and logical replication including slots, origins, and apply workers. |
+| `observability` | How the server reports on itself: cumulative and dynamic statistics views, `pg_stat_statements`, EXPLAIN instrumentation output, progress reporting, wait events, and logging. |
+| `server-administration` | The server as an installation rather than as a query: GUC configuration, security and access control, extension and hook surfaces, contrib inventory, client tools, and operational runbooks. |
+
+Pick the category in this order and stop at the first rule that decides:
+
+1. File by the subsystem the question is *about*, not by the tool used to observe it. B-tree page density is `indexing` even when `pgstatindex` supplies the numbers; what the statistics interface itself exposes is `observability`.
+2. If two categories still fit, file under the subsystem that supplies most of the page's source citations. Vacuum extension hooks are `storage-and-vacuum` because the cited symbols are vacuum and autovacuum code.
+3. If it is still tied, take the first matching category in the table order above.
+
+Category rules:
+
+- One page, one category directory. Do not copy, symlink, or re-file the same page under a second category. When a page matters to a second category, link it from that category's group on the version landing page.
+- The same question basename uses the same category in every version, so `wiki/v12/questions/indexing/create-index-concurrently.md` and `wiki/v18/questions/indexing/create-index-concurrently.md` stay parallel and cross-version comparison is a directory diff.
+- Create a category directory when its first page is filed. Do not create empty category directories.
+- Never invent a category name. Adding, renaming, or removing a category is a repo-wide change: update this section, move every affected page, fix the page-relative links in and to those pages, update `wiki/index.md`, every `wiki/vNN/index.md`, and `wiki/versions.md`, then append to `wiki/log.md` and run `scripts/wiki_lint`.
+- `scripts/wiki_lint` does not check category placement, so verify the directory name against the table above before filing.
+
+Index grouping:
+
+- `wiki/vNN/index.md` groups its `## Questions` list under one `### <Category label>` heading per non-empty category, in the table order above.
+- `wiki/index.md` uses the same grouping one level deeper, as `#### <Category label>` under each `### PostgreSQL NN` section.
+- Category labels are the title-cased directory name: Query Planning, Indexing, Storage and Vacuum, Replication and WAL, Observability, Server Administration.
+
+All question pages were migrated into categories on 2026-08-06. No uncategorized question page is grandfathered.
 
 ## MANDATORY Table of Contents
 
@@ -260,12 +303,13 @@ Migration note: existing content pages without a `## Contents` block remain vali
 - Keep version-specific pages under `wiki/vNN/`.
 - Each `wiki/vNN/` root must contain `index.md` and the mandatory `codebase-navigation-guide.md`.
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
-  - `wiki/vNN/questions/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`.
-  - `wiki/vNN/concepts/` for `type: concept` pages.
+  - `wiki/vNN/questions/<category>/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`. The category directory is mandatory; see `MANDATORY Question Categories`.
+  - `wiki/vNN/concepts/` for `type: concept` pages. Concept pages are not categorized.
   - `wiki/vNN/answers/` holds legacy `type: answer` pages only. Do not file new answer pages there.
 - The version landing page `wiki/vNN/index.md` and `wiki/vNN/codebase-navigation-guide.md` are the only Markdown pages allowed at the version root.
-- Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../index.md)` and `[versions](../../versions.md)` from a `wiki/v18/questions/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
-- Include the version segment and the type subdirectory in links into per-version typed directories. The mandatory codebase navigation guide is the root-level exception, e.g. `wiki/v18/codebase-navigation-guide.md`.
+- `wiki/vNN/questions/` itself holds only category directories, never Markdown pages.
+- Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../../index.md)` and `[versions](../../../versions.md)` from a `wiki/v18/questions/<category>/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
+- Include the version segment, the type subdirectory, and the question category in links into per-version typed directories, e.g. `wiki/v18/questions/indexing/create-index-concurrently.md`. The mandatory codebase navigation guide is the root-level exception, e.g. `wiki/v18/codebase-navigation-guide.md`.
 - Create a page only when the work justifies it.
 - Do not create standalone call-chain or source-trace document families.
 - Treat generated pages as drafts until source references are checked.
@@ -308,7 +352,7 @@ Log heading format:
 4. Draft a claim-to-source map.
 5. Move unverified claims to `## Open Questions`.
 6. Answer with matching-version raw citations.
-7. File the answer inline in the question page under `wiki/vNN/questions/` (`type: question`). Do not create a separate answer page; see `MANDATORY Question Documents`.
+7. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
 8. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
 9. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
 10. Update indexes and log.
