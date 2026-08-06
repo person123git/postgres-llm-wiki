@@ -2,6 +2,43 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] review v12 | COMMENT-stored index/heap ratio bloat screen
+
+- Re-reviewed [Detecting Bloat in All Index Types by Storing an Index/Heap Size
+  Ratio in COMMENT in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Corrected the central interpretation: ratio drift is index allocation growth
+  divided by heap allocation growth, not an access-method-neutral bloat measure.
+  Distinguished the current-file rebuild-reclaimable fraction from excess bytes
+  relative to the rebuilt file, and relabeled the fixture thresholds.
+- Corrected source claims around ordinary VACUUM's conditional heap-tail
+  truncation, BRIN's stepwise revmap extension, the SP-GiST redirect
+  `RecentGlobalXmin` gate, GIN's cleanup trigger, indexed-key HOT eligibility,
+  `pg_class.relpages` writers, COMMENT/catalog locks, default versus
+  `--no-comments` dump/restore, `psql` visibility, and generated catalog headers.
+- Added the `CREATE TABLE ... LIKE INCLUDING ALL` hazard: v12 clones index
+  comments into new indexes, so a numeric baseline can silently describe the
+  source heap. Updated capture discipline to reject ordinary VACUUM as proof of
+  a compact heap and to forbid normalizing unexplained drift by re-capture.
+- Replaced the baseline audit's unsafe cast-in-`OR` with a materialized,
+  CASE-guarded parse. Reworked detection to measure each relation once and report
+  zero-byte or unavailable relations explicitly rather than dropping them. An
+  exact-pin 12.2 fixture confirmed the human-comment, zero-heap, zero-baseline,
+  missing-baseline, and cloned-comment cases.
+- Reran the 200k-row all-seven-AM cycle at one, two, and three post-delete VACUUM
+  passes, repeating the one-pass arm. Corrected GIN from 4,102/7,495 blocks
+  (+82.72%) to 4,101/7,482 (+82.44%); `gin_metapage_info` reports 600,000 entries
+  on 4,100 entry pages. Confirmed B-tree +99.27%, GiST +89.47%, and SP-GiST
+  +0.83%, including SP-GiST's retained nine blocks in every arm. Dropped the
+  review schemas and the two extensions created for the tests; left the
+  pre-existing repo-local server running.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` because the historical non-cycle measurement
+  tables were not all independently reproduced.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-06] follow-up v12 | delete-and-reload cycle test for the COMMENT-stored ratio
 
 - Added a new `### A 200k-row delete-and-reload cycle test on all seven index
