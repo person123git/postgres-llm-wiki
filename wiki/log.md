@@ -2,6 +2,62 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-06] question v12 | COMMENT-stored index/heap ratio as a bloat detector
+
+- Filed [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
+  in COMMENT in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Prompt hygiene applied before drafting: the user approved correcting
+  "postgreql", the preposition, and the `COMMENT` capitalization, and chose a
+  bare-ratio payload, source plus exact-pin tests, and read-only filed SQL. The
+  correction is recorded as a prompt note under `## Question`.
+- Source side: the full `COMMENT` path (grammar, `CommentObject`'s
+  `ShareUpdateExclusiveLock` plus ownership check, `CreateComments`,
+  `pg_description`, `obj_description`), comment lifecycle across DDL
+  (`index_concurrently_swap` moving the `pg_description` row, `pg_dump`'s
+  index comment, the `create_index` and `alter_table` regression suites),
+  the size functions (`pg_relation_size` main-fork wrapper,
+  `calculate_relation_size`, `calculate_table_size`,
+  `calculate_toast_table_size`, `vac_update_relstats`), per-AM storage
+  behavior (fill factors, `_hash_init`/`_hash_expandtable` splitpoints, BRIN
+  pages-per-range and revmap capacity, the four index-vacuum FSM reclaim
+  paths, and every `RelationTruncate`/`smgrtruncate` call site), and the
+  contrib boundary (`pgstattuple`'s AM support matrix and the
+  `superuser = true` control-file default).
+- Corrected one mid-inquiry error: the SP-GiST `RelationTruncate` call found by
+  grep is compiled out under `#ifdef NOT_USED`, so no v12 index AM shrinks its
+  main fork during VACUUM.
+- Built an isolated 12.2 server (VPATH build under `.wiki-runtime/`, port 5492,
+  autovacuum off) and ran six experiments over seven access methods: a
+  three-scale fresh-ratio invariance sweep (B-tree 0.9942, SP-GiST 0.9934,
+  bloom 0.9909, GiST 1.0312, hash 0.7963, GIN 0.6361, BRIN 0.0625 over 16x
+  growth), a seven-point hash/B-tree sawtooth sweep (healthy hash spans
+  0.3314-0.4985 while B-tree moves 0.5%), six workload fixtures with `REINDEX`
+  and `VACUUM FULL` ground truth, a nine-operation COMMENT durability matrix, a
+  lock/ownership/read-visibility probe, and 300-index survey timings
+  (5.3-7.1 ms size-based, 3.7-3.8 ms catalog-only, with `relpages` measured
+  stale at 8 blocks against a live 281).
+- Key measured results now on the page: `drift = index growth factor / heap
+  growth factor`; a mass delete plus VACUUM leaves drift at exactly 1.000 on all
+  seven AMs against 0.667-0.797 real index bloat; row widening masks 49.9%
+  B-tree bloat as drift 0.312; heap truncation fakes drift 3.996 on a
+  zero-bloat BRIN; a `pg_table_size` denominator collapses drift from 1.746 to
+  0.095 under TOAST traffic; a single 20%-of-rows key update grows a
+  fillfactor-90 B-tree by 1.995x; and `ALTER TABLE ... ALTER COLUMN TYPE` on a
+  partitioned table overwrote both child baselines with the parent index's
+  comment, matching the upstream test's own "wrong behavior for comments"
+  note.
+- Both filed queries (detection and baseline audit) were executed verbatim on
+  the pinned server; both are read-only, tagged, and wrapped in transaction-
+  scoped `statement_timeout`/`lock_timeout`.
+- Test objects were dropped, the isolated server was stopped, and the build
+  tree, data directory, and scratch SQL stay under `.wiki-runtime/tmp/`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Human
+  `verified` stays `false`, the visible title keeps `(unverified)`, and
+  `verified_by_agent` stays `not yet`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-06] remove v17 | delete How a GIN Index Becomes Bloated
 
 - Removed `wiki/v17/questions/indexing/gin-index-bloat.md` per user request.
