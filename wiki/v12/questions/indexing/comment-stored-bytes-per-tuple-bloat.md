@@ -17,6 +17,7 @@ verified_by_agent: not yet
   - [Capture the baseline](#capture-the-baseline)
   - [Detect drift](#detect-drift)
   - [Interpretation by access method](#interpretation-by-access-method)
+  - [Follow-up: calibrate increase rates by access method and operation](#follow-up-calibrate-increase-rates-by-access-method-and-operation)
   - [Reindex and recapture](#reindex-and-recapture)
   - [Exact-pin validation](#exact-pin-validation)
   - [Operational and failure boundaries](#operational-and-failure-boundaries)
@@ -30,6 +31,8 @@ verified_by_agent: not yet
 ## Question
 
 Propose a way to detect bloat in all index types by using the `COMMENT` command to store the index’s bytes-per-tuple ratio when the index is created. Suppose the stored initial ratio is 1.0. A maintenance process later recalculates it as 1.4—an increase of approximately 40%—and therefore decides to reindex.
+
+For different index-bloating operations on the table, calculate the best increase rate for each type of index to reduce the risk of unnecessary reindexing.
 
 ## Answer
 
@@ -228,6 +231,27 @@ The query is access-method-neutral; the result is not. PostgreSQL 12 registers s
 
 This distinction is why `1.4` cannot mean “40% bloat” across all index types. It means “current main-fork bytes per estimated indexed row are 40% above this index's stored baseline.”
 
+### Follow-up: calibrate increase rates by access method and operation
+
+PostgreSQL 12 cannot calculate a best percentage increase for B-tree, hash, GiST, SP-GiST, GIN, BRIN, or Bloom from the stored comment alone. It has no generic AM callback for reclaimable space, and the same BPT increase can be healthy growth, temporary AM state, or reclaimable allocation ([amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L159-L233)). Do not add per-AM constants such as “reindex B-tree at 40%” to this process.
+
+The two exact-pin counterexamples on this page make that boundary concrete: an 80% scattered delete made BRIN's ratio `5.0000` while `REINDEX` reclaimed `0.0%`, and adding more distinct GIN keys made its ratio `137.2000` while a rebuild also reclaimed `0.0%` ([brin.c#brinbuildCallback](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L592-L630), [gininsert.c#ginHeapTupleBulkInsert](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L270)). BRIN has no per-heap-tuple index tuples for VACUUM to delete, and its cleanup instead summarizes unsummarized ranges ([brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L814)). GIN can also grow or shrink its pending list through cleanup, independently of a one-row/one-index-entry model ([ginfast.c#ginInsertCleanup](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L765-L850)).
+
+Use an empirical rate for each **index family**, not each AM name alone. A family is at least `(amname, operator classes, key/expression shape, predicate, reloptions)` plus a table workload class. Keep separate cohorts for operations such as append-only inserts, random-key inserts, updates that change indexed columns, deletes followed by `VACUUM`, and bulk load/reload. This is required because B-tree page packing depends on fillfactor and split history, hash grows in bucket/splitpoint steps, GiST and SP-GiST depend on operator-class split/partition choices, GIN depends on extracted keys and pending-list state, and BRIN tracks heap ranges rather than indexed rows ([nbtsort.c#_bt_buildadd](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L837-L900), [hashpage.c#splitpoint-allocation](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L781-L852), [gistsplit.c#gistSplit](../../../../raw/postgres-12/src/backend/access/gist/gistsplit.c#L396-L448), [spgdoinsert.c#redirect-and-placeholder](../../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1120-L1172), [gininsert.c#ginHeapTupleBulkInsert](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L270), [brin.c#brinbuildCallback](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L592-L630)).
+
+For each historical observation `j` in a cohort, calculate the observed drift and measured rebuild yield:
+
+```text
+drift_j        = current_bpt_j / baseline_bpt_j
+increase_pct_j = 100 * (drift_j - 1)
+reclaim_pct_j  = 100 * (pre_reindex_bytes_j - post_reindex_bytes_j)
+                 / pre_reindex_bytes_j
+```
+
+For an agreed minimum reclaimable-byte target `B` and minimum reclaim percentage `R`, select the smallest observed increase rate `t` for which the cohort's *future* rebuilds meet both targets at the required confidence. Until there is enough representative history, emit `investigate` rather than `REINDEX`; do not claim that `t` is calculated. This rule reduces unnecessary rebuilds by requiring demonstrated yield, while preserving the comment drift as a cheap candidate screen. After a successful rebuild, retain the old comment until the rebuild yield is recorded, then analyze and recapture the baseline as described below.
+
+The initial default is therefore the same for every AM: **no automatic rate**. B-tree and Bloom may eventually have useful cohort-specific rates when their definitions and workloads are stable; hash, GiST, SP-GiST, GIN, and BRIN need stricter AM-specific confirmation because their normal allocation changes are structurally discontinuous or not proportional to heap rows ([hashpage.c#initial-buckets](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L493-L525), [blutils.c#bloom-options](../../../../raw/postgres-12/contrib/bloom/blutils.c#L55-L96)).
+
 ### Reindex and recapture
 
 Use the candidate list as the start of a decision process:
@@ -333,6 +357,7 @@ The same scattered-delete fixture showed that B-tree, hash, GiST, SP-GiST, GIN, 
 - Core B-tree, hash, GiST, SP-GiST, GIN, and BRIN implementations plus contrib Bloom.
 - `COMMENT`, ordinary `REINDEX`, `REINDEX CONCURRENTLY`, comment preservation, dump/restore, locks, ownership, timeout contexts, and failure leftovers.
 - Exact-pin SQL validation across all seven in-tree or packaged index access methods.
+- The access-method-specific allocation, insertion, and VACUUM paths relevant to operation-dependent drift.
 
 ## Evidence Map
 
@@ -346,6 +371,7 @@ The same scattered-delete fixture showed that B-tree, hash, GiST, SP-GiST, GIN, 
 | No generic bloat callback exists | [amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L159-L233) |
 | Concurrent reindex preserves the comment and has failure leftovers | [index.c#move-index-comment](../../../../raw/postgres-12/src/backend/catalog/index.c#L1612-L1656), [reindex.sgml#concurrent-failure](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L363-L389) |
 | Timeout changes are session or transaction scoped | [guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386), [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2396) |
+| A universal per-AM increase rate cannot be derived from core because AMs expose no reclaimable-space callback and their allocation paths differ | [amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L159-L233), [hashpage.c#splitpoint-allocation](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L781-L852), [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L814) |
 
 ## Open Questions
 
@@ -354,6 +380,7 @@ The same scattered-delete fixture showed that B-tree, hash, GiST, SP-GiST, GIN, 
 - Which third-party access methods have a stable bytes-per-indexed-row relationship, and which expose better AM-specific diagnostics?
 - Should an installation that already uses comments move this metadata to a dedicated table keyed by database and index identity?
 - What minimum measured post-rebuild saving should cause the process to retain, tighten, or disable this signal for an index family?
+- What cohort size, observation window, and confidence target are appropriate for each production workload before promoting an `investigate` rate to an automated rebuild rate?
 
 ## Source References
 
@@ -374,9 +401,13 @@ The same scattered-delete fixture showed that B-tree, hash, GiST, SP-GiST, GIN, 
 - [pg_am.dat#index-access-methods](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L18-L35)
 - [gininsert.c#ginHeapTupleBulkInsert](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L270)
 - [brin.c#brinbuild-result](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L713-L742)
+- [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L814)
 - [hashpage.c#initial-buckets](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L493-L525)
+- [hashpage.c#splitpoint-allocation](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L781-L852)
 - [gistsplit.c#gistSplit](../../../../raw/postgres-12/src/backend/access/gist/gistsplit.c#L396-L448)
 - [spgdoinsert.c#redirect-and-placeholder](../../../../raw/postgres-12/src/backend/access/spgist/spgdoinsert.c#L1120-L1172)
+- [ginfast.c#ginInsertCleanup](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L765-L850)
+- [nbtsort.c#_bt_buildadd](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L837-L900)
 - [blutils.c#bloom-options](../../../../raw/postgres-12/contrib/bloom/blutils.c#L55-L96)
 - [guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386)
 - [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2396)

@@ -2,6 +2,14 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-07] follow-up v12 | COMMENT-stored bytes-per-tuple bloat calibration
+
+Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored bytes-per-tuple bloat page. It establishes that the pinned source cannot derive a universal per-access-method increase rate, identifies operation-dependent allocation boundaries across the AMs, and specifies cohort calibration against measured rebuild yield before any automatic reindex decision.
+
+## [2026-08-07] lint v12 | COMMENT-stored bytes-per-tuple bloat calibration
+
+`wiki_lint` passed with 0 errors and 0 warnings after the follow-up update.
+
 ## [2026-08-07] answer v12 | COMMENT-stored bytes per tuple index-bloat screen
 
 - Filed [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple in
