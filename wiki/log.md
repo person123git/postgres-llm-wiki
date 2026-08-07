@@ -2,6 +2,51 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-07] answer v12 | COMMENT-stored bytes per tuple index-bloat screen
+
+- Filed [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple in
+  PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene applied before drafting; the user approved
+  the corrected wording, which is restated verbatim under `## Question`.
+- The design stores actual index-main-fork bytes per estimated indexed heap row
+  in a versioned index comment. The value `1.0` is the normalized starting
+  drift, not the literal stored BPT. A later `1.4` result is labeled
+  `investigate`, not an unconditional `REINDEX` decision.
+- Source review found an all-AM denominator discontinuity immediately after
+  index creation: common index code writes each AM's build count to
+  `pg_class.reltuples`, GIN counts extracted entries, and BRIN counts range
+  summaries. The workflow therefore runs plain table `ANALYZE` after creation
+  and before each comparison; v12 then writes an estimated indexed-row count,
+  including sampled partial-index selectivity. `VACUUM (ANALYZE)` is not used
+  for this normalization because that plain-ANALYZE index update is skipped on
+  the combined path.
+- Added production-bound capture, detection, and guarded post-rebuild recapture
+  SQL with session-scoped `statement_timeout` and `lock_timeout`, schema
+  allowlisting, physical/live/ready/valid filters, one-time size measurement,
+  guarded metadata parsing, human-comment preservation, and a material-byte
+  column that is explicitly not called reclaimable bloat.
+- Built and installed the exact 12.2 pin under `.wiki-runtime/`, installed
+  contrib Bloom, and ran an isolated server with autovacuum disabled. All final
+  SQL executed successfully. The seven-AM baseline covered B-tree, hash, GiST,
+  SP-GiST, GIN, BRIN, and Bloom. An 80% scattered-delete BRIN fixture reached
+  drift `5.0000` while rebuilding reclaimed `0.0%`; a legitimate GIN key-shape
+  change reached drift `137.2000`, and rebuilding reproduced the same
+  22,478,848-byte file. These cases disprove a universal all-AM threshold.
+- Documented per-AM interpretation, the absence of a generic bloat callback,
+  COMMENT ownership/lock and single-row semantics, generated-catalog and
+  extension boundaries, dump/restore loss with `--no-comments`, plain versus
+  concurrent reindex cost and restrictions, invalid concurrent-reindex
+  leftovers, comment survival across the swap, and the required successful
+  post-rebuild recapture step.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Human
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` remain because production thresholds,
+  partial-index sampling variance, and third-party AMs require local
+  calibration. The isolated server was stopped. Full `scripts/wiki_lint`
+  reports 0 errors and 0 warnings; `git diff --check` passes.
+
 ## [2026-08-06] answer v17 | index/heap ratio in COMMENT, copied from v12 and reviewed
 
 - Filed [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio

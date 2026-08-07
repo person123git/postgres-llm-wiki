@@ -14,6 +14,25 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-07: filed [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple
+  in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). The proposal stores actual main-fork bytes per estimated
+  indexed heap row in a versioned index comment, treats `1.0` as the normalized
+  baseline, and reports `1.4` as an investigation threshold rather than an
+  automatic rebuild verdict. Source review established that plain table
+  `ANALYZE` must run after creation and before each comparison because GIN's
+  immediate build count is extracted entries while BRIN's is range summaries;
+  plain `ANALYZE` rewrites both to an estimated indexed-row denominator. Tested
+  capture, detection, and guarded post-rebuild recapture SQL preserves human
+  comments and filters non-physical or unsuitable index states. An isolated
+  exact-pin run covered B-tree, hash, GiST, SP-GiST, GIN, BRIN, and contrib
+  Bloom. BRIN and GIN false-positive fixtures reached drift `5.0` and `137.2`
+  while `REINDEX` reclaimed `0.0%`, disproving a universal all-AM threshold.
+  The page remains human-unverified and agent-unverified pending production
+  calibration and third-party-AM review.
+
 - 2026-08-06: filed [Detecting Bloat in All Index Types by Storing an
   Index/Heap Size Ratio in COMMENT in PostgreSQL 17
   (unverified)](v17/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
