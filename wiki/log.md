@@ -2,11 +2,87 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] follow-up v12 | swap the bloat denominator to the index's own reltuples
+
+- Rebuilt [Calibrating a COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in
+  PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md)
+  around `pg_relation_size(index) / index reltuples`, against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Prompt hygiene:
+  the user approved correcting the follow-up to "replace live rows by the index
+  `pg_class.reltuples`", chose a whole-page re-measurement rather than a new
+  section, and chose to rename both the title and the file, so
+  `comment-stored-bytes-per-live-row-bloat.md` was deleted and its root-index,
+  v12-landing-page, and `wiki/versions.md` entries were rewritten in place.
+- Source model established first: three writers set an index's `reltuples` and
+  they disagree about units. `index_update_stats()` stores the AM's own
+  `IndexBuildResult.index_tuples`; plain `ANALYZE` stores
+  `ceil(tupleFract * totalrows)`; `lazy_cleanup_index()` stores
+  `IndexBulkDeleteResult.num_index_tuples` only when `estimated_count` is false.
+  Per AM: B-tree, hash, GiST, SP-GiST and contrib `bloom` count one per indexed
+  heap tuple; `ginbuild()` counts extracted entries (`indtuples += nentries`)
+  while `ginvacuumcleanup()` substitutes the heap count under an explicit XXX;
+  `brinbuild()` counts range summary tuples and `brinvacuumcleanup()` recounts
+  them with `include_partial = false`; `btvacuumcleanup()` and
+  `hashvacuumcleanup()` can return NULL, in which case nothing is written.
+- Built the exact pin out of tree under `.wiki-runtime/tmp/bpr2/build`,
+  installed to `.wiki-runtime/tmp/bpr2/inst` with contrib `bloom`,
+  `pgstattuple` and `pageinspect`, and ran one isolated cluster on port 55432
+  with `autovacuum = off`, `shared_buffers = 512MB`,
+  `maintenance_work_mem = 256MB`.
+- New 96-cell matrix (12 workloads x 8 indexes, seven capture phases each) with
+  `REINDEX` ground truth. The swap is a no-op on ordinary indexes: drift under
+  the index denominator equalled drift under the table denominator to four
+  decimals in all 84 non-BRIN cells, and an index's `reltuples` equalled its
+  table's in all 192 plain-`ANALYZE` observations. `drift >= 1.30` scores
+  42/1/4/49 (94.8%) over 96 cells and 42/0/4/38 (95.2%) excluding BRIN; the four
+  misses are all `w_churn2`, in-domain churn, where the fork stops growing while
+  a rebuild still reclaims 26.28% to 56.15%.
+- Partial indexes re-measured over 13 cells: the table denominator scores 8 of
+  13, the index denominator 10 of 10 defined cells, and the three undefined
+  cells are drained indexes with `reltuples = 0` that the explicit empty-index
+  rule catches (2,260,992 bytes, 273 deleted pages, `avg_leaf_density` 0.05).
+  Band 1.0163 benign to 1.3986 harmful.
+- Disqualifying measurements: a 20-keys-per-row GIN index recorded 4,200,000
+  rows for a 400,000-row table, so a post-rebuild baseline made the next reading
+  drift 10.50 with no bloat; one 24,576-byte BRIN index reported 0.0123 and
+  279.2727 bytes per index row at different times, a factor of 22,705, without
+  moving a byte.
+- Further new findings: `VACUUM (VERBOSE, ANALYZE)` printed no index line while
+  a partial index's own population grew 50%, leaving a sampled 150,710 in place,
+  and the `vacuum_cleanup_index_scale_factor = 0` reloption restored an exact
+  310,000; `reltuples::numeric` rounds 20,000,020 to 20,000,000 through
+  `float4_numeric()`'s `FLT_DIG` of 6, so the shipped SQL casts through
+  `float8`; a GIN pending list moved the ratio down 32% and then up 74% while
+  its probe ran 674x slower (4.043 ms / 497 blocks against 0.006 ms / 6);
+  deleted-page bloat gave 28.50% reclaim with no query change but 413.33 of
+  planner cost, against low-density bloat at 49.64% reclaim, half the scan
+  blocks and no wall-clock gain; a partial index's predicate column turned
+  1,800,000 HOT updates into 0 and quadrupled a sibling index while both partial
+  indexes read drift 1.0000; and the plain-`ANALYZE` noise floor ran from
+  -2.00%/+4.03% at a 10% predicate to `reltuples = 0` on four of six runs at
+  0.001%.
+- New `wiki_bpr_v3` capture and detection SQL (access-method allowlist,
+  `am=`/`pred=` shape check, empty-index rule, `float8` cast, parameterized size
+  floor) was executed on the pin, together with a five-step runbook using
+  `REINDEX INDEX CONCURRENTLY`, which preserved the comment and left the exact
+  build count of 50,000 on the replacement index. Comment durability was
+  re-checked across `REINDEX`, `REINDEX INDEX CONCURRENTLY`, `RENAME`,
+  `SET (fillfactor = 80)`, `VACUUM` and `ANALYZE`.
+- The isolated server was stopped and its data directory, build tree, and
+  fixtures were removed. Updated `wiki/index.md`, `wiki/v12/index.md`, and
+  `wiki/versions.md`, and rewrote the two older log entries that linked the old
+  filename. `verified` stays `false` and `verified_by_agent` stays `not yet`,
+  so the visible title keeps its `(unverified)` suffix.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-11] follow-up v12 | B-tree partial indexes in the bytes-per-live-row page
 
-- Extended [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX Threshold in
-  PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-live-row-bloat.md)
+- Extended the page then titled Calibrating a COMMENT-Stored Bytes-per-Live-Row
+  REINDEX Threshold in PostgreSQL 12, since renamed to [Calibrating a
+  COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md),
   with a new `### B-tree partial indexes: a comprehensive analysis` section,
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene: the user approved correcting the follow-up
@@ -68,9 +144,10 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-11] answer v12 | calibrate a COMMENT-stored bytes-per-live-row REINDEX threshold
 
-- Filed [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX Threshold in
-  PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-live-row-bloat.md)
+- Filed the page then titled Calibrating a COMMENT-Stored Bytes-per-Live-Row
+  REINDEX Threshold in PostgreSQL 12, since renamed to [Calibrating a
+  COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md),
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene: the user approved fixing "by record" to
   "Record" and reading "postgreql 12" as PostgreSQL 12; the rest of the prompt
