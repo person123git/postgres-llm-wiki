@@ -2,6 +2,65 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] review-fix v12 | fillfactor-corrected pgstattuple_approx metric
+
+- Reframed [Proposing and Testing a fillfactor-Corrected pgstattuple_approx
+  Metric for Table Heap Bloat in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene applied first: the user chose silently
+  corrected wording, a rewritten `## Question`, and fresh measurements. The
+  filed question is now "Propose and test the use of `pgstattuple_approx`,
+  corrected for the table's `fillfactor`, to measure table heap bloat", and
+  the title, verdict, section order, and both index entries follow it.
+- Added a source derivation the page did not have: the `RELOPT_KIND_HEAP`
+  `fillfactor` entry with default 100, bounds 10 and 100, and
+  `ShareUpdateExclusiveLock`; `RelationGetFillFactor()` /
+  `RelationGetTargetPageUsage()` / `RelationGetTargetPageFreeSpace()` and the
+  integer truncation that makes the 70% reserve 2,457 bytes; the four heap
+  callers of that reserve (`RelationGetBufferForTuple()`,
+  `heap_multi_insert()`, `raw_heap_insert()`, `heap_page_prune_opt()`);
+  `make_new_heap()` reloption inheritance; the `ATRewriteTable()`
+  `table_tuple_insert()` path; and the documented partitioned-table and TOAST
+  refusals.
+- Re-measured on a fresh isolated 12.2 cluster built from the pin
+  (`autovacuum = off`, `shared_buffers = 256MB`). The nine-fixture accuracy
+  matrix, the approx-versus-exact table, the 35-page emptied-page
+  reconciliation (123,968 / 162,752 / 111,720 / 163,500), and the step 1 to 3
+  worked example all reproduced their filed values; `d_bloat` ground truth is
+  now recorded as 59.99 with error −1.86.
+- New results: a seven-point fillfactor sweep (uncorrected 0.44 to 91.02 on
+  unbloated tables, corrected 0.02 to 1.79 except 10.16 at `fillfactor = 10`);
+  a closed-form residual model from the page-close condition matching all
+  seven within 0.05 points, with per-page geometry from `pageinspect` and
+  `pg_freespacemap`; three bloated fillfactor fixtures at −1.51, −0.78, −1.42
+  corrected against +14.45 and +34.58 raw; `VACUUM FULL` and `CLUSTER` both at
+  1,250 blocks / 40 rows per page where `ALTER COLUMN TYPE` gives 1,316 / 38;
+  `h_up`, whose rewrite grows the table 44.93% and is reported only as the
+  unclamped −42.23; `h_down` at +0.25; `h_wide70` where the declared reserve
+  absorbs the emergent tail (0.11 against 30.08 raw); and the reloption
+  boundary matrix (9 and 101 rejected, partitioned and `toast.fillfactor`
+  rejected, materialized view accepted, `ShareUpdateExclusiveLock` observed).
+- Corrected one filed claim: the `m_hot` live-count delta is not 18 rows. With
+  every page skipped, `approx_tuple_count` returns `pg_class.reltuples`
+  verbatim, and three consecutive `ANALYZE` runs moved it by −379, +697, and
+  −279 rows on the same 500,000-row table. Also added that plain VACUUM
+  truncates trailing empty pages, so the retained-line-pointer surcharge is an
+  interior-page effect.
+- Changed the recommended SQL: step 1 now reports `fillfactor`, and step 2
+  drops its `greatest(..., 0)` clamp so a rewrite that would enlarge the table
+  is reportable. Added four Open Questions (single row width in the residual
+  model, the unswept 10-to-30 fillfactor interval, index fillfactors out of
+  scope, and the existing threshold-calibration gap).
+- Test objects were dropped and the isolated server was stopped. Three
+  postgres servers from earlier sessions were left running under
+  `.wiki-runtime/tmp/`; they were not touched. Kept `verified: false`, the
+  visible `(unverified)` title, and `verified_by_agent: not yet`: the
+  fillfactor claims are freshly measured, but the cost, TOAST, snapshot,
+  privilege, and catalog-estimator numbers were carried over from the original
+  run rather than re-executed. Updated `wiki/index.md`, `wiki/v12/index.md`,
+  and `wiki/versions.md`. `scripts/wiki_lint` reports 0 errors and 0 warnings.
+
 ## [2026-08-11] answer v12 | pgstattuple_approx for table heap bloat
 
 - Filed [Proposing and Testing pgstattuple_approx for Table Heap Bloat in
