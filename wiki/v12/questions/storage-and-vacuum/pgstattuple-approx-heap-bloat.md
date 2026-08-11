@@ -771,6 +771,5 @@ There is no upstream test in this checkout that compares `pgstattuple_approx` ag
 - [versions](../../../versions.md)
 - [wiki index](../../../index.md)
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](../../codebase-navigation-guide.md)
-- [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple in PostgreSQL 12 (unverified)](../indexing/comment-stored-bytes-per-tuple-bloat.md)
 - [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](../indexing/btree-index-bloat-core-sql-only.md)
 - [PostgreSQL 12 Database Health Checklist (unverified)](../server-administration/database-health-checklist.md)

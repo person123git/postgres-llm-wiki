@@ -14,6 +14,20 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-11: removed the v12 question page Detecting Index Bloat with
+  COMMENT-Stored Bytes per Tuple in PostgreSQL 12 (unverified) at the user's
+  request, together with its root-index and v12-landing-page entries and the
+  three inbound `## Navigation` links on
+  [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  [Physical Index Statistics, Tuple Counts, and Bytes per Tuple in PostgreSQL 12 (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md),
+  and [Proposing and Testing a fillfactor-Corrected pgstattuple_approx Metric for Table Heap Bloat in PostgreSQL 12 (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md).
+  The v12 coverage cell above never described the page, so it is unchanged.
+  COMMENT-stored index-bloat screening in v12 now runs through
+  [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  and the GIN DML-counter page named above. The pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` and every surviving page's
+  citations and verification fields are unchanged.
+
 - 2026-08-11: reframed [Proposing and Testing a fillfactor-Corrected
   pgstattuple_approx Metric for Table Heap Bloat in PostgreSQL 12
   (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md)
@@ -130,9 +144,8 @@ This page indexes the PostgreSQL versions covered by the wiki.
   agent-unverified pending local workload calibration, a partial-index design,
   and resolution of a v12 GIN-pending-cleanup documentation discrepancy.
 
-- 2026-08-07: filed [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple
-  in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md)
+- 2026-08-07: filed Detecting Index Bloat with COMMENT-Stored Bytes per Tuple
+  in PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). The proposal stores actual main-fork bytes per estimated
   indexed heap row in a versioned index comment, treats `1.0` as the normalized

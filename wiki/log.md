@@ -2,6 +2,29 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] remove v12 | delete Detecting Index Bloat with COMMENT-Stored Bytes per Tuple
+
+- Removed `wiki/v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md`
+  per user request.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`,
+  and the three inbound `## Navigation` links in
+  `comment-stored-table-dml-counters-gin-reindex.md`,
+  `physical-index-statistics-tuple-counts-and-bytes.md`, and
+  `../storage-and-vacuum/pgstattuple-approx-heap-bloat.md`. No surviving page
+  referred to the deleted page in prose.
+- The v12 coverage cell in `wiki/versions.md` never described this page, so no
+  coverage clause was dropped; its COMMENT-related text covers the surviving
+  index/heap-ratio page.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (1) and
+  `wiki/versions.md` (1) so they refer to the page title as plain text, and
+  added a removal note to `## Coverage Notes`.
+- v12 COMMENT-stored index-bloat coverage now runs through
+  [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md).
+- No source citation, pin, or verification field on any surviving page changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-11] cleanup | removed all scratch sandboxes from .wiki-runtime/tmp
 
 - Removed every scratch sandbox under `.wiki-runtime/tmp/` at the user's
@@ -294,9 +317,8 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 ## [2026-08-07] answer v12 | COMMENT-stored bytes per tuple index-bloat screen
 
-- Filed [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple in
-  PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md)
+- Filed Detecting Index Bloat with COMMENT-Stored Bytes per Tuple in
+  PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene applied before drafting; the user approved
   the corrected wording, which is restated verbatim under `## Question`.

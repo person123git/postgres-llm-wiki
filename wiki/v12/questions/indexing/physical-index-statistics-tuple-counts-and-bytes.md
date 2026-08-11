@@ -386,7 +386,6 @@ No cross-AM `pg_class.reltuples` lifecycle assertion, catalog-derived bytes-per-
 ## Navigation
 
 - [PostgreSQL 12 index](../../index.md)
-- [Related bytes-per-estimated-row drift analysis](comment-stored-bytes-per-tuple-bloat.md)
 - [PostgreSQL 12 codebase navigation guide](../../codebase-navigation-guide.md)
 - [Wiki index](../../../index.md)
 - [Versions](../../../versions.md)
