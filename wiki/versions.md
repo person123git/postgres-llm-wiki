@@ -14,6 +14,23 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-11: filed [Can COMMENT-Stored Table DML Counters Trigger GIN
+  REINDEX at 40% in PostgreSQL 12?
+  (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). The source audit rejects an automatic 40% GIN rebuild
+  trigger because the proposed counters are table-wide attempted actions, HOT
+  updates require no index entries, partial predicates can skip writes, deletes
+  reach GIN only through VACUUM, and GIN operator classes choose an arbitrary
+  row-to-key cardinality. Exact-pin tests produced a 40% HOT-update false
+  positive with 0.00% rebuild savings and a 1% high-cardinality-delete false
+  negative with 99.13% savings. Tested capture and detection SQL stores a
+  HOT-adjusted inspection baseline plus table-OID, fixed-row, and
+  statistics-reset guards in a reserved index comment, and labels 40% as
+  `inspect GIN; do not auto-reindex`. The page remains human-unverified and
+  agent-unverified pending local workload calibration, a partial-index design,
+  and resolution of a v12 GIN-pending-cleanup documentation discrepancy.
+
 - 2026-08-07: filed [Detecting Index Bloat with COMMENT-Stored Bytes per Tuple
   in PostgreSQL 12
   (unverified)](v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md)

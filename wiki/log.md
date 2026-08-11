@@ -2,6 +2,48 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] lint v12 | COMMENT-stored table DML counters for GIN
+
+`wiki_lint` passed with 0 errors and 0 warnings after filing the PostgreSQL 12
+GIN table-counter inspection page and updating the global index, v12 landing
+page, version coverage notes, and wiki log.
+
+## [2026-08-11] answer v12 | COMMENT-stored table DML counters for GIN
+
+- Filed [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12?
+  (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene applied before drafting; the user approved
+  the corrected wording, which is restated verbatim under `## Question`.
+- The source review establishes that the three proposed counters are table-wide
+  attempted heap actions rather than per-index writes. It adds
+  `n_tup_hot_upd` because HOT updates create no index entries, traces non-HOT
+  updates through the executor into `gininsert`, traces deletes through VACUUM,
+  and maps operator-class key extraction, the pending list, entry-tree key
+  retention, posting-tree cleanup, page reuse, and fresh GIN builds.
+- Repeated isolated exact-pin tests produced both decisive counterexamples:
+  4,000 HOT updates on a 10,000-row table reached the original 40.00% score
+  while the 131,072-byte GIN index remained unchanged and `REINDEX` reclaimed
+  0.00%; deleting 100 high-cardinality rows reached only 1.00%, but the
+  5,652,480-byte index remained at that size after VACUUM and rebuilt to 49,152
+  bytes, reclaiming 99.13%. Both comments survived ordinary reindexing.
+- Added tested production-shaped capture and detector SQL with session-scoped
+  timeouts, schema allowlisting, physical/live/ready/valid/full-index filters,
+  HOT subtraction, table-OID and `stats_reset` guards, strict parsing,
+  human-comment preservation, and `inspect GIN; do not auto-reindex` at 40%.
+  A second exact-pin fixture parsed the stored payload and reported 215
+  non-HOT updates, or 21.50%, from 400 total updates.
+- Documented mandatory post-success recapture, ordinary and concurrent
+  reindex comment preservation, collector lag/reset/crash/`track_counts` and
+  TRUNCATE boundaries, dump/restore and `CREATE TABLE LIKE` hazards,
+  pending-list inspection, COMMENT locks and visibility, generated catalogs,
+  extension/operator-class boundaries, upstream tests, and the source/docs
+  discrepancy for `VACUUM (INDEX_CLEANUP false)`. Updated `wiki/index.md`,
+  `wiki/v12/index.md`, and `wiki/versions.md`. Human `verified: false` and
+  `verified_by_agent: not yet` remain pending local calibration and the open
+  boundaries recorded on the page.
+
 ## [2026-08-07] follow-up v12 | COMMENT-stored bytes-per-tuple bloat calibration
 
 Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored bytes-per-tuple bloat page. It establishes that the pinned source cannot derive a universal per-access-method increase rate, identifies operation-dependent allocation boundaries across the AMs, and specifies cohort calibration against measured rebuild yield before any automatic reindex decision.
