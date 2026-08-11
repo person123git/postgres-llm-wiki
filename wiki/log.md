@@ -2,6 +2,32 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] cleanup | removed all scratch sandboxes from .wiki-runtime/tmp
+
+- Removed every scratch sandbox under `.wiki-runtime/tmp/` at the user's
+  request, reclaiming 12 GB: `bpt2/` (2.6 GB), `hbloat/` (4.4 GB), `ioguix/`
+  (4.0 GB), and `ffcorr/` (1.1 GB). Disposable cluster data directories
+  accounted for nearly all of it, with `pg_wal` alone at 2.2 GB, 2.2 GB,
+  3.5 GB, and 1.1 GB respectively. The 316 KB of scratch SQL, shell drivers,
+  and `.out` transcripts across 61 files was removed with them, on the user's
+  instruction, because the filed pages already carry the results.
+- This resolves the outstanding state recorded in the fillfactor-corrected
+  `pgstattuple_approx` entry below, which noted three postgres servers left
+  running from earlier sessions. All three were stopped cleanly with
+  `pg_ctl -D <datadir> -m fast stop` before any deletion; no `postmaster.pid`
+  and no postgres process remained afterwards.
+- `bpt2/` also held the only out-of-tree PostgreSQL 12.2 build (184 MB) and
+  install (67 MB), which every one of those servers ran from, with `bloom`,
+  `pageinspect`, `pg_freespacemap`, `pg_visibility`, and `pgstattuple`. No
+  compiled install now remains, so the next exact-pin experiment must rebuild
+  from `raw/postgres-12/`.
+- Kept `venv/`, `logs/`, and `cache/wiki_lint/last-run.txt`, which the tooling
+  reads and appends to, plus the empty `indexes/` scaffold that
+  `ensure_runtime_dirs()` recreates. `.wiki-runtime/` is now 13 MB.
+- No wiki page, index, version pin, or `raw/` checkout changed; this entry is
+  the only edit. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors,
+  0 warnings.
+
 ## [2026-08-11] review-fix v12 | fillfactor-corrected pgstattuple_approx metric
 
 - Reframed [Proposing and Testing a fillfactor-Corrected pgstattuple_approx
