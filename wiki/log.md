@@ -2,6 +2,65 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] answer v12 | calibrate a COMMENT-stored bytes-per-live-row REINDEX threshold
+
+- Filed [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX Threshold in
+  PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-live-row-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene: the user approved fixing "by record" to
+  "Record" and reading "postgreql 12" as PostgreSQL 12; the rest of the prompt
+  is restated verbatim under `## Question`.
+- Built the exact pin out of tree under `.wiki-runtime/tmp/pg12-build`, installed
+  it to `.wiki-runtime/tmp/pg12-install`, and ran one isolated cluster on port
+  55432 with `autovacuum = off`, `shared_buffers = 512MB`.
+- Calibration matrix: 11 workloads x 8 indexes (btree, hash, gist, spgist, gin
+  with `fastupdate` on and off, brin, contrib `bloom`), 200,000-row fixtures,
+  `REINDEX TABLE` as ground truth. Best single threshold is 1.30 to 1.40 at
+  43 TP / 5 FP / 0 FN / 40 TN (94.3%); on the 66 cells excluding BRIN and
+  SP-GiST, 1.30 and 1.40 are exact. Per-access-method bands give +30% for
+  B-tree, GiST, and hash, +40% for GIN, +60% for `bloom`; SP-GiST's benign
+  2.2041 exceeds its harmful 2.0000, and BRIN had no harmful cell at all.
+- Source basis: no v12 index AM truncates its own main fork (SP-GiST's
+  `RelationTruncate()` is inside `#ifdef NOT_USED`), so VACUUM only records
+  reusable pages via `RecordFreeIndexPage()` and bytes are a high-water mark;
+  hash has no such call and reuses overflow pages through its own bitmap, and
+  `_hash_alloc_buckets` extends the fork by a whole splitpoint; `gistchoose()`
+  breaks ties with `random()`; GIN's `fastupdate` defaults to on and every scan
+  reads the pending list first; `brininsert()` skips unsummarized ranges and
+  `bringetbitmap()` returns all their pages; `brinbulkdelete()` is a no-op.
+- Measured counter-examples: drift exactly 2.0000 for all eight indexes in each
+  of the three delete workloads while reclaim spanned 0.00% to 54.19%; a GIN
+  pending list at 4.1231 whose `gin_clean_pending_list()` fix removed a 12.0x
+  query slowdown while raising the ratio to 4.6182 (1,471 pending pages,
+  200,000 pending tuples); 20-keys-per-row GIN at 6.3176 with a 16.85% larger
+  rebuild; an unsummarized BRIN range set at 0.1000 costing 49,961 blocks
+  against 1,411 and 150.088 ms against 6.144 ms; a partial index at 0.3640 with
+  65.66% reclaimable; `reltuples` versus `n_live_tup` differing 2x after an
+  unvacuumed delete, with `pg_stat_reset()` zeroing the latter; 400,000 HOT
+  updates (`fillfactor = 40`) moving no index byte against 14 HOT updates at
+  the default fillfactor; a 1.322% GiST baseline spread over ten identical
+  builds; and a 0.173% `reltuples` spread over six identical `ANALYZE` runs on
+  a 76,097-page table.
+- Rebuild payoff, measured with the visibility map held constant: 49.96% space,
+  -49.9% index-only-scan blocks, -9.9% time, 0% on a point lookup, -4.4% blocks
+  on a heap-fetching query. Also recorded the v12 behavior that a first VACUUM
+  after churn leaves pages not-all-visible, which inflated an earlier run 10x
+  until a second VACUUM was added.
+- Capture SQL, detection SQL, and a five-step end-to-end runbook were executed
+  on the pin. The first detection run failed with `ERROR: division by zero` on
+  an empty partition child index; the filed SQL uses `nullif(table_rows, 0)`.
+  Comment durability was confirmed across `REINDEX INDEX`,
+  `REINDEX INDEX CONCURRENTLY`, `ALTER INDEX ... RENAME`,
+  `ALTER INDEX ... SET (fillfactor)`, `VACUUM`, and `ANALYZE`.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md` (v12
+  coverage cell plus a coverage note). `verified: false` and
+  `verified_by_agent: not yet` because the page was not re-audited claim by
+  claim after drafting.
+- Cleanup: the isolated server was stopped and its data directory, build tree,
+  install tree, and scratch SQL under `.wiki-runtime/tmp/` were removed;
+  `raw/postgres-12/` is unchanged.
+
 ## [2026-08-11] remove v12 | delete Detecting Index Bloat with COMMENT-Stored Bytes per Tuple
 
 - Removed `wiki/v12/questions/indexing/comment-stored-bytes-per-tuple-bloat.md`
