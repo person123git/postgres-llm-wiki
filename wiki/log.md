@@ -2,6 +2,70 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] follow-up v12 | B-tree partial indexes in the bytes-per-live-row page
+
+- Extended [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX Threshold in
+  PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-live-row-bloat.md)
+  with a new `### B-tree partial indexes: a comprehensive analysis` section,
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene: the user approved correcting the follow-up
+  to "Add a section with a comprehensive analysis for B-tree partial indexes.
+  Also include this in the analysis: Partial indexes: the denominator is wrong
+  by construction." and chose to fold the existing short partial-index section
+  into the new one rather than keep both.
+- Rebuilt the exact pin out of tree under `.wiki-runtime/tmp/pg12/build`,
+  installed to `.wiki-runtime/tmp/pg12/install`, and ran one isolated cluster on
+  port 55432 with `autovacuum = off`, `shared_buffers = 512MB`,
+  `maintenance_work_mem = 256MB`, plus contrib `pgstattuple`.
+- Source work: the three predicate filters (`heapam_index_build_range_scan()`
+  counting `reltuples` before the predicate test, `ExecInsertIndexTuples()`,
+  `compute_index_stats()`), the four writers of an index's own
+  `pg_class.reltuples`, `compute_index_stats()`'s skip of non-partial
+  non-expression indexes (why `tupleFract` stays 1.0), `analyze.c`'s deliberate
+  index skip under `VACOPT_VACUUM`, `lazy_cleanup_index()`,
+  `btvacuumcleanup()`/`_bt_vacuum_needs_cleanup()` and the
+  `vacuum_cleanup_index_scale_factor` GUC (`PGC_USERSET`) and B-tree reloption
+  (`ShareUpdateExclusiveLock`), `_bt_initmetapage()`'s `-1.0` sentinel,
+  `_bt_pagedel()` and `btvacuumpage()`, `RelationGetIndexAttrBitmap()`'s
+  predicate `pull_varattnos()` and `heap_update()`'s HOT gate,
+  `get_relation_info()`'s partial-index `estimate_rel_size()` branch,
+  `genericcostestimate()`'s page charge, and `check_index_predicates()`.
+- Measurements: 13 partial-index cells on 1,000,000-row tables with a 10%
+  `st = 'open'` predicate and a 10% `done_at IS NULL` predicate, `REINDEX` size
+  delta as ground truth. The table denominator scored 8 of 13 (3 TP, 2 FP, 3 FN,
+  5 TN); the index's own `reltuples` scored 11 of 11 defined cells (4 TP, 0 FP,
+  0 FN, 7 TN) with a 1.0243-to-1.3795 band, and the two undefined cells are the
+  indexes at `reltuples = 0`, caught by an explicit empty-index rule.
+- Also measured: `pgstatindex` separating deleted-page bloat (66.59% reclaim,
+  546 deleted pages, density 89.18, 279 to 276 scan blocks, cost 5069.43 to
+  2869.30 = 550 unread pages x `random_page_cost` 4.0) from low-density bloat
+  (49.64% reclaim, density 45.06 to 89.83, 276 to 139 blocks); a fully drained
+  index at 273 of 276 pages deleted that `VACUUM` still scans in full; the
+  plain-`ANALYZE` noise floor at five predicate selectivities, from
+  -3.87%/+2.97% at 10% to `reltuples = 0` on four of six runs at 0.001%;
+  `VACUUM (ANALYZE)` writing exactly 100,000 three times where plain `ANALYZE`
+  wrote 102,634 and 99,900; a `VACUUM` that printed no index line at all after
+  the heap grew 5% while the partial index's population grew 50%; and two
+  identical tables where the same 1,800,000 updates produced 0 versus 1,800,000
+  HOT updates and a 49.96%-reclaimable sibling index, purely because a partial
+  index's predicate names the updated column.
+- New `wiki_bpr_v2` capture and detection SQL (denominator chosen from
+  `indpred`, stored `pred=` guard, empty-partial-index rule) was executed on the
+  pin, plus a five-step runbook with `REINDEX INDEX CONCURRENTLY` in which the
+  table denominator would have reported 1.0526 for a 49.64%-reclaimable index
+  and 1.0000 for a 99.64%-reclaimable one.
+- Updated the page's Contents, Verdict, denominator-choice and operating-rules
+  sections, `## Context Reviewed`, `## Evidence Map` (9 new rows),
+  `## Open Questions` (8 new entries), `## Source References` (41 new
+  citations), plus the root index, the v12 landing page, and version coverage.
+  Kept `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet`.
+- Verified every citation range against the pinned files, all 23 Contents
+  anchors and every in-page anchor link, then stopped the isolated server and
+  removed its data directory, build tree, and fixture scripts.
+  `scripts/wiki_lint` reports 0 errors and 0 warnings.
+
 ## [2026-08-11] answer v12 | calibrate a COMMENT-stored bytes-per-live-row REINDEX threshold
 
 - Filed [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX Threshold in

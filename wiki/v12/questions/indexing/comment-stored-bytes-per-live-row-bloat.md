@@ -21,7 +21,7 @@ verified_by_agent: not yet
   - [What a rebuild actually bought: space and query time](#what-a-rebuild-actually-bought-space-and-query-time)
   - [GIN: the pending list and keys per row](#gin-the-pending-list-and-keys-per-row)
   - [BRIN and SP-GiST: no threshold separates them](#brin-and-sp-gist-no-threshold-separates-them)
-  - [Partial indexes: the denominator is wrong by construction](#partial-indexes-the-denominator-is-wrong-by-construction)
+  - [B-tree partial indexes: a comprehensive analysis](#b-tree-partial-indexes-a-comprehensive-analysis)
   - [Which live-row estimate to divide by](#which-live-row-estimate-to-divide-by)
   - [Baseline reproducibility and the noise floor](#baseline-reproducibility-and-the-noise-floor)
   - [Tested capture and detection SQL](#tested-capture-and-detection-sql)
@@ -39,6 +39,8 @@ verified_by_agent: not yet
 Record a stable post-build baseline for every index in its PostgreSQL index comment using `COMMENT ON INDEX`. Calculate the baseline as **index size in bytes divided by the table's estimated live-row count**, producing bytes per live row. During maintenance, recalculate the ratio and compare it with the stored baseline; an increase indicates that the index is consuming more space per live row. For each index type and workload, determine the percentage increase that serves as the best proxy for triggering a reindex while minimizing unnecessary rebuilds and missed harmful bloat. Calibrate this threshold using realistic insert, update, and delete workloads, then rebuild each index and measure the actual space reclaimed and query-performance improvement. Include index-specific factors, such as the GIN pending list, when evaluating the accuracy of the proxy.
 
 Target version: PostgreSQL 12.
+
+Follow-up: Add a section with a comprehensive analysis for B-tree partial indexes. Also include this in the analysis: Partial indexes: the denominator is wrong by construction.
 
 ## Answer
 
@@ -64,6 +66,8 @@ Three results matter more than the threshold numbers:
 1. **The ratio is dominated by its denominator.** In all three delete workloads the drift was exactly `2.0000` for every one of the eight indexes, because index bytes never shrank and the live-row count halved, while the actually reclaimable fraction ranged from 0.00% (BRIN) to 54.19% (GiST). The metric cannot tell those cells apart.
 2. **A high ratio often means a cheaper fix is due, not a rebuild.** A GIN pending list drove drift to `4.1231` and made a probe query 12.0x slower, and `gin_clean_pending_list()` restored the query cost while *raising* the ratio to `4.6182`. An unsummarized BRIN range set made a probe read 49,961 blocks instead of 1,411 while the ratio read `0.1000`, a 90% *decrease*.
 3. **Reclaimed space is not query improvement.** A B-tree at 45.13% leaf density gave back 49.96% of its bytes on rebuild, which bought exactly 50% fewer index blocks on index-only scans but only 6% to 10% less time, 0% on a point lookup, and 4% to 6% on a query that also fetched heap rows.
+
+One structural assumption sits underneath every row of that table: that the index covers the whole table. It fails for partial indexes, where the table's live-row count is the wrong denominator by construction. On 13 further partial-B-tree cells the table denominator scored 8 of 13, while the index's own `reltuples` scored 11 of 11 cells where it is defined; see [B-tree partial indexes: a comprehensive analysis](#b-tree-partial-indexes-a-comprehensive-analysis).
 
 Store the baseline, alert on it, and require a second, access-method-specific confirmation before rebuilding. Never wire the ratio straight to `REINDEX`.
 
@@ -270,16 +274,328 @@ Worse, the signal is inverted where it matters. Rows appended past the last summ
 
 **SP-GiST** must not be automated on this signal. Its benign maximum, `2.2041` on 10x growth with 0.01% reclaimable, sits *above* its harmful minimum, `2.0000` in the delete workloads with 46.80% to 48.12% reclaimable. No threshold can separate the two sets, and the best scoring threshold, 1.75, still carries a false positive. Report SP-GiST drift for human inspection only.
 
-### Partial indexes: the denominator is wrong by construction
+### B-tree partial indexes: a comprehensive analysis
 
-Dividing by the *table's* live-row count mixes two populations whenever the index has a `WHERE` clause: the index only holds rows that satisfy the predicate, but the denominator counts every live row. Plain `ANALYZE` computes a per-index fraction for exactly this reason and stores `ceil(tupleFract * totalrows)` in the *index's* own `reltuples` ([analyze.c#tupleFract](../../../../raw/postgres-12/src/backend/commands/analyze.c#L430-L438), [analyze.c#tupleFract-estimate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L817-L822), [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629)). The proposed metric throws that fraction away.
+**Verdict for partial indexes.** Keep the +30% B-tree trigger, but change the denominator. Dividing by the *table's* `reltuples` scored 8 of 13 measured partial-index cells; dividing by the *index's* own `reltuples` scored 11 of 11 cells where it is defined, and the two remaining cells are exactly the two indexes whose own `reltuples` is `0`, which is a stronger signal than any drift number. Because a non-partial index's own `reltuples` equals the table's, the swap costs nothing for the rest of the scheme. Three conditions come with it: refresh the denominator with `VACUUM (ANALYZE)`, not plain `ANALYZE`; refuse the signal when the predicate selects less than about 1% of the table; and confirm with `pgstatindex` before rebuilding, because two different bloat shapes give the same drift and only one of them repays a rebuild.
 
-Two measured fixtures, each with a partial B-tree index over 10% of the rows:
+#### Why the denominator is wrong by construction
 
-- **Detected anyway.** Five delete/reinsert cycles inside the predicate plus 2x growth outside it: bpr 2.3347 to 6.7584, drift `2.8948`, reclaim 82.73%. The bloat outran the denominator.
-- **Missed completely.** Two cycles inside the predicate plus 8x growth outside it: bpr 2.3347 to 0.8499, drift `0.3640`, a 63.6% *decrease*, while `REINDEX` reclaimed 65.66% (1,359,872 to 466,944 bytes). No threshold above 1.0 can fire on a falling ratio.
+A partial index holds entries only for rows that satisfy its predicate; the table's live-row count counts every row ([pg_index.h#indpred](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L56-L57), [indices.sgml#indexes-partial](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L757-L772)). The two populations are filtered at three separate places in the pinned tree, and none of them touches the table's row count:
 
-The first fixture also shows how table growth silently rescales the baseline. After the rebuild the index was byte-identical to its baseline, 466,944 bytes, yet its bytes per live row read 1.1674 against a stored 2.3347, because the table had doubled. A freshly rebuilt index therefore reports drift `0.5000` until the baseline is recaptured. For partial indexes, divide by the index's own `reltuples` instead, or accept that the number is not comparable over time.
+- The build scan counts every live heap tuple into `reltuples` *before* testing the predicate, then skips non-matching rows for the index callback ([heapam_handler.c#reltuples-count](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1395-L1400), [heapam_handler.c#partial-index-discard](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1607-L1615)).
+- `ExecInsertIndexTuples()` evaluates `ii_Predicate` per index and skips the index update when it is false ([execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-12/src/backend/executor/execIndexing.c#L334-L353)).
+- `ANALYZE` re-tests the predicate over its sample and derives a per-index fraction for exactly this reason ([analyze.c#compute_index_stats-predicate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L777)).
+
+So the two inputs move independently. Any row inserted, deleted, or updated outside the predicate changes the denominator and cannot change the numerator. That is the whole failure mode, and it cuts both ways: growth outside the predicate hides real bloat, and deletion outside the predicate manufactures fake bloat.
+
+#### The index's own row count, and where it comes from
+
+PostgreSQL 12 already maintains the right denominator: `pg_class.reltuples` on the *index*. Four writers set it, and they differ in accuracy:
+
+| Writer | What it stores for a partial index | Evidence |
+|---|---|---|
+| `CREATE INDEX` / `REINDEX` | the exact number of index tuples the build produced | [index.c#index_build-stats](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2987), [index.c#index_update_stats-reltuples](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2795) |
+| plain `ANALYZE` | `ceil(tupleFract * totalrows)`, where `tupleFract` is the sampled matching fraction | [analyze.c#tupleFract-init](../../../../raw/postgres-12/src/backend/commands/analyze.c#L437-L438), [analyze.c#tupleFract-estimate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L817-L822), [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) |
+| `VACUUM` | the exact count of surviving index tuples, but only when the access method reports an exact count | [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1798-L1815), [nbtree.c#btvacuumscan-counts](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L967-L973) |
+| `VACUUM (ANALYZE)` | VACUUM's exact count; the `ANALYZE` half deliberately skips indexes | [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L612) |
+
+Two properties make this a safe replacement rather than a second metric. First, `compute_index_stats()` skips any index that is neither partial nor expression-bearing, so a plain index keeps `tupleFract = 1.0` and its `reltuples` becomes `ceil(1.0 * totalrows)`, the table's own count ([analyze.c#skip-plain-index](../../../../raw/postgres-12/src/backend/commands/analyze.c#L730-L732)). Measured: over 16 consecutive `ANALYZE` runs on two tables, the full index's `reltuples` equalled the table's `reltuples` every single time. Second, `pg_relation_size()` and the index `reltuples` are read from the same `pg_class` row, so no extra scan is needed.
+
+#### The measured partial-index matrix
+
+One isolated 12.2 server, `autovacuum = off`, one table per workload: 1,000,000 rows, every tenth row with `st = 'open'` and `done_at IS NULL` (100,000 qualifying), heap 12,346 pages. Three B-tree indexes per table: `_full` on `(k)` (2,745 pages, 22,487,040 bytes), `_part` on `(k) WHERE st = 'open'` and `_null` on `(k) WHERE done_at IS NULL` (276 pages, 2,260,992 bytes each). Sequence per workload: build, `VACUUM`/`ANALYZE` as noted, capture, run the workload, refresh statistics, capture, `REINDEX`, capture. `drift_t` divides by the table's `reltuples`, `drift_i` by the index's own; ground truth is the `REINDEX` size delta.
+
+| Workload | What it does | `drift_t` | `drift_i` | reclaim |
+|---|---|---|---|---|
+| `p_noop` | nothing | 1.0000 | 0.9679 | 0.00% |
+| `p_grow_out` | +3,000,000 rows outside the predicate (4x table) | **0.2500** | 1.0243 | 0.00% |
+| `p_grow_in` | +900,000 rows inside the predicate (10x index) | **5.2346** | 0.9662 | 0.00% |
+| `p_churn_in` | 5 rounds: delete 20,000 inside, insert 20,000 inside | 1.3986 | 1.4267 | 28.50% |
+| `p_drain` | every qualifying row updated out of the predicate | **1.0000** | undefined (0 rows) | 99.64% |
+| `p_queue` | 5 rounds: enqueue 100,000, dequeue by update | 1.9952 | 2.9850 | 66.59% |
+| `p_transit_in` (`_part`) | 100,000 rows updated into the `st` predicate | 2.7790 | 1.3795 | 28.16% |
+| `p_transit_in` (`_null`) | the same statement, this predicate untouched | 1.0000 | 0.9748 | 0.00% |
+| `p_del_in` | every qualifying row deleted | **1.1111** | undefined (0 rows) | 99.64% |
+| `p_del_out` | 500,000 non-qualifying rows deleted | **2.0000** | 0.9845 | 0.00% |
+| `p_hot_payload` | 2 full-table HOT payload updates, heap `fillfactor = 40` | 1.0000 | 1.0111 | 0.00% |
+| `p_pred_col` | 1,800,000 updates of the predicate column, staying outside it | 1.0000 | 0.9659 | 0.00% |
+| `q2_scatter` | half the qualifying rows deleted, scattered across the key range | **1.0526** | 2.0412 | 49.64% |
+
+`_part` and `_null` agreed in every workload except `p_transit_in`, where only the `st` predicate gained rows. Bold cells are the table denominator's wrong answers. Scored with the page's convention, harmful means `reclaim >= 25%`:
+
+| Denominator | Trigger | TP | FP | FN | TN | Accuracy |
+|---|---|---|---|---|---|---|
+| table `reltuples` | 1.30 | 3 | 2 | 3 | 5 | 8/13 = 61.5% |
+| index `reltuples` | 1.30 | 4 | 0 | 0 | 7 | 11/11 defined = 100% |
+
+The index denominator's separating band is wide: the highest benign drift is 1.0243 (`p_grow_out`) and the lowest harmful drift is 1.3795 (`p_transit_in`), so any trigger in [1.03, 1.37] is exact on this fixture. 1.30 is the right pick because the denominator carries its own noise (below), and it is the same number already calibrated for full B-tree indexes.
+
+Two earlier fixtures on the same pin, using a different table shape with a partial B-tree index over 10% of the rows, produced the same two verdicts:
+
+- **Detected anyway.** Five delete/reinsert cycles inside the predicate plus 2x growth outside it: bpr 2.3347 to 6.7584, `drift_t` `2.8948`, reclaim 82.73%. The bloat outran the denominator.
+- **Missed completely.** Two cycles inside the predicate plus 8x growth outside it: bpr 2.3347 to 0.8499, `drift_t` `0.3640`, a 63.6% *decrease*, while `REINDEX` reclaimed 65.66% (1,359,872 to 466,944 bytes). No threshold above 1.0 can fire on a falling ratio.
+
+The second fixture also shows how table growth silently rescales the baseline. After the rebuild the index was byte-identical to its baseline, 466,944 bytes, yet its bytes per live row read 1.1674 against a stored 2.3347, because the table had doubled. With the table denominator a freshly rebuilt partial index therefore reports drift `0.5000` until the baseline is recaptured; with the index denominator it reports `1.0072` (measured in the runbook below).
+
+#### Two bloat shapes, and only one repays a rebuild
+
+`REINDEX` byte reclaim is not a proxy for query gain on a partial B-tree index, because two structurally different states both produce large reclaim. Both were measured with the visibility map fully set (`relallvisible = relpages`) so that every index-only scan reported no heap fetches, best of five runs, `enable_seqscan` and `enable_bitmapscan` off. The probe queries name the predicate column (`WHERE st = 'open' AND ...`) and still planned as index-only scans, because `check_index_predicates()` proves the predicate implies that qual and drops it from `indrestrictinfo` ([indxpath.c#check_index_predicates](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L3505-L3533)).
+
+**Shape A: deleted-page bloat.** Churn that empties whole leaf pages, such as a rolling key range or a queue. `_bt_pagedel()` unlinks the emptied page from the tree, and `btvacuumpage()` records it in the index free space map once its `btpo.xact` is old enough ([nbtpage.c#_bt_pagedel](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1284-L1305), [nbtree.c#btvacuumpage-deleted](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1167-L1183), [nbtree.c#pages_free](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1090-L1095)). The fork keeps the pages, scans never visit them, and leaf density does not move:
+
+| Fixture | index bytes | leaf pages | deleted pages | `avg_leaf_density` | full index-only scan |
+|---|---|---|---|---|---|
+| 5 churn rounds inside the predicate, before | 3,162,112 | 274 | 110 | 89.83 | 276 blocks / 8.268 ms |
+| the same index after `REINDEX` (28.50% reclaim) | 2,260,992 | 274 | 0 | 89.83 | 276 blocks / 8.174 ms |
+| queue, 5 enqueue/dequeue rounds, before | 6,766,592 | 276 | 546 | 89.18 | 279 blocks / 9.481 ms |
+| the same index after `REINDEX` (66.59% reclaim) | 2,260,992 | 274 | 0 | 89.83 | 276 blocks / 8.945 ms |
+
+A 66.59% byte reclaim bought 1.1% fewer blocks and 5.7% less time. Every other probe on the churn fixture was unchanged within noise too: a 100,000-row range scan read 276 blocks in 8.919 ms before and 276 in 9.012 ms after, a point lookup read 3 blocks and 0.001 ms in both states, and a heap-fetching range scan read 10,400 blocks in 20.839 ms against 20.498 ms. The extreme case is a fully drained partial index: 276 pages of which 273 are deleted, `avg_leaf_density` 0.05, index `reltuples` 0, and `VACUUM` still reporting `now contains 0 row versions in 276 pages` with `273 index pages have been deleted, 273 are currently reusable`. `REINDEX` took it to 8,192 bytes, 99.64%.
+
+**Shape B: low-density bloat.** Scattered deletion inside the predicate with no reinsertion. No page empties, so nothing is deleted or reclaimed; the surviving entries just sit thinly:
+
+| Fixture | index bytes | leaf pages | deleted pages | `avg_leaf_density` | full index-only scan |
+|---|---|---|---|---|---|
+| half the qualifying rows deleted, scattered | 2,260,992 | 274 | 0 | 45.06 | 276 blocks / 4.328 ms |
+| after `REINDEX` (49.64% reclaim) | 1,138,688 | 137 | 0 | 89.83 | 139 blocks / 4.102 ms |
+
+Here the rebuild halves the blocks a scan reads: 276 to 139 on the full scan (-49.6%) and 139 to 71 on a half-range scan (-48.9%). The wall-clock gain was still small on a fully cached server, -5.2% and -1.0%, and the heap-fetching variant moved 6,311 to 6,243 blocks and 7.282 ms to 7.348 ms. That matches the page's earlier full-index finding: blocks track size, time does not.
+
+The operational consequence: `drift_i` cannot tell shape A from shape B, but `pgstatindex()` can, in one call. Low `avg_leaf_density` means a rebuild will cut scan blocks. High density with many `deleted_pages` means the rebuild only returns disk space that the index itself would have reused.
+
+#### Bloat the planner charges for even when no page is read
+
+Partial-index bloat has a cost that no runtime probe shows. `get_relation_info()` sets `IndexOptInfo.pages` from the current physical size, and for a partial index it also *estimates* `tuples` with `estimate_rel_size()` instead of pinning it to the table's row count ([plancat.c#partial-index-size](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407), [plancat.c#estimate_rel_size-index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L990-L1026)). `genericcostestimate()` then converts those two numbers into pages to be read, and charges `random_page_cost` for each ([selfuncs.c#genericcostestimate-pages](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5755-L5780), [selfuncs.c#btcostestimate-descent](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6097-L6102)).
+
+Measured estimated total cost for the same query on the same data, with `random_page_cost` at its default 4.0 ([guc.c#random_page_cost](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3218-L3227), [cost.h#DEFAULT_RANDOM_PAGE_COST](../../../../raw/postgres-12/src/include/optimizer/cost.h#L25)):
+
+| Fixture | index pages | estimated cost | delta | pages x `random_page_cost` |
+|---|---|---|---|---|
+| queue fixture, bloated | 826 | 5069.43 | | |
+| queue fixture, rebuilt | 276 | 2869.30 | -2200.13 | 550 x 4.0 = 2200 |
+| churn fixture, bloated | 386 | 3307.13 | | |
+| churn fixture, rebuilt | 276 | 2863.47 | -443.66 | 110 x 4.0 = 440 |
+| scattered-delete fixture, bloated | 276 | 1988.19 | | |
+| scattered-delete fixture, rebuilt | 139 | 1437.65 | -550.54 | 137 x 4.0 = 548 |
+
+The rebuilt figures are taken before the next `ANALYZE`; running it moved the churn fixture from 2863.47 to 2818.13, so the size effect dominates and the statistics refresh is a rounding correction. The queue fixture is the one that matters: the planner priced 550 pages it would never have read, because those pages were unlinked from the tree. The 43.4% cost reduction is real even though the execution was identical. A bloated partial index can therefore be dropped from a plan in favour of a sequential scan on the strength of pages that cost nothing to skip. This argues for acting on shape A bloat despite the zero runtime gain, and it is the strongest reason not to dismiss the metric for partial indexes.
+
+#### The noise floor, by predicate selectivity
+
+`tupleFract` is measured on the same sample used for column statistics: 300 rows per unit of `attstattarget`, so 30,000 rows at the default `default_statistics_target = 100` ([analyze.c:1700](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1700), [guc.c#default_statistics_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1986-L1994); `PGC_USERSET`, so session or transaction scope, as is the per-column `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS`). A selective predicate leaves few sampled rows to divide by, and the error grows accordingly. Repeated plain `ANALYZE` runs, true counts known exactly:
+
+| Predicate selects | True index rows | Plain `ANALYZE` results | Error band |
+|---|---|---|---|
+| 10% of 1,000,000 | 100,000 | 99,867 / 99,334 / 102,967 / 100,034 / 100,900 / 99,634 / 96,134 / 102,767 | -3.87% to +2.97% |
+| 2.5% of 4,000,000 | 100,000 | 99,730 / 94,129 / 100,134 / 100,401 / 102,268 / 98,801 / 95,999 / 96,269 | -5.87% to +2.27% |
+| 1% of 1,000,000 | 10,000 | 10,800 / 9,634 / 9,867 / 9,567 / 10,467 / 10,034 | -4.33% to +8.00% |
+| 0.1% of 1,000,000 | 1,000 | 1,134 / 834 / 1,034 / 1,034 / 1,367 / 1,000 | -16.60% to +36.70% |
+| 0.001% of 1,000,000 | 10 | 0 / 0 / 0 / 0 / 34 / 34 | -100% or +240% |
+
+For comparison the table denominator was exactly 1,000,000 in all eight runs on the 1,000,000-row table, because `ANALYZE` samples up to `targrows` *blocks* and selects all of them when the relation has fewer, which 12,346 heap pages is ([sampling.c#BlockSampler_Init](../../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L23-L51)). On the 4,000,000-row table, at 49,383 pages, it ranged 3,999,810 to 4,000,080 (-0.005% to +0.002%). Two rules follow. Do not use `drift_i` when the predicate selects less than about 1% of the table. And treat `reltuples = 0` on a partial index as "unknown", not as "empty": a 10-row predicate produced `0` on four of six `ANALYZE` runs, while `VACUUM` on the same index wrote the exact `10`.
+
+#### What VACUUM refreshes, and what it silently does not
+
+`VACUUM (ANALYZE)` is the correct refresh for this metric, and it is not the advice the rest of this page gives for the table denominator. `do_analyze_rel()` skips the index update when it runs as part of VACUUM, precisely so that VACUUM's exact count survives ([analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L612)), and `lazy_cleanup_index()` writes `num_index_tuples` whenever the access method reports an exact count ([vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1798-L1815)). Measured on a 1,000,000-row table with 100,000 qualifying rows: two plain `ANALYZE` runs wrote 102,634 and 99,900, while three `VACUUM (ANALYZE)` runs each wrote exactly 100,000.
+
+The gap is that VACUUM does not always scan the index. When no heap tuple was removed, `btvacuumcleanup()` asks `_bt_vacuum_needs_cleanup()`, which compares the *heap's* tuple count against `btm_last_cleanup_num_heap_tuples` scaled by `vacuum_cleanup_index_scale_factor` ([nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L896-L927), [nbtree.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L787-L846)). That decision is blind to the partial index's own population. Measured, insert-only, `vacuum_cleanup_index_scale_factor` at its 0.1 default:
+
+| Step | heap rows | partial index population | what VACUUM did | index `reltuples` |
+|---|---|---|---|---|
+| after build | 1,000,000 | 100,000 | — | 100,000 (exact) |
+| first `VACUUM` | 1,000,000 | 100,000 | scanned; the metapage had no previous count | 100,000 |
+| +50,000 qualifying rows, plain `ANALYZE` | 1,050,000 | 150,000 | — | 153,650 (+2.43%) |
+| second `VACUUM` | 1,050,000 | 150,000 | **printed no index line at all** | 153,650, unchanged |
+| +150,000 qualifying rows | 1,200,000 | 300,000 | — | 153,650 |
+| third `VACUUM` | 1,200,000 | 300,000 | scanned: `contains 300000 row versions in 825 pages` | 300,000 (exact) |
+
+The partial index's population had grown 50% when the second `VACUUM` declined to look at it, because the heap had grown only 5%. A fresh index metapage starts at `btm_last_cleanup_num_heap_tuples = -1.0`, which is why the first `VACUUM` always scans ([nbtpage.c#_bt_initmetapage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L46-L65)). To force the exact refresh, set the B-tree reloption `vacuum_cleanup_index_scale_factor = 0` on the index, which takes `ShareUpdateExclusiveLock` ([reloptions.c#vacuum_cleanup_index_scale_factor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L423-L431)); the GUC of the same name is `PGC_USERSET`, so a session or transaction setting is enough for a maintenance script ([guc.c#vacuum_cleanup_index_scale_factor](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3423-L3431)). Verified: with the reloption at `0`, `VACUUM (ANALYZE)` returned exactly 100,000 again.
+
+`VACUUM (ANALYZE)` never makes the stored number worse. It either writes VACUUM's exact count or leaves the previous value untouched, because the `ANALYZE` half is skipped for indexes.
+
+#### Collateral damage: a partial index's predicate column blocks HOT for the whole table
+
+The most expensive partial-index effect measured here does not show up in the partial index at all. `RelationGetIndexAttrBitmap()` folds every attribute named in an index predicate into the all-index bitmap ([relcache.c#RelationGetIndexAttrBitmap](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4782-L4787), [relcache.c#pull_varattnos-predicate](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4956-L4960)), and `heap_update()` uses that bitmap as its HOT gate: a HOT update is possible only when no member of it changed value ([heapam.c#hot_attrs](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2957-L2966), [heapam.c#use_hot_update](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3593-L3600)). A predicate column is therefore HOT-blocking for every row in the table, including rows the predicate never selects.
+
+Two identical tables, heap `fillfactor = 40`, identical statements (`UPDATE ... SET st = 'closed' WHERE st = 'done'`, then back), touching only rows that never satisfy either predicate:
+
+| Table | partial indexes present | updates | `n_tup_hot_upd` | full index bytes | full index drift | full index reclaim |
+|---|---|---|---|---|---|---|
+| `p_pred_col` | 2 | 1,800,000 | **0** | 22,487,040 -> 44,941,312 | 1.9985 | 49.96% |
+| `p_pred_ctl` | 0 | 1,800,000 | **1,800,000** | 22,487,040 -> 22,487,040 | 1.0000 | 0.00% |
+
+The heap ended at the same 273,072,128 bytes in 33,334 pages in both cases; the difference landed entirely on the full index, which doubled. The two partial indexes themselves reported drift 1.0000 and 0.00% reclaim. So the index that caused a 49.96%-reclaimable neighbour is the one index the metric says is healthy. HOT counts come from `pgstat_count_heap_update()` ([heapam.c#pgstat_count_heap_update](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3746), [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L552-L581)). The control case is a column in no index and no predicate: 2,000,000 payload updates on the same shape produced 2,000,000 HOT updates and left every index byte-identical.
+
+Practical reading: when a partial index's drift is flat but a sibling index on the same table is drifting, check whether the partial index's predicate column is being written. `RelationGetIndexPredicate()` and `pg_get_expr(indpred, indrelid)` give the predicate for that check ([relcache.c#RelationGetIndexPredicate](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4712-L4779)).
+
+#### Two costs a partial index does not shrink
+
+- **VACUUM still scans it in full.** `btvacuumscan()` walks every page in physical order regardless of how few entries survive, so the drained fixture above cost a 276-page scan to report zero rows ([nbtree.c#btvacuumscan](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L956-L990)). Deleted pages are counted, not skipped.
+- **The predicate is re-evaluated on every insert and non-HOT update**, per index, through `ExecPrepareQual()`/`ExecQual()` ([execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-12/src/backend/executor/execIndexing.c#L334-L353), [execIndexing.c#ExecCheckIndexConstraints-predicate](../../../../raw/postgres-12/src/backend/executor/execIndexing.c#L556-L575)).
+
+#### Capture and detection for partial B-tree indexes
+
+The change to the shipped statements is small: pick the denominator from `indpred`, record which one was used, and add one rule for an empty partial index. The stored format becomes `wiki_bpr_v2` with a `pred=` field so a comment copied onto a differently-shaped index is rejected.
+
+```sql
+SET /* wiki_index_bpr_timeout */ statement_timeout = '15min';
+SET /* wiki_index_bpr_lock_timeout */ lock_timeout = '5s';
+
+VACUUM (ANALYZE) /* wiki_index_bpr_refresh */ app.orders;
+```
+
+Capture. `rows_used` is the index's own `reltuples` for a partial index and the table's otherwise, so a non-partial index keeps exactly the value the v1 statement produced.
+
+```sql
+WITH /* wiki_capture_index_bpr */ measured AS MATERIALIZED
+(
+    SELECT ins.nspname                         AS index_schema,
+           ic.relname                          AS index_name,
+           am.amname                           AS amname,
+           i.indrelid                          AS table_oid,
+           (i.indpred IS NOT NULL)             AS is_partial,
+           pg_relation_size(ic.oid)            AS index_bytes,
+           tc.reltuples::numeric               AS table_rows,
+           ic.reltuples::numeric               AS index_rows,
+           obj_description(ic.oid, 'pg_class') AS existing_comment
+    FROM pg_index AS i
+    JOIN pg_class AS ic ON ic.oid = i.indexrelid
+    JOIN pg_namespace AS ins ON ins.oid = ic.relnamespace
+    JOIN pg_am AS am ON am.oid = ic.relam
+    JOIN pg_class AS tc ON tc.oid = i.indrelid
+    WHERE ic.relkind = 'i'
+      AND i.indislive AND i.indisready AND i.indisvalid
+      AND ins.nspname IN ('app')
+),
+denom AS
+(
+    SELECT m.*,
+           CASE WHEN m.is_partial THEN m.index_rows ELSE m.table_rows END AS rows_used
+    FROM measured AS m
+)
+SELECT /* wiki_capture_index_bpr */
+       index_schema, index_name, amname, is_partial, index_bytes,
+       trunc(table_rows)::bigint AS table_rows,
+       trunc(rows_used)::bigint  AS rows_used,
+       round(index_bytes / nullif(rows_used, 0), 6) AS bpr,
+       CASE
+           WHEN rows_used <= 0 THEN NULL
+           WHEN existing_comment IS NOT NULL
+                AND existing_comment NOT LIKE 'wiki_bpr_v2;%' THEN NULL
+           ELSE format(
+                    'COMMENT /* wiki_capture_index_bpr */ ON INDEX %I.%I IS %L;',
+                    index_schema, index_name,
+                    format('wiki_bpr_v2;relid=%s;am=%s;pred=%s;bytes=%s;rows=%s;bpr=%s',
+                           table_oid, amname, is_partial, index_bytes,
+                           trunc(rows_used)::bigint,
+                           round(index_bytes / rows_used, 6)))
+       END AS comment_sql
+FROM denom
+ORDER BY index_schema, index_name;
+```
+
+Detection. The `parsed` CTE additionally requires the stored `pred=` flag to match the index's current shape, and the decision gains the empty-partial-index rule.
+
+```sql
+WITH /* wiki_detect_index_bpr */ threshold (amname, drift_trigger, policy) AS
+(
+    VALUES ('btree',  1.30::numeric, 'rebuild candidate; confirm with pgstatindex'),
+           ('gist',   1.30, 'rebuild candidate'),
+           ('hash',   1.30, 'rebuild candidate'),
+           ('gin',    1.40, 'clean pending list, re-measure, then rebuild candidate'),
+           ('bloom',  1.60, 'rebuild candidate'),
+           ('spgist', 1.75, 'inspect only; not separable in calibration'),
+           ('brin',   NULL, 'do not use this signal; VACUUM or summarize instead')
+),
+measured AS MATERIALIZED
+(
+    SELECT ins.nspname                         AS index_schema,
+           ic.relname                          AS index_name,
+           am.amname                           AS amname,
+           i.indrelid                          AS table_oid,
+           (i.indpred IS NOT NULL)             AS is_partial,
+           pg_get_expr(i.indpred, i.indrelid)  AS predicate,
+           pg_relation_size(ic.oid)            AS index_bytes,
+           tc.reltuples::numeric               AS table_rows,
+           ic.reltuples::numeric               AS index_rows,
+           obj_description(ic.oid, 'pg_class') AS stored_comment
+    FROM pg_index AS i
+    JOIN pg_class AS ic ON ic.oid = i.indexrelid
+    JOIN pg_namespace AS ins ON ins.oid = ic.relnamespace
+    JOIN pg_am AS am ON am.oid = ic.relam
+    JOIN pg_class AS tc ON tc.oid = i.indrelid
+    WHERE ic.relkind = 'i'
+      AND i.indislive AND i.indisready AND i.indisvalid
+      AND ins.nspname IN ('app')
+),
+denom AS
+(
+    SELECT m.*,
+           CASE WHEN m.is_partial THEN m.index_rows ELSE m.table_rows END AS rows_used
+    FROM measured AS m
+),
+parsed AS
+(
+    SELECT d.*,
+           CASE
+               WHEN d.stored_comment ~ ('^wiki_bpr_v2;relid=[0-9]+;am=[a-z]+;pred=[tf];'
+                                        || 'bytes=[0-9]+;rows=[0-9]+;bpr=[0-9]+[.][0-9]+$')
+                    AND split_part(split_part(d.stored_comment, 'relid=', 2), ';', 1)::oid
+                        = d.table_oid
+                    AND split_part(split_part(d.stored_comment, 'pred=', 2), ';', 1)
+                        = CASE WHEN d.is_partial THEN 't' ELSE 'f' END
+               THEN split_part(d.stored_comment, ';bpr=', 2)::numeric
+           END AS base_bpr
+    FROM denom AS d
+)
+SELECT /* wiki_detect_index_bpr */
+       p.index_schema, p.index_name, p.amname, p.is_partial, p.predicate,
+       pg_size_pretty(p.index_bytes)  AS size,
+       trunc(p.table_rows)::bigint    AS table_rows,
+       trunc(p.rows_used)::bigint     AS rows_used,
+       p.base_bpr,
+       round(p.index_bytes / nullif(p.rows_used, 0), 6) AS cur_bpr,
+       round((p.index_bytes / nullif(p.rows_used, 0)) / p.base_bpr, 4) AS drift,
+       t.drift_trigger,
+       CASE
+           WHEN p.is_partial AND p.rows_used = 0
+                AND p.index_bytes >= 8 * 1024 * 1024
+               THEN 'empty partial index; rebuild reclaims every page'
+           WHEN p.rows_used <= 0                 THEN 'no usable row estimate'
+           WHEN p.base_bpr IS NULL               THEN 'no usable baseline'
+           WHEN t.drift_trigger IS NULL          THEN t.policy
+           WHEN p.index_bytes < 8 * 1024 * 1024  THEN 'below size floor'
+           WHEN (p.index_bytes / nullif(p.rows_used, 0)) / p.base_bpr
+                >= t.drift_trigger               THEN t.policy
+           ELSE 'below threshold'
+       END AS decision
+FROM parsed AS p
+LEFT JOIN threshold AS t ON t.amname = p.amname
+ORDER BY p.index_schema, p.index_name;
+```
+
+Both statements were executed on the pin. The loop was then run end to end on two 1,000,000-row tables with a 1 MB floor so the fixtures were not suppressed: `r1` lost half its qualifying rows scattered, `r2` was drained.
+
+| Step | `r1_full` (not partial) | `r1_part` | `r2_part` |
+|---|---|---|---|
+| capture after build | bpr 22.487040 | bpr 22.609920 | bpr 22.609920 |
+| detect after capture | 1.0000, below threshold | 1.0000, below threshold | 1.0000, below threshold |
+| detect after the workload | 1.0526, below threshold | **2.0000, rebuild candidate** | **empty partial index** |
+| the same cells with the table denominator | 23.670568 against 22.487040 | 2.379992 against 2.260992, drift 1.0526 | 2.260992 against 2.260992, drift 1.0000 |
+| detect after `REINDEX INDEX CONCURRENTLY` | 1.0526 | 1.0072, below threshold | 8,192 bytes, no usable row estimate |
+| detect after recapture | 1.0000 | 1.0000 | unchanged; nothing to recapture |
+
+The table denominator row is the point of the exercise: it would have reported 1.0526 for an index with 49.64% reclaimable and 1.0000 for an index with 99.64% reclaimable. Both stored comments survived `REINDEX INDEX CONCURRENTLY`, consistent with the comment-durability result recorded elsewhere on this page. The drained index correctly refuses to recapture a baseline while its own `reltuples` is 0, so the stored value is never overwritten with a meaningless one.
+
+#### Operating rules for partial B-tree indexes
+
+- **Divide by the index's own `reltuples`, not the table's.** For non-partial indexes nothing changes, because `ANALYZE` gives them the table's count.
+- **Refresh with `VACUUM (ANALYZE)`**, and remember `VACUUM` cannot run inside a transaction block while `ANALYZE` can ([vacuum.c#PreventInTransactionBlock](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L235-L249)). If the maintenance window cannot afford it, set `vacuum_cleanup_index_scale_factor = 0` on the specific index so ordinary `VACUUM` refreshes the count.
+- **Require the predicate to select at least about 1% of the table** before trusting a plain-`ANALYZE` denominator. Below that, either force the exact count or report the index for human inspection.
+- **Treat `reltuples = 0` on a partial index as two different findings.** With a large fork, it is an empty index whose pages are all reclaimable. With a small fork, it is an unknown count.
+- **Confirm with `pgstatindex()` before rebuilding.** Low `avg_leaf_density` predicts fewer scan blocks after the rebuild; high density with many `deleted_pages` predicts disk space only, plus the planner-cost gain.
+- **Watch the predicate columns for HOT damage.** A partial index makes its predicate columns HOT-blocking for the whole table, so its own flat drift can coexist with a doubling sibling index.
+- **Do not recapture a partial-index baseline after a table-size change alone.** With the index denominator this is no longer necessary: table growth outside the predicate leaves `drift_i` at 1.0243 or below in every measured cell.
 
 ### Which live-row estimate to divide by
 
@@ -293,7 +609,9 @@ Measured on one 200,000-row table:
 | after deleting half, no `VACUUM`, no `ANALYZE` | 200,000 | 100,000 | 22.5690 | 45.1379 |
 | after `pg_stat_reset()` | 200,000 | **0** | 22.5690 | division by zero |
 
-Use `pg_class.reltuples`, for three reasons the table above makes concrete: it survives a statistics reset, which discards every table entry wholesale ([pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6086-L6122)); it is exact immediately after the build with no `ANALYZE` at all, because `index_update_stats()` writes the count the build scanned; and it moves only when a maintenance command moves it, so drift reflects the index rather than DML traffic. The cost of that choice is a stale denominator: the second row above is a real 2x under-report of bytes per live row that persists until the next `ANALYZE` or `VACUUM`. Run plain `ANALYZE` before both the capture and the comparison, not `VACUUM (ANALYZE)`, since the index-side `reltuples` update is deliberately skipped when analysis runs as part of VACUUM ([analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629)) and VACUUM's own index update happens only when the access method reports an exact count ([vacuumlazy.c#index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1800-L1816)).
+Use `pg_class.reltuples`, for three reasons the table above makes concrete: it survives a statistics reset, which discards every table entry wholesale ([pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6086-L6122)); it is exact immediately after the build with no `ANALYZE` at all, because `index_update_stats()` writes the count the build scanned; and it moves only when a maintenance command moves it, so drift reflects the index rather than DML traffic. The cost of that choice is a stale denominator: the second row above is a real 2x under-report of bytes per live row that persists until the next `ANALYZE` or `VACUUM`. For a **whole-table** index, run plain `ANALYZE` before both the capture and the comparison, not `VACUUM (ANALYZE)`, since the index-side `reltuples` update is deliberately skipped when analysis runs as part of VACUUM ([analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629)) and VACUUM's own index update happens only when the access method reports an exact count ([vacuumlazy.c#index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1800-L1816)).
+
+That last instruction inverts for a partial index, which must divide by its own `reltuples` and therefore wants exactly the value VACUUM writes and `ANALYZE` skips. See [B-tree partial indexes: a comprehensive analysis](#b-tree-partial-indexes-a-comprehensive-analysis).
 
 One more trap: statistics snapshots are per transaction. Six `ANALYZE` runs inside a single `DO` block moved `pg_class.reltuples` each time while `n_live_tup` stayed frozen at the first value, 1,199,367, until the transaction ended.
 
@@ -315,6 +633,8 @@ SET /* wiki_index_bpr_lock_timeout */ lock_timeout = '5s';
 
 ANALYZE /* wiki_index_bpr_refresh */ app.orders;
 ```
+
+These are the whole-table forms, using the `wiki_bpr_v1` comment format. If any index in scope is partial, use the `wiki_bpr_v2` forms in [B-tree partial indexes: a comprehensive analysis](#b-tree-partial-indexes-a-comprehensive-analysis) instead; they produce identical values for non-partial indexes.
 
 Capture. This reads only; review the generated `comment_sql` values before running them. It refuses to overwrite a comment it did not write, and skips any index whose table has no positive live-row estimate.
 
@@ -451,6 +771,7 @@ Comment durability was measured across six operations, all of which preserved th
 - **Rebuild cost and locking.** Plain `REINDEX` locks out writes on the table for the duration; `REINDEX INDEX CONCURRENTLY` trades that for a session-level `SHARE UPDATE EXCLUSIVE` lock plus extra passes, and a failure leaves an invalid `_ccnew`, or `_ccold` when the old definition could not be dropped ([reindex.sgml#locking](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L155-L165), [reindex.sgml#concurrently](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L300-L315), [reindex.sgml#concurrent-failure](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L363-L390)).
 - **Recapture policy.** Recapture only after a successful, measured rebuild, or after an approved definition or reloption change. Never recapture to silence unexplained drift: the GIN pending-list case shows that a "fix" can raise the ratio, so a blind recapture would bake a 4.6x inflated baseline in.
 - **Do not divide when the denominator is unusable.** Zero or negative `reltuples`, a never-analyzed empty partition, and a reset statistics collector all produce no defined ratio. Report them; do not coerce them to a number.
+- **Partial indexes need a different denominator, a different refresh, and a different confirmation.** Divide by the index's own `reltuples`, refresh with `VACUUM (ANALYZE)`, and read `deleted_pages` alongside `avg_leaf_density`; see [B-tree partial indexes: a comprehensive analysis](#b-tree-partial-indexes-a-comprehensive-analysis).
 - **Scope.** Run per database with an explicit schema allowlist; never comment on or rebuild system catalogs from this loop.
 
 ### Caller, callee, data structures, and build boundaries
@@ -470,7 +791,8 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - Index comments surviving both rebuild forms are tested directly ([create_index.sql#comments-preserved](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L845-L854), [create_index.out#comments-preserved](../../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2093-L2117)).
 - The GIN pending list is exercised with `fastupdate = on`, an explicit `gin_pending_list_limit` reloption, `gin_clean_pending_list()`, VACUUM-driven flushing, and a later switch to `fastupdate = off` ([gin.sql#pending-list](../../../../raw/postgres-12/src/test/regress/sql/gin.sql#L7-L35)).
 - BRIN summarization and desummarization have dedicated coverage ([brin.sql#summarize](../../../../raw/postgres-12/src/test/regress/sql/brin.sql#L404-L416)).
-- Explicit absence: nothing in the tree measures `pg_relation_size` against `reltuples`, calibrates a rebuild threshold, or asserts an access method's reclaimable fraction. Every threshold in this page comes from the fixture described above, not from upstream tests.
+- Partial B-tree indexes have build coverage on three predicate shapes and planner coverage for predicate implication, quals dropped from the plan, the update-target recheck exception, the not-applicable case, and the bitmap-scan recheck ([create_index.sql#btree-partial](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L62-L72), [select.sql#partial-index-planning](../../../../raw/postgres-12/src/test/regress/sql/select.sql#L190-L224)). Concurrent builds of partial indexes are covered too ([create_index.sql#concurrent-partial](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L479-L481)).
+- Explicit absence: nothing in the tree measures `pg_relation_size` against `reltuples`, calibrates a rebuild threshold, or asserts an access method's reclaimable fraction. No test asserts a partial index's own `pg_class.reltuples`, from any writer; the only `reltuples` writes in the regression suite are hand-forged `UPDATE pg_class` statements in a join test ([join_hash.sql#forged-reltuples](../../../../raw/postgres-12/src/test/regress/sql/join_hash.sql#L68-L84)). Every threshold in this page comes from the fixtures described above, not from upstream tests.
 
 ## Context Reviewed
 
@@ -482,7 +804,9 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - `IndexAmRoutine` callback surface and the absence of any reclaimable-space callback.
 - Visibility-map interaction with index-only-scan measurement.
 - 88-cell calibration matrix (11 workloads x 8 indexes) plus 12 additional fixtures: churn with a stable key domain, GIN pending list, GIN keys per row, two partial-index shapes, denominator noise, denominator-source divergence, comment durability, and the end-to-end runbook.
-- Regression coverage for comments, GIN pending lists, and BRIN summarization; contrib `pgstattuple` control file and 1.4 SQL script.
+- Partial B-tree indexes, as a second experiment on a fresh cluster from the same pin: the three predicate filters (build scan, `ExecInsertIndexTuples()`, `ANALYZE` sample), the four writers of an index's own `reltuples`, `_bt_vacuum_needs_cleanup()` and the `vacuum_cleanup_index_scale_factor` GUC and B-tree reloption, `_bt_pagedel()` page deletion and `btvacuumpage()` free-space recording, the HOT attribute bitmap and `heap_update()`'s HOT gate, `get_relation_info()`'s partial-index size estimate and `genericcostestimate()`'s page charge, and `predicate_implied_by()` in `check_index_predicates()`.
+- 13 partial-index calibration cells (12 workloads plus a scattered-delete fixture, two partial predicates per table) plus targeted fixtures for bloat shape, `pgstatindex` confirmation, planner cost, `ANALYZE` noise at five predicate selectivities, `VACUUM` cleanup skipping, `VACUUM (ANALYZE)` exactness, HOT collateral damage against a no-partial-index control, and a five-step runbook with `REINDEX INDEX CONCURRENTLY`.
+- Regression coverage for comments, GIN pending lists, BRIN summarization, partial-index builds and planning; contrib `pgstattuple` control file and 1.4 SQL script.
 
 ## Evidence Map
 
@@ -499,6 +823,14 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 | Hash allocates bucket pages a splitpoint at a time and counts the hole | [hashpage.c#splitpoint-batch](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L779-L800), [hashpage.c#_hash_alloc_buckets](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L965-L985) |
 | contrib `bloom` reads the whole index per scan with fixed-width tuples | [blscan.c#blgetbitmap](../../../../raw/postgres-12/contrib/bloom/blscan.c#L119-L138), [bloom.h#DEFAULT_BLOOM_LENGTH](../../../../raw/postgres-12/contrib/bloom/bloom.h#L88-L92) |
 | Partial-index row counts are a separately estimated fraction, not the table count | [analyze.c#tupleFract-estimate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L817-L822), [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) |
+| A partial index's contents are filtered at build, at insert, and in the `ANALYZE` sample, none of which changes the table's row count | [heapam_handler.c#partial-index-discard](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1607-L1615), [execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-12/src/backend/executor/execIndexing.c#L334-L353), [analyze.c#compute_index_stats-predicate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L777) |
+| A non-partial index's own `reltuples` is the table's count, so switching denominators is a no-op for it | [analyze.c#skip-plain-index](../../../../raw/postgres-12/src/backend/commands/analyze.c#L730-L732), [analyze.c#tupleFract-init](../../../../raw/postgres-12/src/backend/commands/analyze.c#L437-L438) |
+| `VACUUM` writes an index's exact surviving-tuple count, and the `ANALYZE` half of `VACUUM (ANALYZE)` deliberately leaves it alone | [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1798-L1815), [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L612) |
+| B-tree can skip the cleanup scan entirely, on a heap-growth test that ignores the partial index's own population | [nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L896-L927), [nbtree.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L787-L846), [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L46-L65) |
+| An emptied B-tree leaf is unlinked from the tree and its page recorded as free, so it is invisible to scans but not to `pg_relation_size` | [nbtpage.c#_bt_pagedel](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1284-L1305), [nbtree.c#btvacuumpage-deleted](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1167-L1183) |
+| A partial index's predicate columns are HOT-blocking for every row of the table | [relcache.c#pull_varattnos-predicate](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4956-L4960), [heapam.c#hot_attrs](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2957-L2966), [heapam.c#use_hot_update](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3593-L3600) |
+| The planner estimates a partial index's row count instead of pinning it, and charges `random_page_cost` per estimated index page | [plancat.c#partial-index-size](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407), [plancat.c#estimate_rel_size-index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L990-L1026), [selfuncs.c#genericcostestimate-pages](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5755-L5780) |
+| The `ANALYZE` sample is 300 rows per unit of `attstattarget`, which is what limits a selective predicate's fraction | [analyze.c:1700](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1700), [guc.c#default_statistics_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1986-L1994) |
 | `n_live_tup` is collector state that VACUUM/ANALYZE overwrite and a reset discards | [pgstatfuncs.c#pg_stat_get_live_tuples](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L151-L164), [pgstat.c#pgstat_recv_analyze](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6240-L6260), [pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6086-L6122) |
 | One index comment is one `pg_description` row, written under `ShareUpdateExclusiveLock` with an ownership check | [comment.c#CommentObject](../../../../raw/postgres-12/src/backend/commands/comment.c#L39-L130), [comment.c#CreateComments](../../../../raw/postgres-12/src/backend/commands/comment.c#L141-L225) |
 | Rebuilds preserve the comment | [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3432-L3531), [create_index.sql#comments-preserved](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L845-L854) |
@@ -518,6 +850,13 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - The 8 MB size floor suppressed a 89.37%-reclaimable GIN index. No principled floor was derived; it should come from a real index-size distribution.
 - Third-party access methods are entirely out of scope: they can register any `IndexAmRoutine` and have no obligation to make allocation track live rows.
 - Repeated-observation policy (how many consecutive maintenance windows must agree before a rebuild) was not tested; every measurement here is a single observation per cell.
+- The partial-index matrix uses one predicate selectivity, 10%, on one row shape, with `text` equality and `IS NULL` predicates over an ascending `bigint` key. Bands for a 50% predicate, an inequality predicate on the index key itself, a multi-column predicate, or a partial *unique* index were not measured.
+- The index-denominator bands rest on 13 cells from one fixture family. `p_transit_in` supplies the lowest harmful drift, 1.3795, so the top of the band is a single observation.
+- Two cells have no defined `drift_i` because the index's own `reltuples` is 0. They are caught by a separate rule, so the composite decision procedure was not scored as one classifier.
+- Whether a partial index's `deleted_pages` reach a steady state under indefinite queue churn was not measured. The queue fixture stopped after five rounds at 546 deleted pages, so it is unknown how much of that space later rounds would have reused, and therefore how much of the 66.59% reclaim was genuinely recoverable rather than borrowed.
+- The planner-cost deltas match `pages x random_page_cost` to within a few units, but no plan actually flipped in these fixtures. The selectivity at which a bloated partial index loses to a sequential scan was not located.
+- Only `REINDEX` and `REINDEX INDEX CONCURRENTLY` were tested as remedies for a drained partial index. Whether `DROP INDEX` plus a narrower predicate is the better answer for the queue shape is a design question this page does not settle.
+- The HOT collateral-damage fixture used heap `fillfactor = 40` so that free space was never the limiting factor. How the effect scales at the default fillfactor, where `PageIsFull()` short-circuits the HOT check before the bitmap is even consulted ([heapam.c#PageIsFull](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2975-L2989)), was not measured.
 
 ## Source References
 
@@ -528,8 +867,10 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - [pg_class.h#reltuples](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L59-L63)
 - [pg_class.h#RELKIND_HAS_STORAGE](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L187-L192)
 - [pg_index.h#index-state](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L40-L43)
+- [pg_index.h#indpred](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L56-L57)
 - [pg_description.h#pg_description](../../../../raw/postgres-12/src/include/catalog/pg_description.h#L40-L57)
 - [amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L163-L233)
+- [cost.h#DEFAULT_RANDOM_PAGE_COST](../../../../raw/postgres-12/src/include/optimizer/cost.h#L25)
 - [comment.c#CommentObject](../../../../raw/postgres-12/src/backend/commands/comment.c#L39-L130)
 - [comment.c#CreateComments](../../../../raw/postgres-12/src/backend/commands/comment.c#L141-L225)
 - [index.c#index_concurrently_swap](../../../../raw/postgres-12/src/backend/catalog/index.c#L1612-L1656)
@@ -537,17 +878,39 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - [index.c#index_update_stats-reltuples](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2795)
 - [index.c#index_build-stats](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2987)
 - [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3432-L3531)
-- [analyze.c#tupleFract](../../../../raw/postgres-12/src/backend/commands/analyze.c#L430-L438)
+- [analyze.c#tupleFract-init](../../../../raw/postgres-12/src/backend/commands/analyze.c#L437-L438)
 - [analyze.c#relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L587-L605)
 - [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629)
+- [analyze.c#skip-plain-index](../../../../raw/postgres-12/src/backend/commands/analyze.c#L730-L732)
+- [analyze.c#compute_index_stats-predicate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L777)
 - [analyze.c#tupleFract-estimate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L817-L822)
+- [analyze.c:1700](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1700)
+- [sampling.c#BlockSampler_Init](../../../../raw/postgres-12/src/backend/utils/misc/sampling.c#L23-L51)
 - [vacuum.c#PreventInTransactionBlock](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L235-L249)
 - [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1058-L1113)
 - [vacuum.c#vac_update_relstats](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1116-L1196)
 - [vacuumlazy.c#vac_update_relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L353-L370)
 - [vacuumlazy.c#set-all-visible](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1287-L1315)
 - [vacuumlazy.c#lazy_vacuum_page-vm](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1655-L1676)
+- [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1798-L1815)
 - [vacuumlazy.c#index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1800-L1816)
+- [heapam.c#hot_attrs](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2957-L2966)
+- [heapam.c#PageIsFull](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2975-L2989)
+- [heapam.c#use_hot_update](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3593-L3600)
+- [heapam.c#pgstat_count_heap_update](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3746)
+- [heapam_handler.c#reltuples-count](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1395-L1400)
+- [heapam_handler.c#partial-index-discard](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1607-L1615)
+- [execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-12/src/backend/executor/execIndexing.c#L334-L353)
+- [execIndexing.c#ExecCheckIndexConstraints-predicate](../../../../raw/postgres-12/src/backend/executor/execIndexing.c#L556-L575)
+- [relcache.c#RelationGetIndexPredicate](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4712-L4779)
+- [relcache.c#RelationGetIndexAttrBitmap](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4782-L4787)
+- [relcache.c#pull_varattnos-predicate](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4956-L4960)
+- [plancat.c#partial-index-size](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407)
+- [plancat.c#estimate_rel_size-index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L990-L1026)
+- [indxpath.c#check_index_predicates](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L3505-L3533)
+- [selfuncs.c#genericcostestimate-pages](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5755-L5780)
+- [selfuncs.c#btcostestimate-descent](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6097-L6102)
+- [reloptions.c#vacuum_cleanup_index_scale_factor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L423-L431)
 - [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L552-L581)
 - [pgstatfuncs.c#pg_stat_get_live_tuples](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L151-L164)
 - [pgstat.c#pgstat_report_vacuum](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1403-L1426)
@@ -558,9 +921,17 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - [pgstat.c#pgstat_recv_analyze](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6240-L6260)
 - [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L48-L56)
 - [heap.c#RelationTruncateIndexes](../../../../raw/postgres-12/src/backend/catalog/heap.c#L3164-L3199)
+- [nbtree.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L787-L846)
+- [nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L896-L927)
+- [nbtree.c#btvacuumscan](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L956-L990)
+- [nbtree.c#btvacuumscan-counts](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L967-L973)
 - [nbtree.c#IndexFreeSpaceMapVacuum](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1085-L1095)
+- [nbtree.c#pages_free](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1090-L1095)
 - [nbtree.c#btvacuumpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1149-L1183)
 - [nbtree.c#recyclable-page](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1183)
+- [nbtree.c#btvacuumpage-deleted](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1167-L1183)
+- [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L46-L65)
+- [nbtpage.c#_bt_pagedel](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1284-L1305)
 - [gistvacuum.c#delete-empty-pages](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L115-L129)
 - [gistvacuum.c#RecordFreeIndexPage](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L303-L312)
 - [gistvacuum.c#gistdeletepage](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L586-L672)
@@ -599,15 +970,23 @@ There is no upstream test for a bloat proxy of any kind; the relevant coverage i
 - [pgstattuple.control:3](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.control#L3)
 - [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31)
 - [pgstattuple--1.4--1.5.sql#privileges](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L36-L37)
+- [guc.c#default_statistics_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1986-L1994)
 - [guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386)
 - [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2397)
 - [guc.c#gin_pending_list_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3175-L3184)
+- [guc.c#random_page_cost](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3218-L3227)
+- [guc.c#vacuum_cleanup_index_scale_factor](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3423-L3431)
 - [catalog/Makefile#generated-headers](../../../../raw/postgres-12/src/backend/catalog/Makefile#L28-L90)
+- [indices.sgml#indexes-partial](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L757-L772)
 - [reindex.sgml#locking](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L155-L165)
 - [reindex.sgml#concurrently](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L300-L315)
 - [reindex.sgml#concurrent-failure](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L363-L390)
+- [create_index.sql#btree-partial](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L62-L72)
+- [create_index.sql#concurrent-partial](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L479-L481)
 - [create_index.sql#comments-preserved](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L845-L854)
 - [create_index.out#comments-preserved](../../../../raw/postgres-12/src/test/regress/expected/create_index.out#L2093-L2117)
+- [select.sql#partial-index-planning](../../../../raw/postgres-12/src/test/regress/sql/select.sql#L190-L224)
+- [join_hash.sql#forged-reltuples](../../../../raw/postgres-12/src/test/regress/sql/join_hash.sql#L68-L84)
 - [gin.sql#pending-list](../../../../raw/postgres-12/src/test/regress/sql/gin.sql#L7-L35)
 - [brin.sql#summarize](../../../../raw/postgres-12/src/test/regress/sql/brin.sql#L404-L416)
 

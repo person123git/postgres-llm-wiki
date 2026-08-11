@@ -14,6 +14,45 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-11: extended [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX
+  Threshold in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-live-row-bloat.md)
+  with a comprehensive B-tree partial-index section, against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). The filed
+  follow-up prompt asks for that section and for the earlier "the denominator is
+  wrong by construction" material to be folded into it. Verdict: keep the +30%
+  B-tree trigger but divide by the *index's* own `pg_class.reltuples`. On 13
+  partial-index cells measured on a fresh isolated 12.2 server (1,000,000-row
+  tables, a 10% `st = 'open'` predicate and a 10% `done_at IS NULL` predicate,
+  `REINDEX` size delta as ground truth) the table denominator scored 8 of 13
+  while the index denominator scored 11 of 11 cells where it is defined, with a
+  clean band from 1.0243 benign to 1.3795 harmful; the two undefined cells are
+  the two indexes whose own `reltuples` is 0, which a separate empty-index rule
+  catches. The swap is free for non-partial indexes because
+  `compute_index_stats()` leaves their `tupleFract` at 1.0, verified as an exact
+  match to the table count in all 16 `ANALYZE` runs. Table-denominator failures
+  measured: 5.2346 with 0% reclaimable on growth inside the predicate, 2.0000
+  with 0% reclaimable on deletion outside it, 1.0000 with 99.64% reclaimable on
+  a drained queue index, and 1.0526 with 49.64% reclaimable on scattered
+  deletion. New source findings: a partial index's predicate columns enter the
+  HOT-blocking bitmap, so two identical tables running identical updates
+  recorded 0 versus 1,800,000 HOT updates and a 49.96%-reclaimable sibling
+  index while both partial indexes reported drift 1.0000; `_bt_vacuum_needs_cleanup()`
+  gates the cleanup scan on *heap* growth, so a `VACUUM` skipped an index whose
+  own population had grown 50% because the heap grew 5%; `VACUUM (ANALYZE)`
+  writes the exact index count that plain `ANALYZE` samples (102,634 and 99,900
+  against exactly 100,000); and `get_relation_info()` estimates a partial
+  index's row count instead of pinning it. Two bloat shapes were separated with
+  `pgstatindex`: deleted-page bloat (66.59% reclaim, 546 deleted pages, density
+  89.18, 1.1% fewer scan blocks, but a 2200.13 planner-cost drop equal to 550
+  unread pages x `random_page_cost` 4.0) and low-density bloat (49.64% reclaim,
+  density 45.06 to 89.83, 49.6% fewer scan blocks). The plain-`ANALYZE` noise
+  floor runs from -3.87%/+2.97% at a 10% predicate to `reltuples = 0` on four of
+  six runs at 0.001%. New `wiki_bpr_v2` capture and detection SQL, executed on
+  the pin along with a five-step runbook using `REINDEX INDEX CONCURRENTLY`, is
+  filed. The isolated server was stopped and its data directory, build tree, and
+  fixtures removed. The page remains human-unverified and agent-unverified.
+
 - 2026-08-11: filed [Calibrating a COMMENT-Stored Bytes-per-Live-Row REINDEX
   Threshold in PostgreSQL 12
   (unverified)](v12/questions/indexing/comment-stored-bytes-per-live-row-bloat.md)
