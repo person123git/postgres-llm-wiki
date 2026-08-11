@@ -1,0 +1,388 @@
+---
+type: question
+version: 12
+pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
+verified: false
+verified_by_agent: not yet
+---
+
+# Physical Index Statistics, Tuple Counts, and Bytes per Tuple in PostgreSQL 12 (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Short answer](#short-answer)
+  - [What PostgreSQL stores and what it does not](#what-postgresql-stores-and-what-it-does-not)
+  - [Why pg_class.reltuples changes meaning](#why-pg_classreltuples-changes-meaning)
+  - [Shared page and tuple overhead](#shared-page-and-tuple-overhead)
+  - [Per-access-method inventory](#per-access-method-inventory)
+  - [Calculations that are valid](#calculations-that-are-valid)
+  - [Catalog inventory SQL](#catalog-inventory-sql)
+  - [B-tree and hash physical data-item SQL](#b-tree-and-hash-physical-data-item-sql)
+  - [Consistency, cost, and privilege limits](#consistency-cost-and-privilege-limits)
+  - [Planner, caller-callee, and generated-build boundaries](#planner-caller-callee-and-generated-build-boundaries)
+  - [Tests and explicit test gaps](#tests-and-explicit-test-gaps)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
+## Question
+
+For all PostgreSQL 12 index access methods, analyze all physical statistics stored for each index, including statistics in `pg_class`. Explain whether and how these statistics can be used to calculate or estimate the number of index tuples and the on-disk bytes represented by each tuple.
+
+Prompt note: the original request had spelling and grammatical errors. The user approved this corrected wording before drafting.
+
+## Answer
+
+No PostgreSQL 12 catalog column gives an exact, access-method-independent count of physical index tuples or an exact number of on-disk bytes per tuple. `pg_class.relpages` and `reltuples` are explicitly allowed to be stale, and `reltuples` can change units after `CREATE INDEX`, standalone `ANALYZE`, and `VACUUM`. `pg_relation_size()` gives the current logical file length, but dividing it by `reltuples` gives only **allocated bytes per current catalog-count unit**. It is not a tuple-width calculation.[pg_class.h#physical-relstats](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L49-L66) [index.c#index-build-statistics](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989) [analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1771-L1815) [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L335)
+
+PostgreSQL 12 bootstraps six core index access methods: B-tree, hash, GiST, GIN, SP-GiST, and BRIN. Bloom is a shipped `contrib` extension that registers a seventh index access method. A partitioned-index root has `relkind = 'I'` and no storage; its physical child indexes have `relkind = 'i'` and must be measured separately.[pg_am.dat#core-index-access-methods](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L18-L35) [bloom--1.0.sql#CREATE-ACCESS-METHOD](../../../../raw/postgres-12/contrib/bloom/bloom--1.0.sql#L1-L25) [pg_class.h#relation-kinds-and-storage](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L152-L192)
+
+### Short answer
+
+| Access method | Heap-to-index relationship | Persistent whole-index counter | Best meaningful physical denominator | Can stored aggregates recover heap rows? |
+| --- | --- | --- | --- | --- |
+| B-tree | Normally one leaf data item per indexed heap tuple version; internal pivots and leaf high keys are additional physical items.[nbtsort.c#_bt_build_callback](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L593-L619) [nbtree.h#high-key](../../../../raw/postgres-12/src/include/access/nbtree.h#L198-L219) | None. `btm_last_cleanup_num_heap_tuples` is the parent-heap count recorded by the last cleanup, not the current leaf-item count.[nbtree.h#BTMetaPageData](../../../../raw/postgres-12/src/include/access/nbtree.h#L97-L110) [nbtree.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L783-L845) | Stable full scan of leaf data items, excluding high keys. | No exact current row count; dead entries, HOT chains, partial predicates, and concurrent change break equality with visible rows.[README.HOT#HOT-index-entries](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L34-L55) |
+| Hash | One stored item per qualifying non-NULL heap tuple version; NULL keys are omitted.[hashutil.c#_hash_convert_tuple](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L343) | `hashm_ntuples`, maintained as the logical hash item count; split copies and not-yet-cleaned physical items can make a page census differ.[hash.h#HashMetaPageData](../../../../raw/postgres-12/src/include/access/hash.h#L242-L263) [hash.c#hashbulkdelete](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L454-L632) | Stable bucket/overflow-page item scan. | Only with external knowledge of the partial predicate, NULL rule, dead entries, and concurrency. |
+| GiST | One leaf tuple is built per qualifying heap tuple version; routing tuples occupy internal pages.[gistbuild.c#gistBuildCallback](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L457-L495) | None; GiST has no metapage aggregate.[gist.h#GISTPageOpaqueData](../../../../raw/postgres-12/src/include/access/gist.h#L41-L72) | A correct AM-aware scan of nondeleted leaf pages. | Not from stored aggregates. PostgreSQL 12's generic `pgstattuple()` GiST path has source-visible gaps described below. |
+| GIN | One heap TID can produce many extracted-key associations and can occur in pending tuples, embedded posting lists, or posting trees.[ginutil.c#ginExtractEntries](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L477-L599) [ginblock.h#posting-layout](../../../../raw/postgres-12/src/include/access/ginblock.h#L183-L191) [ginblock.h#posting-lists-and-trees](../../../../raw/postgres-12/src/include/access/ginblock.h#L218-L344) | Pending-list counts plus build/last-maintenance page and key counts; no total posting-association count.[ginblock.h#GinMetaPageData](../../../../raw/postgres-12/src/include/access/ginblock.h#L54-L100) [gininsert.c#gin-build-metapage-statistics](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L395-L406) [ginutil.c#ginUpdateStats](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L659-L710) | The denominator must be named: entry keys, pending tuples, posting TIDs, or distinct referenced heap TIDs. | No. Aggregate counters are insufficient, and `reltuples` itself changes unit.[ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L686-L731) |
+| SP-GiST | One live leaf tuple carries one heap TID; inner, node, redirect, dead, and placeholder tuples are separate physical objects.[spgist_private.h#tuple-states](../../../../raw/postgres-12/src/include/access/spgist_private.h#L232-L244) [spgist_private.h#leaf-tuples](../../../../raw/postgres-12/src/include/access/spgist_private.h#L307-L372) | No live/dead aggregate. The metapage contains only possibly stale last-used-page/free-space hints.[spgist_private.h#page-and-metapage-data](../../../../raw/postgres-12/src/include/access/spgist_private.h#L36-L101) | Stable count of `SPGIST_LIVE` leaf tuples. | Not from stored aggregates. |
+| BRIN | One logical summary tuple represents a heap page range, not a heap row.[brin_tuple.h#BRIN-tuple-purpose](../../../../raw/postgres-12/src/include/access/brin_tuple.h#L18-L30) | `pagesPerRange` and `lastRevmapPage`; valid reverse-map TIDs identify referenced summaries or placeholders, not necessarily completed summaries.[brin_page.h#metapage-and-revmap](../../../../raw/postgres-12/src/include/access/brin_page.h#L63-L94) [brin_revmap.c#leftover-placeholder](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L397-L405) | Dereferenced valid reverse-map entries after excluding placeholder tuples for completed summaries; used regular-page line pointers for all physical summary and placeholder items. | No. A range can contain zero through many heap tuple versions. |
+| Contrib Bloom | One fixed-size signature tuple per qualifying heap tuple version.[blinsert.c#blbuildCallback](../../../../raw/postgres-12/contrib/bloom/blinsert.c#L72-L117) | No tuple aggregate; the metapage stores signature options and a not-full-page reuse cache.[bloom.h#BloomMetaPageData](../../../../raw/postgres-12/contrib/bloom/bloom.h#L99-L165) | Sum `maxoff` across nondeleted data pages. | Only with external predicate/dead-entry knowledge. |
+
+### What PostgreSQL stores and what it does not
+
+| Location | Stored fields | Meaning for physical accounting |
+| --- | --- | --- |
+| `pg_class` | `relam`, `relfilenode`, `reltablespace`, `relpages`, `reltuples`, `relallvisible`, persistence, relation kind, attribute count, and AM-specific `reloptions`.[pg_class.h#FormData_pg_class](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L29-L84) [pg_class.h#reloptions](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L128-L137) | `relpages` is the last stored main-fork block count. `reltuples` is a `float4` estimate whose unit depends on its last writer. Index writers set `relallvisible` to zero because index relations do not use heap visibility-map accounting.[index.c#index_update_stats](../../../../raw/postgres-12/src/backend/catalog/index.c#L2655-L2712) [index.c#index-relallvisible](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2785) |
+| `pg_index` | Parent table, key and included-column counts, uniqueness and state flags, column map, collations, opclasses, per-column AM options, expression tree, and partial predicate.[pg_index.h#FormData_pg_index](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L29-L58) | These fields explain which heap rows and attributes could be represented. They contain no page count, tuple count, free-space count, or byte count. |
+| `pg_statistic` / `pg_stats` | Table-column distributions and statistics for expression-index attributes; `stawidth` is average non-NULL Datum width.[analyze.c#index-expression-statistics](../../../../raw/postgres-12/src/backend/commands/analyze.c#L413-L467) [pg_statistic.h#stawidth](../../../../raw/postgres-12/src/include/catalog/pg_statistic.h#L29-L68) | These are planner value-distribution statistics. Expression `stawidth` uses the expression result type and is not the serialized index item, opclass storage value, or page footprint.[analyze.c#index-expression-result-type](../../../../raw/postgres-12/src/backend/commands/analyze.c#L869-L925) |
+| `pg_stat_all_indexes` / `pg_statio_all_indexes` | `idx_scan`, `idx_tup_read`, `idx_tup_fetch`, blocks read, and blocks hit.[system_views.sql#index-statistics-views](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L658-L708) | These are cumulative workload and I/O counters, not current population or allocation. Bitmap scans, dead entries, and index-only scans also make read/fetch units differ.[monitoring.sgml#index-statistics](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2847-L2940) |
+| AM metapage/page opaque data | Access-method-specific structural fields and, for some AMs, persistent counters. | These fields are detailed below. PostgreSQL 12 has no generic callback that returns a physical item count, occupied bytes, or bloat.[amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L163-L233) |
+| `IndexBuildResult` / `IndexBulkDeleteResult` | Build counts; VACUUM page, tuple, removed, deleted, free, and estimated/exact fields.[genam.h#index-maintenance-statistics](../../../../raw/postgres-12/src/include/access/genam.h#L27-L81) | These structures are transient. Their values can update `pg_class` or appear in `VACUUM` reporting, but PostgreSQL does not retain every field as a per-index catalog row.[vacuumlazy.c#index-cleanup-report](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1827) |
+
+`pg_class.reloptions` contains physical policy rather than measured occupancy. The complete shipped set relevant here is: B-tree `fillfactor` and `vacuum_cleanup_index_scale_factor`; hash `fillfactor`; GiST `fillfactor` and `buffering`; SP-GiST `fillfactor`; GIN `fastupdate` and `gin_pending_list_limit`; BRIN `pages_per_range` and `autosummarize`; and Bloom signature `length` plus per-column `colN` bit counts. These settings can change tuple width, packing, pending storage, summary granularity, cleanup, or build strategy, but none is a current byte or tuple census.[reloptions.c#index-fillfactors](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L177-L215) [reloptions.c#B-tree-and-GiST-options](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L423-L449) [ginutil.c#ginoptions](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L602-L629) [spgutils.c#spgoptions](../../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L583-L590) [brin.c#brinoptions](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L817-L845) [blutils.c#Bloom-reloptions](../../../../raw/postgres-12/contrib/bloom/blutils.c#L55-L79)
+
+`pg_relation_size(index, 'main')` is current in a different sense: PostgreSQL opens the relation, calls `stat()` on each segment file, and sums `st_size`. This is logical relation-file length. It is not occupied tuple payload and not filesystem block allocation after sparse files, compression, or storage-layer effects.[dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L335)
+
+The named relation forks are `main`, `fsm`, `vm`, and `init`. `pg_table_size(index_oid)` behaves sensibly on an index and sums all its forks; `pg_indexes_size(index_oid)` instead means indexes attached to that relation and therefore returns zero for an index.[relpath.h#ForkNumber](../../../../raw/postgres-12/src/include/common/relpath.h#L32-L55) [dbsize.c#calculate_table_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L380-L408) [dbsize.c#calculate_indexes_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L410-L447)
+
+The free space map (FSM) is another persistent physical hint, not a catalog aggregate. B-tree, GiST, GIN, SP-GiST, and Bloom use the generic index-FSM API to find wholly reusable pages. Its implementation writes `BLCKSZ - 1` for free and `0` for used, so the fork records page availability rather than byte-granular free space.[indexfsm.c#index-FSM-implementation](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L32-L73) [nbtpage.c#B-tree-FSM-allocation](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L790-L815) [gistutil.c#GiST-FSM-allocation](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L805-L830) [ginutil.c#GIN-FSM-allocation](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L286-L305) [spgutils.c#SP-GiST-FSM-allocation](../../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L205-L230) [blutils.c#Bloom-FSM-allocation](../../../../raw/postgres-12/contrib/bloom/blutils.c#L340-L360)
+
+Hash instead keeps overflow-page availability in metapage-referenced bitmap pages. BRIN uses the general FSM, recording actual regular-page free space after quantizing it into an eight-bit category; reads return the category's lower-bound byte estimate. The shipped `pg_freespacemap` extension exposes the recorded estimate through `pg_freespace(regclass, bigint)`. The byte length of any FSM fork says how large the map is; it does not equal the free bytes in the main fork.[hash.h#overflow-bitmaps](../../../../raw/postgres-12/src/include/access/hash.h#L201-L228) [hash.h#bitmap-pages](../../../../raw/postgres-12/src/include/access/hash.h#L287-L307) [brin_pageops.c#BRIN-FSM-search](../../../../raw/postgres-12/src/backend/access/brin/brin_pageops.c#L688-L714) [brin_pageops.c#BRIN-FSM-recording](../../../../raw/postgres-12/src/backend/access/brin/brin_pageops.c#L854-L899) [freespace.c#RecordPageWithFreeSpace](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L173-L190) [freespace.c#FSM-quantization](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L379-L416) [pg_freespacemap.c#pg_freespace](../../../../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap.c#L17-L41)
+
+For B-tree, GiST, GIN, SP-GiST, and Bloom, counting nonzero `pg_freespace` results counts pages recorded as wholly reusable, subject to FSM staleness. For BRIN, summing the returned values gives the sum of recorded, quantized lower-bound free-space estimates. Neither calculation counts tuples, and neither subtracts bytes from the relation's allocated file length.[indexfsm.c#index-FSM-implementation](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L32-L73) [freespace.c#FSM-quantization](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L379-L416)
+
+### Why `pg_class.reltuples` changes meaning
+
+The common build layer calls the selected AM's `ambuild` callback and copies `IndexBuildResult.index_tuples` into the index's `pg_class.reltuples`. The AM therefore chooses the build-time unit.[genam.h#IndexBuildResult](../../../../raw/postgres-12/src/include/access/genam.h#L27-L34) [index.c#index_build](../../../../raw/postgres-12/src/backend/catalog/index.c#L2808-L2815) [index.c#ambuild-and-catalog-update](../../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904) [index.c#index-build-statistics](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989)
+
+A standalone table `ANALYZE` later overwrites every ordinary index's `reltuples` with `ceil(tupleFract * totalrows)`. `tupleFract` starts at `1.0` and, for a partial index, is the sampled fraction of heap rows that passes the predicate. This normalizes the catalog value to estimated live heap rows satisfying the partial predicate, or to the whole-table estimate for a nonpartial index—even when an AM such as hash omits NULL keys. `VACUUM (ANALYZE)` deliberately skips this overwrite because the VACUUM phase is expected to have supplied the index count.[analyze.c#index-initialization](../../../../raw/postgres-12/src/backend/commands/analyze.c#L413-L467) [analyze.c#partial-index-sample](../../../../raw/postgres-12/src/backend/commands/analyze.c#L714-L822) [analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) [hashutil.c#hash-NULL-omission](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L343)
+
+VACUUM passes an estimated or exact surviving-heap count to the AM. It writes the AM's returned `num_index_tuples` into `pg_class` only when `estimated_count` is false; otherwise an older value can remain.[genam.h#IndexVacuumInfo](../../../../raw/postgres-12/src/include/access/genam.h#L36-L81) [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1058-L1113) [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1771-L1815)
+
+| Last writer | Value put in index `reltuples` |
+| --- | --- |
+| New physical relation before build | Zero.[heap.c#new-relation-relstats](../../../../raw/postgres-12/src/backend/catalog/heap.c#L954-L998) |
+| `CREATE INDEX` / `REINDEX` | B-tree, GiST, SP-GiST, and Bloom count one successful leaf insertion per qualifying build callback; hash omits NULL keys; GIN counts extracted key associations; BRIN counts inserted range summaries.[nbtsort.c#_bt_build_callback](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L593-L619) [gistbuild.c#gistBuildCallback](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L457-L495) [spginsert.c#spgist-build-count](../../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L41-L69) [blinsert.c#bloom-build-count](../../../../raw/postgres-12/contrib/bloom/blinsert.c#L72-L117) [hash.c#hash-build-callback](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L200-L236) [gininsert.c#gin-build-count](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L288) [brin.c#brin-build-count](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L658-L743) |
+| Standalone table `ANALYZE` | Estimated live heap rows satisfying the index predicate; all nonpartial indexes get the table estimate, even hash indexes that omit NULLs.[analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) |
+| Sufficiently complete `VACUUM` | AM cleanup result. GIN substitutes the heap tuple count and calls it bogus for partial GIN. BRIN counts newly summarized ranges plus existing valid reverse-map entries for full ranges, can therefore include a crash-leftover placeholder, and skips the last partial range. Other AMs return AM-specific surviving data/leaf-item counts subject to their concurrency rules.[ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L686-L731) [brin.c#brinvacuumcleanup](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L786-L814) [brin.c#brinsummarize-counting](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1299-L1401) [brin_revmap.c#leftover-placeholder](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L397-L405) |
+
+Therefore the expression `main_bytes / reltuples` can change sharply even when the index file does not. If the last operation is unknown, the denominator's unit is unknown. A plain table `ANALYZE` can deliberately normalize it to the catalog row-estimate unit—predicate-scaled for a partial index and the whole table for a nonpartial index—but that is not necessarily a count of rows actually represented by the AM and does not make the ratio a physical tuple size.[analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) [hashutil.c#hash-NULL-omission](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L343)
+
+### Shared page and tuple overhead
+
+Most built-in index pages use a generic page header, a line-pointer array, free space, tuple/item bytes, and AM-specific special space. `PageHeaderData` stores the page LSN, checksum, flags, free-space boundaries, page-size/version, and `pd_prune_xid`; the source notes that `pd_prune_xid` is normally unused by index pages, although GIN reuses it for deleted-page reclamation.[bufpage.h#page-layout](../../../../raw/postgres-12/src/include/storage/bufpage.h#L22-L75) [bufpage.h#PageHeaderData](../../../../raw/postgres-12/src/include/storage/bufpage.h#L105-L164) [ginblock.h#deleted-page-xid](../../../../raw/postgres-12/src/include/access/ginblock.h#L131-L138)
+
+An ordinary `IndexTuple` stores a heap TID and a `t_info` word containing NULL, variable-width, AM-reserved, and serialized-size bits. `IndexTupleSize()` therefore gives one tuple object's serialized length, not its whole-file share.[itup.h#IndexTupleData](../../../../raw/postgres-12/src/include/access/itup.h#L23-L90)
+
+For a slotted page, inserting an item consumes `MAXALIGN(item_length)` bytes in the tuple area and, when a new slot is needed, one `ItemIdData` line pointer. The line pointer retains the unaligned item length. Page headers, special space, internal tuples, metapages, alignment gaps, fragmentation, free space, and deleted/reusable pages remain shared overhead.[bufpage.c#PageAddItemExtended-space](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L290-L341) [itemid.h#ItemIdData](../../../../raw/postgres-12/src/include/storage/itemid.h#L20-L41)
+
+This formula is not universal. Bloom stores a packed fixed-size tuple array without line pointers, while GIN posting-tree leaf pages store compressed posting-list segments rather than ordinary index tuples.[bloom.h#Bloom-page-layout](../../../../raw/postgres-12/contrib/bloom/bloom.h#L58-L74) [ginblock.h#posting-tree-data-pages](../../../../raw/postgres-12/src/include/access/ginblock.h#L265-L326)
+
+### Per-access-method inventory
+
+#### B-tree
+
+The B-tree metapage stores `btm_magic`, format version, root block/level, fast-root block/level, the oldest deletion XID, and the parent heap tuple count seen by the last cleanup. Each ordinary page stores left/right sibling links, level or deletion XID, flags, and the last-split VACUUM cycle ID. Flags identify leaf, root, deleted, metapage, half-dead, split-end, garbage, and incomplete-split states.[nbtree.h#BTPageOpaqueData](../../../../raw/postgres-12/src/include/access/nbtree.h#L55-L78) [nbtree.h#BTMetaPageData](../../../../raw/postgres-12/src/include/access/nbtree.h#L90-L110)
+
+None of those fields is a current global entry count. `btm_last_cleanup_num_heap_tuples` is initialized to `-1`, updated during cleanup, and consulted with the oldest deletion XID only to decide whether another cleanup is useful.[nbtpage.c#metapage-initialization](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L47-L77) [nbtpage.c#_bt_update_meta_cleanup_info](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L150-L215) [nbtree.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L783-L845)
+
+`pgstatindex()` exposes index size, tree version/level/root, internal/leaf/empty/deleted page counts, average leaf density, and leaf fragmentation. It does not expose a tuple count. The same extension's `pg_relpages()` returns the current main-fork block count through `RelationGetNumberOfBlocks()`; that is a dynamic size observation, not the stored `pg_class.relpages` value. `pageinspect` exposes metapage and per-page fields and individual item lengths; page-level item totals require care because a non-rightmost B-tree page has a high key that is not a heap-row leaf entry.[pgstattuple--1.4--1.5.sql#pgstatindex-result](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L22-L34) [pgstatindex.c#pgstatindex-full-scan](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L365) [pgstatindex.c#pg_relpages](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L459-L476) [pageinspect--1.5.sql#btree-functions](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L146-L189) [pageinspect--1.6--1.7.sql#bt_metap](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.6--1.7.sql#L7-L26)
+
+For physical leaf accounting, `pgstattuple()` starts after the metapage, visits only nonignored leaf pages, starts at `P_FIRSTDATAKEY()` to exclude high keys, and sums each line pointer's item length. Its “live” count means “not marked `LP_DEAD`,” not MVCC-visible heap rows.[pgstattuple.c#pgstat_btree_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L406-L446) [pgstattuple.c#pgstat_index_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L565-L590)
+
+#### Hash
+
+Each hash page stores previous/next links, bucket number, type/state flags, and a page identifier. The metapage stores magic/version, `hashm_ntuples`, fill factor, page and bitmap sizes, bitmap shift, maximum bucket, high/low masks, overflow split point, first free overflow bit, bitmap count, hash procedure OID, cumulative overflow-page counts, and bitmap page block numbers.[hash.h#HashPageOpaqueData](../../../../raw/postgres-12/src/include/access/hash.h#L45-L99) [hash.h#HashMetaPageData](../../../../raw/postgres-12/src/include/access/hash.h#L193-L263)
+
+`hashm_ntuples` is the closest core persistent global count. Normal insertion increments it only after a non-NULL index tuple is inserted; VACUUM can replace it with a full bucket scan or dead-reckon after concurrent inserts/splits.[hashinsert.c#hashm_ntuples-increment](../../../../raw/postgres-12/src/backend/access/hash/hashinsert.c#L190-L235) [hash.c#hashbulkdelete](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L454-L632) Physical bucket line items can temporarily exceed it because a bucket split copies items before split cleanup removes the old copies.[hashpage.c#bucket-split-copy](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L1107-L1287)
+
+`pageinspect.hash_metapage_info()` exposes every metapage field, while its other hash functions expose page type, live/dead items, free bytes, links, bucket, flags, bitmap state, and individual items. `pgstathashindex()` performs a whole-index page scan and returns bucket/overflow/bitmap/unused page counts, non-`LP_DEAD` items, `LP_DEAD` items, and free percentage.[pageinspect--1.5--1.6.sql#hash-functions](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5--1.6.sql#L6-L77) [pgstattuple--1.4--1.5.sql#pgstathashindex](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L121-L136) [pgstatindex.c#pgstathashindex](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L576-L751)
+
+Generic `pgstattuple()` also supports hash. It scans bucket and overflow pages and sums line-item counts and lengths, so it measures physical stored items, including split copies that still exist, rather than relying on `hashm_ntuples`.[pgstattuple.c#pgstat_hash_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L448-L490) [pgstattuple.c#pgstat_index_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L565-L590)
+
+#### GiST
+
+GiST has no metapage or global persistent count. Its root is block zero. Each page's opaque trailer stores a node-sequence number, right link, flags, and page identifier; flags identify leaf, deleted, tuples-deleted, follow-right, and garbage states.[gist_private.h#GIST_ROOT_BLKNO](../../../../raw/postgres-12/src/include/access/gist_private.h#L263) [gist.h#GISTPageOpaqueData](../../../../raw/postgres-12/src/include/access/gist.h#L41-L82)
+
+Build creates one leaf `IndexTuple` per qualifying heap callback and counts it once. VACUUM scans surviving leaf tuples, but concurrent page splits can double-count; cleanup caps the result to a known whole-heap count when it can.[gistbuild.c#gistBuildCallback](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L457-L495) [gistvacuum.c#gistvacuum-page-count](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L147-L210) [gistvacuum.c#gistvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L115-L144)
+
+PostgreSQL 12's `pgstattuple()` dispatch claims GiST support, but the pinned implementation starts at `GIST_ROOT_BLKNO + 1`. It therefore returns zero leaf items for a one-page GiST whose root is itself a leaf. It also tests `F_LEAF` without excluding `F_DELETED`, while page deletion preserves existing flags and repurposes `pd_lower` for deletion metadata rather than line pointers. This page does not treat that GiST result as an exact physical census.[pgstattuple.c#GiST-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L283) [pgstattuple.c#pgstat_gist_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L492-L518) [gist.h#deleted-page-layout](../../../../raw/postgres-12/src/include/access/gist.h#L160-L183)
+
+PostgreSQL 12 `pageinspect` has no GiST-specific decoder. A reliable GiST count therefore requires a corrected extension or another AM-aware page walker that includes a leaf root, excludes deleted pages, and distinguishes leaf from routing tuples.[pageinspect/Makefile#modules-and-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L3-L15)
+
+#### GIN
+
+Each GIN page stores a right link, a context-dependent `maxoff`, and flags for data, leaf, deleted, metapage, pending-list, full-row, incomplete-split, and compressed pages. On a nonleaf posting-data page `maxoff` counts `PostingItem` objects; on a pending-list page it counts heap-tuple insertion groups, not necessarily the temporary index tuples on that page.[ginblock.h#GinPageOpaqueData](../../../../raw/postgres-12/src/include/access/ginblock.h#L29-L48) [ginfast.c#pending-list-page-accounting](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L52-L208)
+
+The metapage stores pending-list head/tail, free bytes in the tail, pending page count, pending heap-tuple count, total/entry/data page counts, entry-key count, and format version. Pending-list counters are actively maintained, while the main page/key fields are planner statistics refreshed by VACUUM.[ginblock.h#GinMetaPageData](../../../../raw/postgres-12/src/include/access/ginblock.h#L54-L100) [ginfast.c#pending-list-maintenance](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L544-L625) [ginutil.c#ginGetStats](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L631-L657) [ginutil.c#ginUpdateStats](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L659-L710)
+
+`nPendingHeapTuples` is not a pending physical `IndexTuple` count: one heap tuple can produce many extracted keys and temporary tuples. `nEntries` counts entry-tree key tuples, not posting TIDs; until VACUUM physically recounts entry leaf items, repeated build accumulator flushes can also make the build-time value differ from a global distinct-key count.[gininsert.c#gin-build-entry-accounting](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L172-L205) [ginvacuum.c#GIN-entry-page-census](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L746-L781)
+
+After build, `reltuples` is the sum of extracted-key associations across indexed columns. After a sufficiently complete VACUUM, GIN instead reports the heap tuple count and explicitly notes that this is bogus for a partial GIN index because distinct referenced heap tuples are hard to determine.[gininsert.c#gin-build-count](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L245-L288) [gininsert.c#ginbuild-result](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L316-L427) [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L686-L731)
+
+`pgstatginindex()` exposes only version, pending pages, and pending heap tuples. `pageinspect` exposes the full metapage, page opaque fields, and compressed posting-tree leaf segments, but it does not provide one whole-index traversal that decodes pending tuples, entry tuples with embedded postings, and every posting tree. A total association count requires such a traversal; a distinct referenced-TID count additionally requires deduplication.[pgstattuple--1.4--1.5.sql#pgstatginindex](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L47-L57) [pgstatindex.c#pgstatginindex](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L480-L573) [pageinspect--1.5.sql#GIN-functions](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L240-L279) [ginfuncs.c#gin_leafpage_items](../../../../raw/postgres-12/contrib/pageinspect/ginfuncs.c#L156-L265)
+
+#### SP-GiST
+
+SP-GiST reserves block 0 for its metapage, block 1 for the normal root, and block 2 for the NULL root. Page opaque data stores flags plus redirection and placeholder counts and deliberately stores no live/dead count.[spgist_private.h#fixed-pages](../../../../raw/postgres-12/src/include/access/spgist_private.h#L25-L34) [spgist_private.h#SpGistPageOpaqueData](../../../../raw/postgres-12/src/include/access/spgist_private.h#L36-L71)
+
+The metapage contains a magic value and eight last-used-page entries. Each entry has a block number and a free-space estimate that may be obsolete; writes are opportunistic placement hints, and callers recheck the real page before use.[spgist_private.h#SpGistMetaPageData](../../../../raw/postgres-12/src/include/access/spgist_private.h#L73-L101) [spgutils.c#metapage-cache-update](../../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L268-L312) [spgutils.c#cached-page-recheck](../../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L385-L490)
+
+Inner tuples store state, `allTheSame`, node count, prefix size, total size, and an optional prefix plus embedded node tuples. A live leaf stores state, tuple size, same-parent link, heap TID, and opclass-defined datum. Redirect/dead/placeholder tuples have their own state and size, and redirects carry an index pointer and transaction ID.[spgist_private.h#inner-and-node-tuples](../../../../raw/postgres-12/src/include/access/spgist_private.h#L245-L305) [spgist_private.h#leaf-and-dead-tuples](../../../../raw/postgres-12/src/include/access/spgist_private.h#L307-L372)
+
+Build counts one successful leaf insertion per indexed heap tuple. VACUUM counts `SPGIST_LIVE` leaf tuples, but concurrent tuple movement can double-count; it clamps only when a known whole-heap count is lower. Empty pages remain reusable inside the main fork because SP-GiST cleanup does not truncate the index.[spginsert.c#spgist-build-count](../../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L41-L69) [spgvacuum.c#leaf-tuple-count](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L401-L480) [spgvacuum.c#scan-and-no-truncation](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L786-L890) [spgvacuum.c#concurrent-count-cap](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L926-L969)
+
+Neither `pageinspect` nor generic `pgstattuple()` supplies an SP-GiST decoder in PostgreSQL 12. A physical census needs custom code that counts live leaves separately from routing, redirect, dead, and placeholder objects.[pageinspect/Makefile#modules-and-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L3-L15) [pgstattuple.c#unsupported-index-AMs](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L312)
+
+#### BRIN
+
+BRIN page special space records page type and an evacuation flag. The three page types are metapage, reverse map, and regular summary storage. The metapage contains magic, version, `pagesPerRange`, and `lastRevmapPage`; reverse-map pages are arrays of summary-tuple TIDs.[brin_page.h#page-types](../../../../raw/postgres-12/src/include/access/brin_page.h#L23-L60) [brin_page.h#metapage-and-revmap](../../../../raw/postgres-12/src/include/access/brin_page.h#L63-L94)
+
+For each heap page range, a valid reverse-map TID points to a current summary or placeholder tuple; an invalid TID means unsummarized. A placeholder normally exists during summarization and can survive a crash. A BRIN tuple stores the range's starting heap block, null/placeholder/data-offset bits, optional per-column null flags, and an opclass-defined number and type of summary values.[brin_revmap.c#revmap-read](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L147-L205) [brin_tuple.h#BrinTuple](../../../../raw/postgres-12/src/include/access/brin_tuple.h#L49-L89) [brin.c#summarization-placeholder](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1169-L1197) [brin_revmap.c#leftover-placeholder](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L397-L405) [brin_internal.h#stored-summary-values](../../../../raw/postgres-12/src/include/access/brin_internal.h#L19-L60)
+
+Build stores one summary per encountered range, including skipped empty ranges and the final accumulated range, and returns the summary count as `index_tuples`. BRIN bulk delete does nothing because there are no per-heap-tuple index entries. VACUUM calls summarization with `include_partial = false`; it adds newly summarized ranges and every existing non-NULL reverse-map entry for full ranges without testing the tuple's placeholder bit. Its `reltuples` can therefore count a crash-leftover placeholder while omitting a physically present final partial-range summary.[brin.c#range-build](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L591-L656) [brin.c#brin-build-result](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L658-L743) [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784) [brin.c#brinvacuumcleanup](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L786-L814) [brin.c#brinsummarize-counting](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1299-L1387) [brin_revmap.c#leftover-placeholder](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L397-L405)
+
+The final call to `form_and_insert_tuple()` is unconditional. A normal build on an empty heap therefore stores one all-empty summary and reports build-time `reltuples = 1`; a later VACUUM can report zero summarized full ranges while that physical item remains.[brin.c#brin-build-final-tuple](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L713-L740) [brin.c#brinvacuumcleanup](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L786-L814)
+
+At a stable instant, count dereferenced valid reverse-map TIDs whose tuple is not marked as a placeholder to obtain completed current summaries. Count used regular-page line pointers for every physically present summary or placeholder item. Tuple movement and desummarization atomically update or invalidate the reverse map while marking the old item unused; `PageIndexTupleDeleteNoCompact()` can retain an unused slot and free-space overhead, but not an extra used summary. Stable count differences therefore indicate placeholders, corruption, or a scan that observed concurrent change, while allocated-byte calculations must still include unused slots and free space. `brin_page_items()` emits one row per indexed attribute, so a multicolumn summary must be counted once by page/item offset, not once per returned row.[brin_tuple.h#BrinTupleIsPlaceholder](../../../../raw/postgres-12/src/include/access/brin_tuple.h#L49-L89) [brin_pageops.c#summary-tuple-move](../../../../raw/postgres-12/src/backend/access/brin/brin_pageops.c#L242-L268) [brin_revmap.c#desummarize](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L407-L433) [bufpage.c#PageIndexTupleDeleteNoCompact](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L947-L1025) [brinfuncs.c#brin_page_items](../../../../raw/postgres-12/contrib/pageinspect/brinfuncs.c#L206-L317)
+
+`pageinspect` exposes page type, all metapage fields, reverse-map TIDs, and regular-page summary contents. Generic `pgstattuple()` rejects BRIN.[pageinspect--1.5.sql#BRIN-functions](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L191-L229) [pgstattuple.c#unsupported-index-AMs](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L312)
+
+#### Contrib Bloom and third-party access methods
+
+Bloom page opaque data stores tuple count `maxoff`, flags, and page ID. Its metapage stores magic, active bounds into the not-full-page array, frozen signature options, and that page-reuse array. It stores no whole-index tuple count.[bloom.h#page-opaque](../../../../raw/postgres-12/contrib/bloom/bloom.h#L31-L79) [bloom.h#metapage-and-tuple](../../../../raw/postgres-12/contrib/bloom/bloom.h#L99-L165)
+
+Each Bloom data tuple contains a heap TID followed by a fixed-size signature. For one particular Bloom index, the exact tuple payload is `BLOOMTUPLEHDRSZ + sizeof(uint16) * bloomLengthInWords`; pages store these tuples contiguously without line pointers. A stable full scan can sum `maxoff` on initialized, nondeleted data pages, which is also what VACUUM cleanup does.[blutils.c#Bloom-tuple-size](../../../../raw/postgres-12/contrib/bloom/blutils.c#L152-L202) [blutils.c#Bloom-options](../../../../raw/postgres-12/contrib/bloom/blutils.c#L472-L491) [blvacuum.c#Bloom-page-census](../../../../raw/postgres-12/contrib/bloom/blvacuum.c#L163-L216)
+
+Extensions can register arbitrary access-method handlers in `pg_am`. `pg_am` itself stores only name, handler OID, and AM type, while `IndexAmRoutine` has build, insert, vacuum, cost, option, property, and scan callbacks but no generic physical-statistics callback. Every third-party AM therefore needs its own disk-format, build-count, vacuum-count, and inspection review.[pg_am.h#FormData_pg_am](../../../../raw/postgres-12/src/include/catalog/pg_am.h#L29-L41) [amcmds.c#CreateAccessMethod](../../../../raw/postgres-12/src/backend/commands/amcmds.c#L37-L113) [amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L163-L233)
+
+### Calculations that are valid
+
+Use names that expose the numerator and denominator:
+
+| Quantity | Formula | Interpretation |
+| --- | --- | --- |
+| Catalog-estimated main-fork bytes | `relpages * current_setting('block_size')::bigint` | Bytes implied by the last stored block count. It can be stale.[pg_class.h#relpages](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L59-L66) [guc.c#block_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2887) |
+| Current main-fork logical bytes | `pg_relation_size(index_oid, 'main')` | Sum of current segment-file `st_size`; includes every main-fork page, not only tuple payload.[dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L335) |
+| Current main-fork pages | `pg_relation_size(index_oid, 'main') / block_size` | Current logical main-fork length in PostgreSQL blocks.[dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L335) [guc.c#block_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2887) |
+| Current all-fork logical bytes | `pg_table_size(index_oid)` | Main plus FSM, VM, and init forks for that index.[dbsize.c#calculate_table_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L380-L408) |
+| Allocated main bytes per catalog unit | `pg_relation_size(index_oid, 'main') / NULLIF(reltuples, 0)` | A trend ratio only. The denominator can mean build items, estimated rows, or an AM cleanup unit. Never label it tuple width.[index.c#index-build-statistics](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989) [analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629) [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1771-L1815) |
+| B-tree/hash average non-`LP_DEAD` data-item payload | `pgstattuple.tuple_len / NULLIF(tuple_count, 0)` | Average serialized item length from B-tree leaf items or hash bucket/overflow items. Excludes line pointers, alignment, page/routing/meta overhead, and free space.[pgstattuple.c#B-tree-page-scan](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L406-L446) [pgstattuple.c#hash-page-scan](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L448-L490) [pgstattuple.c#pgstat_index_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L565-L590) |
+| B-tree/hash average payload over all stored data items | `(tuple_len + dead_tuple_len) / NULLIF(tuple_count + dead_tuple_count, 0)` | Includes `LP_DEAD` item bodies but still excludes shared overhead.[pgstattuple.c#pgstat_index_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L565-L590) [bufpage.h#page-layout](../../../../raw/postgres-12/src/include/storage/bufpage.h#L22-L75) |
+| B-tree/hash allocated main bytes per stored data item | `table_len / NULLIF(tuple_count + dead_tuple_count, 0)` | Whole-main-fork allocation per scanned B-tree leaf or hash bucket/overflow item, including metadata, routing pages, free space, and reusable/deleted pages. It is an average share, not the item's own size.[pgstattuple.c#pgstat_index](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L520-L590) |
+| BRIN allocated main bytes per completed current summary | `main_bytes / NULLIF(nonplaceholder_valid_revmap_TIDs, 0)` | Average allocation per completed summarized range. Each valid TID must be dereferenced and placeholders excluded; the result does not measure heap rows or tuple payload.[brin_revmap.c#revmap-read](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L147-L205) [brin_tuple.h#BrinTupleIsPlaceholder](../../../../raw/postgres-12/src/include/access/brin_tuple.h#L49-L89) [brin_tuple.h#BRIN-tuple-purpose](../../../../raw/postgres-12/src/include/access/brin_tuple.h#L18-L30) |
+| SP-GiST allocated main bytes per represented heap TID | `main_bytes / NULLIF(live_leaf_count, 0)` | Requires a custom stable page scan. It includes three fixed pages, routing/dead objects, and reusable space.[spgist_private.h#fixed-pages](../../../../raw/postgres-12/src/include/access/spgist_private.h#L25-L34) [spgist_private.h#leaf-tuples](../../../../raw/postgres-12/src/include/access/spgist_private.h#L307-L372) [spgvacuum.c#leaf-tuple-count](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L401-L480) |
+| Bloom tuple payload | `BLOOMTUPLEHDRSZ + sizeof(uint16) * bloomLengthInWords` | Exact for each tuple in one Bloom index; whole-file allocation per tuple still requires the data-page `maxoff` census.[bloom.h#BloomTuple](../../../../raw/postgres-12/contrib/bloom/bloom.h#L137-L165) |
+
+For GIN, no single denominator is honest. Report separate figures such as bytes per entry key, bytes per posting association, bytes per pending heap tuple, or bytes per distinct referenced heap TID, and state exactly how each count was obtained. The metapage can supply `nEntries` and `nPendingHeapTuples`, subject to the build/VACUUM and unit caveats above; its aggregates cannot produce a total posting-association count or a distinct referenced-TID count.[ginblock.h#GinMetaPageData](../../../../raw/postgres-12/src/include/access/ginblock.h#L54-L100) [ginblock.h#posting-lists-and-trees](../../../../raw/postgres-12/src/include/access/ginblock.h#L218-L344)
+
+For logical **visible rows**, obtain a separate heap-side count under a declared snapshot and apply the partial predicate and AM-specific omission rules. That result measures bytes allocated per visible qualifying row, not physical index tuples: an index can retain entries for dead heap versions, and a HOT chain can let one index entry lead to several heap versions.[heapam_handler.c#index-build-visibility](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1381-L1417) [README.HOT#HOT-index-entries](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L34-L55)
+
+### Catalog inventory SQL
+
+This read-only inventory returns catalog estimates, actual logical fork lengths, definition/state fields that affect interpretation, and a deliberately cautious allocation ratio. It includes metadata-only partitioned roots but does not call size functions for them.
+
+`statement_timeout` and `lock_timeout` are `PGC_USERSET` settings in PostgreSQL 12. They need neither restart nor reload and can be set for a session or transaction. The snippet uses `SET LOCAL`, so both changes last only for this transaction.[guc.c#statement-and-lock-timeouts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2396)
+
+```sql
+BEGIN /* wiki_index_physical_inventory */;
+
+SET /* wiki_index_physical_inventory_statement_timeout */ LOCAL
+    statement_timeout = '30s';
+SET /* wiki_index_physical_inventory_lock_timeout */ LOCAL
+    lock_timeout = '1s';
+
+SELECT /* wiki_index_physical_inventory */
+       n.nspname AS index_schema,
+       c.relname AS index_name,
+       tn.nspname AS table_schema,
+       t.relname AS table_name,
+       am.amname,
+       c.relkind,
+       c.relpersistence,
+       c.relfilenode,
+       c.reltablespace,
+       c.reloptions,
+       i.indnatts,
+       i.indnkeyatts,
+       i.indisvalid,
+       i.indisready,
+       i.indislive,
+       i.indpred IS NOT NULL AS is_partial,
+       i.indexprs IS NOT NULL AS has_expressions,
+       c.relpages,
+       c.reltuples,
+       c.relallvisible,
+       current_setting('block_size')::bigint AS block_size_bytes,
+       CASE WHEN c.relkind = 'i'
+            THEN c.relpages::bigint
+                 * current_setting('block_size')::bigint
+       END AS catalog_main_bytes_estimate,
+       CASE WHEN c.relkind = 'i'
+            THEN pg_relation_size(c.oid, 'main')
+       END AS current_main_bytes,
+       CASE WHEN c.relkind = 'i'
+            THEN pg_relation_size(c.oid, 'fsm')
+       END AS current_fsm_bytes,
+       CASE WHEN c.relkind = 'i'
+            THEN pg_relation_size(c.oid, 'vm')
+       END AS current_vm_bytes,
+       CASE WHEN c.relkind = 'i'
+            THEN pg_relation_size(c.oid, 'init')
+       END AS current_init_bytes,
+       CASE WHEN c.relkind = 'i'
+            THEN pg_table_size(c.oid)
+       END AS current_all_forks_bytes,
+       CASE WHEN c.relkind = 'i' AND c.reltuples > 0
+            THEN pg_relation_size(c.oid, 'main')::numeric
+                 / c.reltuples::numeric
+       END AS allocated_main_bytes_per_catalog_count,
+       pg_get_expr(i.indpred, i.indrelid) AS partial_predicate
+FROM pg_class AS c
+JOIN pg_namespace AS n ON n.oid = c.relnamespace
+JOIN pg_am AS am ON am.oid = c.relam
+JOIN pg_index AS i ON i.indexrelid = c.oid
+JOIN pg_class AS t ON t.oid = i.indrelid
+JOIN pg_namespace AS tn ON tn.oid = t.relnamespace
+WHERE c.relkind IN ('i', 'I')
+ORDER BY n.nspname, c.relname;
+
+COMMIT /* wiki_index_physical_inventory */;
+```
+
+The `relpages * block_size` column and current size columns answer different questions. The former preserves the last catalog sample; the latter reads file lengths now. The ratio intentionally keeps the name `catalog_count` because the query cannot discover which operation last established its unit.[pg_class.h#physical-relstats](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L59-L66) [dbsize.c#pg_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L310-L335)
+
+### B-tree and hash physical data-item SQL
+
+With `pgstattuple` 1.5 installed and the caller granted its `regclass` function, this query is suitable only for a B-tree or hash index. Replace `public.index_name`; do not use this calculation for GiST in PostgreSQL 12 because of the pinned-source defects above.[pgstattuple--1.4--1.5.sql#pgstattuple-regclass](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L61-L75) [pgstattuple.c#index-AM-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L312)
+
+```sql
+BEGIN /* wiki_index_data_item_accounting */;
+
+SET /* wiki_index_data_item_accounting_statement_timeout */ LOCAL
+    statement_timeout = '5min';
+SET /* wiki_index_data_item_accounting_lock_timeout */ LOCAL
+    lock_timeout = '1s';
+
+SELECT /* wiki_index_data_item_accounting */
+       s.table_len AS main_fork_bytes,
+       s.tuple_count AS non_lp_dead_data_items,
+       s.dead_tuple_count AS lp_dead_data_items,
+       s.tuple_len AS non_lp_dead_payload_bytes,
+       s.dead_tuple_len AS lp_dead_payload_bytes,
+       CASE WHEN s.tuple_count > 0
+            THEN s.tuple_len::numeric / s.tuple_count
+       END AS avg_non_lp_dead_item_payload_bytes,
+       CASE WHEN s.tuple_count + s.dead_tuple_count > 0
+            THEN (s.tuple_len + s.dead_tuple_len)::numeric
+                 / (s.tuple_count + s.dead_tuple_count)
+       END AS avg_all_item_payload_bytes,
+       CASE WHEN s.tuple_count + s.dead_tuple_count > 0
+            THEN s.table_len::numeric
+                 / (s.tuple_count + s.dead_tuple_count)
+       END AS allocated_main_bytes_per_stored_data_item
+FROM pgstattuple('public.index_name'::regclass) AS s;
+
+COMMIT /* wiki_index_data_item_accounting */;
+```
+
+The extension's output calls the first category “live tuples,” but the implementation tests only `ItemIdIsDead()`. Interpret it as non-`LP_DEAD` physical items, not as a visibility-qualified row count.[pgstattuple--1.4--1.5.sql#pgstattuple-result](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L6-L17) [pgstattuple.c#pgstat_index_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L565-L590)
+
+### Consistency, cost, and privilege limits
+
+`pg_relation_size()` acquires `AccessShareLock`, which does not block ordinary DML. Its file-length numerator and the lazily maintained catalog denominator are not one atomic census.[dbsize.c#pg_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L310-L335) [mvcc.sgml#table-lock-conflicts](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L849-L907)
+
+For an index, `pgstattuple()` scans the AM-selected page range to the repeatedly checked current end of the main fork: B-tree and hash start after their metapages, while the flawed GiST path starts after its root. Only `table_len` reports the final whole-fork block length. The function takes page locks while inspecting each selected page, but no index-wide snapshot prevents inserts, splits, cleanup, or extension during the scan. Treat a result collected under concurrent maintenance or DML as a moving physical observation.[pgstattuple.c#index-AM-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L283) [pgstattuple.c#pgstat_index](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L520-L562)
+
+`pageinspect.get_raw_page()` copies one separately locked page at a time. A multi-page query built from it is not a whole-index consistent snapshot unless the caller separately excludes changes. It also reads raw storage and is intended for privileged diagnostics.[rawpage.c#get_raw_page_internal](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L94-L171)
+
+Version 1.5 of `pgstattuple` revokes public execution and grants its inspection functions to `pg_stat_scan_tables`; these functions can still generate substantial sequential I/O. Use a maintenance window for a stable census and bound production runs with transaction-local timeouts.[pgstattuple--1.4--1.5.sql#privileges](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L19-L45) [pgstattuple--1.4--1.5.sql#regclass-privileges](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L61-L100)
+
+### Planner, caller-callee, and generated-build boundaries
+
+The normal write path computes index attributes and calls the selected AM's insert callback. Build and maintenance use the same boundary: common code calls `ambuild`, `ambulkdelete`, and `amvacuumcleanup`; the AM returns transient statistics; common catalog code decides whether to persist them.[index.c#FormIndexDatum](../../../../raw/postgres-12/src/backend/catalog/index.c#L2578-L2651) [amapi.h#IndexAmRoutine-callbacks](../../../../raw/postgres-12/src/include/access/amapi.h#L209-L233) [index.c#ambuild-and-catalog-update](../../../../raw/postgres-12/src/backend/catalog/index.c#L2899-L2904) [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1771-L1815)
+
+The planner does not treat an ordinary index's own `reltuples` as a physical entry count. For a nonpartial index it takes current blocks and sets index tuples equal to the parent table estimate. For a partial index it scales the index's old tuple/page density to current pages and clamps it to the parent estimate; that source path itself calls its one-metapage subtraction a kludge that is suspect for GiST.[plancat.c#get_relation_info-index-size](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407) [plancat.c#estimate_rel_size-index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L1027)
+
+`pg_class.h`, `pg_index.h`, and `pg_am.h` are catalog inputs. The build generates `_d.h` definitions and bootstrap catalog artifacts from those inputs and `.dat` rows; generated headers add no hidden per-index physical-statistics catalog.[pg_class.h#catalog-input](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L12-L29) [pg_index.h#catalog-input](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L12-L29) [catalog/Makefile#generated-catalog-inputs](../../../../raw/postgres-12/src/backend/catalog/Makefile#L28-L51) [catalog/Makefile#catalog-generation](../../../../raw/postgres-12/src/backend/catalog/Makefile#L71-L100)
+
+### Tests and explicit test gaps
+
+PostgreSQL 12 regression tests exercise GIN pending-list cleanup, SP-GiST VACUUM paths, and BRIN summarize/desummarize behavior. `pageinspect` has direct B-tree, hash, GIN, and BRIN tests. The `pgstattuple` regression file calls generic `pgstattuple()` on the heap and separately exercises `pgstatindex()`, `pgstatginindex()`, and `pgstathashindex()`; it does not directly call generic `pgstattuple()` on a B-tree, hash, or GiST index.[gin.sql#pending-list-tests](../../../../raw/postgres-12/src/test/regress/sql/gin.sql#L7-L36) [spgist.sql#vacuum-tests](../../../../raw/postgres-12/src/test/regress/sql/spgist.sql#L7-L31) [brin.sql#summarize-tests](../../../../raw/postgres-12/src/test/regress/sql/brin.sql#L406-L449) [pageinspect/Makefile#regression-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L3-L15) [pgstattuple.sql#extension-tests](../../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L1-L63)
+
+No cross-AM `pg_class.reltuples` lifecycle assertion, catalog-derived bytes-per-item formula, SP-GiST/Bloom `pageinspect` decoder, or direct one-page/deleted-page GiST `pgstattuple()` case was found in the reviewed test and contrib inspection scope.[pageinspect/Makefile#regression-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L3-L15) [pgstattuple.sql#extension-tests](../../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L1-L63)
+
+## Context Reviewed
+
+- Pinned PostgreSQL 12.2 checkout at commit `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- Shared catalog definitions and writers: `pg_class`, `pg_index`, `pg_statistic`, index build, standalone `ANALYZE`, `VACUUM`, planner size estimation, relation-size functions, generic page/tuple layout, cumulative statistics views, and the index AM API.
+- B-tree, hash, GiST, GIN, SP-GiST, BRIN, and contrib Bloom metapages, page opaque structures, tuple formats, insert/build paths, VACUUM paths, cost/planner readers, error paths, contrib inspection code, and reloptions.
+- Reverse users of the shared build/VACUUM statistics structures and generated catalog headers.
+- Core, contrib, regression, isolation/module, and direct inspection tests listed above.
+- An isolated server built from the exact pin executed the catalog-inventory SQL and reproduced the build, standalone-`ANALYZE`, and `VACUUM` paths described above. The runtime installation did not contain the `pgstattuple` shared module, so the B-tree/hash block was verified against the pinned extension's SQL result declaration and C implementation rather than executed. Runtime results were corroboration; the page's claims remain grounded in the pinned source.[pgstattuple--1.4--1.5.sql#pgstattuple-result](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L6-L17) [pgstattuple.c#index-AM-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L312)
+
+## Evidence Map
+
+| Claim | Primary evidence |
+| --- | --- |
+| `pg_class` physical relstats are stale estimates and index `relallvisible` is zero | [pg_class.h#physical-relstats](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L49-L66), [index.c#index-relallvisible](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2785) |
+| Build, `ANALYZE`, and `VACUUM` can write different `reltuples` units | [index.c#index-build-statistics](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989), [analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1771-L1815) |
+| Current PostgreSQL size is segment `st_size`, not tuple payload or filesystem allocation | [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L335) |
+| B-tree has structural/last-cleanup metadata but no current global tuple count | [nbtree.h#BTMetaPageData](../../../../raw/postgres-12/src/include/access/nbtree.h#L90-L110), [nbtree.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L783-L845) |
+| Hash persists `hashm_ntuples`, but physical split copies and cleanup make page counts a different quantity | [hash.h#HashMetaPageData](../../../../raw/postgres-12/src/include/access/hash.h#L242-L263), [hashpage.c#bucket-split-copy](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L1107-L1287) |
+| GiST has no aggregate and the PostgreSQL 12 `pgstattuple` path is not a safe exact census | [gist.h#GISTPageOpaqueData](../../../../raw/postgres-12/src/include/access/gist.h#L41-L82), [pgstattuple.c#GiST-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L283), [gist.h#deleted-page-layout](../../../../raw/postgres-12/src/include/access/gist.h#L160-L183) |
+| GIN metapage counters have several units and cannot recover total postings or rows | [ginblock.h#GinMetaPageData](../../../../raw/postgres-12/src/include/access/ginblock.h#L54-L100), [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L686-L731) |
+| SP-GiST stores placement hints and per-page redirect/placeholder counts, not live-leaf totals | [spgist_private.h#page-and-metapage-data](../../../../raw/postgres-12/src/include/access/spgist_private.h#L36-L101) |
+| BRIN counts summaries/ranges, not rows; valid revmap TIDs identify referenced summaries or placeholders | [brin_page.h#metapage-and-revmap](../../../../raw/postgres-12/src/include/access/brin_page.h#L63-L94), [brin_revmap.c#revmap-read](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L147-L205), [brin_revmap.c#leftover-placeholder](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L397-L405) |
+| Bloom has fixed tuple payloads but no aggregate tuple counter | [bloom.h#metapage-and-tuple](../../../../raw/postgres-12/contrib/bloom/bloom.h#L99-L165), [blvacuum.c#Bloom-page-census](../../../../raw/postgres-12/contrib/bloom/blvacuum.c#L163-L216) |
+| No generic AM physical-statistics callback exists | [amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L163-L233) |
+
+## Open Questions
+
+- BRIN reverse-map pages physically start at block 1, and extension writes the new map block into `lastRevmapPage`; nevertheless, `brinGetStats()` derives `revmapNumPages = lastRevmapPage - 1`. The pinned implementation is internally inconsistent on that derived planner count, so this page uses the raw last block and reverse-map contents for physical accounting.[brin_revmap.c#revmap-block-mapping](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L445-L463) [brin_revmap.c#revmap-extension](../../../../raw/postgres-12/src/backend/access/brin/brin_revmap.c#L616-L638) [brin.c#brinGetStats](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1089-L1108)
+- The pinned `pgstattuple()` GiST implementation skips block-zero leaf roots and does not exclude deleted pages, and its regression file has no direct GiST case. Whether an operational installation carries a downstream correction cannot be established from this checkout; verify that code before using GiST output.[pgstattuple.c#GiST-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L283) [pgstattuple.c#pgstat_gist_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L492-L518) [pgstattuple.sql#extension-tests](../../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L1-L63)
+- `IndexBulkDeleteResult.pages_removed` is documented as physical file shrink, but GiST increments it when leaf pages are unlinked and marked deleted without truncating the main fork. For this GiST path, treat the returned value as removed from the tree, not proven bytes released to the filesystem.[genam.h#IndexBulkDeleteResult](../../../../raw/postgres-12/src/include/access/genam.h#L55-L81) [gistvacuum.c#empty-page-unlink-count](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L465-L584) [gistvacuum.c#GistPageSetDeleted](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L651-L683)
+- The index-FSM introductory comment says `BLCKSZ - 1` means used and zero means unused, but `RecordFreeIndexPage()` and `RecordUsedIndexPage()` implement the reverse. This page follows the executable implementation: free is `BLCKSZ - 1`, used is zero.[indexfsm.c#index-FSM-comment](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L14-L20) [indexfsm.c#index-FSM-implementation](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L48-L65)
+- `pgstattuple` documentation describes visibility-tested live/dead tuples, but its index path classifies only `LP_DEAD` versus not `LP_DEAD`. This page follows the index implementation.[pgstattuple.sgml#live-dead-description](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L70-L141) [pgstattuple.c#pgstat_index_page](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L565-L590)
+- No regression assertion for a cross-AM `reltuples` lifecycle or bytes-per-entry formula was found in the reviewed test scope. The formulas here should be regression-tested against each production AM/opclass and concurrency pattern before they drive automation.[pgstattuple.sql#extension-tests](../../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L1-L63) [pageinspect/Makefile#regression-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L3-L15)
+- Third-party AMs are intentionally unresolved by core source. Their handler and on-disk format can define different counters and even a different page layout.[amcmds.c#CreateAccessMethod](../../../../raw/postgres-12/src/backend/commands/amcmds.c#L37-L113) [storage.sgml#index-page-format-boundary](../../../../raw/postgres-12/doc/src/sgml/storage.sgml#L697-L710)
+
+## Source References
+
+- Shared catalogs and accounting: [pg_class.h#FormData_pg_class](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L29-L84), [pg_index.h#FormData_pg_index](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L29-L58), [genam.h#index-maintenance-statistics](../../../../raw/postgres-12/src/include/access/genam.h#L27-L81), [index.c#index-build-statistics](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989), [analyze.c#index-relstats-update](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [vacuumlazy.c#lazy_cleanup_index](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1771-L1815), [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L335).
+- Generic storage and extension API: [bufpage.h#page-layout](../../../../raw/postgres-12/src/include/storage/bufpage.h#L22-L75), [itup.h#IndexTupleData](../../../../raw/postgres-12/src/include/access/itup.h#L23-L90), [amapi.h#IndexAmRoutine](../../../../raw/postgres-12/src/include/access/amapi.h#L163-L233).
+- Core AM layouts: [nbtree.h#B-tree-page-and-meta-data](../../../../raw/postgres-12/src/include/access/nbtree.h#L55-L110), [hash.h#HashMetaPageData](../../../../raw/postgres-12/src/include/access/hash.h#L242-L263), [gist.h#GISTPageOpaqueData](../../../../raw/postgres-12/src/include/access/gist.h#L41-L82), [ginblock.h#GIN-page-and-meta-data](../../../../raw/postgres-12/src/include/access/ginblock.h#L29-L100), [spgist_private.h#SP-GiST-page-and-meta-data](../../../../raw/postgres-12/src/include/access/spgist_private.h#L25-L101), [brin_page.h#BRIN-page-and-meta-data](../../../../raw/postgres-12/src/include/access/brin_page.h#L23-L94).
+- Contrib layout and inspection: [bloom.h#Bloom-layout](../../../../raw/postgres-12/contrib/bloom/bloom.h#L31-L165), [pgstattuple.c#index-AM-dispatch](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L255-L312), [pgstatindex.c#inspection-structures](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L70-L128), [pageinspect/Makefile#modules-and-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L3-L15).
+
+## Navigation
+
+- [PostgreSQL 12 index](../../index.md)
+- [Related bytes-per-estimated-row drift analysis](comment-stored-bytes-per-tuple-bloat.md)
+- [PostgreSQL 12 codebase navigation guide](../../codebase-navigation-guide.md)
+- [Wiki index](../../../index.md)
+- [Versions](../../../versions.md)

@@ -14,6 +14,19 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-11: filed [Physical Index Statistics, Tuple Counts, and Bytes per
+  Tuple in PostgreSQL 12
+  (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). The page inventories shared catalog and relation-size
+  values and every core index access method's persistent physical metadata,
+  with contrib Bloom as the packaged-extension boundary. It distinguishes
+  build-, `ANALYZE`-, and `VACUUM`-written `reltuples` meanings from physical
+  page-item counts, gives guarded formulas for allocated bytes per catalog
+  unit or scanned data item, and documents why GIN keys/postings and BRIN
+  summaries cannot be treated as one tuple per heap row. The page remains
+  human-unverified and agent-unverified.
+
 - 2026-08-11: filed [Can COMMENT-Stored Table DML Counters Trigger GIN
   REINDEX at 40% in PostgreSQL 12?
   (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md)

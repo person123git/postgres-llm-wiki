@@ -2,6 +2,39 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] lint v12 | physical index statistics, tuple counts, and bytes
+
+`wiki_lint` passed with 0 errors and 0 warnings after filing the PostgreSQL 12
+physical-index-statistics page and updating the global index, v12 landing page,
+version coverage notes, and wiki log.
+
+## [2026-08-11] answer v12 | physical index statistics, tuple counts, and bytes
+
+- Filed [Physical Index Statistics, Tuple Counts, and Bytes per Tuple in
+  PostgreSQL 12
+  (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene applied before drafting; the user approved
+  the corrected wording, which is restated verbatim under `## Question`.
+- Mapped shared `pg_class`/`pg_index` fields, relation forks, FSM encoding,
+  generic page overhead, and persistent B-tree, hash, GiST, GIN, SP-GiST,
+  BRIN, and Bloom metadata. The page separates catalog estimates, stored
+  counters, per-page observations, serialized item bytes, and whole-file byte
+  shares.
+- Traced every `reltuples` writer through build, standalone `ANALYZE`, and
+  `VACUUM`; documented the valid row/item/summary denominators; and preserved
+  the pinned GiST `pgstattuple`, BRIN revmap/planner/counting, GiST
+  `pages_removed`, index-FSM, and live/dead reporting discrepancies under
+  explicit limits and open questions.
+- An isolated server built from the exact pin executed the catalog inventory
+  SQL. A seven-AM fixture reproduced AM-specific build values, the
+  standalone-`ANALYZE` row-estimate normalization, and AM-specific post-VACUUM
+  values. The B-tree/hash `pgstattuple` block was instead verified against the
+  pinned extension declaration and implementation because that runtime build
+  did not install the module; the server was stopped after testing.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`.
+  Human `verified: false` and `verified_by_agent: not yet` remain.
+
 ## [2026-08-11] lint v12 | COMMENT-stored table DML counters for GIN
 
 `wiki_lint` passed with 0 errors and 0 warnings after filing the PostgreSQL 12
