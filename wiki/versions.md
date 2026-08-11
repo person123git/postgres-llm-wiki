@@ -14,6 +14,31 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-11: reviewed [Physical Index Statistics, Tuple Counts, and Bytes per
+  Tuple in PostgreSQL 12
+  (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Every claim and all 354 source citations were rechecked.
+  Corrections: `pgstattuple.tuple_len` includes each item's `MAXALIGN` padding
+  because B-tree and hash pass an already-rounded `IndexTupleSize()`, and the
+  three `bigint` averages now cast to `numeric`; a bare `block_size` identifier
+  became `current_setting('block_size')::bigint`;
+  `btm_last_cleanup_num_heap_tuples` is written by `btbulkdelete()` as well as
+  cleanup; the `ANALYZE` skip guard is `!inh && !(options & VACOPT_VACUUM)`;
+  `PageIndexTupleDeleteNoCompact()` returns the tuple bytes to free space and
+  retains only the line pointer; `get_raw_page()` requires superuser and
+  rejects partitioned indexes; `brinbulkdelete()` still returns a zeroed
+  result struct; `pg_am` has four columns; and the `pgstattuple` regression
+  file does call generic `pgstattuple()` on a partitioned-index root as an
+  expected failure. Two new Open Questions: the BRIN `revmapNumPages =
+  lastRevmapPage - 1` off-by-one quantified against `brincostestimate()`, and
+  `bufpage.h`'s "unused in index pages" comment versus GIN's `pd_prune_xid`
+  reuse. Roughly 40 citations were repointed or rebounded, including the BRIN
+  revmap reader, the GiST VACUUM leaf count, `pg_relpages_v1_5`, and the
+  `pgstattuple` regression file's true 119-line extent. The page remains
+  human-unverified and agent-unverified: this review re-read source only and
+  did not re-execute the page's SQL on a live 12.2 server.
+
 - 2026-08-11: filed [Physical Index Statistics, Tuple Counts, and Bytes per
   Tuple in PostgreSQL 12
   (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md)

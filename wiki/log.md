@@ -2,6 +2,73 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] lint v12 | physical index statistics review
+
+`wiki_lint` passed with 0 errors and 0 warnings after the review corrections to
+the PostgreSQL 12 physical-index-statistics page and the updates to the global
+index, v12 landing page, version coverage notes, and wiki log. A separate
+citation-resolution pass confirmed all 354 source links resolve to existing
+files with in-range line fragments.
+
+## [2026-08-11] review-fix v12 | physical index statistics, tuple counts, and bytes
+
+- Rechecked the complete [Physical Index Statistics, Tuple Counts, and Bytes
+  per Tuple in PostgreSQL 12
+  (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Claim-by-claim source audit of all sections plus every
+  source citation.
+- Corrected factual claims. `pgstattuple.tuple_len` sums `lp_len`, and both
+  B-tree and hash pass an already-`MAXALIGN`ed `IndexTupleSize()` to
+  `PageAddItem`, so the payload average *includes* each item's alignment
+  padding; the page previously said it excluded alignment. The three
+  `pgstattuple` averages now cast to `numeric` because every count and length
+  column is `bigint`. A bare `block_size` identifier in the formula table
+  became `current_setting('block_size')::bigint`.
+  `btm_last_cleanup_num_heap_tuples` is written by `btbulkdelete()` as well as
+  `btvacuumcleanup()`. The `ANALYZE` skip is the full guard
+  `!inh && !(params->options & VACOPT_VACUUM)`.
+  `PageIndexTupleDeleteNoCompact()` returns the tuple's bytes to free space
+  and retains only the line-pointer slot. `get_raw_page()` requires superuser
+  and rejects partitioned indexes. `brinbulkdelete()` still allocates and
+  returns a zeroed result struct. `pg_am` stores four columns. `pgstathashindex()`
+  returns `version` first. The `pd_prune_xid` sentence now quotes `bufpage.h`
+  instead of softening it, and the GIN posting-tree sentence admits the
+  uncompressed pre-9.4 leaf layout. The `estimate_rel_size()` paragraph quotes
+  the source's own "kluge" wording and adds the zero-`relpages` fallback.
+- Corrected the test-coverage claim: `contrib/pgstattuple/sql/pgstattuple.sql`
+  is 119 lines, not 63, and it *does* call generic `pgstattuple()` on an index
+  — the partitioned-index root `test_partitioned_index`, as an expected
+  failure. The absence claim is now scoped to indexes with storage and is
+  backed by the `contrib/bloom` regression file and the heap-only
+  `vacuum-reltuples` isolation spec.
+- Added two Open Questions. The BRIN `revmapNumPages = lastRevmapPage - 1`
+  entry now shows the off-by-one arithmetic (revmap pages occupy blocks
+  `1..lastRevmapPage`) and its consumer in `brincostestimate()`, whose
+  hypothetical branch computes a rounded-up count. The new entry records
+  `bufpage.h`'s "currently unused in index pages" comment against GIN's
+  `pd_prune_xid` reuse, GIN being the only index AM in the checkout that
+  touches the field.
+- Repointed or rebounded roughly 40 citations, including the BRIN revmap
+  reader (`brinSetHeapBlockItemptr` -> `brinGetTupleForHeapBlock`), the GiST
+  VACUUM leaf count (`gistvacuumscan` setup -> `gistvacuumpage`), the
+  SP-GiST leaf count (leaf-root special case -> `vacuumLeafPage`),
+  `pg_relpages` -> `pg_relpages_v1_5`, `blbuildCallback` ->
+  `bloomBuildCallback`, and the `pgstattuple(text)` result declaration ->
+  the `regclass` overload the page's own query calls. Added missing support
+  for the normal insert path (`ExecInsertIndexTuples`), `ambulkdelete`
+  (`lazy_vacuum_index`), fork-name strings (`relpath.c#forkNames`), GIN
+  pending-list accounting (`ginfast.c`), Bloom's line-pointer-free layout
+  (`BloomPageAddItem`), and the `pg_freespace` SQL signature.
+- Added a cost note to the catalog inventory SQL: five volatile size calls run
+  per row, so narrow the query or drop the redundant `pg_table_size()` column.
+  The SQL itself was re-verified against the pinned catalogs, `pg_proc.dat`,
+  `relpath.c` fork names, and the grammar, and is unchanged.
+- Human `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` are unchanged. The residual gap is stated on the
+  page and here: this review re-read pinned source only and did not re-execute
+  the page's SQL against a live 12.2 server.
+
 ## [2026-08-11] lint v12 | physical index statistics, tuple counts, and bytes
 
 `wiki_lint` passed with 0 errors and 0 warnings after filing the PostgreSQL 12
