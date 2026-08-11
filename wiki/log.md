@@ -2,6 +2,61 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-11] answer v12 | pgstattuple_approx for table heap bloat
+
+- Filed [Proposing and Testing pgstattuple_approx for Table Heap Bloat in
+  PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (PostgreSQL 12.2). Prompt hygiene applied first; the user chose silently
+  corrected wording, full exact-pin measurements, and a comparison against both
+  exact `pgstattuple` and a catalog-only estimate. This is the first page in
+  the new `wiki/v12/questions/storage-and-vacuum/` category directory.
+- Source review covered `pgstatapprox.c` end to end plus `pgstattuple.c`,
+  `vac_estimate_reltuples()`, `lazy_scan_heap()`'s all-visible and free-space
+  paths, every `visibilitymap_set`/`visibilitymap_clear` call site,
+  `GetRecordedFreeSpace()` and the free-space-map categories,
+  `PageGetHeapFreeSpace()`, `PageRepairFragmentation()`, `raw_heap_insert()`,
+  `reform_and_rewrite_tuple()`, `HeapTupleSatisfiesVacuum`/`Dirty`, ANALYZE's
+  width and `relallvisible` accounting, the extension SQL scripts and grants,
+  the documentation chapter, and the module's regression coverage.
+- Built the exact pin out of tree under `.wiki-runtime/` and ran an isolated
+  server with `autovacuum = off`, installing `pgstattuple`, `pageinspect`,
+  `pg_freespacemap`, and `pg_visibility` from the same checkout. Ground truth
+  is `VACUUM FULL` main-fork size reduction.
+- Cost: 6.9 ms and 42 physical reads versus `pgstattuple`'s 484.8 ms and
+  137,932 reads on a 1.08 GB all-visible table; 9.5 ms with 1% of pages dirty;
+  216.7 ms versus 470.8 ms with no visibility map. The relation's free space
+  map fork is 36 pages and its visibility map fork 5.
+- Accuracy: over nine fixtures the `fillfactor`-corrected metric ran −3.11 to
+  +1.79 points on the eight ordinary row shapes. The uncorrected
+  `free + dead` signal produced a 31.25-point `fillfactor` false positive and a
+  14.45-point overstatement. Wide 2,832-byte rows produced a 30.08-point false
+  positive that no correction from this function's output can remove. Dropped
+  columns produced an 84.22-point false negative; v12's retained line-pointer
+  arrays cost 2 to 7 points, reconciled page by page with `pageinspect` and
+  `pg_freespacemap` (`approx_tuple_len` equals `sum(8192 - fsm)` byte for
+  byte).
+- Also filed: the exact `reltuples` dependency of `approx_tuple_count` (a
+  forged `reltuples = 7` returned verbatim when every page is skipped, then 73
+  through the documented density blend), integer-truncated `scanned_percent`, a
+  15.69-point phantom dead-tuple reading during an uncommitted bulk insert,
+  47.65% "bloat" that `VACUUM FULL` could not reclaim under an old snapshot,
+  the relation-kind and error matrix including the refused TOAST relation and
+  the v12 sequence quirk, the `pg_stat_scan_tables` privilege boundary, and a
+  catalog-only estimator that was exact on all nine well-behaved fixtures and
+  wrong by 21.32, 79.99, and −5698.78 points on alignment-padding,
+  stale-statistics, and never-analyzed tables.
+- Six Open Questions recorded, including the untested 32-bit `scanned_percent`
+  overflow above roughly 328 GiB scanned and untested standby behaviour.
+- All test relations and the test role were dropped, the isolated server was
+  stopped, and its 3.1 GB scratch build, install, and data directories under
+  `.wiki-runtime/tmp/approx12/` were removed. `raw/postgres-12/` was unchanged
+  throughout.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. The
+  page is filed with human `verified: false`, the visible `(unverified)` title,
+  and `verified_by_agent: not yet`.
+
 ## [2026-08-11] lint v12 | physical index statistics review
 
 `wiki_lint` passed with 0 errors and 0 warnings after the review corrections to
