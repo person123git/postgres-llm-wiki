@@ -2,6 +2,71 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] answer v12 | extract declarative range partition bounds with SQL and no regex
+
+- Filed [Extracting Declarative Range Partition Bounds With SQL and No Regex in
+  PostgreSQL 12
+  (unverified)](v12/questions/server-administration/extract-range-partition-bounds-without-regex.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). The
+  prompt contained "postgreql 12", a space before its comma, lowercase "sql", and
+  "declarative range partition" for "declarative range partitioning"; the user
+  chose the corrected wording, which is what `## Question` now restates.
+- Filed under `server-administration` because the deliverable is a catalog
+  introspection runbook and every citation is catalog, deparse, client-tool, or
+  documentation code rather than planner code.
+- Verdict: PostgreSQL 12 exposes no typed partition bound. `pg_class.relpartbound`
+  is a `pg_node_tree` whose text form dumps each datum as bytes via `outDatum`, so
+  the only usable SQL form is the `pg_get_expr(relpartbound, oid)` deparse that
+  `psql \d` prints and `pg_dump` pastes into `ATTACH PARTITION`. No regex is needed
+  because `get_rule_expr`'s `T_PartitionBoundSpec` arm plus
+  `get_range_partbound_string` and `get_const_expr(..., -1)` emit a fixed grammar:
+  `FOR VALUES FROM (` … `) TO (`, elements joined by `, `, bare `MINVALUE`/
+  `MAXVALUE`, `DEFAULT` for a default partition, and literals with no `::type` and
+  no `COLLATE`.
+- The filed recipe splits the text on the quote character with the two-argument
+  `string_to_array`, masks each literal's contents to an equal-length `x` run so
+  quote parity is decidable, then locates `) TO (` and `, ` with `strpos`/`substr`.
+  It uses `substr`, never `substring`, because only `substring(text, text)`
+  resolves to the regex `textregexsubstr`. Output is one row per partition, side,
+  and key position, with the key column and type from `pg_attribute` through the
+  zero-based `partattrs` vector.
+- Tested on an isolated exact-pin 12.2 server built under `.wiki-runtime/pg12`.
+  Correctness matrix: 18 range parents, 45 partitions, 95 creation-time control
+  elements over `int4`/`int8`/`numeric`/`date`/`timestamptz`/`text`/`text COLLATE
+  "C"`/two-column/expression/`boolean`/`float8`/`bytea`/`interval`/`char(3)`/
+  `uuid` keys plus adversarial `text` bounds containing `) TO (`, `, `, escaped
+  quotes, a newline, and the literal word `MINVALUE`.
+- Results: a from-scratch reconstruction of the deparse rules matched
+  `pg_get_expr` on 41/41 partitions; the recipe scored 95/95; the obvious
+  `split_part` + `btrim` version scored 81/94 elements and got 9/41 partitions
+  wrong; `pg_get_expr(relpartbound, 0)` and the `pretty = true` form were
+  identical to the canonical call on 45/45; 0 bound texts contained `::` and 2
+  contained a newline inside a literal; the value round trip through the key type
+  was exact in 78/81, the three exceptions being `boolean`'s `true`/`false`
+  keywords.
+- Also measured: `DateStyle`, `TimeZone`, `IntervalStyle`, `extra_float_digits`,
+  `bytea_output` and `standard_conforming_strings` all change the text, all
+  `PGC_USERSET`; `standard_conforming_strings = off` dropped the score to 91/95
+  until an `E''`-string `replace` restored 95/95 under both settings, while the
+  plain `replace(x, '\\', '\')` spelling does not parse at all under that setting;
+  14 catalog `AccessShareLock`s and zero partition locks; 39.9-44.9 ms masked
+  versus 8.3-9.2 ms plain-split at 1048 partitions and 2109 rows; an unprivileged
+  role read all 2109 rows including a partition whose schema it cannot use;
+  `DETACH` erases `relpartbound`; a `REPEATABLE READ` snapshot plus a concurrent
+  `DROP` made `pg_get_expr(…, oid)` NULL while `pg_get_expr(…, 0)` still
+  deparsed; a 9600-character bound failed with `row is too big: size 9304,
+  maximum size 8160` because `pg_class` has no TOAST table; and
+  `cannot use subquery in partition bound` bounds the expression grammar.
+- Recorded seven open questions, including the complete absence of any upstream
+  test that deparses a quoted RANGE bound containing a comma, quote, or
+  backslash, the untested `relkind = 'f'` case, expression-key type derivation,
+  and the unobserved `READ COMMITTED` variant of the NULL-deparse race.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet`. The temporary database and fixtures were dropped
+  and the test server stopped; only the SQL scripts under
+  `.wiki-runtime/tmp/partbounds/` remain.
+
 ## [2026-08-12] answer v12 | calibrate a COMMENT-stored bytes-per-table-tuple REINDEX threshold for every non-btree index
 
 - Filed [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for
