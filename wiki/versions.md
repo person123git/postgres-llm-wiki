@@ -16,6 +16,47 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 - 2026-08-12: extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
   PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  proposed single B-tree bloat statement for servers 12 through 17, against
+  unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10). The statement
+  runs unchanged on every major in that range and credits deduplication only
+  where the catalog proves the engine would: non-unique, `deduplicate_items` on,
+  `indnatts = indnkeyatts`, a `pg_amproc` equal-image row at `amprocnum = 4` for
+  every key opclass, and no key collation with `collisdeterministic = false`. Its
+  posting-list arithmetic is derived from `_bt_load`'s
+  `MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)` cap (812 bytes),
+  `_bt_dedup_save_htid`/`_bt_form_posting`'s `MAXALIGN(base + n * 6)` tuple size,
+  and `_bt_buildadd`'s `pgspc + last_truncextra < btps_full` rule, which together
+  put 9 posting tuples of 808 bytes on a leaf and model 843 leaves against an
+  849-block rebuild for 1,000,000 rows under one key. Key groups come from a
+  mixture — the NULL run (NULLs deduplicate because `_bt_keep_natts_fast` treats
+  two of them as equal), each `most_common_freqs` entry, then the remaining
+  distinct values — and a negative `n_distinct` is credited only for whole-table
+  indexes because the fraction is over the table's rows, not a partial
+  predicate's subset. Measured on isolated 12.2, 14.23 and 17.10 servers built
+  from their own pins (17.10 configured `--with-icu`) with identical fixture DDL
+  and `CREATE INDEX CONCURRENTLY` ground truth: 68/68/72 indexes swept over
+  133,677/94,910/103,056 blocks in 17.7 to 32.9 ms warm, 0/34/36 credited,
+  `expected_blocks` identical to the v12 page's Method A in all 34 scored cells
+  on 12.2, and within 5% of a rebuild on 25 of 33 cells on 14.23 and 25 of 35 on
+  17.10 against Method A's 14 and 15. `i_dupdel` (10 keys, 90% of 1,000,000 rows
+  deleted and vacuumed) reads 89.8% on 14.23 and 17.10 against a true 89.8%, and
+  90.0% on 12.2 against a true 89.9%. The statement emits a second
+  `bloat_pct_floor` column (one tuple per row) plus a `caveats` column, and
+  alerting on the floor scores 4 true positives, 0 false positives and 1 false
+  negative on every server, against 2 to 3 false positives for the point estimate
+  alone: a healthy 28 MB nondeterministic-collation ICU index reads 88.2% without
+  the new conjunct and 0.1% with it, a hot-value skew index whose `n_distinct`
+  came back 81,281 against a true 750,001 reads 53.4% point / −20.9% floor and
+  0.1% after `SET (n_distinct = -0.75)`, and a table doubled since its last
+  `ANALYZE` reads 49.9% with the caveat `row-count sources disagree`. Ten new open
+  questions were filed, including that majors 13, 15 and 16 were never run and
+  the 5.5% to 8.2% posting-list packing loss that is measured but not modelled.
+  All three servers were stopped and their data directories removed. The page
+  remains human-unverified and agent-unverified.
+
+- 2026-08-12: extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with
   three follow-up sections answering whether that page's deduplication-aware
   sweep works for indexes on a v12 server as well as a v17 one, against unchanged

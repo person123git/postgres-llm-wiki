@@ -35,6 +35,15 @@ verified_by_agent: not yet
   - [Follow-up: the same sweep on a 12.2 server and a 17.10 server](#follow-up-the-same-sweep-on-a-122-server-and-a-1710-server)
   - [Follow-up: the INCLUDE-column false positive on v17](#follow-up-the-include-column-false-positive-on-v17)
   - [Follow-up: the v12 hazard the reltuples guard does not cover](#follow-up-the-v12-hazard-the-reltuples-guard-does-not-cover)
+  - [Follow-up: one statement for PostgreSQL 12 through 17](#follow-up-one-statement-for-postgresql-12-through-17)
+  - [What the proposed statement changes](#what-the-proposed-statement-changes)
+  - [The posting-list arithmetic, derived from source](#the-posting-list-arithmetic-derived-from-source)
+  - [The gate, and what each conjunct rejects](#the-gate-and-what-each-conjunct-rejects)
+  - [How the same statement behaves on 12.2, 14.23 and 17.10](#how-the-same-statement-behaves-on-122-1423-and-1710)
+  - [Measured accuracy, per fixture](#measured-accuracy-per-fixture)
+  - [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate)
+  - [Where the proposal is still wrong](#where-the-proposal-is-still-wrong)
+  - [Settings the proposal touches](#settings-the-proposal-touches)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -55,6 +64,18 @@ Follow-up: does the deduplication-aware sweep for v17 work for indexes from v12 
 > it is pointed at a 12 server. Indexes carried onto a 17 server by `pg_upgrade`
 > are out of scope; see [Open Questions](#open-questions).
 
+Follow-up: Propose a SQL statement to measure bloat on PostgreSQL v12 and later versions with support of deduplication.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "propose a
+> sql to measure bloat on postgresql v12 and later versions with support of
+> deduplication", per the repository's prompt-hygiene rule. The asker scoped
+> "v12 and later versions" to servers 12 through 17 — one statement that runs
+> unchanged on any of them and credits deduplication only where the catalog
+> proves the engine would deduplicate — and asked for the proposal to be built
+> and measured on servers, not only derived from source. Majors 13, 15 and 16
+> have no checkout in this repo and were not run; see
+> [Open Questions](#open-questions).
+
 ## Answer
 
 ### Verdict
@@ -73,6 +94,8 @@ One v13 feature breaks it. B-tree **deduplication** merges equal keys into posti
 Three smaller v17 differences also matter: `VACUUM VERBOSE` no longer prints an index row count and can skip the index line entirely (Method D), `pg_class.reltuples` now uses `-1` for "unknown" and turns a healthy 21 MB index into a 100.0% bloat reading, and a plain `ANALYZE` after the build costs partial-index cells their exactness. The [deduplication-aware sweep below](#a-deduplication-aware-sweep-for-v17) restores the worst case from +1896 blocks to −24 blocks (2.9%) without changing a single already-exact cell.
 
 That corrected sweep is also safe to run against a PostgreSQL 12 server, where it silently reduces to the v12 page's own Method A; the follow-up sections measure it on both a 12.2 and a 17.10 server and name the one case where it is wrong on 17.10 — see [Follow-up: the same sweep on a 12.2 server and a 17.10 server](#follow-up-the-same-sweep-on-a-122-server-and-a-1710-server).
+
+A later follow-up replaces it with a single statement intended for any server from 12 through 17, measured on 12.2, 14.23 and 17.10: exact posting-tuple arithmetic instead of a flat 6 bytes per row, a NULL-and-most-common-value key-group mixture, a nondeterministic-collation conjunct in the gate, both `reltuples` eras, and a second `bloat_pct_floor` column to alert on — see [Follow-up: one statement for PostgreSQL 12 through 17](#follow-up-one-statement-for-postgresql-12-through-17).
 
 ### How the test was run
 
@@ -641,6 +664,440 @@ So, pointing this sweep at a 12 server needs no change for deduplication and one
 3. Keep the partial-index `unmeasured` status. It is statistics-driven and version-independent.
 4. Expect the model to sit 1 to 4 blocks *under* a 12.2 rebuild on duplicate-key and NULL-heavy indexes, against 0 blocks on distinct keys.
 
+### Follow-up: one statement for PostgreSQL 12 through 17
+
+Here it is. Every construct in it exists in 12 and still exists in 17, and it
+credits deduplication only where the catalog proves the engine would deduplicate.
+It was run on 12.2, 14.23 and 17.10; 13, 15 and 16 have no checkout in this repo
+and were not run. On the 12.2 server every deduplication term switched itself off
+and the statement reduced to the v12 page's Method A arithmetic — identical
+`expected_blocks` in all 34 scored cells — while on 14.23 and 17.10 it credited
+posting lists and landed within 5% of a `CREATE INDEX CONCURRENTLY` rebuild on 25
+of 33 and 25 of 35 cells against Method A's 14 and 15.
+
+It reports two numbers per index, not one:
+
+- `bloat_pct` — the point estimate, with posting lists credited;
+- `bloat_pct_floor` — the same model with one index tuple per row, which is what
+  a pre-13 server would produce.
+
+Alert on the floor and read the point estimate for size. On the 34-to-36 index
+fixture set below, that rule finds 4 of the 5 genuinely bloated indexes with **0
+false positives** on every server, and the one it misses is flagged
+`never analyzed`; the point estimate alone produces up to 3 false positives.
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '2s';
+
+WITH RECURSIVE
+idx AS (
+    SELECT /* wiki_btree_bloat_sweep_12_17 */
+           c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
+           c.relname AS indexname, t.oid AS tbloid, x.indkey, x.indisunique,
+           x.indnkeyatts,
+           (x.indpred IS NOT NULL)                      AS is_partial,
+           (x.indnatts = x.indnkeyatts)                 AS keys_only,
+           z.actual_bytes, z.fsm_bytes, z.bs, z.server_version_num,
+           coalesce((SELECT option_value::int FROM pg_options_to_table(c.reloptions)
+                      WHERE option_name = 'fillfactor'), 90)            AS fillfactor,
+           coalesce((SELECT option_value::bool FROM pg_options_to_table(c.reloptions)
+                      WHERE option_name = 'deduplicate_items'), true)   AS dedup_on,
+           c.reltuples::numeric                         AS idx_reltuples,
+           coalesce(s.n_live_tup, 0)::numeric           AS tbl_live_tup,
+           coalesce(s.n_dead_tup, 0)::numeric           AS tbl_dead_tup,
+           greatest(s.last_analyze, s.last_autoanalyze) AS last_analyze,
+           -- rows to model: -1 is v14+ "unknown"; a 0 on a non-empty index
+           -- whose table reports live rows is a pre-14 stale zero
+           CASE
+             WHEN c.reltuples < 0 THEN NULL
+             WHEN c.reltuples = 0 AND z.actual_bytes > z.bs
+                  AND coalesce(s.n_live_tup, 0) > 0 THEN NULL
+             WHEN x.indpred IS NOT NULL THEN c.reltuples::numeric
+             ELSE least(c.reltuples::numeric,
+                        coalesce(nullif(s.n_live_tup, 0), c.reltuples)::numeric)
+           END                                          AS live_rows,
+           -- deduplication gate, in catalog terms: every key opclass must
+           -- advertise an equal-image support function (amprocnum 4)
+           (SELECT bool_and(EXISTS (SELECT 1 FROM pg_amproc ap
+                                     WHERE ap.amprocfamily = op.opcfamily
+                                       AND ap.amproclefttype = op.opcintype
+                                       AND ap.amprocrighttype = op.opcintype
+                                       AND ap.amprocnum = 4))
+              FROM generate_subscripts(x.indclass, 1) k
+              JOIN pg_opclass op ON op.oid = x.indclass[k]
+             WHERE k < x.indnkeyatts)                   AS all_equalimage,
+           -- ... and no key column may use a nondeterministic collation
+           NOT EXISTS (SELECT 1 FROM generate_subscripts(x.indcollation, 1) k
+                         JOIN pg_collation cl ON cl.oid = x.indcollation[k]
+                        WHERE k < x.indnkeyatts
+                          AND NOT cl.collisdeterministic) AS all_deterministic
+      FROM pg_class c
+      JOIN pg_index x     ON x.indexrelid = c.oid
+      JOIN pg_class t     ON t.oid = x.indrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_am am       ON am.oid = c.relam
+      LEFT JOIN pg_stat_all_tables s ON s.relid = t.oid
+      CROSS JOIN LATERAL (
+            SELECT pg_relation_size(c.oid)                  AS actual_bytes,
+                   pg_relation_size(c.oid, 'fsm')           AS fsm_bytes,
+                   current_setting('block_size')::int       AS bs,
+                   current_setting('server_version_num')::int AS server_version_num) z
+     WHERE am.amname = 'btree' AND c.relkind = 'i' AND x.indisvalid
+       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+),
+cols AS (
+    SELECT i.idxoid, a.attnum, a.attlen, a.attalign,
+           CASE WHEN a.attlen > 0 THEN a.attlen::numeric
+                ELSE coalesce(se.avg_width, st.avg_width, 32)::numeric END AS width,
+           coalesce(se.null_frac, st.null_frac, 0)::numeric      AS null_frac,
+           coalesce(se.n_distinct, st.n_distinct, 0)::numeric    AS n_distinct,
+           coalesce(se.most_common_freqs, st.most_common_freqs)  AS mcf
+      FROM idx i
+      JOIN pg_attribute a ON a.attrelid = i.idxoid AND a.attnum > 0 AND NOT a.attisdropped
+      LEFT JOIN pg_stats se ON se.schemaname = i.schemaname
+                           AND se.tablename = i.indexname AND se.attname = a.attname
+      LEFT JOIN pg_attribute ta ON ta.attrelid = i.tbloid
+                               AND ta.attnum = i.indkey[a.attnum - 1]
+      LEFT JOIN pg_stats st ON st.schemaname = i.schemaname
+                           AND st.tablename = i.tablename AND st.attname = ta.attname
+),
+tuple AS (
+    SELECT i.*,
+           (SELECT sum((1 - c.null_frac) *
+                       CASE WHEN c.attlen < 0 AND c.width <= 127 THEN c.width
+                            ELSE ceil(c.width / al.a) * al.a END)
+              FROM cols c
+              CROSS JOIN LATERAL (SELECT CASE c.attalign WHEN 'c' THEN 1 WHEN 's' THEN 2
+                                              WHEN 'i' THEN 4 ELSE 8 END AS a) al
+             WHERE c.idxoid = i.idxoid)                          AS data_size,
+           (SELECT 1 - coalesce(exp(sum(ln(greatest(1 - c.null_frac, 1e-9)))), 1)
+              FROM cols c WHERE c.idxoid = i.idxoid)             AS p_null,
+           -- distinct key groups: per-column estimates multiplied over the key
+           -- columns. A negative n_distinct is a fraction of the *table's*
+           -- rows, so a partial index only trusts an absolute count.
+           (SELECT least(round(exp(sum(ln(greatest(
+                       CASE WHEN c.n_distinct > 0 THEN c.n_distinct
+                            WHEN c.n_distinct < 0 AND NOT i.is_partial
+                                 THEN (- c.n_distinct) * greatest(i.live_rows, 0)
+                            ELSE (1 - c.null_frac) * greatest(i.live_rows, 0)
+                       END
+                       + CASE WHEN c.null_frac > 0 THEN 1 ELSE 0 END, 1))))),
+                         greatest(i.live_rows, 0))
+              FROM cols c
+             WHERE c.idxoid = i.idxoid AND c.attnum <= i.indnkeyatts) AS key_groups
+      FROM idx i
+),
+sized AS (
+    SELECT t.*, ceil((8 + 8 * t.p_null + t.data_size) / 8) * 8 + 4 AS slot
+      FROM tuple t
+),
+fit AS (
+    SELECT s.*,
+           greatest(floor((s.bs - 48 - floor(s.bs * (100 - s.fillfactor) / 100)) / s.slot), 1)
+               AS leaf_cap,
+           greatest(floor((s.bs - 48 - floor(s.bs * 30 / 100)) / s.slot), 2)
+               AS int_cap,
+           (s.bs - 48 - floor(s.bs * (100 - s.fillfactor) / 100))     AS leaf_bytes,
+           (NOT s.indisunique AND s.dedup_on AND s.keys_only
+                AND coalesce(s.all_equalimage, false)
+                AND s.all_deterministic)                             AS dedup_applies,
+           least(greatest(s.live_rows, 0), greatest(s.key_groups, 1)) AS groups_est,
+           -- maxpostingsize = MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)
+           floor(floor(s.bs * 10 / 100) / 8) * 8 - 4                  AS maxposting
+      FROM sized s
+),
+posting AS (
+    SELECT f.*,
+           -- largest n with MAXALIGN(base + n * sizeof(ItemPointerData)) <= maxposting
+           greatest(floor(4 * floor((f.maxposting - (f.slot - 4)) / 8) / 3), 1) AS nmax
+      FROM fit f
+),
+kstat AS (
+    SELECT p.idxoid,
+           CASE WHEN p.is_partial THEN 0 ELSE c.null_frac END AS null_frac,
+           CASE WHEN p.is_partial THEN '{}'::real[]
+                ELSE coalesce(c.mcf, '{}'::real[]) END        AS mcf
+      FROM posting p
+      JOIN cols c ON c.idxoid = p.idxoid AND c.attnum = 1
+     WHERE p.indnkeyatts = 1 AND p.dedup_applies AND p.live_rows > 0
+),
+gclass AS (
+    -- the NULL run is one key group
+    SELECT p.idxoid, greatest(p.live_rows, 0) * k.null_frac AS class_rows,
+           1::numeric AS class_groups
+      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+     WHERE k.null_frac > 0
+    UNION ALL
+    -- every most-common value is one key group
+    SELECT p.idxoid, greatest(p.live_rows, 0) * f, 1::numeric
+      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+      CROSS JOIN LATERAL unnest(k.mcf) f
+    UNION ALL
+    -- the rest of the rows spread over the remaining distinct values
+    SELECT p.idxoid,
+           greatest(greatest(p.live_rows, 0)
+                    * (1 - k.null_frac
+                         - coalesce((SELECT sum(f) FROM unnest(k.mcf) f), 0)), 0),
+           greatest(p.groups_est
+                    - CASE WHEN k.null_frac > 0 THEN 1 ELSE 0 END
+                    - coalesce(array_length(k.mcf, 1), 0), 1)
+      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+    UNION ALL
+    -- multi-column keys: one uniform class over the product estimate
+    SELECT p.idxoid, greatest(p.live_rows, 0), p.groups_est
+      FROM posting p
+     WHERE p.indnkeyatts > 1 AND p.dedup_applies AND p.live_rows > 0
+),
+classfit AS (
+    SELECT g.idxoid, g.class_rows,
+           least(g.class_rows / greatest(g.class_groups, 1), p.nmax) AS tids,
+           p.slot, p.leaf_bytes
+      FROM gclass g
+      JOIN posting p ON p.idxoid = g.idxoid
+     WHERE g.class_rows > 0
+),
+classpages AS (
+    -- posting tuples are MAXALIGNed and each leaf page holds
+    -- floor((leaf_bytes + truncated posting list) / tuple size) of them
+    SELECT c.idxoid,
+           sum((c.class_rows / greatest(c.tids, 1))
+               / greatest(floor((c.leaf_bytes
+                                 + CASE WHEN c.tids > 1 THEN c.tids * 6 ELSE 0 END)
+                                / CASE WHEN c.tids > 1
+                                       THEN ceil(((c.slot - 4) + c.tids * 6) / 8) * 8 + 4
+                                       ELSE c.slot END), 1)) AS leaf_frac,
+           max(c.tids) AS max_tids
+      FROM classfit c
+     GROUP BY c.idxoid
+),
+leaves AS (
+    SELECT p.*, coalesce(cp.max_tids, 1) AS tids,
+           CASE WHEN p.dedup_applies AND cp.leaf_frac IS NOT NULL
+                THEN greatest(ceil(cp.leaf_frac), 1)
+                ELSE ceil(greatest(p.live_rows, 0) / p.leaf_cap)
+           END                                                AS leaf_pages,
+           ceil(greatest(p.live_rows, 0) / p.leaf_cap)         AS leaf_pages_floor
+      FROM posting p
+      LEFT JOIN classpages cp ON cp.idxoid = p.idxoid
+),
+levels AS (
+    SELECT idxoid, 'dedup'::text AS variant, leaf_pages AS pages, int_cap FROM leaves
+    UNION ALL
+    SELECT idxoid, 'floor'::text, leaf_pages_floor, int_cap FROM leaves
+    UNION ALL
+    SELECT l.idxoid, l.variant, ceil(l.pages / l.int_cap), l.int_cap
+      FROM levels l WHERE l.pages > 1
+),
+modelled AS (
+    SELECT l.*,
+           (SELECT sum(v.pages) FROM levels v
+             WHERE v.idxoid = l.idxoid AND v.variant = 'dedup') + 1 AS expected_blocks,
+           (SELECT sum(v.pages) FROM levels v
+             WHERE v.idxoid = l.idxoid AND v.variant = 'floor') + 1 AS floor_blocks
+      FROM leaves l
+)
+SELECT schemaname, tablename, indexname,
+       pg_size_pretty(actual_bytes)                     AS index_size,
+       CASE
+         WHEN idx_reltuples < 0 THEN 'unmeasured: reltuples unknown'
+         WHEN live_rows IS NULL THEN 'unmeasured: reltuples 0, table has live rows'
+         ELSE 'ok'
+       END                                              AS status,
+       CASE WHEN live_rows IS NULL THEN NULL ELSE
+         round((100 * (1 - (expected_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
+       END                                              AS bloat_pct,
+       CASE WHEN live_rows IS NULL THEN NULL ELSE
+         round((100 * (1 - (floor_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
+       END                                              AS bloat_pct_floor,
+       CASE WHEN live_rows IS NULL THEN NULL ELSE
+         pg_size_pretty(greatest(actual_bytes - expected_blocks * bs, 0)::bigint) END AS wasted,
+       array_to_string(array_remove(ARRAY[
+         CASE WHEN last_analyze IS NULL THEN 'never analyzed' END,
+         CASE WHEN NOT is_partial
+                   AND greatest(tbl_live_tup, idx_reltuples)
+                       > 1.1 * greatest(least(tbl_live_tup, idx_reltuples), 1)
+              THEN 'row-count sources disagree: analyze first' END,
+         CASE WHEN is_partial AND (tbl_dead_tup > 0 OR last_analyze IS NULL)
+              THEN 'partial: predicate subset may be stale' END,
+         CASE WHEN is_partial AND dedup_applies AND tids > 1
+              THEN 'partial: duplicates from table statistics' END,
+         CASE WHEN dedup_applies AND tids > 1 THEN 'deduplication credited' END
+       ], NULL), '; ')                                  AS caveats,
+       key_groups::bigint                               AS key_groups,
+       round(tids::numeric, 1)                          AS tids_per_tuple,
+       live_rows::bigint                                AS modelled_rows,
+       idx_reltuples::bigint                            AS idx_reltuples,
+       fsm_bytes > 0                                    AS has_freed_pages,
+       server_version_num
+  FROM modelled
+ WHERE actual_bytes > 1024 * 1024
+ ORDER BY greatest(actual_bytes - floor_blocks * bs, 0) DESC NULLS FIRST
+ LIMIT 20;
+```
+
+Remove `WHERE actual_bytes > 1024 * 1024` and `LIMIT 20` to score every index;
+that is how the numbers below were collected.
+
+### What the proposed statement changes
+
+Relative to [the deduplication-aware sweep earlier on this page](#a-deduplication-aware-sweep-for-v17), five things changed. Each one is a measured fix, not a preference:
+
+| Change | Why | Measured on |
+|---|---|---|
+| Posting tuples are sized as `MAXALIGN(base + tids * 6) + 4` and capped at the 1/10-page posting-list limit, and a leaf's capacity gets the high-key truncation credit | the flat "6 bytes per extra row" term ignores alignment padding and the cap | on 17.10, `i_q5` reads −92.5% under the flat term and −2.5% under this one; `i_qall` moves from +2.8% to +0.2% |
+| Key groups come from a mixture — the NULL run, each most-common value, then the remaining distinct values — instead of one uniform group size | one hot value plus mostly-distinct keys is not a uniform distribution | `i_null` (25% NULL, rest distinct) models 2909 blocks under the uniform form (−28.1% on a 2271-block index) and 2281 under the mixture (−0.4%) |
+| A negative `n_distinct` is credited, but only for a whole-table index | the negative form is a fraction of the *table's* rows, so a partial index's subset can have a completely different duplication ratio | on 17.10 `i_q5_part` reads 45.2% when the fraction is applied to the subset and −2.4% when it is not; `i_q10_part` moves from 53.7% to −8.9% and `i_q2_part` from 10.9% to 0.9%, all on 0%-reclaimable indexes |
+| The gate adds "no key column uses a nondeterministic collation" | `btvarstrequalimage` returns false for one, while the `pg_amproc` row still exists | dropping that one conjunct makes a healthy 28 MB ICU index read 88.2% instead of 0.1% |
+| Both `reltuples` eras are handled, plus a `caveats` column and the floor | `-1` only exists from 14, a stale `0` only bites 12 and 13, and two row-count sources can disagree | `i_trunc` reports `unmeasured: reltuples 0, table has live rows` on 12.2 and `unmeasured: reltuples unknown` on 14.23/17.10; `i_grow` reports `row-count sources disagree: analyze first` on all three |
+
+The INCLUDE-column conjunct from [the previous follow-up](#follow-up-the-include-column-false-positive-on-v17) is folded in as `x.indnatts = x.indnkeyatts`.
+
+### The posting-list arithmetic, derived from source
+
+Everything in the deduplication branch comes from three places in the build path.
+
+**The cap.** A sorted build limits a posting list to `MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)` ([nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1292-L1308)) — 812 bytes at `block_size` 8192, which the statement computes as `floor(floor(bs * 10 / 100) / 8) * 8 - 4`.
+
+**The tuple size.** A TID is accepted while `MAXALIGN(basetupsize + (nhtids + 1) * sizeof(ItemPointerData))` stays inside that cap ([nbtdedup.c#_bt_dedup_save_htid](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L503-L531)), and the finished tuple is exactly `MAXALIGN(keysize + nhtids * sizeof(ItemPointerData))` ([nbtdedup.c#_bt_form_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L863-L911)). `keysize` is already MAXALIGNed because `index_form_tuple` rounds up ([indextuple.c:154-163](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L154-L163)). Since the base is a multiple of 8, `MAXALIGN(base + 6n) = base + 8 * ceil(3n/4)`, so the largest usable TID count is `floor(4 * floor((maxposting - base) / 8) / 3)` — 132 for an 8-byte key, in an 808-byte tuple.
+
+**The page capacity.** `_bt_buildadd` finishes a leaf when `pgspc + last_truncextra < btps_full`, where `last_truncextra` is the size of the previous tuple's posting list, because that list is truncated away when the tuple becomes the page's high key ([nbtsort.c:769-781](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L769-L781), [nbtsort.c#_bt_buildadd](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L845-L855)). With `btps_full` at `BLCKSZ * (100 - fillfactor) / 100` ([nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L661-L666), [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145)) that makes the data-tuple capacity `floor((leaf_bytes + tids * 6) / tuple_size)`, which is why the statement adds `tids * 6` to the numerator. For an 808-byte posting tuple, 812 with its line pointer, that is 9 per leaf, and 1,000,000 rows under one key need 7576 tuples, so 843 leaves — the 17.10 rebuild is 849 blocks including internal pages and the metapage.
+
+NULL runs deduplicate because `_bt_keep_natts_fast` treats two NULLs as equal ([nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4890-L4902)), which is why the NULL run enters the mixture as one key group sized from `pg_stats.null_frac`. The most-common-value classes use `pg_stats.most_common_freqs`, which `ANALYZE` stores as sample frequencies of the total row count ([analyze.c:2664-2684](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2664-L2684), [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L218)), and the remainder class uses `n_distinct`, whose sign is decided by the 10%-of-rows rule ([analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612)).
+
+### The gate, and what each conjunct rejects
+
+Build-time deduplication needs `allequalimage`, a non-unique index and the `deduplicate_items` reloption ([nbtsort.c:1147-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1147-L1152)), and `_bt_allequalimage` refuses INCLUDE indexes outright before it looks up `BTEQUALIMAGE_PROC` — support function 4 — for every key opclass ([nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5170), [nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L707-L712)). Each of those conditions has a catalog form, and on the 17.10 fixture set each one rejects a different index:
+
+| Conjunct | Catalog source | What it rejected here |
+|---|---|---|
+| `NOT indisunique` | `pg_index.indisunique` | `i_uniq` |
+| `deduplicate_items` | `pg_options_to_table(reloptions)` ([reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1150)) | `i_dupoff`, 2749 blocks with 100 rows per key, read 0.1% |
+| `indnatts = indnkeyatts` | `pg_index` | `i_inc_lowcard` and `i_inc_hicard` |
+| every key opclass has `pg_amproc.amprocnum = 4` | `pg_amproc` | all 68 indexes on 12.2, none on 14.23/17.10 |
+| no key collation with `collisdeterministic = false` | `pg_index.indcollation` ([pg_index.h:53-54](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L53-L54)) joined to `pg_collation` ([pg_collation.h:40](../../../../raw/postgres-17/src/include/catalog/pg_collation.h#L40)) | `i_ci` on the ICU build |
+
+That last row is the new one, and it is load-bearing. The `pg_amproc` probe accepts all 72 indexes on the 17.10 server, `i_ci` included, because `text_ops` really does have an equal-image support function — `btvarstrequalimage`, which returns false at run time for a nondeterministic collation ([varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2599-L2613)). Measured on a 17.10 build configured `--with-icu`, over 500,000 rows with 100 rows per key:
+
+| index | collation | live | rebuilt | statement as filed | same statement, collation conjunct removed |
+|---|---|---|---|---|---|
+| `i_ci` | `provider = icu, deterministic = false` | 3611 | 3611 | **0.1%** | **88.2%** |
+| `i_cd` | default | 462 | 462 | 8.2% | 8.2% |
+
+Same data, same 100-rows-per-key shape: the engine deduplicated the deterministic index down to 462 blocks and refused to deduplicate the nondeterministic one, leaving it 7.8x larger. Without the conjunct the sweep would have called a healthy 28 MB index 88.2% waste.
+
+### How the same statement behaves on 12.2, 14.23 and 17.10
+
+Three isolated servers, each built from its own pin, carrying the same DDL and the same generated data; `autovacuum = off`, `fsync = off`, `block_size` 8192. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy.
+
+| | 12.2 | 14.23 | 17.10 |
+|---|---|---|---|
+| statement runs unchanged | yes | yes | yes |
+| B-tree indexes swept, rebuild copies included | 68 | 68 | 72 |
+| blocks covered | 133,677 | 94,910 | 103,056 |
+| three consecutive runs | 26.1 / 19.9 / 17.7 ms | 32.9 / 20.6 / 17.6 ms | 28.7 / 20.4 / 17.2 ms |
+| indexes the `pg_amproc` probe accepts | 0 of 68 | 68 of 68 | 72 of 72 |
+| indexes credited with deduplication | 0 | 34 | 36 |
+| `expected_blocks` identical to v12 Method A | 34 of 34 scored | 17 of 34 | 18 of 36 |
+| rows reported `unmeasured` | 1 | 1 | 1 |
+| that row's status | `reltuples 0, table has live rows` | `reltuples unknown` | `reltuples unknown` |
+
+The 12.2 column is the portability claim in numbers: same statement, same answers as the v12 arithmetic, in every cell, because the gate cannot open there. The 14.23 column matters because 14 is the first major with both deduplication and the `-1` sentinel, so it exercises the two version branches at once; 13 has the first and not the second, while 15 and 16 have both; none of the three was run.
+
+### Measured accuracy, per fixture
+
+Every fixture in this first table is freshly built with **0% reclaimable space** — live equals rebuilt in all 54 cells — so any non-zero reading is model error. 1,000,000 rows, `bigint` key, unless noted.
+
+| fixture | shape | 12.2 live / reported | 14.23 live / reported | 17.10 live / reported |
+|---|---|---|---|---|
+| `i_q1` | distinct keys | 2745 / 0.0% | 2745 / 0.0% | 2745 / 0.0% |
+| `i_q2` | 2 rows per key | 2749 / 0.1% | 2475 / 2.4% | 2475 / 0.4% |
+| `i_q5` | 5 rows per key | 2748 / 0.1% | 1426 / −0.3% | 1426 / −2.5% |
+| `i_q10` | 10 rows per key | 2749 / 0.1% | 1157 / −2.3% | 1157 / −0.6% |
+| `i_q100` | 100 rows per key | 2749 / 0.1% | 839 / −0.2% | 839 / −0.1% |
+| `i_q1000` | 1000 rows per key | 2749 / 0.1% | 896 / 5.5% | 896 / 5.5% |
+| `i_qall` | one key | 2749 / 0.1% | 849 / 0.2% | 849 / 0.2% |
+| `i_null` | 25% NULL, rest distinct | 2746 / 0.0% | 2271 / −0.1% | 2271 / −0.4% |
+| `i_skew` | one value 25%, rest distinct | 2746 / 0.0% | 2271 / **53.1%** | 2271 / **53.4%** |
+| `i_ff50` | 50 rows per key, `fillfactor = 50` | 4978 / 0.1% | 1547 / 0.2% | 1547 / 0.4% |
+| `i_var` | variable-width text, 400,000 rows | 3222 / −2.9% | 3211 / −2.3% | 3211 / −4.4% |
+| `i_uniq` | unique, distinct keys | 2745 / 0.0% | 2745 / 0.0% | 2745 / 0.0% |
+| `i_dupoff` | 100 rows per key, `deduplicate_items = off` | 2749 / 0.1% | 2749 / 0.1% | 2749 / 0.1% |
+| `i_inc_bothkeys` | `(a, d)`, 1000 x 5 distinct | 2749 / 0.1% | 896 / 5.5% | 896 / 5.5% |
+| `i_inc_lowcard` | `(a) INCLUDE (d)`, same data | 2749 / 0.1% | 2749 / 0.1% | 2749 / 0.1% |
+| `i_q5_part` | 20% partial sibling of `i_q5` | 551 / 0.0% | 551 / −0.7% | 551 / −2.4% |
+| `i_q100_part` | 20% partial sibling of `i_q100` | 552 / 0.2% | 191 / −5.8% | 191 / −5.8% |
+| `i_qall_part` | 20% partial sibling of `i_qall` | 552 / 0.2% | 171 / −0.6% | 171 / 1.2% |
+
+The second table is the one that matters operationally: indexes with real reclaimable space, plus the three statistics traps. `reported / floor` are the statement's two columns.
+
+| fixture | what it is | 12.2 live -> rebuilt (true) reported / floor | 14.23 | 17.10 |
+|---|---|---|---|---|
+| `i_seqdel` | distinct keys, 90% deleted + VACUUM | 2745 -> 276 (89.9%) **89.9 / 89.9** | same | same |
+| `i_dupdel` | 10 keys, 90% deleted + VACUUM | 2749 -> 278 (89.9%) **90.0 / 90.0** | 850 -> 87 (89.8%) **89.8 / 67.5** | 850 -> 87 (89.8%) **89.8 / 67.5** |
+| `i_dupdelp` | partial over 7 keys, 90% of the subset deleted + VACUUM | 552 -> 57 (89.7%) **89.7 / 89.7** | 171 -> 19 (88.9%) **88.9 / 67.3** | 171 -> 19 (88.9%) **88.3 / 64.9** |
+| `i_alldead` | every row deleted + VACUUM + ANALYZE | 551 -> 1 (99.8%) **99.8 / 99.8** | same | same |
+| `i_stale` | 19% deleted, never vacuumed or analyzed | 2745 -> 2224 (19.0%) **19.0 / 19.0** | same | same |
+| `i_stale_part` | partial subset drained, never analyzed | 551 -> 30 (94.6%) **0.0 / 0.0**, caveat `never analyzed` | same | same |
+| `i_trunc` | `TRUNCATE` and reload, no ANALYZE | 825 -> 825 (0.0%) **unmeasured** | unmeasured | unmeasured |
+| `i_grow` | doubled since the last ANALYZE | 2745 -> 2745 (0.0%) **49.9 / 49.9**, caveat `row-count sources disagree` | same | same |
+
+`i_dupdel` is the load-bearing cell: a duplicate-key index with 89.8% real bloat reads 89.8% on 14.23 and 17.10 through posting-list arithmetic and 90.0% on 12.2 through one-tuple-per-row arithmetic, from the same statement text. The v12 model on the 17.10 index reads 67.5%, which is the floor column and still actionable.
+
+Scored against the rebuilds, excluding the single `unmeasured` row:
+
+| | 12.2 | 14.23 | 17.10 |
+|---|---|---|---|
+| cells scored | 33 | 33 | 35 |
+| exact — Method A / v17 sweep / proposal | 11 / 11 / 11 | 7 / 7 / 9 | 7 / 7 / 8 |
+| within 1% — Method A / v17 sweep / proposal | 30 / 30 / 30 | 12 / 16 / 20 | 12 / 14 / 19 |
+| within 5% — Method A / v17 sweep / proposal | 31 / 31 / 31 | 14 / 22 / 25 | 15 / 23 / 25 |
+| largest model-vs-rebuild gap in blocks, statistics traps excluded | 94 (`i_var`, 3316 against 3222) | 73 (`i_var`, 3284 against 3211) | 142 (`i_var`, 3353 against 3211) |
+| largest relative model-vs-rebuild gap, traps excluded | 2.9% (`i_var`) | 9.5% (`i_q10_part`) | 8.9% (`i_q10_part`) |
+
+The traps excluded from those two rows are `i_grow`, `i_skew`, `i_stale` and `i_stale_part`, all four of which are statistics states rather than arithmetic; each is covered in [Where the proposal is still wrong](#where-the-proposal-is-still-wrong). The remaining gaps run both ways: a model *below* the rebuild reports phantom bloat (`i_q1000`, 847 against 896, 5.5%), and a model *above* it reports a small negative bloat (`i_var`, `i_q10_part`).
+
+### Read the floor, not the point estimate
+
+Alert when `bloat_pct_floor` crosses the threshold, the `status` is `ok`, and `caveats` contains neither `never analyzed` nor `row-count sources disagree`. At a 30% threshold, on every one of the three servers:
+
+| rule | true positives | false positives | false negatives |
+|---|---|---|---|
+| floor + status + caveats (proposed) | 4 of 5 | **0 on all three servers** | 1 (`i_stale_part`) |
+| `bloat_pct` point estimate alone | 4 of 5 | 1 on 12.2 (`i_grow`), 2 on 14.23 and 17.10 (`i_grow`, `i_skew`) | 1 |
+| the deduplication-aware sweep already on this page | 4 of 5 | 1 on 12.2, 2 on 14.23, 3 on 17.10 (`i_grow`, `i_skew`, `i_ci`) | 1 |
+
+The rows the status and caveats take out of alerting are exactly `i_grow` (0% true), `i_stale` (19.0% true, below the threshold anyway), `i_stale_part` (94.6% true — the one false negative) and `i_trunc` (0% true). The false negative is the partial-index staleness this page already documents: one `ANALYZE` on the table repairs it.
+
+The floor is what rescues `i_skew`: its point estimate reads 53.4% on a healthy index while its floor reads −20.9%, so the rule never fires. That is the general shape of the guard — a wide gap between the two columns means the answer rests entirely on a duplication estimate, and only the floor is safe to act on.
+
+### Where the proposal is still wrong
+
+**One hot value plus mostly-distinct keys, at the default statistics target.** `i_skew` is 25% one value and 75% distinct. `ANALYZE` estimated 81,281 distinct values against a true 750,001 and stored it as a positive absolute count, so the statement credited compression that does not exist. This is a statistics failure, not an arithmetic one, and it is fixable from outside the statement — measured on 17.10:
+
+| statistics state | `n_distinct` | reported | floor |
+|---|---|---|---|
+| default target (`default_statistics_target` 100) | 81281 | 53.4% | −20.9% |
+| `ALTER TABLE t_skew ALTER COLUMN k SET STATISTICS 1000; ANALYZE` | −0.473248 | −12.4% | −20.9% |
+| `ALTER TABLE t_skew ALTER COLUMN k SET (n_distinct = -0.75); ANALYZE` | −0.75 | **0.1%** | −20.9% |
+| reset back to the default | 81402 | 53.3% | −20.9% |
+
+**Long posting lists lose 5-8% to page packing.** Where a key group needs more than one posting tuple, the last one is partial and pages no longer pack evenly. `i_q1000`, `i_inc_keyonly` and `i_inc_bothkeys` all model 847 blocks against a 896-block rebuild on both 14.23 and 17.10, 5.5% short, so each reports 5.5% bloat on an index with nothing to reclaim. The 33-byte-key `i_cd` is the same effect at 424 modelled against 462 built: 8.2%.
+
+**A partial index's duplication ratio is a guess.** The statement only lets a partial index use an absolute `n_distinct` count, and labels those rows `partial: duplicates from table statistics`. When the predicate correlates with the key it under-credits instead of over-crediting: `i_q10_part` models 541 blocks against a 497-block index on 17.10 (544 on 14.23), 8.9% high, because it declined to credit the subset's two-rows-per-key at all. An over-modelled index reports negative bloat — −8.9% here — which is harmless for alerting and useless for sizing.
+
+**`i_var` drifts with `avg_width`.** A variable-width text index models 3316 blocks against a 3222-block rebuild on 12.2 and 3353 against 3211 on 17.10 — 2.9% and 4.4% high — for the reason [Method A-prime](#method-a-prime-still-fixes-variable-key-width) documents: one MAXALIGN of a sampled mean width is not the mean of the MAXALIGNs.
+
+### Settings the proposal touches
+
+| Setting | Context in v17 | Apply scope |
+|---|---|---|
+| `statement_timeout`, `lock_timeout` | `PGC_USERSET` ([guc_tables.c:2610-2630](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2630)) | session/transaction; both are set by the statement itself |
+| `default_statistics_target` | `PGC_USERSET` ([guc_tables.c:2070-2077](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2070-L2077)) | session/transaction; raising it only changes estimates after the next `ANALYZE` |
+| `block_size` | `PGC_INTERNAL` preset ([guc_tables.c:3267-3276](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3267-L3276)) | read-only; the statement reads it with `current_setting('block_size')` |
+
+Neither the statement nor the two statistics repairs above need a setting that requires a reload or a restart. `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS` and `SET (n_distinct = ...)` are DDL on the table, not GUC changes, and take effect at the next `ANALYZE`; the per-index `deduplicate_items` reloption is read, never written, by the sweep.
+
 ## Context Reviewed
 
 - nbtree build, split and deduplication: `nbtsort.c` (`_bt_blnewpage`, `_bt_pagestate`, `_bt_buildadd`, `_bt_load`, `_bt_sort_dedup_finish_pending`), `nbtdedup.c` (`_bt_dedup_pass`, `_bt_dedup_start_pending`, `_bt_dedup_save_htid`, `_bt_form_posting`, `_bt_bottomupdel_pass`), `nbtsplitloc.c` (`_bt_findsplitloc`, single-value strategy), `nbtree.h` (fillfactor constants, `BTGetDeduplicateItems`, `BTMaxItemSize`, `BTPageOpaqueData`, `P_HIKEY`), `README`.
@@ -651,6 +1108,8 @@ So, pointing this sweep at a 12 server needs no change for deduplication and one
 - Contrib boundary: `pgstattuple.control`, `pgstatindex.c`, `pageinspect.control`, `rawpage.c`, `extension.c`, the 22 `trusted = true` contrib control files, `pgstattuple.sgml`.
 - Exact-pin execution: one isolated 17.10 server built from the pinned checkout under `.wiki-runtime/`, carrying the 15 named fixtures, the 9 x 3 x {full, partial} matrix (54 indexes over 27 tables), a six-point duplication-ratio sweep, a `reltuples = -1` probe, and Method D bypass fixtures. Methods A, A-prime, B, C and D were executed against them, with `pgstattuple` installed solely as ground truth and Method C rebuilds as the reclaimable-size arbiter. Method B was driven through `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` so the plan's index name, `Heap Fetches` and buffer counts could be scored programmatically.
 - Deduplication gate and its version dependence, for the v12/v17 follow-up: `nbtsort.c` (`_bt_load`'s `deduplicate` condition, `_bt_leafbuild` setting `inskey->allequalimage`), `nbtutils.c` (`_bt_allequalimage`, `btoptions`), `nbtree.h` (`BTORDER_PROC` through `BTNProcs`, `BTGetDeduplicateItems`), `nbtree.c` (`bthandler`'s `amsupport`), `nbtvalidate.c` (accepted support numbers), `reloptions.c` (`deduplicate_items` entry), `opclasscmds.c` (`maxProcNumber` and the `invalid function number` error), `varlena.c` (`btvarstrequalimage`), `pg_class.h` (`reltuples` `-1`), `analyze.c` (the negative-`stadistinct` rule). Commit history for the three constructs' first release tags was read from the same pinned checkout.
+- Portable-statement follow-up, source coverage: `nbtsort.c` (`_bt_load`'s deduplicate condition and `maxpostingsize`, `_bt_buildadd`'s `truncextra` soft-limit rule and its header comment, `_bt_pagestate`, `_bt_blnewpage`), `nbtdedup.c` (`_bt_dedup_start_pending` `basetupsize`, `_bt_dedup_save_htid` `mergedtupsz`, `_bt_form_posting` `newsize`), `nbtutils.c` (`_bt_allequalimage`, `_bt_keep_natts_fast`'s NULL handling, `btoptions`), `nbtree.h` (`BTEQUALIMAGE_PROC`, `BTNProcs`, `BTGetDeduplicateItems`, `BTGetTargetPageFreeSpace`, `BTMaxItemSize`, fillfactor constants), `indextuple.c` (`index_form_tuple_context`'s MAXALIGN), `varlena.c` (`btvarstrequalimage`), `pg_collation.h` and `pg_index.h` (`collisdeterministic`, `indcollation`, `indclass`, `indnkeyatts`, `indnatts`), `reloptions.c`, `pg_class.h` (`reltuples`), `analyze.c` (`compute_scalar_stats`: the 10%-of-rows `stadistinct` sign rule and MCV frequency storage), `system_views.sql` (`pg_stats`, `pg_stat_all_tables`), `vacuumlazy.c` (index relstats update), `guc_tables.c` (`statement_timeout`, `lock_timeout`, `default_statistics_target`, `block_size`).
+- Portable-statement follow-up, exact-pin execution on three servers: isolated 12.2, 14.23 and 17.10 clusters, each built out of tree from its own pinned checkout under `.wiki-runtime/`, all with `autovacuum = off`, `fsync = off`, `block_size` 8192; the 17.10 build was configured `--with-icu` so that a nondeterministic collation could be created. Identical fixture DDL on all three: a seven-point duplication band at 1,000,000 rows (1, 2, 5, 10, 100, 1000 and 1,000,000 rows per key) each with a 20% partial sibling, a 25%-NULL index, a one-hot-value skew index, variable-width and fixed-width text, a unique index, four multi-column/`INCLUDE` variants, a `fillfactor = 50` duplicate-key index, a `deduplicate_items = off` index, five real-bloat fixtures (scattered delete plus VACUUM on distinct and duplicate keys, a partial duplicate-key index, an all-rows-deleted index, an unvacuumed delete), a drained partial predicate, a `TRUNCATE`-and-reload index, a grown-since-ANALYZE index, an empty index, and two 100-rows-per-key text indexes differing only in collation determinism. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy; the v12 Method A arithmetic, the v17 sweep on this page, a uniform-group variant, and the proposed statement were installed as views and scored against those rebuilds in one query. Catalog probes covered `pg_amproc` support numbers, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, `ALTER INDEX ... SET (deduplicate_items = off)`, `collisdeterministic`, `array_lower(indclass, 1)`, and `reltuples` after build, `TRUNCATE`, reload and full delete. The statistics repairs (`SET STATISTICS 1000`, `SET (n_distinct = ...)`) were exercised on 17.10 only. All three servers were stopped afterwards and their data directories removed.
 - Follow-up exact-pin execution, two servers: the same DDL and generated data on one isolated 12.2 server and one isolated 17.10 server, each built from its own pin under `.wiki-runtime/`, both with `autovacuum = off`, `fsync = off`, `block_size` 8192, and no contrib extension installed. Fixtures: nine 1,000,000-row indexes (distinct, all-duplicate, 25% NULL, four duplication ratios, a 20% partial sibling, and a 10-key index with 90% of rows deleted and vacuumed), six shape indexes over a 200,000-row table, three `INCLUDE`-versus-key-column indexes over a 1,000,000-row table, an empty-table index, and a `TRUNCATE`-and-reload index. The dedup-aware sweep and the v12 page's Method A were installed as views on both servers with only the 1 MB triage filter and `LIMIT` removed and `expected_blocks` exposed; `CREATE INDEX CONCURRENTLY` rebuilds were the ground truth. Catalog probes covered `pg_amproc` support numbers, `array_lower(indclass, 1)`, `ALTER INDEX ... SET (deduplicate_items = off)`, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, and `pg_class.reltuples` after build, `TRUNCATE` and reload. Both servers were stopped afterwards, the test databases dropped, and the 17.10 data directory removed.
 
 ## Evidence Map
@@ -693,6 +1152,13 @@ So, pointing this sweep at a 12 server needs no change for deduplication and one
 | `deduplicate_items` is a B-tree reloption defaulting to on | [reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168), [nbtutils.c#btoptions](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4561-L4576), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1150) |
 | Equal-image support functions, nbtree deduplication and the `-1` `reltuples` sentinel all postdate 12 | this checkout's history: `612a1ab7672` and `0d861bbb702` (2020-02-26, first in `REL_13_0`), `3d351d916b2` (2020-08-30, first in `REL_14_0`); none is an ancestor of `REL_12_2` |
 | The equal-image function can exist and still return false, so a presence-only catalog probe is not exact | [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613) |
+| A posting tuple's size is `MAXALIGN(keysize + nhtids * sizeof(ItemPointerData))`, and `keysize` is already MAXALIGNed | [nbtdedup.c#_bt_form_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L863-L911), [nbtdedup.c#_bt_dedup_start_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L432-L475), [indextuple.c:154-163](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L154-L163) |
+| A leaf page under construction accepts posting tuples until `pgspc + last_truncextra < btps_full`, so the posting list of the future high key raises the effective capacity | [nbtsort.c:769-781](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L769-L781), [nbtsort.c:845-855](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L845-L855), [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L661-L666), [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145) |
+| Two NULL keys count as equal for deduplication, so a NULL run forms one key group | [nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4890-L4902) |
+| `most_common_freqs` are sample frequencies over the total row count, stored as `STATISTIC_KIND_MCV` | [analyze.c:2664-2684](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2664-L2684), [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L218) |
+| A nondeterministic collation is visible in core SQL as `pg_collation.collisdeterministic = false` for one of `pg_index.indcollation`'s entries | [pg_collation.h:40](../../../../raw/postgres-17/src/include/catalog/pg_collation.h#L40), [pg_index.h:53-54](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L53-L54), [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2599-L2613) |
+| `n_mod_since_analyze`, `n_live_tup` and `n_dead_tup` all come from the cumulative statistics system, not from `pg_class` | [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L686-L694) |
+| `default_statistics_target` is session-scoped and only changes estimates at the next `ANALYZE` | [guc_tables.c:2070-2077](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2070-L2077), [analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612) |
 
 ## Open Questions
 
@@ -712,6 +1178,15 @@ So, pointing this sweep at a 12 server needs no change for deduplication and one
 - **Bottom-up index deletion was not isolated.** `idx_churn` and the `churn_*` matrix cells differ from the v12 page's sizes, and v14's bottom-up deletion is the obvious mechanism, but no fixture here separates it from the update pattern; the model's accuracy does not depend on which it is.
 - **Block sizes other than 8192 were not exercised**, and `MAXALIGN` was assumed to be 8.
 - **No upstream test covers these estimates.** The pinned tree has no regression test comparing a modelled index size against a built one, so every accuracy number here rests on the exact-pin fixtures described above.
+- **Majors 13, 15 and 16 were never run.** The portable statement was measured on 12.2, 14.23 and 17.10 only, because those are the checkouts this repo pins. 13 is the interesting hole: deduplication and the equal-image support function exist there, while the `-1` `reltuples` sentinel does not, so a 13 server should take the deduplication branch and the stale-zero branch at the same time. The statement covers that combination by construction — the two `reltuples` branches are independent — but no 13 server confirmed it. 15 and 16 should behave exactly like 14.23 for every construct the statement reads.
+- **The skew repairs were measured on one server and one shape.** `SET STATISTICS 1000` and `SET (n_distinct = -0.75)` were applied to a single 25%-hot-value column on 17.10. Neither the cost of the larger statistics target nor the staleness risk of a hard-coded `n_distinct` override was measured, and no equivalent run was made on 12.2 or 14.23.
+- **The posting-list packing loss is measured, not modelled.** Where a key group needs more than one posting tuple the last one is partial, and the statement's uniform tuple size understates the rebuild by 5.5% on three fixtures and 8.2% on a 33-byte-key text index. Deriving the exact mixed-size packing would need the same per-page simulation `_bt_buildadd` performs, which is not expressed in the SQL.
+- **The multi-column mixture is still the product rule.** Only one two-column duplicate case (`(a, d)` with 1000 x 5 distinct values) was measured, and it lands at −5.5%, indistinguishable from the single-column packing loss on the same data. Whether the product rule or the packing loss dominates was not separated, and no NULL-plus-MCV mixture was applied across two key columns.
+- **Choosing caveats over suppression trades one error for another.** The earlier sweep on this page reports a stale partial index as `unmeasured`; the proposal reports the number with a `partial: predicate subset may be stale` caveat instead. That keeps the true 88.9% detection on `i_dupdelp`, whose statistics really were current, and keeps the false negative on `i_stale_part`, which reads 0.0% against a true 94.6%. Which default is better was not tested against a real monitoring workload.
+- **The stale-zero rule leans on the cumulative statistics counters.** On a 12 or 13 server the rule fires only when `pg_stat_all_tables.n_live_tup` is above zero. After `pg_stat_reset()`, or on a standby, a genuinely stale `reltuples = 0` would pass the rule and report ~100% bloat on a healthy index. That path was not measured.
+- **Two counter artifacts were observed and not traced.** Immediately after `VACUUM (ANALYZE)`, `t_dupdelp` reported `n_dead_tup` and `n_mod_since_analyze` of 180,000 and `t_alldead` reported 200,000 dead, on all three servers; `t_trunc` reported `n_live_tup` 600,000 for 300,000 real rows on 17.10. Message-ordering between the analyze report and the DML report is the obvious suspect, but no source path was confirmed. This is why the `caveats` column tests `pg_class.reltuples` against `n_live_tup` rather than trusting `n_mod_since_analyze`.
+- **The 17.10 server for this follow-up is a different build of the same pin.** It was configured `--with-icu` so that `CREATE COLLATION ... deterministic = false` would work, unlike the `--without-icu` build used earlier on this page. The ICU-specific rows are `i_ci` and `i_cd`; no other cell depends on the build option, but the two builds were not diffed cell by cell.
+- **The 30% alert threshold is arbitrary.** True-positive and false-positive counts are reported at that one threshold on 36 fixtures. No sweep over thresholds, and no production index population, was measured.
 
 ## Source References
 
@@ -728,8 +1203,15 @@ So, pointing this sweep at a 12 server needs no change for deduplication and one
 - [opclasscmds.c#AlterOpFamilyAdd](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L880-L1028)
 - [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613)
 - [nbtdedup.c#_bt_dedup_pass](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L58-L210)
+- [nbtdedup.c#_bt_dedup_start_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L432-L475)
 - [nbtdedup.c#_bt_dedup_save_htid](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L477-L544)
 - [nbtdedup.c#_bt_form_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L856-L920)
+- [nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4852-L4905)
+- [indextuple.c#index_form_tuple_context](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L64-L200)
+- [pg_collation.h#collisdeterministic](../../../../raw/postgres-17/src/include/catalog/pg_collation.h#L28-L50)
+- [pg_index.h#indcollation](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L28-L60)
+- [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L672-L700)
+- [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2069-L2078)
 - [nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L129-L430)
 - [nbtree.h#BTREE_DEFAULT_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202)
 - [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1131-L1150)

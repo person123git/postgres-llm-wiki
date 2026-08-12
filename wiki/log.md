@@ -2,6 +2,83 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] follow-up v17 | one B-tree bloat statement for servers 12 through 17
+
+- Added eight follow-up sections to [Testing the PostgreSQL 12 Core-SQL B-Tree
+  Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
+  (PostgreSQL 17.10), proposing one statement that runs unchanged on any server
+  from 12 through 17 and credits deduplication only where the catalog proves the
+  engine would deduplicate.
+- Prompt hygiene applied before drafting. The asker approved the grammar
+  correction of "propose a sql to measure bloat on postgresql v12 and later
+  versions with support of deduplication", scoped "later versions" to servers 12
+  through 17, and asked for the proposal to be built and measured on servers
+  rather than derived from source alone.
+- Five changes over the deduplication-aware sweep already on the page, each with
+  a measured reason: posting tuples sized `MAXALIGN(base + tids * 6) + 4` under
+  the 1/10-page cap with the high-key truncation credit on leaf capacity
+  (`i_q5` −92.5% -> −2.5%, `i_qall` +2.8% -> +0.2%); key groups from a NULL-run
+  plus most-common-value plus remainder mixture (`i_null` −27.7% -> −0.4%); a
+  negative `n_distinct` credited only for whole-table indexes (`i_q5_part`
+  49.0% -> 1.1%); a nondeterministic-collation conjunct in the gate; and both
+  `reltuples` eras plus a `bloat_pct_floor` column and a `caveats` column.
+- Source derivation, `raw/postgres-17/` only: `_bt_load`'s `maxpostingsize` of
+  `MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)` (812 bytes),
+  `_bt_dedup_save_htid`'s `MAXALIGN(basetupsize + n * sizeof(ItemPointerData))`
+  test and `_bt_form_posting`'s `newsize`, `index_form_tuple`'s MAXALIGNed base,
+  `_bt_buildadd`'s `pgspc + last_truncextra < btps_full` rule (which is why a
+  leaf holds 9 x 808-byte posting tuples, giving 843 modelled leaves against an
+  849-block rebuild for 1,000,000 rows under one key), `_bt_keep_natts_fast`
+  treating two NULLs as equal, `_bt_allequalimage`'s INCLUDE refusal and support
+  function 4 lookup, `btvarstrequalimage`'s nondeterministic-collation false,
+  `pg_collation.collisdeterministic`, `analyze.c`'s 10%-of-rows `stadistinct`
+  sign rule and MCV frequency storage.
+- Exact-pin execution on three isolated servers built out of tree under
+  `.wiki-runtime/` — 12.2, 14.23 and 17.10, the last configured `--with-icu` —
+  with identical fixture DDL (a seven-point duplication band with partial
+  siblings, NULL and hot-value skew, text and variable-width keys, unique,
+  `INCLUDE` and multi-column shapes, `fillfactor = 50`,
+  `deduplicate_items = off`, five real-bloat fixtures, a drained partial
+  predicate, `TRUNCATE`-and-reload, grown-since-ANALYZE, empty, and two
+  collation-only variants) and `CREATE INDEX CONCURRENTLY` rebuilds as ground
+  truth. Same statement text everywhere: 68 / 68 / 72 indexes swept over
+  133,677 / 94,910 / 103,056 blocks in 17.7 to 32.9 ms warm; 0 / 34 / 36
+  indexes credited; `expected_blocks` identical to v12 Method A in 34 of 34
+  scored cells on 12.2 and differing in 17 of 34 and 18 of 36 on 14.23 and
+  17.10; one `unmeasured` row on each server, reported as
+  `reltuples 0, table has live rows` on 12.2 and `reltuples unknown` on
+  14.23/17.10.
+- Accuracy against the rebuilds, excluding the unmeasured row: within 5% on
+  31/31/31 cells on 12.2 (Method A / v17 sweep / proposal identical there),
+  14 / 22 / 25 of 33 on 14.23, and 15 / 23 / 25 of 35 on 17.10. `i_dupdel`
+  (10 keys, 90% deleted and vacuumed) reads 89.8% on 14.23 and 17.10 against a
+  true 89.8% and 90.0% on 12.2 against a true 89.9%, from one statement.
+- Alerting on `bloat_pct_floor` with `status = ok` and no `never analyzed` or
+  `row-count sources disagree` caveat scores 4 true positives, 0 false
+  positives and 1 false negative (`i_stale_part`, 94.6% true) on every server,
+  against 2 to 3 false positives for the point estimate alone. The measured
+  false-positive shapes are a healthy 28 MB nondeterministic-collation index
+  (88.2% without the new conjunct, 0.1% with it), a hot-value skew index whose
+  `n_distinct` came back 81,281 against a true 750,001 (53.4% point estimate,
+  −20.9% floor, and 0.1% after `SET (n_distinct = -0.75)`), and a table doubled
+  since its last `ANALYZE` (49.9%, caveat `row-count sources disagree`).
+- Recorded ten new `## Open Questions`, including that majors 13, 15 and 16 were
+  never run (13 combines deduplication with the pre-14 stale-zero hazard), the
+  5.5% to 8.2% posting-list packing loss that is measured but not modelled, the
+  caveats-over-suppression trade that keeps the `i_dupdelp` detection and the
+  `i_stale_part` false negative, and two cumulative-statistics counter artifacts
+  observed after `VACUUM (ANALYZE)`.
+- Updated `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md`. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet`, because this is a new follow-up rather than a
+  claim-by-claim re-verification of the whole page. All three servers were
+  stopped, their data directories dropped and the two new out-of-tree build
+  trees removed; the 14.23 and ICU-enabled 17.10 installs and the harness SQL
+  stay under `.wiki-runtime/`, which is runtime state and not wiki content.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-12] follow-up v17 | does the dedup-aware bloat sweep work on v12 and v17?
 
 - Added three follow-up sections to [Testing the PostgreSQL 12 Core-SQL B-Tree
