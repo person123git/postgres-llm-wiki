@@ -14,6 +14,39 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-12: extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with
+  three follow-up sections answering whether that page's deduplication-aware
+  sweep works for indexes on a v12 server as well as a v17 one, against unchanged
+  pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10). Verdict: yes on both,
+  because each v17-specific term is gated on a catalog fact a 12 server cannot
+  produce - a `pg_amproc` equal-image row at `amprocnum = 4` (`_bt_allequalimage`
+  is the engine's own test, and support numbers are bounded by the access method's
+  `amsupport`), the `deduplicate_items` reloption, and the `-1` `reltuples`
+  sentinel; the three constructs first ship in `REL_13_0`, `REL_13_0` and
+  `REL_14_0` per this checkout's own history (`612a1ab7672`, `0d861bbb702`,
+  `3d351d916b2`), none of them an ancestor of `REL_12_2`. Measured by running the
+  identical statement on isolated 12.2 and 17.10 servers over the same DDL and
+  data: 0 of 32 indexes credited on 12.2 with `expected_blocks` identical to the
+  v12 page's Method A in every cell and no miss worse than 4 blocks, against 15 of
+  34 credited on 17.10; a 10-distinct-key index with 90% of rows deleted and
+  vacuumed reads 90.0% on 12.2 (rebuild 278 blocks) and 90.1% on 17.10 (rebuild
+  87) against true bloat of 89.9% and 89.8%, where the uncorrected model would
+  have said 67.5% on 17.10. 12.2 refuses the gate even deliberately
+  (`ERROR: invalid function number 4, must be between 1 and 3`,
+  `ERROR: unrecognized parameter "deduplicate_items"`). Two new findings: an
+  `INCLUDE` index with a low-cardinality included column read 78.1% bloat on a
+  0%-reclaimable 3853-block index on 17.10 because `_bt_allequalimage` refuses
+  INCLUDE indexes outright while the sweep probes only key columns - adding
+  `indnatts = indnkeyatts` to the gate makes that cell exact and moves no other
+  cell - and on 12.2 the `-1` guard is dead code, so a stale-zero `reltuples`
+  after `TRUNCATE` and reload reports 99.9% bloat on a healthy 825-block index
+  where 17.10 reports `unmeasured`; a zero-plus-size rule for 12 and 13 servers
+  was verified as filed. Both servers were stopped, the test databases dropped,
+  and the 17.10 data directory removed. The page remains human-unverified and
+  agent-unverified.
+
 - 2026-08-11: rebuilt the v12 COMMENT-stored index-bloat page around the index's
   own row count and renamed it to [Calibrating a COMMENT-Stored
   Bytes-per-Index-Row REINDEX Threshold in PostgreSQL 12

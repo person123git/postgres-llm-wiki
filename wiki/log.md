@@ -2,6 +2,76 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] follow-up v17 | does the dedup-aware bloat sweep work on v12 and v17?
+
+- Added three follow-up sections to [Testing the PostgreSQL 12 Core-SQL B-Tree
+  Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
+  (PostgreSQL 17.10).
+- Prompt hygiene applied before drafting. The asker approved a grammar-corrected
+  restatement of "does A deduplication-aware sweep for v17 works for indexes from
+  v12 and v7?", confirmed that "v7" meant v17, and chose the reading "indexes on a
+  live v12 server", i.e. does the statement parse, run and stay correct when
+  pointed at a 12 server. The corrected prompt is restated under `## Question`
+  with a prompt note; the `pg_upgrade` reading is scoped out and recorded in
+  `## Open Questions`.
+- Verdict: yes on both, because every v17-specific term is gated on a catalog
+  fact a 12 server cannot produce. Source side (`raw/postgres-17/` only, as the
+  page's version rule requires): `_bt_load`'s `deduplicate` condition is
+  `allequalimage AND NOT isunique AND BTGetDeduplicateItems`, `allequalimage`
+  comes from `_bt_allequalimage`, which needs a `BTEQUALIMAGE_PROC` (support
+  number 4) per key column, `deduplicate_items` is a `RELOPT_KIND_BTREE` option,
+  and `pg_class.reltuples` documents `-1` as unknown. Support numbers are bounded
+  by the AM's `amsupport` (`bthandler`, `AlterOpFamily`'s `maxProcNumber`,
+  `btvalidate`), so an older major cannot be made to advertise number 4. The
+  three constructs first ship in `REL_13_0`, `REL_13_0` and `REL_14_0`
+  (`612a1ab7672`, `0d861bbb702`, `3d351d916b2`), none an ancestor of `REL_12_2`,
+  read from the same checkout's history.
+- Exact-pin execution on two servers: the same DDL and generated data on an
+  isolated 12.2 server and an isolated 17.10 server, each built from its own pin
+  under `.wiki-runtime/`, no contrib installed, ground truth
+  `CREATE INDEX CONCURRENTLY`. The statement ran unchanged on both: 32 indexes /
+  10.9 ms on 12.2 and 34 / 10.5 ms on 17.10. On 12.2, 0 indexes credited,
+  `all_equalimage` false on all 20 fixtures, `expected_blocks` identical to the
+  v12 page's Method A in all 32 cells, and no miss worse than 4 blocks; on 17.10,
+  15 of 34 credited and 15 differing. `idx_dupdel` (10 keys, 90% of 1,000,000
+  rows deleted and vacuumed) reads 90.0% on 12.2 (model 276, rebuild 278, true
+  89.9%) and 90.1% on 17.10 (model 84, rebuild 87, true 89.8%), where the
+  uncorrected model says 67.5% on 17.10. Catalog probes: btree `max(amprocnum)`
+  is 3 on 12.2 with zero rows at 4, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`
+  fails with `invalid function number 4, must be between 1 and 3`,
+  `ALTER INDEX ... SET (deduplicate_items = off)` fails with
+  `unrecognized parameter`, and `array_lower(indclass, 1)` is 0 on both, so the
+  `k < indnkeyatts` probe really does cover every key column.
+- Two new findings. (1) An `INCLUDE` index with a low-cardinality included column
+  is a v17 false positive of the sweep as filed: `_bt_allequalimage` refuses
+  INCLUDE indexes outright while the SQL probe inspects only key columns, so
+  `(a) INCLUDE (d)` with 1000 and 5 distinct values read 78.1% bloat on a
+  0%-reclaimable 3853-block index. Adding `x.indnatts = x.indnkeyatts` to the gate
+  makes that cell exact (model 3853 against a rebuild of 3853) and moves none of
+  the other 33 indexes. (2) On 12.2 the `reltuples = -1` guard is dead code and the
+  stale-*zero* hazard it replaced is still live: after `TRUNCATE` and reload a
+  healthy 825-block index reads 99.9% bloat (collector `n_live_tup` 300,000,
+  `pg_class` 0, so `least()` takes the zero) where 17.10 reports
+  `unmeasured: reltuples unknown`. A zero-plus-size rule for 12 and 13 servers was
+  executed as filed and returns exactly the one truncated index.
+- Also recorded: the `n_distinct` sign boundary is unstable at ten rows per key
+  (this run got the negative form where the page's earlier sweep got a positive
+  97311), the posting-list-cap under-correction is 24 blocks at 1,000,000 rows per
+  key and 69 at 1000, and one multi-column duplicate-key cell now exercises the
+  per-column `n_distinct` product rule (842 modelled against a 897 rebuild).
+- Updated `## Contents`, `## Question`, `## Context Reviewed`, `## Evidence Map`
+  (7 new rows), `## Open Questions` (6 new items, plus corrections to the
+  "no PostgreSQL 12 server was run" and multi-column notes), and
+  `## Source References` (8 new entries). Refreshed `wiki/index.md`,
+  `wiki/v17/index.md`, and `wiki/versions.md`. `verified` stays `false` and
+  `verified_by_agent` stays `not yet`: this was a scoped follow-up, not a
+  claim-by-claim re-verification of the whole page.
+- Cleanup: both servers stopped, the two test databases dropped, the 17.10 data
+  directory removed, and the temporary SQL scripts deleted.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-12] answer v17 | test the v12 core-SQL B-tree bloat method on 17
 
 - Filed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17

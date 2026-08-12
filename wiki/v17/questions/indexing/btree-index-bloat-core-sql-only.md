@@ -32,6 +32,9 @@ verified_by_agent: not yet
   - [Cost of each method on this server](#cost-of-each-method-on-this-server)
   - [Settings and apply scopes](#settings-and-apply-scopes)
   - [What no core-SQL method can measure on v17](#what-no-core-sql-method-can-measure-on-v17)
+  - [Follow-up: the same sweep on a 12.2 server and a 17.10 server](#follow-up-the-same-sweep-on-a-122-server-and-a-1710-server)
+  - [Follow-up: the INCLUDE-column false positive on v17](#follow-up-the-include-column-false-positive-on-v17)
+  - [Follow-up: the v12 hazard the reltuples guard does not cover](#follow-up-the-v12-hazard-the-reltuples-guard-does-not-cover)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -41,6 +44,16 @@ verified_by_agent: not yet
 ## Question
 
 In PostgreSQL 17: test the SQL from the PostgreSQL 12 question "Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)" on PostgreSQL 17 and compare whether it measures bloat with the same accuracy as in version 12.
+
+Follow-up: does the deduplication-aware sweep for v17 work for indexes from v12 and v17?
+
+> Prompt note: the follow-up is filed as an approved grammar-corrected restatement
+> of the original wording ("does A deduplication-aware sweep for v17 works for
+> indexes from v12 and v7?"), per the repository's prompt-hygiene rule. The asker
+> confirmed that "v7" meant v17, and that "indexes from v12" means indexes on a
+> live PostgreSQL 12 server: does this statement parse, run, and stay correct when
+> it is pointed at a 12 server. Indexes carried onto a 17 server by `pg_upgrade`
+> are out of scope; see [Open Questions](#open-questions).
 
 ## Answer
 
@@ -58,6 +71,8 @@ One v13 feature breaks it. B-tree **deduplication** merges equal keys into posti
 | Method B density formula on the same cells | 313.58% against `pgstatindex`'s 96.15% — **+217 points** |
 
 Three smaller v17 differences also matter: `VACUUM VERBOSE` no longer prints an index row count and can skip the index line entirely (Method D), `pg_class.reltuples` now uses `-1` for "unknown" and turns a healthy 21 MB index into a 100.0% bloat reading, and a plain `ANALYZE` after the build costs partial-index cells their exactness. The [deduplication-aware sweep below](#a-deduplication-aware-sweep-for-v17) restores the worst case from +1896 blocks to −24 blocks (2.9%) without changing a single already-exact cell.
+
+That corrected sweep is also safe to run against a PostgreSQL 12 server, where it silently reduces to the v12 page's own Method A; the follow-up sections measure it on both a 12.2 and a 17.10 server and name the one case where it is wrong on 17.10 — see [Follow-up: the same sweep on a 12.2 server and a 17.10 server](#follow-up-the-same-sweep-on-a-122-server-and-a-1710-server).
 
 ### How the test was run
 
@@ -511,6 +526,121 @@ The v12 page's list is unchanged, and deduplication adds one entry:
 - **How much deduplication actually happened** — the number of posting-list tuples and their TID counts is per-page state; core SQL can only estimate it from `n_distinct` and `null_frac`.
 - **Per-page detail of any kind** — there is still no core page reader. `pg_proc.dat` contains no `pgstatindex`, `pgstattuple`, `get_raw_page`, `bt_page_stats` or `pg_freespace` entry; all of them are contrib, none of `pgstattuple`, `pageinspect`, `pg_freespacemap` or `amcheck` sets `trusted = true` in its control file, and `read_extension_control_file` defaults `superuser` to true and `trusted` to false ([extension.c:778-790](../../../../raw/postgres-17/src/backend/commands/extension.c#L778-L790)), so a non-superuser without the trust flag gets `permission denied to create extension` ([extension.c#execute_extension_script](../../../../raw/postgres-17/src/backend/commands/extension.c#L1019-L1035)). `pgstatindex` re-checks `superuser()` in C at entry ([pgstatindex.c:145-160](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L145-L160)), as does `pageinspect` ([rawpage.c:148-154](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L148-L154)). `TABLESAMPLE` still cannot be applied to an index ([parse_clause.c:1136-1146](../../../../raw/postgres-17/src/backend/parser/parse_clause.c#L1136-L1146)).
 
+### Follow-up: the same sweep on a 12.2 server and a 17.10 server
+
+Yes on both, and the deduplication term is what makes it portable rather than what breaks it. Every v17-specific term in the sweep is gated on a catalog fact that a PostgreSQL 12 server cannot produce, so the same statement pointed at a 12 server turns the correction off by itself and leaves exactly the v12 page's Method A running.
+
+The gate is the SQL form of the engine's own test. `_bt_load` deduplicates only when the build's `allequalimage` flag is set, the index is not unique, and `deduplicate_items` is on ([nbtsort.c:1147-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1147-L1152)), and that flag comes from `_bt_allequalimage`, which looks up a `BTEQUALIMAGE_PROC` support function per key column and returns false when any opclass lacks one ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563), [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183)). `BTEQUALIMAGE_PROC` is support number 4 ([nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L702-L712)), which is why the sweep asks `pg_amproc` for `amprocnum = 4`.
+
+What each v17 term needs, and what a 12.2 server offers:
+
+| Sweep term | What it reads | 17.10 | 12.2, measured |
+|---|---|---|---|
+| posting-list leaf formula | a `pg_amproc` row at `amprocnum = 4` for every key column's opclass | present; `all_equalimage` is true on all 21 fixture indexes | no such row: `max(amprocnum)` over btree opfamilies is 3 and the count at 4 is 0, so `all_equalimage` is false on all 20 fixture indexes |
+| `deduplicate_items` reloption | `pg_options_to_table(reloptions)` ([reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168), [nbtutils.c#btoptions](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4561-L4576)) | exists, defaults to on | the option does not exist: `ALTER INDEX idx_dup SET (deduplicate_items = off)` fails with `ERROR: unrecognized parameter "deduplicate_items"` |
+| `reltuples = -1` guard | `pg_class.reltuples` ([pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)) | reads `-1` after `TRUNCATE` and reports `unmeasured: reltuples unknown` | the sentinel never appears: an index on an empty table and an index after `TRUNCATE` both read `0` |
+
+None of the three can be back-ported into a 12 catalog by hand either. A support-function number is bounded by the access method's `amsupport`, which for B-tree is `BTNProcs` ([nbtree.c#bthandler](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L100-L107)) — 5 in v17, and `ALTER OPERATOR FAMILY ... ADD FUNCTION n` rejects anything above it ([opclasscmds.c:840-845](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L840-L845), [opclasscmds.c#invalid-function-number](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L956-L962)); `btvalidate` accepts exactly support numbers 1 through 5 and reports every other number as invalid ([nbtvalidate.c:90-126](../../../../raw/postgres-17/src/backend/access/nbtree/nbtvalidate.c#L90-L126)). On 12.2 the same DDL returns `ERROR: invalid function number 4, must be between 1 and 3`.
+
+All three constructs postdate 12 in this checkout's own history: `612a1ab7672` (2020-02-26, "Add equalimage B-Tree support functions.") and `0d861bbb702` (2020-02-26, "Add deduplication to nbtree.") first ship in `REL_13_0`, and `3d351d916b2` (2020-08-30, "Redefine pg_class.reltuples to be -1 before the first VACUUM or ANALYZE.") first ships in `REL_14_0`. None is an ancestor of `REL_12_2`.
+
+Measured with the statement unchanged on two isolated servers, each built from its own pin, carrying the same DDL and the same generated data:
+
+| | 12.2 | 17.10 |
+|---|---|---|
+| statement runs | yes | yes |
+| indexes swept / blocks covered, rebuild copies included | 32 / 68,108 | 34 / 48,753 |
+| warm run time, same statement | 10.9 ms | 10.5 ms |
+| indexes credited with deduplication | 0 | 15 |
+| cells whose `expected_blocks` differs from the v12 page's Method A | 0 of 32 | 15 of 34 |
+| indexes reported `unmeasured` | 0 | 1 |
+
+Per fixture, 1,000,000 rows each, `bigint` key, `pg_relation_size` in blocks and a `CREATE INDEX CONCURRENTLY` rebuild as ground truth:
+
+| fixture | 12.2 live | 12.2 rebuilt | 12.2 model | 12.2 reported | 17.10 live | 17.10 rebuilt | 17.10 model | 17.10 reported |
+|---|---|---|---|---|---|---|---|---|
+| `idx_seq`, distinct keys | 2745 | 2745 | 2745 | 0.0% | 2745 | 2745 | 2745 | 0.0% |
+| `idx_dup`, one key | 2749 | 2749 | 2745 | 0.1% | 849 | 849 | 825 | 2.8% |
+| `idx_null`, 25% NULL | 2746 | 2746 | 2745 | 0.0% | 2271 | 2271 | 2265 | 0.3% |
+| `idx_q2`, 2 rows/key | 2749 | 2749 | 2745 | 0.1% | 2475 | 2475 | 2745 | −10.9% |
+| `idx_q5`, 5 rows/key | 2748 | 2748 | 2745 | 0.1% | 1426 | 1426 | 2745 | −92.5% |
+| `idx_q10`, 10 rows/key | 2749 | 2749 | 2745 | 0.1% | 1157 | 1157 | 2745 | −137.3% |
+| `idx_q100`, 100 rows/key | 2749 | 2749 | 2745 | 0.1% | 839 | 839 | 844 | −0.6% |
+| `idx_seq_part`, 20% partial | 551 | 551 | 551 | 0.0% | 551 | 551 | 550 | 0.2% |
+| `idx_dupdel`, 10 keys, 90% deleted + VACUUM | 2749 | 278 | 276 | 90.0% | 850 | 87 | 84 | 90.1% |
+
+Four readings matter:
+
+- **Every fresh fixture is 0% reclaimable on both servers** — live equals rebuilt in all sixteen cells — so any non-zero reading in the "reported" columns is model error, not bloat.
+- **On 12.2 the sweep misses by at most 4 blocks across these nine fixtures**, including the all-duplicate index. That is the case the deduplication term exists for, and crediting it there would have been wrong: 12.2 stores one index tuple per row, so `idx_dup` really is 2749 blocks. The gate is what keeps the answer right.
+- **`idx_dupdel` is the load-bearing case**: a duplicate-key index with real, VACUUM-confirmed bloat. Both servers report about 90% and both are right — 276 modelled blocks against a 12.2 rebuild of 278 (true bloat 89.9%), 84 against a 17.10 rebuild of 87 (true bloat 89.8%) — reached by different arithmetic on each server. The uncorrected v12 model would have reported 67.5% on the 17.10 index.
+- **The negative percentages on 17.10 at 2, 5 and 10 rows per key** are the `n_distinct > 0` gate declining to credit deduplication, the blind spot already documented in [A deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17). The same cells are accurate on 12.2 because there is nothing to credit. At ten rows per key this run landed on the negative form (`key_groups` 1,000,000, no credit) where the earlier ratio sweep on this page recorded a positive `n_distinct` of 97311; 100,001 distinct values in 1,000,000 rows sits exactly on the 10%-of-rows boundary that decides the sign ([analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612)), and the estimate is sampled.
+
+Six further index shapes over a 200,000-row table were swept on both servers without error — multi-column, `INCLUDE`, expression, unique, `text`, and a low-cardinality `int`. Scored against the freshly built live size rather than a rebuild, the model lands within one block on every one of the twelve cells, on both servers. The `indclass` probe survives the version change because `oidvector` subscripts start at 0, so `k < x.indnkeyatts` covers every key column on both servers (measured `array_lower(indclass, 1) = 0` on 12.2 and 17.10).
+
+### Follow-up: the INCLUDE-column false positive on v17
+
+This comparison exposed one case where the dedup-aware sweep is wrong on 17.10, and it is not a version-portability problem: `_bt_allequalimage` returns false immediately for any index whose total attribute count differs from its key attribute count, because "INCLUDE indexes can never support deduplication" ([nbtutils.c:5144-5148](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5148)). The sweep's catalog probe only inspects key columns and never checks for included ones, so it credits deduplication the engine will refuse.
+
+It only bites when the *included* column is also low-cardinality, because `key_groups` multiplies per-column `n_distinct` across every index attribute. Measured on 17.10 over 1,000,000 rows with 1000 distinct `a` and 5 distinct `d`:
+
+| index | key groups | model | live | rebuilt | reported | true |
+|---|---|---|---|---|---|---|
+| `idx_inc_lowcard` — `(a) INCLUDE (d)` | 5000 | 842 | 3853 | 3853 | **78.1%** | 0.0% |
+| `idx_inc_bothkeys` — `(a, d)` | 5000 | 842 | 897 | 897 | 6.1% | 0.0% |
+| `idx_inc_keyonly` — `(a)` | 1000 | 827 | 896 | 896 | 7.7% | 0.0% |
+| `idx_inc_include` — `(a) INCLUDE (b)`, `b` distinct | 1,000,000 | 3853 | 3853 | 3853 | 0.0% | 0.0% |
+
+The fix is one conjunct. Add `(x.indnatts = x.indnkeyatts) AS no_included_cols` to the `idx` CTE and require it in the gate:
+
+```sql
+(NOT s.indisunique AND s.dedup_on AND s.no_included_cols
+     AND coalesce(s.all_equalimage, false))                    AS dedup_applies
+```
+
+Re-scored on the same server, `idx_inc_lowcard` moves from 78.1% to 0.0% with a model of 3853 blocks against a rebuild of 3853 — exact — and all 33 other indexes in that database are unchanged. On 12.2 the same three indexes read 0.1% to 0.2% with errors of −4 to −6 blocks, because the gate is closed there for every index anyway.
+
+The 6.1% and 7.7% on the two indexes that *can* deduplicate are the posting-list-cap under-correction this page already records at 2.9%. It is not a constant: it was 24 blocks at 1,000,000 rows per key and 69 blocks at 1000 rows per key.
+
+### Follow-up: the v12 hazard the reltuples guard does not cover
+
+The `reltuples = -1` branch is dead code on 12.2, and the v12-era failure it was added for is still live there as a *zero*. Same fixture on both servers — 300,000 rows, `TRUNCATE`, reload, no `ANALYZE`:
+
+| server | table / index `reltuples` | 825-block healthy index reported as |
+|---|---|---|
+| 12.2 | `0` / `0` | **99.9% bloat** |
+| 17.10 | `-1` / `-1` | `unmeasured: reltuples unknown`, no number |
+
+`least(reltuples, n_live_tup)` cannot rescue it: the collector had the right 300,000 while `pg_class` had 0, and `least()` takes the zero. So a v12 server needs its own unmeasured rule, and the size check is what separates a stale zero from a genuinely empty index:
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '2s';
+
+SELECT /* wiki_btree_zero_reltuples_v12 */
+       n.nspname                                              AS schemaname,
+       c.relname                                              AS indexname,
+       c.reltuples::bigint                                    AS reltuples,
+       pg_relation_size(c.oid)                                AS bytes
+  FROM pg_class c
+  JOIN pg_index x     ON x.indexrelid = c.oid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relkind = 'i' AND x.indisvalid
+   AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+   AND c.reltuples = 0
+   AND pg_relation_size(c.oid) > current_setting('block_size')::int
+ ORDER BY pg_relation_size(c.oid) DESC;
+```
+
+Run as written on the 12.2 test database, that returns the truncated index and nothing else — one row, `idx_trunc`, `reltuples` 0, 6,758,400 bytes — because the genuinely empty index is exactly one metapage (8192 bytes) and every populated index carries a non-zero `reltuples`.
+
+So, pointing this sweep at a 12 server needs no change for deduplication and one change for statistics:
+
+1. Leave the posting-list term and its `pg_amproc` gate alone. They cost nothing and cannot fire.
+2. Replace the `reltuples = -1` branch with the zero rule above, or keep both — `-1` on 14 and later, `0`-with-bytes on 12 and 13.
+3. Keep the partial-index `unmeasured` status. It is statistics-driven and version-independent.
+4. Expect the model to sit 1 to 4 blocks *under* a 12.2 rebuild on duplicate-key and NULL-heavy indexes, against 0 blocks on distinct keys.
+
 ## Context Reviewed
 
 - nbtree build, split and deduplication: `nbtsort.c` (`_bt_blnewpage`, `_bt_pagestate`, `_bt_buildadd`, `_bt_load`, `_bt_sort_dedup_finish_pending`), `nbtdedup.c` (`_bt_dedup_pass`, `_bt_dedup_start_pending`, `_bt_dedup_save_htid`, `_bt_form_posting`, `_bt_bottomupdel_pass`), `nbtsplitloc.c` (`_bt_findsplitloc`, single-value strategy), `nbtree.h` (fillfactor constants, `BTGetDeduplicateItems`, `BTMaxItemSize`, `BTPageOpaqueData`, `P_HIKEY`), `README`.
@@ -520,6 +650,8 @@ The v12 page's list is unchanged, and deduplication adds one entry:
 - Rebuild path: `indexcmds.c` (`DefineIndex`), `utility.c`, `ruleutils.c` (`pg_get_indexdef`), `bulk_write.c`, `create_index.sgml`, `maintenance.sgml`.
 - Contrib boundary: `pgstattuple.control`, `pgstatindex.c`, `pageinspect.control`, `rawpage.c`, `extension.c`, the 22 `trusted = true` contrib control files, `pgstattuple.sgml`.
 - Exact-pin execution: one isolated 17.10 server built from the pinned checkout under `.wiki-runtime/`, carrying the 15 named fixtures, the 9 x 3 x {full, partial} matrix (54 indexes over 27 tables), a six-point duplication-ratio sweep, a `reltuples = -1` probe, and Method D bypass fixtures. Methods A, A-prime, B, C and D were executed against them, with `pgstattuple` installed solely as ground truth and Method C rebuilds as the reclaimable-size arbiter. Method B was driven through `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` so the plan's index name, `Heap Fetches` and buffer counts could be scored programmatically.
+- Deduplication gate and its version dependence, for the v12/v17 follow-up: `nbtsort.c` (`_bt_load`'s `deduplicate` condition, `_bt_leafbuild` setting `inskey->allequalimage`), `nbtutils.c` (`_bt_allequalimage`, `btoptions`), `nbtree.h` (`BTORDER_PROC` through `BTNProcs`, `BTGetDeduplicateItems`), `nbtree.c` (`bthandler`'s `amsupport`), `nbtvalidate.c` (accepted support numbers), `reloptions.c` (`deduplicate_items` entry), `opclasscmds.c` (`maxProcNumber` and the `invalid function number` error), `varlena.c` (`btvarstrequalimage`), `pg_class.h` (`reltuples` `-1`), `analyze.c` (the negative-`stadistinct` rule). Commit history for the three constructs' first release tags was read from the same pinned checkout.
+- Follow-up exact-pin execution, two servers: the same DDL and generated data on one isolated 12.2 server and one isolated 17.10 server, each built from its own pin under `.wiki-runtime/`, both with `autovacuum = off`, `fsync = off`, `block_size` 8192, and no contrib extension installed. Fixtures: nine 1,000,000-row indexes (distinct, all-duplicate, 25% NULL, four duplication ratios, a 20% partial sibling, and a 10-key index with 90% of rows deleted and vacuumed), six shape indexes over a 200,000-row table, three `INCLUDE`-versus-key-column indexes over a 1,000,000-row table, an empty-table index, and a `TRUNCATE`-and-reload index. The dedup-aware sweep and the v12 page's Method A were installed as views on both servers with only the 1 MB triage filter and `LIMIT` removed and `expected_blocks` exposed; `CREATE INDEX CONCURRENTLY` rebuilds were the ground truth. Catalog probes covered `pg_amproc` support numbers, `array_lower(indclass, 1)`, `ALTER INDEX ... SET (deduplicate_items = off)`, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, and `pg_class.reltuples` after build, `TRUNCATE` and reload. Both servers were stopped afterwards, the test databases dropped, and the 17.10 data directory removed.
 
 ## Evidence Map
 
@@ -554,14 +686,27 @@ The v12 page's list is unchanged, and deduplication adds one entry:
 | The bloat tooling is contrib and superuser-gated | [extension.c:778-790](../../../../raw/postgres-17/src/backend/commands/extension.c#L778-L790), [extension.c#execute_extension_script](../../../../raw/postgres-17/src/backend/commands/extension.c#L1019-L1035), [pgstatindex.c:145-160](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L145-L160), [rawpage.c:148-154](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L148-L154) |
 | `TABLESAMPLE` cannot be applied to an index | [parse_clause.c:1136-1146](../../../../raw/postgres-17/src/backend/parser/parse_clause.c#L1136-L1146) |
 | GUC contexts used by these methods | [guc_tables.c:2610-2630](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2630), [guc_tables.c:2464-2473](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2464-L2473), [guc_tables.c:3267-3276](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3267-L3276), [guc_tables.c:4973-4981](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4973-L4981) |
+| The build-time deduplication decision is `allequalimage AND NOT isunique AND deduplicate_items` | [nbtsort.c:1147-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1147-L1152), [nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563) |
+| `allequalimage` is false when any key column's opclass lacks a `BTEQUALIMAGE_PROC` entry, and unconditionally false for an INCLUDE index | [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [nbtutils.c:5144-5148](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5148) |
+| Equal image is B-tree support function number 4, which is why the sweep probes `pg_amproc.amprocnum = 4` | [nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L702-L712) |
+| A support-function number cannot exceed the access method's `amsupport`, so a pre-13 catalog cannot advertise number 4 | [nbtree.c#bthandler](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L100-L107), [opclasscmds.c:840-845](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L840-L845), [opclasscmds.c#invalid-function-number](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L956-L962), [nbtvalidate.c:90-126](../../../../raw/postgres-17/src/backend/access/nbtree/nbtvalidate.c#L90-L126) |
+| `deduplicate_items` is a B-tree reloption defaulting to on | [reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168), [nbtutils.c#btoptions](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4561-L4576), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1150) |
+| Equal-image support functions, nbtree deduplication and the `-1` `reltuples` sentinel all postdate 12 | this checkout's history: `612a1ab7672` and `0d861bbb702` (2020-02-26, first in `REL_13_0`), `3d351d916b2` (2020-08-30, first in `REL_14_0`); none is an ancestor of `REL_12_2` |
+| The equal-image function can exist and still return false, so a presence-only catalog probe is not exact | [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613) |
 
 ## Open Questions
 
 - **The v12 fixtures were reconstructed, not recovered.** The v12 page records each fixture's shape and its resulting block counts but not its DDL, so `idx_multi`, `idx_var`, `idx_rand` and `idx_churn` differ from the v12 page's block counts for reasons that include fixture choice. Nine of fifteen fixtures reproduce the v12 block count exactly, which bounds but does not eliminate the risk that a difference attributed to v17 is really a difference in the recipe.
-- **v12 numbers are quoted, not re-measured.** Every "v12 page" figure in this page comes from that page's own tables. No PostgreSQL 12 server was run for this comparison, so those figures are attributions rather than evidence from the v12 checkout.
+- **v12 numbers in the original comparison are quoted, not re-measured.** Every "v12 page" figure in the sections above comes from that page's own tables, so those figures are attributions rather than evidence from the v12 checkout. The 12.2 server used for the v12/v17 follow-up carried new fixtures and does not re-measure the v12 page's own numbers.
+- **The 12.2 column of the follow-up is measurement plus history, not v12 source citation.** This page may cite only `raw/postgres-17/`, so every 12.2 statement above rests on exact-pin execution against a 12.2 server plus this checkout's own commit history. The v12-side source analysis — where v12's `BTNProcs` is 3, what its `btoptions` accepts, and what writes its `reltuples` — belongs on [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md) and is not filed there yet.
+- **Only 12 and 17 were exercised.** Majors 13 through 16 were not run. 13 is the interesting gap: deduplication and the equal-image support function exist there, so the sweep would credit the posting-list term, while the `-1` `reltuples` sentinel does not exist until 14, so the stale-zero hazard described above applies at the same time.
+- **The `pg_upgrade` reading was not measured.** A duplicate-key index built by 12 and carried onto a 17 server holds no posting lists, while the sweep predicts the size a 17 rebuild would produce. The reported "bloat" should therefore be the deduplication win a `REINDEX` would realize, which follows from the model's definition, but no `pg_upgrade` run was made to confirm it.
+- **On 12.2 the model ran 1 to 6 blocks under a rebuild whenever keys repeated** — 2745 modelled against 2749 built on four single-column fixtures, 2748 on one, 2746 on the NULL fixture, and 3853 against 3859 on the two two-attribute `INCLUDE` cases — while distinct keys were exact. The cause was not isolated; no page-level tool was installed on that server, so leaf-versus-internal attribution was not possible.
+- **The nondeterministic-collation false positive is source-derived only.** `btvarstrequalimage` returns false for a nondeterministic collation while the `pg_amproc` row still exists, so the sweep's presence-only probe would credit deduplication the engine refuses. This build has no ICU support (`CREATE COLLATION ... provider = icu` fails with `ICU is not supported in this build`), so the case was not measured.
+- **The INCLUDE fix was scored on one server.** Adding `x.indnatts = x.indnkeyatts` to the gate corrected the one affected index and left the other 33 in that 17.10 database unchanged, but it was not re-scored against the 54-cell matrix above.
 - **The dedup term ignores the posting-list cap.** Charging a flat 6 bytes per extra row underestimates an all-duplicate rebuild by about 3% (825 modelled against 849 measured at 1,000,000 rows) because it ignores both the 812-byte cap and the base tuple that each capped posting list repeats. The exact arithmetic is derivable from `_bt_dedup_save_htid` plus the `_bt_buildadd` `truncextra` rule, but it was not implemented in SQL.
 - **The gate is a heuristic with a measured blind spot.** Refusing to credit deduplication when `n_distinct` is negative leaves +10.9% error at 2 rows per key and +92.5% at 5. A `SET (n_distinct = ...)` column override would close it, but that was not tested.
-- **Multi-column group estimation is a product of per-column `n_distinct`.** No matrix cell exercised a multi-column index with duplicates, so the combination rule is untested against a rebuild.
+- **Multi-column group estimation is a product of per-column `n_distinct`.** No cell in the 54-cell matrix exercised a multi-column index with duplicates. The follow-up added one: `(a, d)` with 1000 and 5 distinct values over 1,000,000 rows produced 5000 groups and modelled 842 blocks against a rebuild of 897, so the product rule was 6.1% optimistic on the one case measured. Whether that error is the product rule or the posting-list cap was not separated.
 - **`n_live_tup` read 2,000,000 for a 1,000,000-row table** after a truncate-and-reload in one session, while a separate clean run of the same sequence showed the counter resetting correctly. The discrepancy was not traced to a specific flush path; the recommendation above avoids depending on it, but the cause is unresolved.
 - **Half-dead pages were never produced.** No fixture reached a non-zero `empty_pages`, so the claim that Methods A and B lump half-dead pages in with deleted ones follows from the code path, not from measurement.
 - **Bottom-up index deletion was not isolated.** `idx_churn` and the `churn_*` matrix cells differ from the v12 page's sizes, and v14's bottom-up deletion is the obvious mechanism, but no fixture here separates it from the update pattern; the model's accuracy does not depend on which it is.
@@ -573,6 +718,15 @@ The v12 page's list is unchanged, and deduplication adds one entry:
 - [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L641-L671)
 - [nbtsort.c#_bt_buildadd](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L783-L940)
 - [nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1135-L1377)
+- [nbtsort.c#_bt_leafbuild](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L535-L571)
+- [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5129-L5183)
+- [nbtutils.c#btoptions](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4561-L4576)
+- [nbtvalidate.c#btvalidate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtvalidate.c#L40-L287)
+- [nbtree.c#bthandler](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L100-L153)
+- [reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168)
+- [opclasscmds.c#AlterOpFamily](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L816-L878)
+- [opclasscmds.c#AlterOpFamilyAdd](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L880-L1028)
+- [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613)
 - [nbtdedup.c#_bt_dedup_pass](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L58-L210)
 - [nbtdedup.c#_bt_dedup_save_htid](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L477-L544)
 - [nbtdedup.c#_bt_form_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L856-L920)
