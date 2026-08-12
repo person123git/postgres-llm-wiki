@@ -2,6 +2,93 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] answer v12 | calibrate a COMMENT-stored bytes-per-table-tuple REINDEX threshold for every non-btree index
+
+- Filed [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for
+  Every Non-B-Tree Index in PostgreSQL 12
+  (unverified)](v12/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). The
+  prompt contained "postgreql 12", "bytes per tuples", a comma splice before
+  "For each index type", "documment", and "how it was tested"; the user chose
+  "Fix all typos/grammar", picked the five core non-btree access methods
+  (hash, GiST, GIN, SP-GiST, BRIN; no contrib `bloom`), and approved running real
+  workloads rather than a source-only answer. The corrected prompt is restated
+  verbatim under `## Question` with a note recording the correction.
+- Verdict: the scheme calibrates for GiST, is row-count-dependent for hash and
+  SP-GiST, is screening-only for GIN, and must never fire for BRIN. Per-access-
+  method thresholds, perfect windows and confusion counts (positive class =
+  `REINDEX` reclaims >= 20% of current bytes): GiST 25% (window 13.97-33.33,
+  14/0/0/8), SP-GiST 30% (28.24-32.17, 15/0/0/7), hash 10% (8.78-11.11,
+  16/0/0/6), GIN `fastupdate = off` 50% (no perfect window, 16/2/0/4), GIN
+  `fastupdate = on` 75% (55.84-100.00, 18/0/0/4), BRIN never (0/4/0/18 at its
+  least-bad setting). One all-method threshold of 30% scores 90.2% over all 132
+  cells and 93.6% over the 110 non-BRIN cells.
+- Method: built the exact pin out of tree under `.wiki-runtime/pg12`, installed
+  its own `pageinspect`, `pgstattuple` and `pg_freespacemap`, and ran an isolated
+  12.2 cluster on port 55442 with `autovacuum = off` so each cell's
+  `VACUUM`/`ANALYZE` boundary is explicit. One deterministic id-derived fixture
+  (200,000 rows, 5,406 heap pages) carried six indexes covering all five access
+  methods plus both GIN `fastupdate` settings on separate columns. 22 workloads:
+  a do-nothing control, six delete fractions, a delete-without-vacuum, five
+  churn intensities, a partial-HOT update pass (measured 241,920 of 400,000
+  updates HOT), three insert-growth multiples, a row-turnover cell, a mixed
+  insert/update/delete cell, and a combined grow-2x-plus-churn cell. Each cell
+  stamps the baseline through `COMMENT ON INDEX`, reaches its maintenance point,
+  reads the ratio and access-method internals, measures the representative query
+  with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` (median of 7, warm), runs
+  `REINDEX INDEX`, and measures both again. Page density came from
+  `page_header(get_raw_page(...))` because `pgstattuple()` refuses GIN, SP-GiST
+  and BRIN indexes on this version.
+- Measured findings recorded on the page: `VACUUM` never shrank any index (byte-
+  identical sizes in every delete cell, matching the source fact that the only
+  index-side `RelationTruncate` call is `TRUNCATE`'s rebuild path and SP-GiST's
+  is `#ifdef NOT_USED`); every access method reads exactly `1/(1-f)-1` after a
+  delete of fraction f, so deletes carry no index information; a GIN pending list
+  reads +261.73% and `gin_clean_pending_list()` moves it to a worse +388.78%
+  (23,232,512 -> 31,391,744 bytes) while delivering the entire query improvement
+  (3,779 -> 1,336 blocks, 11.259 -> 1.393 ms) that the subsequent rebuild did
+  not, and `fastupdate` alone changes bytes-per-tuple 2.8x; three hash builds
+  over identical 200,000 rows give 34.5293 / 38.0928 / 37.1917 bytes per row
+  because `hashbuild` sizes buckets from `estimate_rel_size`; fresh hash builds
+  from 60,000 to 250,000 rows span 28.071 to 52.634 bytes per row; a grown hash
+  index carried 87 unwritten zero pages, with `pg_relation_size` reporting
+  5,341,184 bytes against 4,628,480 allocated per `stat`, and `pgstattuple()`
+  erroring on it; a 10% delete "reclaims" 22.66% by re-bucketing 768 -> 640;
+  BRIN's `pages_per_range` spreads the baseline 6.3x and BRIN churn cost
+  130 -> 487 query blocks at a +0.00% reading with 0.00% reclaimed; stale
+  `reltuples` flips one GiST index between +84.71% and -7.64%; a partial index
+  that grew 80.4% read -5.02% against 44.59% reclaimable; rebuild costs were
+  GiST 650.8 ms, SP-GiST 292.9, GIN 156.7/155.7, hash 120.3, BRIN 19.4; and at a
+  30% threshold the rebuild reduced query blocks in 12/13 GiST and 13/14 SP-GiST
+  cells but 0/14 hash and 0/6 BRIN cells.
+- `COMMENT ON INDEX` mechanics were executed on the pin: the grammar takes only
+  a literal or `NULL` (both `IS (SELECT ...)` and `IS 12.5` are syntax errors, so
+  a computed baseline needs dynamic SQL), one `ShareUpdateExclusiveLock` on the
+  index and none on the table, owner-only writes but world-readable values,
+  `IS NULL` and `IS ''` both deleting the `pg_description` row, plain `REINDEX`
+  keeping the OID (18061 -> 18061) and `REINDEX INDEX CONCURRENTLY` moving the
+  single row to a new OID (18061 -> 18063), and `LIKE ... INCLUDING ALL` copying
+  the numeric baseline onto an 81,920-byte empty clone.
+- Both fenced SQL blocks (the stamping function and the maintenance check) were
+  extracted from the filed page and executed on the pin with zero errors and
+  zero warnings; the check correctly returned `ignore` for BRIN, partial indexes,
+  zero `reltuples`, and baselines whose recorded `relid` no longer matches.
+- Reproducibility: two cells re-run end to end matched to the digit for 10 of 12
+  index-level results, including byte-identical sizes; only GiST differed
+  (84.62% vs 84.22% reading), and the two duplicated matrix labels agreed exactly
+  for five of six index shapes. Eleven open questions were filed, covering the
+  single-platform constants, the fixed 1,000-key GIN fixture, the 20%-reclaimable
+  judgement call, warm single-client query measurement, autovacuum being off, the
+  unmeasured SP-GiST held-snapshot case, and GiST's non-determinism.
+- Updated `wiki/index.md`, `wiki/v12/index.md`, and the v12 coverage cell plus a
+  new coverage note in `wiki/versions.md`. Kept `verified: false`, the visible
+  `(unverified)` title, and `verified_by_agent: not yet`: every cited line range
+  was re-read in the pinned checkout and every number was produced on the pin,
+  but the constants rest on one fixture family and one platform, so this is not
+  a full claim-by-claim audit. The test server was stopped and its data
+  directory removed; the harness and captured output remain under
+  `.wiki-runtime/tmp/bpt/`, and `raw/postgres-12/` was not modified.
+
 ## [2026-08-12] remove v12 | delete Calibrating a COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold
 
 - Removed `wiki/v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md`
