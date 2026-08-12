@@ -2,6 +2,80 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] answer v17 | which indexes need a rebuild for deduplication after pg_upgrade from 12
+
+- Filed [Checking Whether an Index Needs a Rebuild to Enable Deduplication After
+  pg_upgrade From PostgreSQL 12 to 17
+  (unverified)](v17/questions/indexing/btree-deduplication-after-pg-upgrade.md)
+  against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
+  (PostgreSQL 17.10).
+- Prompt hygiene applied before drafting. The asker approved the corrected wording
+  of "in postgreql 17 , question: after an database is upgraded from v12 to v17,
+  how to check if an index needs to be rebuild to enable de-duplication.", chose a
+  live `pg_upgrade` test over a source-only answer, and restricted the check itself
+  to core SQL with no extensions.
+- Verdict: every B-tree index `pg_upgrade` carries over from a v12 cluster is
+  unable to deduplicate, and only a rebuild changes that. Source side:
+  `BTMetaPageData`'s own comment ("Even version 4 indexes created on PostgreSQL v12
+  will need a REINDEX ... pg_upgrade hasn't been taught to set the metapage
+  field"), `_bt_metaversion`'s "we rely on the assumption that btm_allequalimage
+  will be zero'ed", `_bt_upgrademetapage`'s "Only a REINDEX can set this field",
+  `_bt_initmetapage` storing `_bt_allequalimage()`'s answer at build time, the
+  build and insert deduplication gates in `_bt_load` and
+  `_bt_delete_or_dedup_one_page`, and `pageinspect`'s identical assumption.
+  `btm_version` is 4 both before and after, so version is not the discriminator.
+- Deliverable is a core-SQL-only check with three parts: read byte 64 of block 0
+  through `pg_read_binary_file(..., 0, 72, true)` + `get_byte`, mirror
+  `_bt_allequalimage` in the catalogs (`indnatts = indnkeyatts`, a `pg_amproc`
+  support function 4 per key opclass, `collisdeterministic` for
+  `btvarstrequalimage` columns), and read the `deduplicate_items` reloption. Byte
+  offsets were confirmed by compiling `offsetof` against the pin's own installed
+  headers (contents at 24, `btm_version` 28, `btm_allequalimage` 64, v17 metapage
+  `pd_lower` 72); the 12.2 headers have no such struct member at all.
+- Measured on three isolated 12.2 -> 17.10 `pg_upgrade --copy` runs plus one
+  ICU-enabled 17.10 cluster: 21/21 carried-over indexes read `pd_lower = 64`,
+  version 4 and the flag false, while every 17-built index read 72/true; the probe
+  agreed with `bt_metap()` (installed only as ground truth) in 75/75 row comparisons,
+  57 before the rebuilds and 18 after;
+  all 21 index files were MD5-identical between old and new data directories with
+  OID and relfilenode preserved; the gate matched the engine's own `DEBUG1` verdict
+  on 19 shapes, the one silent case being the `INCLUDE` index whose early
+  `return false` skips the `elog`.
+- Rebuild results: `REINDEX INDEX CONCURRENTLY` reclaimed 69.1% / 69.0% / 69.0% /
+  68.7% / 68.5% / 67.4% / 67.4% on the seven duplicate-heavy indexes, 0.0% on the
+  unique and empty ones, and left the five not-equal-image indexes identical to the
+  byte. A fresh `deduplicate_items = off` twin measured 22,519,808 bytes, exactly
+  the carried-over index's size, against 6,963,200 with deduplication on. The
+  savings curve over rows per key ran 0.0% / 10.0% / 48.1% / 65.4% / 69.5% / 67.4%
+  at 1 / 2 / 5 / 20 / 100 / 1000, and a carried-over index grew to 3.1x a fresh
+  twin over the same 200,000 duplicate inserts.
+- Also measured and filed: the `deduplicate_items` trap (metapage flag true, full
+  22,519,808 bytes, engine still logging "can safely use deduplication"),
+  `VACUUM FULL` and `CLUSTER` setting the flag while plain `VACUUM` does not, that
+  `GRANT EXECUTE ON FUNCTION pg_read_binary_file(text,bigint,bigint,boolean)` is
+  the requirement and `pg_read_server_files` is neither sufficient nor necessary,
+  `relpages`/`reltuples` left at 0 (not the v14 `-1`) for all 21 indexes until the
+  first `ANALYZE`, a single `pg_class.xmin` band of 534 that makes xmin useless as
+  a durable marker, and `pg_largeobject_loid_pn_index` plus a TOAST index as the
+  carried-over catalog cases. Both filed statements plus the priority query and the
+  platform self-test were executed on the pin.
+- Updated two open questions on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md): the
+  `pg_upgrade` reading it scoped out and the nondeterministic-collation false
+  positive it could not measure are now both measured, and it also inherits the
+  zeroed-`reltuples` blind spot right after an upgrade.
+- Refreshed `wiki/index.md`, `wiki/v17/index.md`, and the v17 coverage cell plus a
+  new coverage note in `wiki/versions.md`. `verified` stays `false` and
+  `verified_by_agent` stays `not yet`: nine open questions remain, including
+  single-platform byte offsets and an unobserved standby/replay case.
+- Cleanup: all four test servers stopped and their data directories, tablespace
+  directory and socket directory removed (5.2 GB reclaimed); the fixture and
+  measurement scripts with their captured output remain under
+  `.wiki-runtime/tmp/dedup-upgrade/` for re-verification. `raw/postgres-12/` and
+  `raw/postgres-17/` were not modified.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-12] follow-up v17 | one B-tree bloat statement for servers 12 through 17
 
 - Added eight follow-up sections to [Testing the PostgreSQL 12 Core-SQL B-Tree
