@@ -2,6 +2,61 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] answer v17 | test the v12 core-SQL B-tree bloat method on 17
+
+- Filed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
+  (PostgreSQL 17.10). Prompt hygiene: the user approved correcting the prompt's
+  "postgreql" and "acurace" typos and its trailing "from version 12" phrasing,
+  and chose full-parity testing plus citing the v12 page's own numbers rather
+  than re-running a PostgreSQL 12 server.
+- Built the pin out of tree under `.wiki-runtime/pg17`, ran an isolated 17.10
+  server (`autovacuum = off`, `pgstattuple` installed only as ground truth), and
+  executed the v12 page's Methods A-D verbatim over three populations: the 15
+  named fixtures, a 9-bloat-type x 3-scale x partial/non-partial 54-cell matrix
+  (54 indexes over 27 tables), and a six-point duplication-ratio sweep. Ground
+  truth per index is a `CREATE INDEX CONCURRENTLY` rebuild plus `pgstatindex`;
+  Method B was driven through `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` so the
+  plan's index name, `Heap Fetches` and buffer counts could be scored
+  programmatically.
+- Verdict: the SQL runs unchanged and is as accurate as the v12 page reports
+  wherever keys are distinct - exact on 9 of 14 fixtures and all 24 non-partial
+  matrix cells outside the duplicate-key type, `leaf_pages` exact on 12 of 12 fixtures and 36 of 36 eligible
+  cells, `pg_column_size` moving the variable-width fixture from +105 blocks to
+  -1, Method C exact by construction, and the stale-partial-index failure
+  clearing with one `ANALYZE` (worst error 499 blocks to 1, against the v12
+  page's 510 to 1). Nine of fifteen fixtures reproduce the v12 page's block
+  count exactly, which is the control for the comparison.
+- The v13 deduplication feature is the one break: `_bt_load` deduplicates
+  non-unique all-equal-image indexes by default, so the per-row page-fill model
+  overestimates a rebuild by +223.3% on an all-duplicate 1,000,000-row index,
+  +92.5% at 5 rows per key on an index with 0% reclaimable, and +20.9% on a
+  25%-NULL index; Method B's density formula reads 313.58% against
+  `pgstatindex`'s 96.15%. Filed a dedup-aware sweep charging 6 bytes per extra
+  TID, gated on `n_distinct > 0` (because `analyze.c` switches to a negative
+  fraction above 10% distinct, and crediting that form turned a +105-block
+  estimate into -271), on `deduplicate_items`, on non-uniqueness, and on the
+  `pg_amproc` equal-image support function. It cuts the worst duplicate-key
+  error to -24 blocks (2.9%) and changes no already-exact cell.
+- Also measured and filed three smaller v17 differences: `pg_class.reltuples`
+  now uses -1 for unknown and `TRUNCATE` restores that state, so the v12 SQL
+  reports 100.0% bloat on an index a rebuild proves healthy (2745 against 2745)
+  while the collector's `n_live_tup` read 2,000,000 for 1,000,000 rows, hence a
+  guard that reports "unmeasured"; `VACUUM VERBOSE` prints four page classes and
+  no index row count; and the v14 2%-of-pages index-vacuum bypass prints no
+  index line at all (measured at 0.41% of pages, restored with
+  `INDEX_CLEANUP ON`).
+- Updated `wiki/index.md`, `wiki/v17/index.md`, and the v17 coverage note in
+  `wiki/versions.md`. Kept `verified: false`, the visible `(unverified)` title,
+  and `verified_by_agent: not yet`: the fixture recipes are reconstructions from
+  the v12 page's descriptions, and the v12 comparison figures are attributions
+  to that page rather than evidence from the v12 checkout.
+- The isolated server was stopped and its 7.5 GB data directory, build tree, and
+  socket directory were removed; the installed binaries and the executed SQL
+  scripts remain under `.wiki-runtime/pg17/` for re-verification.
+  `raw/postgres-17/` was not modified.
+
 ## [2026-08-11] follow-up v12 | swap the bloat denominator to the index's own reltuples
 
 - Rebuilt [Calibrating a COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in
