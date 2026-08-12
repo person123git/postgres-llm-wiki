@@ -2,6 +2,40 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-12] remove v12 | delete Calibrating a COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold
+
+- Removed `wiki/v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md`
+  per user request, which named the page by its exact visible title, so no
+  prompt text is restated on any wiki page and no prompt-hygiene correction was
+  needed.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`. No
+  surviving page linked, cited, or discussed the page, so no `## Navigation`
+  list and no page prose changed; its own outbound links to
+  `comment-stored-index-heap-ratio-bloat.md`,
+  `comment-stored-table-dml-counters-gin-reindex.md`,
+  `physical-index-statistics-tuple-counts-and-bytes.md`,
+  `btree-index-bloat-core-sql-only.md`,
+  `how-pgstatindex-calculates-information.md`, and
+  `reindex-index-concurrently.md` went away with it, and all six keep inbound
+  links from `wiki/index.md` and `wiki/v12/index.md`.
+- Dropped the closing `indexing` clause of the v12 coverage cell in
+  `wiki/versions.md`, which described this page's index-`reltuples` denominator,
+  96-cell matrix, `drift >= 1.30` scores, GIN/BRIN disqualification, and
+  measured counter-examples. The cell's other COMMENT-related text covers the
+  surviving index/heap-ratio page and was left alone.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (3) and
+  `wiki/versions.md` (3) so they name the page title as plain text, and added a
+  removal note to `## Coverage Notes`.
+- v12 COMMENT-stored index-bloat coverage now runs through
+  [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  and core-SQL bloat measurement through
+  [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
+- No source citation, pin, or verification field on any surviving page changed.
+  `raw/postgres-12/` is unchanged and no server was started.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
 ## [2026-08-12] answer v17 | which indexes need a rebuild for deduplication after pg_upgrade from 12
 
 - Filed [Checking Whether an Index Needs a Rebuild to Enable Deduplication After
@@ -280,9 +314,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-11] follow-up v12 | swap the bloat denominator to the index's own reltuples
 
-- Rebuilt [Calibrating a COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in
-  PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md)
+- Rebuilt Calibrating a COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in
+  PostgreSQL 12 (unverified)
   around `pg_relation_size(index) / index reltuples`, against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2). Prompt hygiene:
   the user approved correcting the follow-up to "replace live rows by the index
@@ -356,9 +389,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 ## [2026-08-11] follow-up v12 | B-tree partial indexes in the bytes-per-live-row page
 
 - Extended the page then titled Calibrating a COMMENT-Stored Bytes-per-Live-Row
-  REINDEX Threshold in PostgreSQL 12, since renamed to [Calibrating a
+  REINDEX Threshold in PostgreSQL 12, since renamed to Calibrating a
   COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md),
+  (unverified),
   with a new `### B-tree partial indexes: a comprehensive analysis` section,
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene: the user approved correcting the follow-up
@@ -421,9 +454,9 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 ## [2026-08-11] answer v12 | calibrate a COMMENT-stored bytes-per-live-row REINDEX threshold
 
 - Filed the page then titled Calibrating a COMMENT-Stored Bytes-per-Live-Row
-  REINDEX Threshold in PostgreSQL 12, since renamed to [Calibrating a
+  REINDEX Threshold in PostgreSQL 12, since renamed to Calibrating a
   COMMENT-Stored Bytes-per-Index-Row REINDEX Threshold in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-bytes-per-index-row-bloat.md),
+  (unverified),
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene: the user approved fixing "by record" to
   "Record" and reading "postgreql 12" as PostgreSQL 12; the rest of the prompt
