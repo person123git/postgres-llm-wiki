@@ -7688,3 +7688,86 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `raw/postgres-12/` is unchanged and no server was started.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-08-13] answer v17 | copy and review the v12 COMMENT-stored bytes-per-table-tuple REINDEX threshold
+
+- Filed [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for
+  Every Non-B-Tree Index in PostgreSQL 17
+  (unverified)](v17/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+  against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10,
+  `REL_17_10-3-g54eeefaedbe`). Applied `MANDATORY Prompt Hygiene`: the request
+  said `follow agents.md, In PostgreSQL 17, ...` and quoted the v12 title with
+  its ` (unverified)` state marker; the user chose to correct all three issues
+  (the `AGENTS.md` sentence, the comma splice with a mid-sentence capital, and
+  the state marker), so `## Question` restates the corrected prompt plus the
+  copied v12 question text. The user also chose full re-measurement over a
+  source-only review.
+- Verdict: the v12 calibration transfers almost unchanged and **only GiST moved**.
+  Re-ran the entire v12 protocol on an isolated 17.10 server over 132 cells
+  (22 workloads x 6 index shapes) with `REINDEX INDEX` as ground truth and
+  "worth rebuilding" defined as reclaiming >= 20% of current bytes. hash 9-11%
+  (16/0/0/6), SP-GiST 29-32% (15/0/0/7), GIN `fastupdate = on` 56-100%
+  (18/0/0/4), GIN `fastupdate = off` 40-62% (16/2/0/4) and BRIN-unusable
+  (0/4/0/18) reproduce the v12 page's confusion matrices cell for cell, and the
+  hash, GIN, SP-GiST and BRIN result columns are identical cell for cell. GiST's
+  perfect window narrows from 14-33% to 25-33%, with its lower edge set by one
+  `churn25` cell at +24.46% against 19.65% reclaimable, so 30% is recommended
+  instead of 25%. Single all-AM thresholds are unchanged: 30% -> 90.2% over 132
+  cells and 93.6% over the 110 non-BRIN cells.
+- Root cause of the GiST shift, traced in source and measured: when every key
+  column has a `GIST_SORTSUPPORT_PROC`, v17 forces `GIST_SORTED_BUILD`
+  (`gistbuild.c#L231-L248`) and that path carries
+  `/* fillfactor ignored */` (`gistbuild.c#L468`). Measured a 3 x 4 sweep in
+  which fillfactor 100/90/50/10 all yield 1,660 pages under
+  `buffering = auto`/`off` but 1,633/1,775/3,158/18,824 under `buffering = on`,
+  with an `int4range` control (whose `range_ops` has no sortsupport) honouring
+  fillfactor throughout at 1,379/1,538/2,816/15,383. `point_ops` is the only
+  sortsupport-capable GiST opclass among the four probed. GiST rebuild also fell
+  to 244.4 ms, below SP-GiST's 310.4 ms, and rebuilt sizes are now
+  byte-deterministic while the bloated size still varies by a few pages.
+- Two hazards v12 could not have. `pg_class.reltuples = -1` for "unknown" makes
+  the original formula return a negative bytes-per-tuple: measured
+  -7,438,336.00 on a never-analyzed 200,000-row table, with `TRUNCATE`
+  resetting the heap and both indexes to `-1` and `REINDEX` of an empty table
+  leaving it. And the v14 2%-of-pages index-vacuum bypass fired as
+  `index scan bypassed: 41 pages from table (0.38% of total) have 1500 dead item
+  identifiers`, with the next pass removing 3,000 rather than 1,500. Every guard
+  on the filed page and in the filed SQL now tests `reltuples <= 0`.
+- Also measured on the pin: parallel BRIN build (new in v17) leaving the index
+  byte-identical at 0/2/4 workers (139 pages at `pages_per_range = 1`, 3 at the
+  default) with 4 workers observed live in `pg_stat_progress_create_index` and
+  70.2 ms against 180.6 ms; the GIN pending-list four-stage table where a flush
+  moves the reading from +261.73% to a worse +388.78% while delivering the whole
+  2.8x block win; the hash triple of build-path spread
+  (34.5293/38.0928/37.1917 bytes per row), splitpoint staircase (28.071 to
+  52.634) and an 87-page filesystem hole confirmed by `stat` after `CHECKPOINT`;
+  a partial index growing +96.4% but reading +3.38% against 49.09% reclaimable
+  (+3.07%/48.94% on an independent re-run); `REINDEX INDEX CONCURRENTLY`
+  matching plain `REINDEX` byte for byte on all six shapes with the surviving
+  baseline reading -48.86% to -79.36%; a partitioned parent at
+  `relpages = -1, reltuples = 200000` whose parent index has
+  `pg_relation_size = 0` and whose comment reached 0 of 3 children; and
+  `pgstattuple` no longer erroring on a hash index with a splitpoint hole
+  (0 of 21 hash cells errored), which `036decbba2a` shipped in 17.7.
+- The since-v12 section attributes 17 changes to their first release tags from
+  the checkout's own history, and records what did not change: `indexfsm.c` has
+  zero executable-code changes since `REL_12_0`, `ginfast.c`'s flush threshold
+  and `shiftList` FSM handling are untouched, `_hash_alloc_buckets` is
+  functionally identical, and GIN builds are still serial. Parallel GIN build
+  (`8492feb98f6`, 18.0) is not an ancestor of the pin, so the page states the
+  constants must not be reused for v18.
+- All v12 comparisons are explicitly framed: behavioral differences are
+  attributed to commits in this checkout's history, while every numeric
+  "v12 measured X" is labelled a cross-reference to the v12 page rather than
+  evidence from this pin.
+- Built `contrib/pg_freespacemap` out of tree with `USE_PGXS=1` into
+  `.wiki-runtime/pg17/install`; `raw/postgres-17/` verified unmodified with
+  `git status --porcelain`. The isolated 17.10 server was stopped and its data
+  directory removed; the harness and captured output remain under
+  `.wiki-runtime/tmp/bpt17/`. Fifteen open questions filed, including the
+  knife-edge GiST window, the one fired GiST cell that needed 7% more blocks
+  after the rebuild, and the unmeasured cumulative cost of the bypass.
+- Kept `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` because this is a first filing rather than a
+  separate full-page claim audit. Updated `wiki/index.md`, `wiki/v17/index.md`,
+  and `wiki/versions.md`.
