@@ -7602,3 +7602,50 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   broken citations to absent
   `src/bin/pg_combinebackup/t/012_vm_consistency.pl`; no v18 RLS or
   bookkeeping error was added. `git diff --check` passed.
+
+## [2026-08-13] answer v18 | declarative partition bound syntax and relpartbound since PG 10
+
+- Filed [Changes to Declarative Partition Bound Syntax and pg_class.relpartbound
+  Since Partitioning Was Introduced, as of PostgreSQL 18
+  (unverified)](v18/questions/server-administration/declarative-partition-bound-syntax-and-relpartbound.md)
+  against unchanged pin `6cb307251c5c6261286c1566496920976640108e`. Applied
+  `MANDATORY Prompt Hygiene`: the user chose to correct the prompt's typos
+  (`postgreql`, `is there any changes`, `changes on syntax`, the stray space
+  before the comma, lower-case `postgresql`), chose the pinned v18 checkout's own
+  git history as the pre-v12 baseline, and scoped "syntax" to the bound spec only.
+- Verdict: yes on both, but every substantive change landed by v12/v17.
+  `git log -L '/^PartitionBoundSpec:/,/^hash_partbound:/:src/backend/parser/gram.y'`
+  over `REL_10_0..6cb30725` returns exactly six commits: `6f6b99d1335`
+  (`DEFAULT`, 11.0), `1aba8e651ac` (hash `WITH (MODULUS, REMAINDER)`, 11.0),
+  `95931133a95` (typo, 12.0), `7c079d7417a` (general `partition_bound_expr`,
+  12.0), `30ed71e423e` (indent, 15.0) and `2d8bff603c9` (18.0, error cursors on
+  the two hash-bound errors). `d363d42bb9a` replaced `UNBOUNDED` with
+  `MINVALUE`/`MAXVALUE` inside the v10 cycle, and `9361f6f54e3` added the
+  sentinel-ordering rule in 11.0. The documented synopsis is textually identical
+  from 12.0 through the pin.
+- `pg_class.relpartbound` itself never changed; the stored `pg_node_tree` changed
+  twice (v11 added `is_default`/`modulus`/`remainder`; v17's `d20d8fbd3e4` writes
+  `-1` for every `:location`). Confirmed the v16 generated-node-support switch
+  `964d01ae90c` is output-compatible, and that `outDatum`, `_outConst` and the
+  four `WRITE_*` macros used by the bound are byte-identical to `REL_10_0`.
+  Exposure surfaces only gained additions, newest being v14's ` DETACH PENDING`;
+  the `pg_get_expr` deparse path has no functional commit since 10.0.
+- Built the exact pin out of tree under `.wiki-runtime/pg18/` and ran an isolated
+  18.3 server. Captured the literal stored node text for hash/list/range/default
+  bounds (`:location -1` in 14/14 bounds), `IN ((2+1), 5, NULL)` stored as `Const`
+  3, reversed hash options canonicalized, quoted `"minvalue"` accepted while
+  `"MINVALUE"` is rejected, `FROM (-5)` deparsing as `FROM ('-5')`,
+  `pretty = true` identical on 14/14, detach/reattach and `pg_dump -s` round
+  trips, `DETACH` clearing the column, absent MERGE/SPLIT syntax, the new v18
+  error cursor, and a no-TOAST size cliff between an 8,000-character bound
+  (7,627 stored bytes) and an 8,400-character one (`row is too big: size 8216,
+  maximum size 8160`). The server was stopped and its data directory removed;
+  `raw/postgres-18/` was left unmodified.
+- Recorded three test gaps (no test asserts the stored node text, the size
+  cliff, or the quoted-sentinel behavior) and four open questions. Kept
+  `verified: false`, the visible `(unverified)` title, and
+  `verified_by_agent: not yet` because this is a first filing rather than a
+  separate full-page claim audit.
+- Updated `wiki/index.md`, `wiki/v18/index.md`, and `wiki/versions.md`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
