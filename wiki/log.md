@@ -179,7 +179,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `wiki/versions.md` (3) so they name the page title as plain text, and added a
   removal note to `## Coverage Notes`.
 - v12 COMMENT-stored index-bloat coverage now runs through
-  [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in
+  COMMENT in PostgreSQL 12 (unverified)
   and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
   and core-SQL bloat measurement through
   [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
@@ -680,7 +681,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   `wiki/versions.md` (1) so they refer to the page title as plain text, and
   added a removal note to `## Coverage Notes`.
 - v12 COMMENT-stored index-bloat coverage now runs through
-  [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in
+  COMMENT in PostgreSQL 12 (unverified)
   and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md).
 - No source citation, pin, or verification field on any surviving page changed.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
@@ -1076,9 +1078,9 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 ## [2026-08-06] follow-up v12 | rebuild with REINDEX INDEX CONCURRENTLY
 
 - The user stated the maintenance process rebuilds with `REINDEX INDEX
-  CONCURRENTLY`, so the decision-rule comparison in [Detecting Bloat in All
+  CONCURRENTLY`, so the decision-rule comparison in Detecting Bloat in All
   Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  (unverified)
   was extended against unchanged pin
   `45b88269a353ad93744772791feb6d01bc7e1e42` (PostgreSQL 12.2).
 - No score changes. On a second isolated 12.2 server with `autovacuum = off`,
@@ -1118,9 +1120,9 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 ## [2026-08-06] follow-up v12 | ratio drift versus "reindex when index > heap"
 
-- Added a decision-rule comparison section to [Detecting Bloat in All Index
+- Added a decision-rule comparison section to Detecting Bloat in All Index
   Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2).
 - Prompt hygiene applied before drafting. The user chose corrected wording with
@@ -1170,9 +1172,8 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 ## [2026-08-06] review v12 | COMMENT-stored index/heap ratio bloat screen
 
-- Re-reviewed [Detecting Bloat in All Index Types by Storing an Index/Heap Size
-  Ratio in COMMENT in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+- Re-reviewed Detecting Bloat in All Index Types by Storing an Index/Heap Size
+  Ratio in COMMENT in PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
 - Corrected the central interpretation: ratio drift is index allocation growth
   divided by heap allocation growth, not an access-method-neutral bloat measure.
@@ -1208,9 +1209,8 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 ## [2026-08-06] follow-up v12 | delete-and-reload cycle test for the COMMENT-stored ratio
 
 - Added a new `### A 200k-row delete-and-reload cycle test on all seven index
-  types` section to [Detecting Bloat in All Index Types by Storing an Index/Heap
-  Size Ratio in COMMENT in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+  types` section to Detecting Bloat in All Index Types by Storing an Index/Heap
+  Size Ratio in COMMENT in PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
 - Prompt hygiene applied before drafting. The user chose silently corrected
   wording ("postgreql" -> "PostgreSQL", "diferences" -> "differences",
@@ -1256,9 +1256,8 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 ## [2026-08-06] question v12 | COMMENT-stored index/heap ratio as a bloat detector
 
-- Filed [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
-  in COMMENT in PostgreSQL 12
-  (unverified)](v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+- Filed Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
+  in COMMENT in PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
 - Prompt hygiene applied before drafting: the user approved correcting
   "postgreql", the preposition, and the `COMMENT` capitalization, and chose a
@@ -7648,4 +7647,44 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   separate full-page claim audit.
 - Updated `wiki/index.md`, `wiki/v18/index.md`, and `wiki/versions.md`.
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
+
+## [2026-08-13] remove v12 | delete Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT
+
+- Removed `wiki/v12/questions/indexing/comment-stored-index-heap-ratio-bloat.md`
+  per user request, which named the page by its exact visible title. The
+  request's `postgreql` typo drives no document generation and is restated on no
+  wiki page, so no prompt-hygiene correction was needed.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`, and
+  the two inbound `## Navigation` links in
+  `comment-stored-bytes-per-table-tuple-non-btree.md` and
+  `comment-stored-table-dml-counters-gin-reindex.md`. No surviving v12 page
+  referred to the deleted page in prose.
+- Its own outbound links to `btree-index-bloat-core-sql-only.md`,
+  `how-pgstatindex-calculates-information.md`,
+  `leaf-density-vs-fragmentation-index-scan-io.md`,
+  `reindex-index-concurrently.md`, and
+  `../query-planning/bloated-indexes-query-planner.md` went away with it, and all
+  five keep inbound links from `wiki/index.md` and `wiki/v12/index.md`.
+- Dropped the index/heap-ratio clause of the v12 coverage cell in
+  `wiki/versions.md`: the allocation-growth reclassification, the source-audit
+  list, the one-, two- and three-pass delete/reload numbers, the 49-cell
+  drift-versus-"index larger than the heap" scores, and the
+  `REINDEX INDEX CONCURRENTLY` section. The cell's remaining COMMENT text
+  describes the surviving bytes-per-table-tuple page.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (7) and
+  `wiki/versions.md` (6) so they name the page title as plain text, and added a
+  removal note to `## Coverage Notes`.
+- Left the separate v17 page
+  `wiki/v17/questions/indexing/comment-stored-index-heap-ratio-bloat.md`, its
+  inbound links, and the provenance prose that describes it as copied from the
+  v12 question untouched, so v17 still carries this proposal.
+- v12 COMMENT-stored index-bloat coverage now runs through
+  [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  and core-SQL bloat measurement through
+  [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
+- No source citation, pin, or verification field on any surviving page changed.
+  `raw/postgres-12/` is unchanged and no server was started.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.

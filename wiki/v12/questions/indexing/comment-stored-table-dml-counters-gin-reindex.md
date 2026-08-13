@@ -456,5 +456,4 @@ After success, record the measured yield and run the capture query again. Ordina
 - [v12/index](../../index.md)
 - [versions](../../../versions.md)
 - [wiki index](../../../index.md)
-- [Detecting Bloat with a COMMENT-Stored Index/Heap Ratio in PostgreSQL 12 (unverified)](comment-stored-index-heap-ratio-bloat.md)
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](reindex-index-concurrently.md)
