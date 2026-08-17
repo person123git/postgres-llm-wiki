@@ -1025,9 +1025,8 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 ## [2026-08-06] answer v17 | index/heap ratio in COMMENT, copied from v12 and reviewed
 
-- Filed [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
-  in COMMENT in PostgreSQL 17
-  (unverified)](v17/questions/indexing/comment-stored-index-heap-ratio-bloat.md)
+- Filed Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio
+  in COMMENT in PostgreSQL 17 (unverified)
   against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa`
   (PostgreSQL 17.10), copying the v12 question of the same name.
 - Prompt hygiene applied before drafting. The user chose silently corrected
@@ -7957,3 +7956,45 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   in a 22-line file, and five `timeouts.out` citations ending at `L76` in a
   73-line file -> `L73`.
 - No prose changed on those pages; only the out-of-range endpoints.
+
+## [2026-08-17] remove v17 | delete Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT
+
+- Removed `wiki/v17/questions/indexing/comment-stored-index-heap-ratio-bloat.md`
+  per user request, which named the page by its exact visible title including the
+  ` (unverified)` state marker. The request's `remove question:` phrasing and
+  leading `#` drive no document generation and are restated on no wiki page, so
+  no prompt-hygiene correction was needed.
+- Removed the active page entry from `wiki/index.md` and `wiki/v17/index.md`, and
+  the two inbound `## Navigation` links in
+  `comment-stored-bytes-per-table-tuple-non-btree.md` and
+  `btree-index-bloat-core-sql-only.md`. No surviving v17 page referred to the
+  deleted page in prose.
+- Its own outbound links to `reindex-index-concurrently.md`,
+  `create-index-concurrently.md`,
+  `../query-planning/bloated-indexes-query-planner.md` and
+  `../server-administration/contrib-extensions.md` went away with it, along with
+  its three navigation links to `wiki/v17/index.md`, `wiki/index.md` and
+  `wiki/versions.md`; all four keep inbound links from `wiki/index.md` and
+  `wiki/v17/index.md`.
+- Dropped the index/heap-ratio clause of the v17 coverage cell in
+  `wiki/versions.md`: the screening-signal-only verdict, the 49-cell
+  drift-versus-"index larger than the heap" scores, the
+  `hashbuild`/`estimate_rel_size` bucket-sizing and same-VACUUM-recycling
+  (`9dd963ae253`) findings, the day-zero sweep, the GIN baseline-1.004900
+  fixture, and the nine-operation comment durability matrix. The cell's remaining
+  COMMENT text describes the surviving bytes-per-table-tuple page.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (1) and
+  `wiki/versions.md` (2) so they name the page title as plain text, and added a
+  removal note to `## Coverage Notes`. The 2026-08-13 v12 removal note said the
+  v17 page and its inbound links were untouched "so v17 still carries this
+  proposal"; that sentence is now scoped to its date and points at this removal.
+- The v12 page of the same name was removed on 2026-08-13, so no supported
+  version carries this index/heap-ratio proposal any more. COMMENT-stored
+  index-bloat screening in v17 now runs through
+  [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 17 (unverified)](v17/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+  and core-SQL B-tree bloat measurement through
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md).
+- No source citation, pin, or verification field on any surviving page changed.
+  `raw/postgres-17/` is unchanged and no server was started.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.

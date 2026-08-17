@@ -622,7 +622,6 @@ The test server was stopped and its data directory removed after the run; the SQ
 - [v17 index](../../index.md)
 - [wiki index](../../../index.md)
 - [versions](../../../versions.md)
-- [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 17 (unverified)](comment-stored-index-heap-ratio-bloat.md)
 - [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified)](btree-index-bloat-core-sql-only.md)
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](reindex-index-concurrently.md)
 - [Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)](../query-planning/bloated-indexes-query-planner.md)

@@ -1246,7 +1246,6 @@ Neither the statement nor the two statistics repairs above need a setting that r
 - [v17/index](../../index.md)
 - [PostgreSQL 17 Codebase Navigation Guide (unverified)](../../codebase-navigation-guide.md)
 - [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md)
-- [Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 17 (unverified)](comment-stored-index-heap-ratio-bloat.md)
 - [Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)](../query-planning/bloated-indexes-query-planner.md)
 - [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](create-index-concurrently.md)
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](reindex-index-concurrently.md)
