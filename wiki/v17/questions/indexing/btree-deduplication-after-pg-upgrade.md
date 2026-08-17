@@ -1,7 +1,7 @@
 ---
 type: question
 version: 17
-pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
+pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
 verified_by_agent: not yet
 ---
@@ -376,7 +376,7 @@ matches what the catalogs encode:
 One edge worth knowing: the pattern opclasses register `btequalimage`, which would
 ignore a nondeterministic collation — but such an index cannot be created in the
 first place
-([index.c#index_create](../../../../raw/postgres-17/src/backend/catalog/index.c#L820-L841)).
+([index.c#index_create](../../../../raw/postgres-17/src/backend/catalog/index.c#L827-L848)).
 Measured: `CREATE INDEX ... (a text_pattern_ops)` on a nondeterministic-collation
 column failed with `ERROR:  nondeterministic collations are not supported for
 operator class "text_pattern_ops"`, so the simpler and the proc-aware forms of the
@@ -669,9 +669,9 @@ Measured here as harmless: that field read 0 in all fixtures.
 
 | setting | value used | context | apply scope |
 |---|---|---|---|
-| `statement_timeout` | `60s` for the read-only checks | `PGC_USERSET` ([guc_tables.c:2610-2619](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2619)) | session or transaction |
-| `lock_timeout` | `5s` for the read-only checks | `PGC_USERSET` ([guc_tables.c:2621-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2621-L2631)) | session or transaction |
-| `client_min_messages` | `debug1` to see the engine's verdict | `PGC_USERSET` ([guc_tables.c:4763-4772](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4763-L4772)) | session or transaction |
+| `statement_timeout` | `60s` for the read-only checks | `PGC_USERSET` ([guc_tables.c:2611-2620](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620)) | session or transaction |
+| `lock_timeout` | `5s` for the read-only checks | `PGC_USERSET` ([guc_tables.c:2622-2632](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2632)) | session or transaction |
+| `client_min_messages` | `debug1` to see the engine's verdict | `PGC_USERSET` ([guc_tables.c:4776-4785](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4776-L4785)) | session or transaction |
 | `deduplicate_items` | leave at `on` | B-tree reloption, `ShareUpdateExclusiveLock` ([reloptions.c:159-168](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168)) | per index, `ALTER INDEX` |
 
 No restart or reload is needed for anything on this page. Do not raise
@@ -708,6 +708,20 @@ behind, which the sibling page on `REINDEX INDEX CONCURRENTLY` describes.
   created by `pg_upgrade --copy` from it, plus one isolated ICU-enabled 17.10
   cluster for the nondeterministic-collation cases. Fixtures, sizes, `DEBUG1`
   verdicts, MD5s, privilege errors and rebuild results are reported inline.
+- Pinned checkout `raw/postgres-17/` at commit
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11,
+  `REL_17_11-7-g786db8dcf16`); repinned from
+  `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every number
+  above is a 17.10 measurement taken against that previous pin and was not
+  re-measured. In the `54eeefaed..786db8dcf16` range, `nbtree.c`, `nbtdedup.c`,
+  `nbtsort.c`, `nbtutils.c`, `nbtree.h` and contrib `pageinspect`'s `bt_metap`
+  are untouched; the only `pg_upgrade` change is `01992176e08`, which adds a
+  check that every output plugin used by a migrated logical replication slot is
+  listed in the new cluster's `output_plugin_libraries`
+  ([check.c#check_new_cluster_logical_replication_slots](../../../../raw/postgres-17/src/bin/pg_upgrade/check.c#L1865-L1943)).
+  That check runs only when the old cluster reports at least one logical
+  replication slot (`if (nslots_on_old > 0)`), which none of these fixtures
+  creates, so no upgrade result above changes.
 
 ## Evidence Map
 
@@ -729,7 +743,7 @@ behind, which the sibling page on `REINDEX INDEX CONCURRENTLY` describes.
 | `btequalimage` always true; `btvarstrequalimage` false for nondeterministic collations | [datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L415-L438), [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613) |
 | Which opclasses register which support function | [pg_amproc.dat:201-212](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L201-L212) |
 | Documented unsafe cases and the unique-index note | [btree.sgml#btree-deduplication](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L810-L909) |
-| Pattern opclasses reject nondeterministic collations at DDL time | [index.c#index_create](../../../../raw/postgres-17/src/backend/catalog/index.c#L820-L841) |
+| Pattern opclasses reject nondeterministic collations at DDL time | [index.c#index_create](../../../../raw/postgres-17/src/backend/catalog/index.c#L827-L848) |
 | `deduplicate_items` default, lock level, no retroactive effect | [create_index.sgml#deduplicate_items](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L448-L476), [reloptions.c:159-168](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1129-L1151) |
 | `pg_upgrade` transfers user indexes plus TOAST and `pg_largeobject` | [info.c#get_rel_infos](../../../../raw/postgres-17/src/bin/pg_upgrade/info.c#L471-L524) |
 | Index OID and relfilenode are preserved by the dump | [pg_dump.c#binary_upgrade_set_next_index_relfilenode](../../../../raw/postgres-17/src/bin/pg_dump/pg_dump.c#L5563-L5572) |
@@ -746,7 +760,7 @@ behind, which the sibling page on `REINDEX INDEX CONCURRENTLY` describes.
 | Repurposed metapage field can hold a stale XID after an upgrade | [nbtpage.c#_bt_set_cleanup_info](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L225-L263) |
 | Deduplication in unique indexes is exercised in the regression tests | [btree_index.sql:208-231](../../../../raw/postgres-17/src/test/regress/sql/btree_index.sql#L208-L231) |
 | Pattern-opclass rejection is exercised in the ICU collation test | [collate.icu.utf8.out:1796-1801](../../../../raw/postgres-17/src/test/regress/expected/collate.icu.utf8.out#L1796-L1801) |
-| Timeout and message GUC contexts | [guc_tables.c:2610-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2631), [guc_tables.c:4763-4772](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4763-L4772) |
+| Timeout and message GUC contexts | [guc_tables.c:2611-2632](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2632), [guc_tables.c:4776-4785](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4776-L4785) |
 
 ## Open Questions
 
@@ -807,14 +821,14 @@ behind, which the sibling page on `REINDEX INDEX CONCURRENTLY` describes.
 - [varlena.c#byteaGetByte](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L3246-L3268)
 - [pg_amproc.dat:201-212](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L201-L212)
 - [pg_proc.dat#btvarstrequalimage](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L1055-L1057)
-- [index.c#index_create](../../../../raw/postgres-17/src/backend/catalog/index.c#L820-L841)
+- [index.c#index_create](../../../../raw/postgres-17/src/backend/catalog/index.c#L827-L848)
 - [reloptions.c:159-168](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168)
 - [cluster.c#finish_heap_swap](../../../../raw/postgres-17/src/backend/commands/cluster.c#L1433-L1508)
 - [genfile.c#convert_and_check_filename](../../../../raw/postgres-17/src/backend/utils/adt/genfile.c#L41-L92)
 - [dbsize.c#pg_relation_filepath](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L948-L1028)
 - [system_functions.sql:710-719](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L710-L719)
-- [guc_tables.c:2610-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2631)
-- [guc_tables.c:4763-4772](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4763-L4772)
+- [guc_tables.c:2611-2632](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2632)
+- [guc_tables.c:4776-4785](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4776-L4785)
 - [pg_upgrade.c#main](../../../../raw/postgres-17/src/bin/pg_upgrade/pg_upgrade.c#L155-L197)
 - [pg_upgrade.c#copy_xact_xlog_xid](../../../../raw/postgres-17/src/bin/pg_upgrade/pg_upgrade.c#L701-L737)
 - [check.c#output_completion_banner](../../../../raw/postgres-17/src/bin/pg_upgrade/check.c#L760-L790)
@@ -824,7 +838,7 @@ behind, which the sibling page on `REINDEX INDEX CONCURRENTLY` describes.
 - [pg_dump.c#binary_upgrade_set_next_index_relfilenode](../../../../raw/postgres-17/src/bin/pg_dump/pg_dump.c#L5563-L5572)
 - [btree.sgml#btree-deduplication](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L736-L911)
 - [create_index.sgml#deduplicate_items](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L448-L476)
-- [pgupgrade.sgml#post-upgrade-scripts](../../../../raw/postgres-17/doc/src/sgml/ref/pgupgrade.sgml#L1076-L1084)
+- [pgupgrade.sgml#post-upgrade-scripts](../../../../raw/postgres-17/doc/src/sgml/ref/pgupgrade.sgml#L1078-L1086)
 - [btree_index.sql:208-231](../../../../raw/postgres-17/src/test/regress/sql/btree_index.sql#L208-L231)
 - [collate.icu.utf8.out:1796-1801](../../../../raw/postgres-17/src/test/regress/expected/collate.icu.utf8.out#L1796-L1801)
 - [005_opclass_damage.pl:45-52](../../../../raw/postgres-17/src/bin/pg_amcheck/t/005_opclass_damage.pl#L45-L52)

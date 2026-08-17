@@ -1,9 +1,9 @@
 ---
 type: question
 version: 18
-pinned_commit: 6cb307251c5c6261286c1566496920976640108e
+pinned_commit: baa7b142aace6821ce085906f314a75bcc4d95c8
 verified: false
-verified_by_agent: claude-opus-4-7 2026-05-19T17:30:00Z
+verified_by_agent: not yet
 ---
 
 # How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)
@@ -25,7 +25,7 @@ loaded from `shared_preload_libraries`
 `shared_preload_libraries` has `PGC_POSTMASTER` context in v18, so changing it
 requires a server restart
 ([guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c),
-[config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927)).
+[config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11004)).
 
 The extension then chooses one of two shapes. A variable-numbered kind stores
 one shared entry per object key in the pgstat dynamic shared-memory hash table,
@@ -82,7 +82,7 @@ duplicate custom IDs or duplicate names
 The injection-points test module shows the intended extension boundary: `_PG_init`
 returns unless shared-preload processing is active, defines a postmaster-context
 GUC, and registers both custom pgstat kinds from `_PG_init`
-([injection_points.c#_PG_init](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.c#L550)).
+([injection_points.c#_PG_init](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.c#L542)).
 
 Startup order explains the restriction. The postmaster processes preload
 libraries before shared-memory requests and before shared memory is initialized;
@@ -135,17 +135,40 @@ to shared `numcalls`, unlocks, and returns success
 ([injection_stats.c#injection_stats_flush_cb](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats.c#L71)).
 
 Dropping a variable-numbered custom entry uses the same shared-hash lifetime
-rules as built-in variable stats. `pgstat_drop_entry` releases the calling
-backend's local reference, then `pgstat_drop_entry_internal` marks the shared
-entry `dropped` and decrements its refcount; if the refcount reaches zero the
-entry is freed immediately and `pgstat_drop_entry` returns `true`, otherwise
-it returns `false` and the caller is responsible for calling
-`pgstat_request_entry_refs_gc` so other backends release their cached refs.
-The injection-points module follows exactly that contract
-([pgstat_shmem.c#pgstat_drop_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L990),
-[pgstat_shmem.c#pgstat_drop_entry_internal](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L888),
-[pgstat_shmem.c#pgstat_request_entry_refs_gc](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L736),
-[injection_stats.c#pgstat_drop_inj](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats.c#L146)).
+rules as built-in variable stats, but the extension entry point is now
+`pgstat_drop_entry_ext(kind, dboid, objid, missing_ok)`. `pgstat_drop_entry()`
+survives only as an ABI-preserving wrapper that passes `missing_ok = false`,
+because the v15 signature had no such argument
+([pgstat_shmem.c#pgstat_drop_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L974-L983),
+[pgstat_shmem.c#pgstat_drop_entry_ext](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L985-L1000),
+[pgstat_internal.h#pgstat_drop_entry_ext](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L712-L713)).
+
+`pgstat_drop_entry_ext()` releases the calling backend's local reference, then
+`pgstat_drop_entry_internal` marks the shared entry `dropped` and decrements its
+refcount; if the refcount reaches zero the entry is freed immediately and the
+call returns `true`, otherwise it returns `false` and the caller is responsible
+for calling `pgstat_request_entry_refs_gc` so other backends release their
+cached refs
+([pgstat_shmem.c#pgstat_drop_entry_internal](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L891-L906),
+[pgstat_shmem.c#pgstat_request_entry_refs_gc](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L739)).
+
+The `missing_ok` argument decides what happens when the shared entry has already
+been marked `dropped`. With `missing_ok = false` — the wrapper's behavior — the
+call raises `ERROR "trying to drop stats entry already dropped: ..."`; with
+`missing_ok = true` it releases the dshash lock and returns `true`. That error no
+longer lives in `pgstat_drop_entry_internal()`, which now only `Assert`s that the
+entry is not already dropped
+([pgstat_shmem.c#missing_ok-branch](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1025-L1040),
+[pgstat_shmem.c#pgstat_drop_entry_internal](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L891-L906)).
+The in-tree injection-points example follows that contract with the `_ext` form
+directly, passing `missing_ok = false`
+([injection_stats.c#pgstat_drop_inj](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats.c#L146-L155)).
+
+Entry creation has a related fix. When `pgstat_init_entry()` cannot allocate the
+entry's shared data, `pgstat_get_entry_ref()` now releases the local reference
+*before* deleting the shared hashtable entry, because releasing the dshash lock
+can process a pending interrupt
+([pgstat_shmem.c#pgstat_get_entry_ref-OOM](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L525-L537)).
 
 ## Fixed-Numbered Custom Stats
 
@@ -168,8 +191,8 @@ current stats, and reset-offset stats
 Its reporter writes shared counters directly under the kind's lock and wraps the
 counter changes in the pgstat changecount helpers
 ([injection_stats_fixed.c#pgstat_report_inj_fixed](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats_fixed.c#L141),
-[pgstat_internal.h#pgstat_begin_changecount_write](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L798),
-[pgstat_internal.h#pgstat_end_changecount_write](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L808)).
+[pgstat_internal.h#pgstat_begin_changecount_write](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L800),
+[pgstat_internal.h#pgstat_end_changecount_write](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L810)).
 
 Its reset callback copies current stats into `reset_offset` and updates the
 reset timestamp; its snapshot callback copies current stats into the backend's
@@ -197,7 +220,7 @@ Full snapshots include entries for the current database, entries with
 Fixed-numbered readers call `pgstat_snapshot_fixed` and then read the backend's
 custom snapshot buffer through `pgstat_get_custom_snapshot_data`
 ([pgstat.c#pgstat_snapshot_fixed](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1062),
-[pgstat_internal.h#pgstat_get_custom_snapshot_data](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L933)).
+[pgstat_internal.h#pgstat_get_custom_snapshot_data](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L935)).
 The fixed injection-points SQL function follows that pattern before building a
 five-column record
 ([injection_stats_fixed.c#injection_points_stats_fixed](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats_fixed.c#L173)).
@@ -215,8 +238,8 @@ kind data; `pgstat_reset_of_kind` calls the fixed kind's `reset_all_cb` for
 fixed-numbered stats and scans/reset entries for variable-numbered stats
 ([pgstat.c#pgstat_reset](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L853),
 [pgstat.c#pgstat_reset_of_kind](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L875),
-[pgstat_shmem.c#pgstat_reset_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1101),
-[pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085)).
+[pgstat_shmem.c#pgstat_reset_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1125),
+[pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1109)).
 `pg_stat_reset_shared` exposes named reset targets only for built-in shared
 stats, while `pg_stat_reset` scans and resets entries whose `dboid` is the
 current database; the injection-points test extension supplies its own SQL drop
@@ -277,6 +300,9 @@ are zero
   [injection_stats.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats.c),
   [injection_stats_fixed.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats_fixed.c),
   [injection_points.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.c),
+  [injection_points.h](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.h)
+  (new in the 18.4/18.6 range: `20a4b06a1ea` moved shared structs out of
+  `injection_points.c` into this header),
   [001_stats.pl](../../../../raw/postgres-18/src/test/modules/injection_points/t/001_stats.pl).
 
 ## Evidence Map
@@ -286,7 +312,7 @@ are zero
 | Custom kind IDs are `24..32`; experimental ID is `24` | [pgstat_kind.h](../../../../raw/postgres-18/src/include/utils/pgstat_kind.h) |
 | `PgStat_KindInfo` defines storage shape, offsets, persistence, and callbacks | [pgstat_internal.h#PgStat_KindInfo](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L202) |
 | Registration must happen during `shared_preload_libraries` processing | [pgstat.c#pgstat_register_kind](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1465) |
-| `shared_preload_libraries` changes require restart | [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927) |
+| `shared_preload_libraries` changes require restart | [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11004) |
 | Variable custom stats use pending entries and flush callbacks | [pgstat.c#pgstat_prep_pending_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1267), [pgstat.c#pgstat_flush_pending_entries](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1341) |
 | Fixed custom stats use `PgStat_ShmemControl.custom_data[]` | [pgstat_internal.h#PgStat_ShmemControl](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L466), [pgstat_shmem.c#StatsShmemInit](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L155) |
 | Readers use `pgstat_fetch_entry` or `pgstat_snapshot_fixed` | [pgstat.c#pgstat_fetch_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L933), [pgstat.c#pgstat_snapshot_fixed](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1062) |
@@ -298,16 +324,16 @@ are zero
 - [pgstat_kind.h](../../../../raw/postgres-18/src/include/utils/pgstat_kind.h) - built-in and custom kind ID ranges, including `PGSTAT_KIND_EXPERIMENTAL`.
 - [pgstat_internal.h#PgStat_KindInfo](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L202) - custom kind descriptor contract.
 - [pgstat_internal.h#PgStat_ShmemControl](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L466) - custom fixed-stat shared memory slots.
-- [pgstat_internal.h#pgstat_get_custom_shmem_data](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L918), [pgstat_internal.h#pgstat_get_custom_snapshot_data](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L933) - fixed custom helper accessors.
+- [pgstat_internal.h#pgstat_get_custom_shmem_data](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L920), [pgstat_internal.h#pgstat_get_custom_snapshot_data](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L935) - fixed custom helper accessors.
 - [pgstat.c#pgstat_register_kind](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1465) - custom registration validation and storage.
 - [pgstat.c#pgstat_report_stat](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L693), [pgstat.c#pgstat_prep_pending_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1267), [pgstat.c#pgstat_flush_pending_entries](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1341) - pending-update lifecycle.
 - [pgstat.c#pgstat_fetch_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L933), [pgstat.c#pgstat_snapshot_fixed](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1062), [pgstat.c#pgstat_build_snapshot](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1122) - read and snapshot behavior.
 - [pgstat.c#pgstat_before_server_shutdown](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L561), [pgstat.c#pgstat_write_statsfile](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1570), [pgstat.c#pgstat_read_statsfile](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1754), [pgstat.c#pgstat_discard_stats](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L518) - stats-file persistence and discard.
-- [pgstat_shmem.c#StatsShmemSize](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L127), [pgstat_shmem.c#StatsShmemInit](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L155), [pgstat_shmem.c#pgstat_get_entry_ref](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L457), [pgstat_shmem.c#pgstat_drop_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L990) - shared memory and shared-entry mechanics.
+- [pgstat_shmem.c#StatsShmemSize](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L127), [pgstat_shmem.c#StatsShmemInit](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L155), [pgstat_shmem.c#pgstat_get_entry_ref](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L457), [pgstat_shmem.c#pgstat_drop_entry_ext](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L985-L1000) - shared memory and shared-entry mechanics.
 - [postmaster.c#PostmasterMain](../../../../raw/postgres-18/src/backend/postmaster/postmaster.c#L494), [ipci.c#CalculateShmemSize](../../../../raw/postgres-18/src/backend/storage/ipc/ipci.c#L89), [ipci.c#CreateSharedMemoryAndSemaphores](../../../../raw/postgres-18/src/backend/storage/ipc/ipci.c#L200), [postinit.c#BaseInit](../../../../raw/postgres-18/src/backend/utils/init/postinit.c#L612) - startup and backend initialization boundaries.
-- [injection_stats.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats.c), [injection_stats_fixed.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats_fixed.c), [injection_points.c#_PG_init](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.c#L550), [injection_points--1.0.sql](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points--1.0.sql), [001_stats.pl](../../../../raw/postgres-18/src/test/modules/injection_points/t/001_stats.pl) - custom variable and fixed examples plus tests.
+- [injection_stats.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats.c), [injection_stats_fixed.c](../../../../raw/postgres-18/src/test/modules/injection_points/injection_stats_fixed.c), [injection_points.c#_PG_init](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.c#L542), [injection_points.h](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points.h), [injection_points--1.0.sql](../../../../raw/postgres-18/src/test/modules/injection_points/injection_points--1.0.sql), [001_stats.pl](../../../../raw/postgres-18/src/test/modules/injection_points/t/001_stats.pl) - custom variable and fixed examples plus tests.
 - [pgstatfuncs.c#pg_stat_have_stats](../../../../raw/postgres-18/src/backend/utils/adt/pgstatfuncs.c#L2264), [pgstat.c#pgstat_get_kind_from_str](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1403), [pgstat.c#pgstat_have_entry](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1046) - kind-name lookup and existence helper behavior.
-- [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927) - GUC contexts used in this page.
+- [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11004) - GUC contexts used in this page.
 - [xfunc.sgml#xfunc-addin-custom-cumulative-statistics](../../../../raw/postgres-18/doc/src/sgml/xfunc.sgml#L3960) - documentation section checked against implementation.
 
 ## Open Questions

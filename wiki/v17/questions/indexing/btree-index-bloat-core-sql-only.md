@@ -1,7 +1,7 @@
 ---
 type: question
 version: 17
-pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
+pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
 verified_by_agent: not yet
 ---
@@ -100,6 +100,11 @@ A later follow-up replaces it with a single statement intended for any server fr
 ### How the test was run
 
 One isolated PostgreSQL 17.10 server, built out of tree from the pinned checkout under `.wiki-runtime/`, `block_size` 8192, `autovacuum = off`, `fsync = off`. `pgstattuple` was installed **only as ground truth**; no method below uses it.
+
+Measurement provenance: every number on this page was produced on that 17.10 server, built from the **previous** pin `54eeefaedbee0385529f3edf321bb99e49232aaa`. Nothing was re-measured for the 2026-08-17 repin to 17.11 (`786db8dcf168bd9df8f55047337525ac19118b1c`). Two commits in that range touch code these methods read, and neither moves a number here:
+
+- `355faed5a24` rewrote `IndexOnlyNext()` and `StoreIndexTuple()` so each tuple is deformed with the descriptor the index AM formed it with ([nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L62-L240), [nodeIndexonlyscan.c#StoreIndexTuple](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L255-L281)). The fix is for the GiST/SP-GiST `xs_hitup` path; the B-tree path still deforms `xs_itup` with `xs_itupdesc`, so Method B's index-only-scan census keeps the same semantics.
+- `8434c938598` added an empty-index recheck to `_bt_endpoint`, but only inside `if (IsolationIsSerializable())` ([nbtsearch.c#_bt_endpoint-empty-index](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2590-L2606)). No fixture or method on this page runs in a `SERIALIZABLE` transaction.
 
 Two populations, both taken from the v12 page's own descriptions:
 
@@ -382,7 +387,7 @@ returned 57.165 bytes from a 1% sample (3,883 rows, 23.9 ms) and 58.000 from a f
 
 ### Method B: leaf counts still exact, density formula not
 
-The census is unchanged: `live_leaf_pages = full_scan_blocks - descent_blocks`, both probes twice in one session, second reading used. A forward scan still reads one buffer per right link and skips ignorable pages ([nbtsearch.c#_bt_readnextpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2181-L2240)), and an index-only scan still falls back to the heap whenever the visibility-map bit is unset ([nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L150-L170)), reported as `Heap Fetches` ([explain.c:1993](../../../../raw/postgres-17/src/backend/commands/explain.c#L1993)).
+The census is unchanged: `live_leaf_pages = full_scan_blocks - descent_blocks`, both probes twice in one session, second reading used. A forward scan still reads one buffer per right link and skips ignorable pages ([nbtsearch.c#_bt_readnextpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2181-L2240)), and an index-only scan still falls back to the heap whenever the visibility-map bit is unset ([nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L151-L171)), reported as `Heap Fetches` ([explain.c:1993](../../../../raw/postgres-17/src/backend/commands/explain.c#L1993)).
 
 Results: **exact on every eligible cell** — 12 of 12 fixtures and 36 of 36 matrix cells, partial and non-partial alike. The 18 ineligible matrix cells are exactly the three never-vacuumed bloat types, and the `Heap Fetches` check caught all of them (`m_churn_unvac_1000_full` reported 1,559,855 leaf pages against a true 8,197).
 
@@ -397,11 +402,11 @@ The density reconstruction is where v17 diverges. The v12 formula assumes one sl
 
 ### Method C: unchanged answer, different write path
 
-Method C is exact by construction on 17.10 and stays the arbiter used above. Its restrictions are the same: `CREATE INDEX CONCURRENTLY` is rejected inside a transaction block ([utility.c:1462](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1455-L1465)), takes `ShareUpdateExclusiveLock` on the table ([indexcmds.c:678](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L672-L682)), is refused on a partitioned table ([indexcmds.c:729](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L723-L733)), leaves an invalid index behind on failure because `indisvalid` is set as the last step ([index.c#index_set_state_flags](../../../../raw/postgres-17/src/backend/catalog/index.c#L3449-L3521)), and costs two table scans ([create_index.sgml:625-635](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L625-L635)).
+Method C is exact by construction on 17.10 and stays the arbiter used above. Its restrictions are the same: `CREATE INDEX CONCURRENTLY` is rejected inside a transaction block ([utility.c:1456-1466](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1456-L1466)), takes `ShareUpdateExclusiveLock` on the table ([indexcmds.c:672-682](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L672-L682)), is refused on a partitioned table ([indexcmds.c:723-733](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L723-L733)), leaves an invalid index behind on failure because `indisvalid` is set as the last step ([index.c#index_set_state_flags](../../../../raw/postgres-17/src/backend/catalog/index.c#L3478-L3550)), and costs two table scans ([create_index.sgml:625-635](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L625-L635)).
 
-One v17 internal difference is worth knowing before quoting its cost: the sorted build now writes through the bulk-write facility rather than issuing its own page writes and an unconditional `smgrimmedsync` ([nbtsort.c:1149](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1145-L1152), [nbtsort.c:1376](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1370-L1377)). `smgr_bulk_finish` still WAL-logs the built pages when the relation needs WAL, but it registers the fsync with the checkpointer and only calls `smgrimmedsync` when a checkpoint started concurrently ([bulk_write.c#smgr_bulk_finish](../../../../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L131-L220)).
+One v17 internal difference is worth knowing before quoting its cost: the sorted build now writes through the bulk-write facility rather than issuing its own page writes and an unconditional `smgrimmedsync` ([nbtsort.c:1145-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1145-L1152), [nbtsort.c:1370-1377](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1370-L1377)). `smgr_bulk_finish` still WAL-logs the built pages when the relation needs WAL, but it registers the fsync with the checkpointer and only calls `smgrimmedsync` when a checkpoint started concurrently ([bulk_write.c#smgr_bulk_finish](../../../../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L131-L220)).
 
-The DDL generator still needs the same two fixes, because `pg_get_indexdef` emits reloptions but neither `CONCURRENTLY` nor the tablespace ([ruleutils.c#pg_get_indexdef](../../../../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L1158-L1175)).
+The DDL generator still needs the same two fixes, because `pg_get_indexdef` emits reloptions but neither `CONCURRENTLY` nor the tablespace ([ruleutils.c#pg_get_indexdef](../../../../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L1160-L1177)).
 
 ### Method D: new message, no row count, new blind spot
 
@@ -412,7 +417,7 @@ index scan needed: 4425 pages from table (100.00% of total) had 900000 dead item
 index "d_work_idx": pages: 2745 in total, 0 newly deleted, 0 currently deleted, 0 reusable
 ```
 
-That is the exact format string in [vacuumlazy.c:725-731](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), fed by `IndexBulkDeleteResult`, which gained a `pages_newly_deleted` counter ([genam.h#IndexBulkDeleteResult](../../../../raw/postgres-17/src/include/access/genam.h#L75-L84), [nbtree.c#btvacuumpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1160-L1190)). Anything parsing the v12 wording ("now contains N row versions in M pages") gets nothing, and the tuple count is simply not available from Method D any more.
+That is the exact format string in [vacuumlazy.c:718-732](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), fed by `IndexBulkDeleteResult`, which gained a `pages_newly_deleted` counter ([genam.h#IndexBulkDeleteResult](../../../../raw/postgres-17/src/include/access/genam.h#L75-L84), [nbtree.c#btvacuumpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1160-L1190)). Anything parsing the v12 wording ("now contains N row versions in M pages") gets nothing, and the tuple count is simply not available from Method D any more.
 
 The v12 caveat that a no-op VACUUM prints no index line still holds — `btvacuumcleanup` returns NULL when `_bt_vacuum_needs_cleanup` says no scan is needed ([nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L851-L924)) — and v17 adds a second, larger hole. When fewer than 2% of the table's pages hold dead items, VACUUM bypasses index vacuuming entirely ([vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89), [vacuumlazy.c#lazy_vacuum](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1864-L1935)) and prints a distinct line with no per-index output at all. Measured on a 4,425-page table with 4,000 dead rows on 18 pages:
 
@@ -420,11 +425,11 @@ The v12 caveat that a no-op VACUUM prints no index line still holds — `btvacuu
 index scan bypassed: 18 pages from table (0.41% of total) have 4000 dead item identifiers
 ```
 
-Re-running the same VACUUM with `INDEX_CLEANUP ON` — which sets `consider_bypass_optimization` false ([vacuumlazy.c:392-407](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L388-L407)) — produced the index line and reported 10 newly deleted pages. On v17, Method D therefore reports only when VACUUM both had work to do **and** did not bypass it.
+Re-running the same VACUUM with `INDEX_CLEANUP ON` — which sets `consider_bypass_optimization` false ([vacuumlazy.c:388-407](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L388-L407)) — produced the index line and reported 10 newly deleted pages. On v17, Method D therefore reports only when VACUUM both had work to do **and** did not bypass it.
 
 ### The v14 unknown reltuples sentinel
 
-`pg_class.reltuples` now defaults to `-1`, documented in the catalog header as "unknown" ([pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)), and `index_update_stats` deliberately preserves it when an index is created on an empty table ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2796-L2813)). `TRUNCATE` puts an index back into that state: measured on a 300,000-row fixture, the index's `reltuples` went 300000 → −1 across a truncate and stayed −1 after the reload.
+`pg_class.reltuples` now defaults to `-1`, documented in the catalog header as "unknown" ([pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)), and `index_update_stats` deliberately preserves it when an index is created on an empty table ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842)). `TRUNCATE` puts an index back into that state: measured on a 300,000-row fixture, the index's `reltuples` went 300000 → −1 across a truncate and stayed −1 after the reload.
 
 The v12 SQL has no `-1` branch, so the sentinel flows straight into the arithmetic. On a 1,000,000-row table whose index was created before the rows and never analyzed:
 
@@ -445,7 +450,7 @@ A perfectly healthy 21 MB index is reported as 100% wasted. Falling back to the 
 
 Partial indexes were exact for the v12 page and are exact here too, but only in the statistics state the v12 recipes produce. Which of the two writers touched the index's `reltuples` last decides it:
 
-- a build writes the true count through `index_update_stats` ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2796-L2813));
+- a build writes the true count through `index_update_stats` ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842));
 - `ANALYZE` writes `ceil(tupleFract * totalrows)` from the heap sample ([analyze.c:637-660](../../../../raw/postgres-17/src/backend/commands/analyze.c#L637-L660));
 - VACUUM writes the true count, but only when the index scan actually ran and produced a non-estimated count ([vacuumlazy.c:3078-3098](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3078-L3098), [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L851-L924)).
 
@@ -530,12 +535,12 @@ So: same accuracy on distinct-key indexes, same failure mode and same repair for
 
 | Setting | Context in v17 | Apply scope |
 |---|---|---|
-| `statement_timeout` | `PGC_USERSET` ([guc_tables.c:2611-2619](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2619)) | session/transaction |
-| `lock_timeout` | `PGC_USERSET` ([guc_tables.c:2622-2630](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2621-L2630)) | session/transaction |
-| `maintenance_work_mem` | `PGC_USERSET` ([guc_tables.c:2465-2473](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2464-L2473)) | session/transaction |
+| `statement_timeout` | `PGC_USERSET` ([guc_tables.c:2611-2620](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620)) | session/transaction |
+| `lock_timeout` | `PGC_USERSET` ([guc_tables.c:2622-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631)) | session/transaction |
+| `maintenance_work_mem` | `PGC_USERSET` ([guc_tables.c:2465-2474](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2465-L2474)) | session/transaction |
 | `enable_seqscan`, `enable_bitmapscan`, `max_parallel_workers_per_gather` | `PGC_USERSET` | session/transaction |
-| `block_size` | `PGC_INTERNAL` preset ([guc_tables.c:3268-3276](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3267-L3276)) | read-only; always read it with `current_setting('block_size')` |
-| `wal_level` | `PGC_POSTMASTER` ([guc_tables.c:4974-4981](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4973-L4981)) | restart; only relevant because it decides whether Method C WAL-logs every built page |
+| `block_size` | `PGC_INTERNAL` preset ([guc_tables.c:3268-3277](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3268-L3277)) | read-only; always read it with `current_setting('block_size')` |
+| `wal_level` | `PGC_POSTMASTER` ([guc_tables.c:4986-4994](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4986-L4994)) | restart; only relevant because it decides whether Method C WAL-logs every built page |
 
 No method here requires changing a setting that needs a reload or a restart. The per-index `deduplicate_items` reloption read by the sweep is set with `ALTER INDEX ... SET (deduplicate_items = off)`, which takes `AccessExclusiveLock` and is not required to run the sweep.
 
@@ -1092,14 +1097,15 @@ The floor is what rescues `i_skew`: its point estimate reads 53.4% on a healthy 
 
 | Setting | Context in v17 | Apply scope |
 |---|---|---|
-| `statement_timeout`, `lock_timeout` | `PGC_USERSET` ([guc_tables.c:2610-2630](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2630)) | session/transaction; both are set by the statement itself |
-| `default_statistics_target` | `PGC_USERSET` ([guc_tables.c:2070-2077](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2070-L2077)) | session/transaction; raising it only changes estimates after the next `ANALYZE` |
-| `block_size` | `PGC_INTERNAL` preset ([guc_tables.c:3267-3276](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3267-L3276)) | read-only; the statement reads it with `current_setting('block_size')` |
+| `statement_timeout`, `lock_timeout` | `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)) | session/transaction; both are set by the statement itself |
+| `default_statistics_target` | `PGC_USERSET` ([guc_tables.c:2071-2078](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2078)) | session/transaction; raising it only changes estimates after the next `ANALYZE` |
+| `block_size` | `PGC_INTERNAL` preset ([guc_tables.c:3268-3277](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3268-L3277)) | read-only; the statement reads it with `current_setting('block_size')` |
 
 Neither the statement nor the two statistics repairs above need a setting that requires a reload or a restart. `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS` and `SET (n_distinct = ...)` are DDL on the table, not GUC changes, and take effect at the next `ANALYZE`; the per-index `deduplicate_items` reloption is read, never written, by the sweep.
 
 ## Context Reviewed
 
+- Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number here is a 17.10 observation and was not re-measured; the two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged.
 - nbtree build, split and deduplication: `nbtsort.c` (`_bt_blnewpage`, `_bt_pagestate`, `_bt_buildadd`, `_bt_load`, `_bt_sort_dedup_finish_pending`), `nbtdedup.c` (`_bt_dedup_pass`, `_bt_dedup_start_pending`, `_bt_dedup_save_htid`, `_bt_form_posting`, `_bt_bottomupdel_pass`), `nbtsplitloc.c` (`_bt_findsplitloc`, single-value strategy), `nbtree.h` (fillfactor constants, `BTGetDeduplicateItems`, `BTMaxItemSize`, `BTPageOpaqueData`, `P_HIKEY`), `README`.
 - VACUUM and page recycling: `vacuumlazy.c` (VERBOSE report, `BYPASS_THRESHOLD_PAGES`, `lazy_vacuum`, `lazy_cleanup_all_indexes`, `lazy_cleanup_one_index`, index relstats update), `nbtree.c` (`btvacuumcleanup`, `btvacuumscan`, `btvacuumpage`), `nbtpage.c` (`_bt_pagedel`, `BTPageIsRecyclable`), `indexfsm.c`, `genam.h`.
 - Catalog and statistics surfaces: `pg_class.h`, `index.c` (`index_update_stats`, `index_set_state_flags`), `vacuum.c` (`vac_update_relstats`), `analyze.c` (`do_analyze_rel`, `compute_scalar_stats`, `compute_distinct_stats`), `pg_statistic.h`, `system_views.sql` (`pg_stats`, `pg_stat_all_tables`, `pg_stat_all_indexes`), `pg_proc.dat`, `dbsize.c`, `relpath.c`, `varlena.c`, `guc_tables.c`.
@@ -1124,27 +1130,27 @@ Neither the statement nor the two statistics repairs above need a setting that r
 | Insert-time deduplication uses a different, larger cap | [nbtdedup.c#_bt_dedup_pass](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L75-L93) |
 | All-duplicate leaf splits use fillfactor 96 | [nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416), [nbtree.h#BTREE_SINGLEVAL_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202) |
 | `ANALYZE` stores `stadistinct` as a negative fraction above 10% distinct | [analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612), [analyze.c:2544-2549](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2544-L2549), [pg_statistic.h#stadistinct](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L52-L69) |
-| `reltuples = -1` means unknown, and index creation on an empty table preserves it | [pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2796-L2813) |
-| Index `reltuples` is written by the build, by ANALYZE's sample, or by a non-estimated VACUUM count | [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2796-L2813), [analyze.c:637-660](../../../../raw/postgres-17/src/backend/commands/analyze.c#L637-L660), [vacuumlazy.c:3078-3098](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3078-L3098), [vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1410-L1470) |
+| `reltuples = -1` means unknown, and index creation on an empty table preserves it | [pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842) |
+| Index `reltuples` is written by the build, by ANALYZE's sample, or by a non-estimated VACUUM count | [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842), [analyze.c:637-660](../../../../raw/postgres-17/src/backend/commands/analyze.c#L637-L660), [vacuumlazy.c:3078-3098](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3078-L3098), [vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1410-L1470) |
 | `n_live_tup`/`n_dead_tup` come from the cumulative statistics system | [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L670-L700) |
 | `pg_stats` exposes `avg_width`, `null_frac` and `n_distinct` | [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L215) |
 | `pg_relation_size` is a live filesystem measurement of one fork | [dbsize.c#calculate_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L308-L343), [relpath.c#forkNames](../../../../raw/postgres-17/src/common/relpath.c#L33-L40) |
 | `pg_column_size` returns the stored datum size | [varlena.c#pg_column_size](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L5062-L5102) |
 | A forward index scan reads one buffer per right link and ignores dead pages | [nbtsearch.c#_bt_readnextpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2181-L2240) |
-| Index-only scans fall back to the heap when the VM bit is unset, reported as `Heap Fetches` | [nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L150-L170), [explain.c:1993](../../../../raw/postgres-17/src/backend/commands/explain.c#L1993) |
+| Index-only scans fall back to the heap when the VM bit is unset, reported as `Heap Fetches` | [nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L151-L171), [explain.c:1993](../../../../raw/postgres-17/src/backend/commands/explain.c#L1993) |
 | `BUFFERS` is one per-node counter with no per-relation split | [explain.c#show_buffer_usage](../../../../raw/postgres-17/src/backend/commands/explain.c#L3743-L3800), [explain.sgml#BUFFERS](../../../../raw/postgres-17/doc/src/sgml/ref/explain.sgml#L182-L200) |
 | v17 `VACUUM VERBOSE` prints four page classes per index and no row count | [vacuumlazy.c:718-732](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), [genam.h#IndexBulkDeleteResult](../../../../raw/postgres-17/src/include/access/genam.h#L75-L84) |
 | Index vacuuming is bypassed below 2% of pages, and forced by `INDEX_CLEANUP ON` | [vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89), [vacuumlazy.c#lazy_vacuum](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1864-L1935), [vacuumlazy.c:388-407](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L388-L407) |
 | A no-op VACUUM prints no index line | [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L851-L924) |
 | Deleted pages stay in the file and are only recorded in the FSM | [nbtree.c#btvacuumpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1160-L1190), [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55), [README:236-246](../../../../raw/postgres-17/src/backend/access/nbtree/README#L236-L246) |
-| Partly-emptied pages remain allocated, the documented bloat mechanism | [maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1026-L1034) |
-| CIC restrictions, lock level and invalid-index leftover | [utility.c:1455-1465](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1455-L1465), [indexcmds.c:672-682](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L672-L682), [indexcmds.c:723-733](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L723-L733), [index.c#index_set_state_flags](../../../../raw/postgres-17/src/backend/catalog/index.c#L3449-L3521), [create_index.sgml:625-635](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L625-L635) |
+| Partly-emptied pages remain allocated, the documented bloat mechanism | [maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1032-L1040) |
+| CIC restrictions, lock level and invalid-index leftover | [utility.c:1456-1466](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1456-L1466), [indexcmds.c:672-682](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L672-L682), [indexcmds.c:723-733](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L723-L733), [index.c#index_set_state_flags](../../../../raw/postgres-17/src/backend/catalog/index.c#L3478-L3550), [create_index.sgml:625-635](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L625-L635) |
 | v17 builds write through the bulk-write facility, syncing via the checkpointer | [nbtsort.c:1145-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1145-L1152), [nbtsort.c:1370-1377](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1370-L1377), [bulk_write.c#smgr_bulk_finish](../../../../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L131-L220) |
-| `pg_get_indexdef` emits reloptions but not `CONCURRENTLY` or the tablespace | [ruleutils.c#pg_get_indexdef](../../../../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L1158-L1175) |
+| `pg_get_indexdef` emits reloptions but not `CONCURRENTLY` or the tablespace | [ruleutils.c#pg_get_indexdef](../../../../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L1160-L1177) |
 | `pgstatindex`'s density denominator and fragmentation definition | [pgstatindex.c:310-316](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L310-L316), [pgstatindex.c:363-367](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L367), [pgstatindex.c:318-325](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L325) |
 | The bloat tooling is contrib and superuser-gated | [extension.c:778-790](../../../../raw/postgres-17/src/backend/commands/extension.c#L778-L790), [extension.c#execute_extension_script](../../../../raw/postgres-17/src/backend/commands/extension.c#L1019-L1035), [pgstatindex.c:145-160](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L145-L160), [rawpage.c:148-154](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L148-L154) |
 | `TABLESAMPLE` cannot be applied to an index | [parse_clause.c:1136-1146](../../../../raw/postgres-17/src/backend/parser/parse_clause.c#L1136-L1146) |
-| GUC contexts used by these methods | [guc_tables.c:2610-2630](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2610-L2630), [guc_tables.c:2464-2473](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2464-L2473), [guc_tables.c:3267-3276](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3267-L3276), [guc_tables.c:4973-4981](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4973-L4981) |
+| GUC contexts used by these methods | [guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631), [guc_tables.c:2465-2474](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2465-L2474), [guc_tables.c:3268-3277](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3268-L3277), [guc_tables.c:4986-4994](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4986-L4994) |
 | The build-time deduplication decision is `allequalimage AND NOT isunique AND deduplicate_items` | [nbtsort.c:1147-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1147-L1152), [nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563) |
 | `allequalimage` is false when any key column's opclass lacks a `BTEQUALIMAGE_PROC` entry, and unconditionally false for an INCLUDE index | [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [nbtutils.c:5144-5148](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5148) |
 | Equal image is B-tree support function number 4, which is why the sweep probes `pg_amproc.amprocnum = 4` | [nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L702-L712) |
@@ -1158,7 +1164,7 @@ Neither the statement nor the two statistics repairs above need a setting that r
 | `most_common_freqs` are sample frequencies over the total row count, stored as `STATISTIC_KIND_MCV` | [analyze.c:2664-2684](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2664-L2684), [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L218) |
 | A nondeterministic collation is visible in core SQL as `pg_collation.collisdeterministic = false` for one of `pg_index.indcollation`'s entries | [pg_collation.h:40](../../../../raw/postgres-17/src/include/catalog/pg_collation.h#L40), [pg_index.h:53-54](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L53-L54), [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2599-L2613) |
 | `n_mod_since_analyze`, `n_live_tup` and `n_dead_tup` all come from the cumulative statistics system, not from `pg_class` | [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L686-L694) |
-| `default_statistics_target` is session-scoped and only changes estimates at the next `ANALYZE` | [guc_tables.c:2070-2077](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2070-L2077), [analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612) |
+| `default_statistics_target` is session-scoped and only changes estimates at the next `ANALYZE` | [guc_tables.c:2071-2078](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2078), [analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612) |
 
 ## Open Questions
 
@@ -1211,7 +1217,7 @@ Neither the statement nor the two statistics repairs above need a setting that r
 - [pg_collation.h#collisdeterministic](../../../../raw/postgres-17/src/include/catalog/pg_collation.h#L28-L50)
 - [pg_index.h#indcollation](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L28-L60)
 - [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L672-L700)
-- [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2069-L2078)
+- [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2070-L2079)
 - [nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L129-L430)
 - [nbtree.h#BTREE_DEFAULT_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202)
 - [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1131-L1150)
@@ -1220,19 +1226,19 @@ Neither the statement nor the two statistics repairs above need a setting that r
 - [vacuumlazy.c#heap_vacuum_rel](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L618-L735)
 - [vacuumlazy.c#lazy_vacuum](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1864-L1935)
 - [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L55-L70)
-- [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2760-L2900)
+- [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2789-L2929)
 - [analyze.c#compute_scalar_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2440-L2620)
 - [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L215)
 - [dbsize.c#calculate_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L308-L343)
 - [varlena.c#pg_column_size](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L5062-L5102)
 - [nbtsearch.c#_bt_readnextpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2181-L2338)
-- [nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L61-L258)
+- [nodeIndexonlyscan.c#IndexOnlyNext](../../../../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L62-L240)
 - [explain.c#show_buffer_usage](../../../../raw/postgres-17/src/backend/commands/explain.c#L3743-L3906)
 - [indexcmds.c#DefineIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L540-L740)
 - [bulk_write.c#smgr_bulk_finish](../../../../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L131-L220)
 - [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L216-L380)
 - [extension.c#execute_extension_script](../../../../raw/postgres-17/src/backend/commands/extension.c#L993-L1060)
-- [maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1012-L1048)
+- [maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1018-L1054)
 - [create_index.sgml#CONCURRENTLY](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L610-L700)
 
 ## Navigation

@@ -7805,3 +7805,155 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `raw/postgres-12/` is unchanged and no server was started.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-08-17] tooling | repin citation re-anchoring, label sync, and a pin-vs-checkout lint check
+
+- Added `scripts/repin_citations`, which re-anchors `#Lstart-Lend` fragments when a
+  `raw/postgres-NN/` checkout is repinned. It reads the cited block at the old
+  commit and locates it at the new commit, reporting one of `unchanged`, `exact`,
+  `context`, `endpoints`, `nearest`, `changed`, `missing-new`, `missing-old`, or
+  `out-of-range`. `--apply` rewrites only mechanically resolvable fragments,
+  `--sync-labels` also updates labels that embed their own line numbers such as
+  `[index.c:2622-2626]`, and `--update-pinned-commit` sets front-matter pins.
+  Reports land in `.wiki-runtime/cache/repin_citations/vNN.json`.
+- Verified the tool before trusting it: 8 of 8 sampled moved citations had
+  byte-identical old and new blocks, and after the run the label-symbol hit rate
+  for re-anchored citations (`exact` 81.6%, `endpoints` 96.4%) matched or beat the
+  untouched `unchanged` baseline of 77.5%, so the pass introduced no systematic
+  drift. All 135 non-trivial re-anchors were checked individually: 28 `context`
+  and 10 `nearest` blocks byte-identical, 97 `endpoints` boundary lines identical.
+- Added a source-pin integrity check to `scripts/wiki_lint`. For every version in
+  `wiki/versions.md` it now errors when the checkout is missing, when the pinned
+  commit is not a full 40-character sha, when the pinned commit is absent from the
+  checkout, or when the checkout HEAD is a different commit, and warns on an
+  unclean checkout. Exercised all five cases against a throwaway repository.
+- This closes the gap that hid the v19 drift below: lint compared page
+  `pinned_commit:` values against the manifest but never against the checkout.
+
+## [2026-08-17] repin v19 | 19beta2 99e47536 -> 19beta3 67342a14863, 152 commits reviewed
+
+- Found and fixed a pin/checkout mismatch first: `wiki/versions.md` and all four
+  v19 pages declared `99e47536bbf1a165f5dc8d504f928821ebc8df6a`, but
+  `raw/postgres-19/` sat on `3aa54433b0cdce48facb610a5b720208cc760654`, 52 commits
+  earlier, and the declared commit was not even present in the local clone. Every
+  v19 citation line number therefore resolved against the wrong tree. Fetching
+  `REL_19_STABLE` restored the object, and the repin moved the checkout forward
+  from the declared pin.
+- Repinned to `67342a148632801d44c2fb9a7bf4231b6827c5d2`
+  (`REL_19_BETA3-26-g67342a14863`), stamped `19beta3` in `configure.ac` and
+  `meson.build`. The range crosses the `REL_19_BETA3` stamp `3638289fb57` and
+  contains a 35-commit security batch dated 2026-08-10.
+- Reviewed all 152 commits: 14 change a filed claim, 29 touch covered files
+  without changing a claim, 109 are unrelated.
+- Page updates. `5d47df21e89` (CVE-2026-6471) moved the pgrepack direct-use
+  rejection out of `repack_startup()` into `StartupDecodingContext()` and added the
+  `output_plugin_libraries` GUC; `d7db169fa13` rejects `CLUSTER (ANALYZE)`;
+  `6a80179f6b0` closed the decoding-deactivation versus slot-creation races;
+  `fd56954c9fe` documented the `NO_LOGICAL` table-AM flags. REPACK feature-scope
+  commits went 50 -> 55, including the page title. `3ab3f33281f` renamed
+  EXISTS-to-ANY subplans to `exists_to_any_*`, changing `pg_plan_advice` target
+  names and raising direct module commits 26 -> 27. `567286b762b` (CVE-2026-14666)
+  added role/database plan-cache invalidation. `b3331578b58` restored the
+  autovacuum launcher's descending `adl_score` sort, which had been ascending.
+- 109 citation fragments re-anchored, 19 stale labels synced, three anchors
+  repointed by hand (`plancache.c#L14-L42`, `autovacuum.c#L1118-L1124`,
+  `slot.c#L372-L465`). `verified_by_agent` stays `not yet` on all four pages.
+
+## [2026-08-17] repin v18 | 18.3 6cb307251c5 -> 18.6 baa7b142aac, 294 commits reviewed
+
+- Repinned the primary version to `baa7b142aace6821ce085906f314a75bcc4d95c8`
+  (`REL_18_6-10-gbaa7b142aac`, stamped 18.6). The range crosses the 18.4 and 18.6
+  releases. 18.5 was stamped (`17fae4fbdd6`) but never released; the checkout's own
+  release notes say so, and no `REL_18_5` tag exists, so the wiki does not call it
+  a release.
+- Reviewed all 294 commits: 17 change a filed claim, 82 touch covered files
+  without changing a claim, 195 are unrelated.
+- Page updates. `0b12f56bfac` (CVE-2026-14666) inverted the RLS page's central
+  finding: `InitPlanCache()` now registers `PlanCacheRoleCallback` on
+  `AUTHMEMROLEMEM`/`AUTHOID`/`DATABASEOID`, so same-role membership,
+  `BYPASSRLS`, superuser and current-database-owner changes no longer leave a
+  stale RLS decision, and its 18.3-line reproduction is now recorded as
+  superseded. The RLS release-based history went 21 -> 24 changes.
+  `2a29b607dbb` (CVE-2026-6471) added `output_plugin_libraries`, a new mandatory
+  precondition for logical replication. `cb35d730689` (CVE-2026-6638) answered the
+  bidirectional page's open question about unquoted publisher-side identifiers.
+  `8a31ffc2d4c` (CVE-2026-14676) rebuilt `pg_stat_statements` normalization on an
+  expansible `StringInfo`, without adding the length cap that page is about.
+  `2780538433f`, `e4527519b77`, `fe464e9e686`/`5cc59834b86`, `2fd8d45ecf7`,
+  `585181e0774`/`7c25cdb1ebf`, `ed8050370b7` and `d4420a97206` updated the CIC,
+  custom-statistics, buffer-partition and vacuum-hook pages.
+- No GUC present in both v12 and 18 changed its default in the range, so the
+  GUC-defaults answer is unchanged; the page now says so explicitly.
+- 633 citation fragments re-anchored, 145 stale labels synced, 13 anchors
+  repointed by hand, including the four `bufmgr.c#BufferAlloc` ranges and five
+  `heapam.c`/`libpqwalreceiver.c`/`subscriptioncmds.c` anchors whose cited text
+  had moved. `verified_by_agent` reset to `not yet` where it carried a timestamp.
+
+## [2026-08-17] repin v17 | 17.10 54eeefaedbe -> 17.11 786db8dcf16, 193 commits reviewed
+
+- Repinned to `786db8dcf168bd9df8f55047337525ac19118b1c`
+  (`REL_17_11-7-g786db8dcf16`, stamped 17.11), crossing the `REL_17_11` stamp
+  `083ac033419`.
+- Reviewed all 193 commits: 12 change a filed claim, 57 touch covered files
+  without changing a claim, 124 are unrelated.
+- Page updates. `1d6c654c818` replaced `CompareIndexInfo`'s blanket refusal of
+  exclusion indexes with an element-wise comparison of exclusion operators,
+  procedures and strategies, so the ATTACH page's exclusion-index non-reuse claim
+  and its 17.10 measurement of that behavior are corrected and the new regression
+  case cited. `31f2acde53d` fixed RANGE pruning wrongly discarding the DEFAULT
+  partition. `28269fed661` propagates `INDEX_CREATE_DEFERRABLE` to the
+  `REINDEX CONCURRENTLY` `_ccnew` copy and adds a third injection point.
+  `d1c8aa0b09f` (CVE-2026-6470) requires `USAGE` on index-expression and
+  predicate types. `01992176e08` (CVE-2026-6471) added `output_plugin_libraries`,
+  and `14810cc0d96` rebuilt replication-command quoting, so the bidirectional
+  page's "no related commits since 17.10" statement became a 17.11 section. Four
+  refint commits added the PostgreSQL 20 removal notice and secure-schema rules to
+  the contrib inventory.
+- Measured pages keep every number, now labelled as measured on the previous
+  17.10 pin with a per-page source check of whether the underlying code moved.
+  No GUC default changed in 17.11.
+- 929 citation fragments re-anchored, 326 stale labels synced, 11 anchors
+  repointed by hand (four `index.c` exclusion anchors, two `read_stream.c`,
+  `index.c#apply-reloptions`, four `libpqwalreceiver.c`, five `contrib-spi.sgml`
+  sections). `verified_by_agent` reset to `not yet` on the three pages that
+  carried a timestamp.
+
+## [2026-08-17] repin v14 | 14.23 5c00f4e2e3b -> 14.24 a92fbdfb830, 133 commits reviewed
+
+- Repinned to `a92fbdfb830046e907813e9067b2c9de9708d600`
+  (`REL_14_24-6-ga92fbdfb830`, stamped 14.24), crossing the `REL_14_24` stamp
+  `6b3806732b7`. PostgreSQL 14 has no meson build system, so `configure.ac` and
+  the generated `configure` are the only stamp files; the navigation guide now
+  records that, and that release tags on this checkout are unannotated, so
+  `git describe --tags` is required.
+- Reviewed all 133 commits: 6 change a filed claim, 30 touch covered files
+  without changing a claim, 97 are unrelated.
+- Page updates. `f4174aa84a3` (CVE-2026-14666) inverted the RLS page's central
+  same-role plan-cache finding, and its 14.23 reproduction is recorded as
+  superseded with the fix's two residual scopes (saved plans only; other
+  databases' `pg_database` rows ignored) and its complete absence of in-tree
+  tests. `1a358b8f2a2` (CVE-2026-6470) added the policy, index, default, CHECK and
+  partition-key type-`USAGE` requirement. `155dacbc547` (CVE-2026-14680) added a
+  fourth "cannot be called explicitly" class for `internal`-typed arguments and
+  results. `802dc79df63` and `2bb60eb4fea` changed MultiXact wraparound hints and
+  `RecordNewMultiXact()`'s SLRU locking, and `5100bdbd3ba` added an isolation spec,
+  so the MultiXact page's "full isolation suite passed" claim is now scoped to the
+  previous pin.
+- 310 citation fragments re-anchored, 3 stale labels synced, one broken anchor
+  repointed (`multixact.c#L1141-L1168`) and five duplicate labels given distinct
+  names. `verified_by_agent` reset to `not yet` on the two pages that carried a
+  timestamp.
+
+## [2026-08-17] review-fix | 11 citations pointing past end-of-file, found by the new bounds check
+
+- The new `repin_citations` bounds check surfaced 11 citations whose line range
+  ran past the end of the cited file. All predate this repin and none was caught by
+  `scripts/wiki_lint`, which checks only that the file exists.
+- Fixed in v17 and v18: `execdesc.h#L33-L80` -> `#L33-L56` in a 70-line file and
+  `memnodes.h#L117-L170` -> `#L117-L134` in a 152-line file, on both codebase
+  navigation guides.
+- Fixed in v12, whose pin `45b88269a353ad93744772791feb6d01bc7e1e42` did not move:
+  `pg_stat_statements--1.6--1.7.sql#L13-L23` and `#L1-L23` -> `L13-L22`/`L1-L22`
+  in a 22-line file, and five `timeouts.out` citations ending at `L76` in a
+  73-line file -> `L73`.
+- No prose changed on those pages; only the out-of-range endpoints.

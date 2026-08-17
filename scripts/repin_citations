@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Re-anchor wiki source citations when a raw/postgres-NN checkout is repinned.
+
+A repin moves the pinned commit of one source checkout, so every
+`#Lstart-Lend` fragment on that version's pages may now point at different
+lines.  This tool reads the cited block at the old commit, locates the same
+block at the new commit, and reports or rewrites the line fragment.
+
+Statuses:
+  unchanged        cited file is byte-identical between the two commits
+  exact            block located at a new offset (unique match)
+  context          block located after widening the match window
+  endpoints        block interior changed; both boundary lines still map 1:1
+  nearest          block appears more than once; nearest offset was used
+  changed          cited block itself changed; needs a human/agent decision
+  missing-new      cited file does not exist at the new commit
+  missing-old      cited file did not exist at the old commit
+  out-of-range     cited line range does not exist at the old commit
+"""
+
+from __future__ import annotations
+
+import argparse
+import difflib
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+
+from wiki_tooling import (
+    REPO_ROOT,
+    WIKI_ROOT,
+    append_tool_log,
+    die,
+)
+
+
+CITATION_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\s]+)\)")
+# Labels that embed their own line numbers, e.g. `index.c:2622-2626` or
+# `plancache.c#L14-L39`.  These must be kept in step with the URL fragment.
+LABEL_LINES_RE = re.compile(r"^(?P<file>[\w.+-]+?)(?P<sep>#L|:)(?P<start>\d+)(?:(?P<dash>-L?)(?P<end>\d+))?$")
+CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
+FRAGMENT_RE = re.compile(r"^L(\d+)(?:-L(\d+))?$")
+CONTEXT_STEPS = (0, 2, 4, 8, 16, 32)
+REWRITABLE_STATUSES = ("exact", "context", "endpoints")
+MANUAL_STATUSES = ("endpoints", "nearest", "changed", "missing-new", "missing-old", "out-of-range")
+
+
+@dataclass
+class Citation:
+    page: Path
+    span: tuple[int, int]
+    label: str
+    url: str
+    path: str
+    start: int
+    end: int
+    status: str = "pending"
+    new_start: int | None = None
+    new_end: int | None = None
+    detail: str = ""
+
+    @property
+    def moved(self) -> bool:
+        return self.new_start is not None and (self.new_start, self.new_end) != (self.start, self.end)
+
+    @property
+    def rewritable(self) -> bool:
+        return self.status in REWRITABLE_STATUSES and self.moved
+
+
+@dataclass
+class Blob:
+    lines: list[str] | None
+    index: dict[str, list[int]] = field(default_factory=dict)
+
+
+class Checkout:
+    """Read-only accessor for file contents at two commits of one checkout."""
+
+    def __init__(self, version: str, old: str, new: str) -> None:
+        self.root = REPO_ROOT / f"raw/postgres-{version}"
+        if not (self.root / ".git").exists():
+            die(f"{self.root} is not a git checkout")
+        self.version = version
+        self.old = self._resolve(old)
+        self.new = self._resolve(new)
+        self._cache: dict[tuple[str, str], Blob] = {}
+
+    def _resolve(self, rev: str) -> str:
+        proc = subprocess.run(
+            ["git", "-C", str(self.root), "rev-parse", "--verify", f"{rev}^{{commit}}"],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            die(f"commit {rev} is not present in {self.root}")
+        return proc.stdout.strip()
+
+    def blob(self, commit: str, path: str) -> Blob:
+        key = (commit, path)
+        if key in self._cache:
+            return self._cache[key]
+        proc = subprocess.run(
+            ["git", "-C", str(self.root), "show", f"{commit}:{path}"],
+            capture_output=True, text=True, errors="replace",
+        )
+        if proc.returncode != 0:
+            blob = Blob(None)
+        else:
+            lines = proc.stdout.split("\n")
+            if lines and lines[-1] == "":
+                lines.pop()
+            index: dict[str, list[int]] = {}
+            for number, line in enumerate(lines):
+                index.setdefault(line, []).append(number)
+            blob = Blob(lines, index)
+        self._cache[key] = blob
+        return blob
+
+
+def masked_regions(text: str) -> list[tuple[int, int]]:
+    regions = [match.span() for match in CODE_BLOCK_RE.finditer(text)]
+    for match in CODE_SPAN_RE.finditer(text):
+        if not any(start <= match.start() < end for start, end in regions):
+            regions.append(match.span())
+    return regions
+
+
+def collect_citations(version: str, pages: list[Path]) -> list[Citation]:
+    prefix = f"raw/postgres-{version}/"
+    citations: list[Citation] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        masked = masked_regions(text)
+        for match in CITATION_RE.finditer(text):
+            if any(start <= match.start() < end for start, end in masked):
+                continue
+            url = match.group(2)
+            url_path, _, fragment = url.partition("#")
+            url_path = url_path.strip().strip("/")
+            if not re.search(r"(^|/)raw/postgres-\d+/", url_path):
+                continue
+            if url_path.startswith("raw/"):
+                repo_path = url_path
+            else:
+                resolved = (page.parent / url_path).resolve()
+                try:
+                    repo_path = resolved.relative_to(REPO_ROOT).as_posix()
+                except ValueError:
+                    continue
+            if not repo_path.startswith(prefix):
+                continue
+            bounds = FRAGMENT_RE.match(fragment.strip())
+            if not bounds:
+                continue
+            start = int(bounds.group(1))
+            end = int(bounds.group(2) or bounds.group(1))
+            citations.append(Citation(
+                page=page,
+                span=match.span(),
+                label=match.group(1),
+                url=url,
+                path=repo_path[len(prefix):],
+                start=start,
+                end=end,
+            ))
+    return citations
+
+
+def find_windows(blob: Blob, window: list[str]) -> list[int]:
+    if not window or blob.lines is None:
+        return []
+    candidates = blob.index.get(window[0], [])
+    size = len(window)
+    total = len(blob.lines)
+    hits = []
+    for position in candidates:
+        if position + size > total:
+            continue
+        if blob.lines[position:position + size] == window:
+            hits.append(position)
+    return hits
+
+
+def locate(old: Blob, new: Blob, start: int, end: int) -> tuple[str, int | None, int | None, str]:
+    assert old.lines is not None and new.lines is not None
+    if start < 1 or end > len(old.lines) or end < start:
+        return "out-of-range", None, None, f"old file has {len(old.lines)} lines"
+
+    block = old.lines[start - 1:end]
+    block_hits = find_windows(new, block)
+    if len(block_hits) == 1:
+        offset = block_hits[0] + 1
+        return "exact", offset, offset + (end - start), ""
+    if not block_hits:
+        return "changed", None, None, "cited block not found at the new commit"
+
+    for context in CONTEXT_STEPS[1:]:
+        low = max(0, start - 1 - context)
+        high = min(len(old.lines), end + context)
+        window = old.lines[low:high]
+        hits = find_windows(new, window)
+        if len(hits) == 1:
+            offset = hits[0] + (start - 1 - low) + 1
+            return "context", offset, offset + (end - start), f"unique with {context} lines of context"
+        if not hits:
+            break
+
+    nearest = min(block_hits, key=lambda position: abs(position - (start - 1)))
+    offset = nearest + 1
+    return "nearest", offset, offset + (end - start), f"{len(block_hits)} candidate offsets"
+
+
+def equal_line_map(old_lines: list[str], new_lines: list[str]) -> dict[int, int]:
+    """Map old line numbers to new ones for lines the diff reports as equal."""
+    mapping: dict[int, int] = {}
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    for tag, old_start, old_end, new_start, _ in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for offset in range(old_end - old_start):
+            mapping[old_start + offset + 1] = new_start + offset + 1
+    return mapping
+
+
+def locate_endpoints(mapping: dict[int, int], start: int, end: int) -> tuple[int | None, int | None]:
+    """Remap a range whose interior changed but whose boundary lines survived."""
+    new_start, new_end = mapping.get(start), mapping.get(end)
+    if new_start is None or new_end is None or new_end < new_start:
+        return None, None
+    return new_start, new_end
+
+
+def resolve(checkout: Checkout, citations: list[Citation]) -> None:
+    maps: dict[str, dict[int, int]] = {}
+    for citation in citations:
+        old = checkout.blob(checkout.old, citation.path)
+        new = checkout.blob(checkout.new, citation.path)
+        if new.lines is None:
+            citation.status = "missing-new"
+            citation.detail = "file absent at the new commit"
+            continue
+        if old.lines is None:
+            citation.status = "missing-old"
+            citation.detail = "file absent at the old commit"
+            continue
+        if old.lines == new.lines:
+            # Still bounds-check: a citation can point past end-of-file even when
+            # the cited file never changed.
+            if citation.end > len(new.lines) or citation.start < 1 or citation.end < citation.start:
+                citation.status = "out-of-range"
+                citation.detail = f"file has {len(new.lines)} lines"
+                continue
+            citation.status = "unchanged"
+            citation.new_start, citation.new_end = citation.start, citation.end
+            continue
+        status, new_start, new_end, detail = locate(old, new, citation.start, citation.end)
+        if status == "changed":
+            if citation.path not in maps:
+                maps[citation.path] = equal_line_map(old.lines, new.lines)
+            mapped_start, mapped_end = locate_endpoints(maps[citation.path], citation.start, citation.end)
+            if mapped_start is not None:
+                status, new_start, new_end = "endpoints", mapped_start, mapped_end
+                detail = "interior changed; boundary lines unchanged"
+        citation.status = status
+        citation.new_start, citation.new_end = new_start, new_end
+        citation.detail = detail
+
+
+def synced_label(label: str, path: str, start: int, end: int) -> str:
+    """Return the label with any embedded line numbers set to start/end."""
+    match = LABEL_LINES_RE.match(label)
+    if not match or match.group("file") != path.rsplit("/", 1)[-1]:
+        return label
+    separator = match.group("sep")
+    if separator == "#L":
+        return f"{match.group('file')}#L{start}" + (f"-L{end}" if end != start else "")
+    return f"{match.group('file')}:{start}" + (f"-{end}" if end != start else "")
+
+
+def rewrite(citations: list[Citation], sync_labels: bool) -> dict[Path, int]:
+    by_page: dict[Path, list[Citation]] = {}
+    for citation in citations:
+        needs_label = sync_labels and citation.new_start is not None and (
+            synced_label(citation.label, citation.path, citation.new_start, citation.new_end) != citation.label
+        )
+        if citation.rewritable or needs_label:
+            by_page.setdefault(citation.page, []).append(citation)
+
+    changed: dict[Path, int] = {}
+    for page, page_citations in by_page.items():
+        text = page.read_text(encoding="utf-8")
+        for citation in sorted(page_citations, key=lambda item: item.span[0], reverse=True):
+            start, end = citation.span
+            keep = citation.status in REWRITABLE_STATUSES
+            new_start = citation.new_start if keep else citation.start
+            new_end = citation.new_end if keep else citation.end
+            fragment = f"L{new_start}" + (f"-L{new_end}" if new_end != new_start else "")
+            label = synced_label(citation.label, citation.path, new_start, new_end) if sync_labels else citation.label
+            url_path = citation.url.partition("#")[0]
+            text = text[:start] + f"[{label}]({url_path}#{fragment})" + text[end:]
+        page.write_text(text, encoding="utf-8")
+        changed[page] = len(page_citations)
+    return changed
+
+
+def update_pins(pages: list[Path], new_commit: str) -> list[Path]:
+    updated = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        replaced, count = re.subn(
+            r"(?m)^pinned_commit: [0-9a-f]{40}$", f"pinned_commit: {new_commit}", text, count=1
+        )
+        if count and replaced != text:
+            page.write_text(replaced, encoding="utf-8")
+            updated.append(page)
+    return updated
+
+
+def version_pages(version: str) -> list[Path]:
+    root = WIKI_ROOT / f"v{version}"
+    if not root.exists():
+        die(f"{root} does not exist")
+    return sorted(path for path in root.rglob("*.md") if path.is_file())
+
+
+def rel(path: Path) -> str:
+    return path.relative_to(REPO_ROOT).as_posix()
+
+
+def report(citations: list[Citation], verbose: bool) -> None:
+    counts: dict[str, int] = {}
+    for citation in citations:
+        counts[citation.status] = counts.get(citation.status, 0) + 1
+    moved = sum(1 for citation in citations if citation.rewritable)
+    order = ["unchanged", "exact", "context", "endpoints", "nearest", "changed",
+             "missing-new", "missing-old", "out-of-range"]
+    summary = ", ".join(f"{status} {counts[status]}" for status in order if status in counts)
+    print(f"citations {len(citations)}: {summary} (line fragments needing rewrite: {moved})")
+
+    for status in MANUAL_STATUSES:
+        flagged = [citation for citation in citations if citation.status == status]
+        if not flagged:
+            continue
+        print(f"\n{status} ({len(flagged)}):")
+        for citation in flagged:
+            target = ""
+            if citation.new_start:
+                target = f" -> L{citation.new_start}-L{citation.new_end}"
+            print(f"  {rel(citation.page)}: [{citation.label}] {citation.path}#L{citation.start}-L{citation.end}{target}"
+                  f"{' | ' + citation.detail if citation.detail else ''}")
+
+    if verbose:
+        print("\nmoved:")
+        for citation in citations:
+            if citation.rewritable:
+                print(f"  {rel(citation.page)}: {citation.path} L{citation.start}-L{citation.end}"
+                      f" -> L{citation.new_start}-L{citation.new_end} ({citation.status})")
+
+
+def write_json(version: str, checkout: Checkout, citations: list[Citation]) -> Path:
+    out_dir = REPO_ROOT / ".wiki-runtime" / "cache" / "repin_citations"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"v{version}.json"
+    payload = {
+        "version": version,
+        "old": checkout.old,
+        "new": checkout.new,
+        "citations": [
+            {
+                "page": rel(citation.page),
+                "label": citation.label,
+                "path": citation.path,
+                "old_range": [citation.start, citation.end],
+                "new_range": [citation.new_start, citation.new_end],
+                "status": citation.status,
+                "detail": citation.detail,
+            }
+            for citation in citations
+        ],
+    }
+    out_path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    return out_path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", required=True, help="major version, e.g. 18")
+    parser.add_argument("--old", required=True, help="previous pinned commit")
+    parser.add_argument("--new", required=True, help="new pinned commit")
+    parser.add_argument("--apply", action="store_true", help="rewrite moved line fragments in place")
+    parser.add_argument("--sync-labels", action="store_true",
+                        help="also update link labels that embed line numbers, e.g. [index.c:2622-2626]")
+    parser.add_argument("--update-pinned-commit", action="store_true", help="also set pinned_commit: in front matter")
+    parser.add_argument("--verbose", action="store_true", help="list every moved citation")
+    args = parser.parse_args(argv)
+
+    append_tool_log("repin_citations", sys.argv[1:])
+    checkout = Checkout(args.version, args.old, args.new)
+    pages = version_pages(args.version)
+    citations = collect_citations(args.version, pages)
+    resolve(checkout, citations)
+
+    print(f"v{args.version}: {checkout.old[:11]} -> {checkout.new[:11]} over {len(pages)} page(s)")
+    report(citations, args.verbose)
+    out_path = write_json(args.version, checkout, citations)
+    print(f"\nreport: {rel(out_path)}")
+
+    stale_labels = [
+        citation for citation in citations
+        if citation.new_start is not None
+        and synced_label(citation.label, citation.path, citation.new_start, citation.new_end) != citation.label
+    ]
+    print(f"labels embedding stale line numbers: {len(stale_labels)}")
+
+    if args.apply:
+        changed = rewrite(citations, args.sync_labels)
+        total = sum(changed.values())
+        print(f"\nrewrote {total} citation(s) across {len(changed)} page(s)")
+        for page, count in sorted(changed.items()):
+            print(f"  {rel(page)}: {count}")
+        if args.update_pinned_commit:
+            updated = update_pins(pages, checkout.new)
+            print(f"updated pinned_commit on {len(updated)} page(s)")
+
+    manual = sum(1 for citation in citations if citation.status in MANUAL_STATUSES)
+    return 1 if manual else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

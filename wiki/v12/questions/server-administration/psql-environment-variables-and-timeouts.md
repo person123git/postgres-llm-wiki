@@ -18,7 +18,7 @@ verified_by_agent: not yet
 
 There is no dedicated `PGSTATEMENTTIMEOUT` or `PGLOCKTIMEOUT` variable in v12. To set these for a `psql` session from the environment, use `PGOPTIONS='-c statement_timeout=... -c lock_timeout=...'`; libpq documents that `PGOPTIONS` settings become defaults for the life of that session and do not affect other sessions [config.sgml#PGOPTIONS-example](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L338-L356). Inside `psql`, `SET statement_timeout` and `SET lock_timeout` are ordinary server-side GUC changes. Both are `PGC_USERSET`, so any user can set them for the current session or transaction without restart or reload [guc.c#statement-and-lock-timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2398) [catalogs.sgml#context-user](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L10505-L10614).
 
-`statement_timeout` aborts a statement that runs longer than its limit; `lock_timeout` aborts a statement only while it waits too long to acquire a table, index, row, or other lock, and the lock limit is applied separately to each lock acquisition attempt [config.sgml#statement_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7669-L7699) [config.sgml#lock_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7701-L7738). If both are set, the earlier timeout is what the user sees; setting `lock_timeout` equal to or larger than a nonzero `statement_timeout` is usually not useful because the statement timeout will fire first [postgres.c#timeout-reporting](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3095) [timeouts.out#combined-timeouts](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L31-L76).
+`statement_timeout` aborts a statement that runs longer than its limit; `lock_timeout` aborts a statement only while it waits too long to acquire a table, index, row, or other lock, and the lock limit is applied separately to each lock acquisition attempt [config.sgml#statement_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7669-L7699) [config.sgml#lock_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7701-L7738). If both are set, the earlier timeout is what the user sees; setting `lock_timeout` equal to or larger than a nonzero `statement_timeout` is usually not useful because the statement timeout will fire first [postgres.c#timeout-reporting](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3095) [timeouts.out#combined-timeouts](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L31-L73).
 
 ## Environment Variables Read By psql
 
@@ -100,7 +100,7 @@ The user-visible effect is narrower than `statement_timeout`: `lock_timeout` onl
 
 When both indicators are set, the interrupt handler fetches and clears both indicators, then reports whichever timeout finished earlier; ties are broken in favor of lock timeout [postgres.c#timeout-reporting](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3095). The docs therefore say that when `statement_timeout` is nonzero, setting `lock_timeout` to the same or a larger value is rather pointless because `statement_timeout` would always trigger first [config.sgml#lock_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7721-L7728).
 
-The isolation tests cover both table-level and row-level lock waits: a session with only `statement_timeout` gets statement-timeout errors, a session with only `lock_timeout` gets lock-timeout errors, `lock_timeout = 5000` with `statement_timeout = 6000` reports lock timeout, and `lock_timeout = 6000` with `statement_timeout = 5000` reports statement timeout [timeouts.spec#permutations](../../../../raw/postgres-12/src/test/isolation/specs/timeouts.spec#L1-L38) [timeouts.out#results](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L1-L76).
+The isolation tests cover both table-level and row-level lock waits: a session with only `statement_timeout` gets statement-timeout errors, a session with only `lock_timeout` gets lock-timeout errors, `lock_timeout = 5000` with `statement_timeout = 6000` reports lock timeout, and `lock_timeout = 6000` with `statement_timeout = 5000` reports statement timeout [timeouts.spec#permutations](../../../../raw/postgres-12/src/test/isolation/specs/timeouts.spec#L1-L38) [timeouts.out#results](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L1-L73).
 
 Practical patterns in `psql`:
 
@@ -108,7 +108,7 @@ Practical patterns in `psql`:
 |---|---|---|
 | Cap all ad hoc statements in one interactive session | `SET statement_timeout = '5min';` | Any statement in that `psql` session that exceeds five minutes is canceled with statement-timeout ERROR [config.sgml#statement_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7669-L7699). |
 | Fail quickly when blocked by locks, but allow normal long work | `SET lock_timeout = '5s';` and leave `statement_timeout = 0` or much larger | Statements can run longer than five seconds if they are not waiting on locks, but any single lock wait over five seconds aborts the statement with lock-timeout ERROR [config.sgml#lock_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7701-L7738). |
-| Put a short lock-wait guard inside a larger statement budget | `SET statement_timeout = '10min'; SET lock_timeout = '5s';` | Lock waits fail quickly; non-lock execution can continue up to ten minutes [postgres.c#timeout-reporting](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3095) [timeouts.out#combined-timeouts](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L31-L76). |
+| Put a short lock-wait guard inside a larger statement budget | `SET statement_timeout = '10min'; SET lock_timeout = '5s';` | Lock waits fail quickly; non-lock execution can continue up to ten minutes [postgres.c#timeout-reporting](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3095) [timeouts.out#combined-timeouts](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L31-L73). |
 | Limit only one transaction | `SET LOCAL statement_timeout = '30s'; SET LOCAL lock_timeout = '2s';` inside `BEGIN` | The timeout values disappear at transaction end; after commit or rollback, the session-level values apply again [set.sgml#LOCAL](../../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L43-L56) [set.sgml#SESSION-LOCAL](../../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L89-L104). |
 
 ## Context Reviewed
@@ -133,7 +133,7 @@ Practical patterns in `psql`:
 - [postgres.c#statement-timeout-timer](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4685-L4716)
 - [proc.c#lock-wait-timers](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1240-L1315)
 - [timeouts.spec](../../../../raw/postgres-12/src/test/isolation/specs/timeouts.spec#L1-L38)
-- [timeouts.out](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L1-L76)
+- [timeouts.out](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L1-L73)
 
 ## Evidence Map
 
@@ -149,7 +149,7 @@ Practical patterns in `psql`:
 | `statement_timeout` measures whole statement duration and aborts on timeout | [config.sgml#statement_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7669-L7699) [postgres.c#enable_statement_timeout](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4685-L4716) |
 | `lock_timeout` applies only to lock waits, separately per lock acquisition | [config.sgml#lock_timeout](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7701-L7738) [proc.c#enable-lock-timeout](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1240-L1315) |
 | If both fire, PostgreSQL reports the one whose finish time came first | [postgres.c#timeout-reporting](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3095) |
-| Same-checkout tests cover table-level and row-level lock waits with both timeout orderings | [timeouts.spec#permutations](../../../../raw/postgres-12/src/test/isolation/specs/timeouts.spec#L1-L38) [timeouts.out#results](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L1-L76) |
+| Same-checkout tests cover table-level and row-level lock waits with both timeout orderings | [timeouts.spec#permutations](../../../../raw/postgres-12/src/test/isolation/specs/timeouts.spec#L1-L38) [timeouts.out#results](../../../../raw/postgres-12/src/test/isolation/expected/timeouts.out#L1-L73) |
 
 ## Source References
 

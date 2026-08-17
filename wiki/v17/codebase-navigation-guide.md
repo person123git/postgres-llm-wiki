@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 17
-pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
+pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
 verified_by_agent: not yet
 ---
@@ -66,9 +66,9 @@ Keep these structs open when tracing behavior:
 | `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-17/src/include/nodes/parsenodes.h#L117-L170) [parsenodes.h#RawStmt](../../raw/postgres-17/src/include/nodes/parsenodes.h#L2017-L2038). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-17/src/include/nodes/plannodes.h#L46-L120). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-17/src/include/nodes/pathnodes.h#L95-L170) [pathnodes.h#RelOptInfo](../../raw/postgres-17/src/include/nodes/pathnodes.h#L853-L930) [pathnodes.h#Path](../../raw/postgres-17/src/include/nodes/pathnodes.h#L1622-L1660). |
-| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-17/src/include/executor/execdesc.h#L33-L80) [execnodes.h#EState](../../raw/postgres-17/src/include/nodes/execnodes.h#L621-L710) [execnodes.h#PlanState](../../raw/postgres-17/src/include/nodes/execnodes.h#L1113-L1175). |
+| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-17/src/include/executor/execdesc.h#L33-L56) [execnodes.h#EState](../../raw/postgres-17/src/include/nodes/execnodes.h#L621-L710) [execnodes.h#PlanState](../../raw/postgres-17/src/include/nodes/execnodes.h#L1113-L1175). |
 | `RelationData`, `TableAmRoutine`, and `IndexAmRoutine` | Relation cache state points at table and index access-method callback tables [rel.h#RelationData](../../raw/postgres-17/src/include/utils/rel.h#L55-L135) [tableam.h#TableAmRoutine](../../raw/postgres-17/src/include/access/tableam.h#L296-L390) [amapi.h#IndexAmRoutine](../../raw/postgres-17/src/include/access/amapi.h#L214-L300). |
-| `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-17/src/include/nodes/memnodes.h#L117-L170). |
+| `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-17/src/include/nodes/memnodes.h#L117-L134). |
 
 ### Tests And Docs
 
@@ -128,6 +128,6 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 
 ## Navigation
 
-- [PostgreSQL 17.10 index](index.md)
+- [PostgreSQL 17.11 index](index.md)
 - [Wiki index](../index.md)
 - [Versions](../versions.md)

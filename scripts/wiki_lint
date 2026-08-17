@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,52 @@ def requires_front_matter(slug: str) -> bool:
 def has_source_references(text: str) -> bool:
     refs = section_text(text, "Source References")
     return bool(re.search(r"(raw/postgres-\d+/|src/)", refs))
+
+
+def git(checkout: Path, *args: str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(checkout), *args], capture_output=True, text=True,
+        )
+    except OSError as error:
+        return 127, str(error)
+    return proc.returncode, proc.stdout.strip()
+
+
+def check_source_pin(version: str, commit: str) -> list[Issue]:
+    """Verify the raw checkout is actually parked on the pinned commit.
+
+    Citations carry line numbers that are only meaningful at the pinned commit,
+    so a checkout sitting on a different commit silently invalidates every line
+    range on that version's pages.
+    """
+    checkout = REPO_ROOT / f"raw/postgres-{version}"
+    label = f"raw/postgres-{version}"
+    if not checkout.is_dir():
+        return [Issue("ERROR", label, f"missing source checkout for v{version}")]
+    if not (checkout / ".git").exists():
+        return [Issue("WARN", label, "source checkout is not a git repository; cannot verify pin")]
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return [Issue("ERROR", "wiki/versions.md", f"v{version} pinned commit is not a full 40-character sha")]
+
+    status, head = git(checkout, "rev-parse", "HEAD")
+    if status == 127:
+        return [Issue("WARN", label, "git is unavailable; cannot verify pin")]
+    if status != 0:
+        return [Issue("ERROR", label, "cannot read HEAD of source checkout")]
+
+    issues: list[Issue] = []
+    if git(checkout, "cat-file", "-e", f"{commit}^{{commit}}")[0] != 0:
+        issues.append(Issue("ERROR", label, f"pinned commit {commit[:11]} is not present in the checkout"))
+    elif head != commit:
+        issues.append(Issue(
+            "ERROR", label,
+            f"checkout is on {head[:11]} but wiki/versions.md pins {commit[:11]}",
+        ))
+
+    if git(checkout, "status", "--porcelain")[1]:
+        issues.append(Issue("WARN", label, "source checkout has uncommitted changes; evidence may not match the pin"))
+    return issues
 
 
 def resolve_link(target: str, current_slug: str, slugs: set[str]) -> str | None:
@@ -222,7 +269,10 @@ def lint() -> tuple[list[Issue], list[Issue]]:
             continue
         warnings.append(Issue("WARN", f"wiki/{slug}.md", "orphan page has no inbound wiki links"))
 
-    for version in versions:
+    for version, info in versions.items():
+        for issue in check_source_pin(version, info.get("commit", "")):
+            (errors if issue.severity == "ERROR" else warnings).append(issue)
+
         guide = WIKI_ROOT / f"v{version}" / f"{CODEBASE_GUIDE_BASENAME}.md"
         if not guide.exists():
             errors.append(Issue("ERROR", rel(guide), "missing mandatory codebase navigation guide"))

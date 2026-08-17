@@ -1,9 +1,9 @@
 ---
 type: question
 version: 18
-pinned_commit: 6cb307251c5c6261286c1566496920976640108e
+pinned_commit: baa7b142aace6821ce085906f314a75bcc4d95c8
 verified: false
-verified_by_agent: Qwen36-35B-A3B 2026-05-19T14:00:00Z
+verified_by_agent: not yet
 ---
 
 # Computing and Storing avg_leaf_density During (Auto)VACUUM of a B-Tree Index (unverified)
@@ -201,7 +201,7 @@ Store it as `float8` plus a validity bit, or store `-1.0` internally and expose
 SQL `NULL` or `NaN` through the accessor. A bare `-1.0` column is awkward in the
 cumulative statistics system because relation stats reset by zeroing the shared
 entry, and `0.0` is a valid leaf-density value
-([pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085)).
+([pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1109)).
 
 ## Where to Store It (the "stat table")
 
@@ -273,7 +273,7 @@ Plan:
    ([pgstat.h#PgStat_StatTabEntry](../../../../raw/postgres-18/src/include/pgstat.h#L422)).
    It is meaningful only for B-tree index entries; reset code zeros relation
    stats, so the accessor should return `NULL` unless the validity flag is set
-   ([pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085)).
+   ([pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1109)).
 2. Return the value out of the AM. `IndexBulkDeleteResult` is the AM-to-VACUUM
    contract
    ([genam.h#IndexBulkDeleteResult](../../../../raw/postgres-18/src/include/access/genam.h#L98));
@@ -285,7 +285,7 @@ Plan:
    [nbtree.c#btvacuumcleanup](../../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1098)).
 3. Report it from VACUUM. The struct surfaces in
    `lazy_vacuum_one_index`/`lazy_cleanup_one_index`
-   ([vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3037))
+   ([vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3061))
    and is retained in `vacrel->indstats`. Add a per-index reporter modeled on
    `pgstat_report_vacuum`, which takes a locked shared entry, writes fields, and
    unlocks: an in-memory shared-hashtable update, **not** a disk write
@@ -316,9 +316,9 @@ autovacuum, call it from the leader-side lazy VACUUM path after serial or
 parallel index work has populated `vacrel->indstats`; that preserves the
 existing `AmAutoVacuumWorkerProcess()` distinction used by
 `pgstat_report_vacuum`
-([vacuumlazy.c#lazy_vacuum_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3071),
-[vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3037),
-[vacuumlazy.c#dead_items_cleanup](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3582),
+([vacuumlazy.c#lazy_vacuum_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3095),
+[vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3061),
+[vacuumlazy.c#dead_items_cleanup](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3606),
 [pgstat_relation.c#pgstat_report_vacuum](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_relation.c#L210)).
 
 ### Recommendation
@@ -384,7 +384,7 @@ detailed, fully cited version follows in the Cons Evidence section below.
   wraparound failsafe, and `btvacuumcleanup`'s early return all skip the index
   scan by design, leaving no leaf pages in hand
   ([vacuumlazy.c#heap_vacuum_rel](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L615),
-  [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2950),
+  [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2964),
   [nbtpage.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L179)).
 - **Durable metapage storage is not write-free.** A changed density can turn
   `_bt_set_cleanup_info`'s early return into one metapage write plus one
@@ -400,7 +400,7 @@ detailed, fully cited version follows in the Cons Evidence section below.
   clean shutdown, and the new field needs an explicit validity bit to tell "no
   value" from a real `0.0`
   ([pgstat.c](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c),
-  [pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085)).
+  [pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1109)).
 - **Exact parity needs deletion-aware accounting.** Empty leaves entering
   `_bt_pagedel` may survive or be deleted (with right siblings deleted in
   passing), so a single `P_ISLEAF` counter is not exact across
@@ -428,7 +428,7 @@ wraparound failsafe disables further index vacuuming and cleanup, and B-tree
 cleanup can return `NULL` without `btvacuumscan` when no bulk-delete scan ran
 and `_bt_vacuum_needs_cleanup` says cleanup is unnecessary
 ([vacuumlazy.c#heap_vacuum_rel](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L615),
-[vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2950),
+[vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2964),
 [nbtree.c#btvacuumcleanup](../../../../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1098),
 [nbtpage.c#_bt_vacuum_needs_cleanup](../../../../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L179)).
 Refreshing density in those cases would require a physical B-tree scan that
@@ -471,7 +471,7 @@ before clean shutdown only for stats kinds that allow it
 Relation stats reset by zeroing the `PgStat_StatTabEntry`, so a B-tree density
 field in that struct needs an explicit validity bit or it cannot distinguish
 "no value" from real `0.0` density
-([pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085),
+([pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1109),
 [pgstat.h#PgStat_StatTabEntry](../../../../raw/postgres-18/src/include/pgstat.h#L422)).
 
 Exact `pgstatindex` parity is harder than a per-live-leaf counter. `pgstatindex`
@@ -526,7 +526,7 @@ correctly skip the B-tree scan:
 - VACUUM skips index vacuuming entirely under `INDEX_CLEANUP off` or when the
   wraparound failsafe is active
   ([vacuumlazy.c#heap_vacuum_rel](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L615),
-  [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2950)).
+  [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L2964)).
 
 In all of these, `stats` is `NULL` or unscanned, so **leave the stored density
 unchanged** and keep its previous timestamp/value. Do not write a zero or a
@@ -591,7 +591,7 @@ v18's `pg_stat_all_indexes` does not expose those timestamps today
    column
    ([pgstat.h#PgStat_StatTabEntry](../../../../raw/postgres-18/src/include/pgstat.h#L422),
    [pgstat_relation.c#pgstat_report_vacuum](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_relation.c#L210),
-   [vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3037),
+   [vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3061),
    [pgstatfuncs.c](../../../../raw/postgres-18/src/backend/utils/adt/pgstatfuncs.c),
    [pg_proc.dat](../../../../raw/postgres-18/src/include/catalog/pg_proc.dat)).
 7. No autovacuum-specific change: the autovacuum worker uses the same path and
@@ -643,12 +643,12 @@ v18's `pg_stat_all_indexes` does not expose those timestamps today
 - [nbtree.h#BTVacState](../../../../raw/postgres-18/src/include/access/nbtree.h#L331), [nbtree.h#BTMetaPageData](../../../../raw/postgres-18/src/include/access/nbtree.h#L104) - structs to extend.
 - [nbtxlog.h#xl_btree_metadata](../../../../raw/postgres-18/src/include/access/nbtxlog.h#L49) - WAL record struct to extend.
 - [genam.h#IndexBulkDeleteResult](../../../../raw/postgres-18/src/include/access/genam.h#L98) - AM-to-VACUUM result contract.
-- [vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3037) - VACUUM/index boundary and stats reporting site.
+- [vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3061) - VACUUM/index boundary and stats reporting site.
 - [vacuum.c#vac_bulkdel_one_index](../../../../raw/postgres-18/src/backend/commands/vacuum.c#L2651), [indexam.c#index_bulk_delete](../../../../raw/postgres-18/src/backend/access/index/indexam.c#L795) - generic VACUUM-to-index-AM bridge.
 - [vacuumparallel.c](../../../../raw/postgres-18/src/backend/commands/vacuumparallel.c) - parallel VACUUM copies `IndexBulkDeleteResult`.
 - [autovacuum.c#autovacuum_do_vac_analyze](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L3173) - autovacuum enters the shared `vacuum()` path.
 - [pgstat_relation.c#pgstat_report_vacuum](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_relation.c#L210) - model for the cumulative-stats reporter.
-- [pgstat.c](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c), [pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1085) - stats persistence and reset behavior.
+- [pgstat.c](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c), [pgstat_shmem.c#shared_stat_reset_contents](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_shmem.c#L1109) - stats persistence and reset behavior.
 - [pgstat.h#PgStat_StatTabEntry](../../../../raw/postgres-18/src/include/pgstat.h#L422) - cumulative stats entry to extend.
 - [pgstatfuncs.c](../../../../raw/postgres-18/src/backend/utils/adt/pgstatfuncs.c), [pg_proc.dat](../../../../raw/postgres-18/src/include/catalog/pg_proc.dat), [system_views.sql#pg_stat_all_indexes](../../../../raw/postgres-18/src/backend/catalog/system_views.sql#L803) - accessor and view surface for `pg_stat_all_indexes`.
 - [btreefuncs.c#bt_metap](../../../../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L838) - existing metapage field exposure.

@@ -1,7 +1,7 @@
 ---
 type: question
 version: 18
-pinned_commit: 6cb307251c5c6261286c1566496920976640108e
+pinned_commit: baa7b142aace6821ce085906f314a75bcc4d95c8
 verified: false
 verified_by_agent: not yet
 ---
@@ -41,7 +41,9 @@ The text-handling code confirms there is no truncation step:
 - `CleanQuerytext()` only applies the statement's start offset and trims leading/trailing whitespace; it does not cap length [queryjumblefuncs.c#CleanQuerytext](../../../../raw/postgres-18/src/backend/nodes/queryjumblefuncs.c#L86-L128).
 - `qtext_store()` writes exactly `query_len` bytes plus a `\0`. The only guard rejects a write that would exceed `MaxAllocHugeSize` for the whole file (a 32-bit overflow safeguard), which fails the store rather than truncating the text [pg_stat_statements.c#qtext_store](../../../../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c#L2240-L2296).
 
-Normalization can *shorten* a stored text by replacing constants with `$n` and squashing constant lists into one placeholder, but that is identity-driven normalization, not a configurable size limit [pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c#L2792-L2906).
+Normalization can *shorten* a stored text by replacing constants with `$n` and squashing constant lists into one placeholder, but that is identity-driven normalization, not a configurable size limit [pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c#L2792-L2895).
+
+PostgreSQL 18.6 changed how that normalized text is buffered, and it is worth being precise that this is **not** a new length cap. `generate_normalized_query()` used to write into a fixed `palloc(query_len + clocations_count * 10 + 1)` allocation. That arithmetic did not account for the ` /*, ... */` comment appended for each squashed list, so a query with many squashable lists could write past the allocation. `8a31ffc2d4c` ("pg_stat_statements: Fix buffer overflow with query normalization", CVE-2026-14676, back-patched through 18) replaced the fixed buffer with an expansible `StringInfo`: `initStringInfoExt(&norm_query, query_len + jstate->clocations_count * 10)` reserves the same amount as a *hint*, and the body then appends with `appendBinaryStringInfo()` and `appendStringInfo()`, enlarging the buffer whenever the reserve is not enough [pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c#L2792-L2895) [pg_stat_statements.c#initStringInfoExt-reserve](../../../../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c#L2823-L2828) [release-18.sgml#CVE-2026-14676](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml#L989-L1012). The final `*query_len_p = norm_query.len` is whatever the normalized text actually needs, so the answer above is unchanged: no per-statement length limit exists, and the reserve is now a hint rather than a limit.
 
 ## Edge Path: The File Can Grow, Then Texts Are Dropped Wholesale
 
@@ -91,9 +93,10 @@ These are workarounds, not built-in length controls:
 
 - [pg_stat_statements.c](../../../../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c) - GUC definitions, query-text storage, garbage collection, and read path.
 - [pgstatstatements.sgml](../../../../raw/postgres-18/doc/src/sgml/pgstatstatements.sgml) - same-version documentation on representative query texts and file growth.
+- [release-18.sgml](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml) - 18.6 release note for the normalization buffer-overrun fix.
 - [queryjumblefuncs.c](../../../../raw/postgres-18/src/backend/nodes/queryjumblefuncs.c) - `CleanQuerytext` normalization input handling.
 - [system-views.sgml](../../../../raw/postgres-18/doc/src/sgml/system-views.sgml) - `pg_settings` context meanings for GUC change scope.
 
 ## Open Questions
 
-- No unresolved factual questions remain in this pass. The page is marked `(unverified)` because `verified:` is human-only and `verified_by_agent` has not been advanced after a separate full-page re-check.
+- No unresolved factual question remains for the "is there a length limit?" answer as of the 2026-08-17 repin to `baa7b142aace6821ce085906f314a75bcc4d95c8`. The one in-range change to `contrib/pg_stat_statements/pg_stat_statements.c` is `8a31ffc2d4c`, described above; it makes the normalization output buffer expansible and adds no cap, so the "No" answer stands. Nothing on this page was re-measured on a running server for that repin. The page is marked `(unverified)` because `verified:` is human-only and `verified_by_agent` has not been advanced after a separate full-page re-check.

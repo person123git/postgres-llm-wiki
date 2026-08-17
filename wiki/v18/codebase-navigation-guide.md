@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 18
-pinned_commit: 6cb307251c5c6261286c1566496920976640108e
+pinned_commit: baa7b142aace6821ce085906f314a75bcc4d95c8
 verified: false
 verified_by_agent: not yet
 ---
@@ -49,7 +49,7 @@ Use the PostgreSQL 18 checkout as a set of subsystem maps. The top-level `src/Ma
 
 1. For the simple-query protocol, start in `exec_simple_query()`. It parses the query string with `pg_parse_query()`, then proceeds through analysis, rewrite, planning, portal setup, and execution for each raw statement [postgres.c#exec_simple_query](../../raw/postgres-18/src/backend/tcop/postgres.c#L1012-L1205) [postgres.c#pg_parse_query](../../raw/postgres-18/src/backend/tcop/postgres.c#L604-L630).
 2. Parse analysis and rewrite live behind the `pg_analyze_and_rewrite_*()` wrappers and `pg_rewrite_query()`. The normal statement path reaches `QueryRewrite()` before planning [postgres.c#pg_analyze_and_rewrite](../../raw/postgres-18/src/backend/tcop/postgres.c#L666-L835) [rewriteHandler.c#QueryRewrite](../../raw/postgres-18/src/backend/rewrite/rewriteHandler.c#L4635-L4685).
-3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-18/src/backend/tcop/postgres.c#L971-L1008) [planner.c#planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L287-L325) [planner.c#subquery_planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L651-L720).
+3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-18/src/backend/tcop/postgres.c#L971-L1008) [planner.c#planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L300-L338) [planner.c#subquery_planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L664-L735).
 4. Execution is portal-driven. `PortalRun()` dispatches portal execution, and the executor entry points are `ExecutorStart()` and `ExecutorRun()` with hook-aware standard implementations [pquery.c#PortalRun](../../raw/postgres-18/src/backend/tcop/pquery.c#L685-L850) [execMain.c#ExecutorStart-Run](../../raw/postgres-18/src/backend/executor/execMain.c#L122-L335).
 5. Utility commands are routed outside normal plan execution. `ProcessUtility()` exposes `ProcessUtility_hook`; without a hook it calls `standard_ProcessUtility()` [utility.c#ProcessUtility](../../raw/postgres-18/src/backend/tcop/utility.c#L499-L595).
 
@@ -66,9 +66,9 @@ Keep these structs open when tracing behavior:
 | `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-18/src/include/nodes/parsenodes.h#L117-L170) [parsenodes.h#RawStmt](../../raw/postgres-18/src/include/nodes/parsenodes.h#L2081-L2102). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-18/src/include/nodes/plannodes.h#L46-L120). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-18/src/include/nodes/pathnodes.h#L95-L170) [pathnodes.h#RelOptInfo](../../raw/postgres-18/src/include/nodes/pathnodes.h#L883-L960) [pathnodes.h#Path](../../raw/postgres-18/src/include/nodes/pathnodes.h#L1753-L1790). |
-| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-18/src/include/executor/execdesc.h#L33-L80) [execnodes.h#EState](../../raw/postgres-18/src/include/nodes/execnodes.h#L649-L740) [execnodes.h#PlanState](../../raw/postgres-18/src/include/nodes/execnodes.h#L1149-L1215). |
+| `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-18/src/include/executor/execdesc.h#L33-L56) [execnodes.h#EState](../../raw/postgres-18/src/include/nodes/execnodes.h#L649-L740) [execnodes.h#PlanState](../../raw/postgres-18/src/include/nodes/execnodes.h#L1149-L1215). |
 | `RelationData`, `TableAmRoutine`, and `IndexAmRoutine` | Relation cache state points at table and index access-method callback tables [rel.h#RelationData](../../raw/postgres-18/src/include/utils/rel.h#L55-L135) [tableam.h#TableAmRoutine](../../raw/postgres-18/src/include/access/tableam.h#L288-L385) [amapi.h#IndexAmRoutine](../../raw/postgres-18/src/include/access/amapi.h#L230-L315). |
-| `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-18/src/include/nodes/memnodes.h#L117-L170). |
+| `MemoryContextData` | Memory contexts form the allocation tree used by backend code [memnodes.h#MemoryContextData](../../raw/postgres-18/src/include/nodes/memnodes.h#L117-L134). |
 
 ### Tests And Docs
 
@@ -113,8 +113,8 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 - [postgres.c#pg_plan_queries](../../raw/postgres-18/src/backend/tcop/postgres.c#L971-L1008)
 - [pquery.c#PortalRun](../../raw/postgres-18/src/backend/tcop/pquery.c#L685-L850)
 - [utility.c#ProcessUtility](../../raw/postgres-18/src/backend/tcop/utility.c#L499-L595)
-- [planner.c#planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L287-L325)
-- [planner.c#subquery_planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L651-L720)
+- [planner.c#planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L300-L338)
+- [planner.c#subquery_planner](../../raw/postgres-18/src/backend/optimizer/plan/planner.c#L664-L735)
 - [execMain.c#ExecutorStart-Run](../../raw/postgres-18/src/backend/executor/execMain.c#L122-L335)
 - [backend/Makefile#generated-headers](../../raw/postgres-18/src/backend/Makefile#L141-L146)
 - [pg_index.h#CATALOG](../../raw/postgres-18/src/include/catalog/pg_index.h#L29-L74)

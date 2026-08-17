@@ -1,9 +1,9 @@
 ---
 type: question
 version: 17
-pinned_commit: 54eeefaedbee0385529f3edf321bb99e49232aaa
+pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
-verified_by_agent: GPT-5-6-Sol-Max-Thinking 2026-07-17T19:53:21Z
+verified_by_agent: not yet
 ---
 
 # Can ALTER TABLE ... ATTACH PARTITION Drop Indexes in PostgreSQL 17? (unverified)
@@ -48,7 +48,7 @@ drop an existing index.** For each partitioned index on the parent, it either
 reuses a compatible, valid, unattached index on the table being attached or
 creates a new matching index. Extra, incompatible, already-attached, and
 directly encountered invalid indexes remain in place
-([tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18805-L18986)).
+([tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18846-L19027)).
 
 That answer is about core PostgreSQL semantics. A user-defined event trigger or
 a loadable module's `ProcessUtility_hook` runs outside the match-or-create
@@ -73,11 +73,11 @@ lock, and calls `AlterTable`
 
 `ATExecCmd` then dispatches the same subtype to `ATExecAttachPartition` for a
 partitioned table or to `ATExecAttachPartitionIdx` for a partitioned index
-([tablecmds.c#ATExecCmd](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L5510-L5520)).
+([tablecmds.c#ATExecCmd](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L5519-L5529)).
 The table path establishes table inheritance and the partition bound, then
 calls `AttachPartitionEnsureIndexes` before cloning row triggers and foreign
 keys
-([tablecmds.c#ATExecAttachPartition](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18686-L18710)).
+([tablecmds.c#ATExecAttachPartition](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18727-L18751)).
 
 ### Locks prevent a concurrent DROP from interleaving
 
@@ -85,43 +85,43 @@ ATTACH selects `ShareUpdateExclusiveLock` for the parent table. It takes
 `AccessExclusiveLock` on the table being attached, all of that table's
 descendants, and any affected default partition; the child lock is retained
 until transaction end
-([tablecmds.c#AlterTableGetLockLevel](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4697-L4705),
-[tablecmds.c#ATExecAttachPartition-locks](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18517-L18526),
-[tablecmds.c#ATExecAttachPartition-descendants](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18583-L18600),
-[tablecmds.c:18798-18799](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18798-L18799)).
+([tablecmds.c#AlterTableGetLockLevel](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4706-L4714),
+[tablecmds.c#ATExecAttachPartition-locks](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18558-L18567),
+[tablecmds.c#ATExecAttachPartition-descendants](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18624-L18641),
+[tablecmds.c:18839-18840](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18839-L18840)).
 
 `DROP INDEX` first locks the index's table. A normal drop requests
 `AccessExclusiveLock`; a concurrent drop requests `ShareUpdateExclusiveLock`.
 Both conflict with ATTACH's lock on the relevant parent or child table, so the
 commands serialize rather than deleting an index midway through the core
 ATTACH routine
-([tablecmds.c#RemoveRelations](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1462-L1494),
-[tablecmds.c:1558-1568](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1558-L1568),
-[tablecmds.c#RangeVarCallbackForDropRelation](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1745-L1759),
+([tablecmds.c#RemoveRelations](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1471-L1503),
+[tablecmds.c:1567-1577](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1567-L1577),
+[tablecmds.c#RangeVarCallbackForDropRelation](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1754-L1768),
 [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L59-L104)).
 `DROP INDEX CONCURRENTLY` cannot target a partitioned parent index at all
-([tablecmds.c:1589-1598](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1589-L1598)).
+([tablecmds.c:1598-1607](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1598-L1607)).
 
 ### The core match-or-create decision
 
 `AttachPartitionEnsureIndexes` snapshots the parent and child index lists,
 opens each existing child index, and builds an `IndexInfo` description for
 matching
-([tablecmds.c:18813-18840](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18813-L18840)).
+([tablecmds.c:18854-18881](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18854-L18881)).
 Only parent relations whose `relkind` is `RELKIND_PARTITIONED_INDEX` drive this
 loop
-([tablecmds.c:18870-18891](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18870-L18891)).
+([tablecmds.c:18911-18932](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18911-L18932)).
 
 | State on the table being attached | Core action | Existing index dropped? |
 |---|---|---|
-| A compatible, valid, unattached index exists | Re-parent the first match with `IndexSetParentIndex`; re-parent its constraint too when required ([tablecmds.c:18900-18954](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18900-L18954)) | No. The same index OID and storage are retained. |
-| No candidate passes all checks | Generate a clone and call `DefineIndex` ([tablecmds.c:18958-18975](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18958-L18975)) | No. A new index is attempted. |
-| An extra or incompatible index exists | Ignore it and continue looking; create a matching index if none is found ([tablecmds.c:18905-18975](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18905-L18975)) | No. The extra index remains. |
-| A direct candidate is invalid | Skip it because `indisvalid` is false, then keep looking ([tablecmds.c:18910-18917](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18910-L18917)) | No. The invalid index remains. |
-| A candidate already belongs to another index tree | Skip it because `relispartition` is true ([tablecmds.c:18910-18912](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18910-L18912)) | No. It remains attached to its existing parent. |
-| The parent index backs a constraint | Reuse requires a child constraint and, in v17, the same constraint type; otherwise creation is attempted ([tablecmds.c:18925-18950](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18925-L18950)) | No. Creation can error, but it does not replace the old index. |
-| The table being attached is foreign and the parent has a unique or primary index | Error before doing index work ([tablecmds.c:18842-18868](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18842-L18868)) | No. ATTACH is refused. |
-| The parent has an exclusion index | `CompareIndexInfo` deliberately returns false for exclusion indexes, so ATTACH does not reuse an existing child exclusion index and instead attempts creation ([index.c:2622-2626](../../../../raw/postgres-17/src/backend/catalog/index.c#L2622-L2626), [tablecmds.c:18958-18975](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18958-L18975)) | No. The old exclusion index remains even if another is created. |
+| A compatible, valid, unattached index exists | Re-parent the first match with `IndexSetParentIndex`; re-parent its constraint too when required ([tablecmds.c:18941-18995](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18941-L18995)) | No. The same index OID and storage are retained. |
+| No candidate passes all checks | Generate a clone and call `DefineIndex` ([tablecmds.c:18999-19016](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18999-L19016)) | No. A new index is attempted. |
+| An extra or incompatible index exists | Ignore it and continue looking; create a matching index if none is found ([tablecmds.c:18946-19016](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18946-L19016)) | No. The extra index remains. |
+| A direct candidate is invalid | Skip it because `indisvalid` is false, then keep looking ([tablecmds.c:18951-18958](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18951-L18958)) | No. The invalid index remains. |
+| A candidate already belongs to another index tree | Skip it because `relispartition` is true ([tablecmds.c:18951-18953](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18951-L18953)) | No. It remains attached to its existing parent. |
+| The parent index backs a constraint | Reuse requires a child constraint and, in v17, the same constraint type; otherwise creation is attempted ([tablecmds.c:18966-18991](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18966-L18991)) | No. Creation can error, but it does not replace the old index. |
+| The table being attached is foreign and the parent has a unique or primary index | Error before doing index work ([tablecmds.c:18883-18909](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18883-L18909)) | No. ATTACH is refused. |
+| The parent has an exclusion index | Since 17.11, `CompareIndexInfo` compares exclusion operators, procedures, and strategies per key attribute, so a child exclusion index is reused when all three match and the child has a constraint of the same type; a mismatching one is skipped and a clone is created ([index.c#exclusion-comparison](../../../../raw/postgres-17/src/backend/catalog/index.c#L2639-L2653), [tablecmds.c:18966-18991](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18966-L18991), [tablecmds.c:18999-19016](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18999-L19016)) | No. A mismatching exclusion index remains even if another is created. |
 
 The regression output confirms the keep-and-add behavior: four mismatched
 indexes—hash, partial, expression, and a two-column index—remain after ATTACH,
@@ -135,14 +135,18 @@ and a fifth matching B-tree index is added
 
 - uniqueness, `NULLS NOT DISTINCT`, access method, and key/total attribute
   counts
-  ([index.c:2518-2534](../../../../raw/postgres-17/src/backend/catalog/index.c#L2518-L2534));
+  ([index.c:2535-2551](../../../../raw/postgres-17/src/backend/catalog/index.c#L2535-L2551));
 - mapped column positions, key collations, and operator families
-  ([index.c:2536-2570](../../../../raw/postgres-17/src/backend/catalog/index.c#L2536-L2570));
+  ([index.c:2553-2587](../../../../raw/postgres-17/src/backend/catalog/index.c#L2553-L2587));
 - mapped expression trees and mapped partial-index predicates
-  ([index.c:2572-2620](../../../../raw/postgres-17/src/backend/catalog/index.c#L2572-L2620)); and
-- no exclusion operators at all—the presence of either exclusion definition
-  forces a non-match
-  ([index.c:2622-2626](../../../../raw/postgres-17/src/backend/catalog/index.c#L2622-L2626)).
+  ([index.c:2589-2637](../../../../raw/postgres-17/src/backend/catalog/index.c#L2589-L2637)); and
+- exclusion operators, procedures, and strategies element-wise across the key
+  attributes; only a one-sided exclusion definition forces a non-match
+  ([index.c#exclusion-comparison](../../../../raw/postgres-17/src/backend/catalog/index.c#L2639-L2653)).
+  Before 17.11 the routine refused every exclusion index outright; commit
+  `1d6c654c818` ("Fix restore of partitions with exclusion constraints",
+  back-patched through 14) replaced that blanket rejection with the
+  element-wise comparison, so a matching child exclusion index is now reused.
 
 Therefore, **matching expression and partial indexes can be reused**. The
 four-index regression case above proves only that an expression or predicate
@@ -156,9 +160,15 @@ The matcher contains no comparison of index names, tablespaces, relation
 storage parameters, or the `pg_index.indoption` vector. “Equivalent” in the
 ATTACH documentation means equivalent under this routine, not byte-for-byte
 identical DDL
-([index.c#CompareIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2500-L2627),
+([index.c#CompareIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2517-L2656),
 [pg_index.h#FormData_pg_index](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L29-L62),
-[alter_table.sgml#ATTACH-PARTITION](../../../../raw/postgres-17/doc/src/sgml/ref/alter_table.sgml#L995-L1012)).
+[alter_table.sgml#ATTACH-PARTITION](../../../../raw/postgres-17/doc/src/sgml/ref/alter_table.sgml#L995-L1013)).
+Commit `f67b9dd8fc7` rewrote that documentation in 17.11, so the invalid-index
+skip this page derives from source is now stated in the manual as well: “For
+each index in the target table, if a valid equivalent index already exists in
+the partition, it will be attached … otherwise, a new corresponding index will
+be created. Invalid indexes on the partition are skipped.”
+([alter_table.sgml#ATTACH-PARTITION-indexes](../../../../raw/postgres-17/doc/src/sgml/ref/alter_table.sgml#L998-L1008)).
 
 ### What re-parenting changes
 
@@ -168,40 +178,40 @@ Reusing an index does not rewrite its tuples. `IndexSetParentIndex`:
 2. sets the parent's `relhassubclass` hint;
 3. sets the child index's `pg_class.relispartition`; and
 4. adds partition dependencies on the parent index and the indexed child table
-   ([indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4300-L4428)).
+   ([indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4318-L4446)).
 
 If the parent index backs a constraint, `ConstraintSetParentConstraint` also
 marks the child constraint inherited and adds partition dependencies. Those
 dependencies prevent independent deletion
-([pg_constraint.c#ConstraintSetParentConstraint](../../../../raw/postgres-17/src/backend/catalog/pg_constraint.c#L814-L887)).
+([pg_constraint.c#ConstraintSetParentConstraint](../../../../raw/postgres-17/src/backend/catalog/pg_constraint.c#L817-L890)).
 The existing index's OID is the input `partRelid`; no new index relation or
 access-method build callback appears in this re-parenting function
-([indexcmds.c:4304-4315](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4304-L4315)).
+([indexcmds.c:4322-4333](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4322-L4333)).
 
 ### Creation and multilevel partitions
 
 When no direct match exists, `generateClonedIndexStmt` produces a
 search-path-independent `IndexStmt`, and ATTACH passes it to `DefineIndex` with
 the parent index and parent constraint OIDs
-([tablecmds.c:18962-18974](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18962-L18974),
-[indexcmds.c:1451-1486](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1451-L1486)).
+([tablecmds.c:19003-19015](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19003-L19015),
+[indexcmds.c:1467-1502](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1467-L1502)).
 For a stored table, `index_create` normally calls `index_build`, which invokes
 the selected index access method's `ambuild` callback
-([index.c:1248-1277](../../../../raw/postgres-17/src/backend/catalog/index.c#L1248-L1277),
-[index.c#index_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L2945-L3024)).
+([index.c:1256-1285](../../../../raw/postgres-17/src/backend/catalog/index.c#L1256-L1285),
+[index.c#index_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L2974-L3053)).
 This is a new index build, not a rebuild or replacement of an existing index.
 
 If the attached table is itself partitioned, the new intermediate partitioned
 index has no storage. `DefineIndex` recursively scans each child for a match and
 creates another index where none exists
-([indexcmds.c:1249-1261](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1249-L1261),
-[indexcmds.c:1315-1323](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1315-L1323),
-[indexcmds.c:1535-1550](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1535-L1550)).
+([indexcmds.c:1265-1277](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1265-L1277),
+[indexcmds.c:1331-1339](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1331-L1339),
+[indexcmds.c:1551-1566](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1551-L1566)).
 Unlike the direct ATTACH matcher, this recursive `DefineIndex` matcher does not
 skip invalid candidates. It may absorb one, then marks each newly created
 partitioned ancestor invalid when a descendant is invalid
-([indexcmds.c:1372-1423](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1372-L1423),
-[indexcmds.c:1490-1531](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1490-L1531)).
+([indexcmds.c:1388-1439](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1388-L1439),
+[indexcmds.c:1506-1547](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1506-L1547)).
 This distinction matters to the multilevel edge under
 [Open Questions](#open-questions).
 
@@ -210,7 +220,7 @@ This distinction matters to the multilevel edge under
 Any error in compatibility checks, constraint creation, index creation, the
 index build, or later partition validation aborts the current transaction
 command
-([postgres.c:4478-4491](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4478-L4491),
+([postgres.c:4494-4507](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4494-L4507),
 [xact.c#AbortCurrentTransaction](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L3392-L3476)).
 Physical relation files created in the transaction are registered for deletion
 on abort
@@ -233,7 +243,7 @@ Three core behaviors can look like ATTACH removed an index:
    CHECK constraint can prove the partition bound and avoid a validation scan;
    the documentation then tells the user to drop that constraint manually. It
    is not an index, and ATTACH does not execute the drop
-   ([ddl.sgml:4289-4297](../../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4289-L4297)).
+   ([ddl.sgml:4295-4303](../../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4295-L4303)).
 3. **A later parent DROP cascades.** Dropping the parent partitioned index drops
    its attached child indexes, and dropping a partition table drops its own
    index. These are separate commands after ATTACH
@@ -246,22 +256,22 @@ The companion `ALTER INDEX ... ATTACH PARTITION` path locks the child table,
 parent table, and child index, checks that the index belongs to the correct
 table partition, compares definitions, verifies any constraint, and then calls
 `IndexSetParentIndex`
-([tablecmds.c#ATExecAttachPartitionIdx](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19859-L20021)).
+([tablecmds.c#ATExecAttachPartitionIdx](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19900-L20062)).
 It refuses a different index when that table partition already has one attached
 for the parent slot
-([tablecmds.c#refuseDupeIndexAttach](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20024-L20042))
+([tablecmds.c#refuseDupeIndexAttach](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20065-L20083))
 and rejects mismatched definitions instead of replacing either index
-([tablecmds.c:19955-19972](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19955-L19972)).
+([tablecmds.c:19996-20013](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19996-L20013)).
 
 At this pin, repeating the command for an index already attached to that same
 parent attempts one validation pass if the parent remains invalid
-([tablecmds.c:19902-19908](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19902-L19908),
-[tablecmds.c:20005-20014](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20005-L20014),
+([tablecmds.c:19943-19949](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19943-L19949),
+[tablecmds.c:20046-20055](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20046-L20055),
 [alter_index.sgml:100-104](../../../../raw/postgres-17/doc/src/sgml/ref/alter_index.sgml#L100-L104)).
 `validatePartitionedIndex` marks a parent valid only when its count of valid
 attached indexes equals the table's partition count, then recursively checks an
 invalid ancestor
-([tablecmds.c#validatePartitionedIndex](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20045-L20145)).
+([tablecmds.c#validatePartitionedIndex](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20086-L20186)).
 
 ### Custom code can issue a separate DROP
 
@@ -276,17 +286,17 @@ There are two supported interception boundaries around the core path:
   in the same transaction. PostgreSQL explicitly performs command-counter
   increments so trigger changes are visible across those boundaries
   ([utility.c:1106-1114](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1106-L1114),
-  [utility.c:1927-1931](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1927-L1931),
+  [utility.c:1943-1947](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1943-L1947),
   [event_trigger.c:759-769](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L759-L769),
   [event_trigger.c:807-817](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L807-L817),
-  [event_trigger.c#EventTriggerInvoke](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L1063-L1116)).
+  [event_trigger.c#EventTriggerInvoke](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L1071-L1124)).
 
 Such custom code can submit its own `DROP INDEX`, including a parent drop that
 cascades to newly attached child indexes. That drop is attributable to the
 hook or trigger, not to `AttachPartitionEnsureIndexes`. If the enclosing ATTACH
 later errors, the custom DDL rolls back with the same transaction
-([event_trigger.c#EventTriggerEndCompleteQuery](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L1215-L1237),
-[postgres.c:4483-4487](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4483-L4487)).
+([event_trigger.c#EventTriggerEndCompleteQuery](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L1223-L1245),
+[postgres.c:4499-4503](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4499-L4503)).
 
 The two shipped contrib modules that assign `ProcessUtility_hook` do not add
 this behavior: `sepgsql` performs its checks and chains to the next or standard
@@ -304,7 +314,7 @@ create the parent index with `CREATE INDEX ON ONLY`, build each child index with
 `CREATE INDEX CONCURRENTLY`, and attach each child index with `ALTER INDEX ...
 ATTACH PARTITION`; the parent becomes valid once all required child indexes are
 valid and attached
-([ddl.sgml:4318-4354](../../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4318-L4354)).
+([ddl.sgml:4324-4360](../../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4324-L4360)).
 
 PostgreSQL 17 still rejects `CREATE INDEX CONCURRENTLY` directly on a
 partitioned table, so concurrency is per stored partition
@@ -318,7 +328,7 @@ The no-drop rule is unchanged from PostgreSQL 12: the v17 function still ends
 in re-parent or create. The changes below affect parser validation, which index
 is reusable, recursive creation, validity propagation, event-trigger metadata,
 locking, or the companion command—not deletion
-([tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18805-L18986)).
+([tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18846-L19027)).
 The first-major assignments use this checkout's own “Stamp HEAD as NNdevel”
 commits as cycle boundaries; all listed commits are ancestors of the pin.
 
@@ -327,66 +337,66 @@ commits as cycle boundaries; all listed commits are ancestors of the pin.
 - Commit `e1551f96e6` (2019-12-18) replaced the separate attribute-number array
   and length with `AttrMap`; ATTACH now passes that object to
   `CompareIndexInfo`. This was a mechanical safety refactor
-  ([tablecmds.c:18893-18898](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18893-L18898),
-  [index.c:2505-2514](../../../../raw/postgres-17/src/backend/catalog/index.c#L2505-L2514)).
+  ([tablecmds.c:18934-18939](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18934-L18939),
+  [index.c:2522-2531](../../../../raw/postgres-17/src/backend/catalog/index.c#L2522-L2531)).
 - Commit `0b48f1335d` (2020-03-03, back-patched through v11) made `ALTER TABLE ...
   ATTACH PARTITION` reject a partitioned index cleanly instead of reaching an
   assertion; index attachment uses `ALTER INDEX` syntax
-  ([parse_utilcmd.c#transformPartitionCmd](../../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L3928-L3960),
+  ([parse_utilcmd.c#transformPartitionCmd](../../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L3938-L3970),
   [indexing.sql:67-76](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L67-L76)).
 - Commit `5b1c61e8b8` (2020-05-28, back-patched through v11) added
   `ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE` to one companion-command error;
   it did not change object state
-  ([tablecmds.c:19945-19953](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19945-L19953)).
+  ([tablecmds.c:19986-19994](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19986-L19994)).
 
 #### PostgreSQL 14
 
 - Commit `a24ae3d7b9` (2021-03-25, back-patched through v11) replaced duplicated
   `pg_inherits` insertion code in `IndexSetParentIndex` with
   `StoreSingleInheritance`; the resulting catalog link is the same
-  ([indexcmds.c:4317-4347](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4317-L4347)).
+  ([indexcmds.c:4335-4365](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4335-L4365)).
 - Commit `e1ae40f381` (2021-03-17) changed only the foreign-table error detail to
   name the partitioned table
-  ([tablecmds.c:18855-18863](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18855-L18863)).
+  ([tablecmds.c:18896-18904](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18896-L18904)).
 - Adjacent commit `afc7e0ad55` (2020-09-01, back-patched to v11) introduced the
   explicit error for `DROP INDEX CONCURRENTLY` on a partitioned index. It
   concerns a separate DROP command
-  ([tablecmds.c:1589-1598](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1589-L1598)).
+  ([tablecmds.c:1598-1607](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1598-L1607)).
 
 #### PostgreSQL 15
 
 - Commit `94aa7cc5f7` (2022-02-03) added `NULLS NOT DISTINCT`; equality of that
   flag became another reuse requirement. A mismatch causes create-and-keep,
   not replacement
-  ([index.c:2518-2526](../../../../raw/postgres-17/src/backend/catalog/index.c#L2518-L2526)).
+  ([index.c:2535-2543](../../../../raw/postgres-17/src/backend/catalog/index.c#L2535-L2543)).
 - Adjacent commit `7b6ec86532` (2022-03-21, back-patched to v11) changed DROP of
   a partitioned index to lock all child tables before child indexes. It did not
   add a drop to ATTACH
-  ([tablecmds.c:1600-1610](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1600-L1610)).
+  ([tablecmds.c:1609-1619](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1609-L1619)).
 
 #### PostgreSQL 16
 
 - Commit `43231423da` (2022-07-31) made ATTACH return the attached table's
   `ObjectAddress` to `ddl_command_end` collection
-  ([tablecmds.c:5510-5520](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L5510-L5520),
-  [tablecmds.c:5540-5549](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L5540-L5549),
+  ([tablecmds.c:5519-5529](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L5519-L5529),
+  [tablecmds.c:5549-5558](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L5549-L5558),
   [test_ddl_deparse/alter_table.out:43-56](../../../../raw/postgres-17/src/test/modules/test_ddl_deparse/expected/alter_table.out#L43-L56)).
 - Commit `e6dbb48487` (2022-08-18, back-patched to v11) made recursive
   partitioned-index creation build both sides' `IndexInfo` with
   `BuildIndexInfo`, fixing missed expression/predicate matches that created
   duplicates
-  ([indexcmds.c:1302-1312](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1302-L1312),
+  ([indexcmds.c:1318-1328](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1318-L1328),
   [indexing.sql:210-222](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L210-L222)).
 - Commit `27f5c712b2` (2023-03-25) added `DefineIndex.total_parts`; ATTACH passes
   `-1`, allowing the recursive path to count partitions for progress. It does
   not change match versus create
-  ([indexcmds.c:1272-1296](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1272-L1296),
-  [tablecmds.c:18967-18974](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18967-L18974)).
+  ([indexcmds.c:1288-1312](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1288-L1312),
+  [tablecmds.c:19008-19015](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19008-L19015)).
 - Commit `fc55c7ff8d` (2023-06-28, back-patched through v11) added the direct
   `indisvalid` guard. The current regression proves that an invalid index on
   the table being attached is left unattached while a valid replacement tree
   is created
-  ([tablecmds.c:18910-18917](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18910-L18917),
+  ([tablecmds.c:18951-18958](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18951-L18958),
   [indexing.sql:891-911](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L891-L911)).
 
 #### PostgreSQL 17.0
@@ -394,38 +404,49 @@ commits as cycle boundaries; all listed commits are ancestors of the pin.
 - Commit `cfc43aeb38` (2023-06-30, back-patched through v11) propagated an
   invalid recursively absorbed descendant through newly created partitioned
   indexes and added the missing command-counter increment
-  ([indexcmds.c:1490-1531](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1490-L1531),
+  ([indexcmds.c:1506-1547](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1506-L1547),
   [indexing.sql:913-937](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L913-L937)).
 - Commit `8c852ba9a4` (2023-07-12) allowed partitioned exclusion constraints when
   each partition key is covered by an equality strategy
   ([indexing.sql:545-565](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L545-L565)).
-  Once such a parent constraint exists, ATTACH's create branch can clone it,
-  while `CompareIndexInfo` deliberately refuses to reuse an existing child
-  exclusion index
-  ([parse_utilcmd.c:1600-1667](../../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L1600-L1667),
-  [index.c:2622-2626](../../../../raw/postgres-17/src/backend/catalog/index.c#L2622-L2626),
-  [tablecmds.c:18958-18975](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18958-L18975)).
+  Once such a parent constraint exists, ATTACH's create branch can clone it, and
+  since 17.11 `CompareIndexInfo` can also reuse an existing child exclusion
+  index whose exclusion operators, procedures, and strategies all match
+  ([parse_utilcmd.c:1610-1677](../../../../raw/postgres-17/src/backend/parser/parse_utilcmd.c#L1610-L1677),
+  [index.c#exclusion-comparison](../../../../raw/postgres-17/src/backend/catalog/index.c#L2639-L2653),
+  [tablecmds.c:18999-19016](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18999-L19016)).
+- Commit `1d6c654c818` ("Fix restore of partitions with exclusion constraints",
+  2026-07-20, back-patched through v14, shipped in 17.11) made
+  `CompareIndexInfo` compare exclusion operators, procedures, and strategies
+  instead of refusing every exclusion index. Its regression case attaches a
+  child exclusion index whose operators differ (`a with &&` against the
+  parent's `a with =`) and gets `cannot attach index ... The index definitions
+  do not match.`, then recreates the child constraint with matching operators
+  and attaches successfully
+  ([index.c#exclusion-comparison](../../../../raw/postgres-17/src/backend/catalog/index.c#L2639-L2653),
+  [indexing.sql#exclusion-attach](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L982-L994),
+  [indexing.out#exclusion-attach](../../../../raw/postgres-17/src/test/regress/expected/indexing.out#L1748-L1762)).
 - Commit `38ea6aa90e` (2023-07-14, back-patched through v11) changed
   `validatePartitionedIndex` to update a fresh syscache copy of `pg_index`,
   avoiding an invisible-tuple error in multi-command transactions
-  ([tablecmds.c:20098-20118](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20098-L20118)).
+  ([tablecmds.c:20139-20159](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20139-L20159)).
 - Commit `9f71e10d65` (2023-09-28, back-patched to all supported branches) made
   expression-versus-column mismatches explicit before indexing into the
   attribute map
-  ([index.c:2536-2560](../../../../raw/postgres-17/src/backend/catalog/index.c#L2536-L2560)).
+  ([index.c:2553-2577](../../../../raw/postgres-17/src/backend/catalog/index.c#L2553-L2577)).
 - Commit `cee8db3f68` (2024-04-15) made a parent primary-key constraint require
   a child primary-key constraint rather than accepting a unique constraint
-  ([tablecmds.c:18925-18944](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18925-L18944)).
+  ([tablecmds.c:18966-18985](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18966-L18985)).
 - Commit `0cecc908e9` (2024-06-27, back-patched through v12) added
   `ShareUpdateExclusiveLock` before setting the parent index's
   `relhassubclass`, so concurrent catalog updates block instead of producing a
   tuple-concurrently-updated error
-  ([indexcmds.c:4384-4389](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4384-L4389)).
+  ([indexcmds.c:4402-4407](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4402-L4407)).
 - Commit `a15b0edb5d` (2024-07-15, back-patched through v17) restored the
   restricted search path after index functions or owner-context switches in
   `DefineIndex`, hardening the recursive creation branch
-  ([indexcmds.c:1235-1243](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1235-L1243),
-  [indexcmds.c:1335-1343](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1335-L1343)).
+  ([indexcmds.c:1251-1259](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1251-L1259),
+  [indexcmds.c:1351-1359](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1351-L1359)).
 
 #### PostgreSQL 17.x stable
 
@@ -433,13 +454,13 @@ commits as cycle boundaries; all listed commits are ancestors of the pin.
   recursive `IndexStmt` copying with `generateClonedIndexStmt`. This preserves
   references to non-search-path expressions, collations, and operator classes
   and stops propagating the parent index comment to children
-  ([indexcmds.c:1451-1486](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1451-L1486),
+  ([indexcmds.c:1467-1502](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1467-L1502),
   [contrib/seg/partition.sql:1-35](../../../../raw/postgres-17/contrib/seg/sql/partition.sql#L1-L35)).
 - Commit `becf6d2696` (2026-04-22, back-patched through v14) made re-attachment
   of an already-attached index retry parent validation; commit `1f0a58a0c2`
   documented it. PostgreSQL 17.10's release notes list the change
-  ([tablecmds.c:19902-20014](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19902-L20014),
-  [release-17.sgml:696-700](../../../../raw/postgres-17/doc/src/sgml/release-17.sgml#L696-L700),
+  ([tablecmds.c:19943-20055](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19943-L20055),
+  [release-17.sgml:3649-3653](../../../../raw/postgres-17/doc/src/sgml/release-17.sgml#L3649-L3653),
   [indexing.sql:249-306](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L249-L306)).
 
 None of these commits adds an index-deletion call to the table or index ATTACH
@@ -468,8 +489,13 @@ The current core regression suite directly covers:
 The source tree has no direct upstream test for a concurrent DROP racing table
 ATTACH, custom event-trigger or utility-hook deletion, direct table-ATTACH reuse
 of a matching partial/expression index (the cited case creates the parent index
-after ATTACH), an existing exclusion-index non-match, or the multilevel
-invalid-leaf edge in [Open Questions](#open-questions). The
+after ATTACH), or the multilevel invalid-leaf edge in
+[Open Questions](#open-questions). Exclusion-index matching gained a test in
+17.11: `1d6c654c818` added an `ALTER INDEX ... ATTACH PARTITION` case covering
+both the mismatching and the matching exclusion definition
+([indexing.sql#exclusion-attach](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L982-L994),
+[indexing.out#exclusion-attach](../../../../raw/postgres-17/src/test/regress/expected/indexing.out#L1748-L1762)),
+though still not through the table-ATTACH path this page describes. The
 v17 same-constraint-type commit originally added a primary-key-versus-unique
 regression case, but the later structural not-null revert removed that test
 block; the implementation check remains. These absences were confirmed across
@@ -509,14 +535,14 @@ Re-parenting is access-method independent because `IndexSetParentIndex` only
 changes catalogs and dependencies. Creation reaches the chosen AM's `ambuild`;
 a custom AM can therefore participate only when ATTACH must build a new stored
 index, not when ATTACH reuses one
-([indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4300-L4428),
+([indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4318-L4446),
 [amapi.h#IndexAmRoutine](../../../../raw/postgres-17/src/include/access/amapi.h#L101-L108),
-[index.c:3021-3024](../../../../raw/postgres-17/src/backend/catalog/index.c#L3021-L3024)).
+[index.c:3050-3053](../../../../raw/postgres-17/src/backend/catalog/index.c#L3050-L3053)).
 Creating an index also invokes the object-access post-create hook before the
 build. Re-parenting an existing index does not invoke an object-access hook in
 `IndexSetParentIndex`
-([index.c:1218-1226](../../../../raw/postgres-17/src/backend/catalog/index.c#L1218-L1226),
-[indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4300-L4428)).
+([index.c:1226-1234](../../../../raw/postgres-17/src/backend/catalog/index.c#L1226-L1234),
+[indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4318-L4446)).
 Shipped contrib coverage is adjacent rather than ATTACH-specific or a second
 implementation: `btree_gist` tests creating partitioned exclusion constraints,
 and `seg` tests `CREATE INDEX` propagation for non-`pg_catalog` functions,
@@ -529,7 +555,9 @@ collations, and operator classes
 - Navigation only: `wiki/versions.md`, `wiki/index.md`, `wiki/v17/index.md`, and
   the last 20 `wiki/log.md` entries.
 - Pinned source: `raw/postgres-17/` at
-  `54eeefaedbee0385529f3edf321bb99e49232aaa` (PostgreSQL 17.10).
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11,
+  `REL_17_11-7-g786db8dcf16`); repinned from
+  `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17.
 - Parser and utility path: `gram.y`, `parsenodes.h`, `parse_utilcmd.c`,
   `utility.c`, and ALTER TABLE phase dispatch in `tablecmds.c`.
 - Core index path: `ATExecAttachPartition`, `AttachPartitionEnsureIndexes`,
@@ -551,36 +579,41 @@ collations, and operator classes
 - History: inspected each listed commit body and patch, checked ancestry to the
   pin, and bracketed first major releases with the checkout's 13devel through
   17devel stamp commits.
-- Exact-pin execution: a disposable PostgreSQL 17.10 cluster confirmed direct
-  reuse of matching expression and partial indexes, exclusion-index non-reuse,
-  rollback after a failed auto-build, a `ddl_command_start` trigger dropping an
-  extra index, a `ddl_command_end` trigger dropping the parent and cascading to
-  the new child index, and the multilevel invalid-index state in Open Questions.
-  The server was stopped.
+- Execution on the previous pin: a disposable PostgreSQL 17.10 cluster
+  (`54eeefaedbee0385529f3edf321bb99e49232aaa`) confirmed direct reuse of
+  matching expression and partial indexes, rollback after a failed auto-build, a
+  `ddl_command_start` trigger dropping an extra index, a `ddl_command_end`
+  trigger dropping the parent and cascading to the new child index, and the
+  multilevel invalid-index state in Open Questions. The server was stopped.
+  That run also observed exclusion-index non-reuse; `1d6c654c818` changed that
+  behavior in 17.11, so the observation no longer describes this pin and has
+  been dropped from the list above. Nothing was re-measured on 17.11 during the
+  2026-08-17 repin, so every other number here remains a 17.10 observation whose
+  code path is unchanged in the range.
 
 ## Evidence Map
 
 | Claim | Primary evidence |
 |---|---|
-| Core table ATTACH is match-or-create, with no drop branch | [tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18805-L18986) |
-| Table ATTACH calls index reconciliation after partition catalog wiring | [tablecmds.c:18686-18710](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18686-L18710) |
-| Compatible direct index is re-parented | [tablecmds.c:18900-18954](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18900-L18954) |
-| No direct match creates a clone | [tablecmds.c:18958-18975](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18958-L18975) |
-| Direct invalid and already-attached candidates are skipped | [tablecmds.c:18910-18917](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18910-L18917) |
-| Compatible partial/expression indexes can match | [index.c:2572-2620](../../../../raw/postgres-17/src/backend/catalog/index.c#L2572-L2620) |
-| Exclusion indexes never match in `CompareIndexInfo` | [index.c:2622-2626](../../../../raw/postgres-17/src/backend/catalog/index.c#L2622-L2626) |
-| Constraint-backed reuse requires a child constraint of the same type | [tablecmds.c:18925-18950](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18925-L18950) |
-| Re-parenting changes `pg_inherits`, `pg_class`, and partition dependencies | [indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4300-L4428) |
-| Constraint re-parenting prevents independent deletion | [pg_constraint.c#ConstraintSetParentConstraint](../../../../raw/postgres-17/src/backend/catalog/pg_constraint.c#L814-L887) |
-| New stored indexes invoke the AM build callback | [index.c:1248-1277](../../../../raw/postgres-17/src/backend/catalog/index.c#L1248-L1277), [index.c:3021-3024](../../../../raw/postgres-17/src/backend/catalog/index.c#L3021-L3024) |
-| Recursive creation may absorb invalid descendants and propagates invalidity through new ancestors | [indexcmds.c:1372-1423](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1372-L1423), [indexcmds.c:1490-1531](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1490-L1531) |
-| Parent/child locks serialize concurrent DROP | [tablecmds.c:18517-18600](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18517-L18600), [tablecmds.c:1558-1568](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1558-L1568), [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L59-L104) |
-| Errors abort all statement changes | [postgres.c:4478-4491](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4478-L4491), [xact.c#AbortCurrentTransaction](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L3392-L3476) |
+| Core table ATTACH is match-or-create, with no drop branch | [tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18846-L19027) |
+| Table ATTACH calls index reconciliation after partition catalog wiring | [tablecmds.c:18727-18751](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18727-L18751) |
+| Compatible direct index is re-parented | [tablecmds.c:18941-18995](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18941-L18995) |
+| No direct match creates a clone | [tablecmds.c:18999-19016](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18999-L19016) |
+| Direct invalid and already-attached candidates are skipped | [tablecmds.c:18951-18958](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18951-L18958) |
+| Compatible partial/expression indexes can match | [index.c:2589-2637](../../../../raw/postgres-17/src/backend/catalog/index.c#L2589-L2637) |
+| Exclusion indexes match only when their operators, procedures, and strategies are all identical (17.11 behavior) | [index.c#exclusion-comparison](../../../../raw/postgres-17/src/backend/catalog/index.c#L2639-L2653) |
+| Constraint-backed reuse requires a child constraint of the same type | [tablecmds.c:18966-18991](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18966-L18991) |
+| Re-parenting changes `pg_inherits`, `pg_class`, and partition dependencies | [indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4318-L4446) |
+| Constraint re-parenting prevents independent deletion | [pg_constraint.c#ConstraintSetParentConstraint](../../../../raw/postgres-17/src/backend/catalog/pg_constraint.c#L817-L890) |
+| New stored indexes invoke the AM build callback | [index.c:1256-1285](../../../../raw/postgres-17/src/backend/catalog/index.c#L1256-L1285), [index.c:3050-3053](../../../../raw/postgres-17/src/backend/catalog/index.c#L3050-L3053) |
+| Recursive creation may absorb invalid descendants and propagates invalidity through new ancestors | [indexcmds.c:1388-1439](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1388-L1439), [indexcmds.c:1506-1547](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1506-L1547) |
+| Parent/child locks serialize concurrent DROP | [tablecmds.c:18558-18641](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18558-L18641), [tablecmds.c:1567-1577](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L1567-L1577), [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L59-L104) |
+| Errors abort all statement changes | [postgres.c:4494-4507](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4494-L4507), [xact.c#AbortCurrentTransaction](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L3392-L3476) |
 | Attached child cannot be dropped alone; parent drop cascades | [alter_index.sgml:90-104](../../../../raw/postgres-17/doc/src/sgml/ref/alter_index.sgml#L90-L104), [indexing.out:171-199](../../../../raw/postgres-17/src/test/regress/expected/indexing.out#L171-L199) |
-| Companion command re-parents, validates, or errors; it does not replace | [tablecmds.c#ATExecAttachPartitionIdx](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19859-L20021) |
+| Companion command re-parents, validates, or errors; it does not replace | [tablecmds.c#ATExecAttachPartitionIdx](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19900-L20062) |
 | Event triggers and utility hooks can execute independent custom behavior | [utility.c#ProcessUtility](../../../../raw/postgres-17/src/backend/tcop/utility.c#L489-L525), [event_trigger.c:721-817](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L721-L817) |
 | Tests retain four mismatched indexes and add one | [indexing.out:260-283](../../../../raw/postgres-17/src/test/regress/expected/indexing.out#L260-L283) |
-| v17.10 repeated-attach validation behavior | [tablecmds.c:19902-20014](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19902-L20014), [release-17.sgml:696-700](../../../../raw/postgres-17/doc/src/sgml/release-17.sgml#L696-L700) |
+| v17.10 repeated-attach validation behavior | [tablecmds.c:19943-20055](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19943-L20055), [release-17.sgml:3649-3653](../../../../raw/postgres-17/doc/src/sgml/release-17.sgml#L3649-L3653) |
 | Catalog and parser generated-file boundaries | [catalog/Makefile:17-28](../../../../raw/postgres-17/src/include/catalog/Makefile#L17-L28), [catalog/Makefile:126-143](../../../../raw/postgres-17/src/include/catalog/Makefile#L126-L143), [parser/meson.build:38-41](../../../../raw/postgres-17/src/backend/parser/meson.build#L38-L41) |
 
 ## Open Questions
@@ -589,14 +622,14 @@ collations, and operator classes
   invalid new child.** The direct matcher skips an invalid index on the table
   being attached, but a recursive `DefineIndex` call may absorb an invalid leaf
   index and mark only the newly created intermediate partitioned index invalid
-  ([tablecmds.c:18910-18917](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18910-L18917),
-  [indexcmds.c:1372-1423](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1372-L1423),
-  [indexcmds.c:1490-1531](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1490-L1531)).
+  ([tablecmds.c:18951-18958](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18951-L18958),
+  [indexcmds.c:1388-1439](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1388-L1439),
+  [indexcmds.c:1506-1547](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1506-L1547)).
   In an exact-pin smoke test, a valid top parent expression index stayed
   `indisvalid = true` after ATTACH created and linked an invalid intermediate
   index above a failed-CIC leaf. `validatePartitionedIndex` describes the
   intended validation rule as one valid attached index per table partition
-  ([tablecmds.c:20063-20098](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20063-L20098)),
+  ([tablecmds.c:20104-20139](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20104-L20139)),
   but ATTACH does not call it for this newly invalid child. The current upstream
   tests separately cover direct invalid-index skipping and recursive validity
   propagation during `CREATE INDEX`, not their combination during table
@@ -611,19 +644,19 @@ collations, and operator classes
 - [parsenodes.h#PartitionCmd](../../../../raw/postgres-17/src/include/nodes/parsenodes.h#L950-L959)
 - [utility.c#ProcessUtility](../../../../raw/postgres-17/src/backend/tcop/utility.c#L489-L525)
 - [utility.c#T_AlterTableStmt](../../../../raw/postgres-17/src/backend/tcop/utility.c#L1268-L1321)
-- [tablecmds.c#ATExecAttachPartition](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18491-L18801)
-- [tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18805-L18986)
-- [tablecmds.c#ATExecAttachPartitionIdx](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19859-L20021)
-- [tablecmds.c#validatePartitionedIndex](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20045-L20145)
-- [indexcmds.c#DefineIndex-partitions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1249-L1550)
-- [indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4300-L4428)
-- [index.c#CompareIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2500-L2627)
-- [index.c#index_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L2945-L3040)
-- [pg_constraint.c#ConstraintSetParentConstraint](../../../../raw/postgres-17/src/backend/catalog/pg_constraint.c#L814-L887)
+- [tablecmds.c#ATExecAttachPartition](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18532-L18842)
+- [tablecmds.c#AttachPartitionEnsureIndexes](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L18846-L19027)
+- [tablecmds.c#ATExecAttachPartitionIdx](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L19900-L20062)
+- [tablecmds.c#validatePartitionedIndex](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L20086-L20186)
+- [indexcmds.c#DefineIndex-partitions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1265-L1566)
+- [indexcmds.c#IndexSetParentIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4318-L4446)
+- [index.c#CompareIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2517-L2656)
+- [index.c#index_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L2974-L3069)
+- [pg_constraint.c#ConstraintSetParentConstraint](../../../../raw/postgres-17/src/backend/catalog/pg_constraint.c#L817-L890)
 - [event_trigger.c#DDL-command-triggers](../../../../raw/postgres-17/src/backend/commands/event_trigger.c#L721-L817)
-- [alter_table.sgml#ATTACH-PARTITION](../../../../raw/postgres-17/doc/src/sgml/ref/alter_table.sgml#L995-L1012)
+- [alter_table.sgml#ATTACH-PARTITION](../../../../raw/postgres-17/doc/src/sgml/ref/alter_table.sgml#L995-L1013)
 - [alter_index.sgml#ATTACH-PARTITION](../../../../raw/postgres-17/doc/src/sgml/ref/alter_index.sgml#L88-L104)
-- [ddl.sgml#partition-maintenance](../../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4289-L4354)
+- [ddl.sgml#partition-maintenance](../../../../raw/postgres-17/doc/src/sgml/ddl.sgml#L4295-L4360)
 - [indexing.sql#partitioned-indexes](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L55-L306)
 - [indexing.sql#invalid-indexes](../../../../raw/postgres-17/src/test/regress/sql/indexing.sql#L891-L937)
 - [indexing.out#partitioned-indexes](../../../../raw/postgres-17/src/test/regress/expected/indexing.out#L78-L283)

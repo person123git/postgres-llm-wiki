@@ -1,7 +1,7 @@
 ---
 type: question
 version: 18
-pinned_commit: 6cb307251c5c6261286c1566496920976640108e
+pinned_commit: baa7b142aace6821ce085906f314a75bcc4d95c8
 verified: false
 verified_by_agent: not yet
 ---
@@ -174,7 +174,7 @@ Vacuum and autovacuum emit log lines through `ereport()` like every other
 subsystem, so this hook is the one general-purpose extension point that fires
 on both paths. For example, `vacuum_error_callback` and per-phase progress
 logging all flow through `EmitErrorReport`
-([vacuumlazy.c#vacuum_error_callback](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3758)).
+([vacuumlazy.c#vacuum_error_callback](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3782)).
 
 ### `shmem_request_hook` and `shmem_startup_hook`
 
@@ -331,6 +331,38 @@ shipping a `typanalyze` function in its CREATE TYPE definition.
 
 ## Adjacent Extension Surfaces
 
+### Read-stream strategy clearing (new extension-visible API in 18.6)
+
+The 18.4/18.6 range adds one exported function to the read-stream API that
+extensions and out-of-core table AMs can call:
+`read_stream_clear_strategy(ReadStream *stream)`. It sets
+`op.strategy = NULL` on every one of the stream's `ReadBuffersOperation`s,
+including in-flight ones, so subsequent reads use the whole shared buffer pool
+instead of a ring; the caller still owns freeing the strategy's memory, and the
+function's comment notes that an IO whose strategy was cleared mid-flight may
+have a small part of its read time attributed to `IOCONTEXT_NORMAL`
+([read_stream.c#read_stream_clear_strategy](../../../../raw/postgres-18/src/backend/storage/aio/read_stream.c#L1046-L1066),
+[read_stream.h:102](../../../../raw/postgres-18/src/include/storage/read_stream.h#L102)).
+
+The only in-tree caller is VACUUM's heap scan. When `VacuumFailsafeActive` is
+set — the wraparound failsafe — `lazy_scan_heap()` calls it once and records
+that it did, so the rest of the vacuum may use all of shared buffers
+([vacuumlazy.c#failsafe-clear-strategy](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L1311-L1323)).
+Commits `585181e0774` and `7c25cdb1ebf` restored that behavior, which a v18
+refactor had accidentally broken, and made the clearing happen only once
+([release-18.sgml#failsafe-buffer-pool](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml#L2036-L2062)).
+This is a buffer-access-strategy change only: the failsafe's other effects,
+including skipping further index vacuuming and cleanup, are unchanged, and no
+new hook or callback is introduced.
+
+Separately, `4cc49cb7039` fixed the autovacuum launcher's database ordering:
+`db_comparator()` was sorting databases from lowest to highest score, when the
+launcher should process the highest-scoring database first. Extensions that
+infer launcher behavior from observed per-database ordering should note the
+change
+([autovacuum.c#db_comparator](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L1070-L1076),
+[release-18.sgml#autovacuum-db-order](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml#L2016-L2034)).
+
 ### Background workers
 
 `shared_preload_libraries`'s `_PG_init` may call `RegisterBackgroundWorker`
@@ -348,8 +380,7 @@ own background worker rather than trying to hook into the launcher.
 An extension can register a `PgStat_KindInfo` to define new shared cumulative
 counters that report on vacuum-related events. The flow, validation, and
 shared-memory layout are documented separately and are not duplicated here;
-see [[v18/questions/custom-cumulative-statistics|How Custom Cumulative
-Statistics Work in PostgreSQL 18 (unverified)]]
+see [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](../observability/custom-cumulative-statistics.md)
 ([pgstat.c#pgstat_register_kind](../../../../raw/postgres-18/src/backend/utils/activity/pgstat.c#L1465),
 [pgstat_internal.h#PgStat_KindInfo](../../../../raw/postgres-18/src/include/utils/pgstat_internal.h#L202)).
 
@@ -386,7 +417,7 @@ read these views instead of installing a hook
 - `shared_preload_libraries` has GUC context `PGC_POSTMASTER`, so changing it
   requires a server restart
   ([guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c),
-  [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927)).
+  [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11004)).
 - Plugins that install in-process hooks must save and call the previous hook
   value so multiple extensions can chain; the `ProcessUtility_hook` block
   comment in `utility.c` documents the chaining pattern for that hook
@@ -422,11 +453,20 @@ read these views instead of installing a hook
   [bgworker.h](../../../../raw/postgres-18/src/include/postmaster/bgworker.h),
   [bgworker.c#RegisterBackgroundWorker](../../../../raw/postgres-18/src/backend/postmaster/bgworker.c#L940),
   [progress.h](../../../../raw/postgres-18/src/include/commands/progress.h),
+  [read_stream.h](../../../../raw/postgres-18/src/include/storage/read_stream.h),
+  [read_stream.c](../../../../raw/postgres-18/src/backend/storage/aio/read_stream.c),
   [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](../observability/custom-cumulative-statistics.md).
+- Target evidence checkout: `raw/postgres-18/` at pinned commit
+  `baa7b142aace6821ce085906f314a75bcc4d95c8` (`REL_18_6-10-gbaa7b142aac`),
+  re-checked for the 18.4/18.6 range against the previous pin
+  `6cb307251c5c6261286c1566496920976640108e`. The hook and AM-callback inventory
+  above is unchanged by that range; the only extension-visible addition is
+  `read_stream_clear_strategy()`
+  ([read_stream.h:102](../../../../raw/postgres-18/src/include/storage/read_stream.h#L102)).
 - Documentation cross-checks:
   [xfunc.sgml](../../../../raw/postgres-18/doc/src/sgml/xfunc.sgml),
   [fdwhandler.sgml#fdw-callbacks-analyze](../../../../raw/postgres-18/doc/src/sgml/fdwhandler.sgml#L1367),
-  [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927).
+  [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11004).
 
 ## Evidence Map
 
@@ -461,6 +501,10 @@ read these views instead of installing a hook
 - [miscinit.c#process_shared_preload_libraries](../../../../raw/postgres-18/src/backend/utils/init/miscinit.c#L1903) - `_PG_init` is run from here when `process_shared_preload_libraries_in_progress` is true.
 - [vacuum.c](../../../../raw/postgres-18/src/backend/commands/vacuum.c), [vacuum.c#ExecVacuum](../../../../raw/postgres-18/src/backend/commands/vacuum.c#L162), [vacuum.c#vac_bulkdel_one_index](../../../../raw/postgres-18/src/backend/commands/vacuum.c#L2651), [vacuum.c#vac_cleanup_one_index](../../../../raw/postgres-18/src/backend/commands/vacuum.c#L2672) - VACUUM dispatch, per-index AM calls.
 - [vacuumparallel.c](../../../../raw/postgres-18/src/backend/commands/vacuumparallel.c) - parallel VACUUM workers calling `ambulkdelete`/`amvacuumcleanup` and copying `IndexBulkDeleteResult` through DSM.
+- [read_stream.c#read_stream_clear_strategy](../../../../raw/postgres-18/src/backend/storage/aio/read_stream.c#L1046-L1066), [read_stream.h:102](../../../../raw/postgres-18/src/include/storage/read_stream.h#L102) - the 18.6 exported strategy-clearing entry point.
+- [vacuumlazy.c#failsafe-clear-strategy](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L1311-L1323) - the only in-tree caller, in VACUUM's wraparound failsafe.
+- [autovacuum.c#db_comparator](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L1070-L1076) - launcher database-ordering comparator fixed by `4cc49cb7039`.
+- [release-18.sgml](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml#L2016-L2062) - 18.6 release notes for the autovacuum database ordering and failsafe buffer-pool fixes.
 - [vacuumlazy.c](../../../../raw/postgres-18/src/backend/access/heap/vacuumlazy.c) - lazy vacuum implementation, including `vacuum_error_callback`.
 - [analyze.c](../../../../raw/postgres-18/src/backend/commands/analyze.c), [analyze.c#analyze_rel](../../../../raw/postgres-18/src/backend/commands/analyze.c#L109), [analyze.c#examine_attribute](../../../../raw/postgres-18/src/backend/commands/analyze.c#L1036), [analyze.c#std_typanalyze](../../../../raw/postgres-18/src/backend/commands/analyze.c#L1891) - ANALYZE driver and per-attribute `typanalyze`.
 - [tableam.h](../../../../raw/postgres-18/src/include/access/tableam.h) - `relation_vacuum`, `scan_analyze_next_block`, `scan_analyze_next_tuple`, `table_relation_vacuum` wrapper.
@@ -472,7 +516,7 @@ read these views instead of installing a hook
 - [autovacuum.c](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c), [autovacuum.c#AutoVacLauncherMain](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L368), [autovacuum.c#AutoVacWorkerMain](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L1376), [autovacuum.c#do_autovacuum](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L1885), [autovacuum.c#autovacuum_do_vac_analyze](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L3173) - autovacuum process model.
 - [bgworker.h](../../../../raw/postgres-18/src/include/postmaster/bgworker.h), [bgworker.c#RegisterBackgroundWorker](../../../../raw/postgres-18/src/backend/postmaster/bgworker.c#L940) - extension background workers.
 - [progress.h](../../../../raw/postgres-18/src/include/commands/progress.h) - vacuum/analyze progress field constants.
-- [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L10927) - `shared_preload_libraries` GUC context.
+- [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c), [config.sgml#guc-shared-preload-libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11004) - `shared_preload_libraries` GUC context.
 - [xfunc.sgml](../../../../raw/postgres-18/doc/src/sgml/xfunc.sgml) - documentation pattern for `shmem_request_hook` and `shmem_startup_hook`.
 - [How Custom Cumulative Statistics Work in PostgreSQL 18 (unverified)](../observability/custom-cumulative-statistics.md) - companion page for the cumulative-stats extension surface.
 
