@@ -530,7 +530,6 @@ The test server was stopped and its data directory removed after the run; the SQ
 - [v12 index](../../index.md)
 - [wiki index](../../../index.md)
 - [versions](../../../versions.md)
-- [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](comment-stored-table-dml-counters-gin-reindex.md)
 - [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](btree-index-bloat-core-sql-only.md)
 - [Physical Index Statistics, Tuple Counts, and Bytes per Tuple in PostgreSQL 12 (unverified)](physical-index-statistics-tuple-counts-and-bytes.md)
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12 (unverified)](reindex-index-concurrently.md)

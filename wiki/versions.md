@@ -14,12 +14,29 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-17: removed the v12 question page Can COMMENT-Stored Table DML
+  Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified) at the
+  user's request, together with its root-index and v12-landing-page entries and
+  the one inbound `## Navigation` link on
+  [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md).
+  No surviving v12 page referred to it in prose, and the v12 coverage cell above
+  never described it, so no coverage clause was dropped. The four historical
+  coverage notes below that referenced the page now name it as plain text.
+  COMMENT-stored index-bloat screening in v12 now runs through the
+  bytes-per-table-tuple page named above, and core-SQL B-tree bloat measurement
+  through
+  [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md);
+  no v12 page proposes a table-DML-counter GIN rebuild trigger any more. The pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` and every surviving page's
+  citations and verification fields are unchanged.
+
 - 2026-08-13: removed the v12 question page Detecting Bloat in All Index Types
   by Storing an Index/Heap Size Ratio in COMMENT in PostgreSQL 12 (unverified)
   at the user's request, together with its root-index and v12-landing-page
   entries, the two inbound `## Navigation` links on
   [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
-  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  and Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified),
   and the index/heap-ratio clause of the v12 coverage cell above that described
   it, including its drift-versus-"index larger than the heap" and
   `REINDEX INDEX CONCURRENTLY` follow-ups. The six historical coverage notes
@@ -184,7 +201,8 @@ This page indexes the PostgreSQL versions covered by the wiki.
   as plain text. COMMENT-stored index-bloat screening in v12 now runs through
   Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in
   COMMENT in PostgreSQL 12 (unverified)
-  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  and Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified),
   and core-SQL B-tree bloat measurement through
   [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
   The pin `45b88269a353ad93744772791feb6d01bc7e1e42` and every surviving page's
@@ -431,7 +449,8 @@ This page indexes the PostgreSQL versions covered by the wiki.
   COMMENT-Stored Bytes per Tuple in PostgreSQL 12 (unverified) at the user's
   request, together with its root-index and v12-landing-page entries and the
   three inbound `## Navigation` links on
-  [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified),
   [Physical Index Statistics, Tuple Counts, and Bytes per Tuple in PostgreSQL 12 (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md),
   and [Proposing and Testing a fillfactor-Corrected pgstattuple_approx Metric for Table Heap Bloat in PostgreSQL 12 (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md).
   The v12 coverage cell above never described the page, so it is unchanged.
@@ -541,9 +560,8 @@ This page indexes the PostgreSQL versions covered by the wiki.
   summaries cannot be treated as one tuple per heap row. The page remains
   human-unverified and agent-unverified.
 
-- 2026-08-11: filed [Can COMMENT-Stored Table DML Counters Trigger GIN
-  REINDEX at 40% in PostgreSQL 12?
-  (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md)
+- 2026-08-11: filed Can COMMENT-Stored Table DML Counters Trigger GIN
+  REINDEX at 40% in PostgreSQL 12? (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). The source audit rejects an automatic 40% GIN rebuild
   trigger because the proposed counters are table-wide attempted actions, HOT

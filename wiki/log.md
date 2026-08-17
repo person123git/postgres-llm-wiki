@@ -181,7 +181,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - v12 COMMENT-stored index-bloat coverage now runs through
   Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in
   COMMENT in PostgreSQL 12 (unverified)
-  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  and Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified),
   and core-SQL bloat measurement through
   [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
 - No source citation, pin, or verification field on any surviving page changed.
@@ -683,7 +684,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - v12 COMMENT-stored index-bloat coverage now runs through
   Detecting Bloat in All Index Types by Storing an Index/Heap Size Ratio in
   COMMENT in PostgreSQL 12 (unverified)
-  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md).
+  and Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified).
 - No source citation, pin, or verification field on any surviving page changed.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
@@ -936,9 +938,8 @@ page, version coverage notes, and wiki log.
 
 ## [2026-08-11] answer v12 | COMMENT-stored table DML counters for GIN
 
-- Filed [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
-  PostgreSQL 12?
-  (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md)
+- Filed Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene applied before drafting; the user approved
   the corrected wording, which is restated verbatim under `## Question`.
@@ -7681,7 +7682,8 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   v12 question untouched, so v17 still carries this proposal.
 - v12 COMMENT-stored index-bloat coverage now runs through
   [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
-  and [Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in PostgreSQL 12? (unverified)](v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md),
+  and Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40% in
+  PostgreSQL 12? (unverified),
   and core-SQL bloat measurement through
   [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
 - No source citation, pin, or verification field on any surviving page changed.
@@ -7771,3 +7773,35 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `verified_by_agent: not yet` because this is a first filing rather than a
   separate full-page claim audit. Updated `wiki/index.md`, `wiki/v17/index.md`,
   and `wiki/versions.md`.
+
+## [2026-08-17] remove v12 | delete Can COMMENT-Stored Table DML Counters Trigger GIN REINDEX at 40%
+
+- Removed `wiki/v12/questions/indexing/comment-stored-table-dml-counters-gin-reindex.md`
+  per user request, which named the page by its exact visible title. The
+  request's `remove question:` phrasing drives no document generation and is
+  restated on no wiki page, so no prompt-hygiene correction was needed.
+- Removed the active page entry from `wiki/index.md` and `wiki/v12/index.md`, and
+  the one inbound `## Navigation` link in
+  `comment-stored-bytes-per-table-tuple-non-btree.md`. No surviving v12 page
+  referred to the deleted page in prose.
+- Its own outbound link to `reindex-index-concurrently.md` went away with it,
+  along with its three navigation links to `wiki/v12/index.md`,
+  `wiki/index.md`, and `wiki/versions.md`; `reindex-index-concurrently.md` keeps
+  inbound links from `wiki/index.md`, `wiki/v12/index.md`, and
+  `comment-stored-bytes-per-table-tuple-non-btree.md`.
+- The v12 coverage cell in `wiki/versions.md` never described this page, so no
+  coverage clause was dropped; its COMMENT-related text covers the surviving
+  bytes-per-table-tuple page.
+- Neutralized the remaining historical Markdown links in `wiki/log.md` (4) and
+  `wiki/versions.md` (4) so they name the page title as plain text, and added a
+  removal note to `## Coverage Notes`.
+- v12 COMMENT-stored index-bloat coverage now runs through
+  [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 12 (unverified)](v12/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+  and core-SQL B-tree bloat measurement through
+  [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md).
+  No v12 page proposes a table-DML-counter GIN rebuild trigger any more, and no
+  other version ever carried a copy of this question.
+- No source citation, pin, or verification field on any surviving page changed.
+  `raw/postgres-12/` is unchanged and no server was started.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
+  `git diff --check` passed.
