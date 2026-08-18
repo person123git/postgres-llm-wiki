@@ -66,6 +66,18 @@ verified_by_agent: not yet
   - [Direction, magnitude, and whether the floor was immune](#direction-magnitude-and-whether-the-floor-was-immune)
   - [Two rejected fixes](#two-rejected-fixes)
   - [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)
+  - [Follow-up: seventeen mandatory tests for the deduplication gate](#follow-up-seventeen-mandatory-tests-for-the-deduplication-gate)
+  - [The seventeen mandatory tests, and the verdict on each](#the-seventeen-mandatory-tests-and-the-verdict-on-each)
+  - [How the mandatory tests were run](#how-the-mandatory-tests-were-run)
+  - [What the engine decides, and when](#what-the-engine-decides-and-when)
+  - [Change 6: name the support function, do not just count it](#change-6-name-the-support-function-do-not-just-count-it)
+  - [Why prosrc and not proname](#why-prosrc-and-not-proname)
+  - [What change 6 costs](#what-change-6-costs)
+  - [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)
+  - [The earlier v17 sweep needs three conjuncts](#the-earlier-v17-sweep-needs-three-conjuncts)
+  - [Post-build mutation, and why the metapage is still not the answer](#post-build-mutation-and-why-the-metapage-is-still-not-the-answer)
+  - [The mandatory tests on a 12.2 server](#the-mandatory-tests-on-a-122-server)
+  - [The harness, runnable](#the-harness-runnable)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -228,6 +240,58 @@ Deliverable and constraints:
 > `wasted_space_pct` is the percentage column, which was never defective and was
 > renamed from `bloat_pct` by the fifth follow-up. The asker also named the
 > mischaracterized issue: the attribution of the `i_q1000` gap to page packing.
+
+Follow-up: in PostgreSQL 17, add a mandatory-tests section to this question page,
+and make sure that all the proposed SQL passes all the mandatory tests. Add these
+test requirements for deduplication:
+
+- With a normal integer B-tree index: deduplication should be enabled.
+- With a bigint B-tree index: deduplication should be enabled.
+- With a text index using a deterministic collation: deduplication should be
+  enabled.
+- With a text index using a nondeterministic collation: deduplication must be
+  disabled.
+- With a numeric index: deduplication must be disabled.
+- With a float4 or float8 index: deduplication must be disabled.
+- With a multi-column index where all columns support equalimage, for example
+  (integer, bigint): deduplication should be enabled.
+- With a multi-column index where one column does not support equalimage, for
+  example (integer, numeric): deduplication must be disabled.
+- With an expression index, for example lower(text_column): verify that
+  equalimage is evaluated using the index expression's opclass and collation.
+- With an INCLUDE index: deduplication must be disabled.
+- With deduplicate_items = off: deduplication must be disabled even if
+  all_equalimage = true.
+- With a custom opclass that has no equalimage support function: deduplication
+  must be disabled.
+- With a custom opclass where support function #4 exists but returns FALSE:
+  all_equalimage must be FALSE and deduplication must be disabled. This is the
+  main regression test for the original bug.
+- With a custom opclass where support function #4 exists and returns TRUE:
+  verify that all_equalimage is TRUE if the implementation can safely determine
+  the result.
+- Test a multi-column index where one key returns TRUE and another returns
+  FALSE: the final all_equalimage must be FALSE.
+- Test unknown or unsupported equalimage cases: they must resolve to FALSE,
+  never TRUE.
+- Run the same basic positive and negative tests to verify version
+  compatibility.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "follow
+> agents.md, in postgresql 17 , for question: Testing the PostgreSQL 12 Core-SQL
+> B-Tree Bloat Method on PostgreSQL 17 (unverified) , create a section with
+> mandatory tests to question, make sure that all proposed sql executes all
+> mandatory tests and add these tests requirements for deduplication: ...", per
+> the repository's prompt-hygiene rule. The seventeen requirements were reflowed
+> to one bullet each; none was added, dropped, merged or reordered. The asker
+> scoped "all the proposed SQL" to the two deduplication-aware statements on this
+> page — [the corrected statement with all five
+> changes](#the-corrected-statement-with-all-five-changes) and [the earlier
+> deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17) —
+> directed that a statement failing a mandatory test be corrected rather than
+> only reported, and confirmed that "the original bug" is the existence-only
+> equal-image gate: `EXISTS (... amprocnum = 4)` cannot see the support
+> function's return value.
 
 ## Answer
 
@@ -2048,6 +2112,362 @@ What 12.2 does with the rest is unchanged from [How the same statement behaves o
 
 The `i_rand` row is the portability point that matters for change 5: split-point density is not a v13-and-later behavior, so a 12 server reports the same healthy index as 26.6% waste.
 
+### Follow-up: seventeen mandatory tests for the deduplication gate
+
+**The statement as filed fails 3 of the 17 mandatory tests and the earlier deduplication-aware sweep fails 6. One replaced conjunct — change 6 — passes all 17 in both statements, at no measurable cost.** Every failure is the same defect wearing a different disguise: the gate asks whether an equal-image support function *exists* in `pg_amproc`, while the engine asks what that function *returns*.
+
+Measured on 28 freshly built fixtures, each with nothing to reclaim, on an isolated 17.11 server built from this page's pin:
+
+| Statement | Gate over-credits | Gate under-credits | Fixtures over 30% on `wasted_space_pct` | ... on `wasted_space_pct_floor` |
+|---|---|---|---|---|
+| [The corrected statement, with all five changes](#the-corrected-statement-with-all-five-changes) | **5 of 28** | 0 | **3** | 0 |
+| The same statement with change 6 | **0** | 1 | **0** | 0 |
+| [A deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17) | **8 of 28** | 0 | **4** | n/a, it has no floor |
+| The same sweep with three conjuncts added | **0** | 1 | **0** | n/a |
+
+Over-crediting is the dangerous direction, because it invents reclaimable space on a healthy index: the worst cell reports **78.1%** waste on a 1931-block index that a rebuild would reproduce block for block. Under-crediting is the safe direction, and change 6 trades exactly one of those for the five over-credits.
+
+The one under-credit is unavoidable in core SQL, and the mandatory list anticipates it. Test 14 asks for `all_equalimage = TRUE` on a custom opclass whose support function returns true *"if the implementation can safely determine the result"*; a SQL statement cannot call a function it can only see by OID, so it cannot safely determine it, and test 16 requires that such cases resolve to FALSE rather than TRUE. Change 6 answers FALSE, and pays for it on one fixture.
+
+### The seventeen mandatory tests, and the verdict on each
+
+The `Engine` column is the engine's own answer, taken from the `DEBUG1` line `_bt_allequalimage` emits during the build and cross-checked against the metapage flag and against whether the first leaf really holds posting tuples. Every percentage is `wasted_space_pct` on an index with 0% genuinely reclaimable space, so any non-zero number is model error.
+
+| # | Requirement | Fixture | Engine | Filed | Change 6 | v17 sweep |
+|---|---|---|---|---|---|---|
+| 1 | integer key deduplicates | `i_int4` | yes, 421 blocks | pass, −0.5% | pass, −0.5% | pass |
+| 2 | `bigint` key deduplicates | `i_int8` | yes, 421 | pass, −0.5% | pass, −0.5% | pass |
+| 3 | `text` with a deterministic collation deduplicates | `i_text_det` (default), `i_text_icu_det` (ICU `und`) | yes, 460 each | pass, 7.8% | pass, 7.8% | pass |
+| 4 | `text` with a nondeterministic collation must not | `i_text_nondet` (ICU `und-u-ks-level2`) | no, 1931 | pass, 0.2% | pass, 0.2% | **FAIL, 77.7%** |
+| 5 | `numeric` must not | `i_numeric` | no, 1376 | pass, 0.1% | pass, 0.1% | pass |
+| 6 | `float4`/`float8` must not | `i_float4`, `i_float8` | no, 1376 each | pass, 0.1% | pass, 0.1% | pass |
+| 7 | all-equal-image multicolumn key deduplicates | `i_multi_ok`, `i2_ok` `(int4, int8)` | yes, 459 each | pass, −320.0% / 8.1% | pass, same | pass |
+| 8 | multicolumn key with one non-equal-image column must not | `i_multi_bad` `(int4, numeric)` | no, 1931 | pass, 28.8% | pass, 28.8% | pass |
+| 9 | an expression key is judged by the expression's opclass and collation | `i_expr_lower`, `i_expr_lower_ci`, `i_expr_num`, `i_expr_int8` | yes / no / no / yes | pass, 4 of 4 | pass, 4 of 4 | **FAIL on `i_expr_lower_ci`, 77.7%** |
+| 10 | an `INCLUDE` index must not | `i_inc` | no, 1376 | pass, 0.1% | pass, 0.1% | **FAIL, 65.0%** |
+| 11 | `deduplicate_items = off` must not, even at `all_equalimage = true` | `i_dupoff`, `i_text_off`, `i2_off` | flag true, no posting lists | pass, 0.1-0.2% | pass | pass |
+| 12 | custom opclass with no support function must not | `i_ei_none` | no, 1376 | pass, 0.1% | pass, 0.1% | pass |
+| 13 | support function exists and returns FALSE must not | `i_ei_false` | no, 1376 | **FAIL, 69.3%** | pass, 0.1% | **FAIL, 69.2%** |
+| 14 | support function exists and returns TRUE, if safely determinable | `i_ei_true`, `i_ei_alias` | yes, 421 each | pass, −0.5% | `i_ei_alias` pass; `i_ei_true` **FALSE by design**, −226.4% | pass |
+| 15 | one key TRUE, another FALSE, must resolve FALSE | `i_mixed_tf`, `i_mixed_ft`, `i2_tf`, `i2_ft` | no, 1931 each | **FAIL, 4 of 4** (0.2% latent, **78.1%** visible) | pass, 0.2% | **FAIL, 4 of 4** |
+| 16 | unknown or unsupported cases resolve FALSE, never TRUE | `i_ei_null`, `i_ei_boom`, `i_squat`, a replaced built-in | 2 builds fail outright; `i_squat` refuses; the replaced built-in still deduplicates | **FAIL on `i_squat`** | pass | **FAIL on `i_squat`** |
+| 17 | the same positive and negative tests across versions | 10 fixtures on 12.2 | no deduplication exists there | pass, 10 of 10 | pass, 10 of 10 | pass |
+
+Tests 1, 2, 3, 7 and 14 are the positives; the rest are negatives. Two readings in that table are arithmetic error rather than gate error, and both are already filed above: the 7.8% on the text fixtures is [the posting-tuple packing loss](#the-mischaracterized-issue-page-packing) that `i_cd` reports as 8.2%, and `i_multi_ok`'s −320.0% is the per-column product rule that [change 2](#change-2-extended-statistics-for-a-multicolumn-key) fixes — the same index with a `CREATE STATISTICS ... (ndistinct)` object is `i2_ok`, at 8.1%. The gate verdict is identical either way.
+
+### How the mandatory tests were run
+
+One isolated **17.11** server, built out of tree from this page's pin `786db8dcf168bd9df8f55047337525ac19118b1c` and configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, in a scratch database created for this run. `pageinspect` and `amcheck` were installed as ground truth only. One isolated **12.2** server from its own pin, without ICU, carried test 17.
+
+Two fixture tables, both 500,000 rows with 5,000 distinct keys, so every candidate key repeats 100 times:
+
+- `t (u int4 unique, a int4, b int8, s text, n numeric, f4 float4, f8 float8, d int4)`, carrying 24 B-tree indexes.
+- `t2 (a int4, b int8)` with `CREATE STATISTICS s2_ab (ndistinct) ON a, b`, carrying 4. It exists so that test 15's failure is visible as a percentage and not only as a flag; see [What the mixed-key failure costs](#what-the-mixed-key-failure-costs).
+
+Eight custom operator classes supply the equal-image cases that no built-in type can. The support functions are plain SQL and PL/pgSQL, which the access method accepts: `amvalidate` returned true for all eight custom opclasses ([amapi.c#amvalidate](../../../../raw/postgres-17/src/backend/access/index/amapi.c#L110-L143)), because `btvalidate` only checks that support function 4 takes one `oid` and returns `bool` ([nbtvalidate.c:110-113](../../../../raw/postgres-17/src/backend/access/nbtree/nbtvalidate.c#L110-L113)) and `CREATE OPERATOR CLASS` only checks the same two properties plus non-cross-typedness ([opclasscmds.c:1310-1333](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L1310-L1333), reached through `amadjustmembers` at [opclasscmds.c:696-704](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L696-L704)). Neither checks the language, the volatility or the return value:
+
+| Function | Language | Registered in | What the engine does with it |
+|---|---|---|---|
+| `ei_true(oid) → true` | `sql` | `int4_ei_true`, `int8_ei_true` | deduplicates; `i_ei_true` is 421 blocks |
+| `ei_false(oid) → false` | `sql` | `int4_ei_false`, `int8_ei_false` | refuses; `i_ei_false` is 1376 blocks |
+| `ei_none` — none registered | — | `int4_ei_none` | refuses; 1376 blocks |
+| `ei_null(oid) → NULL` | `sql` | `int4_ei_null` | `CREATE INDEX` fails: `ERROR: function 16575 returned NULL` |
+| `ei_boom(oid)` raises | `plpgsql` | `int4_ei_boom` | `CREATE INDEX` fails: `ERROR: equalimage probe exploded` |
+| `ei_alias(oid)` | `internal`, `AS 'btequalimage'`, in `public` | `int4_ei_alias` | deduplicates; 421 blocks |
+
+The two build failures are not a quirk of the harness. `_bt_allequalimage` calls the support function through `OidFunctionCall1Coll` ([fmgr.c#OidFunctionCall1Coll](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L1411-L1418)), whose `FunctionCall1Coll` rejects a NULL result with `elog(ERROR, "function %u returned NULL", ...)` ([fmgr.c:1141-1143](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L1141-L1143)), and an exception inside the function propagates. So tests 12 through 16 are satisfiable only by opclasses whose function returns a real boolean — which is why `i_ei_null` and `i_ei_boom` contribute "no such index can exist" rather than a row.
+
+### What the engine decides, and when
+
+`_bt_allequalimage` is the whole of it ([nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5129-L5183)), and four of its properties are exactly what the mandatory tests probe:
+
+1. **`INCLUDE` short-circuits before any lookup.** If the index has more attributes than key attributes it returns false immediately ([nbtutils.c:5144-5147](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147)) — before the `debugmessage` block, which is why `i_inc` is the one fixture that logs *no* deduplication verdict at all while every other index logs one.
+2. **The loop is over index key attributes, not table columns.** It reads `rd_opfamily[i]`, `rd_opcintype[i]` and `rd_indcollation[i]` ([nbtutils.c:5149-5157](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5149-L5157)), so an expression key is judged by the expression's own opclass and collation. Measured: `i_expr_int8` on `(n::int8)` over a **numeric** column deduplicates to 421 blocks, while `i_expr_num` on `(a::numeric)` over an **int4** column refuses at 1376, and `i_expr_lower` on `lower(s)` deduplicates at 460 while `i_expr_lower_ci` on `(lower(s)) COLLATE ci` refuses at 1931. That is test 9, in both directions, twice.
+3. **The catalog lookup is only half the test.** `get_opfamily_proc` finds the OID and then the function is *called*, with the index collation passed as the function's collation and `opcintype` as its argument; a missing OID and a false return are the same outcome ([nbtutils.c:5156-5169](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5156-L5169)). The loop `break`s on the first false, so `i_mixed_tf` and `i_mixed_ft` both answer false regardless of which key is the false one.
+4. **It runs at build time only.** `_bt_leafbuild` calls it with `debugmessage = true` and stores the answer in the insertion scankey ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563)); `_bt_load` then deduplicates only when that flag, non-uniqueness and the reloption all agree ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1150)). The documentation states the same rule from the operator-class side: deduplication is safe only when *every* indexed column registers an `equalimage` function *and each one actually returns true* ([btree.sgml#equalimage](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L499-L509)).
+
+The two stock functions are what make tests 1 through 6 predictable. `btequalimage` returns true unconditionally ([datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L415-L438)); `btvarstrequalimage` returns true for the C collation, the default collation, or any collation marked deterministic, and false otherwise ([varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613)). `numeric`, `float4`, `float8`, `jsonb` and the container types register nothing at all — measured on a stock database, `numeric_ops`, `float8_ops`, `jsonb_ops`, `array_ops`, `range_ops` and `record_ops` have no support function 4, while `int4_ops`, `text_ops` and `text_pattern_ops` do — which is the catalog form of the documentation's list of unsafe cases ([btree.sgml:834-909](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L834-L909)).
+
+Two catalog facts bound how much the gate can even see. Support-function numbers are per access method: the same stock database has 113 `pg_amproc` rows at `amprocnum = 4`, of which only **29** belong to a B-tree family, the rest being `brin_minmax_union`, GIN extract routines and their kin. And all 29 name one of the two stock functions — 26 `btequalimage`, 3 `btvarstrequalimage`, every one of them `LANGUAGE internal` in `pg_catalog` ([pg_amproc.dat:143](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L143), [pg_amproc.dat:206](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L206), [pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241)). On a database with no custom opclass, therefore, the filed gate and change 6 return the same answer for every index.
+
+Four unsupported shapes never reach the gate at all, because the DDL refuses them. Measured on 17.11:
+
+| Attempted | Error |
+|---|---|
+| `ALTER OPERATOR FAMILY int4_ei_true USING btree ADD FUNCTION 4 (int4, int2) ei_true(oid)` | `btree equal image functions must not be cross-type` ([opclasscmds.c:1321-1332](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L1321-L1332)) |
+| the same with a two-argument function | `btree equal image functions must have one argument` ([opclasscmds.c:1312-1315](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L1312-L1315)) |
+| the same with a function returning `int` | `btree equal image functions must return boolean` ([opclasscmds.c:1316-1319](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L1316-L1319)) |
+| `CREATE INDEX ON t (s COLLATE ci text_pattern_ops)` | `nondeterministic collations are not supported for operator class "text_pattern_ops"` ([index.c:807-850](../../../../raw/postgres-17/src/backend/catalog/index.c#L807-L850)) |
+
+The last one matters for the collation conjunct. `text_pattern_ops` registers `btequalimage`, not `btvarstrequalimage` ([pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241)), so an index on that opclass with a nondeterministic collation would be the one case where the statement's whole-index collation test is stricter than the engine's per-column one — and no such index can be created. The cross-type rejection is covered upstream by a regression test ([alter_generic.sql:444-446](../../../../raw/postgres-17/src/test/regress/sql/alter_generic.sql#L444-L446), [alter_generic.out:504-507](../../../../raw/postgres-17/src/test/regress/expected/alter_generic.out#L504-L507)), and `opr_sanity` separately asserts which core opclasses may omit `btequalimage` ([opr_sanity.sql:1336-1353](../../../../raw/postgres-17/src/test/regress/sql/opr_sanity.sql#L1336-L1353), [opr_sanity.out:2204-2222](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222)).
+
+### Change 6: name the support function, do not just count it
+
+Replace the `all_equalimage` subquery in the `idx` CTE. Nothing else in [the corrected statement](#the-corrected-statement-with-all-five-changes) changes — not the collation conjunct next to it, not `dedup_applies`, not either model, not a column.
+
+```sql
+           -- deduplication gate, in catalog terms: every key opclass must
+           -- register a *known* equal-image support function (amprocnum 4).
+           -- A row's mere existence proves nothing: the engine calls the
+           -- function, and a custom one may return false.
+           (SELECT bool_and(EXISTS (SELECT 1 FROM pg_amproc ap
+                                     JOIN pg_proc pr     ON pr.oid = ap.amproc
+                                     JOIN pg_language pl ON pl.oid = pr.prolang
+                                     WHERE ap.amprocfamily = op.opcfamily
+                                       AND ap.amproclefttype = op.opcintype
+                                       AND ap.amprocrighttype = op.opcintype
+                                       AND ap.amprocnum = 4
+                                       AND pl.lanname = 'internal'
+                                       AND pr.prosrc IN ('btequalimage',
+                                                         'btvarstrequalimage')))
+              FROM generate_subscripts(x.indclass, 1) k
+              JOIN pg_opclass op ON op.oid = x.indclass[k]
+             WHERE k < x.indnkeyatts)                   AS all_equalimage,
+```
+
+The two whitelisted names are safe to hard-code because their behavior is fixed in C: one always returns true, and the other returns true exactly when the collation conjunct beside it already requires. Everything else — a SQL function, a PL/pgSQL function, a third-party C function, or no row at all — resolves to false, which is test 16.
+
+### Why `prosrc` and not `proname`
+
+The obvious spelling is `pr.proname IN ('btequalimage', 'btvarstrequalimage')` with `pronamespace = pg_catalog`. Two measured fixtures reject it, and both follow from how `fmgr` resolves a function:
+
+- For a built-in OID, `fmgr_info` never consults `pg_proc` at all ([fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178)).
+- For a non-built-in OID declared `LANGUAGE internal`, the C entry point is looked up **by `prosrc`**, and the comment says why: a user may create an alias whose name differs from the internal function's ([fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240)).
+
+So `prosrc` is the identity the engine uses, and the name is decoration. Measured, on the same server:
+
+| Probe | Engine | `EXISTS` (as filed) | `proname` whitelist | `prosrc` whitelist (change 6) |
+|---|---|---|---|---|
+| `i_ei_alias`: `LANGUAGE internal AS 'btequalimage'`, in schema `public` | deduplicates, 421 blocks | true | **false** — wrong name, wrong schema | true |
+| `i_squat`: the real `btvarstrequalimage` renamed away and a SQL impostor created under its name in `pg_catalog`, registered in a new `text_squat` opclass | refuses, 1931 blocks, metapage false | true | **true** — over-credits | false |
+| `i_text_det`, measured during that same rename | deduplicates, 460 blocks | true | **false** — the name it wants no longer exists | true |
+| `pg_catalog.btequalimage` replaced by `CREATE OR REPLACE ... LANGUAGE sql AS 'SELECT false'` | still deduplicates, 421 blocks, because of the built-in fast path | true | true | **false** — under-credits |
+
+The impostor got a fresh OID (16738) and therefore no fast path, so the engine really did call it and really did refuse. Scoring those four rows against the engine: the existence test is wrong once (`i_squat`, an over-credit), the `proname` whitelist is wrong **three** times and in both directions, and the `prosrc` whitelist is wrong once — on the replaced built-in, where it under-credits, and where being wrong needs a superuser to rewrite a catalog row that the running engine then ignores.
+
+### What change 6 costs
+
+One fixture, and one shape of database. `i_ei_true` is a genuinely deduplicated 421-block index that change 6 models as if it held one tuple per row, so it reports **−226.4%** where the filed statement reports −0.5%. A negative reading is the harmless direction for alerting and useless for sizing, which is the same trade this page records for [`i_q10_part`](#where-the-proposal-is-still-wrong).
+
+The real cost is a missed positive, and it is worth stating plainly. Starting from `i_ei_none` — 1376 blocks, built with no support function — a single `ALTER OPERATOR FAMILY int4_ei_none USING btree ADD FUNCTION 4 (int4, int4) ei_alias(oid)` makes a rebuild deduplicate: `REINDEX` took it to **421 blocks**, a true 69.4% reclaimable. The filed gate reported 69.3% and was right; change 6 reported 0.1% and was wrong. That is the price, and it is bounded by three facts:
+
+- It needs a custom opclass. On a stock 17.11 database all 29 B-tree support-function-4 rows pass change 6, so no reading moves.
+- The documentation calls a custom function the recommended practice for third-party extensions ([btree.sgml:538-550](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L538-L550)), so the affected population is exactly "indexes on extension-supplied operator classes", not "indexes on built-in types".
+- The error is a false negative on a rebuild win, not an invented one. Nothing in the output claims space that is not there.
+
+Cost in time is nil: three consecutive runs over the 28 indexes and 34,164 blocks of this database took 12.8 / 12.1 / 14.0 ms as filed against 12.2 / 12.5 / 16.6 ms with change 6, and on the 12.2 server 14.0 ms against 10.3 ms. The two extra joins are on `pg_proc` and `pg_language`, both syscache-backed.
+
+### What the mixed-key failure costs
+
+Test 15 is where the filed statement's over-credit is easiest to miss, because on `t` it is *latent*. `i_mixed_tf` and `i_mixed_ft` open the gate but still report 0.2%: with 5,000 distinct values in each key column the per-column product is 25,000,000, which `least(..., live_rows)` clamps to the row count, so `tids_per_tuple` comes back 1.0 and the posting-list arithmetic has nothing to compress.
+
+Give the same two-column key an `ndistinct` object and the flag turns into a number. On `t2`, where `CREATE STATISTICS s2_ab (ndistinct) ON a, b` makes [change 2](#change-2-extended-statistics-for-a-multicolumn-key) fire, `key_groups` reads 5004 and `tids_per_tuple` 99.9:
+
+| Fixture | Live = rebuilt | Engine | Filed | Change 6 |
+|---|---|---|---|---|
+| `i2_ok` `(a, b)`, both keys equal-image | 459 | deduplicates | 8.1% | 8.1% |
+| `i2_tf` `(a int4_ei_true, b int8_ei_false)` | 1931 | refuses | **78.1%** | 0.2% |
+| `i2_ft` `(a int4_ei_false, b int8_ei_true)` | 1931 | refuses | **78.1%** | 0.2% |
+| `i2_off` `(a, b)`, `deduplicate_items = off` | 1931 | refuses | 0.2% | 0.2% |
+
+So the two changes interact: the better the duplication estimate gets, the more a wrong gate costs. The floor column is immune — 0.2% in both failing rows — which is why the alerting rule in [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate) survives all five over-credits, and why a sizing decision taken from `wasted_space_pct` or `wasted_space` does not.
+
+### The earlier v17 sweep needs three conjuncts
+
+[A deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17) predates the INCLUDE and collation work, so its gate is `NOT indisunique AND dedup_on AND all_equalimage` and it fails six tests. Adding the two conjuncts the portable statement already carries, plus change 6, brings it to 0 over-credits on the same 28 fixtures:
+
+| Fixture | Test | Engine | Sweep as filed | Sweep + 3 conjuncts |
+|---|---|---|---|---|
+| `i_inc` | 10 | refuses | **65.0%** | 0.1% |
+| `i_text_nondet` | 4 | refuses | **77.7%** | 0.2% |
+| `i_expr_lower_ci` | 9 | refuses | **77.7%** | 0.2% |
+| `i_ei_false` | 13 | refuses | **69.2%** | 0.1% |
+| `i_mixed_tf`, `i_mixed_ft`, `i2_tf`, `i2_ft` | 15 | refuses | gate opens; 0.2% reported | 0.2% |
+
+```sql
+-- in the sweep's idx CTE, beside all_equalimage
+           (x.indnatts = x.indnkeyatts)                  AS keys_only,
+           NOT EXISTS (SELECT 1 FROM generate_subscripts(x.indcollation, 1) k
+                         JOIN pg_collation cl ON cl.oid = x.indcollation[k]
+                        WHERE k < x.indnkeyatts
+                          AND NOT cl.collisdeterministic) AS all_deterministic,
+-- ... and in its fit CTE
+           (NOT s.indisunique AND s.dedup_on AND coalesce(s.all_equalimage, false)
+                AND s.keys_only AND s.all_deterministic)  AS dedup_applies,
+```
+
+The sweep still reports −320.0% on `i2_ok`, because it has no extended-statistics branch and no floor column. It is superseded by the portable statement for every purpose except reading this page in order.
+
+### Post-build mutation, and why the metapage is still not the answer
+
+The mandatory tests also settle a question [rejected fix B](#two-rejected-fixes) answered from source only: could the gate just read `bt_metap().allequalimage`? A support function is ordinary catalog state, and replacing it invalidates the metapage's stored verdict without touching the index. Measured, on `i_ei_true`, in one session:
+
+| Step | Blocks | Metapage flag | `bt_index_check` | Filed | Change 6 |
+|---|---|---|---|---|---|
+| As built | 421, posting tuples present | true | passes | −0.5% | −226.4% |
+| `CREATE OR REPLACE FUNCTION ei_true(oid) → false` | 421, unchanged | still true | **`ERROR: index "i_ei_true" metapage incorrectly indicates that deduplication is safe`** | −0.5% | −226.4% |
+| `REINDEX INDEX i_ei_true` | **1376**, no posting tuples | false | passes | 0.1% | 0.1% |
+
+Two things follow. First, core tooling treats the divergence as corruption, not as a stale cache: `bt_index_check` re-runs `_bt_allequalimage` against the current catalog and raises `ERRCODE_INDEX_CORRUPTED` when the metapage disagrees ([verify_nbtree.c:379-400](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L379-L400)). The catalog, which is what change 6 reads, is the authority. Second, change 6's "over-prediction" was the correct prediction: −226.4% against an actual rebuild of 1376 blocks from 421, which is −226.8%. The metapage would have said "true" and the filed gate "−0.5%", both of which described an index that no longer existed in that form.
+
+### The mandatory tests on a 12.2 server
+
+Test 17 on an isolated 12.2 server, `server_version_num` 120002, built without ICU. The engine has no equal-image concept at all, so the correct verdict for every fixture — positive and negative alike — is "deduplication disabled", and all four statement variants delivered it:
+
+| Probe | Result on 12.2 |
+|---|---|
+| B-tree `pg_amproc` rows at `amprocnum = 4` | **0**, while 55 rows exist for other access methods |
+| `CREATE OPERATOR CLASS ... FUNCTION 4 ei_true(oid)` | `ERROR: invalid function number 4, must be between 1 and 3` |
+| `WITH (deduplicate_items = off)` | `ERROR: unrecognized parameter "deduplicate_items"` |
+| `CREATE COLLATION ... provider = icu, deterministic = false` | `ERROR: ICU is not supported in this build` |
+| `DEBUG1` deduplication verdict during `CREATE INDEX` | never logged |
+| 10 fixtures scored | `all_equalimage` false and `dedup_applies` false in all 10, for all four variants: 0 over-credits, 0 under-credits |
+| Reported percentages | 0.0-0.2% on nine fixtures; 28.8% on `i_multi_bad`, identical to 17.11 |
+| Change 6 runs unchanged | yes; `pg_language.lanname` and `pg_proc.prosrc` both exist |
+
+Tests 4, 11, 12, 13, 14, 15 and 16 are therefore **unconstructible** on 12: the DDL that would create the fixture is rejected by that major. The positives (1, 2, 3, 7) and the type negatives (5, 6, 8, 10) all ran, and every one of them read as "not deduplicated" against a physical index that really is not deduplicated — `i_int4` at 1376 blocks there against 421 on 17.11, `i_text_det` at 1931 against 460. `i_multi_bad`'s 28.8% appearing identically on both majors is the useful accident: it proves that cell is the `avg_width` arithmetic rather than anything to do with the gate, because on 12.2 the gate cannot open.
+
+That 28.8% is worth one sentence of explanation, since it is the largest non-gate reading in the table. `pg_stats.avg_width` for the `numeric` column is **4**, because `stawidth` is an `int32` assigned `total_width / nonnull_cnt` ([analyze.c:2536-2540](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540)) and the true mean is 4.9996 — `pg_column_size` is 5 for 499,900 rows and 3 for the 100 zero rows. The model therefore prices the `(int4, numeric)` tuple in a 20-byte slot at 366 per leaf, while the built index holds 24-byte items at 262 per leaf.
+
+### The harness, runnable
+
+Two artifacts. The first is an audit query that needs no fixtures: run it against any 12-or-later database to list the indexes whose reading depends on the gate change, before adopting change 6.
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '2s';
+
+SELECT /* wiki_btree_dedup_gate_audit */
+       n.nspname, t.relname AS tablename, c.relname AS indexname,
+       pg_size_pretty(pg_relation_size(c.oid))                     AS index_size,
+       g.exists_aei                                                AS gate_as_filed,
+       g.builtin_aei                                               AS gate_change6,
+       (SELECT string_agg(DISTINCT coalesce(pr.proname::text, '(none)'), ', ')
+          FROM generate_subscripts(x.indclass, 1) k
+          JOIN pg_opclass op ON op.oid = x.indclass[k]
+          LEFT JOIN pg_amproc ap ON ap.amprocfamily = op.opcfamily
+                                AND ap.amproclefttype = op.opcintype
+                                AND ap.amprocrighttype = op.opcintype
+                                AND ap.amprocnum = 4
+          LEFT JOIN pg_proc pr ON pr.oid = ap.amproc
+         WHERE k < x.indnkeyatts)                                   AS equalimage_procs
+  FROM pg_class c
+  JOIN pg_index x     ON x.indexrelid = c.oid
+  JOIN pg_class t     ON t.oid = x.indrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_am am       ON am.oid = c.relam
+  CROSS JOIN LATERAL (
+    SELECT
+      (SELECT bool_and(EXISTS (SELECT 1 FROM pg_amproc ap
+                                WHERE ap.amprocfamily = op.opcfamily
+                                  AND ap.amproclefttype = op.opcintype
+                                  AND ap.amprocrighttype = op.opcintype
+                                  AND ap.amprocnum = 4))
+         FROM generate_subscripts(x.indclass, 1) k
+         JOIN pg_opclass op ON op.oid = x.indclass[k]
+        WHERE k < x.indnkeyatts)                                    AS exists_aei,
+      (SELECT bool_and(EXISTS (SELECT 1 FROM pg_amproc ap
+                                 JOIN pg_proc pr     ON pr.oid = ap.amproc
+                                 JOIN pg_language pl ON pl.oid = pr.prolang
+                                WHERE ap.amprocfamily = op.opcfamily
+                                  AND ap.amproclefttype = op.opcintype
+                                  AND ap.amprocrighttype = op.opcintype
+                                  AND ap.amprocnum = 4
+                                  AND pl.lanname = 'internal'
+                                  AND pr.prosrc IN ('btequalimage',
+                                                    'btvarstrequalimage')))
+         FROM generate_subscripts(x.indclass, 1) k
+         JOIN pg_opclass op ON op.oid = x.indclass[k]
+        WHERE k < x.indnkeyatts)                                    AS builtin_aei
+  ) g
+ WHERE am.amname = 'btree' AND c.relkind = 'i' AND x.indisvalid
+   AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+   AND coalesce(g.exists_aei, false) IS DISTINCT FROM coalesce(g.builtin_aei, false)
+ ORDER BY pg_relation_size(c.oid) DESC;
+```
+
+Every row it returns is an index whose deduplication credit is a guess as filed. Measured: it returns 6 rows in the fixture database — `i_ei_false`, `i_ei_true`, `i_mixed_tf`, `i_mixed_ft`, `i2_tf`, `i2_ft`, with `equalimage_procs` naming `ei_true` and `ei_false` — and **0 rows** both in a stock 17.11 database and on the 12.2 server. `i_ei_alias` and `i_ei_none` are correctly absent: the two gates agree on them, true and false respectively.
+
+The second artifact is the fixture harness. It writes a 500,000-row table and 23 of the 24 indexes measured on `t` above — the `text` `deduplicate_items = off` twin is left out — so run it in a scratch database, never beside production data.
+
+```sql
+-- fixtures for the seventeen mandatory tests (scratch database only)
+CREATE COLLATION ci   (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+CREATE COLLATION cdet (provider = icu, locale = 'und');
+
+CREATE FUNCTION ei_true(oid)  RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT true $$;
+CREATE FUNCTION ei_false(oid) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT false $$;
+CREATE FUNCTION ei_alias(oid) RETURNS bool LANGUAGE internal IMMUTABLE AS 'btequalimage';
+
+CREATE OPERATOR CLASS int4_ei_true FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4), FUNCTION 4 ei_true(oid);
+CREATE OPERATOR CLASS int4_ei_false FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4), FUNCTION 4 ei_false(oid);
+CREATE OPERATOR CLASS int4_ei_none FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4);
+CREATE OPERATOR CLASS int4_ei_alias FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4), FUNCTION 4 ei_alias(oid);
+CREATE OPERATOR CLASS int8_ei_true FOR TYPE int8 USING btree AS
+  OPERATOR 1 <(int8,int8), OPERATOR 2 <=(int8,int8), OPERATOR 3 =(int8,int8),
+  OPERATOR 4 >=(int8,int8), OPERATOR 5 >(int8,int8),
+  FUNCTION 1 btint8cmp(int8,int8), FUNCTION 4 ei_true(oid);
+CREATE OPERATOR CLASS int8_ei_false FOR TYPE int8 USING btree AS
+  OPERATOR 1 <(int8,int8), OPERATOR 2 <=(int8,int8), OPERATOR 3 =(int8,int8),
+  OPERATOR 4 >=(int8,int8), OPERATOR 5 >(int8,int8),
+  FUNCTION 1 btint8cmp(int8,int8), FUNCTION 4 ei_false(oid);
+
+CREATE TABLE t AS
+SELECT i::int4 AS u, (i % 5000)::int4 AS a, (i % 5000)::int8 AS b,
+       'key' || lpad((i % 5000)::text, 8, '0') AS s, ((i % 5000)::numeric) AS n,
+       (i % 5000)::float4 AS f4, (i % 5000)::float8 AS f8, (i % 7)::int4 AS d
+  FROM generate_series(1, 500000) i;
+
+SET client_min_messages = debug1;          -- logs the engine's own verdict
+CREATE INDEX i_int4          ON t (a);                                   -- 1
+CREATE INDEX i_int8          ON t (b);                                   -- 2
+CREATE INDEX i_text_det      ON t (s);                                   -- 3
+CREATE INDEX i_text_icu_det  ON t (s COLLATE cdet);                      -- 3
+CREATE INDEX i_text_nondet   ON t (s COLLATE ci);                        -- 4
+CREATE INDEX i_numeric       ON t (n);                                   -- 5
+CREATE INDEX i_float4        ON t (f4);                                  -- 6
+CREATE INDEX i_float8        ON t (f8);                                  -- 6
+CREATE INDEX i_multi_ok      ON t (a, b);                                -- 7
+CREATE INDEX i_multi_bad     ON t (a, n);                                -- 8
+CREATE INDEX i_expr_lower    ON t (lower(s));                            -- 9
+CREATE INDEX i_expr_lower_ci ON t ((lower(s)) COLLATE ci);               -- 9
+CREATE INDEX i_expr_num      ON t ((a::numeric));                        -- 9
+CREATE INDEX i_expr_int8     ON t ((n::int8));                           -- 9
+CREATE INDEX i_inc           ON t (a) INCLUDE (d);                       -- 10
+CREATE INDEX i_dupoff        ON t (a) WITH (deduplicate_items = off);     -- 11
+CREATE INDEX i_ei_none       ON t (a int4_ei_none);                      -- 12
+CREATE INDEX i_ei_false      ON t (a int4_ei_false);                     -- 13
+CREATE INDEX i_ei_true       ON t (a int4_ei_true);                      -- 14
+CREATE INDEX i_ei_alias      ON t (a int4_ei_alias);                     -- 14
+CREATE INDEX i_mixed_tf      ON t (a int4_ei_true, b int8_ei_false);     -- 15
+CREATE INDEX i_mixed_ft      ON t (a int4_ei_false, b int8_ei_true);     -- 15
+CREATE UNIQUE INDEX i_uniq   ON t (u);
+RESET client_min_messages;
+ANALYZE t;
+```
+
+`client_min_messages` is `PGC_USERSET` ([guc_tables.c:4777-4785](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4777-L4785)), so `debug1` applies to the session or transaction that sets it and needs no reload or restart. The two build-failure cases are omitted because they abort `CREATE INDEX` by design; add them with `ei_null(oid) → NULL::bool` and a PL/pgSQL `ei_boom(oid)` that raises. Both `CREATE COLLATION` lines need a server built `--with-icu`: without it they fail with `ICU is not supported in this build`, which drops tests 4 and half of test 9.
+
+The block above was run verbatim in a fresh database on the same 17.11 server: 23 indexes built, the two ICU collations created, and the engine logged `can safely use deduplication` for 11 of them, `cannot use deduplication` for 11, and nothing at all for `i_inc`.
+
+Scoring needs the engine's answer per index. Three sources agree in all 28 fixtures, and the first needs no extension:
+
+1. the `DEBUG1` line — `index "x" can safely use deduplication` or `cannot use deduplication` — except for `INCLUDE` indexes, which log nothing;
+2. `bt_metap(indexname).allequalimage`, which is superuser-only and true even for `deduplicate_items = off` and unique indexes;
+3. `count(tids) > 0` over `bt_page_items(indexname, 1)`, the only one of the three that proves posting lists were actually written.
+
 ## Context Reviewed
 
 - Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number here is a 17.10 observation and was not re-measured; the two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged.
@@ -2066,6 +2486,8 @@ The `i_rand` row is the portability point that matters for change 5: split-point
 - Twelve-issue-review follow-up, source coverage: nbtree build and deduplication in `nbtsort.c` (`_bt_pagestate`'s `btps_full`, `_bt_blnewpage`'s reserved high-key line pointer, `_bt_buildadd`'s hard and soft page-full rule and its high-key move, `_bt_load`'s `maxpostingsize` and its dedup loop, `_bt_sort_dedup_finish_pending`, `_bt_leafbuild`'s recomputed `allequalimage` and metapage write), `nbtdedup.c` (`_bt_dedup_start_pending`'s `basetupsize`, `_bt_dedup_save_htid`'s `mergedtupsz` test, `_bt_form_posting`), `nbtsplitloc.c` (`_bt_findsplitloc`'s header comment on fillfactor versus 50:50, the rightmost-leaf branch, `_bt_afternewitemoff`, the other-leaf branch, single-value strategy), `nbtutils.c` (`_bt_allequalimage`'s INCLUDE early return), `nbtpage.c` (`_bt_initmetapage`, `_bt_metaversion`), `nbtinsert.c` (the insert-time deduplication gate), `nbtree.h` (the btree-version comment on `btm_allequalimage` and pg_upgrade); extended statistics in `mvdistinct.c` (`statext_ndistinct_build`'s combination generator, `ndistinct_for_combination`, `estimate_ndistinct`'s clamping, `pg_ndistinct_out`'s key spelling, the negative-attnum expression convention), `extended_stats.c` (`BuildRelationExtStatistics`, the ndistinct build call, `stxdinherit`), `statscmds.c` (the two-column minimum and the `STATS_MAX_DIMENSIONS` limit), `statistics.h`; statistics visibility in `system_views.sql` (`pg_stats` and its `has_column_privilege`/RLS filter, the `REVOKE` on `pg_statistic`, `pg_stats_ext` and its `pg_has_role` filter, `pg_stats_ext_exprs`, `pg_stat_all_tables`'s live/dead/last-analyze columns) and `catalogs.sgml` (the `pg_statistic` and `pg_statistic_ext_data` visibility paragraphs); row-count sources in `pgstat_relation.c` (`pgstat_count_heap_insert`, `AtEOXact_PgStat`'s live/dead deltas, `pgstat_relation_flush_cb`'s clamped accumulation, `pgstat_report_analyze`'s re-basing), `index.c`, `analyze.c`, `vacuum.c`; contrib boundary in `btreefuncs.c` (`bt_metap`'s superuser check and its `allequalimage` output) and `pgstatindex.c` (`leaf_fragmentation`).
 - Twelve-issue-review follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --without-icu`, `block_size` 8192, `autovacuum = off`, `fsync = off`, plus one isolated 12.2 server from its own pin for the portability run. Fixtures on 17.11: a nine-point duplication band at 1,000,000 rows (100, 132, 133, 143, 200, 264, 265, 500 and 1000 rows per key) chosen around the 132-TID cap; `i_q1000` and `i_cd` rebuilt to the shapes the earlier follow-up measured; `i_seq` and `i_rand` as ordered-versus-random insertion twins over the same 1,000,000 distinct keys; `i_wide` at 300,000 distinct 100-byte `text` keys; correlated, independent, superset-covered, gap-covered, reversed-column and expression multicolumn indexes with `CREATE STATISTICS ... (ndistinct)` objects; `i_inc_lowcard` and `i_dupoff` for the two gate conjuncts; `i_stale`, `i_dupdel`, `i_extdel2` and `i_ext50` for real reclaimable space; and an unprivileged `probe` role with no table privileges. The statement as filed and the corrected statement were installed as views, a `security_invoker` copy was used to read internals as the unprivileged role, and a third view dropped only the `least()` guard for rejected fix A. `CREATE INDEX CONCURRENTLY` copies are the ground truth; `pgstattuple` supplied page classes, densities and `leaf_fragmentation`, and `pageinspect` supplied `bt_metap`, `bt_page_stats`, `bt_multi_page_stats` and `bt_page_items` — both as ground truth only. The 12.2 server carried the ordered/random twins, the correlated multicolumn index with its statistics object, `i_q1000`, `i_wide` and `i_stale`, plus its own `probe` role.
 - Column-rename follow-up, source coverage (no server run; this follow-up is source-only): output column labelling and sorting in `queries.sgml` (the Column Labels section and the `ORDER BY`-by-output-column rule); query-jumble surfaces in `queryjumblefuncs.c` (`CleanQuerytext`, `JumbleQuery`, `_jumbleNode` and the two generated includes), `gen_node_support.pl` (per-field `query_jumble_ignore` emission), `primnodes.h` (`TargetEntry.resname`), and `pgstatstatements.sgml` (the `queryid` post-parse-analysis and stability paragraphs); query-text surfaces in `pg_stat_statements.c` (`pgss_store`'s entry lookup, `generate_normalized_query`, `qtext_store`) and `postgres.c` (`log_statement` and duration logging in `exec_simple_query`); identifier limits in `pg_config_manual.h` (`NAMEDATALEN`), `scan.l` (the `{identifier}` rule) and `scansup.c` (`downcase_truncate_identifier`, `truncate_identifier`); type and error surfaces in `pg_proc.dat` (`pg_size_pretty` return types), `varlena.c` (`bttextcmp`, `text_cmp`, `varstr_cmp`) and `parse_relation.c` (`errorMissingColumn`); vocabulary in `glossary.sgml` (the Bloat entry), `ref/copy.sgml` ("recover the wasted space"), `maintenance.sgml` (routine reindexing), `pgstattuple--1.4.sql` (`free_space`/`free_percent`), plus whole-tree string searches for `bloat` across `system_views.sql`, `pg_proc.dat` and every contrib SQL script.
+- Mandatory-tests follow-up, source coverage: the equal-image decision in `nbtutils.c` (`_bt_allequalimage`'s INCLUDE early return, its per-key-attribute loop over `rd_opfamily`/`rd_opcintype`/`rd_indcollation`, the `get_opfamily_proc` lookup followed by the actual call and the first-false `break`, and the `debugmessage` block that the early return skips), `nbtsort.c` (`_bt_leafbuild`'s `debugmessage = true` call, `_bt_load`'s three-way `deduplicate` condition), `nbtree.h` (`BTEQUALIMAGE_PROC`, `BTNProcs`, `BTGetDeduplicateItems`); the two stock support functions in `datum.c` (`btequalimage`'s unconditional true and its header comment about `opcintype`) and `varlena.c` (`btvarstrequalimage`'s C-collation/default-collation/`get_collation_isdeterministic` branches); function resolution in `fmgr.c` (`fmgr_info_cxt_security`'s built-in fast path that never consults `pg_proc`, the `INTERNALlanguageId` branch that resolves an alias by `prosrc` through `fmgr_lookupByName`, `OidFunctionCall1Coll`, and `FunctionCall1Coll`'s NULL-result `elog`); support-function validation in `opclasscmds.c` (`assignProcTypes`'s one-argument, boolean-return and non-cross-type checks for `BTEQUALIMAGE_PROC`, and the two `amadjustmembers` call sites) and `nbtvalidate.c` (`btvalidate`'s `check_amproc_signature` for support number 4 and its `invalid support number` default), with the SQL entry point in `amapi.c` (`amvalidate`); the nondeterministic-collation DDL refusal for the three pattern opclasses in `index.c`; catalog shape in `pg_amproc.dat` (every B-tree `amprocnum => '4'` row), `pg_proc.dat` (`btequalimage`, `btvarstrequalimage`), `pg_index.h` (`indclass`, `indcollation`, `indnatts`, `indnkeyatts`), `pg_collation.h` (`collisdeterministic`); `analyze.c`'s `stawidth = total_width / nonnull_cnt` assignment; `guc_tables.c` (`client_min_messages`); the contrib cross-check in `amcheck/verify_nbtree.c` (`bt_index_check`'s metapage-versus-`_bt_allequalimage` comparison and its `ERRCODE_INDEX_CORRUPTED` message) and `pageinspect/btreefuncs.c` (`bt_metap`, `bt_page_items`); the documentation in `btree.sgml` (the `equalimage` support-function contract, the every-column-must-return-true rule, the stock-function convention and the third-party-extension recommendation, and the unsafe-case list covering nondeterministic collations, `numeric`, `jsonb`, `float4`/`float8`, container types and `INCLUDE`); and the upstream tests `alter_generic.sql`/`.out` (cross-type `ADD FUNCTION 4`) and `opr_sanity.sql`/`.out` (which core opclasses may omit `btequalimage`).
+- Mandatory-tests follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, in a scratch database created for this run, plus the isolated 12.2 server from its own pin for test 17. Fixtures: `t`, 500,000 rows with 5,000 distinct keys over `int4`, `int8`, `text`, `numeric`, `float4`, `float8`, a unique `int4` and a 7-value `int4`, carrying 24 B-tree indexes that cover the seventeen requirements — two deterministic-collation text indexes (default and ICU `und`), one nondeterministic ICU index, four expression indexes chosen so the expression's type and collation differ from the underlying column's, an `INCLUDE` index, a `deduplicate_items = off` twin per key type, a unique index, and six custom-opclass indexes; and `t2`, the same shape on `(int4, int8)` with a `CREATE STATISTICS ... (ndistinct)` object so the mixed-key over-credit becomes visible as a percentage. Eight custom operator classes registered SQL, PL/pgSQL and `LANGUAGE internal` support functions returning true, false and NULL, plus one that raises. Ground truth per index is the build's own `DEBUG1` verdict, `bt_metap().allequalimage`, and `count(tids) > 0` over `bt_page_items(index, 1)`, with a `deduplicate_items = off` twin as the physical size baseline; `pageinspect` and `amcheck` were installed as ground truth only. Both statements on this page were installed as views generated mechanically from this page's own SQL text — the filed text and a copy with only the `all_equalimage` subquery replaced — with the 1 MB triage filter, `ORDER BY` and `LIMIT` removed and `dedup_applies`, `all_equalimage`, `slot`, `leaf_cap`, `expected_blocks` and `floor_blocks` exposed. Additional probes: `amvalidate` on every custom opclass, four rejected `ADD FUNCTION 4`/`CREATE INDEX` DDL shapes, `CREATE OR REPLACE FUNCTION pg_catalog.btequalimage`, a rename-and-squat of `pg_catalog.btvarstrequalimage`, a post-build support-function mutation followed by `bt_index_check` and `REINDEX`, the reverse mutation via `ALTER OPERATOR FAMILY ... ADD FUNCTION 4` followed by `REINDEX`, and a stock-database census of B-tree `amprocnum = 4` rows. Both servers were stopped afterwards, with the scratch databases dropped and `pg_catalog.btequalimage` restored to `LANGUAGE internal`.
 
 ## Evidence Map
 
@@ -2147,6 +2569,18 @@ The `i_rand` row is the portability point that matters for change 5: split-point
 | A rightmost leaf split targets `fillfactor` while every other leaf split targets 50:50, so only ordered insertion reaches a sorted build's density | [nbtsplitloc.c:88-102](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L88-L102), [nbtsplitloc.c:286-291](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L286-L291), [nbtsplitloc.c:292-303](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L292-L303), [nbtsplitloc.c:329-335](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L329-L335) |
 | A build recomputes `allequalimage` from the catalog and only then writes it to the new metapage, while the metapage copy is what the insert path reads | [nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563), [nbtsort.c:1124-1127](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1124-L1127), [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L60-L90), [nbtpage.c#_bt_metaversion](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L718-L795), [nbtinsert.c:2772-2782](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2772-L2782) |
 | A v12-built index keeps `btm_allequalimage` false until a `REINDEX`, and `bt_metap` is superuser-only | [nbtree.h:135-142](../../../../raw/postgres-17/src/include/access/nbtree.h#L135-L142), [btreefuncs.c:905-921](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L905-L921), [btreefuncs.c:840-857](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L840-L857) |
+| The equal-image decision looks the function up **and calls it**, so a registered support function that returns false is the same outcome as no support function at all | [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5129-L5183), [nbtutils.c:5156-5169](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5156-L5169), [btree.sgml#equalimage](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L499-L509) |
+| An `INCLUDE` index returns false before any lookup, and before the debug message, so it logs no deduplication verdict | [nbtutils.c:5144-5147](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147), [nbtutils.c:5172-5180](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180), [btree.sgml:897-909](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L897-L909) |
+| The loop is over index key attributes, using each key's own opclass, input type and collation, so an expression key is judged by the expression | [nbtutils.c:5149-5157](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5149-L5157), [pg_index.h:48-54](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L48-L54) |
+| The two stock support functions are unconditional-true and deterministic-collations-only | [datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L415-L438), [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613), [btree.sgml:538-550](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L538-L550) |
+| `numeric`, `jsonb`, `float4`/`float8`, container types and `INCLUDE` are the documented unsafe cases, and the catalog form is a missing support-function row | [btree.sgml:834-909](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L834-L909), [pg_amproc.dat:143](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L143), [opr_sanity.sql:1336-1353](../../../../raw/postgres-17/src/test/regress/sql/opr_sanity.sql#L1336-L1353), [opr_sanity.out:2204-2222](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222) |
+| A support function is validated for arity, return type and non-cross-typedness only — never for language or return value | [opclasscmds.c:1310-1333](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L1310-L1333), [opclasscmds.c:696-704](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L696-L704), [nbtvalidate.c:110-126](../../../../raw/postgres-17/src/backend/access/nbtree/nbtvalidate.c#L110-L126), [amapi.c#amvalidate](../../../../raw/postgres-17/src/backend/access/index/amapi.c#L110-L143), [alter_generic.sql:444-446](../../../../raw/postgres-17/src/test/regress/sql/alter_generic.sql#L444-L446) |
+| A NULL-returning support function aborts the build rather than disabling deduplication | [fmgr.c#OidFunctionCall1Coll](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L1411-L1418), [fmgr.c:1141-1143](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L1141-L1143) |
+| `prosrc`, not `proname`, is the identity the engine resolves: built-in OIDs skip `pg_proc` entirely, and a `LANGUAGE internal` alias is looked up by `prosrc` | [fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178), [fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240) |
+| A nondeterministic collation cannot be combined with the three pattern opclasses, which is why a whole-index collation test cannot be wrong in that direction | [index.c:807-850](../../../../raw/postgres-17/src/backend/catalog/index.c#L807-L850), [pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241) |
+| A metapage flag that disagrees with the current opclasses is corruption to `amcheck`, not a stale cache | [verify_nbtree.c:379-400](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L379-L400) |
+| `pg_stats.avg_width` is an integer truncation of the mean stored width | [analyze.c:2536-2540](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540), [pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L40-L50) |
+| `client_min_messages` is `PGC_USERSET`, so the harness's `debug1` needs no reload or restart | [guc_tables.c:4777-4785](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4777-L4785) |
 
 ## Open Questions
 
@@ -2199,6 +2633,19 @@ The `i_rand` row is the portability point that matters for change 5: split-point
 - **Neither statement was re-run on 14.23, 13, 15 or 16.** The corrected statement was measured on 17.11 and 12.2 only. 14.23 was measured for the earlier follow-up with the filed statement, and change 2 would behave there as on 17.11 because `CREATE STATISTICS` and `pg_stats_ext` predate 12; that is a source-and-catalog argument, not a run.
 - **The `−0.6%` on `i_q1000` depends on the sampled most-common-value list.** `ANALYZE` stored 11 MCVs for a uniform 1000-value column, which is what splits the key groups into classes and adds 6 leaves to the model. A second `ANALYZE` with a different sample, or a different `default_statistics_target`, would move that cell; `i_r1000` — the same shape built independently — read `−0.3%` in the same run, which is the size of that effect on one server.
 - **The two-server timing comparison is not a benchmark.** 41.7 / 34.4 / 37.6 ms against 30.2 / 31.9 / 36.6 ms was measured on one warm database with 54 indexes, with the triage filter removed, on a machine running other work. The ranges overlap and no attempt was made to attribute the difference to a specific CTE.
+- **The mandatory tests ran on their own fixture set, not on the 54-cell matrix or the twelve-issue-review fixtures.** Change 6 touches only `all_equalimage`, and the 28 fixtures show it moving exactly the six custom-opclass rows, so on any index whose key opclasses are built-in the two statements are the same expression. That is an argument from the changed subquery plus 22 unchanged rows, not a re-run of the earlier tables. `i_q1000`, `i_cd`, `i_rand`, `i_stale`, `i_dupdel`, `i_ext50` and the duplication band were not re-measured with change 6 applied, so every number above this follow-up remains a reading of the statement without it.
+- **The 30%-threshold alert table above was not recomputed.** [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate) counts true and false positives on the earlier fixture set. The new fixtures add three point-estimate false positives at that threshold and none on the floor, but they were counted on this run's 28 indexes, not merged into that table's population.
+- **Test 14 is answered "FALSE by design", which is a policy choice, not a proof.** A statement that could call the support function — a `security_invoker` view over a PL/pgSQL wrapper, or an extension — would answer test 14 correctly and keep test 16 safe. That was not built, because this page's constraint is core SQL and read-only catalog access. Whether calling an arbitrary opclass support function from a monitoring query is acceptable was not analyzed; the function may be volatile, may raise, and `ei_boom` shows what raising costs.
+- **The whitelist is a fixed two-name list, so a future core function would need editing.** If a later major adds a third stock equal-image function, change 6 silently declines to credit every opclass that registers it. Nothing in the statement detects that; the only symptom is under-reporting. No mechanism for discovering "known-safe" support functions from the catalog alone was found.
+- **The replaced-built-in case was measured for the gate but not for the reported percentage.** With `pg_catalog.btequalimage` rewritten as a SQL function returning false, change 6 answered false for `i_int4` and `i_text_det` while the engine still deduplicated, so the statement would over-predict every built-in-keyed index in that database. The gate values were captured; the resulting percentages were not, because the built-in was restored first.
+- **`i_mixed_tf` and `i_mixed_ft` were only made visible through an extended-statistics object.** On `t` their over-credit is latent, because the per-column product exceeds the row count. Whether a real two-column key with genuine correlation and no `CREATE STATISTICS` object can show the same failure was not tested; the `t2` pair proves it appears as soon as change 2 supplies a group estimate.
+- **The `i_multi_bad` 28.8% reading is explained but not fixed.** It reproduces identically on 12.2, which places it in the `avg_width` family of errors [Method A-prime](#method-a-prime-still-fixes-variable-key-width) documents, and 28.8% sits just under the 30% threshold used throughout this page. No fixture was built to find the width at which a two-column key with a variable-width member crosses it.
+- **The 12.2 run could not construct seven of the seventeen tests.** Tests 4, 11, 12, 13, 14, 15 and 16 need a nondeterministic collation, the `deduplicate_items` reloption or a custom support function 4, and that server rejects all three. Test 17 therefore proves that the statement stays correct where deduplication cannot exist, not that it stays correct on a 13-through-16 server where deduplication exists and custom opclasses are constructible. Majors 13 through 16 were again not run.
+- **The 12.2 server has no ICU.** `CREATE COLLATION ... provider = icu, deterministic = false` fails there with `ICU is not supported in this build`, so the collation half of the gate was exercised on 17.11 only. That is a build-option gap in this repository's checkout, not a statement about what PostgreSQL 12 supports.
+- **The harness scores the gate, not the whole statement.** Pass and fail above mean "`dedup_applies` agrees with the engine". A test that also asserted the reported percentage would fail on `i_text_det` (7.8%), `i_multi_ok` (−320.0%) and `i_multi_bad` (28.8%) for reasons this page already files as arithmetic limits. No threshold for "close enough" was defined, and none of the three has a fix in this follow-up.
+- **One seed, one block size, one fillfactor.** All 28 fixtures use 500,000 rows, exactly 100 rows per key, `block_size` 8192 and the default `fillfactor`. The 100-rows-per-key choice puts every deduplicated fixture below the 132-TID cap for an 8-byte key, so no mandatory-test fixture exercises the multi-posting-tuple path that [change 1](#change-1-round-each-key-group-up-to-whole-posting-tuples) addresses.
+- **The post-build mutation was measured on one fixture in one session.** `ei_true` was rewritten, `bt_index_check` raised, and `REINDEX` produced 1376 blocks. Whether an ordinary `VACUUM`, an insert-time deduplication pass or a standby replaying the same index would behave the same way after such a catalog change was not tested, and `amcheck`'s verdict was taken as the definition of "wrong", not as a guarantee that reads of that index misbehave.
+- **"0% reclaimable" is an argument from freshly built, not a measured rebuild.** Unlike the earlier fixture families on this page, no `CREATE INDEX CONCURRENTLY` copy was taken for the 28 mandatory-test fixtures; each one was built once from static data and never modified, so live equals rebuilt by construction. The only two rebuilds actually performed are the mutation pair (`REINDEX` produced 1376 blocks for `i_ei_true` and 421 for `i_ei_none`, both matching the corresponding fresh builds exactly), which supports the construction argument without replacing it.
 
 ## Source References
 
@@ -2307,6 +2754,29 @@ The `i_rand` row is the portability point that matters for change 5: split-point
 - [glossary.sgml#glossary-bloat](../../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250)
 - [copy.sgml#wasted-space](../../../../raw/postgres-17/doc/src/sgml/ref/copy.sgml#L613-L621)
 - [pgstattuple--1.4.sql#pgstattuple](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L6-L17)
+- [datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L415-L438)
+- [fmgr.c#fmgr_info_cxt_security](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L142-L260)
+- [fmgr.c#FunctionCall1Coll](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L1128-L1146)
+- [fmgr.c#OidFunctionCall1Coll](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L1393-L1418)
+- [fmgr.c#fmgr_isbuiltin](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L70-L95)
+- [opclasscmds.c#assignProcTypes-btree](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L1244-L1334)
+- [opclasscmds.c#DefineOpClass-amadjustmembers](../../../../raw/postgres-17/src/backend/commands/opclasscmds.c#L690-L710)
+- [nbtvalidate.c#btvalidate-procs](../../../../raw/postgres-17/src/backend/access/nbtree/nbtvalidate.c#L83-L138)
+- [amapi.c#amvalidate](../../../../raw/postgres-17/src/backend/access/index/amapi.c#L110-L143)
+- [index.c#index_create-nondeterministic](../../../../raw/postgres-17/src/backend/catalog/index.c#L807-L850)
+- [pg_amproc.dat#btree-equalimage-rows](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L18-L295)
+- [pg_proc.dat#btvarstrequalimage](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L1055-L1057)
+- [pg_proc.dat#btequalimage](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L10380-L10382)
+- [pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L40-L50)
+- [analyze.c#compute_scalar_stats-width](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2530-L2545)
+- [guc_tables.c#client_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4776-L4786)
+- [verify_nbtree.c#bt_index_check-metapage](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L365-L405)
+- [btree.sgml#equalimage-support-function](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L459-L552)
+- [btree.sgml#btree-deduplication-restrictions](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L834-L909)
+- [opr_sanity.sql#btree-equalimage](../../../../raw/postgres-17/src/test/regress/sql/opr_sanity.sql#L1336-L1353)
+- [opr_sanity.out#btree-equalimage](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222)
+- [alter_generic.sql#cross-type-equalimage](../../../../raw/postgres-17/src/test/regress/sql/alter_generic.sql#L444-L446)
+- [alter_generic.out#cross-type-equalimage](../../../../raw/postgres-17/src/test/regress/expected/alter_generic.out#L504-L507)
 
 ## Navigation
 

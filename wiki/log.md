@@ -8323,3 +8323,93 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Root index, `wiki/v17/index.md`, the v17 coverage cell and a new
   `## Coverage Notes` entry in `wiki/versions.md` all describe the follow-up. The
   page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-18] follow-up v17 | seventeen mandatory deduplication-gate tests, and change 6
+
+- Extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  seventh follow-up: a seventeen-test mandatory suite for the deduplication gate,
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+  Earlier follow-ups were not renumbered or rewritten.
+- Prompt hygiene: the request ("follow agents.md, in postgresql 17 , for question:
+  ... create a section with mandatory tests to question, make sure that all
+  proposed sql executes all mandatory tests and add these tests requirements for
+  deduplication: ...") had a space before a comma, lowercase "postgresql"/"sql",
+  "tests requirements", telegraphic phrasing and a requirement list that mixed
+  fragments with imperatives. The user chose the corrected restatement, which is
+  what `## Question` now carries, with a prompt note recording the original
+  wording and the three scoping answers: both deduplication-aware statements are
+  in scope, a statement that fails a mandatory test must be corrected rather than
+  only reported, and "the original bug" is the existence-only equal-image gate.
+- Verdict: the corrected 12-through-17 statement fails 3 of 17 tests and the
+  earlier v17 sweep fails 6. Every failure is one defect — the gate asks whether
+  an equal-image support function exists in `pg_amproc`, while `_bt_allequalimage`
+  looks it up and then calls it, treating a missing OID and a false return
+  identically.
+- Measurement provenance: an isolated **17.11** server built out of tree from the
+  current pin with `--with-icu --enable-debug`, `block_size` 8192, `autovacuum` and
+  `fsync` off, in a scratch database; plus the isolated 12.2 server for test 17.
+  `pageinspect` and `amcheck` installed as ground truth only. Both statements were
+  installed as views generated mechanically from the page's own SQL text, so the
+  scored text is the filed text plus the documented view edits.
+- Fixtures: `t`, 500,000 rows with 5,000 distinct keys, 24 indexes covering every
+  requirement (two deterministic-collation text indexes, one nondeterministic ICU
+  index, four expression indexes whose expression type or collation differs from
+  the column's, an `INCLUDE` index, `deduplicate_items = off` twins, a unique
+  index, six custom-opclass indexes); and `t2`, the same shape on `(int4, int8)`
+  with a `CREATE STATISTICS (ndistinct)` object so the mixed-key over-credit shows
+  up as a percentage rather than only as a flag.
+- Eight custom operator classes made tests 12-16 constructible in pure SQL:
+  `amvalidate` returns true for SQL and PL/pgSQL support functions, because
+  `btvalidate` and `assignProcTypes` check only arity, boolean return and
+  non-cross-typedness. A NULL-returning function aborts `CREATE INDEX` with
+  `function 16575 returned NULL`; a raising one propagates.
+- Results as filed: 5 over-credits of 28 and 0 under-credits, with three fixtures
+  above a 30% threshold on the point estimate and none on the floor. `i_ei_false`
+  (support function returns false, 1376 blocks, nothing to reclaim) reads
+  **69.3%**; `i2_tf` and `i2_ft` read **78.1%**. The v17 sweep adds `i_inc`
+  (65.0%), `i_text_nondet` (77.7%) and `i_expr_lower_ci` (77.7%).
+- Change 6 applied: the registered proc must be `LANGUAGE internal` with `prosrc`
+  in (`btequalimage`, `btvarstrequalimage`). 0 over-credits, one deliberate
+  under-credit — `i_ei_true`, genuinely deduplicated at 421 blocks, reads −226.4% —
+  which is what test 16 ("never TRUE") costs against test 14 ("TRUE if safely
+  determinable"). 12.2 / 12.5 / 16.6 ms against the filed 12.8 / 12.1 / 14.0 ms
+  over 34,164 blocks; 10.3 ms against 14.0 ms on 12.2.
+- `prosrc` beats `proname`, measured on four probes: a `LANGUAGE internal` alias in
+  `public` and a renamed-away built-in break the name test as under-credits, while
+  a same-named SQL impostor at a fresh OID breaks it as an over-credit. `fmgr`'s
+  built-in fast path (which never reads `pg_proc`) and its `LANGUAGE internal`
+  branch (which resolves by `prosrc`) explain all four.
+- The metapage question is now closed by measurement, not only by source:
+  rewriting `ei_true` to return false leaves `allequalimage` true, makes
+  `bt_index_check` raise `metapage incorrectly indicates that deduplication is
+  safe`, and a `REINDEX` takes the index from 421 to 1376 blocks — which the
+  corrected reading (−226.4%) predicted to within 0.4 points.
+- The honest cost is filed as its own measurement: adding a working `FUNCTION 4`
+  to the opclass that had none makes a rebuild reclaim a true 69.4%, which the
+  filed gate reported correctly and change 6 reports as 0.1%. Bounded by a
+  stock-database census — 29 B-tree support-function-4 rows, 26 `btequalimage` plus
+  3 `btvarstrequalimage`, all `LANGUAGE internal` in `pg_catalog` — so no reading
+  moves where no custom opclass exists.
+- Test 17 on 12.2: seven of seventeen tests are unconstructible (`invalid function
+  number 4, must be between 1 and 3`, `unrecognized parameter
+  "deduplicate_items"`, `ICU is not supported in this build`), no deduplication
+  verdict is ever logged, and all four variants agree with the engine on all 10
+  buildable fixtures. `i_multi_bad` reads 28.8% on both majors, which is an
+  `avg_width` truncation to 4 on a 5-byte `numeric` rather than a gate error.
+- Two runnable artifacts, both executed: a zero-fixture audit query that lists the
+  indexes whose credit depends on the gate change (6 rows in the fixture database,
+  0 on a stock 17.11 database, 0 on 12.2) and the fixture harness, re-run verbatim
+  from the page text — 23 indexes, 11 engine "can", 11 "cannot", and no verdict at
+  all for the `INCLUDE` index, because the early return precedes the debug message.
+- Page updates: Contents gained twelve entries, `## Question` gained the
+  seventeen-bullet follow-up and its prompt note, and twelve new `###` sections
+  carry the verdict table, the per-test verdicts, the harness provenance, the
+  engine walkthrough with the four DDL refusals, change 6, the
+  `prosrc`-versus-`proname` evidence, both cost sections, the sweep's three
+  conjuncts, the post-build mutation, the 12.2 run and the runnable harness.
+  Context Reviewed gained two bullets, Evidence Map twelve rows, Open Questions
+  thirteen, and Source References twenty-three.
+- Root index, `wiki/v17/index.md`, the v17 coverage cell and a new
+  `## Coverage Notes` entry in `wiki/versions.md` all describe the follow-up. The
+  page keeps `verified: false` and `verified_by_agent: not yet`.
