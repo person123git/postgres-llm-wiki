@@ -53,6 +53,19 @@ verified_by_agent: not yet
   - [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat)
   - [What the rename cannot change](#what-the-rename-cannot-change)
   - [What a consumer must change](#what-a-consumer-must-change)
+  - [Follow-up: five changes from a twelve-issue review](#follow-up-five-changes-from-a-twelve-issue-review)
+  - [Four issues the statement already fixed](#four-issues-the-statement-already-fixed)
+  - [The mischaracterized issue: page packing](#the-mischaracterized-issue-page-packing)
+  - [Change 1: round each key group up to whole posting tuples](#change-1-round-each-key-group-up-to-whole-posting-tuples)
+  - [Change 2: extended statistics for a multicolumn key](#change-2-extended-statistics-for-a-multicolumn-key)
+  - [Change 3: statistics that exist but are invisible](#change-3-statistics-that-exist-but-are-invisible)
+  - [Change 4: a randomly inserted, never-deleted index](#change-4-a-randomly-inserted-never-deleted-index)
+  - [Change 5: what the baseline is, and what a reading means](#change-5-what-the-baseline-is-and-what-a-reading-means)
+  - [The corrected statement, with all five changes](#the-corrected-statement-with-all-five-changes)
+  - [Measured on 17.11, per fixture](#measured-on-1711-per-fixture)
+  - [Direction, magnitude, and whether the floor was immune](#direction-magnitude-and-whether-the-floor-was-immune)
+  - [Two rejected fixes](#two-rejected-fixes)
+  - [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -122,6 +135,100 @@ wasted_space.
 > the new names, and that the two `wiki_btree_bloat_sweep_*` statement tags are
 > renamed too.
 
+Follow-up on the PostgreSQL 17 page
+wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md, section
+"Follow-up: one statement for PostgreSQL 12 through 17".
+
+An external review of that statement listed twelve issues. Establish first, against
+the pinned PostgreSQL 17 checkout, that four of them are already fixed in the
+statement as filed (the negative n_distinct branch, the nondeterministic-collation
+conjunct in the deduplication gate, the INCLUDE-column conjunct
+indnatts = indnkeyatts, and the two reporting defects that became
+fsm_written_since_build and wasted_space_pct), and that one is mischaracterized.
+Then apply exactly the five changes below and no others.
+
+1. Correct the posting-tuple count so that each key group rounds up. In the
+   classpages CTE, replace the tuple count class_rows / greatest(tids, 1) with
+   least(class_groups * ceil(class_rows / class_groups / greatest(tids, 1)),
+   class_rows), carrying class_groups through classfit as needed. Show the
+   arithmetic on the page's own i_q1000 fixture (1000 keys, 1000 rows per key,
+   nmax 132: 7576 tuples modelled against 8000 required) and state whether this
+   accounts for the 847-modelled-against-896-rebuilt gap the page currently
+   attributes to page packing, or only part of it. Re-derive i_cd (424 against
+   462) under the corrected form.
+
+2. Use extended statistics for multicolumn keys. When a CREATE STATISTICS object
+   with the ndistinct kind covers the index's key columns, prefer
+   pg_stats_ext.n_distinct over the per-column product now used in key_groups,
+   and fall back to the product when no such object exists or its rows are not
+   visible. State the privilege condition pg_stats_ext imposes, and how the
+   statement behaves when the object exists but its entry does not cover the
+   exact key-column set.
+
+3. Add a caveat for invisible statistics. pg_stats drops rows the caller cannot
+   see, and the current coalesce(..., 0) turns that into an all-distinct
+   assumption, so the sweep silently degrades to the floor model and
+   under-reports bloat on duplicate-heavy indexes. Distinguish "no statistics
+   row exists" from "statistics exist but are not visible to this role" as far
+   as core SQL allows, emit a caveat for it, and say whether that caveat belongs
+   in the alert-suppression set alongside "never analyzed" and "row-count
+   sources disagree".
+
+4. Add a fixture for a randomly inserted, never-deleted index and measure it.
+   Every existing reclaimable-space fixture is delete-driven or a statistics
+   trap, so the page's "0 false positives at a 30% threshold on all three
+   servers" result was never tested against an index whose leaves are at
+   split-point density rather than fillfactor density. Report the live density,
+   the rebuilt size, the point estimate, and the floor, and state plainly that
+   this is the one valid issue the floor-plus-status-plus-caveats rule cannot
+   defend against, because with distinct keys the floor equals the point
+   estimate.
+
+5. Sharpen the framing of the baseline. The model's reference is a sorted build
+   at the index's fillfactor, which is what a rebuild produces; a live index's
+   non-rightmost leaf splits target a different occupancy. Say what the output
+   therefore means for a healthy index under steady random insertion, and how a
+   reader should decide between "a rebuild would reclaim this" and "a rebuild is
+   worth doing".
+
+Record two rejected fixes, with reasons from source:
+
+A. Do not replace least(reltuples, n_live_tup). n_live_tup is a live-row count
+   maintained by DML deltas without ANALYZE, live rows are the correct rebuild
+   baseline, and that expression is what makes the i_stale fixture read
+   correctly. Name what the sweep would lose if it used reltuples alone.
+
+B. Do not source the deduplication gate from bt_metap().allequalimage. The model
+   predicts a fresh build, the build path recomputes the flag, an index carried
+   over by pg_upgrade from PostgreSQL 12 reports false while a rebuild would set
+   it true, and the function is superuser-only, which breaks the page's
+   core-SQL-only constraint. State which question the metapage flag does answer.
+
+Deliverable and constraints:
+
+- Extend the existing question page as a new follow-up section. Do not create a
+  new document, and do not renumber or rewrite the earlier follow-ups.
+- Keep the two-column output contract (wasted_space_pct and
+  wasted_space_pct_floor) and the wasted_space naming.
+- For every change, state the direction of the error it fixes (does it produce
+  false positives or false negatives), its measured or derived magnitude, and
+  whether the floor-based alert rule was already immune to it.
+- Verify that the statement still runs unchanged on PostgreSQL 12 and that every
+  new construct exists in 12. If any does not, say so and give the fallback.
+- Cite the pinned PostgreSQL 17 checkout for every behavioral claim. If a change
+  is not measured on a server, put the unmeasured part under Open Questions
+  rather than presenting derived numbers as measurements.
+
+> Prompt note: filed verbatim, at the asker's direction, with two counts recorded
+> here rather than silently corrected. First, the parenthesis lists five items for
+> "four of them are already fixed"; the asker confirmed the two reporting defects
+> count as one review issue, which makes the ledger 4 already fixed + 1
+> mischaracterized + 5 applied + 2 rejected = 12. Second, the second reporting
+> defect became the **signed `wasted_space` byte column**, not `wasted_space_pct`:
+> `wasted_space_pct` is the percentage column, which was never defective and was
+> renamed from `bloat_pct` by the fifth follow-up. The asker also named the
+> mischaracterized issue: the attribution of the `i_q1000` gap to page packing.
+
 ## Answer
 
 ### Verdict
@@ -146,6 +253,8 @@ A later follow-up replaces it with a single statement intended for any server fr
 A fourth follow-up corrects two reporting defects that both statements shipped with — a free-space-map boolean that reports history rather than current state, and a byte column clamped at zero beside an unclamped percentage. Neither touches `expected_blocks`, so no percentage on this page moves; see [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects).
 
 A fifth follow-up renames the three reporting columns and both statement tags off the word "bloat": the statements now emit `wasted_space`, `wasted_space_pct` and `wasted_space_pct_floor`. That is an `AS` label change and nothing else, and it is worth making because the PostgreSQL glossary's "bloat" is per-page state that no core-SQL method here can see; see [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat).
+
+A sixth follow-up works a twelve-issue external review of the portable statement, on a server built from the **current** 17.11 pin rather than the 17.10 one every earlier number came from. Four issues were already fixed, one — the page's own "page packing" attribution — is mischaracterized, five changes are applied, and two proposed fixes are rejected with reasons from source. The load-bearing results: extended statistics turn a genuinely 49.8%-reclaimable correlated two-column index from a missed `−38.3%` into `+49.9%`; a randomly inserted, never-deleted index reports **27.1% on both columns while the model is exactly right**, which is the one failure the floor-based alert rule cannot defend against; and the prescribed posting-tuple round-up is not a strict improvement — it removes every phantom-bloat reading above 264 rows per key and introduces over-prediction up to `−99.4%` just above a multiple of the 132-TID cap. See [Follow-up: five changes from a twelve-issue review](#follow-up-five-changes-from-a-twelve-issue-review).
 
 ### How the test was run
 
@@ -1314,6 +1423,631 @@ Two artifacts keep the old spelling on purpose: the psql capture in [The v14 unk
 2. **Anything that sorts on the size column.** `pg_size_pretty` returns `text` for both its `int8` and `numeric` forms ([pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507)), so `ORDER BY wasted_space DESC` sorts collated strings through `bttextcmp` ([varlena.c#bttextcmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1875-L1888), [varlena.c#varstr_cmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1583-L1590)) and puts `9 bytes` above `10 MB`. This was already true of `wasted`; it is why the ranking belongs on the byte expression, and why a parsing consumer should take `wasted_space_bytes` instead.
 3. **Log and `pg_stat_statements` text matching.** The tag survives into both, so a grep for `wiki_btree_bloat_sweep_12_17` stops matching. `log_statement` and `log_min_duration_statement` print the source string as received ([postgres.c#log_statement](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1071-L1081), [postgres.c#duration-statement](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1369-L1380)); `pg_stat_statements` trims only leading and trailing whitespace from the statement's slice of the source text ([queryjumblefuncs.c#CleanQuerytext](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L61-L102)) and its normalization replaces constants, so an inline comment is preserved. One wrinkle follows from the unchanged query ID: the text is written only when the hash entry is created ([pg_stat_statements.c#pgss_store-entry](../../../../raw/postgres-17/contrib/pg_stat_statements/pg_stat_statements.c#L1312-L1369)), so an entry that already exists keeps showing the old tag until it is evicted or `pg_stat_statements_reset()` runs.
 
+### Follow-up: five changes from a twelve-issue review
+
+The twelve issues resolve into four already fixed, one mischaracterized, five applied and two rejected. Every number in this follow-up was measured on a **17.11** server built out of tree from the current pin `786db8dcf168bd9df8f55047337525ac19118b1c` — the first measurements on this page taken on the pinned commit rather than the previous 17.10 one — plus a 12.2 server for portability. `block_size` 8192, `autovacuum = off`, `fsync = off`; `pgstattuple` and `pageinspect` were installed as ground truth only and neither statement reads them. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy.
+
+| # | Issue | Disposition |
+|---|---|---|
+| 1 | Negative `n_distinct` is not credited | already fixed: credited for a whole-table index since the portable statement was filed |
+| 2 | The gate ignores nondeterministic collations | already fixed: `all_deterministic` conjunct |
+| 3 | The gate credits INCLUDE indexes | already fixed: `indnatts = indnkeyatts` |
+| 4 | Two reporting defects | already fixed: `fsm_written_since_build`, signed `wasted_space` |
+| 5 | The `i_q1000` gap is page packing | **mischaracterized**: 48 of its 49 blocks are a posting-tuple count error |
+| 6 | Posting tuples are not counted per key group | applied, change 1 |
+| 7 | Multicolumn keys use a per-column product | applied, change 2 |
+| 8 | Invisible statistics look like all-distinct keys | applied, change 3 |
+| 9 | No randomly-inserted fixture | applied, change 4 |
+| 10 | The baseline is not stated | applied, change 5 |
+| 11 | Replace `least(reltuples, n_live_tup)` | rejected, A |
+| 12 | Source the gate from `bt_metap().allequalimage` | rejected, B |
+
+The output contract does not move. The statement still emits `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`, still alerts on the floor, and still carries the tag `wiki_btree_wasted_space_sweep_12_17`. One caveat string is added and one is refined; nothing is removed.
+
+### Four issues the statement already fixed
+
+Each of the four is in the [statement as filed](#follow-up-one-statement-for-postgresql-12-through-17), and three of them are measurable on 17.11 with the filed text run verbatim:
+
+| Already fixed | Where it lives in the filed statement | Source rule it encodes | Measured on 17.11 |
+|---|---|---|---|
+| Negative `n_distinct` | the `key_groups` `CASE`: `WHEN c.n_distinct < 0 AND NOT i.is_partial THEN (- c.n_distinct) * greatest(i.live_rows, 0)` | `ANALYZE` stores `stadistinct` as a negative fraction of the table's rows once it estimates more than 10% distinct ([analyze.c:2605-2612](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2605-L2612), [pg_statistic.h#stadistinct](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L52-L69)) | `t_rand`, `t_seq`, `t_stale` and `t_wide` all read `n_distinct = -1`, and their key groups come out at the full row count |
+| Nondeterministic collation | `all_deterministic` in `idx`, required by `dedup_applies` | `btvarstrequalimage` returns false for a nondeterministic collation even though the `pg_amproc` row exists ([varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613), [pg_collation.h:40](../../../../raw/postgres-17/src/include/catalog/pg_collation.h#L40)) | not re-measured: this build is `--without-icu`, so no nondeterministic collation exists on it |
+| INCLUDE columns | `keys_only` = `(x.indnatts = x.indnkeyatts)`, required by `dedup_applies` | `_bt_allequalimage` returns false for any index whose attribute count exceeds its key-attribute count ([nbtutils.c:5144-5148](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5148)) | `i_inc_lowcard` — `(a) INCLUDE (d)`, 1000 x 5 distinct over 1,000,000 rows — reads `dedup_applies = false`, models 2745 against a 2749-block index and a 2749-block rebuild, and reports 0.1%. The 78.1% false positive [the third follow-up](#follow-up-the-include-column-false-positive-on-v17) measured is gone |
+| The two reporting defects | `fsm_written_since_build` and the unclamped `pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) AS wasted_space` | the FSM fork's length is history, not state ([indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55), [freespace.c#fsm_extend](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L633-L646)); `pg_size_pretty` renders negatives symmetrically ([dbsize.c#half_rounded](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L34-L57)) | every row of the 17.11 run prints a signed `wasted_space` and `fsm_written_since_build = f` on the freshly built fixtures |
+
+One more conjunct in the same gate is confirmed by measurement rather than by text: `i_dupoff` — 1000 keys x 1000 rows with `deduplicate_items = off` — reads `dedup_applies = false` and 0.1% on a 2749-block index, because `dedup_on` comes from `pg_options_to_table(reloptions)` and the build path requires it ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152), [reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168)).
+
+### The mischaracterized issue: page packing
+
+[Where the proposal is still wrong](#where-the-proposal-is-still-wrong) says of `i_q1000`, `i_inc_keyonly` and `i_inc_bothkeys`: "Where a key group needs more than one posting tuple, the last one is partial and pages no longer pack evenly." That is the wrong mechanism, and it is why the page also concluded that fixing it "would need the same per-page simulation `_bt_buildadd` performs".
+
+Reproduced on 17.11, `i_q1000` is 896 blocks live, 896 rebuilt, 889 leaf pages and 6 internal pages, and the filed statement models 847. The 49-block gap decomposes into two errors, neither of which is uneven packing:
+
+| Gap component | Blocks | Cause |
+|---|---|---|
+| Posting-tuple count | 48 | the model divides a class's rows by its TID count, which lets one posting tuple span two key groups. Groups are disjoint: `_bt_load` flushes the pending posting list whenever the next tuple's key differs ([nbtsort.c:1323-1335](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1323-L1335), [nbtsort.c#_bt_sort_dedup_finish_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1029-L1057)) |
+| Internal-level fanout | 1 | `int_cap` prices a pivot tuple at the leaf slot size, 20 bytes. Above a deduplicated leaf level a pivot generally carries a heap TID, so `pageinspect` measures level-1 block 3 of `i_q1000` at 212 items of 8 to 24 bytes, 185 of them with an `htid`, against the modelled 284 — five level-1 pages where the model computes four, under a 5-item root at level 2 |
+
+Leaf **packing** is modelled correctly here: 8000 posting tuples over 889 leaves is exactly 9 data items per leaf, which is what the statement's capacity expression already returns, and `pageinspect` confirms the page layout the model assumes — leaf block 890 holds 10 items, nine 808-byte posting tuples plus a 24-byte high key whose posting list was truncated away. So the count error is expressible in SQL — that is change 1 — and no per-page simulation is needed for it.
+
+Where the page's claim does hold is `i_cd`, and change 1 leaves it untouched; see the end of the next section.
+
+### Change 1: round each key group up to whole posting tuples
+
+Applied exactly as prescribed. `classfit` now carries `class_groups`, and `classpages` counts tuples per class instead of per row:
+
+```sql
+classfit AS (
+    SELECT g.idxoid, g.class_rows, g.class_groups,
+           least(g.class_rows / greatest(g.class_groups, 1), p.nmax) AS tids,
+           p.slot, p.leaf_bytes
+      FROM gclass g
+      JOIN posting p ON p.idxoid = g.idxoid
+     WHERE g.class_rows > 0
+),
+classpages AS (
+    SELECT c.idxoid,
+           sum(least(c.class_groups
+                     * ceil(c.class_rows / c.class_groups / greatest(c.tids, 1)),
+                     c.class_rows)
+               / greatest(floor((c.leaf_bytes
+                                 + CASE WHEN c.tids > 1 THEN c.tids * 6 ELSE 0 END)
+                                / CASE WHEN c.tids > 1
+                                       THEN ceil(((c.slot - 4) + c.tids * 6) / 8) * 8 + 4
+                                       ELSE c.slot END), 1)) AS leaf_frac,
+           max(c.tids) AS max_tids
+      FROM classfit c
+     GROUP BY c.idxoid
+)
+```
+
+**The arithmetic on `i_q1000`.** An 8-byte key gives `slot` 20, so the base tuple is 16 bytes and `nmax` is `floor(4 * floor((812 - 16) / 8) / 3)` = 132 TIDs in an 808-byte tuple, 812 with its line pointer. One key group of 1000 rows therefore needs `ceil(1000 / 132)` = 8 posting tuples, seven full and one holding 76 TIDs, and the build has no choice about it: `_bt_dedup_save_htid` refuses the 133rd TID because `MAXALIGN(16 + 133 * 6)` = 816 exceeds `maxpostingsize` 812 ([nbtdedup.c#_bt_dedup_save_htid](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L504-L531), [nbtsort.c:1292-1308](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1292-L1308)), and the run then ends at a key change, flushing whatever is pending ([nbtsort.c#_bt_sort_dedup_finish_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1029-L1057)).
+
+| | Tuples | Leaves | Blocks | Against a 896-block rebuild |
+|---|---|---|---|---|
+| As filed, `class_rows / tids` | 1,000,000 / 132 = 7575.8 | `ceil(7575.8 / 9)` = 842 | 842 + 3 + 1 + 1 = 847 | +5.5%, phantom |
+| Change 1, one class of 1000 groups | 1000 x `ceil(1000/132)` = 8000 | `ceil(8000 / 9)` = 889 | 889 + 4 + 1 + 1 = 895 | +0.1% |
+| The build | 8000 | 889 | 889 + 6 + 1 = 896 | — |
+
+That closes 48 of the 49 blocks. The last block is the internal-fanout error above, not packing.
+
+**The measured statement lands at 901, not 895**, because `ANALYZE` stored 11 most-common values for `t_q1000` with frequencies near 0.0018 even though the distribution is uniform, and the [key-group mixture](#the-posting-list-arithmetic-derived-from-source) then splits the index into 11 single-group classes plus a 989-group remainder. Each class rounds up separately and each rounded-up tuple is priced at the full 812 bytes, so the model over-predicts by 6 leaves: 901 blocks against 896, `−0.6%`. The sign of the error flips and its magnitude drops from 49 blocks to 5.
+
+**`i_cd` does not move.** Reproduced on 17.11 at 462 blocks live, 462 rebuilt, 455 leaf pages: `avg_width` 33 gives `slot` 52, `nmax` 126, and `n_distinct` 4995 over 500,000 rows is 100.1 rows per group. `ceil(100.1 / 100.1)` = 1, so the tuple count is unchanged at 4995 and the model stays at 424 blocks and +8.2%. Its 38-block gap is a **capacity** error, and it is exact rather than statistical: a 100-TID posting tuple is `MAXALIGN(48 + 600) + 4` = 652 bytes, `_bt_buildadd` keeps adding while `PageGetFreeSpace()` covers the next tuple plus a heap TID ([nbtsort.c:853-854](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854)), so 12 tuples go on the page and the twelfth is then moved to the next page and left behind as the truncated high key ([nbtsort.c#_bt_buildadd-highkey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L873-L940)). Eleven data items per leaf, `ceil(4995 / 11)` = 455 leaves, which is what `pgstatindex` reports; the statement's `floor((leaf_bytes + tids * 6) / tuple_size)` says 12. The exact rule, `floor((bs - 48 - greatest(tuple_size + 4, floor(bs * (100 - fillfactor) / 100) - tids * 6)) / tuple_size)`, reproduces 11 for `i_cd`, 9 for `i_q1000` and 366 for a non-deduplicated `bigint` leaf, but it is a sixth change and was not applied; see [Open Questions](#open-questions).
+
+**Direction, magnitude, immunity.** The count error produced **false positives** — phantom reclaimable space on indexes with nothing to reclaim — at 5.5% on `i_q1000`, `i_r500` and `i_r1000` and 10.8% on `i_r265`. Change 1 removes them and replaces them with over-prediction, which is a **false negative** risk, at up to `−99.4%`; both directions are confined to `wasted_space_pct`, because `wasted_space_pct_floor` never credits deduplication at all, so the floor-based alert rule was already immune to the defect *and* is unaffected by the fix. The full band is in [Direction, magnitude, and whether the floor was immune](#direction-magnitude-and-whether-the-floor-was-immune).
+
+### Change 2: extended statistics for a multicolumn key
+
+The per-column product is wrong in one direction only: it multiplies away every functional dependency, so a correlated multicolumn key looks far more distinct than it is, the statement declines to credit deduplication, and the modelled rebuild comes out too large. Too large means a **false negative**: a bloated index reports negative waste and never alerts.
+
+The fix reads an `ndistinct` extended-statistics object when one covers the whole key. `pg_ndistinct`'s output function spells its keys as ascending, comma-space-separated table attnums, so the entry can be looked up as JSON:
+
+```sql
+keyatts AS (
+    SELECT i.idxoid,
+           string_agg(i.indkey[k]::text, ', ' ORDER BY i.indkey[k]) AS ext_key,
+           count(*)         AS nkeys,
+           min(i.indkey[k]) AS min_attnum
+      FROM idx i, generate_subscripts(i.indkey, 1) k
+     WHERE k < i.indnkeyatts
+     GROUP BY i.idxoid
+),
+extstat AS (
+    SELECT k.idxoid, max(e.nd) AS ext_ndistinct
+      FROM keyatts k
+      JOIN idx i           ON i.idxoid = k.idxoid
+      JOIN pg_stats_ext se ON se.schemaname = i.schemaname
+                          AND se.tablename = i.tablename
+      CROSS JOIN LATERAL (
+            SELECT ((se.n_distinct::text)::json ->> k.ext_key)::numeric AS nd) e
+     WHERE k.nkeys > 1 AND k.min_attnum > 0 AND e.nd > 0
+     GROUP BY k.idxoid
+)
+```
+
+and `key_groups` prefers it: `CASE WHEN e.ext_ndistinct IS NOT NULL THEN least(e.ext_ndistinct, greatest(i.live_rows, 0)) ELSE <the product> END`.
+
+Four source facts make this safe:
+
+- **The value is an absolute count, never a fraction.** `statext_ndistinct_build` runs the same Duj1 estimator `analyze.c` uses and clamps the result to `[d, totalrows]` ([mvdistinct.c#estimate_ndistinct](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L519-L542)), so the negative-fraction convention that forces the per-column branch to be careful does not exist here.
+- **The key spelling is fixed by the output function.** `pg_ndistinct_out` writes `{"1, 2": 1000}` — quoted attnum lists, `", "` separated, in the stored ascending order ([mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L354-L385)). Measured: an index declared `(b, a)` finds the same `"1, 2"` entry as one declared `(a, b)`, because `ORDER BY i.indkey[k]` sorts numerically.
+- **A superset object still covers the key.** `statext_ndistinct_build` emits an item for every combination of 2 to N of the object's columns ([mvdistinct.c#statext_ndistinct_build](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L87-L141)). Measured: `i_sup` on `(a, b)` with `CREATE STATISTICS ... ON a, b, c` picks up the `"1, 2"` entry out of the four entries stored.
+- **Expression keys are excluded.** Expressions are stored as negative attnums offset by the expression count ([mvdistinct.c:83-86](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L83-L86)), which no `indkey` attnum can match, so `min_attnum > 0` keeps the lookup off them. Measured: `i_expr` on `((a + b), a)` gets no extended estimate and falls back to the product.
+
+**The privilege condition.** `pg_stats_ext` filters on `pg_has_role(c.relowner, 'USAGE')` and on RLS ([system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309)); the documentation states it "only exposes information about tables the current user owns" ([catalogs.sgml#pg_statistic_ext_data](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L7764-L7775)). That is stricter than `pg_stats`, which needs only column-level `SELECT` ([system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L271-L273)). So a monitoring role that is not a member of the table owner's role gets no extended estimate and silently falls back to the product. Measured: the 17.11 database exposes 8 `pg_stats_ext` rows to the table owner and 0 to an unprivileged role.
+
+**When the object exists but its entry does not cover the exact key set**, `->>` returns NULL for the missing key, the `WHERE e.nd > 0` predicate drops the row, `extstat` produces nothing for that index, and `key_groups` uses the product. Measured: `i_gap` on `(a, b, c)` with `CREATE STATISTICS ... ON a, b` keeps the product and stays at `−329.5%`, unchanged from the filed statement. Two further limits come from source: an object needs at least 2 columns ([statscmds.c:415-419](../../../../raw/postgres-17/src/backend/commands/statscmds.c#L415-L419)) and at most `STATS_MAX_DIMENSIONS` = 8 ([statistics.h#STATS_MAX_DIMENSIONS](../../../../raw/postgres-17/src/include/statistics/statistics.h#L19), [statscmds.c:216-224](../../../../raw/postgres-17/src/backend/commands/statscmds.c#L216-L224)), so a 9-or-more-column key can never be covered, and the data only exists after an `ANALYZE` builds it ([extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L112-L133), [extended_stats.c:200-210](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L200-L210)).
+
+**Direction, magnitude, immunity.** It fixes **false negatives**, and the floor was *not* immune. `i_ext50` is a correlated `(a, b)` index over 1,000,000 rows with half the rows deleted and vacuumed: 896 blocks live, 450 rebuilt, so 49.8% is genuinely reclaimable. The filed statement models 1239 blocks and reports `−38.3%`; its floor models 1374 and reports `−53.3%`; both are silent. With the extended estimate the model is 449 blocks and the report is `+49.9%`, one block from the rebuild. On healthy fixtures the same change moves `i_ext` and `i_sup` from `−206.4%` to `+0.1%`, tightening the size estimate 3.06x. A new caveat, `key groups from extended statistics`, marks every row that used it.
+
+### Change 3: statistics that exist but are invisible
+
+`pg_stats` is publicly readable and silently row-filtered: it returns nothing for a column the caller cannot `SELECT`, and nothing when RLS is active on the table ([system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L273)), because `pg_statistic` itself is revoked from `public` ([system_views.sql:275](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L275), [catalogs.sgml#pg_statistic](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L7431-L7440)). The filed statement's `coalesce(..., 0)` then reads a hidden row as "no duplicates", and `coalesce(se.avg_width, st.avg_width, 32)` reads a hidden width as 32 bytes.
+
+Core SQL can separate the two cases, because the statement can evaluate the view's own filter itself:
+
+```sql
+           -- no pg_stats row was returned for this column ...
+           (se.attname IS NULL AND st.attname IS NULL)           AS no_stats_row,
+           -- ... and pg_stats would have withheld one had it existed
+           (NOT coalesce(has_column_privilege(i.tbloid, ta.attnum, 'SELECT'),
+                         has_table_privilege(i.tbloid, 'SELECT'))
+            OR (i.tbl_rls AND row_security_active(i.tbloid)))    AS stats_hidden
+```
+
+aggregated per index in a new `statvis` CTE and reported as two caveats: `statistics not visible to this role` when a row is missing *and* the filter would have removed it, `no statistics row for an index column` when a row is missing while the caller could have seen it and the table has been analyzed. `pg_stat_all_tables.last_analyze` is the corroborating signal and is not privilege-filtered ([system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L687-L693)). What core SQL cannot do is prove a hidden row exists: `pg_statistic` is unreadable, so "not visible" is a statement about the filter, not about the catalog.
+
+**Yes, the caveat belongs in the alert-suppression set**, and for a reason the review did not give. Losing `n_distinct` only collapses the point estimate onto the floor, which is a false negative the floor rule already tolerates. Losing `avg_width` moves **the floor itself**, because `slot` feeds `leaf_cap`. Measured on 17.11, same server, same indexes, as the table owner and then as a role with no `SELECT` privilege:
+
+| Index | Key | As owner | As an unprivileged role | Why |
+|---|---|---|---|---|
+| `i_wide` | 300,000 distinct 100-byte `text` keys | 0.0 / 0.0, model 4864 = live = rebuilt | **62.5 / 62.5**, model 1825 | `width` defaults to 32, so `slot` is 44 instead of 116 and `leaf_cap` 166 instead of 63 |
+| `i_seq` | 1,000,000 distinct `bigint` | 0.0 / 0.0 | 0.0 / 0.0 | `attlen > 0`, so the width never comes from statistics |
+| `i_q1000` | 1000 x 1000 `bigint` | −0.6 / −206.4 | −206.4 / −206.4 | `n_distinct` defaults to 0, the point estimate collapses onto the floor |
+| `i_cd` | 5000 x 100, 33-byte `text` | 8.2 / −680.7 | −557.8 / −557.8 | both effects at once |
+
+A 62.5-point **false positive on both columns** of a healthy index is exactly what `never analyzed` and `row-count sources disagree` are suppressed for, so the third caveat joins them: alert when `wasted_space_pct_floor` crosses the threshold, `status` is `ok`, and `caveats` contains none of `never analyzed`, `row-count sources disagree` and `statistics not visible to this role`. The narrower `no statistics row for an index column` carries the same width risk and is worth suppressing on the same grounds; it is kept separate so that a genuinely un-analyzed column can be told apart from a permissions problem.
+
+### Change 4: a randomly inserted, never-deleted index
+
+`i_rand` is 1,000,000 distinct `bigint` keys inserted in random order into an index that already existed, with no update and no delete, then analyzed. Nothing about it is bloated by the documented mechanism ([maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1032-L1040)); it is simply at the density random insertion produces.
+
+| Measurement | Value |
+|---|---|
+| Live size | 3765 blocks, 29 MB |
+| `pgstatindex` leaf pages / `avg_leaf_density` / `leaf_fragmentation` | 3752 / **65.68%** / 49.87% |
+| Deleted, half-dead, empty pages | 0 / 0 / 0 |
+| `CREATE INDEX CONCURRENTLY` rebuild | 2745 blocks, 21 MB, 90.06% density |
+| `wasted_space_pct` | **27.1** |
+| `wasted_space_pct_floor` | **27.1** |
+| `wasted_space` | 8160 kB |
+| `status` / `caveats` | `ok` / empty |
+| Modelled blocks | 2745, which is the rebuilt size **exactly** |
+
+This is the one valid review issue the floor-plus-status-plus-caveats rule cannot defend against. The floor is the one-tuple-per-row model; with distinct keys the point estimate *is* the one-tuple-per-row model, so both columns carry the same number, `status` is `ok` because both row counts agree, and there is no caveat to emit. On the 17.11 database this row sorts first under the statement's own `ORDER BY` — an 8,355,840-byte key in the state above, against 4,702,208 for the three 89.8%-reclaimable duplicate-key indexes behind it — so it is also the row a `LIMIT 20` triage shows first. At a 30% threshold it does not fire, at 27.1%, but the margin is 2.9 points on one fixture, and a `fillfactor` above 90 would raise the modelled density and push the same shape over the line; that was not measured.
+
+What the rule can still say is narrower and true: the model was right. A rebuild really would return 1020 blocks. The question change 5 answers is whether that makes a rebuild worth doing.
+
+### Change 5: what the baseline is, and what a reading means
+
+The model's reference is a sorted build at the index's `fillfactor`: `_bt_pagestate` sets a leaf's target free space from `BTGetTargetPageFreeSpace` ([nbtsort.c:663-665](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L663-L665)), which is what `REINDEX` and `CREATE INDEX` produce. A live index only reaches that density where inserts arrive in key order: `_bt_findsplitloc` applies `fillfactor` to a **rightmost** leaf split and splits every other leaf 50:50 ([nbtsplitloc.c:286-291](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L286-L291), [nbtsplitloc.c:329-335](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L329-L335)), with a middle case for a new item at the right edge of a localized grouping ([nbtsplitloc.c:292-303](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L292-L303)). The header comment states the consequence outright: ordered insertion "will end up with a tree whose pages are about fillfactor% full, instead of the 50% full result that we'd get without this special case. This is the same as nbtsort.c produces for a newly-created tree" ([nbtsplitloc.c:88-102](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L88-L102)).
+
+So for a healthy index under steady random insertion the output means: **a rebuild would shrink this index to the density a sorted build produces, and ordinary inserts would then take it back.** It is a prediction about a rebuild, not a measurement of dead space — the same limit the [column rename](#follow-up-the-output-columns-say-wasted_space-not-bloat) records.
+
+Measured, in one sequence on the same table: 500,000 more random keys were inserted into `t_rand`, then a second rebuild taken.
+
+| Index | State | Blocks | `avg_leaf_density` | Reported |
+|---|---|---|---|---|
+| `i_rand` | never rebuilt, 1.5M rows | 5590 | 66.36% | 26.4 / 26.4 |
+| the first rebuild | built sorted at 1.0M rows, then took 500,000 random inserts | 4622 | 80.21% | 10.9 / 10.9 |
+| a fresh rebuild | built sorted at 1.5M rows | 4116 | 90.07% | 0.0 / 0.0, model 4116 exactly |
+
+The 27.1% the rebuild reclaimed at 1.0M rows was 10.9% gone again after 50% more rows arrived, while the index that was never rebuilt held steady near 66% density. That is the decision rule:
+
+1. **"A rebuild would reclaim this"** is what a positive `wasted_space_pct_floor` says, once `status` is `ok` and no suppressing caveat is set. It is a size prediction and, on these fixtures, an accurate one.
+2. **"A rebuild is worth doing"** needs one more fact the statement does not have: whether the index is *converging* on its current density or *retaining* dead space. Sources for that fact, in order of cost: a non-zero deleted-page or reusable-page count from `VACUUM VERBOSE` or contrib ([Where a current count of empty, deleted and reusable pages comes from](#where-a-current-count-of-empty-deleted-and-reusable-pages-comes-from)); a workload fact — bulk delete, `TRUNCATE`-and-reload, retention window, or a monotonic key that has stopped being appended to; and the shape of the row itself, since a wide gap between the two percentage columns means the answer rests on a duplication estimate.
+3. If the index takes random inserts, has no deleted pages, and reads near 25-35%, the honest reading is "this index is at split-point density", and a rebuild buys temporary space at the cost of a full index build. `leaf_fragmentation` 49.87% on `i_rand` against 0.00% on every sorted build is the contrib-only signal that separates the two, and no core-SQL method reaches it ([pgstatindex.c:318-325](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L325)).
+
+### The corrected statement, with all five changes
+
+Two CTEs are new (`keyatts`, `extstat` for change 2, and `statvis` for change 3), `classfit`/`classpages` carry change 1, `idx` gains `t.relrowsecurity`, `cols` gains two booleans, `key_groups` gains its extended-statistics branch, and the final `SELECT` gains two caveat strings. Nothing else moved: the gate, both models, `status`, the two percentage columns, the signed `wasted_space`, the `ORDER BY` and the tag are as filed.
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '2s';
+
+WITH RECURSIVE
+idx AS (
+    SELECT /* wiki_btree_wasted_space_sweep_12_17 */
+           c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
+           c.relname AS indexname, t.oid AS tbloid, x.indkey, x.indisunique,
+           x.indnkeyatts, t.relrowsecurity                AS tbl_rls,
+           (x.indpred IS NOT NULL)                      AS is_partial,
+           (x.indnatts = x.indnkeyatts)                 AS keys_only,
+           z.actual_bytes, z.fsm_bytes, z.bs, z.server_version_num,
+           coalesce((SELECT option_value::int FROM pg_options_to_table(c.reloptions)
+                      WHERE option_name = 'fillfactor'), 90)            AS fillfactor,
+           coalesce((SELECT option_value::bool FROM pg_options_to_table(c.reloptions)
+                      WHERE option_name = 'deduplicate_items'), true)   AS dedup_on,
+           c.reltuples::numeric                         AS idx_reltuples,
+           coalesce(s.n_live_tup, 0)::numeric           AS tbl_live_tup,
+           coalesce(s.n_dead_tup, 0)::numeric           AS tbl_dead_tup,
+           greatest(s.last_analyze, s.last_autoanalyze) AS last_analyze,
+           -- rows to model: -1 is v14+ "unknown"; a 0 on a non-empty index
+           -- whose table reports live rows is a pre-14 stale zero
+           CASE
+             WHEN c.reltuples < 0 THEN NULL
+             WHEN c.reltuples = 0 AND z.actual_bytes > z.bs
+                  AND coalesce(s.n_live_tup, 0) > 0 THEN NULL
+             WHEN x.indpred IS NOT NULL THEN c.reltuples::numeric
+             ELSE least(c.reltuples::numeric,
+                        coalesce(nullif(s.n_live_tup, 0), c.reltuples)::numeric)
+           END                                          AS live_rows,
+           -- deduplication gate, in catalog terms: every key opclass must
+           -- advertise an equal-image support function (amprocnum 4)
+           (SELECT bool_and(EXISTS (SELECT 1 FROM pg_amproc ap
+                                     WHERE ap.amprocfamily = op.opcfamily
+                                       AND ap.amproclefttype = op.opcintype
+                                       AND ap.amprocrighttype = op.opcintype
+                                       AND ap.amprocnum = 4))
+              FROM generate_subscripts(x.indclass, 1) k
+              JOIN pg_opclass op ON op.oid = x.indclass[k]
+             WHERE k < x.indnkeyatts)                   AS all_equalimage,
+           -- ... and no key column may use a nondeterministic collation
+           NOT EXISTS (SELECT 1 FROM generate_subscripts(x.indcollation, 1) k
+                         JOIN pg_collation cl ON cl.oid = x.indcollation[k]
+                        WHERE k < x.indnkeyatts
+                          AND NOT cl.collisdeterministic) AS all_deterministic
+      FROM pg_class c
+      JOIN pg_index x     ON x.indexrelid = c.oid
+      JOIN pg_class t     ON t.oid = x.indrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_am am       ON am.oid = c.relam
+      LEFT JOIN pg_stat_all_tables s ON s.relid = t.oid
+      CROSS JOIN LATERAL (
+            SELECT pg_relation_size(c.oid)                  AS actual_bytes,
+                   pg_relation_size(c.oid, 'fsm')           AS fsm_bytes,
+                   current_setting('block_size')::int       AS bs,
+                   current_setting('server_version_num')::int AS server_version_num) z
+     WHERE am.amname = 'btree' AND c.relkind = 'i' AND x.indisvalid
+       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+),
+keyatts AS (
+    -- the index's key columns as table attnums, spelled the way
+    -- pg_ndistinct spells its keys: ascending, comma-space separated
+    SELECT i.idxoid,
+           string_agg(i.indkey[k]::text, ', ' ORDER BY i.indkey[k]) AS ext_key,
+           count(*)         AS nkeys,
+           min(i.indkey[k]) AS min_attnum
+      FROM idx i, generate_subscripts(i.indkey, 1) k
+     WHERE k < i.indnkeyatts
+     GROUP BY i.idxoid
+),
+extstat AS (
+    -- a CREATE STATISTICS ... (ndistinct) object whose column list covers the
+    -- whole key: its estimate replaces the per-column product. pg_stats_ext
+    -- shows a row only to a member of the table owner's role, and the entry
+    -- is present only for the exact column set asked for below.
+    SELECT k.idxoid, max(e.nd) AS ext_ndistinct
+      FROM keyatts k
+      JOIN idx i           ON i.idxoid = k.idxoid
+      JOIN pg_stats_ext se ON se.schemaname = i.schemaname
+                          AND se.tablename = i.tablename
+      CROSS JOIN LATERAL (
+            SELECT ((se.n_distinct::text)::json ->> k.ext_key)::numeric AS nd) e
+     WHERE k.nkeys > 1 AND k.min_attnum > 0 AND e.nd > 0
+     GROUP BY k.idxoid
+),
+cols AS (
+    SELECT i.idxoid, a.attnum, a.attlen, a.attalign,
+           CASE WHEN a.attlen > 0 THEN a.attlen::numeric
+                ELSE coalesce(se.avg_width, st.avg_width, 32)::numeric END AS width,
+           coalesce(se.null_frac, st.null_frac, 0)::numeric      AS null_frac,
+           coalesce(se.n_distinct, st.n_distinct, 0)::numeric    AS n_distinct,
+           coalesce(se.most_common_freqs, st.most_common_freqs)  AS mcf,
+           -- no pg_stats row was returned for this column ...
+           (se.attname IS NULL AND st.attname IS NULL)           AS no_stats_row,
+           -- ... and pg_stats would have withheld one had it existed, because
+           -- the view filters on has_column_privilege() and row_security_active()
+           (NOT coalesce(has_column_privilege(i.tbloid, ta.attnum, 'SELECT'),
+                         has_table_privilege(i.tbloid, 'SELECT'))
+            OR (i.tbl_rls AND row_security_active(i.tbloid)))    AS stats_hidden
+      FROM idx i
+      JOIN pg_attribute a ON a.attrelid = i.idxoid AND a.attnum > 0 AND NOT a.attisdropped
+      LEFT JOIN pg_stats se ON se.schemaname = i.schemaname
+                           AND se.tablename = i.indexname AND se.attname = a.attname
+      LEFT JOIN pg_attribute ta ON ta.attrelid = i.tbloid
+                               AND ta.attnum = i.indkey[a.attnum - 1]
+      LEFT JOIN pg_stats st ON st.schemaname = i.schemaname
+                           AND st.tablename = i.tablename AND st.attname = ta.attname
+),
+statvis AS (
+    SELECT c.idxoid,
+           bool_or(c.no_stats_row)                    AS any_no_stats,
+           bool_or(c.no_stats_row AND c.stats_hidden) AS any_stats_hidden
+      FROM cols c
+     GROUP BY c.idxoid
+),
+tuple AS (
+    SELECT i.*,
+           (SELECT sum((1 - c.null_frac) *
+                       CASE WHEN c.attlen < 0 AND c.width <= 127 THEN c.width
+                            ELSE ceil(c.width / al.a) * al.a END)
+              FROM cols c
+              CROSS JOIN LATERAL (SELECT CASE c.attalign WHEN 'c' THEN 1 WHEN 's' THEN 2
+                                              WHEN 'i' THEN 4 ELSE 8 END AS a) al
+             WHERE c.idxoid = i.idxoid)                          AS data_size,
+           (SELECT 1 - coalesce(exp(sum(ln(greatest(1 - c.null_frac, 1e-9)))), 1)
+              FROM cols c WHERE c.idxoid = i.idxoid)             AS p_null,
+           -- distinct key groups: an ndistinct extended-statistics estimate for
+           -- the whole key when one is visible, else the per-column product.
+           -- A negative n_distinct is a fraction of the *table's* rows, so a
+           -- partial index only trusts an absolute count.
+           CASE WHEN e.ext_ndistinct IS NOT NULL
+                THEN least(e.ext_ndistinct, greatest(i.live_rows, 0))
+                ELSE
+           (SELECT least(round(exp(sum(ln(greatest(
+                       CASE WHEN c.n_distinct > 0 THEN c.n_distinct
+                            WHEN c.n_distinct < 0 AND NOT i.is_partial
+                                 THEN (- c.n_distinct) * greatest(i.live_rows, 0)
+                            ELSE (1 - c.null_frac) * greatest(i.live_rows, 0)
+                       END
+                       + CASE WHEN c.null_frac > 0 THEN 1 ELSE 0 END, 1))))),
+                         greatest(i.live_rows, 0))
+              FROM cols c
+             WHERE c.idxoid = i.idxoid AND c.attnum <= i.indnkeyatts)
+           END                                                   AS key_groups,
+           (e.ext_ndistinct IS NOT NULL)                         AS ext_used,
+           v.any_no_stats, v.any_stats_hidden
+      FROM idx i
+      LEFT JOIN extstat e ON e.idxoid = i.idxoid
+      LEFT JOIN statvis v ON v.idxoid = i.idxoid
+),
+sized AS (
+    SELECT t.*, ceil((8 + 8 * t.p_null + t.data_size) / 8) * 8 + 4 AS slot
+      FROM tuple t
+),
+fit AS (
+    SELECT s.*,
+           greatest(floor((s.bs - 48 - floor(s.bs * (100 - s.fillfactor) / 100)) / s.slot), 1)
+               AS leaf_cap,
+           greatest(floor((s.bs - 48 - floor(s.bs * 30 / 100)) / s.slot), 2)
+               AS int_cap,
+           (s.bs - 48 - floor(s.bs * (100 - s.fillfactor) / 100))     AS leaf_bytes,
+           (NOT s.indisunique AND s.dedup_on AND s.keys_only
+                AND coalesce(s.all_equalimage, false)
+                AND s.all_deterministic)                             AS dedup_applies,
+           least(greatest(s.live_rows, 0), greatest(s.key_groups, 1)) AS groups_est,
+           -- maxpostingsize = MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)
+           floor(floor(s.bs * 10 / 100) / 8) * 8 - 4                  AS maxposting
+      FROM sized s
+),
+posting AS (
+    SELECT f.*,
+           -- largest n with MAXALIGN(base + n * sizeof(ItemPointerData)) <= maxposting
+           greatest(floor(4 * floor((f.maxposting - (f.slot - 4)) / 8) / 3), 1) AS nmax
+      FROM fit f
+),
+kstat AS (
+    SELECT p.idxoid,
+           CASE WHEN p.is_partial THEN 0 ELSE c.null_frac END AS null_frac,
+           CASE WHEN p.is_partial THEN '{}'::real[]
+                ELSE coalesce(c.mcf, '{}'::real[]) END        AS mcf
+      FROM posting p
+      JOIN cols c ON c.idxoid = p.idxoid AND c.attnum = 1
+     WHERE p.indnkeyatts = 1 AND p.dedup_applies AND p.live_rows > 0
+),
+gclass AS (
+    -- the NULL run is one key group
+    SELECT p.idxoid, greatest(p.live_rows, 0) * k.null_frac AS class_rows,
+           1::numeric AS class_groups
+      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+     WHERE k.null_frac > 0
+    UNION ALL
+    -- every most-common value is one key group
+    SELECT p.idxoid, greatest(p.live_rows, 0) * f, 1::numeric
+      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+      CROSS JOIN LATERAL unnest(k.mcf) f
+    UNION ALL
+    -- the rest of the rows spread over the remaining distinct values
+    SELECT p.idxoid,
+           greatest(greatest(p.live_rows, 0)
+                    * (1 - k.null_frac
+                         - coalesce((SELECT sum(f) FROM unnest(k.mcf) f), 0)), 0),
+           greatest(p.groups_est
+                    - CASE WHEN k.null_frac > 0 THEN 1 ELSE 0 END
+                    - coalesce(array_length(k.mcf, 1), 0), 1)
+      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+    UNION ALL
+    -- multi-column keys: one uniform class over the whole-key estimate
+    SELECT p.idxoid, greatest(p.live_rows, 0), p.groups_est
+      FROM posting p
+     WHERE p.indnkeyatts > 1 AND p.dedup_applies AND p.live_rows > 0
+),
+classfit AS (
+    SELECT g.idxoid, g.class_rows, g.class_groups,
+           least(g.class_rows / greatest(g.class_groups, 1), p.nmax) AS tids,
+           p.slot, p.leaf_bytes
+      FROM gclass g
+      JOIN posting p ON p.idxoid = g.idxoid
+     WHERE g.class_rows > 0
+),
+classpages AS (
+    -- posting tuples are MAXALIGNed and each leaf page holds
+    -- floor((leaf_bytes + truncated posting list) / tuple size) of them.
+    -- Each key group rounds up to a whole number of posting tuples.
+    SELECT c.idxoid,
+           sum(least(c.class_groups
+                     * ceil(c.class_rows / c.class_groups / greatest(c.tids, 1)),
+                     c.class_rows)
+               / greatest(floor((c.leaf_bytes
+                                 + CASE WHEN c.tids > 1 THEN c.tids * 6 ELSE 0 END)
+                                / CASE WHEN c.tids > 1
+                                       THEN ceil(((c.slot - 4) + c.tids * 6) / 8) * 8 + 4
+                                       ELSE c.slot END), 1)) AS leaf_frac,
+           max(c.tids) AS max_tids
+      FROM classfit c
+     GROUP BY c.idxoid
+),
+leaves AS (
+    SELECT p.*, coalesce(cp.max_tids, 1) AS tids,
+           CASE WHEN p.dedup_applies AND cp.leaf_frac IS NOT NULL
+                THEN greatest(ceil(cp.leaf_frac), 1)
+                ELSE ceil(greatest(p.live_rows, 0) / p.leaf_cap)
+           END                                                AS leaf_pages,
+           ceil(greatest(p.live_rows, 0) / p.leaf_cap)         AS leaf_pages_floor
+      FROM posting p
+      LEFT JOIN classpages cp ON cp.idxoid = p.idxoid
+),
+levels AS (
+    SELECT idxoid, 'dedup'::text AS variant, leaf_pages AS pages, int_cap FROM leaves
+    UNION ALL
+    SELECT idxoid, 'floor'::text, leaf_pages_floor, int_cap FROM leaves
+    UNION ALL
+    SELECT l.idxoid, l.variant, ceil(l.pages / l.int_cap), l.int_cap
+      FROM levels l WHERE l.pages > 1
+),
+modelled AS (
+    SELECT l.*,
+           (SELECT sum(v.pages) FROM levels v
+             WHERE v.idxoid = l.idxoid AND v.variant = 'dedup') + 1 AS expected_blocks,
+           (SELECT sum(v.pages) FROM levels v
+             WHERE v.idxoid = l.idxoid AND v.variant = 'floor') + 1 AS floor_blocks
+      FROM leaves l
+)
+SELECT schemaname, tablename, indexname,
+       pg_size_pretty(actual_bytes)                     AS index_size,
+       CASE
+         WHEN idx_reltuples < 0 THEN 'unmeasured: reltuples unknown'
+         WHEN live_rows IS NULL THEN 'unmeasured: reltuples 0, table has live rows'
+         ELSE 'ok'
+       END                                              AS status,
+       CASE WHEN live_rows IS NULL THEN NULL ELSE
+         round((100 * (1 - (expected_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
+       END                                              AS wasted_space_pct,
+       CASE WHEN live_rows IS NULL THEN NULL ELSE
+         round((100 * (1 - (floor_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
+       END                                              AS wasted_space_pct_floor,
+       CASE WHEN live_rows IS NULL THEN NULL ELSE
+         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END AS wasted_space,
+       array_to_string(array_remove(ARRAY[
+         CASE WHEN last_analyze IS NULL THEN 'never analyzed' END,
+         CASE WHEN any_stats_hidden
+              THEN 'statistics not visible to this role' END,
+         CASE WHEN any_no_stats AND NOT any_stats_hidden AND last_analyze IS NOT NULL
+              THEN 'no statistics row for an index column' END,
+         CASE WHEN NOT is_partial
+                   AND greatest(tbl_live_tup, idx_reltuples)
+                       > 1.1 * greatest(least(tbl_live_tup, idx_reltuples), 1)
+              THEN 'row-count sources disagree: analyze first' END,
+         CASE WHEN is_partial AND (tbl_dead_tup > 0 OR last_analyze IS NULL)
+              THEN 'partial: predicate subset may be stale' END,
+         CASE WHEN is_partial AND dedup_applies AND tids > 1
+              THEN 'partial: duplicates from table statistics' END,
+         CASE WHEN dedup_applies AND tids > 1 THEN 'deduplication credited' END,
+         CASE WHEN ext_used THEN 'key groups from extended statistics' END
+       ], NULL), '; ')                                  AS caveats,
+       key_groups::bigint                               AS key_groups,
+       round(tids::numeric, 1)                          AS tids_per_tuple,
+       live_rows::bigint                                AS modelled_rows,
+       idx_reltuples::bigint                            AS idx_reltuples,
+       fsm_bytes > 0                                    AS fsm_written_since_build,
+       server_version_num
+  FROM modelled
+ WHERE actual_bytes > 1024 * 1024
+ ORDER BY (actual_bytes - floor_blocks * bs) DESC NULLS FIRST
+ LIMIT 20;
+```
+
+Cost, over the 54 B-tree indexes and 75,847 blocks the 17.11 database ended with, three consecutive runs with the triage filter and `LIMIT` removed: 41.7 / 34.4 / 37.6 ms for this statement against 30.2 / 31.9 / 36.6 ms for the filed one. The three new CTEs cost single-digit milliseconds at that scale, and the ranges overlap.
+
+### Measured on 17.11, per fixture
+
+Every fixture in the first group is freshly built with **nothing to reclaim** — live equals rebuilt — so any non-zero reading is model error. 1,000,000 rows and a `bigint` key unless noted.
+
+| Fixture | Shape | Live = rebuilt | As filed | Corrected | Floor |
+|---|---|---|---|---|---|
+| `i_seq` | distinct, inserted in key order | 2745 | 0.0 | 0.0 | 0.0 |
+| `i_q1000` | 1000 keys x 1000 rows | 896 | +5.5 | **−0.6** | −206.4 |
+| `i_cd` | 5000 keys x 100 rows, 33-byte `text`, 500,000 rows | 462 | +8.2 | +8.2 | −680.7 |
+| `i_ext` | `(a, b)` with `b = a`, 1000 distinct | 896 | −206.4 | **+0.1** | −206.4 |
+| `i_sup` | `(a, b)`, statistics object on `(a, b, c)` | 896 | −206.4 | **+0.1** | −206.4 |
+| `i_gap` | `(a, b, c)`, statistics object on `(a, b)` only | 897 | −329.5 | −329.5 | −329.5 |
+| `i_ind2` | `(a, d)`, 1000 x 7 independent | 830 | −2.0 | **−88.6** | −230.7 |
+| `i_inc_lowcard` | `(a) INCLUDE (d)`, 1000 x 5 | 2749 | +0.1 | +0.1 | +0.1 |
+| `i_dupoff` | 1000 x 1000, `deduplicate_items = off` | 2749 | +0.1 | +0.1 | +0.1 |
+| `i_wide` | 300,000 distinct 100-byte `text` keys | 4864 | 0.0 | 0.0 | 0.0 |
+| `i_rand` | 1,000,000 distinct, random insertion | 3765 live, **2745 rebuilt** | +27.1 | +27.1 | +27.1 |
+
+The duplication band isolates change 1. Each row is 1,000,000 rows at `r` rows per key, freshly built, live equal to rebuilt, and `nmax` is 132:
+
+| `r` | Live = rebuilt | As filed | Corrected | Why |
+|---|---|---|---|---|
+| 100 | 839 | −0.6 | −0.7 | one tuple per group; the round-up is a no-op |
+| 132 | 847 | −0.8 | −0.8 | exactly one full tuple per group |
+| 133 | 843 | −0.5 | **−99.4** | two tuples per group, the second holding one TID, priced as a full one |
+| 143 | 829 | −2.2 | −88.7 | same shape |
+| 200 | 841 | −0.7 | −33.2 | second tuple holds 68 of 132 TIDs |
+| 264 | 854 | +0.8 | **+0.4** | exactly two full tuples per group |
+| 265 | 950 | **+10.8** | −33.5 | worst as-filed false positive; the round-up then charges three full tuples for 2 x 132 + 1 |
+| 500 | 896 | +5.5 | **−0.2** | |
+| 1000 | 896 | +5.5 | **−0.3** | |
+
+Then the fixtures with real reclaimable space, and the statistics states:
+
+| Fixture | What it is | Live -> rebuilt (true) | As filed | Corrected | Floor |
+|---|---|---|---|---|---|
+| `i_dupdel` | 10 keys, 90% of rows deleted + VACUUM | 850 -> 87 (89.8%) | 89.8 | 89.8 | 67.5 |
+| `i_ext50` | `(a, b)` with `b = a`, 50% deleted + VACUUM | 896 -> 450 (49.8%) | **−38.3** | **+49.9** | −53.3 |
+| `i_stale` | 19% deleted, never vacuumed or analyzed | 2745 -> 2224 (19.0%) | 19.0 | 19.0 | 19.0 |
+| `i_rand` | random insertion, nothing deleted | 3765 -> 2745 (27.1%) | 27.1 | 27.1 | 27.1 |
+
+`i_ext50` is the row that changes an operational outcome: 446 reclaimable blocks that the filed statement reports as `−38.3%` and does not surface at any threshold, on either column.
+
+### Direction, magnitude, and whether the floor was immune
+
+| Change | Error it fixes | Direction | Measured magnitude | Floor already immune? |
+|---|---|---|---|---|
+| 1, key-group round-up | posting tuples counted across group boundaries | fixes **false positives** | +5.5% on `i_q1000`/`i_r500`/`i_r1000` and +10.8% on `i_r265` removed; introduces over-prediction to `−99.4%` at `r` = 133 | **Yes**, in both directions: the floor never credits deduplication, so neither the defect nor the fix can move `wasted_space_pct_floor` |
+| 2, extended statistics | the per-column product multiplies away functional dependencies | fixes **false negatives** | `i_ext50`: a true 49.8% reported as `−38.3%` becomes `+49.9%`; `i_ext`/`i_sup` over-prediction 3.06x -> 1.001x | **No.** The floor read `−53.3%` on the same index and was equally silent |
+| 3, invisible statistics | `coalesce(..., 0)` and the 32-byte default width | fixes both, and the width half is a **false positive** | `i_wide` reads 62.5 / 62.5 on a healthy index as an unprivileged role, against 0.0 / 0.0 as owner | **No.** `avg_width` feeds `slot`, so the floor moves too. This is why the caveat joins the suppression set |
+| 4, random-insert fixture | an untested class of index | exposes a **false positive** | `i_rand`: 27.1 / 27.1 on an index with no dead space, model exact to the block | **No**, and it cannot be: with distinct keys the floor is the point estimate |
+| 5, baseline framing | reading a size prediction as a bloat measurement | neither; it changes interpretation | a rebuild reclaimed 1020 blocks, and 500,000 further random inserts gave 10.9% of it back | n/a |
+
+Two things follow for the alerting rule in [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate). The suppression set grows by one string, `statistics not visible to this role`. And the rule's "0 false positives" claim needs the qualifier the review asked for: 0 false positives *among delete-driven and statistics-trap fixtures*, and one at 27.1% among randomly-inserted ones, which is below a 30% threshold by 2.9 points rather than by construction.
+
+### Two rejected fixes
+
+**A. `least(reltuples, n_live_tup)` stays.** The two sources are not interchangeable. `pg_class.reltuples` is written only by an index build, by `ANALYZE`'s sample, or by a `VACUUM` that counted exactly ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842), [analyze.c:637-660](../../../../raw/postgres-17/src/backend/commands/analyze.c#L637-L660), [vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1410-L1470)), while `pg_stat_all_tables.n_live_tup` is maintained by DML: each statement's inserts and deletes accumulate per transaction ([pgstat_relation.c#pgstat_count_heap_insert](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L360-L369)), commit turns them into a signed delta — "insert adds a live tuple, delete removes one" ([pgstat_relation.c#AtEOXact_PgStat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L553-L575)) — and the flush adds that delta to the shared counter, clamped at zero ([pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L838-L866)). `ANALYZE` then re-bases it, discounting rows in still-open transactions ([pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L277-L311)).
+
+Live rows are the right baseline because a rebuild indexes live rows. Measured on 17.11, with the same statement modified only to drop the `least()`:
+
+| `i_stale`, 19% deleted, never vacuumed or analyzed | Modelled rows | Modelled blocks | Reported |
+|---|---|---|---|
+| As filed, `least(reltuples, n_live_tup)` | 810,000 | 2224 | **19.0%** — the rebuild is 2224 blocks |
+| `reltuples` alone | 1,000,000 | 2745 | **0.0%** — the live size |
+
+What the sweep would lose is every index whose table shrank since the last `ANALYZE`: 521 blocks and 4168 kB on this one fixture, reported as nothing at all. That is a **false negative**, and the floor does not rescue it, because `live_rows` feeds both models — the floor reads 0.0% too. Three other fixtures (`i_dupdel`, `i_ext50`, `i_seq`) are bit-identical under both forms, so the guard costs nothing where the two sources agree. The reverse hazard is already handled elsewhere: when the collector is the stale one, the `row-count sources disagree: analyze first` caveat fires, as it does on `i_stale` itself.
+
+**B. `bt_metap().allequalimage` stays out.** Four reasons, three from source and one measured:
+
+1. **The model predicts a fresh build, and the build recomputes the flag.** `_bt_leafbuild` sets `wstate.inskey->allequalimage = _bt_allequalimage(wstate.index, true)` from the current opclasses, never from the metapage ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563)), uses that value to decide whether to deduplicate ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152)), and only then writes it into the new metapage ([nbtsort.c:1124-1127](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1124-L1127), [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L60-L90)). The sweep's `pg_amproc` probe plus the collation conjunct is the catalog form of that same function.
+2. **A pg_upgrade'd v12 index reports false while a rebuild would set it true.** The header says so: "Even version 4 indexes created on PostgreSQL v12 will need a REINDEX to make use of deduplication, though, since there is no other way to set `btm_allequalimage` to true (pg_upgrade hasn't been taught to set the metapage field)" ([nbtree.h:135-142](../../../../raw/postgres-17/src/include/access/nbtree.h#L135-L142)), and `bt_metap` relies on the same assumption when it reports the column ([btreefuncs.c:905-921](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L905-L921)). A gate built on it would model those indexes as un-deduplicatable and hide exactly the win a `REINDEX` would deliver — measured separately, on real 12.2 -> 17.10 upgrades, in [Checking Whether an Index Needs a Rebuild to Enable Deduplication After pg_upgrade From PostgreSQL 12 to 17 (unverified)](btree-deduplication-after-pg-upgrade.md).
+3. **It is superuser-only.** `bt_metap` raises `must be superuser to use pageinspect functions` before it opens the relation ([btreefuncs.c:840-857](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L840-L857)); measured on 17.11, an unprivileged role gets exactly that error. `pageinspect` is also contrib and not `trusted`, which is the same wall [What no core-SQL method can measure on v17](#what-no-core-sql-method-can-measure-on-v17) already documents.
+4. **The flag is true for indexes that hold no posting lists.** Measured on 17.11: `i_dupoff` (1000 keys x 1000 rows, `deduplicate_items = off`) reports `allequalimage = t` and `version = 4` on a 2749-block index with no deduplication anywhere in it, because the reloption, not the flag, is what turned it off. The metapage would have credited it.
+
+**The question the metapage flag does answer** is the complement: *may this index, as it stands on disk, deduplicate?* `_bt_metaversion` reads `btm_allequalimage` into the insertion scankey ([nbtpage.c#_bt_metaversion](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L718-L795)), and the insert path runs a deduplication pass only if that flag and the reloption both allow it ([nbtinsert.c:2772-2782](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2772-L2782)). Operationally that is "does this index need a `REINDEX` before deduplication can ever happen in it", which is a rebuild-decision question, not a size-model question — and it is why the upgrade page reads the metapage byte while this page reads `pg_amproc`.
+
+### The corrected statement on a 12.2 server
+
+The statement runs unchanged on 12.2, and every construct the five changes add exists there. Verified by running the same file on an isolated 12.2 server, `server_version_num` 120002:
+
+| New construct | Exists in 12? | Evidence from the 12.2 run |
+|---|---|---|
+| `pg_stats_ext.n_distinct`, `.kinds`, `.schemaname`, `.tablename` | yes | the view's column list on 12.2 is `schemaname, tablename, statistics_schemaname, statistics_name, statistics_owner, attnames, kinds, n_distinct, dependencies, most_common_vals, most_common_val_nulls, most_common_freqs, most_common_base_freqs` |
+| `pg_ndistinct` rendered as JSON | yes | `n_distinct::text` returns `{"1, 2": 1000}`, and `((n_distinct::text)::json ->> '1, 2')::numeric` yields 1000 |
+| `string_agg(... ORDER BY ...)`, `generate_subscripts(indkey, 1)`, `min()` over `int2vector` subscripts | yes | `i_ext` on `(a, b)` resolves `ext_key` and is credited |
+| `has_column_privilege`, `has_table_privilege`, `row_security_active`, `pg_class.relrowsecurity` | yes | as an unprivileged role, `i_wide` reports 62.5 / 62.5 with `statistics not visible to this role`, the same as 17.11 |
+
+Two columns the v17 view has are **absent** in 12 and are deliberately not referenced: `inherited` (from `pg_statistic_ext_data.stxdinherit`, which the v17 view exposes at [system_views.sql:290-291](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290-L291)) and `exprs`. Referencing either would break the statement on 12. The cost of not filtering on `inherited` is that an inheritance parent can expose two rows for the same object on 15 and later; `max(e.nd)` takes the larger estimate, which credits less deduplication and therefore under-reports rather than over-reports. That is the fallback, and it is the conservative direction.
+
+What 12.2 does with the rest is unchanged from [How the same statement behaves on 12.2, 14.23 and 17.10](#how-the-same-statement-behaves-on-122-1423-and-1710): `pg_amproc` has no `amprocnum = 4` row for any B-tree opfamily — measured count 0 — so the gate never opens, `tids_per_tuple` is 1.0 in all 12 rows, and every point estimate equals its floor. Change 1 is therefore dead code on 12. Change 2 fills in `key_groups` and its caveat on two of the twelve indexes but cannot move a percentage while the gate is closed. Change 3 does move percentages on 12: the unprivileged-role run there reports the same 62.5% on `i_wide`, which is the strongest reason to treat its caveat as version-independent.
+
+| | 12.2 | 17.11 |
+|---|---|---|
+| Statement runs unchanged | yes | yes |
+| B-tree indexes swept, rebuild copies included | 12 | 54 |
+| Blocks covered | 37,668 | 75,847 |
+| Three consecutive runs | 30.5 / 19.4 / 21.7 ms | 41.7 / 34.4 / 37.6 ms |
+| Indexes credited with deduplication | 0 | 39 |
+| Indexes using an extended-statistics estimate | 2 | 15 |
+| Rows where `wasted_space_pct` differs from `wasted_space_pct_floor` | 0 of 12 | 39 of 54 |
+| `i_rand`, random insertion, nothing deleted | 26.6 / 26.6 | 27.1 / 27.1 |
+| `i_stale`, 19% deleted, unvacuumed | 19.0 / 19.0 | 19.0 / 19.0 |
+
+The `i_rand` row is the portability point that matters for change 5: split-point density is not a v13-and-later behavior, so a 12 server reports the same healthy index as 26.6% waste.
+
 ## Context Reviewed
 
 - Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number here is a 17.10 observation and was not re-measured; the two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged.
@@ -1329,6 +2063,8 @@ Two artifacts keep the old spelling on purpose: the psql capture in [The v14 unk
 - Portable-statement follow-up, exact-pin execution on three servers: isolated 12.2, 14.23 and 17.10 clusters, each built out of tree from its own pinned checkout under `.wiki-runtime/`, all with `autovacuum = off`, `fsync = off`, `block_size` 8192; the 17.10 build was configured `--with-icu` so that a nondeterministic collation could be created. Identical fixture DDL on all three: a seven-point duplication band at 1,000,000 rows (1, 2, 5, 10, 100, 1000 and 1,000,000 rows per key) each with a 20% partial sibling, a 25%-NULL index, a one-hot-value skew index, variable-width and fixed-width text, a unique index, four multi-column/`INCLUDE` variants, a `fillfactor = 50` duplicate-key index, a `deduplicate_items = off` index, five real-bloat fixtures (scattered delete plus VACUUM on distinct and duplicate keys, a partial duplicate-key index, an all-rows-deleted index, an unvacuumed delete), a drained partial predicate, a `TRUNCATE`-and-reload index, a grown-since-ANALYZE index, an empty index, and two 100-rows-per-key text indexes differing only in collation determinism. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy; the v12 Method A arithmetic, the v17 sweep on this page, a uniform-group variant, and the proposed statement were installed as views and scored against those rebuilds in one query. Catalog probes covered `pg_amproc` support numbers, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, `ALTER INDEX ... SET (deduplicate_items = off)`, `collisdeterministic`, `array_lower(indclass, 1)`, and `reltuples` after build, `TRUNCATE`, reload and full delete. The statistics repairs (`SET STATISTICS 1000`, `SET (n_distinct = ...)`) were exercised on 17.10 only. All three servers were stopped afterwards and their data directories removed.
 - Reporting-defect follow-up, source coverage (no server run; this follow-up is source-only): free space map internals in `freespace.c` (`RecordPageWithFreeSpace`, `GetPageWithFreeSpace`, `GetRecordedFreeSpace`, `fsm_readbuf`'s `extend` flag and ZERO_ON_ERROR path, `fsm_extend`, `fsm_set_and_search`, `fsm_get_location`, `fsm_logical_to_physical`, `fsm_space_avail_to_cat`/`fsm_space_cat_to_avail`, `FreeSpaceMapPrepareTruncateRel`, `FreeSpaceMapVacuum`, the category table and `FSM_TREE_DEPTH`), `indexfsm.c` (all four exported routines and the header NOTES), `fsm_internals.h` (`NodesPerPage` through `SlotsPerFSMPage`); nbtree page recycling in `nbtree.c` (`btvacuumscan`'s `pages_free`-is-index-state comment and its FSM-vacuum condition, `btvacuumpage`'s recyclable/deleted/half-dead branches), `nbtpage.c` (`_bt_allocbuf`'s FSM loop and its two reject paths, `_bt_pendingfsm_init`, `_bt_pendingfsm_add`, `_bt_pendingfsm_finalize`), `nbtree.h` (`BTPageIsRecyclable`, `BTDeletedPageData`, `BTPageSetDeleted`, `P_ISDELETED`/`P_ISHALFDEAD`/`P_IGNORE`, `BTVacState`), `README` ("Deleting entire pages during VACUUM"); storage lifecycle in `storage.c` (`RelationTruncate`'s per-fork preparation), `heap.c` (`RelationTruncateIndexes`), `relcache.c` (`RelationSetNewRelfilenumber`), `index.c` (`reindex_index`), `tablecmds.c` (`ExecuteTruncateGuts`), plus the `RelationTruncate` caller set (`vacuumlazy.c`, `heapam_handler.c`, and the `#ifdef NOT_USED` call in `spgvacuum.c`); reporting surfaces in `vacuumlazy.c` (the VERBOSE per-index line), `genam.h` (`IndexBulkDeleteResult` field semantics), `dbsize.c` (`half_rounded`, `size_pretty_units`, `pg_size_pretty`, `pg_size_pretty_numeric`), `queries.sgml` (`LIMIT` without a unique ordering), `genfile.c` (`convert_and_check_filename`'s `pg_read_server_files` check and `pg_read_binary_file_common`); contrib page-class sources `pgstatindex.c` with `pgstattuple--1.4.sql`, `pg_freespacemap.c` with `pg_freespacemap--1.1.sql`/`--1.1--1.2.sql` and its control file, `pageinspect`'s `btreefuncs.c` with `pageinspect--1.11--1.12.sql`; and tests `contrib/pg_freespacemap/{sql,expected}/pg_freespacemap` (the `avail > 0` idiom over a B-tree index) and `src/test/regress/{sql,expected}/dbsize` (negative `pg_size_pretty` for both variants).
 - Follow-up exact-pin execution, two servers: the same DDL and generated data on one isolated 12.2 server and one isolated 17.10 server, each built from its own pin under `.wiki-runtime/`, both with `autovacuum = off`, `fsync = off`, `block_size` 8192, and no contrib extension installed. Fixtures: nine 1,000,000-row indexes (distinct, all-duplicate, 25% NULL, four duplication ratios, a 20% partial sibling, and a 10-key index with 90% of rows deleted and vacuumed), six shape indexes over a 200,000-row table, three `INCLUDE`-versus-key-column indexes over a 1,000,000-row table, an empty-table index, and a `TRUNCATE`-and-reload index. The dedup-aware sweep and the v12 page's Method A were installed as views on both servers with only the 1 MB triage filter and `LIMIT` removed and `expected_blocks` exposed; `CREATE INDEX CONCURRENTLY` rebuilds were the ground truth. Catalog probes covered `pg_amproc` support numbers, `array_lower(indclass, 1)`, `ALTER INDEX ... SET (deduplicate_items = off)`, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, and `pg_class.reltuples` after build, `TRUNCATE` and reload. Both servers were stopped afterwards, the test databases dropped, and the 17.10 data directory removed.
+- Twelve-issue-review follow-up, source coverage: nbtree build and deduplication in `nbtsort.c` (`_bt_pagestate`'s `btps_full`, `_bt_blnewpage`'s reserved high-key line pointer, `_bt_buildadd`'s hard and soft page-full rule and its high-key move, `_bt_load`'s `maxpostingsize` and its dedup loop, `_bt_sort_dedup_finish_pending`, `_bt_leafbuild`'s recomputed `allequalimage` and metapage write), `nbtdedup.c` (`_bt_dedup_start_pending`'s `basetupsize`, `_bt_dedup_save_htid`'s `mergedtupsz` test, `_bt_form_posting`), `nbtsplitloc.c` (`_bt_findsplitloc`'s header comment on fillfactor versus 50:50, the rightmost-leaf branch, `_bt_afternewitemoff`, the other-leaf branch, single-value strategy), `nbtutils.c` (`_bt_allequalimage`'s INCLUDE early return), `nbtpage.c` (`_bt_initmetapage`, `_bt_metaversion`), `nbtinsert.c` (the insert-time deduplication gate), `nbtree.h` (the btree-version comment on `btm_allequalimage` and pg_upgrade); extended statistics in `mvdistinct.c` (`statext_ndistinct_build`'s combination generator, `ndistinct_for_combination`, `estimate_ndistinct`'s clamping, `pg_ndistinct_out`'s key spelling, the negative-attnum expression convention), `extended_stats.c` (`BuildRelationExtStatistics`, the ndistinct build call, `stxdinherit`), `statscmds.c` (the two-column minimum and the `STATS_MAX_DIMENSIONS` limit), `statistics.h`; statistics visibility in `system_views.sql` (`pg_stats` and its `has_column_privilege`/RLS filter, the `REVOKE` on `pg_statistic`, `pg_stats_ext` and its `pg_has_role` filter, `pg_stats_ext_exprs`, `pg_stat_all_tables`'s live/dead/last-analyze columns) and `catalogs.sgml` (the `pg_statistic` and `pg_statistic_ext_data` visibility paragraphs); row-count sources in `pgstat_relation.c` (`pgstat_count_heap_insert`, `AtEOXact_PgStat`'s live/dead deltas, `pgstat_relation_flush_cb`'s clamped accumulation, `pgstat_report_analyze`'s re-basing), `index.c`, `analyze.c`, `vacuum.c`; contrib boundary in `btreefuncs.c` (`bt_metap`'s superuser check and its `allequalimage` output) and `pgstatindex.c` (`leaf_fragmentation`).
+- Twelve-issue-review follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --without-icu`, `block_size` 8192, `autovacuum = off`, `fsync = off`, plus one isolated 12.2 server from its own pin for the portability run. Fixtures on 17.11: a nine-point duplication band at 1,000,000 rows (100, 132, 133, 143, 200, 264, 265, 500 and 1000 rows per key) chosen around the 132-TID cap; `i_q1000` and `i_cd` rebuilt to the shapes the earlier follow-up measured; `i_seq` and `i_rand` as ordered-versus-random insertion twins over the same 1,000,000 distinct keys; `i_wide` at 300,000 distinct 100-byte `text` keys; correlated, independent, superset-covered, gap-covered, reversed-column and expression multicolumn indexes with `CREATE STATISTICS ... (ndistinct)` objects; `i_inc_lowcard` and `i_dupoff` for the two gate conjuncts; `i_stale`, `i_dupdel`, `i_extdel2` and `i_ext50` for real reclaimable space; and an unprivileged `probe` role with no table privileges. The statement as filed and the corrected statement were installed as views, a `security_invoker` copy was used to read internals as the unprivileged role, and a third view dropped only the `least()` guard for rejected fix A. `CREATE INDEX CONCURRENTLY` copies are the ground truth; `pgstattuple` supplied page classes, densities and `leaf_fragmentation`, and `pageinspect` supplied `bt_metap`, `bt_page_stats`, `bt_multi_page_stats` and `bt_page_items` — both as ground truth only. The 12.2 server carried the ordered/random twins, the correlated multicolumn index with its statistics object, `i_q1000`, `i_wide` and `i_stale`, plus its own `probe` role.
 - Column-rename follow-up, source coverage (no server run; this follow-up is source-only): output column labelling and sorting in `queries.sgml` (the Column Labels section and the `ORDER BY`-by-output-column rule); query-jumble surfaces in `queryjumblefuncs.c` (`CleanQuerytext`, `JumbleQuery`, `_jumbleNode` and the two generated includes), `gen_node_support.pl` (per-field `query_jumble_ignore` emission), `primnodes.h` (`TargetEntry.resname`), and `pgstatstatements.sgml` (the `queryid` post-parse-analysis and stability paragraphs); query-text surfaces in `pg_stat_statements.c` (`pgss_store`'s entry lookup, `generate_normalized_query`, `qtext_store`) and `postgres.c` (`log_statement` and duration logging in `exec_simple_query`); identifier limits in `pg_config_manual.h` (`NAMEDATALEN`), `scan.l` (the `{identifier}` rule) and `scansup.c` (`downcase_truncate_identifier`, `truncate_identifier`); type and error surfaces in `pg_proc.dat` (`pg_size_pretty` return types), `varlena.c` (`bttextcmp`, `text_cmp`, `varstr_cmp`) and `parse_relation.c` (`errorMissingColumn`); vocabulary in `glossary.sgml` (the Bloat entry), `ref/copy.sgml` ("recover the wasted space"), `maintenance.sgml` (routine reindexing), `pgstattuple--1.4.sql` (`free_space`/`free_percent`), plus whole-tree string searches for `bloat` across `system_views.sql`, `pg_proc.dat` and every contrib SQL script.
 
 ## Evidence Map
@@ -1398,6 +2134,19 @@ Two artifacts keep the old spelling on purpose: the psql capture in [The v14 unk
 | Selecting a name the statement no longer emits raises `ERRCODE_UNDEFINED_COLUMN` | [parse_relation.c#errorMissingColumn](../../../../raw/postgres-17/src/backend/parser/parse_relation.c#L3712-L3733) |
 | `pg_size_pretty` returns `text`, so ordering by its result is a collated string comparison | [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507), [varlena.c#bttextcmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1875-L1888), [varlena.c#varstr_cmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1583-L1590) |
 | "Bloat" is defined in the docs as per-page space, while "wasted space" is the docs' phrase for space a maintenance command recovers; contrib names the quantity `free_space` | [glossary.sgml#Bloat](../../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250), [copy.sgml#recover-the-wasted-space](../../../../raw/postgres-17/doc/src/sgml/ref/copy.sgml#L613-L621), [maintenance.sgml#non-btree-bloat](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1042-L1046), [pgstattuple--1.4.sql#free_space](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L14-L15), [zic.c#bloat](../../../../raw/postgres-17/src/timezone/zic.c#L641-L646) |
+| A run of equal keys is flushed as its own posting tuple or tuples, so key groups never share one, and the last tuple of a group is partial | [nbtsort.c:1323-1335](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1323-L1335), [nbtsort.c#_bt_sort_dedup_finish_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1029-L1057), [nbtdedup.c#_bt_dedup_save_htid](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L504-L531) |
+| A leaf under construction is finished on a hard space test or a fillfactor test discounted by the previous tuple's posting list, and the last item added becomes the truncated high key rather than a data item | [nbtsort.c:853-854](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854), [nbtsort.c#_bt_buildadd-highkey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L873-L940), [nbtsort.c:663-665](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L663-L665) |
+| An `ndistinct` extended-statistics value is an absolute count clamped to the sampled distinct count and the row count, never a negative fraction | [mvdistinct.c#estimate_ndistinct](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L519-L542), [mvdistinct.c#ndistinct_for_combination](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L424-L517) |
+| `pg_ndistinct` renders as a JSON object keyed by ascending comma-space-separated attnums, with an item for every 2-to-N column combination | [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L354-L385), [mvdistinct.c#statext_ndistinct_build](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L87-L141) |
+| Expressions in an extended-statistics object are stored as negative attnums, so an `indkey` attnum cannot match one | [mvdistinct.c:83-86](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L83-L86) |
+| A statistics object needs 2 to 8 columns, and its data exists only after `ANALYZE` builds it | [statscmds.c:415-419](../../../../raw/postgres-17/src/backend/commands/statscmds.c#L415-L419), [statscmds.c:216-224](../../../../raw/postgres-17/src/backend/commands/statscmds.c#L216-L224), [statistics.h#STATS_MAX_DIMENSIONS](../../../../raw/postgres-17/src/include/statistics/statistics.h#L19), [extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L112-L133) |
+| `pg_stats` is publicly readable but row-filtered by column privilege and RLS, and `pg_statistic` itself is revoked from `public` | [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L271-L273), [system_views.sql:275](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L275), [catalogs.sgml#pg_statistic](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L7431-L7440) |
+| `pg_stats_ext` is stricter: it needs membership in the table owner's role | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L308-L309), [catalogs.sgml#pg_statistic_ext_data](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L7764-L7775) |
+| `pg_stat_all_tables` exposes live/dead tuples and the last analyze time with no privilege filter | [system_views.sql#pg_stat_all_tables-live](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L687-L693) |
+| `n_live_tup` is maintained by DML deltas at commit and re-based by `ANALYZE`, without needing `ANALYZE` to move | [pgstat_relation.c#pgstat_count_heap_insert](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L360-L369), [pgstat_relation.c#AtEOXact_PgStat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L553-L575), [pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L838-L866), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L277-L311) |
+| A rightmost leaf split targets `fillfactor` while every other leaf split targets 50:50, so only ordered insertion reaches a sorted build's density | [nbtsplitloc.c:88-102](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L88-L102), [nbtsplitloc.c:286-291](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L286-L291), [nbtsplitloc.c:292-303](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L292-L303), [nbtsplitloc.c:329-335](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L329-L335) |
+| A build recomputes `allequalimage` from the catalog and only then writes it to the new metapage, while the metapage copy is what the insert path reads | [nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563), [nbtsort.c:1124-1127](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1124-L1127), [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L60-L90), [nbtpage.c#_bt_metaversion](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L718-L795), [nbtinsert.c:2772-2782](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2772-L2782) |
+| A v12-built index keeps `btm_allequalimage` false until a `REINDEX`, and `bt_metap` is superuser-only | [nbtree.h:135-142](../../../../raw/postgres-17/src/include/access/nbtree.h#L135-L142), [btreefuncs.c:905-921](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L905-L921), [btreefuncs.c:840-857](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L840-L857) |
 
 ## Open Questions
 
@@ -1436,6 +2185,20 @@ Two artifacts keep the old spelling on purpose: the psql capture in [The v14 unk
 - **The query-ID and query-text consequences of the tag rename are source-derived.** `queryid` stability follows from `JumbleQuery` walking the parse tree and from `TargetEntry.resname` carrying `query_jumble_ignore`; the surviving comment and the write-once query text follow from `CleanQuerytext` and `pgss_store`. No 17 server was started with `pg_stat_statements` loaded to confirm that one entry keeps the old tag while the new tag is what a fresh entry shows, and the generated `queryjumblefuncs.funcs.c` was read only through `gen_node_support.pl`, since generated files are not in the checkout.
 - **`wasted_space_bytes` is a recommendation, not part of either statement.** Neither statement emits the raw `bigint`; the name is proposed for a consumer that parses output, and no run compared a text `wasted_space` ordering against a byte ordering to demonstrate the `9 bytes` before `10 MB` inversion.
 - **The negative string searches are searches, not proofs of intent.** "No SQL-visible interface says bloat" comes from string searches of `system_views.sql`, `pg_proc.dat` and every contrib SQL script in the pinned tree. A name assembled at run time, or one in an out-of-tree extension, would not be found that way.
+- **The 17.11 follow-up did not re-measure the rest of the page.** Its server carries new fixtures, not the 15 named fixtures, the 54-cell matrix, or the 12-through-17 fixture family, and 14.23 was not rebuilt for it. So the two servers on this page now disagree in provenance: everything above [Follow-up: five changes from a twelve-issue review](#follow-up-five-changes-from-a-twelve-issue-review) is a 17.10 observation and everything inside it is a 17.11 one. No cell was compared across the two builds.
+- **The corrected statement's tuple count is right and its tuple price is not.** Change 1 counts posting tuples per key group exactly — 14,008 modelled against 14,000 built on `i_ind2` — and then charges every one of them the full `nmax`-TID size, so a group whose last posting list is nearly empty is over-charged by up to `(nmax - remainder) * 6` bytes. That is the whole of the `−99.4%` at 133 rows per key and the `−88.7%` at 143. A two-size mixture (`floor(rpg / nmax)` full tuples plus one partial) is the obvious repair, was not implemented, and cannot be closed-form on its own: the packing of mixed-size tuples into leaves needs the per-page rule `_bt_buildadd` runs, and the measured per-page utilisation across three fixtures was 6929, 7165 and 7689 bytes, so no single constant reproduces it.
+- **The exact leaf-capacity rule was derived and not applied.** `floor((bs - 48 - greatest(tuple_size + 4, floor(bs * (100 - fillfactor) / 100) - tids * 6)) / tuple_size)` reproduces the measured 11 data items per leaf on `i_cd`, 9 on `i_q1000` and 366 on a plain `bigint` leaf, which would close `i_cd`'s remaining 38 blocks. It was left out because the brief was exactly five changes, and it was checked on three shapes only, all at `block_size` 8192, `fillfactor` 90 and `MAXALIGN` 8.
+- **The internal-level fanout for a deduplicated index is still modelled from the leaf slot.** `int_cap` uses `slot`, and the pivots above a posting-list leaf level measured 8 to 24 bytes with 185 of 212 carrying a heap TID, which is why `i_q1000` needs five level-1 pages against the modelled four. The one-block error this leaves was not corrected, and only one index's internal levels were inspected.
+- **The nondeterministic-collation conjunct was not re-measured on 17.11.** That build is `--without-icu`, so the `all_deterministic` claim in this follow-up rests on the statement text plus `btvarstrequalimage`, not on a fresh run. The measured version of it is the 17.10 ICU build recorded earlier on this page.
+- **`i_rand`'s numbers come from one seed and one shape.** `setseed(0.42)` and a `generate_series ... ORDER BY random()` load produced 65.68% density and 27.1% on both columns; no second seed, no second key type, no `fillfactor` other than 90, and no concurrent-insert workload were tried. Whether a production random-insert index sits above or below a 30% threshold is therefore unquantified, and the 2.9-point margin here should not be read as a safety margin.
+- **The re-randomisation experiment mutated the fixture.** The 500,000 extra inserts that produced the 5590/4622/4116-block drift table were run after the `i_rand` row of the fixture tables was captured, on the same table and in the same database, so the two sets of `i_rand` numbers describe two different states rather than a repeatable pair. The rebuilt copy that drifted to 80.21% was also the ground-truth index for the earlier state.
+- **Extended statistics were exercised on plain-column keys only.** The measured cases are two-column and three-column `int` keys on ordinary tables. Partitioned parents, inheritance children, expression statistics objects, `MCV`-only or `dependencies`-only objects, objects on more than 8 columns, and the `inherited = true` row that 15 and later can produce were not run; the `max(e.nd)` choice for duplicate rows is an argument about direction, not a measurement.
+- **The invisible-statistics caveat cannot prove a hidden row exists.** `pg_statistic` is unreadable to the role in question, so the statement reports that `pg_stats`'s filter would have removed a row, not that one is there. A column that genuinely has no statistics and a column whose statistics are hidden are distinguished only by privilege state plus `last_analyze`, and no case was constructed where a table was analyzed while one column legitimately had no row.
+- **RLS was not exercised.** The `stats_hidden` expression tests `relrowsecurity AND row_security_active(tbloid)` because that is `pg_stats`'s own condition, but no fixture enabled row-level security, so only the column-privilege half of the caveat is measured.
+- **The alert-rule counts were not re-run.** [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate) reports true and false positives at a 30% threshold over the 12-through-17 fixture family on three servers. This follow-up adds one true false positive (`i_rand`) and one recovered true positive (`i_ext50`) and one new suppression string, but the whole table was not recomputed on 17.11, so the "4 of 5, 0 false positives" line still describes the older fixture set.
+- **Neither statement was re-run on 14.23, 13, 15 or 16.** The corrected statement was measured on 17.11 and 12.2 only. 14.23 was measured for the earlier follow-up with the filed statement, and change 2 would behave there as on 17.11 because `CREATE STATISTICS` and `pg_stats_ext` predate 12; that is a source-and-catalog argument, not a run.
+- **The `−0.6%` on `i_q1000` depends on the sampled most-common-value list.** `ANALYZE` stored 11 MCVs for a uniform 1000-value column, which is what splits the key groups into classes and adds 6 leaves to the model. A second `ANALYZE` with a different sample, or a different `default_statistics_target`, would move that cell; `i_r1000` — the same shape built independently — read `−0.3%` in the same run, which is the size of that effect on one server.
+- **The two-server timing comparison is not a benchmark.** 41.7 / 34.4 / 37.6 ms against 30.2 / 31.9 / 36.6 ms was measured on one warm database with 54 indexes, with the triage filter removed, on a machine running other work. The ranges overlap and no attempt was made to attribute the difference to a specific CTE.
 
 ## Source References
 
@@ -1516,6 +2279,29 @@ Two artifacts keep the old spelling on purpose: the psql capture in [The v14 unk
 - [pg_config_manual.h#NAMEDATALEN-comment](../../../../raw/postgres-17/src/include/pg_config_manual.h#L16-L30)
 - [scansup.c#downcase_truncate_identifier](../../../../raw/postgres-17/src/backend/parser/scansup.c#L23-L105)
 - [parse_relation.c#errorMissingColumn-full](../../../../raw/postgres-17/src/backend/parser/parse_relation.c#L3658-L3751)
+- [nbtsort.c#_bt_sort_dedup_finish_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1029-L1057)
+- [nbtsort.c#_bt_load-dedup-loop](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1280-L1356)
+- [nbtsort.c#_bt_leafbuild](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1075-L1130)
+- [nbtsplitloc.c#_bt_findsplitloc-strategy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L270-L340)
+- [nbtsplitloc.c#_bt_afternewitemoff](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L629-L746)
+- [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L60-L100)
+- [nbtpage.c#_bt_metaversion](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L718-L795)
+- [nbtinsert.c#_bt_delete_or_dedup_one_page](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2683-L2790)
+- [nbtree.h#btree-versions](../../../../raw/postgres-17/src/include/access/nbtree.h#L112-L150)
+- [mvdistinct.c#statext_ndistinct_build](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L76-L141)
+- [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L346-L386)
+- [mvdistinct.c#estimate_ndistinct](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L519-L542)
+- [extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L104-L230)
+- [statscmds.c#CreateStatistics](../../../../raw/postgres-17/src/backend/commands/statscmds.c#L200-L230)
+- [statistics.h#STATS_MAX_DIMENSIONS](../../../../raw/postgres-17/src/include/statistics/statistics.h#L14-L30)
+- [system_views.sql#pg_stats-view](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L275)
+- [system_views.sql#pg_stats_ext-view](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L310)
+- [catalogs.sgml#pg_statistic-visibility](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L7425-L7441)
+- [catalogs.sgml#pg_statistic_ext_data-visibility](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L7760-L7776)
+- [pgstat_relation.c#pgstat_count_heap_insert](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L355-L400)
+- [pgstat_relation.c#AtEOXact_PgStat-relations](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L530-L590)
+- [pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L800-L880)
+- [btreefuncs.c#bt_metap](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L828-L939)
 - [pg_proc.dat#pg_size_pretty-entries](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507)
 - [varlena.c#text_cmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1583-L1888)
 - [glossary.sgml#glossary-bloat](../../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250)

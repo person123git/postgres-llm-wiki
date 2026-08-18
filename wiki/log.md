@@ -8197,3 +8197,129 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Root index, `wiki/v12/index.md`, the v12 coverage cell and a new
   `## Coverage Notes` entry in `wiki/versions.md` all describe the rename. The
   page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-18] follow-up v17 | five changes from a twelve-issue review of the portable B-tree wasted-space statement
+
+- Extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  sixth follow-up that works a twelve-issue external review of the portable
+  12-through-17 statement, against unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Earlier follow-ups were not
+  renumbered or rewritten, and the two-column contract
+  (`wasted_space_pct`/`wasted_space_pct_floor`) plus the `wasted_space` naming are
+  unchanged.
+- Prompt hygiene: filed verbatim at the asker's direction, with two counts recorded
+  in a prompt note rather than silently corrected. The parenthesis lists five items
+  for "four of them are already fixed" (the asker confirmed the two reporting
+  defects count as one review issue, making the ledger 4 + 1 + 5 + 2 = 12), and the
+  second reporting defect became the signed `wasted_space` byte column, not
+  `wasted_space_pct`, which was never defective. The asker also named the
+  mischaracterized issue.
+- New measurement provenance: an isolated **17.11** server built out of tree from
+  the current pin (`--without-readline --without-zlib --without-icu`, `block_size`
+  8192, `autovacuum = off`, `fsync = off`) — the first numbers on this page taken
+  on the pinned commit rather than the previous 17.10 one — plus an isolated 12.2
+  server for portability. `pgstattuple` and `pageinspect` were installed as ground
+  truth only; `CREATE INDEX CONCURRENTLY` copies are the reclaimable-size arbiter.
+  The filed statement, the corrected statement, a `security_invoker` copy for the
+  unprivileged-role run, and a variant with only the `least()` guard removed were
+  installed as views and scored in one query.
+- Reproduction check first: the new server reproduces the earlier follow-up's cells
+  exactly — `i_q1000` 847 modelled against 896 live and 896 rebuilt, `i_cd` 424
+  against 462, `i_dupdel` 89.8% against a true 89.8%, `i_stale` 19.0% against a
+  true 19.0% — which is what makes the rest of the comparison meaningful.
+- Four issues confirmed already fixed, three of them by running the filed text:
+  the negative-`n_distinct` branch (four fixtures read `n_distinct = -1`), the
+  `indnatts = indnkeyatts` conjunct (`i_inc_lowcard` reads `dedup_applies = false`
+  and 0.1%, so the 78.1% false positive of the third follow-up is gone), the two
+  reporting defects, and — by text plus source, since this build has no ICU — the
+  nondeterministic-collation conjunct. The `deduplicate_items` conjunct was
+  measured too: `i_dupoff` reads 0.1% on 2749 blocks.
+- Mischaracterization established: the page's "the last posting tuple is partial
+  and pages no longer pack evenly" is the wrong mechanism for `i_q1000`. Of the
+  49-block gap, 48 blocks are a posting-tuple count error (the model divided a
+  class's rows by its TID count, letting one tuple span two key groups, while
+  `_bt_load` flushes the pending list at every key change) and 1 block is
+  internal-fanout error (pivots above a deduplicated leaf level carry a heap TID,
+  measured 212 items per level-1 page against the modelled 284). Leaf packing was
+  already right: a leaf holds nine 808-byte posting tuples plus a 24-byte truncated
+  high key, which is the model's 9 data items.
+- Change 1 applied as prescribed, and reported as not a strict improvement. It
+  removes every phantom-bloat reading above 264 rows per key (`i_q1000` +5.5% to
+  −0.6%, `i_r500`/`i_r1000` +5.5% to −0.2%/−0.3%, `i_r265` +10.8% to −33.5%) and
+  introduces over-prediction to −99.4% at 133 rows per key and −88.7% at 143,
+  because each group's last, partial posting tuple is still priced at the full
+  `nmax` size; the count itself is exact (14,008 modelled against 14,000 built).
+  `i_cd` does not move: at 100.1 rows per group the round-up multiplier is 1, and
+  its 38 blocks are an off-by-one leaf capacity — 12 modelled posting tuples where
+  `_bt_buildadd` fits 11 data items plus the high key. Both directions are confined
+  to the point estimate, so the floor-based rule was immune before and after.
+- Change 2 applied: an `ndistinct` extended-statistics estimate replaces the
+  per-column product for a multicolumn key, read as
+  `((n_distinct::text)::json ->> '<ascending attnums>')::numeric`. It is the only
+  change that recovers a missed alert: `i_ext50`, a correlated `(a, b)` index with
+  49.8% genuinely reclaimable, read `−38.3%` with a `−53.3%` floor and now reads
+  `+49.9%`, one block from its rebuild — so the floor was *not* immune. Measured
+  superset covering, wrong-column-set fallback, reversed column order, expression
+  keys, and `pg_stats_ext`'s owner-membership condition (8 rows to the owner, 0 to
+  an unprivileged role).
+- Change 3 applied: a `statistics not visible to this role` caveat, plus a narrower
+  `no statistics row for an index column`, from the view's own filter evaluated in
+  SQL. It belongs in the suppression set for a reason the review did not give — the
+  32-byte default `avg_width` moves the **floor**, so a healthy 100-byte-key index
+  reads 62.5% on both columns to a role without `SELECT` against 0.0% as owner,
+  reproduced identically on 12.2 — while the `n_distinct` half only collapses the
+  point estimate onto the floor.
+- Change 4 applied and measured: `i_rand`, 1,000,000 distinct keys inserted in
+  random order into an existing index and never deleted, is 3765 blocks live at
+  65.68% leaf density and 49.87% fragmentation with zero deleted, half-dead or
+  empty pages, rebuilds to 2745, and reports 27.1% on both columns with the model
+  exactly equal to the rebuild. Stated plainly as the one valid issue the
+  floor-plus-status-plus-caveats rule cannot defend against.
+- Change 5 applied: the baseline is a sorted build at `fillfactor`, while
+  `_bt_findsplitloc` applies `fillfactor` only to rightmost leaf splits and splits
+  every other leaf 50:50. Measured drift: 500,000 further random inserts took the
+  never-rebuilt copy to 5590 blocks at 66.36% (26.4%), gave 10.9% of the reclaimed
+  space back on the rebuilt copy (4622 blocks at 80.21%), and a fresh rebuild
+  landed on the model's 4116 blocks exactly at 90.07%. A three-step decision rule
+  separates "a rebuild would reclaim this" from "a rebuild is worth doing".
+- Two fixes rejected with source reasons. `least(reltuples, n_live_tup)` stays:
+  `n_live_tup` is DML-maintained at commit and re-based by `ANALYZE`, live rows are
+  the rebuild baseline, and `reltuples` alone reports the 19%-drained `i_stale` as
+  0.0% — 521 blocks and 4168 kB lost on both columns — while three other fixtures
+  are bit-identical under both forms. `bt_metap().allequalimage` stays out: the
+  build recomputes the flag from the catalog and only then writes the metapage, a
+  pg_upgrade'd v12 index reports false until a `REINDEX`, the function raises
+  `must be superuser to use pageinspect functions`, and a `deduplicate_items = off`
+  index reports `allequalimage = t` on 2749 blocks holding no posting lists. The
+  metapage answers "may this index deduplicate as it stands", which is the
+  rebuild-decision question the pg_upgrade page uses it for.
+- Portability verified by running the same file on 12.2 (`server_version_num`
+  120002): every added construct exists there, `pg_stats_ext` has exactly the
+  columns referenced, `n_distinct::text` renders `{"1, 2": 1000}`, and the
+  unprivileged-role caveat fires the same way. `inherited` and `exprs` are
+  deliberately not referenced because 12 lacks them; the stated fallback is
+  `max()` over duplicate rows, which under-credits deduplication rather than
+  over-crediting. On 12.2 the gate stays closed (`pg_amproc` count at
+  `amprocnum = 4` is 0), so all 12 rows have `tids_per_tuple` 1.0 and every point
+  estimate equals its floor; change 1 is dead code there, change 2 fills in
+  `key_groups` on two indexes without moving a percentage, and change 3 does move
+  percentages.
+- Cost: 41.7 / 34.4 / 37.6 ms against the filed statement's 30.2 / 31.9 / 36.6 ms
+  over 54 indexes and 75,847 blocks on 17.11, and 30.5 / 19.4 / 21.7 ms over 12
+  indexes and 37,668 blocks on 12.2.
+- Fifteen new open questions record what was not measured: the unapplied exact
+  leaf-capacity rule and two-size posting-tuple mixture, the uncorrected
+  internal-fanout term, the untested RLS half of the new caveat, the un-recomputed
+  30%-threshold alert table, the single-seed `i_rand` result, the fixture-mutating
+  drift experiment, extended statistics on plain columns only, no 13/14/15/16 run,
+  and that everything above this follow-up remains a 17.10 observation.
+- Page updates: Contents gained thirteen entries; the Verdict gained a paragraph;
+  thirteen new `###` sections carry the ledger, the four already-fixed issues, the
+  mischaracterization, the five changes, the full corrected statement, the fixture
+  and duplication-band tables, the direction/magnitude/immunity table, the two
+  rejected fixes, and the 12.2 run. Context Reviewed gained two bullets, Evidence
+  Map thirteen rows, Open Questions fifteen, and Source References twenty-four.
+- Root index, `wiki/v17/index.md`, the v17 coverage cell and a new
+  `## Coverage Notes` entry in `wiki/versions.md` all describe the follow-up. The
+  page keeps `verified: false` and `verified_by_agent: not yet`.
