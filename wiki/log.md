@@ -8474,3 +8474,62 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Root index, `wiki/v17/index.md`, the v17 coverage cell and a new
   `## Coverage Notes` entry in `wiki/versions.md` all describe the follow-up. The
   page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-18] follow-up v17 | fold change 6 into the B-tree wasted-space statement and re-measure the whole page
+
+- Extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  ninth follow-up against unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): change 6 is now inside
+  [The corrected statement, with all six
+  changes](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-corrected-statement-with-all-six-changes),
+  the section is retitled from "five changes", and **every server-measured table on
+  the page was re-run on 17.11**. Nothing on the page is a 17.10 observation any
+  more.
+- Prompt hygiene: the request ("follow agents.md, in postgresql 17 , for question:
+  ... correct and replace "The corrected statement, with all five changes" by
+  adding the change 6 and re-run all tests") had a space before a comma, lowercase
+  "postgresql", and "the change 6"; the asker approved the corrected restatement
+  and confirmed three scoping decisions — "all tests" means every server-measured
+  table, not just the mandatory suite; the section is renamed to "six changes" with
+  every anchor followed; and change 6 keeps its rationale but loses its duplicate
+  SQL block.
+- Servers: one isolated 17.11 install built from the pin with `--with-icu
+  --enable-debug` carrying four databases (the 15 v12 fixtures plus the 54-cell
+  matrix and Methods A/A-prime/B/C/D; the twelve-issue-review family with its
+  `probe` role; the 28 mandatory-test fixtures; a fresh database for the runnable
+  harness), a second 17.11 cluster plus isolated 14.23 and 12.2 servers for the
+  12-through-17 family. Every scored statement text was generated mechanically from
+  the page's own Markdown, including the pre-change-6 form, so both columns of every
+  comparison come from one source.
+- Reproduced exactly: all 15 `pgstatindex` fixture rows, Method C's rebuilds, Method
+  B's 36-of-36 census and its 18 never-vacuumed `Heap Fetches` catches, the 313.58%
+  against 96.15% density blow-up, 5 gate over-credits before change 6 and 0 after
+  with 1 under-credit, 8 for the earlier sweep, the audit query's 6 / 0 / 0 rows,
+  the harness's 23 indexes and 11-versus-11 `DEBUG1` verdicts, and every 12.2
+  blocker.
+- Moved by `ANALYZE` sampling: Method A is exact on 11 of 15 fixtures rather than 9;
+  the matrix scoreboard reads 33 exact rather than 30; the 10-rows-per-key sweep row
+  flipped to a negative `n_distinct` and lost its credit; `i_q1000` models 899 rather
+  than 901 because 8 most-common values were stored instead of 11.
+- Corrected one wrong claim: [What change 6
+  costs](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-change-6-costs)
+  had reported the gate under-crediting an opclass that gains `ei_alias(oid)`. It
+  does not — `ei_alias` is `LANGUAGE internal` with `prosrc = 'btequalimage'`, so the
+  whitelist credits it and both texts report 69.3% on a true 69.4%. The cost applies
+  only to a non-internal support function, re-measured with `ei_true(oid)`.
+- Newly measured: the nondeterministic-collation conjunct on an ICU 17.11 build
+  (`i_ci` 0.1% against the earlier sweep's 87.6% on a healthy 3611-block index),
+  change 1's residual over-prediction on a two-column and a partial fixture
+  (`i_inc_bothkeys` −24.8%, `i_q1000_part` −33.1%), a never-rebuilt 1.5M-row random
+  twin for change 5 (25.9% against the rebuilt index's 11.5%), and interleaved
+  timings that price the five earlier changes at roughly 30% while change 6 stays
+  inside the noise.
+- Page updates: the Contents, the verdict's follow-up list, the recommended-statement
+  section and its residual-error table, the change-1 through change-5 sections, the
+  six-change fixture tables, the 12.2 portability tables, the mandatory-test tables,
+  the `prosrc` and mixed-key sections, one new `###` section recording the re-run,
+  one Context Reviewed bullet, two Evidence Map rows, and twenty-two Open Questions
+  rewritten of which three are retired as resolved (the "did not re-measure the rest
+  of the page" gap, the un-measured collation conjunct, and the un-recomputed alert
+  table). The page keeps `verified: false` and `verified_by_agent: not yet`.
