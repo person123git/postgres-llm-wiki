@@ -8413,3 +8413,64 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Root index, `wiki/v17/index.md`, the v17 coverage cell and a new
   `## Coverage Notes` entry in `wiki/versions.md` all describe the follow-up. The
   page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-18] follow-up v17 | a maintained pointer to the current recommended B-tree wasted-space statement
+
+- Extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with an
+  eighth follow-up: a standing `## Question` requirement plus one new section,
+  [The current recommended
+  statement](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-current-recommended-statement),
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+  Earlier follow-ups were not renumbered or rewritten.
+- Prompt hygiene: the request ("follow agents.md, in postgresql 17 , for question:
+  ... add to question the requirement to keep a section that point to the current
+  recommended sql, select it based on the most acurate and with more fixes and more
+  compatible") had a space before a comma, lowercase "postgresql"/"sql", "acurate",
+  "a section that point to", and a trailing comparative fragment. The user chose
+  the corrected restatement, which is what `## Question` now carries, with a prompt
+  note recording the original wording and the three scoping answers: the section
+  points at a statement already on the page rather than restating its SQL, it names
+  the exact substitution needed to assemble it, and it sits directly after
+  `### Verdict` rather than at the end of the page.
+- The recommendation: the corrected statement with all five changes, with change
+  6's `all_equalimage` subquery substituted for the existence test. Assembly is two
+  stated steps — take the five-change SQL block, then replace the ten lines from
+  the `-- deduplication gate` comment through `AS all_equalimage,` — so there is no
+  second SQL copy to drift. The 17.11 and 12.2 runs behind the seventeen
+  mandatory-test verdicts were generated exactly that way, so the assembled text is
+  one the page has executed.
+- Selected on the three criteria the prompt named, with a six-row ranking table.
+  Accuracy: 0 over-credits over the 28 zero-waste fixtures against 5 as filed and 8
+  for the earlier v17 sweep, and 0 fixtures above 30% on either percentage column
+  against 3 and 4; the five changes add `i_q1000` +5.5% to −0.6%, `i_ext`/`i_sup`
+  −206.4% to +0.1%, and a genuinely 49.8%-reclaimable index from an unalertable
+  −38.3% to +49.9%. Fixes: six numbered changes on top of the portable statement's
+  gate conjuncts and both reporting corrections, ending in the catalog form of what
+  `_bt_allequalimage` does — look the support function up and call it — with
+  `prosrc` as the identity `fmgr` resolves. Compatibility: 12 through 17 unchanged,
+  measured on 12.2 and 17.11 for this exact text and on 14.23 and 17.10 for the
+  pre-change-6 text; 13, 15 and 16 were never run.
+- Four residual errors are named with their direction rather than buried: change 1's
+  −99.4% band just above a multiple of the 132-TID cap, change 2's −88.6% on
+  independent columns, change 6's one custom-opclass under-credit (a real 69.4%
+  rebuild win reported as 0.1%), and the 27.1% a randomly inserted, never-deleted
+  index reads on both columns while the model is exact to the block — the only one
+  of the four that a floor-based alert cannot absorb.
+- The section also fixes what the recommendation does not replace (Method C as the
+  only exact arbiter, Method B's leaf census, Method A-prime's sampled width; the
+  earlier v17 sweep needs its three conjuncts if it is kept), how to read the
+  output (floor plus `status = 'ok'` plus the three-string suppression set), the
+  `PGC_USERSET` scope of the two `SET`s the statement issues, the audit query to
+  run before adopting the gate swap, and the displacement rule: state the trade
+  instead of switching silently, because an over-prediction and an over-credit are
+  not interchangeable.
+- Source-only; no server was run. Page updates: one Contents entry, one `## Question`
+  follow-up with its prompt note, one new `###` section, one Context Reviewed
+  bullet, one Evidence Map row and two Open Questions (the ranking covers only this
+  page's own statements and fixtures; the assembled text has two servers and one
+  28-fixture set behind it, while every per-fixture number it inherits was measured
+  without change 6).
+- Root index, `wiki/v17/index.md`, the v17 coverage cell and a new
+  `## Coverage Notes` entry in `wiki/versions.md` all describe the follow-up. The
+  page keeps `verified: false` and `verified_by_agent: not yet`.
