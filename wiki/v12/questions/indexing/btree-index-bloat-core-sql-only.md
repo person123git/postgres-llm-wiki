@@ -32,6 +32,9 @@ verified_by_agent: not yet
   - [Follow-up: error by bloat type, partial and non-partial](#follow-up-error-by-bloat-type-partial-and-non-partial)
   - [Follow-up: an avg_leaf_density predictor head to head](#follow-up-an-avg_leaf_density-predictor-head-to-head)
   - [Follow-up: the partial-index failure and its fix](#follow-up-the-partial-index-failure-and-its-fix)
+  - [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat)
+  - [What the rename cannot change](#what-the-rename-cannot-change)
+  - [What a consumer must change](#what-a-consumer-must-change)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -45,6 +48,20 @@ Propose a SQL-only method, using no contrib extensions, to measure B-tree index 
 Follow-up:
 
 Add sections comparing the SQL bloat results to pgstatindex results, and measure what the error is with different types of index bloat and with partial and non-partial indexes.
+
+Follow-up:
+
+Add a correction. In the SQL, do not use bloat as the output; use wasted_space.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "add
+> correction: on the sql don't use bloat as the output but use wasted_space", per
+> the repository's prompt-hygiene rule. The asker scoped "the output" to the
+> statements' own identifiers and confirmed that both Method A reporting columns
+> are renamed (`wasted` -> `wasted_space`, `bloat_pct` -> `wasted_space_pct`),
+> that the Method A statement tag and the Method C probe index name are renamed
+> too, and that this page's prose and its two accuracy-table percentage headers
+> follow the new names. The page title and the conceptual use of "bloat" stay as
+> filed.
 
 ## Answer
 
@@ -112,7 +129,7 @@ SET lock_timeout = '2s';
 
 WITH RECURSIVE
 idx AS (
-    SELECT /* wiki_btree_bloat_sweep */
+    SELECT /* wiki_btree_wasted_space_sweep */
            c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
            c.relname AS indexname, t.oid AS tbloid, x.indkey,
            coalesce((SELECT option_value::int FROM pg_options_to_table(c.reloptions)
@@ -188,9 +205,9 @@ modelled AS (
 )
 SELECT schemaname, tablename, indexname,
        pg_size_pretty(actual_bytes) AS index_size,
-       pg_size_pretty(greatest(actual_bytes - expected_blocks * bs, 0)::bigint) AS wasted,
+       pg_size_pretty(greatest(actual_bytes - expected_blocks * bs, 0)::bigint) AS wasted_space,
        round((100 * (1 - (expected_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
-           AS bloat_pct,
+           AS wasted_space_pct,
        fsm_bytes > 0                                  AS has_freed_pages,
        tbl_n_dead_tup                                 AS dead_tuples,
        (last_vacuum IS NULL AND last_analyze IS NULL) AS never_analyzed,
@@ -200,6 +217,8 @@ SELECT schemaname, tablename, indexname,
  WHERE actual_bytes > 1024 * 1024
  ORDER BY greatest(actual_bytes - expected_blocks * bs, 0) DESC;
 ```
+
+Two `AS` labels and the statement tag were corrected after this page was first filed, and none of the three changes a value: `wasted` became `wasted_space`, `bloat_pct` became `wasted_space_pct`, and `/* wiki_btree_bloat_sweep */` became `/* wiki_btree_wasted_space_sweep */`. See [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat).
 
 Design notes that matter:
 
@@ -267,7 +286,7 @@ Exact by construction: build a sibling with the same definition, read its size, 
 SELECT /* wiki_btree_probe_ddl */
        regexp_replace(pg_get_indexdef(c.oid),
                       '^CREATE (UNIQUE )?INDEX ' || quote_ident(c.relname) || ' ON ',
-                      'CREATE \1INDEX CONCURRENTLY wiki_bloat_probe ON ')
+                      'CREATE \1INDEX CONCURRENTLY wiki_wasted_space_probe ON ')
        || coalesce(' TABLESPACE ' || quote_ident(ts.spcname), '') AS ddl
   FROM pg_class c
   LEFT JOIN pg_tablespace ts ON ts.oid = nullif(c.reltablespace, 0)
@@ -279,13 +298,13 @@ Then, as three separate top-level statements:
 ```sql
 SET maintenance_work_mem = '256MB';
 SET lock_timeout = '5s';
-CREATE INDEX CONCURRENTLY wiki_bloat_probe ON public.t_seq USING btree (id);
+CREATE INDEX CONCURRENTLY wiki_wasted_space_probe ON public.t_seq USING btree (id);
 SELECT /* wiki_btree_probe_result */
-       pg_size_pretty(pg_relation_size('public.idx_seq'))          AS live,
-       pg_size_pretty(pg_relation_size('wiki_bloat_probe'))        AS fresh,
+       pg_size_pretty(pg_relation_size('public.idx_seq'))              AS live,
+       pg_size_pretty(pg_relation_size('wiki_wasted_space_probe'))     AS fresh,
        pg_size_pretty(pg_relation_size('public.idx_seq')
-                      - pg_relation_size('wiki_bloat_probe'))      AS reclaimable;
-DROP INDEX CONCURRENTLY wiki_bloat_probe;
+                      - pg_relation_size('wiki_wasted_space_probe'))   AS reclaimable;
+DROP INDEX CONCURRENTLY wiki_wasted_space_probe;
 ```
 
 Constraints and costs, all from source:
@@ -293,7 +312,7 @@ Constraints and costs, all from source:
 - **Three separate statements.** `CREATE INDEX CONCURRENTLY` is rejected inside a transaction block, a subtransaction, or a function ([utility.c#ProcessUtilitySlow](../../../../raw/postgres-12/src/backend/tcop/utility.c#L1301-L1310), [xact.c#PreventInTransactionBlock](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L3329-L3359)). `DROP INDEX CONCURRENTLY` has the same restriction plus no-CASCADE and one-object rules ([tablecmds.c#RemoveRelations](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L1235-L1253)).
 - **Lock level is `ShareUpdateExclusiveLock`** on the table, so DML keeps running ([indexcmds.c#DefineIndex](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L548-L564)).
 - **Not usable on a partitioned table** ([indexcmds.c#DefineIndex](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L604-L622)), and silently downgraded to a non-concurrent build on temp tables ([indexcmds.c#DefineIndex](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L489-L499)).
-- **Failure leaves an invalid index** that still costs write overhead, because `indisvalid` is set non-transactionally as the last step ([index.c#index_set_state_flags](../../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3330), [create_index.sgml#CONCURRENTLY](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596)). Always follow up with a check for a leftover `wiki_bloat_probe`.
+- **Failure leaves an invalid index** that still costs write overhead, because `indisvalid` is set non-transactionally as the last step ([index.c#index_set_state_flags](../../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3330), [create_index.sgml#CONCURRENTLY](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596)). Always follow up with a check for a leftover `wiki_wasted_space_probe`.
 - **It costs a full build**: two table scans ([create_index.sgml#CONCURRENTLY](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L545-L558)), a full-page WAL image per index page whenever `wal_level >= replica` ([nbtsort.c#_bt_blwritepage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L576-L580)), an `smgrimmedsync` of the whole fork ([nbtsort.c#_bt_load](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1288-L1307)), and double disk footprint while it runs. On the 39 MB fixture the probe took 258 ms against 26.7 ms for the whole Method A sweep.
 - **The baseline is a fillfactor build, not a maximally packed index** ([nbtsort.c](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L17-L24)). That is the right baseline for "what would `REINDEX` give back", which is the question a DBA is actually asking.
 
@@ -356,7 +375,7 @@ Fixtures, with `pgstatindex` ground truth:
 
 Method A against the Method C rebuild, in blocks:
 
-| index | live | rebuilt (exact) | Method A model | model − rebuilt | model bloat % | true bloat % |
+| index | live | rebuilt (exact) | Method A model | model − rebuilt | model wasted_space % | true wasted_space % |
 |---|---|---|---|---|---|---|
 | `idx_seq` | 2745 | 2745 | 2745 | 0 | 0.0 | 0.0 |
 | `idx_uuid` | 1543 | 1543 | 1543 | 0 | 0.0 | 0.0 |
@@ -393,7 +412,7 @@ Method B against `pgstatindex`:
 ### Measured failure modes
 
 - **Stale relstats hide real bloat.** After deleting 900,000 of 1,000,000 rows with no VACUUM and no ANALYZE, `pg_class.reltuples` still read `1e+06` for both table and index, and a `reltuples`-only model reported **0.0% bloat** against a true reclaimable 2745 → 276 blocks. `pg_stat_all_tables` knew: `n_live_tup = 100000`, `n_dead_tup = 900000`. Using `least(reltuples, n_live_tup)` produced exactly 276 blocks, matching the rebuild.
-- **A rebuild can make an index bigger.** `idx_dup` (500,000 identical keys) sits at 96.00% density because an all-duplicate split uses `BTREE_SINGLEVAL_FILLFACTOR` ([nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L412-L422)), while a fresh sorted build packs to fillfactor 90. Rebuilding grew it from 1291 to 1376 blocks. Method A predicted this correctly as −6.4%: **negative bloat is a real reading and means "do not rebuild".**
+- **A rebuild can make an index bigger.** `idx_dup` (500,000 identical keys) sits at 96.00% density because an all-duplicate split uses `BTREE_SINGLEVAL_FILLFACTOR` ([nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L412-L422)), while a fresh sorted build packs to fillfactor 90. Rebuilding grew it from 1291 to 1376 blocks. Method A predicted this correctly as −6.4%: **a negative `wasted_space_pct` is a real reading and means "do not rebuild".**
 - **Random-insert indexes report ~27% bloat forever.** `idx_rand` reached 65.81% density with zero deletions, because non-rightmost leaf splits aim for an even 50/50 division rather than fillfactor ([nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331)). The 27.0% is genuinely reclaimable — the rebuild returned 3758 → 2745 blocks — but the index will drift straight back. This is a workload property, not a maintenance failure.
 - **Highly variable key widths mislead Method A by ~5%.** `idx_var` was reported at −4.6% against a true 0.0%, because a single MAXALIGN of the average width is not the average of per-row MAXALIGNs. Method A′ reduced this to +0.32%.
 - **Leaf density alone misses deleted pages entirely.** `idx_range` shows a healthy 89.83% `avg_leaf_density` while 2330 of 2745 blocks are deleted; Method A reported 84.9% bloat and the rebuild confirmed 414 blocks.
@@ -551,6 +570,38 @@ The worst error drops from 510 blocks to 1. The residual ±1 block is ANALYZE's 
 
 Practical rule: **treat a partial index whose table shows dead tuples or no recent analyze as unmeasured, not as unbloated.** Run `ANALYZE` first, or fall back to the Method C rebuild probe, which needs no statistics at all.
 
+### Follow-up: the output columns say wasted_space, not bloat
+
+Done. On the reporting side it costs nothing: the Method A sweep now labels its two reporting columns `wasted_space` and `wasted_space_pct`, and carries the tag `/* wiki_btree_wasted_space_sweep */`. Every value expression is untouched — `live_rows`, `slot`, `leaf_cap`, `int_cap`, `expected_blocks`, the triage filter and the `ORDER BY` key — so **no number in any table on this page moves**. The Method C probe index is renamed too, and that one is not a label change; see [What a consumer must change](#what-a-consumer-must-change).
+
+| As filed | Now | The value behind it |
+|---|---|---|
+| `wasted` | `wasted_space` | `pg_size_pretty(greatest(actual_bytes - expected_blocks * bs, 0)::bigint)`, still clamped at zero |
+| `bloat_pct` | `wasted_space_pct` | `round((100 * (1 - (expected_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)`, unclamped and therefore signed |
+| `/* wiki_btree_bloat_sweep */` | `/* wiki_btree_wasted_space_sweep */` | the Method A statement tag |
+| `wiki_bloat_probe` | `wiki_wasted_space_probe` | the Method C probe index, in the generated DDL, the `CREATE`, both `pg_relation_size` arguments and the `DROP` |
+| — | `wasted_space_bytes` | the label to give the raw `greatest(actual_bytes - expected_blocks * bs, 0)::bigint` if a consumer parses the output instead of reading it |
+
+Two table headers follow the columns: `model bloat %` and `true bloat %` in [Exact-pin measurements](#exact-pin-measurements) are now `model wasted_space %` and `true wasted_space %`. The `bloat type` column of the matrix tables is deliberately left alone — it names the mechanism that emptied the pages in a fixture, not a column this SQL emits — and so is the page title.
+
+The rename is not merely cosmetic, because "bloat" in this checkout means per-page state, which no method on this page can see. v12 puts its definition in the `REINDEX` reference page: an index "has become 'bloated', that is it contains many empty or nearly-empty pages" ([ref/reindex.sgml#bloated](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L47-L57)), and the routine-reindexing section states the mechanism in the same per-page terms — "if all but a few index keys on a page have been deleted, the page remains allocated" ([maintenance.sgml#routine-reindex](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L866-L874)). Method A never reads a page. It subtracts a modelled fresh-build size from `pg_relation_size`, which is why [What no core-SQL method can measure](#what-no-core-sql-method-can-measure) lists `LP_DEAD` space inside live leaves, the deleted-versus-half-dead split, `leaf_fragmentation` and per-page detail as invisible, and why the percentage can be negative at all. "Wasted space" is this documentation's own phrase for space a maintenance command is expected to recover ([ref/copy.sgml#recover-the-wasted-space](../../../../raw/postgres-12/doc/src/sgml/ref/copy.sgml#L532-L541)), which is what the two columns estimate.
+
+Unlike later majors there is no glossary here to appeal to: `doc/src/sgml/` in this checkout has no `glossary.sgml`, so all 24 case-insensitive matches for `bloat` under it are prose — the two paragraphs above, the non-B-tree warning ([maintenance.sgml#non-btree-bloat](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L876-L880)), and settings, replication and release-note advice. What ships as SQL is consistent all the same: `system_views.sql`, `pg_proc.dat` and every contrib SQL script contain zero occurrences of the string, while `pgstattuple` names this class of quantity `free_space`/`free_percent` and `approx_free_space`/`approx_free_percent` ([pgstattuple--1.4.sql#free_space](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L11-L16), [pgstattuple--1.4.sql#approx_free_space](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L88-L94)). The only two contrib occurrences are C comments, one of them the header of the estimator itself ([pgstatapprox.c#header](../../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L1-L12)).
+
+### What the rename cannot change
+
+- **Any value.** `AS` assigns a name to a select-list entry "for subsequent processing, such as for use in an `ORDER BY` clause or for display by the client application"; the expression itself is untouched ([queries.sgml#Column-Labels](../../../../raw/postgres-12/doc/src/sgml/queries.sgml#L1473-L1496)).
+- **Row order.** The sweep sorts on an expression, `ORDER BY greatest(actual_bytes - expected_blocks * bs, 0) DESC`. A label may be a sort key, but only standing alone — the documentation marks `ORDER BY sum + c` as wrong for exactly that reason ([queries.sgml#sort-by-output-column](../../../../raw/postgres-12/doc/src/sgml/queries.sgml#L1742-L1761)) — so no label change reaches this `ORDER BY`.
+- **The sweep's `pg_stat_statements` identity.** In v12 the query ID is computed by the contrib module itself, at post-parse-analysis time, over the finished `Query` tree ([pg_stat_statements.c#pgss_post_parse_analyze](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L801-L826)), and the walker's stated rule of thumb is to ignore "anything not semantically significant (such as alias names)" ([pg_stat_statements.c#JumbleQuery](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2402-L2435)). Its `T_TargetEntry` case appends `resno` and `ressortgroupref` and recurses into the expression; `resname`, which is where an `AS` label lands, is never touched ([pg_stat_statements.c#T_TargetEntry](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2837-L2845)). The tag cannot reach the tree at all: the lexer switches to an exclusive state at `/*` and returns no token for the comment body ([scan.l#xcstart](../../../../raw/postgres-12/src/backend/parser/scan.l#L344-L346), [scan.l#extended-comments](../../../../raw/postgres-12/src/backend/parser/scan.l#L427-L465)).
+- **Identifier limits.** The longest new name is `wiki_wasted_space_probe` at 23 bytes and the longest new label `wasted_space_pct` at 16, against `NAMEDATALEN 64`, which limits names to 63 bytes ([pg_config_manual.h#NAMEDATALEN](../../../../raw/postgres-12/src/include/pg_config_manual.h#L22-L29)). Truncation, and the `NOTICE: identifier "..." will be truncated to "..."` that comes with it, only starts there ([scansup.c#downcase_truncate_identifier](../../../../raw/postgres-12/src/backend/parser/scansup.c#L117-L134), [scansup.c#truncate_identifier](../../../../raw/postgres-12/src/backend/parser/scansup.c#L177-L209)).
+
+### What a consumer must change
+
+1. **Anything that selects the old labels.** Wrapping the sweep in a view or subquery and reading `bloat_pct` now fails with `ERRCODE_UNDEFINED_COLUMN` and `column "bloat_pct" does not exist`, possibly carrying a fuzzy-matched "Perhaps you meant to reference the column ..." hint ([parse_relation.c#errorMissingColumn](../../../../raw/postgres-12/src/backend/parser/parse_relation.c#L3308-L3359)). Output labels have no alias-compatibility mechanism, so there is nothing to deprecate gradually.
+2. **Anything that sorts on the byte column.** `pg_size_pretty` returns `text` in both its `int8` and `numeric` forms ([pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6896-L6903)), so `ORDER BY wasted_space DESC` in a wrapper is a collated string comparison through `bttextcmp` and `varstr_cmp` ([varlena.c#bttextcmp](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L1924-L1937), [varlena.c#varstr_cmp](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L1468-L1490)) and puts `9 bytes` above `10 MB`. That was already true of `wasted`; it is why the statement's own `ORDER BY` sorts the byte expression, and why a parsing consumer should take `wasted_space_bytes` instead.
+3. **Log and `pg_stat_statements` text matching.** The tag survives into both. `log_statement` and `log_min_duration_statement` print the string as received ([postgres.c#log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047), [postgres.c#duration-statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1280-L1298)), and `pgss_store` trims only leading and trailing whitespace from the statement's slice of the source text ([pg_stat_statements.c#pgss_store](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1139-L1146)). So a grep for `wiki_btree_bloat_sweep` stops matching new traffic but not old rows: because the query ID does not move and the text is written only when the hash entry is created ([pg_stat_statements.c#entry-creation](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1169-L1231)), an existing entry keeps showing the old tag until it is evicted or `pg_stat_statements_reset()` runs.
+4. **The probe rename, which is an object name and not a label.** `wiki_wasted_space_probe` has to move in five places at once — the generated DDL's replacement string, the `CREATE INDEX CONCURRENTLY`, both `pg_relation_size` arguments and the `DROP INDEX CONCURRENTLY` — plus the leftover check. Renaming some sites and not others produces the failure Method C already warns about: an invalid leftover index that still costs write overhead, because `indisvalid` is set non-transactionally as the last step ([index.c#index_set_state_flags](../../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3330)), and a cleanup check looking for the wrong name. It also does something the label rename cannot: it moves the two utility statements' `pg_stat_statements` identity. `pgss_ProcessUtility` passes a query ID of 0 to signal a utility statement ([pg_stat_statements.c#pgss_ProcessUtility](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1054-L1062)), and `pgss_store` then keys it by a hash of the statement text ([pg_stat_statements.c#utility-hash](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1148-L1162)), so the renamed `CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY` land on new entries. Inside the two `SELECT`s the name only ever appears in a string constant — twice as a `pg_relation_size` argument, where parse analysis coerces the unknown literal to `regclass` but keeps the literal's own location "to simplify life for pg_stat_statements" ([parse_coerce.c#coerce_type](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L286-L291)), and once inside the DDL generator's replacement text — and a constant is recorded for normalization rather than jumbled ([pg_stat_statements.c#T_Const](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2534-L2543)), then replaced by a `$n` parameter symbol in the stored text ([pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L3058-L3087)), so it changes neither their query ID nor what `pg_stat_statements` displays for them.
+
 ## Context Reviewed
 
 - nbtree build and split: `nbtsort.c` (`_bt_pagestate`, `_bt_blnewpage`, `_bt_buildadd`, `_bt_load`), `nbtsplitloc.c` (`_bt_findsplitloc`, `_bt_deltasortsplits`, `_bt_afternewitemoff`), `nbtinsert.c`, `nbtree.h` fillfactor and page-flag constants, `README`.
@@ -561,6 +612,7 @@ Practical rule: **treat a partial index whose table shows dead tuples or no rece
 - Rebuild path: `indexcmds.c` (`DefineIndex`), `index.c` (`index_set_state_flags`), `tablecmds.c` (`RemoveRelations`, `RenameRelation`), `utility.c`, `xact.c`, `ruleutils.c` (`pg_get_indexdef`), `create_index.sgml`, `reindex.sgml`, `maintenance.sgml`.
 - Contrib boundary: `pgstattuple.control`, `pgstattuple--1.4--1.5.sql`, `pgstatindex.c`, `pageinspect.control`, `rawpage.c`, `btreefuncs.c`, `pg_freespacemap.control`, `amcheck.control`, `extension.c`, `pgstattuple.sgml`, `pageinspect.sgml`, `contrib.sgml`.
 - Exact-pin execution: one isolated 12.2 server built from the pinned checkout under `.wiki-runtime/`, 15 fixtures, Methods A–D executed against each, with `pgstattuple`/`pageinspect` installed solely as ground truth. Test objects were dropped and the server was stopped afterwards.
+- Column-rename follow-up, source coverage (no server run; this follow-up is source-only): output labelling and sorting in `queries.sgml` (the Column Labels section and the `ORDER BY`-by-output-column rule); query identity and query text in contrib `pg_stat_statements.c` (`pgss_post_parse_analyze`, `JumbleQuery`'s rule of thumb, the `T_TargetEntry` and `T_Const` cases of `JumbleExpr`, `RecordConstLocation`, `pgss_store`'s whitespace trim, utility-statement string hash, entry lookup and creation, `generate_normalized_query`, `qtext_store`, `pgss_ProcessUtility`, the `pg_stat_statements.track_utility` GUC) and `postgres.c` (`exec_simple_query`'s `log_statement` and duration logging, `check_log_statement`); lexer comment handling in `scan.l` (`xcstart`/`xcstop`/`xcinside`, the `{whitespace}` rule and the `<xc>` block); identifier limits in `pg_config_manual.h` (`NAMEDATALEN`) and `scansup.c` (`downcase_truncate_identifier`, `downcase_identifier`, `truncate_identifier`); error and type surfaces in `parse_relation.c` (`errorMissingColumn`), `parse_coerce.c` (`coerce_type`'s unknown-literal branch and its location rule), `pg_proc.dat` (both `pg_size_pretty` entries), `varlena.c` (`bttextcmp`, `text_cmp`, `varstr_cmp`) and `dbsize.c` (`half_rounded`, `pg_size_pretty`, `pg_size_pretty_numeric`); vocabulary in `ref/reindex.sgml`, `maintenance.sgml`, `ref/copy.sgml`, `pgstattuple--1.4.sql` and `pgstatapprox.c`, plus whole-tree string searches for `bloat` across `doc/src/sgml/`, `src/`, `system_views.sql`, `pg_proc.dat` and every contrib SQL script, and a check that this checkout has no `doc/src/sgml/glossary.sgml`.
 - Follow-up exact-pin execution: a second isolated 12.2 server from the same pin, carrying a 9-bloat-type × 3-scale × partial/non-partial matrix (54 indexes over 27 tables). Per index it collected `pgstatindex` ground truth, the filed Method A model run from the page's own CTE chain, the Method B census with its `Heap Fetches` precondition, and a Method C rebuild, then re-ran Method A on the six failing partial cells after a plain `ANALYZE`. Test objects were dropped and the server was stopped afterwards.
 
 ## Evidence Map
@@ -590,6 +642,16 @@ Practical rule: **treat a partial index whose table shows dead tuples or no rece
 | CIC restrictions, lock level, invalid-index leftover, and build cost | [indexcmds.c#DefineIndex](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L548-L564), [indexcmds.c#DefineIndex](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L604-L622), [utility.c#ProcessUtilitySlow](../../../../raw/postgres-12/src/backend/tcop/utility.c#L1301-L1310), [index.c#index_set_state_flags](../../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3330), [create_index.sgml#CONCURRENTLY](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L574-L596), [nbtsort.c#_bt_blwritepage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L576-L580) |
 | `pg_get_indexdef` emits reloptions but not the tablespace or `CONCURRENTLY` | [ruleutils.c#pg_get_indexdef](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1088-L1115), [ruleutils.c#pg_get_indexdef_worker](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1410-L1439) |
 | `TABLESAMPLE` cannot be applied to an index | [parse_clause.c#transformRangeTableSample](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1162-L1169) |
+| `AS` names a select-list entry for display and later reference; a label is a sort key only standing alone | [queries.sgml#Column-Labels](../../../../raw/postgres-12/doc/src/sgml/queries.sgml#L1473-L1496), [queries.sgml#sort-by-output-column](../../../../raw/postgres-12/doc/src/sgml/queries.sgml#L1742-L1761) |
+| v12 defines a bloated index as one holding many empty or nearly-empty pages, and "wasted space" as what a maintenance command recovers | [ref/reindex.sgml#bloated](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L47-L57), [maintenance.sgml#routine-reindex](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L866-L874), [ref/copy.sgml#recover-the-wasted-space](../../../../raw/postgres-12/doc/src/sgml/ref/copy.sgml#L532-L541) |
+| Contrib names this quantity free space, not bloat, in its SQL interface | [pgstattuple--1.4.sql#free_space](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L11-L16), [pgstattuple--1.4.sql#approx_free_space](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L88-L94), [pgstatapprox.c#header](../../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L1-L12) |
+| A label rename cannot move the sweep's query ID: v12 jumbles the `Query` tree in contrib and ignores `resname` | [pg_stat_statements.c#pgss_post_parse_analyze](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L801-L826), [pg_stat_statements.c#JumbleQuery](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2402-L2412), [pg_stat_statements.c#T_TargetEntry](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2837-L2845) |
+| A `/* ... */` tag produces no token, so it cannot reach the parse tree | [scan.l#xcstart](../../../../raw/postgres-12/src/backend/parser/scan.l#L344-L346), [scan.l#extended-comments](../../../../raw/postgres-12/src/backend/parser/scan.l#L427-L465) |
+| The new names sit far below the truncation point | [pg_config_manual.h#NAMEDATALEN](../../../../raw/postgres-12/src/include/pg_config_manual.h#L22-L29), [scansup.c#downcase_truncate_identifier](../../../../raw/postgres-12/src/backend/parser/scansup.c#L117-L134), [scansup.c#truncate_identifier](../../../../raw/postgres-12/src/backend/parser/scansup.c#L177-L209) |
+| Reading an old label raises `ERRCODE_UNDEFINED_COLUMN`, possibly with a fuzzy-match hint | [parse_relation.c#errorMissingColumn](../../../../raw/postgres-12/src/backend/parser/parse_relation.c#L3308-L3359) |
+| `pg_size_pretty` returns `text`, so ordering by the byte label is a collated string comparison | [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6896-L6903), [varlena.c#bttextcmp](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L1924-L1937), [varlena.c#varstr_cmp](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L1468-L1490) |
+| The tag reaches the log and `pg_stat_statements`, whose text is written only at entry creation | [postgres.c#log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047), [postgres.c#duration-statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1280-L1298), [pg_stat_statements.c#pgss_store](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1139-L1146), [pg_stat_statements.c#entry-creation](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1169-L1231) |
+| A utility statement is keyed by a hash of its text, so the probe rename creates new entries, while a constant in a `SELECT` is normalized away | [pg_stat_statements.c#pgss_ProcessUtility](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1054-L1062), [pg_stat_statements.c#utility-hash](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1148-L1162), [pg_stat_statements.c#T_Const](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2534-L2543), [pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L3058-L3087), [parse_coerce.c#coerce_type](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L286-L291) |
 
 ## Open Questions
 
@@ -603,6 +665,10 @@ Practical rule: **treat a partial index whose table shows dead tuples or no rece
 - **The `avg_leaf_density` predictor formula is this page's construction.** `ceil(leaf_pages * avg_leaf_density / fillfactor) + internal_pages + 1` is the natural reading of the density-versus-fillfactor heuristic as a size predictor, but upstream defines no such formula, so the head-to-head scores it against a plausible interpretation rather than a specified one.
 - **The matrix varies scale, not seed.** The three repeats per cell are 200,000 / 500,000 / 1,000,000 rows with deterministic delete patterns; only the `random` fixture draws random values, and it used a single fixed `setseed(0.42)`. Error spread across different random draws at one scale was not measured.
 - **The post-`ANALYZE` residual was not chased further.** Three of the six repaired cells still differ by one block, tracked to `tupleFract * totalrows` recording 18,337 index rows against a true 18,181; whether a higher `default_statistics_target` removes it was not tested.
+- **Nothing was executed for the column rename.** No server ran the renamed statements. That only two `AS` labels, one comment and one index name moved is read off the two statements plus the pinned source, and "no number on this page moves" is an argument about which expressions changed, not a re-measurement. The renamed Method C sequence in particular was never run end to end, so the five renamed sites were not checked against a live `CREATE`/`DROP INDEX CONCURRENTLY`.
+- **The byte column is still clamped while the percentage is not.** `wasted_space` keeps `greatest(actual_bytes - expected_blocks * bs, 0)`, so a row can print `0 bytes` beside a negative `wasted_space_pct` — `idx_dup` at −6.4% and `idx_var` at −4.6% are the two cells on this page where that happens. Unclamping was outside this correction's scope and was not measured, and v12's `pg_size_pretty` would not render a negative symmetrically in any case: its `half_rounded` macro is documented as "Divide by two and round towards positive infinity" ([dbsize.c#half_rounded](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L34-L35)), and this checkout carries no `dbsize` regression test to pin that behavior.
+- **The `pg_stat_statements` consequences were derived, not observed.** No server was used to confirm that an existing entry keeps the old tag until eviction or reset, that the renamed utility statements land on new entries, or that the probe name is displayed as `$n` in the normalized `SELECT` text.
+- **The vocabulary survey is a string search, not a semantic one.** The zero-occurrence claims for `system_views.sql`, `pg_proc.dat` and the contrib SQL scripts, the 24 doc-tree matches, and the absent `glossary.sgml` come from case-insensitive searches of this checkout; a column named for bloat in some other form of words would not have been caught.
 
 ## Source References
 
@@ -635,6 +701,22 @@ Practical rule: **treat a partial index whose table shows dead tuples or no rece
 - [maintenance.sgml#routine-reindex](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L852-L897)
 - [create_index.sgml#CONCURRENTLY](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L530-L633)
 - [explain.sgml#BUFFERS](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L167-L193)
+- [queries.sgml#Column-Labels](../../../../raw/postgres-12/doc/src/sgml/queries.sgml#L1473-L1515)
+- [queries.sgml#sort-by-output-column](../../../../raw/postgres-12/doc/src/sgml/queries.sgml#L1742-L1761)
+- [ref/reindex.sgml#bloated](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L47-L57)
+- [ref/copy.sgml#recover-the-wasted-space](../../../../raw/postgres-12/doc/src/sgml/ref/copy.sgml#L532-L541)
+- [pgstattuple--1.4.sql#free_space](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L11-L16)
+- [pgstatapprox.c#header](../../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L1-L12)
+- [pg_stat_statements.c#JumbleQuery](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2402-L2435)
+- [pg_stat_statements.c#pgss_store](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1139-L1231)
+- [pg_stat_statements.c#pgss_ProcessUtility](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1054-L1062)
+- [scan.l#extended-comments](../../../../raw/postgres-12/src/backend/parser/scan.l#L427-L465)
+- [scansup.c#truncate_identifier](../../../../raw/postgres-12/src/backend/parser/scansup.c#L177-L209)
+- [pg_config_manual.h#NAMEDATALEN](../../../../raw/postgres-12/src/include/pg_config_manual.h#L22-L29)
+- [parse_relation.c#errorMissingColumn](../../../../raw/postgres-12/src/backend/parser/parse_relation.c#L3308-L3379)
+- [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6896-L6903)
+- [varlena.c#bttextcmp](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L1924-L1937)
+- [postgres.c#log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047)
 
 ## Navigation
 

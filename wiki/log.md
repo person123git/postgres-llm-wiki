@@ -8123,3 +8123,77 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   the page resolve in-range against the pinned checkout, and every one of its 82
   in-page anchors resolves to a heading. The page keeps `verified: false` and
   `verified_by_agent: not yet`.
+
+## [2026-08-18] follow-up v12 | rename the core-SQL B-tree bloat statements' output to wasted_space
+
+- Extended [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12
+  (unverified)](v12/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  third follow-up, against unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). This is the v12 counterpart of
+  the rename filed on the v17 page a day earlier, argued from v12 evidence only.
+- Prompt hygiene: the request ("add correction: on the sql don't use bloat as the
+  output but use wasted_space") had lowercase "sql", a space before its comma, and
+  telegraphic phrasing. The user chose the corrected restatement, which is what
+  `## Question` now carries, with a prompt note recording the original wording and
+  the three scoping answers (rename both reporting columns, rename the statement
+  tag and the probe index too, and follow the new names in prose plus the two
+  accuracy-table headers).
+- The rename: `wasted` -> `wasted_space`, `bloat_pct` -> `wasted_space_pct`,
+  `/* wiki_btree_bloat_sweep */` -> `/* wiki_btree_wasted_space_sweep */`, and
+  `wiki_bloat_probe` -> `wiki_wasted_space_probe` in all five sites it appears
+  (the `pg_get_indexdef` replacement string, the `CREATE INDEX CONCURRENTLY`, both
+  `pg_relation_size` arguments, the `DROP INDEX CONCURRENTLY`) plus the
+  leftover-check sentence. Table headers `model bloat %` / `true bloat %` became
+  `model wasted_space %` / `true wasted_space %`, and the one prose sentence that
+  reads the percentage now names `wasted_space_pct`. Left as filed on purpose: the
+  page title, conceptual "bloat" wording, and the `bloat type` fixture-recipe
+  column. `wasted_space_bytes` is named as the label for the raw `::bigint` a
+  parsing consumer should read instead.
+- Source-only: no server was started, `raw/postgres-12/` is unchanged, and no
+  number on the page moves. `AS` names a select-list entry for display and later
+  reference (`queries.sgml` Column Labels); the sweep's `ORDER BY` is an
+  expression, and a label is usable there only as a bare sort key; and the query ID
+  cannot move because v12 computes it in contrib `pg_stat_statements`
+  (`pgss_post_parse_analyze` -> `JumbleQuery`, whose rule of thumb ignores alias
+  names) and its `JumbleExpr` `T_TargetEntry` case hashes `resno` and
+  `ressortgroupref` only, never `resname`, while the lexer's `xc` state discards
+  the `/* ... */` tag before parsing. Longest new identifier is 23 bytes against
+  `NAMEDATALEN` 64, where `downcase_truncate_identifier` -> `truncate_identifier`
+  would raise a `NOTICE`.
+- Why it is not only cosmetic, on v12 terms: this checkout has no
+  `glossary.sgml`, so the definition comes from `ref/reindex.sgml` — a bloated
+  index "contains many empty or nearly-empty pages" — plus `maintenance.sgml`'s
+  partly-emptied-page mechanism, both per-page state that a statement subtracting
+  a modelled rebuild size from `pg_relation_size` cannot see, which is also why
+  the percentage can go negative. `ref/copy.sgml` supplies "wasted space" for what
+  a maintenance command recovers. All 24 case-insensitive doc-tree matches for
+  `bloat` are prose; `system_views.sql`, `pg_proc.dat` and every contrib SQL
+  script have zero; `pgstattuple` names the quantity
+  `free_space`/`free_percent` and `approx_free_space`/`approx_free_percent`, and
+  the only two contrib occurrences are C comments, one being
+  `pgstatapprox.c`'s own header.
+- Consumer impact filed, including one v12-specific asymmetry the v17 page does
+  not have: reading an old label raises `ERRCODE_UNDEFINED_COLUMN` through
+  `errorMissingColumn`; `pg_size_pretty` returns `text`, so ordering by the byte
+  label is a `bttextcmp` comparison that puts `9 bytes` above `10 MB`; the tag
+  survives into `log_statement`/duration lines and into `pg_stat_statements`,
+  whose text is written only when the hash entry is created, so an existing row
+  keeps the old tag until eviction or reset; and the probe rename, being an object
+  name, does re-key the two utility statements, because `pgss_ProcessUtility`
+  passes query ID 0 and `pgss_store` then hashes the statement text, while inside
+  the two `SELECT`s the same name is a constant that `RecordConstLocation` and
+  `generate_normalized_query` reduce to `$n`.
+- Five new open questions record that nothing was executed: no server ran the
+  renamed statements or the renamed Method C sequence, the `pg_stat_statements`
+  consequences are derived, the vocabulary survey is a string search, and the byte
+  column stays clamped at zero beside a signed percentage (`idx_dup` −6.4%,
+  `idx_var` −4.6%), which the rename does not address and which v12's
+  `half_rounded` — documented as rounding toward positive infinity, with no
+  `dbsize` regression test in this checkout — would not render symmetrically
+  anyway.
+- Page updates: Contents gained three entries; the Method A block carries a
+  pointer note; Context Reviewed gained a source-coverage bullet, Evidence Map ten
+  rows, Open Questions five, and Source References sixteen.
+- Root index, `wiki/v12/index.md`, the v12 coverage cell and a new
+  `## Coverage Notes` entry in `wiki/versions.md` all describe the rename. The
+  page keeps `verified: false` and `verified_by_agent: not yet`.
