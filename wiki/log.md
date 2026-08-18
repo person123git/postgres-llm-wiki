@@ -7998,3 +7998,67 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `raw/postgres-17/` is unchanged and no server was started.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings;
   `git diff --check` passed.
+
+## [2026-08-18] answer v17 | correct two reporting defects in the 12-through-17 B-tree bloat statement
+
+- Extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  fourth follow-up, against unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The follow-up prompt is
+  grammatical, so it is restated verbatim under `## Question` with no
+  prompt-hygiene note.
+- Source-only follow-up: no server was started, `raw/postgres-17/` is unchanged,
+  and both defects are confirmed from the pinned checkout alone. The user's
+  framing is correct — neither column feeds `expected_blocks`, `floor_blocks`,
+  `live_rows`, `key_groups`, `tids`, the deduplication gate, `status` or
+  `caveats`, so no percentage on the page moves.
+- Defect 1, `fsm_bytes > 0 AS has_freed_pages`, is a history bit. An index FSM
+  records only free-or-used (`RecordFreeIndexPage` writes `BLCKSZ - 1`,
+  `RecordUsedIndexPage` writes 0); the first recorded page extends the fork to
+  three blocks / 24576 bytes at `block_size` 8192 (`SlotsPerFSMPage` 4069,
+  `FSM_TREE_DEPTH` 3, leaf address maps to physical block 2), so its length is
+  fixed rather than proportional. `_bt_allocbuf`'s `GetFreeIndexPage` marks pages
+  used without shortening the file; no nbtree path reaches
+  `FreeSpaceMapPrepareTruncateRel` (live `RelationTruncate` callers are
+  `lazy_truncate_heap`, `heapam_relation_nontransactional_truncate` and
+  `RelationTruncateIndexes`; the SP-GiST call sits in `#ifdef NOT_USED`); and only
+  `RelationSetNewRelfilenumber` — `REINDEX` via `reindex_index`, transactional
+  `TRUNCATE` via `ExecuteTruncateGuts` — resets it, creating the main fork alone.
+  In the other direction `btvacuumpage` records a deleted page only once
+  `BTPageIsRecyclable` holds, `_bt_pendingfsm_finalize` breaks at the first
+  still-visible `safexid`, `btvacuumscan` vacuums the FSM only when `pages_free`
+  is non-zero, half-dead pages are never recorded, and nbtree deletes a page only
+  when it is "completely empty of items", so partly-emptied leaves never enter the
+  map. Renamed `fsm_written_since_build`.
+- Page-class replacements, from source: `VACUUM VERBOSE`'s
+  `pages: N in total, N newly deleted, N currently deleted, N reusable` line is
+  the only core source (`IndexBulkDeleteResult`, where nbtree documents
+  `pages_free` as whole-index state), and contrib supplies the rest —
+  `pgstatindex.deleted_pages` (every `P_ISDELETED` page) plus `empty_pages` (in
+  fact the half-dead class), `pg_freespace` with the `avail > 0` idiom its own
+  regression test uses on `freespace_btree`, and `pageinspect`'s per-page `type`
+  (`d`/`D`/`e`/`l`/`i`/`r`). `pg_read_binary_file` on the `_fsm` fork is noted as a
+  possible core-SQL decode and not attempted.
+- Defect 2, the mixed clamp: `wasted` used `greatest(..., 0)` while `bloat_pct`
+  did not. Derived from block counts already on the page, `i_var` on 17.10 printed
+  `0 bytes` beside -4.4% where the signed value is -1,163,264 bytes (-142 blocks),
+  and the earlier dedup-aware sweep printed `0 bytes` beside -92.5% while hiding
+  -10,805,248 bytes (-1319 blocks). A negative `bloat_pct` is shown to mean only
+  that a rebuild is not predicted to shrink the index: usually model
+  over-prediction, but the page's own `idx_dup` grew 396 -> 426 blocks on rebuild
+  under `BTREE_SINGLEVAL_FILLFACTOR`. One signed convention now applies to both
+  columns and to the `ORDER BY` key, so a `LIMIT 20` no longer ties every
+  over-predicted row at zero (`queries.sgml` documents that as an unpredictable
+  subset). `pg_size_pretty` renders negatives symmetrically and
+  `src/test/regress/expected/dbsize.out` asserts it.
+- Both SQL blocks on the page were corrected in place, each with a pointer note
+  saying the measurements below were taken with the defective columns; the
+  Contents, Verdict, Context Reviewed, Evidence Map (13 new rows), Open Questions
+  (7 new) and Source References (22 new) were updated to match.
+- Root index, `wiki/v17/index.md` and the v17 coverage cell plus a new
+  `## Coverage Notes` entry in `wiki/versions.md` all describe the correction.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. An
+  ad-hoc bounds check under `.wiki-runtime/` confirms all 354 source citations on
+  the page resolve in-range, and every one of its 71 in-page anchors resolves to a
+  heading. The page keeps `verified: false` and
+  `verified_by_agent: not yet`.
