@@ -8062,3 +8062,64 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   the page resolve in-range, and every one of its 71 in-page anchors resolves to a
   heading. The page keeps `verified: false` and
   `verified_by_agent: not yet`.
+
+## [2026-08-18] follow-up v17 | rename the B-tree bloat statements' output columns to wasted_space
+
+- Extended [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) with a
+  fifth follow-up, against unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+- Prompt hygiene: the request ("add correction: on the sql don't use bloat as the
+  output but use wasted_space") had lowercase "sql", a space before its comma, and
+  telegraphic phrasing. The user chose the corrected restatement, which is what
+  `## Question` now carries, with a prompt note recording the original wording and
+  the three scoping answers (rename all three reporting columns, follow the new
+  names in prose, rename the statement tags too).
+- The rename, applied to both statements: `wasted` -> `wasted_space`,
+  `bloat_pct` -> `wasted_space_pct`, `bloat_pct_floor` -> `wasted_space_pct_floor`,
+  `/* wiki_btree_bloat_sweep_v17 */` -> `/* wiki_btree_wasted_space_sweep_v17 */`,
+  and `/* wiki_btree_bloat_sweep_12_17 */` ->
+  `/* wiki_btree_wasted_space_sweep_12_17 */`. `wasted_space_bytes` is named as the
+  label for the raw `::bigint` a parsing consumer should read instead.
+- Source-only: no server was started, `raw/postgres-17/` is unchanged, and no
+  number on the page moves. `AS` sets an output column label and nothing else
+  (`queries.sgml` Column Labels); both `ORDER BY` keys are expressions, and a label
+  is usable there only as a bare sort key; and `queryid` cannot move, because
+  `JumbleQuery` hashes the post-parse-analysis `Query` tree while
+  `TargetEntry.resname` carries `pg_node_attr(query_jumble_ignore)`, for which
+  `gen_node_support.pl` emits no `JUMBLE_STRING` into the generated
+  `queryjumblefuncs.funcs.c` that `_jumbleNode` dispatches through. The longest new
+  label is 22 bytes against the `NAMEDATALEN` limit of 63, where
+  `downcase_truncate_identifier` -> `truncate_identifier` would raise a `NOTICE`.
+- Why it is not only cosmetic: `glossary.sgml` defines bloat as "Space in data
+  pages which does not contain current row versions", i.e. per-page state including
+  free space in used pages, which neither statement can see — both subtract a
+  modelled rebuild size from the file size, which is also why the number can go
+  negative. `ref/copy.sgml` uses "wasted space" for space a maintenance command
+  recovers. No SQL-visible interface in the tree says `bloat`: zero occurrences in
+  `system_views.sql`, in `pg_proc.dat` and in every contrib SQL script, while
+  `pgstattuple` names the quantity `free_space`/`free_percent`; the one non-prose
+  occurrence is an unrelated static in `src/timezone/zic.c`.
+- Consumer impact filed: reading an old name raises `ERRCODE_UNDEFINED_COLUMN`
+  through `errorMissingColumn`; `pg_size_pretty` returns `text` for both its `int8`
+  and `numeric` forms, so ordering by `wasted_space` is a collated `bttextcmp`
+  comparison that puts `9 bytes` above `10 MB`; and because the query ID does not
+  change while `pgss_store` writes the text only when the hash entry is created, an
+  existing `pg_stat_statements` row keeps showing the old tag until eviction or
+  `pg_stat_statements_reset()`.
+- Page updates: both SQL blocks and both corrected-column snippets, the Verdict,
+  and every prose mention of the three columns, with two artifacts left verbatim on
+  purpose — the psql capture taken before the rename (now labelled as such) and the
+  as-filed expression quotes in the reporting-defect table. `### Defect 2: wasted
+  is clamped and bloat_pct is not` became `### Defect 2: the byte column is clamped
+  and the percentage is not` so no heading names a column that no longer exists.
+  Contents gained three entries and one renamed one; Context Reviewed, Evidence Map
+  (7 new rows), Open Questions (5 new) and Source References (18 new) were updated
+  to match.
+- Root index, `wiki/v17/index.md` and the v17 coverage cell plus a new
+  `## Coverage Notes` entry in `wiki/versions.md` all describe the rename.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. An
+  ad-hoc bounds check under `.wiki-runtime/` confirms all 418 source citations on
+  the page resolve in-range against the pinned checkout, and every one of its 82
+  in-page anchors resolves to a heading. The page keeps `verified: false` and
+  `verified_by_agent: not yet`.

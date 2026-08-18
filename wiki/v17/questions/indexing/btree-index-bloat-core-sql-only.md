@@ -47,9 +47,12 @@ verified_by_agent: not yet
   - [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects)
   - [Defect 1: the FSM column is a history bit](#defect-1-the-fsm-column-is-a-history-bit)
   - [Where a current count of empty, deleted and reusable pages comes from](#where-a-current-count-of-empty-deleted-and-reusable-pages-comes-from)
-  - [Defect 2: wasted is clamped and bloat_pct is not](#defect-2-wasted-is-clamped-and-bloat_pct-is-not)
+  - [Defect 2: the byte column is clamped and the percentage is not](#defect-2-the-byte-column-is-clamped-and-the-percentage-is-not)
   - [The corrected columns](#the-corrected-columns)
   - [What the corrections change, and whether the v17 sweep needs them too](#what-the-corrections-change-and-whether-the-v17-sweep-needs-them-too)
+  - [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat)
+  - [What the rename cannot change](#what-the-rename-cannot-change)
+  - [What a consumer must change](#what-a-consumer-must-change)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -107,6 +110,18 @@ correction changes any reported bloat percentage on the fixtures already measure
 on this page, and say whether the earlier deduplication-aware sweep for v17 needs
 the same two corrections.
 
+Follow-up: add a correction. In the SQL, do not use bloat as the output; use
+wasted_space.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "add
+> correction: on the sql don't use bloat as the output but use wasted_space", per
+> the repository's prompt-hygiene rule. The asker scoped "the output" to the
+> statements' output column names and confirmed that all three are renamed
+> (`wasted` -> `wasted_space`, `bloat_pct` -> `wasted_space_pct`,
+> `bloat_pct_floor` -> `wasted_space_pct_floor`), that this page's prose follows
+> the new names, and that the two `wiki_btree_bloat_sweep_*` statement tags are
+> renamed too.
+
 ## Answer
 
 ### Verdict
@@ -126,9 +141,11 @@ Three smaller v17 differences also matter: `VACUUM VERBOSE` no longer prints an 
 
 That corrected sweep is also safe to run against a PostgreSQL 12 server, where it silently reduces to the v12 page's own Method A; the follow-up sections measure it on both a 12.2 and a 17.10 server and name the one case where it is wrong on 17.10 — see [Follow-up: the same sweep on a 12.2 server and a 17.10 server](#follow-up-the-same-sweep-on-a-122-server-and-a-1710-server).
 
-A later follow-up replaces it with a single statement intended for any server from 12 through 17, measured on 12.2, 14.23 and 17.10: exact posting-tuple arithmetic instead of a flat 6 bytes per row, a NULL-and-most-common-value key-group mixture, a nondeterministic-collation conjunct in the gate, both `reltuples` eras, and a second `bloat_pct_floor` column to alert on — see [Follow-up: one statement for PostgreSQL 12 through 17](#follow-up-one-statement-for-postgresql-12-through-17).
+A later follow-up replaces it with a single statement intended for any server from 12 through 17, measured on 12.2, 14.23 and 17.10: exact posting-tuple arithmetic instead of a flat 6 bytes per row, a NULL-and-most-common-value key-group mixture, a nondeterministic-collation conjunct in the gate, both `reltuples` eras, and a second `wasted_space_pct_floor` column to alert on — see [Follow-up: one statement for PostgreSQL 12 through 17](#follow-up-one-statement-for-postgresql-12-through-17).
 
-A final follow-up corrects two reporting defects that both statements shipped with — a free-space-map boolean that reports history rather than current state, and a `wasted` column clamped at zero beside an unclamped percentage. Neither touches `expected_blocks`, so no percentage on this page moves; see [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects).
+A fourth follow-up corrects two reporting defects that both statements shipped with — a free-space-map boolean that reports history rather than current state, and a byte column clamped at zero beside an unclamped percentage. Neither touches `expected_blocks`, so no percentage on this page moves; see [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects).
+
+A fifth follow-up renames the three reporting columns and both statement tags off the word "bloat": the statements now emit `wasted_space`, `wasted_space_pct` and `wasted_space_pct_floor`. That is an `AS` label change and nothing else, and it is worth making because the PostgreSQL glossary's "bloat" is per-page state that no core-SQL method here can see; see [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat).
 
 ### How the test was run
 
@@ -254,7 +271,7 @@ SET lock_timeout = '2s';
 
 WITH RECURSIVE
 idx AS (
-    SELECT /* wiki_btree_bloat_sweep_v17 */
+    SELECT /* wiki_btree_wasted_space_sweep_v17 */
            c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
            c.relname AS indexname, t.oid AS tbloid, x.indkey, x.indisunique,
            (x.indpred IS NOT NULL)                      AS is_partial,
@@ -372,10 +389,10 @@ SELECT schemaname, tablename, indexname,
          ELSE 'ok'
        END                                            AS status,
        CASE WHEN live_rows IS NULL THEN NULL ELSE
-         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END AS wasted,
+         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END AS wasted_space,
        CASE WHEN live_rows IS NULL THEN NULL ELSE
          round((100 * (1 - (expected_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
-       END                                            AS bloat_pct,
+       END                                            AS wasted_space_pct,
        (dedup_applies AND groups_est < greatest(live_rows, 0)) AS dedup_credited,
        fsm_bytes > 0                                  AS fsm_written_since_build,
        tbl_n_dead_tup                                 AS dead_tuples,
@@ -389,7 +406,7 @@ SELECT schemaname, tablename, indexname,
  LIMIT 20;
 ```
 
-Two columns in that `SELECT` list were corrected after the fact, and neither changes `expected_blocks` or any percentage measured below: `wasted` is signed rather than clamped at zero, and the free-space-map boolean is renamed. See [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects).
+Three labels in that final `SELECT`, plus the statement tag, were corrected after the fact, and none changes `expected_blocks` or any percentage measured below: `wasted_space` is signed rather than clamped at zero, the free-space-map boolean is renamed, and the two reporting columns and the tag no longer say "bloat". See [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects) and [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat).
 
 Scored on the same 54 cells, against the same rebuilds:
 
@@ -472,7 +489,7 @@ The v12 SQL has no `-1` branch, so the sentinel flows straight into the arithmet
 |---|---|---|---|---|---|---|---|
 | `m1_neg_idx` | 2745 | 2745 | 0.0% | −1 | −1 | 1 block | **100.0** |
 
-A perfectly healthy 21 MB index is reported as 100% wasted. Falling back to the cumulative statistics counter is not a fix either: at the moment of the sweep `pg_stat_all_tables.n_live_tup` for that table read 2,000,000 against 1,000,000 real rows. The sweep above therefore treats `reltuples = -1` as *unmeasured* and emits NULL for `wasted` and `bloat_pct` rather than a number:
+A perfectly healthy 21 MB index is reported as 100% wasted. Falling back to the cumulative statistics counter is not a fix either: at the moment of the sweep `pg_stat_all_tables.n_live_tup` for that table read 2,000,000 against 1,000,000 real rows. The sweep above therefore treats `reltuples = -1` as *unmeasured* and emits NULL for `wasted_space` and `wasted_space_pct` rather than a number. This capture predates the column rename, so its header carries the old labels:
 
 ```text
  tablename |  indexname  | index_size |             status            | wasted | bloat_pct | idx_reltuples
@@ -717,9 +734,9 @@ of 33 and 25 of 35 cells against Method A's 14 and 15.
 
 It reports two numbers per index, not one:
 
-- `bloat_pct` — the point estimate, with posting lists credited;
-- `bloat_pct_floor` — the same model with one index tuple per row, which is what
-  a pre-13 server would produce.
+- `wasted_space_pct` — the point estimate, with posting lists credited;
+- `wasted_space_pct_floor` — the same model with one index tuple per row, which is
+  what a pre-13 server would produce.
 
 Alert on the floor and read the point estimate for size. On the 34-to-36 index
 fixture set below, that rule finds 4 of the 5 genuinely bloated indexes with **0
@@ -732,7 +749,7 @@ SET lock_timeout = '2s';
 
 WITH RECURSIVE
 idx AS (
-    SELECT /* wiki_btree_bloat_sweep_12_17 */
+    SELECT /* wiki_btree_wasted_space_sweep_12_17 */
            c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
            c.relname AS indexname, t.oid AS tbloid, x.indkey, x.indisunique,
            x.indnkeyatts,
@@ -946,12 +963,12 @@ SELECT schemaname, tablename, indexname,
        END                                              AS status,
        CASE WHEN live_rows IS NULL THEN NULL ELSE
          round((100 * (1 - (expected_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
-       END                                              AS bloat_pct,
+       END                                              AS wasted_space_pct,
        CASE WHEN live_rows IS NULL THEN NULL ELSE
          round((100 * (1 - (floor_blocks * bs) / greatest(actual_bytes, 1)))::numeric, 1)
-       END                                              AS bloat_pct_floor,
+       END                                              AS wasted_space_pct_floor,
        CASE WHEN live_rows IS NULL THEN NULL ELSE
-         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END AS wasted,
+         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END AS wasted_space,
        array_to_string(array_remove(ARRAY[
          CASE WHEN last_analyze IS NULL THEN 'never analyzed' END,
          CASE WHEN NOT is_partial
@@ -979,11 +996,14 @@ SELECT schemaname, tablename, indexname,
 Remove `WHERE actual_bytes > 1024 * 1024` and `LIMIT 20` to score every index;
 that is how the numbers below were collected.
 
-Three expressions in that final `SELECT` — `wasted`, the free-space-map boolean,
-and the `ORDER BY` key — were corrected after the measurements below were taken.
-Neither correction touches `expected_blocks`, `floor_blocks` or any reported
-percentage; see
-[Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects).
+Three expressions in that final `SELECT` — `wasted_space`, the free-space-map
+boolean, and the `ORDER BY` key — were corrected after the measurements below were
+taken, and the three reporting columns plus the statement tag were then renamed off
+the word "bloat". No correction touches `expected_blocks`, `floor_blocks` or any
+reported percentage; see
+[Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects)
+and
+[Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat).
 
 ### What the proposed statement changes
 
@@ -1105,12 +1125,12 @@ The traps excluded from those two rows are `i_grow`, `i_skew`, `i_stale` and `i_
 
 ### Read the floor, not the point estimate
 
-Alert when `bloat_pct_floor` crosses the threshold, the `status` is `ok`, and `caveats` contains neither `never analyzed` nor `row-count sources disagree`. At a 30% threshold, on every one of the three servers:
+Alert when `wasted_space_pct_floor` crosses the threshold, the `status` is `ok`, and `caveats` contains neither `never analyzed` nor `row-count sources disagree`. At a 30% threshold, on every one of the three servers:
 
 | rule | true positives | false positives | false negatives |
 |---|---|---|---|
 | floor + status + caveats (proposed) | 4 of 5 | **0 on all three servers** | 1 (`i_stale_part`) |
-| `bloat_pct` point estimate alone | 4 of 5 | 1 on 12.2 (`i_grow`), 2 on 14.23 and 17.10 (`i_grow`, `i_skew`) | 1 |
+| `wasted_space_pct` point estimate alone | 4 of 5 | 1 on 12.2 (`i_grow`), 2 on 14.23 and 17.10 (`i_grow`, `i_skew`) | 1 |
 | the deduplication-aware sweep already on this page | 4 of 5 | 1 on 12.2, 2 on 14.23, 3 on 17.10 (`i_grow`, `i_skew`, `i_ci`) | 1 |
 
 The rows the status and caveats take out of alerting are exactly `i_grow` (0% true), `i_stale` (19.0% true, below the threshold anyway), `i_stale_part` (94.6% true — the one false negative) and `i_trunc` (0% true). The false negative is the partial-index staleness this page already documents: one `ANALYZE` on the table repairs it.
@@ -1153,6 +1173,8 @@ Both defects are confirmed against the pinned checkout, and the framing holds: n
 | `fsm_bytes > 0 AS has_freed_pages` | that this index's free space map has been written at least once since its current relfilenode was created — a fact about history, not about now | rename to `fsm_written_since_build`; get page classes from `VACUUM VERBOSE` or contrib |
 | `pg_size_pretty(greatest(actual_bytes - expected_blocks * bs, 0)::bigint) AS wasted` | reclaimable bytes where the model under-predicts, and `0 bytes` where it over-predicts by *any* amount | drop the `greatest(..., 0)` clamp, in the column and in the `ORDER BY` key, so both columns carry the same sign convention |
 
+Both as-filed labels are quoted above as they shipped. The columns are `fsm_written_since_build` and `wasted_space` in the statements now, the second having also lost the word "bloat" from its percentage siblings in [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat).
+
 ### Defect 1: the FSM column is a history bit
 
 `pg_relation_size(c.oid, 'fsm')` is a live `stat()` over one fork's segment files ([dbsize.c#calculate_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L308-L343)), so `fsm_bytes > 0` asks one question: does this index have a free space map file of nonzero length. For a B-tree index the map is a bitmap in all but name — it "only track[s] whether pages are completely free or in-use", storing 0 for a used page and `BLCKSZ - 1` for a free one ([indexfsm.c#NOTES](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L14-L20), [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55)) — and its file length is fixed, not proportional to the number of free pages. `RecordPageWithFreeSpace` reaches `fsm_readbuf(rel, addr, true)`, whose `extend` flag creates the fork ([freespace.c#RecordPageWithFreeSpace](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L186-L204), [freespace.c#fsm_set_and_search](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L648-L682), [freespace.c#fsm_readbuf](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L557-L631), [freespace.c#fsm_extend](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L633-L646)). At `block_size` 8192, `SlotsPerFSMPage` is 4069 ([fsm_internals.h#SlotsPerFSMPage](../../../../raw/postgres-17/src/include/storage/fsm_internals.h#L47-L61)), above the 1626 a three-level tree needs ([freespace.c#FSM_TREE_DEPTH](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L36-L78)), so the slot for any of an index's first 4069 blocks sits on physical FSM block 2 ([freespace.c#fsm_get_location](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L497-L510), [freespace.c#fsm_logical_to_physical](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L461-L495)): the first recorded page extends the fork to three blocks, 24576 bytes, and the four-thousandth adds nothing.
@@ -1184,16 +1206,16 @@ The pair to reach for is `pgstatindex` plus `pg_freespace`: `deleted_pages` is a
 
 One core-SQL route exists in principle and is not taken here. `pg_read_binary_file` will return the `_fsm` fork's bytes to a member of `pg_read_server_files` ([genfile.c#convert_and_check_filename](../../../../raw/postgres-17/src/backend/utils/adt/genfile.c#L41-L91), [genfile.c#pg_read_binary_file_common](../../../../raw/postgres-17/src/backend/utils/adt/genfile.c#L254-L273)), the same trick [the deduplication-after-upgrade page](btree-deduplication-after-pg-upgrade.md) uses on a metapage byte, and an FSM page is a flat `uint8` array whose leaf nodes follow `fp_next_slot` and `NonLeafNodesPerPage` upper nodes ([fsm_internals.h#FSMPageData](../../../../raw/postgres-17/src/include/storage/fsm_internals.h#L20-L61)). That yields the *reusable* count only — the map has no notion of deleted versus half-dead — and the offsets depend on `BLCKSZ` and `MAXALIGN`, so it is a decoding exercise, not a column. Nothing on this page implemented or measured it.
 
-### Defect 2: wasted is clamped and bloat_pct is not
+### Defect 2: the byte column is clamped and the percentage is not
 
-`bloat_pct` is `100 * (1 - expected_blocks * bs / actual_bytes)`, so it goes negative exactly when the model predicts a fresh sorted rebuild *larger* than the index on disk. That has two causes, and they are not the same:
+`wasted_space_pct` is `100 * (1 - expected_blocks * bs / actual_bytes)`, so it goes negative exactly when the model predicts a fresh sorted rebuild *larger* than the index on disk. That has two causes, and they are not the same:
 
-1. **The model over-predicts.** Every negative *reported* cell in the fixture tables above is this case: `i_var` (one MAXALIGN of a sampled mean width), `i_q10_part` (a partial index's duplication declined), `i_q5`/`i_q10`/`i_q100`/`i_null` (posting-list packing loss), and — by construction — `bloat_pct_floor` on any index the engine really did deduplicate, which is why `i_skew`'s floor reads −20.9% on a healthy 2271-block index.
+1. **The model over-predicts.** Every negative *reported* cell in the fixture tables above is this case: `i_var` (one MAXALIGN of a sampled mean width), `i_q10_part` (a partial index's duplication declined), `i_q5`/`i_q10`/`i_q100`/`i_null` (posting-list packing loss), and — by construction — `wasted_space_pct_floor` on any index the engine really did deduplicate, which is why `i_skew`'s floor reads −20.9% on a healthy 2271-block index.
 2. **A rebuild really would grow the index.** This page measured one, in the *true* bloat column rather than the reported one: `idx_dup` sits at 396 blocks live and 426 after a `CREATE INDEX CONCURRENTLY` rebuild, true bloat −7.6%, because an all-duplicate leaf split packs to `BTREE_SINGLEVAL_FILLFACTOR` 96 while the sorted build caps each posting list at a tenth of a page ([nbtsplitloc.c#_bt_findsplitloc](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416), [nbtree.h#BTREE_SINGLEVAL_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202)).
 
-So a negative `bloat_pct` does not prove model error; it proves that *a rebuild is not predicted to shrink this index*, and only a rebuild separates the two causes. Either way the magnitude is information: it is the distance between the model and the file, which is the one signal on the row that says how much weight the point estimate can carry.
+So a negative `wasted_space_pct` does not prove model error; it proves that *a rebuild is not predicted to shrink this index*, and only a rebuild separates the two causes. Either way the magnitude is information: it is the distance between the model and the file, which is the one signal on the row that says how much weight the point estimate can carry.
 
-The clamp deletes that magnitude. `wasted` collapses "the model is exactly right" and "the model over-predicts by 10 MB" into the same `0 bytes`. Three examples, derived arithmetically at `block_size` 8192 from block counts already reported above, not re-measured:
+The clamp deletes that magnitude. Clamped, `wasted_space` collapses "the model is exactly right" and "the model over-predicts by 10 MB" into the same `0 bytes`. Three examples, derived arithmetically at `block_size` 8192 from block counts already reported above, not re-measured:
 
 | Row | actual | model | signed difference | reported as filed |
 |---|---|---|---|---|
@@ -1203,22 +1225,22 @@ The clamp deletes that magnitude. `wasted` collapses "the model is exactly right
 
 Consumers the mixed convention breaks:
 
-- **Any byte threshold or ranking.** "Alert when `wasted` exceeds 100 MB" and "show me the largest `wasted`" cannot distinguish a well-modelled index from one the model over-shot by 10 MB, because both print `0 bytes`. The failure is in the diagnostic, not in the bloat detection.
+- **Any byte threshold or ranking.** "Alert when `wasted_space` exceeds 100 MB" and "show me the largest `wasted_space`" cannot distinguish a well-modelled index from one the model over-shot by 10 MB, because both print `0 bytes`. The failure is in the diagnostic, not in the bloat detection.
 - **The statement's own top-N triage.** The key as filed, `ORDER BY greatest(actual_bytes - floor_blocks * bs, 0) DESC NULLS FIRST` with `LIMIT 20`, ties every over-predicted row at zero, and PostgreSQL documents that a `LIMIT` without a unique ordering returns "an unpredictable subset of the query's rows" ([queries.sgml#limit-ordering](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1940-L1947)). Unclamped, those rows get distinct decreasing keys and a deterministic tail.
-- **Any aggregation.** `sum(wasted)` over a database charges each over-prediction as zero instead of a negative, so a cluster-wide "reclaimable" total is biased upward and cannot be reconciled with the per-row percentages.
+- **Any aggregation.** Summing the byte difference behind `wasted_space` over a database charges each over-prediction as zero instead of a negative, so a cluster-wide "reclaimable" total is biased upward and cannot be reconciled with the per-row percentages.
 - **A human reading one row.** `0 bytes` next to −92.5% reads as a tool bug and invites the reader to pick whichever column suits. Worse, it silently disables this page's own guard: [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate) says a wide gap between the two columns means the answer rests entirely on a duplication estimate, and that rule is a sign-reading rule.
 
-One convention, applied to both columns: **signed, positive means the index is larger than the model (reclaimable if the model is right), negative means the model is larger than the index (over-prediction, or a rebuild that would grow it).** Clamping both instead would be the wrong trade — it would hide the over-prediction in the percentage too, and `bloat_pct_floor` exists precisely so that the two models can be seen disagreeing. `pg_size_pretty(bigint)` renders negatives symmetrically: the unit is chosen from the absolute value, `half_rounded` rounds away from zero, and the divisor comment says division is used "to ensure positive and negative values are rounded in the same way" ([dbsize.c#half_rounded](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L34-L57), [dbsize.c#pg_size_pretty](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L565-L604)). The in-tree regression test asserts that shape for both the `bigint` and `numeric` variants — `-10 bytes`, `-977 kB`, `-954 MB`, `-931 GB`, `-909 TB` ([sql/dbsize.sql:1-4](../../../../raw/postgres-17/src/test/regress/sql/dbsize.sql#L1-L4), [expected/dbsize.out#negatives](../../../../raw/postgres-17/src/test/regress/expected/dbsize.out#L1-L13)). Applying that algorithm by hand, the three rows above print `-1136 kB`, `-10 MB` and `-7824 kB`.
+One convention, applied to both columns: **signed, positive means the index is larger than the model (reclaimable if the model is right), negative means the model is larger than the index (over-prediction, or a rebuild that would grow it).** Clamping both instead would be the wrong trade — it would hide the over-prediction in the percentage too, and `wasted_space_pct_floor` exists precisely so that the two models can be seen disagreeing. `pg_size_pretty(bigint)` renders negatives symmetrically: the unit is chosen from the absolute value, `half_rounded` rounds away from zero, and the divisor comment says division is used "to ensure positive and negative values are rounded in the same way" ([dbsize.c#half_rounded](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L34-L57), [dbsize.c#pg_size_pretty](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L565-L604)). The in-tree regression test asserts that shape for both the `bigint` and `numeric` variants — `-10 bytes`, `-977 kB`, `-954 MB`, `-931 GB`, `-909 TB` ([sql/dbsize.sql:1-4](../../../../raw/postgres-17/src/test/regress/sql/dbsize.sql#L1-L4), [expected/dbsize.out#negatives](../../../../raw/postgres-17/src/test/regress/expected/dbsize.out#L1-L13)). Applying that algorithm by hand, the three rows above print `-1136 kB`, `-10 MB` and `-7824 kB`.
 
 ### The corrected columns
 
-Three expressions in the [12-through-17 statement](#follow-up-one-statement-for-postgresql-12-through-17), all in its final `SELECT`; nothing above that `SELECT` changes. Both statements on this page now carry these corrections, so the blocks above are the corrected text and the diff is here:
+Three expressions in the [12-through-17 statement](#follow-up-one-statement-for-postgresql-12-through-17), all in its final `SELECT`; these two defects change nothing above that `SELECT`, though the later rename does move the statement tag. Both statements on this page now carry these corrections, so the blocks above are the corrected text and the diff is here:
 
 ```sql
-       -- signed, like bloat_pct: negative means the model predicts a rebuild
-       -- larger than the index on disk, so the point estimate is not a size
+       -- signed, like wasted_space_pct: negative means the model predicts a
+       -- rebuild larger than the index on disk, so this is not a size
        CASE WHEN live_rows IS NULL THEN NULL ELSE
-         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END  AS wasted,
+         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END  AS wasted_space,
        -- the FSM fork has been written at least once since this index's
        -- relfilenode was created; not a count of free pages, and not current
        fsm_bytes > 0                                    AS fsm_written_since_build,
@@ -1228,37 +1250,69 @@ Three expressions in the [12-through-17 statement](#follow-up-one-statement-for-
 
 Notes on the shape of the fix:
 
-- `bloat_pct` and `bloat_pct_floor` are already signed and are left byte-identical.
+- `wasted_space_pct` and `wasted_space_pct_floor` are already signed, so the clamp correction leaves their expressions untouched; only their labels moved, and that came later.
 - The `ORDER BY` keeps ranking on `floor_blocks` rather than `expected_blocks`, deliberately: the alerting rule on this page reads the floor. Only the clamp goes.
 - The `live_rows IS NULL` guard stays, so an `unmeasured` row still emits NULL rather than a signed number.
 - Clamp late, not early. A consumer that genuinely wants a non-negative size can wrap the column in `greatest(..., 0)` itself; the statement should not make that choice on its behalf.
-- If a consumer parses the output, emit `(actual_bytes - expected_blocks * bs)::bigint` raw and let the consumer format it; `pg_size_pretty` is for human reading.
+- If a consumer parses the output, emit `(actual_bytes - expected_blocks * bs)::bigint` raw — as `wasted_space_bytes` — and let the consumer format it; `pg_size_pretty` is for human reading.
 
 ### What the corrections change, and whether the v17 sweep needs them too
 
-**No reported bloat percentage changes.** `bloat_pct` and `bloat_pct_floor` are the same expressions before and after, over the same `expected_blocks`, `floor_blocks` and `live_rows`, so every cell in [Measured accuracy, per fixture](#measured-accuracy-per-fixture), every error figure in [How the same statement behaves on 12.2, 14.23 and 17.10](#how-the-same-statement-behaves-on-122-1423-and-1710), and the 30%-threshold true/false-positive counts in [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate) stand unchanged — that alerting rule reads `bloat_pct_floor`, `status` and `caveats` only, none of which is touched.
+**No reported bloat percentage changes.** `wasted_space_pct` and `wasted_space_pct_floor` are the same expressions before and after, over the same `expected_blocks`, `floor_blocks` and `live_rows`, so every cell in [Measured accuracy, per fixture](#measured-accuracy-per-fixture), every error figure in [How the same statement behaves on 12.2, 14.23 and 17.10](#how-the-same-statement-behaves-on-122-1423-and-1710), and the 30%-threshold true/false-positive counts in [Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate) stand unchanged — that alerting rule reads `wasted_space_pct_floor`, `status` and `caveats` only, none of which is touched.
 
 What does change on the already-measured fixtures:
 
-- The `wasted` cell on every row where the model over-predicts. Across the 54 cells of the fresh-fixture table (18 fixtures on 3 servers), at least 16 of them: `i_var` on 12.2; `i_q5`, `i_q10`, `i_q100`, `i_null`, `i_var`, `i_q5_part`, `i_q100_part` and `i_qall_part` on 14.23; and that same list minus `i_qall_part` on 17.10. It is "at least" because a cell printed `0.0%` may be a small negative rounded to one decimal, and the rounded tables cannot be un-rounded.
+- The `wasted_space` cell on every row where the model over-predicts. Across the 54 cells of the fresh-fixture table (18 fixtures on 3 servers), at least 16 of them: `i_var` on 12.2; `i_q5`, `i_q10`, `i_q100`, `i_null`, `i_var`, `i_q5_part`, `i_q100_part` and `i_qall_part` on 14.23; and that same list minus `i_qall_part` on 17.10. It is "at least" because a cell printed `0.0%` may be a small negative rounded to one decimal, and the rounded tables cannot be un-rounded.
 - Nothing in the real-bloat table: every percentage there is positive, and `i_trunc` stays NULL in both columns.
 - Nothing that was ever printed for the renamed column. No table on this page reports `has_freed_pages`, and its per-fixture values were not recorded, so the rename cannot be scored against the fixtures without re-running them.
 - Nothing that depends on the sort key: the measurements were collected with `WHERE actual_bytes > 1024 * 1024` and `LIMIT 20` removed, as [the statement's own note](#follow-up-one-statement-for-postgresql-12-through-17) says. The un-clamped key only matters to a production run that keeps the `LIMIT`.
 
-**The earlier deduplication-aware sweep needs both corrections, in the same words, and now carries them.** As filed, [A deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17) had `fsm_bytes > 0 AS has_freed_pages`, the same clamped `wasted`, an unclamped `bloat_pct`, and the same clamped `ORDER BY` key. Two differences in how much they matter there:
+**The earlier deduplication-aware sweep needs both corrections, in the same words, and now carries them.** As filed, [A deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17) had `fsm_bytes > 0 AS has_freed_pages`, the same clamp on its byte column (then labelled `AS wasted`), an unclamped percentage (then `AS bloat_pct`), and the same clamped `ORDER BY` key. Two differences in how much they matter there:
 
-- The clamp hides more, because that sweep has no floor column: the sign of `bloat_pct` is the only trustworthiness signal it emits, and its documented blind spot is an order of magnitude larger than the proposal's — 10,805,248 bytes of over-prediction printed as `0 bytes` at 5 rows per key, against 1,163,264 bytes in the proposal's worst fresh cell.
-- Its `ORDER BY` key uses `expected_blocks`, the same quantity as its `wasted`, so removing the clamp there also makes the ranking and the size column agree, which the proposal reaches differently by ranking on the floor.
+- The clamp hides more, because that sweep has no floor column: the sign of `wasted_space_pct` is the only trustworthiness signal it emits, and its documented blind spot is an order of magnitude larger than the proposal's — 10,805,248 bytes of over-prediction printed as `0 bytes` at 5 rows per key, against 1,163,264 bytes in the proposal's worst fresh cell.
+- Its `ORDER BY` key uses `expected_blocks`, the same quantity as its `wasted_space`, so removing the clamp there also makes the ranking and the size column agree, which the proposal reaches differently by ranking on the floor.
 
 The corrected columns for that sweep are the same two expressions, with its own `status` semantics untouched:
 
 ```sql
        CASE WHEN live_rows IS NULL THEN NULL ELSE
-         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END  AS wasted,
+         pg_size_pretty((actual_bytes - expected_blocks * bs)::bigint) END  AS wasted_space,
        fsm_bytes > 0                                  AS fsm_written_since_build,
 ...
  ORDER BY (actual_bytes - expected_blocks * bs) DESC NULLS FIRST
 ```
+
+### Follow-up: the output columns say wasted_space, not bloat
+
+Done, and it costs nothing: both statements now label their reporting columns `wasted_space` and `wasted_space_pct`, the 12-through-17 statement adds `wasted_space_pct_floor`, and both statement tags say `wasted_space` too. The change is confined to `AS` labels and two comments. Every value expression, both models, the deduplication gate, `status` and `caveats` are unchanged, so **no number in any table on this page moves**.
+
+| As filed | Now | The value behind it |
+|---|---|---|
+| `wasted` | `wasted_space` | `pg_size_pretty(actual_bytes - expected_blocks * bs)`, signed since [Defect 2](#defect-2-the-byte-column-is-clamped-and-the-percentage-is-not) |
+| `bloat_pct` | `wasted_space_pct` | `round(100 * (1 - expected_blocks * bs / actual_bytes), 1)` |
+| `bloat_pct_floor` | `wasted_space_pct_floor` | the same percentage over `floor_blocks`, the one-tuple-per-row model |
+| `/* wiki_btree_bloat_sweep_v17 */` | `/* wiki_btree_wasted_space_sweep_v17 */` | the v17 sweep's statement tag |
+| `/* wiki_btree_bloat_sweep_12_17 */` | `/* wiki_btree_wasted_space_sweep_12_17 */` | the portable statement's tag |
+| — | `wasted_space_bytes` | the name to give the raw `::bigint` if a consumer parses the output instead of reading it |
+
+The rename is not only cosmetic, because "bloat" overclaims what the column holds. The PostgreSQL glossary defines bloat as "Space in data pages which does not contain current row versions, such as unused (free) space or outdated row versions" ([glossary.sgml#Bloat](../../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250)) — per-page state, free space inside still-used pages included. Neither statement can see per-page state. Both subtract a modelled fresh-rebuild size from the file's size, which is why [What no core-SQL method can measure on v17](#what-no-core-sql-method-can-measure-on-v17) lists `LP_DEAD` space inside live leaves, the deleted-versus-half-dead split and `leaf_fragmentation` as invisible, why the number can be negative at all, and why a positive reading is a prediction about a rebuild rather than a measurement of dead space. "Wasted space" is the docs' own phrase for space a maintenance command is expected to recover ([copy.sgml#recover-the-wasted-space](../../../../raw/postgres-17/doc/src/sgml/ref/copy.sgml#L613-L621)), which is what these columns estimate.
+
+The vocabulary also matches what ships. No SQL-visible interface in the pinned tree spells the word: `system_views.sql` contains no occurrence of the string `bloat`, no contrib SQL script and no `pg_proc.dat` entry does either, and `pgstattuple` names this class of quantity `free_space` and `free_percent` ([pgstattuple--1.4.sql#free_space](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L14-L15)). Where "bloat" does appear it is documentation prose or a C comment — such as the non-B-tree paragraph of the reindexing advice this page rests on ([maintenance.sgml#non-btree-bloat](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1042-L1046)) — with one unrelated exception, a static variable in the imported IANA timezone compiler ([zic.c#bloat](../../../../raw/postgres-17/src/timezone/zic.c#L641-L646)).
+
+Two artifacts keep the old spelling on purpose: the psql capture in [The v14 unknown reltuples sentinel](#the-v14-unknown-reltuples-sentinel), because that is what the server printed, and the as-filed expression quotes in [Follow-up: two reporting defects, not arithmetic defects](#follow-up-two-reporting-defects-not-arithmetic-defects). Every other mention on this page names the columns as they stand now.
+
+### What the rename cannot change
+
+- **Any value.** `AS` assigns an output column label, used for display and for reference elsewhere in the same query; the select-list expression is untouched ([queries.sgml#Column-Labels](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1556-L1602)).
+- **Row order.** Both statements sort on an expression — `ORDER BY (actual_bytes - floor_blocks * bs) DESC NULLS FIRST` in the portable statement, the `expected_blocks` form in the v17 sweep — never on a label. `ORDER BY` may name an output column, but only when the sort key is that bare name ([queries.sgml#sort-by-output-column](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1867-L1886)), and neither statement does that.
+- **The query ID.** Two independent reasons. A comment never reaches the parse tree, and `pg_stat_statements` hashes the tree, not the text: `JumbleQuery` walks the finished `Query` node ([queryjumblefuncs.c#JumbleQuery](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L104-L127)), and the docs say the value "is computed on the post-parse-analysis representation of the queries" ([pgstatstatements.sgml#queryid](../../../../raw/postgres-17/doc/src/sgml/pgstatstatements.sgml#L613-L639)). The label does reach the tree, as `TargetEntry.resname`, but it is declared `pg_node_attr(query_jumble_ignore)` ([primnodes.h#TargetEntry](../../../../raw/postgres-17/src/include/nodes/primnodes.h#L2186-L2203)) and `gen_node_support.pl` emits no jumble code for such a field ([gen_node_support.pl#query_jumble_ignore](../../../../raw/postgres-17/src/backend/nodes/gen_node_support.pl#L1283-L1324)) into the generated `queryjumblefuncs.funcs.c` that `_jumbleNode` dispatches through ([queryjumblefuncs.c#generated-includes](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L227-L255)). Renaming a column therefore cannot split one `pg_stat_statements` entry into two.
+- **Identifier limits.** The longest new label is 22 bytes. Truncation only starts at `NAMEDATALEN`, 64, so 63 usable bytes ([pg_config_manual.h#NAMEDATALEN](../../../../raw/postgres-17/src/include/pg_config_manual.h#L22-L29)), where the lexer's `downcase_truncate_identifier` ([scan.l:1096-1103](../../../../raw/postgres-17/src/backend/parser/scan.l#L1096-L1103)) reaches `truncate_identifier` and raises `NOTICE: identifier "..." will be truncated` ([scansup.c#truncate_identifier](../../../../raw/postgres-17/src/backend/parser/scansup.c#L84-L105)).
+
+### What a consumer must change
+
+1. **Anything that selects the old names.** Wrapping either statement in a view or a subquery and reading `bloat_pct` now fails with `ERRCODE_UNDEFINED_COLUMN` and `column "bloat_pct" does not exist`, possibly with a "Perhaps you meant to reference the column" hint pointing at the neighbour it fuzzy-matched ([parse_relation.c#errorMissingColumn](../../../../raw/postgres-17/src/backend/parser/parse_relation.c#L3712-L3733)). Output labels have no alias-compatibility mechanism; there is nothing to deprecate gradually.
+2. **Anything that sorts on the size column.** `pg_size_pretty` returns `text` for both its `int8` and `numeric` forms ([pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507)), so `ORDER BY wasted_space DESC` sorts collated strings through `bttextcmp` ([varlena.c#bttextcmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1875-L1888), [varlena.c#varstr_cmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1583-L1590)) and puts `9 bytes` above `10 MB`. This was already true of `wasted`; it is why the ranking belongs on the byte expression, and why a parsing consumer should take `wasted_space_bytes` instead.
+3. **Log and `pg_stat_statements` text matching.** The tag survives into both, so a grep for `wiki_btree_bloat_sweep_12_17` stops matching. `log_statement` and `log_min_duration_statement` print the source string as received ([postgres.c#log_statement](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1071-L1081), [postgres.c#duration-statement](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1369-L1380)); `pg_stat_statements` trims only leading and trailing whitespace from the statement's slice of the source text ([queryjumblefuncs.c#CleanQuerytext](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L61-L102)) and its normalization replaces constants, so an inline comment is preserved. One wrinkle follows from the unchanged query ID: the text is written only when the hash entry is created ([pg_stat_statements.c#pgss_store-entry](../../../../raw/postgres-17/contrib/pg_stat_statements/pg_stat_statements.c#L1312-L1369)), so an entry that already exists keeps showing the old tag until it is evicted or `pg_stat_statements_reset()` runs.
 
 ## Context Reviewed
 
@@ -1275,6 +1329,7 @@ The corrected columns for that sweep are the same two expressions, with its own 
 - Portable-statement follow-up, exact-pin execution on three servers: isolated 12.2, 14.23 and 17.10 clusters, each built out of tree from its own pinned checkout under `.wiki-runtime/`, all with `autovacuum = off`, `fsync = off`, `block_size` 8192; the 17.10 build was configured `--with-icu` so that a nondeterministic collation could be created. Identical fixture DDL on all three: a seven-point duplication band at 1,000,000 rows (1, 2, 5, 10, 100, 1000 and 1,000,000 rows per key) each with a 20% partial sibling, a 25%-NULL index, a one-hot-value skew index, variable-width and fixed-width text, a unique index, four multi-column/`INCLUDE` variants, a `fillfactor = 50` duplicate-key index, a `deduplicate_items = off` index, five real-bloat fixtures (scattered delete plus VACUUM on distinct and duplicate keys, a partial duplicate-key index, an all-rows-deleted index, an unvacuumed delete), a drained partial predicate, a `TRUNCATE`-and-reload index, a grown-since-ANALYZE index, an empty index, and two 100-rows-per-key text indexes differing only in collation determinism. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy; the v12 Method A arithmetic, the v17 sweep on this page, a uniform-group variant, and the proposed statement were installed as views and scored against those rebuilds in one query. Catalog probes covered `pg_amproc` support numbers, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, `ALTER INDEX ... SET (deduplicate_items = off)`, `collisdeterministic`, `array_lower(indclass, 1)`, and `reltuples` after build, `TRUNCATE`, reload and full delete. The statistics repairs (`SET STATISTICS 1000`, `SET (n_distinct = ...)`) were exercised on 17.10 only. All three servers were stopped afterwards and their data directories removed.
 - Reporting-defect follow-up, source coverage (no server run; this follow-up is source-only): free space map internals in `freespace.c` (`RecordPageWithFreeSpace`, `GetPageWithFreeSpace`, `GetRecordedFreeSpace`, `fsm_readbuf`'s `extend` flag and ZERO_ON_ERROR path, `fsm_extend`, `fsm_set_and_search`, `fsm_get_location`, `fsm_logical_to_physical`, `fsm_space_avail_to_cat`/`fsm_space_cat_to_avail`, `FreeSpaceMapPrepareTruncateRel`, `FreeSpaceMapVacuum`, the category table and `FSM_TREE_DEPTH`), `indexfsm.c` (all four exported routines and the header NOTES), `fsm_internals.h` (`NodesPerPage` through `SlotsPerFSMPage`); nbtree page recycling in `nbtree.c` (`btvacuumscan`'s `pages_free`-is-index-state comment and its FSM-vacuum condition, `btvacuumpage`'s recyclable/deleted/half-dead branches), `nbtpage.c` (`_bt_allocbuf`'s FSM loop and its two reject paths, `_bt_pendingfsm_init`, `_bt_pendingfsm_add`, `_bt_pendingfsm_finalize`), `nbtree.h` (`BTPageIsRecyclable`, `BTDeletedPageData`, `BTPageSetDeleted`, `P_ISDELETED`/`P_ISHALFDEAD`/`P_IGNORE`, `BTVacState`), `README` ("Deleting entire pages during VACUUM"); storage lifecycle in `storage.c` (`RelationTruncate`'s per-fork preparation), `heap.c` (`RelationTruncateIndexes`), `relcache.c` (`RelationSetNewRelfilenumber`), `index.c` (`reindex_index`), `tablecmds.c` (`ExecuteTruncateGuts`), plus the `RelationTruncate` caller set (`vacuumlazy.c`, `heapam_handler.c`, and the `#ifdef NOT_USED` call in `spgvacuum.c`); reporting surfaces in `vacuumlazy.c` (the VERBOSE per-index line), `genam.h` (`IndexBulkDeleteResult` field semantics), `dbsize.c` (`half_rounded`, `size_pretty_units`, `pg_size_pretty`, `pg_size_pretty_numeric`), `queries.sgml` (`LIMIT` without a unique ordering), `genfile.c` (`convert_and_check_filename`'s `pg_read_server_files` check and `pg_read_binary_file_common`); contrib page-class sources `pgstatindex.c` with `pgstattuple--1.4.sql`, `pg_freespacemap.c` with `pg_freespacemap--1.1.sql`/`--1.1--1.2.sql` and its control file, `pageinspect`'s `btreefuncs.c` with `pageinspect--1.11--1.12.sql`; and tests `contrib/pg_freespacemap/{sql,expected}/pg_freespacemap` (the `avail > 0` idiom over a B-tree index) and `src/test/regress/{sql,expected}/dbsize` (negative `pg_size_pretty` for both variants).
 - Follow-up exact-pin execution, two servers: the same DDL and generated data on one isolated 12.2 server and one isolated 17.10 server, each built from its own pin under `.wiki-runtime/`, both with `autovacuum = off`, `fsync = off`, `block_size` 8192, and no contrib extension installed. Fixtures: nine 1,000,000-row indexes (distinct, all-duplicate, 25% NULL, four duplication ratios, a 20% partial sibling, and a 10-key index with 90% of rows deleted and vacuumed), six shape indexes over a 200,000-row table, three `INCLUDE`-versus-key-column indexes over a 1,000,000-row table, an empty-table index, and a `TRUNCATE`-and-reload index. The dedup-aware sweep and the v12 page's Method A were installed as views on both servers with only the 1 MB triage filter and `LIMIT` removed and `expected_blocks` exposed; `CREATE INDEX CONCURRENTLY` rebuilds were the ground truth. Catalog probes covered `pg_amproc` support numbers, `array_lower(indclass, 1)`, `ALTER INDEX ... SET (deduplicate_items = off)`, `ALTER OPERATOR FAMILY ... ADD FUNCTION 4`, and `pg_class.reltuples` after build, `TRUNCATE` and reload. Both servers were stopped afterwards, the test databases dropped, and the 17.10 data directory removed.
+- Column-rename follow-up, source coverage (no server run; this follow-up is source-only): output column labelling and sorting in `queries.sgml` (the Column Labels section and the `ORDER BY`-by-output-column rule); query-jumble surfaces in `queryjumblefuncs.c` (`CleanQuerytext`, `JumbleQuery`, `_jumbleNode` and the two generated includes), `gen_node_support.pl` (per-field `query_jumble_ignore` emission), `primnodes.h` (`TargetEntry.resname`), and `pgstatstatements.sgml` (the `queryid` post-parse-analysis and stability paragraphs); query-text surfaces in `pg_stat_statements.c` (`pgss_store`'s entry lookup, `generate_normalized_query`, `qtext_store`) and `postgres.c` (`log_statement` and duration logging in `exec_simple_query`); identifier limits in `pg_config_manual.h` (`NAMEDATALEN`), `scan.l` (the `{identifier}` rule) and `scansup.c` (`downcase_truncate_identifier`, `truncate_identifier`); type and error surfaces in `pg_proc.dat` (`pg_size_pretty` return types), `varlena.c` (`bttextcmp`, `text_cmp`, `varstr_cmp`) and `parse_relation.c` (`errorMissingColumn`); vocabulary in `glossary.sgml` (the Bloat entry), `ref/copy.sgml` ("recover the wasted space"), `maintenance.sgml` (routine reindexing), `pgstattuple--1.4.sql` (`free_space`/`free_percent`), plus whole-tree string searches for `bloat` across `system_views.sql`, `pg_proc.dat` and every contrib SQL script.
 
 ## Evidence Map
 
@@ -1336,6 +1391,13 @@ The corrected columns for that sweep are the same two expressions, with its own 
 | `pageinspect` classifies each B-tree page as deleted leaf/internal, half-dead, leaf, internal or root | [btreefuncs.c#page-type](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L125-L163), [pageinspect--1.11--1.12.sql#bt_multi_page_stats](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.11--1.12.sql#L6-L23) |
 | `pg_size_pretty` renders negative sizes symmetrically, and the regression suite asserts it | [dbsize.c#half_rounded](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L34-L57), [dbsize.c#pg_size_pretty](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L565-L604), [sql/dbsize.sql:1-4](../../../../raw/postgres-17/src/test/regress/sql/dbsize.sql#L1-L4), [expected/dbsize.out#negatives](../../../../raw/postgres-17/src/test/regress/expected/dbsize.out#L1-L13) |
 | A `LIMIT` without a unique ordering returns an unpredictable subset | [queries.sgml#limit-ordering](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1940-L1947) |
+| `AS` names an output column and nothing else; `ORDER BY` may use that name only as a bare sort key | [queries.sgml#Column-Labels](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1556-L1602), [queries.sgml#sort-by-output-column](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1867-L1886) |
+| An output column label cannot change `queryid`: the jumble walks the post-analysis tree and `TargetEntry.resname` is `query_jumble_ignore`, which `gen_node_support.pl` emits no code for | [queryjumblefuncs.c#JumbleQuery](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L104-L127), [primnodes.h#TargetEntry](../../../../raw/postgres-17/src/include/nodes/primnodes.h#L2186-L2203), [gen_node_support.pl#query_jumble_ignore](../../../../raw/postgres-17/src/backend/nodes/gen_node_support.pl#L1283-L1324), [queryjumblefuncs.c#generated-includes](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L227-L255), [pgstatstatements.sgml#queryid](../../../../raw/postgres-17/doc/src/sgml/pgstatstatements.sgml#L613-L639) |
+| An inline comment survives into the logged and stored statement text, and the stored text is written only when the hash entry is created | [postgres.c#log_statement](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1071-L1081), [postgres.c#duration-statement](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1369-L1380), [queryjumblefuncs.c#CleanQuerytext](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L61-L102), [pg_stat_statements.c#pgss_store-entry](../../../../raw/postgres-17/contrib/pg_stat_statements/pg_stat_statements.c#L1312-L1369) |
+| Identifiers are truncated only at `NAMEDATALEN - 1` bytes, with a `NOTICE` | [pg_config_manual.h#NAMEDATALEN](../../../../raw/postgres-17/src/include/pg_config_manual.h#L22-L29), [scan.l:1096-1103](../../../../raw/postgres-17/src/backend/parser/scan.l#L1096-L1103), [scansup.c#truncate_identifier](../../../../raw/postgres-17/src/backend/parser/scansup.c#L84-L105) |
+| Selecting a name the statement no longer emits raises `ERRCODE_UNDEFINED_COLUMN` | [parse_relation.c#errorMissingColumn](../../../../raw/postgres-17/src/backend/parser/parse_relation.c#L3712-L3733) |
+| `pg_size_pretty` returns `text`, so ordering by its result is a collated string comparison | [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507), [varlena.c#bttextcmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1875-L1888), [varlena.c#varstr_cmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1583-L1590) |
+| "Bloat" is defined in the docs as per-page space, while "wasted space" is the docs' phrase for space a maintenance command recovers; contrib names the quantity `free_space` | [glossary.sgml#Bloat](../../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250), [copy.sgml#recover-the-wasted-space](../../../../raw/postgres-17/doc/src/sgml/ref/copy.sgml#L613-L621), [maintenance.sgml#non-btree-bloat](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1042-L1046), [pgstattuple--1.4.sql#free_space](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L14-L15), [zic.c#bloat](../../../../raw/postgres-17/src/timezone/zic.c#L641-L646) |
 
 ## Open Questions
 
@@ -1364,12 +1426,16 @@ The corrected columns for that sweep are the same two expressions, with its own 
 - **Two counter artifacts were observed and not traced.** Immediately after `VACUUM (ANALYZE)`, `t_dupdelp` reported `n_dead_tup` and `n_mod_since_analyze` of 180,000 and `t_alldead` reported 200,000 dead, on all three servers; `t_trunc` reported `n_live_tup` 600,000 for 300,000 real rows on 17.10. Message-ordering between the analyze report and the DML report is the obvious suspect, but no source path was confirmed. This is why the `caveats` column tests `pg_class.reltuples` against `n_live_tup` rather than trusting `n_mod_since_analyze`.
 - **The 17.10 server for this follow-up is a different build of the same pin.** It was configured `--with-icu` so that `CREATE COLLATION ... deterministic = false` would work, unlike the `--without-icu` build used earlier on this page. The ICU-specific rows are `i_ci` and `i_cd`; no other cell depends on the build option, but the two builds were not diffed cell by cell.
 - **The 30% alert threshold is arbitrary.** True-positive and false-positive counts are reported at that one threshold on 36 fixtures. No sweep over thresholds, and no production index population, was measured.
-- **The two reporting corrections were not run on a server.** Both are source-derived: the renamed boolean reads the same `fsm_bytes` expression, and the un-clamped `wasted` is the same subtraction without `greatest(..., 0)`. The claim that no percentage changes follows from the expressions, which share `expected_blocks`, `floor_blocks` and `live_rows` with the versions that produced the tables above, but no server re-ran the corrected statement to confirm it row for row.
+- **The two reporting corrections were not run on a server.** Both are source-derived: the renamed boolean reads the same `fsm_bytes` expression, and the un-clamped `wasted_space` is the same subtraction without `greatest(..., 0)`. The claim that no percentage changes follows from the expressions, which share `expected_blocks`, `floor_blocks` and `live_rows` with the versions that produced the tables above, but no server re-ran the corrected statement to confirm it row for row.
 - **The rendered negative sizes are derived, not observed.** `-1136 kB`, `-10 MB` and `-7824 kB` come from applying `pg_size_pretty`'s unit selection and `half_rounded` by hand to −1,163,264, −10,805,248 and −8,011,776 bytes. The regression suite proves the sign and unit behavior but not these three specific strings.
 - **No fixture's FSM state was ever recorded.** The `has_freed_pages` column was in both statements but never printed in a table here, so neither direction of its failure was observed on the fixtures: no run confirmed a true reading on an index whose recorded pages had all been reused, and none confirmed a false reading on an index full of deleted-but-not-recyclable pages. `idx_range` (2330 deleted pages) and `idx_del` are the fixtures that would show it, and `pg_freespace` was never installed on those servers.
 - **The FSM fork size arithmetic assumes `block_size` 8192 and `MAXALIGN` 8.** `SlotsPerFSMPage` 4069, `FSM_TREE_DEPTH` 3, the resulting 24576-byte first extension and the 16384 bytes a truncation leaves behind are all computed from the pinned constants at that block size; smaller block sizes take the four-level branch and were not worked through, and no server confirmed either byte count.
 - **The replacement page-class sources were not exercised here.** `pg_freespace`, `pgstatindex.deleted_pages`/`empty_pages` and `bt_page_stats` are named from source and from `pg_freespacemap`'s own regression output; no run on this page compared their counts against each other on the same index, so the "`deleted_pages` minus reusable equals not-yet-recyclable" identity is a source-level deduction about a quiescent index, not a measurement.
-- **Whether a signed `wasted` breaks a real consumer was not tested.** The consumer list is reasoned from the statement's own output shape and the documented `LIMIT` ordering rule. No monitoring pipeline was pointed at either version of the statement.
+- **Whether a signed `wasted_space` breaks a real consumer was not tested.** The consumer list is reasoned from the statement's own output shape and the documented `LIMIT` ordering rule. No monitoring pipeline was pointed at either version of the statement.
+- **The renamed statements were never executed.** No server ran either statement under its new labels, so the claim that only the labels moved rests on reading the two `SELECT` lists: the same `expected_blocks`, `floor_blocks`, `live_rows`, `key_groups` and `tids` feed the same expressions, and the `ORDER BY` keys never named a label. Nothing was re-measured, and no psql capture with the new header exists on this page.
+- **The query-ID and query-text consequences of the tag rename are source-derived.** `queryid` stability follows from `JumbleQuery` walking the parse tree and from `TargetEntry.resname` carrying `query_jumble_ignore`; the surviving comment and the write-once query text follow from `CleanQuerytext` and `pgss_store`. No 17 server was started with `pg_stat_statements` loaded to confirm that one entry keeps the old tag while the new tag is what a fresh entry shows, and the generated `queryjumblefuncs.funcs.c` was read only through `gen_node_support.pl`, since generated files are not in the checkout.
+- **`wasted_space_bytes` is a recommendation, not part of either statement.** Neither statement emits the raw `bigint`; the name is proposed for a consumer that parses output, and no run compared a text `wasted_space` ordering against a byte ordering to demonstrate the `9 bytes` before `10 MB` inversion.
+- **The negative string searches are searches, not proofs of intent.** "No SQL-visible interface says bloat" comes from string searches of `system_views.sql`, `pg_proc.dat` and every contrib SQL script in the pinned tree. A name assembled at run time, or one in an out-of-tree extension, would not be found that way.
 
 ## Source References
 
@@ -1437,6 +1503,24 @@ The corrected columns for that sweep are the same two expressions, with its own 
 - [pg_freespacemap.c#pg_freespace](../../../../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.c#L1-L50)
 - [btreefuncs.c#GetBTPageStatistics](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L101-L200)
 - [queries.sgml#LIMIT](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1900-L1960)
+- [queries.sgml#queries-column-labels](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1556-L1620)
+- [queries.sgml#sorting-rows](../../../../raw/postgres-17/doc/src/sgml/queries.sgml#L1830-L1893)
+- [queryjumblefuncs.c#CleanQuerytext-and-JumbleQuery](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L61-L160)
+- [queryjumblefuncs.c#_jumbleNode](../../../../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L212-L290)
+- [gen_node_support.pl#jumble-emission](../../../../raw/postgres-17/src/backend/nodes/gen_node_support.pl#L1258-L1340)
+- [primnodes.h#TargetEntry-fields](../../../../raw/postgres-17/src/include/nodes/primnodes.h#L2130-L2203)
+- [pgstatstatements.sgml#queryid-stability](../../../../raw/postgres-17/doc/src/sgml/pgstatstatements.sgml#L604-L660)
+- [pg_stat_statements.c#pgss_store](../../../../raw/postgres-17/contrib/pg_stat_statements/pg_stat_statements.c#L1270-L1420)
+- [pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-17/contrib/pg_stat_statements/pg_stat_statements.c#L2780-L2900)
+- [postgres.c#exec_simple_query-logging](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L1060-L1090)
+- [pg_config_manual.h#NAMEDATALEN-comment](../../../../raw/postgres-17/src/include/pg_config_manual.h#L16-L30)
+- [scansup.c#downcase_truncate_identifier](../../../../raw/postgres-17/src/backend/parser/scansup.c#L23-L105)
+- [parse_relation.c#errorMissingColumn-full](../../../../raw/postgres-17/src/backend/parser/parse_relation.c#L3658-L3751)
+- [pg_proc.dat#pg_size_pretty-entries](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507)
+- [varlena.c#text_cmp](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L1583-L1888)
+- [glossary.sgml#glossary-bloat](../../../../raw/postgres-17/doc/src/sgml/glossary.sgml#L242-L250)
+- [copy.sgml#wasted-space](../../../../raw/postgres-17/doc/src/sgml/ref/copy.sgml#L613-L621)
+- [pgstattuple--1.4.sql#pgstattuple](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L6-L17)
 
 ## Navigation
 
