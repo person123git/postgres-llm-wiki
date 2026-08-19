@@ -3438,3 +3438,86 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
   unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-19] follow-up v17 | changes A and B applied as a WHERE exclusion, and all 74 partial-index tests re-scored
+
+- Applied both changes from [Two changes the partial-index tests
+  justify](v17/questions/indexing/btree-index-bloat-core-sql-only.md#two-changes-the-partial-index-tests-justify)
+  to the recommended statement in [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat
+  Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The asker chose a
+  hard `WHERE` exclusion over a warning column, so the statement gains a
+  `suppress_partial` flag in `modelled` and one `AND NOT suppress_partial` conjunct in
+  the final `WHERE`: an untrustworthy partial-index reading is withheld, not annotated.
+- Prompt hygiene: the request had a space before commas, lowercase "postgresql", double
+  spaces, "by filter out", and a sentence opening on "and"; the asker approved a
+  corrected restatement, and the prompt note records that the quoted `m.` qualifiers are
+  the asker's while the page's own change-B sketch carries no alias. Four scoping answers
+  are filed: hard exclusion; the trigger computed with per-table reloption overrides
+  rather than from the GUCs alone; the whole 74-fixture suite rebuilt and re-scored
+  rather than argued arithmetically; and `autovacuum = off` deliberately not suppressing
+  the caveat.
+- **12 critical false positives become 1.** Scored on `wasted_space_pct_floor`: change A
+  withholds 8 (tests 30, 32, 49, 50, 78, 79, 83, 85), change B 3 more (64, 69, 84) plus
+  the single plain false positive (66), and only test 47 survives — a wide `INCLUDE`
+  column reading 84.0% on a 787-block index a `REINDEX` reproduces block for block, with
+  an empty `caveats` string and `status = ok`. That split is exactly what the tenth
+  follow-up predicted from the recorded caveat strings, test for test.
+- **No true detection lost.** Tests 68, 74, 75 and 77 still report 75.0 / 74.3 / 89.1 /
+  94.2 against measured 74.9 / 74.3 / 89.1 / 94.2, and the 8 false negatives are
+  unchanged (4 of them now additionally withheld, which costs nothing because they read
+  0.0, 0.0, 16.1 and 18.4 against 89.1, 89.1, 73.6 and 73.6 reclaims).
+- Change B's threshold is the auto-analyze trigger, not `> 0`: `anl_base_thresh +
+  anl_scale_factor * reltuples` with the table's reloption overriding either GUC and a
+  negative `reltuples` clamped to zero, exactly as `relation_needs_vacanalyze` computes
+  it (`autovacuum.c:3011-3017`, `:3063-3096`, `:3068`, `:3070-3072`; `reloptions.c`
+  entries and parse table; both GUCs `PGC_SIGHUP` at 50 and 0.1). Measured trigger values
+  100,050 / 50,050 / 10,050 / 100 / 1,000,000 / 60 / 50 across seven fixtures, the last
+  being the `reltuples = -1` clamp after `TRUNCATE`. The `> 0` form scores these 74 tests
+  identically but withheld two genuinely 89.1%-reclaimable calibration indexes, and a
+  GUC-only threshold got both reloption fixtures backwards.
+- The exclusion carries `is_partial` on judgement rather than measurement, so 0 of 4
+  non-partial controls are touched; the price is stated — control `np97`, a freshly built
+  non-partial expression index with no statistics row, reads 64.9% on 5201 blocks and is
+  still reported — and the widening option is left as an open question.
+- Report-level effect on the final database state (all 86 indexes freshly rebuilt, so
+  every true reclaim is 0%): 82 rows returned to 46, 8 readings above the 50% alert line
+  to 2, 41 indexes over the 1 MB triage filter to 28, and 9 of the pre-change top-20
+  triage rows withheld, 6 of them above 50%. Cost is inside the noise: 33.4 / 38.0 / 32.8
+  ms as filed against 37.5 / 33.6 / 35.2 ms amended, interleaved. No percentage moves —
+  `expected_blocks` and `floor_blocks` are untouched.
+- One new hazard measured: without `pg_stat_force_next_flush()` before an `ANALYZE`, a
+  same-session bulk load leaves `n_mod_since_analyze` at the full 200,000 rows and
+  `n_live_tup` at 400,000 for a 200,000-row table (`pgstat_relation.c:326-337` against
+  `:847-867`), which fires the new caveat spuriously — in the safe direction. The
+  harness rule on the page is tightened to flush before every `ANALYZE`, not only before
+  `VACUUM`.
+- Page edits: the new prompt and its note in `## Question`, an eleventh-follow-up bullet
+  in `### Verdict`, the recommended-statement section rewritten so the carve-out is the
+  statement's job rather than the reader's (blanket `NOT is_partial` dropped from the
+  alerting rule, two residual-error rows replaced and two added), the statement text
+  itself (two input columns, one caveat, one flag, one `WHERE` conjunct), the "Two
+  changes" section marked applied with the `> 0` correction recorded, seven new `###`
+  sections including a 74-row re-scored table, 8 new Contents entries, 2 Context Reviewed
+  bullets, 8 Evidence Map rows, 5 rewritten/new Open Questions, and 12 Source References.
+  All 239 page-internal anchors were checked to resolve.
+- Measured on one isolated 17.11 server built out of tree from the pin
+  `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192,
+  `autovacuum`/`fsync` off, `maintenance_work_mem` 256MB. Three estimator texts were
+  generated mechanically from the page's own Markdown — the amended text, the pre-change
+  text from `git show HEAD:`, and a `> 0` copy — with one new documented harness edit
+  (`AND NOT suppress_partial` removed, `suppress_partial` exposed) so a withheld index
+  can still be scored; `REINDEX INDEX` is ground truth. The 74 fixtures are a
+  **reconstruction** from the tenth follow-up's published shapes, because the original
+  harness was deleted with its sandbox: 61 of the 74 reproduce their filed live-block
+  count exactly and 13 differ (three of them because the reconstruction got the fixture
+  shape wrong), none changing a verdict class. The server was shut down cleanly and its
+  sandbox retained under `.wiki-runtime/tmp/partial17b/`.
+- Five open questions record the gaps: the reconstruction is not the same population,
+  the `is_partial` scoping is unmeasured, the borrowed trigger is not calibrated against
+  a predicate subset, the two new terms were never run on 12.2 or 14.23, and test 47
+  still has no detection signal.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
+  unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

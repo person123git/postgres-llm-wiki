@@ -14,6 +14,55 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-19: **applied changes A and B** to the recommended B-tree wasted-space
+  statement in [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL
+  17 (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) and
+  re-scored all 74 partial-index tests against the amended text, on unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The two changes are now a
+  `suppress_partial` flag in the `modelled` CTE and one `AND NOT suppress_partial`
+  conjunct in the `WHERE`, so a partial index missing an index-column statistics
+  row, one crediting duplicates from table statistics, or one whose table has
+  changed past its **auto-analyze trigger** returns no row at all. **The twelve
+  critical false positives become one.** Change A withholds 8 (tests 30, 32, 49, 50,
+  78, 79, 83, 85), change B withholds 3 more (64, 69, 84) plus the one plain false
+  positive (66), and only test 47 — a wide `INCLUDE` column reading 84.0% on a
+  787-block index a `REINDEX` reproduces block for block, with an empty `caveats`
+  string — survives, exactly as the tenth follow-up predicted from the recorded
+  caveat strings. No true detection is lost: tests 68, 74, 75 and 77 still report
+  75.0 / 74.3 / 89.1 / 94.2 against measured 74.9 / 74.3 / 89.1 / 94.2, and the 8
+  false negatives are unchanged. Change B's threshold is the trigger
+  `relation_needs_vacanalyze` uses — `autovacuum_analyze_threshold +
+  autovacuum_analyze_scale_factor * reltuples`, per-table reloption overrides
+  included and a negative `reltuples` clamped to zero, measured at 100,050 / 50,050
+  / 10,050 / 100 / 1,000,000 / 60 / 50 across seven fixtures — and not the
+  `n_mod_since_analyze > 0` first sketched: `> 0` scores these 74 tests identically
+  but withheld two genuinely 89.1%-reclaimable indexes on purpose-built calibration
+  fixtures, and a GUC-only threshold got both reloption fixtures backwards. The
+  exclusion carries `is_partial`, so 0 of 4 non-partial controls are touched, at the
+  stated price of a non-partial expression index with no statistics row reading 64.9%
+  unsuppressed on a freshly built 5201-block index. Whole-database effect on the
+  final state: 82 rows returned to 46, 8 readings above the 50% alert line to 2, and
+  9 of the pre-change top-20 triage rows withheld, 6 of them above 50%; cost is
+  inside the noise (33.4 / 38.0 / 32.8 ms as filed against 37.5 / 33.6 / 35.2 ms
+  amended, interleaved over 86 indexes), and no percentage moves because
+  `expected_blocks` and `floor_blocks` are untouched. One new hazard is measured:
+  without `pg_stat_force_next_flush()` before an `ANALYZE`, a same-session bulk load
+  leaves `n_mod_since_analyze` at the full 200,000 rows and `n_live_tup` at 400,000
+  for a 200,000-row table, which fires the new caveat spuriously in the safe
+  direction. Measured on one isolated 17.11 server built out of tree from the pin
+  `--with-icu --enable-debug`, `autovacuum`/`fsync` off, with three estimator texts
+  generated mechanically from the page's own Markdown (the amended text, the
+  pre-change text from `git show HEAD:`, and a `> 0` copy) and `REINDEX INDEX` as
+  ground truth; the 74 fixtures are a **reconstruction** from the tenth follow-up's
+  published shapes, since the original harness was deleted with its sandbox — 61 of
+  the 74 reproduce their filed live-block count exactly and 13 differ, three of those
+  because the reconstruction got the fixture shape wrong, none changing a verdict
+  class. Five open questions record the gaps, including that the reconstruction is
+  not the same population, that the `is_partial` scoping is a judgement rather than a
+  measurement, that the borrowed trigger is not calibrated against a subset, and that
+  the two new terms were never run on 12.2 or 14.23. The page remains
+  human-unverified and agent-unverified.
+
 - 2026-08-19: folded **74 partial-index mandatory tests** into the mandatory-tests
   section of [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), taking

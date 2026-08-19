@@ -90,6 +90,13 @@ verified_by_agent: not yet
   - [Three findings the partial-index run turned up in passing](#three-findings-the-partial-index-run-turned-up-in-passing)
   - [The partial-index harness, runnable](#the-partial-index-harness-runnable)
   - [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured)
+  - [Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)
+  - [The auto-analyze trigger, in catalog terms](#the-auto-analyze-trigger-in-catalog-terms)
+  - [Why the trigger rather than any change at all](#why-the-trigger-rather-than-any-change-at-all)
+  - [Why the exclusion carries is_partial](#why-the-exclusion-carries-is_partial)
+  - [What the exclusion costs, and what it does to the report](#what-the-exclusion-costs-and-what-it-does-to-the-report)
+  - [The re-scored suite, test by test](#the-re-scored-suite-test-by-test)
+  - [How the re-score was run](#how-the-re-score-was-run)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -521,6 +528,34 @@ represent the predicate-selected subset.
 > `wasted_space_pct` recorded beside it; and the estimator column named in the
 > critical-false-positive list is the one the pass/fail rule means by "Estimator".
 
+Follow-up: apply the two changes in "Two changes the partial-index tests justify"
+to the recommended statement, so that changes A and B filter out the affected
+indexes. The check for `THEN 'partial: table changed since the last ANALYZE'`
+should not be conditioned only on `WHEN m.is_partial AND m.tbl_mod_since_analyze
+> 0`; it should fire when `tbl_mod_since_analyze` is over the auto-analyze
+trigger.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "follow
+> agents.md, in postgresql 17 , for question:  Testing the PostgreSQL 12
+> Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) , apply changes "Two
+> changes the partial-index tests justify" by filter out indexes on the
+> recommended statement for change A and B. and the check for "THEN 'partial:
+> table changed since the last ANALYZE' " this should not be conditioned only on
+> " WHEN m.is_partial AND m.tbl_mod_since_analyze > 0"  it should be if the
+> tbl_mod_since_analyze is over the auto-analyze trigger.", per the repository's
+> prompt-hygiene rule. The quoted `m.` qualifiers are the asker's; the change-B
+> sketch as filed in [Two changes the partial-index tests
+> justify](#two-changes-the-partial-index-tests-justify) carries no table alias.
+> The asker confirmed four scoping decisions: "filter out" means a hard `WHERE`
+> exclusion, so a suppressed index returns no row at all rather than a row with a
+> warning column; the trigger is computed from `autovacuum_analyze_threshold` and
+> `autovacuum_analyze_scale_factor` **with per-table reloption overrides**, the
+> way `relation_needs_vacanalyze` computes it, rather than from the GUCs alone;
+> the whole 74-fixture partial-index suite is rebuilt and re-scored against the
+> amended text rather than argued arithmetically; and `autovacuum = off` does not
+> suppress the caveat, because a table autovacuum will never analyze is more
+> likely to carry stale statistics, not less.
+
 ## Answer
 
 ### Verdict
@@ -552,11 +587,13 @@ A ninth follow-up folds [change 6](#change-6-name-the-support-function-do-not-ju
 
 A tenth follow-up adds 74 partial-index tests to the mandatory suite, and **the recommended statement fails the primary requirement they set**: 12 freshly built or freshly grown partial indexes with nothing to reclaim report `wasted_space_pct_floor` between 84.0% and 99.6%, and not one of them is suppressed by the filed alerting rule. The cause is one structural fact, not an arithmetic error: `ANALYZE` gives a partial index statistics of its own **only when it is an expression index** ([analyze.c:448-478](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478), [analyze.c:861-863](../../../../raw/postgres-17/src/backend/commands/analyze.c#L861-L863)), so a partial index on a plain column is priced with whole-table `avg_width`, `null_frac` and `n_distinct`. Rebuilding each predicate subset as its own table and pointing the same statement at it makes the model exact on 7 of 7 fixtures, which locates the defect entirely in the statistics input. See [The seventy-four partial-index tests, and the verdict on each](#the-seventy-four-partial-index-tests-and-the-verdict-on-each).
 
+An eleventh follow-up applies both of those changes to the statement as a hard `WHERE` exclusion and re-runs all 74 partial-index tests against the amended text on a fresh 17.11 server. **The twelve critical false positives become one**: change A's two existing caveats remove 8 of them, change B's new staleness caveat removes 3 more, and only test 47 — the wide `INCLUDE` column, which produces no caveat at all — survives. No true detection is lost: all four genuinely reclaimable partial indexes reading above 50% still report (75.0% against a measured 74.9%, 74.3/74.3, 89.1/89.1, 94.2/94.2). Change B's threshold is the auto-analyze trigger rather than "any change at all", because `n_mod_since_analyze > 0` also suppressed two genuinely 89.1%-reclaimable indexes that the trigger form keeps. See [Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored).
+
 ### The current recommended statement
 
-**Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed — but do not act on its reading for a partial index.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen deduplication-gate tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
+**Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen deduplication-gate tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
 
-**The partial-index carve-out is not a caveat, it is an exclusion.** Over the 74 partial-index tests added by the tenth follow-up, this statement produces 12 critical false positives on indexes with nothing to reclaim, the worst reading 99.6% on an index a `REINDEX` reproduces byte for byte, and the filed alerting rule suppresses none of them ([The twelve critical false positives](#the-twelve-critical-false-positives)). Until the two changes in [Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify) are applied, filter partial indexes out of any alert built on this statement — `x.indpred IS NULL`, or equivalently `NOT is_partial` — and size them with [Method C](#method-c-unchanged-answer-different-write-path) instead. On non-partial indexes nothing about this recommendation changes.
+**The partial-index carve-out is now inside the statement, not in the reader's head.** The tenth follow-up measured 12 critical false positives over 74 partial-index fixtures — the worst reading 99.6% on an index a `REINDEX` reproduces block for block — and the alerting rule of the day suppressed none of them ([The twelve critical false positives](#the-twelve-critical-false-positives)). The eleventh follow-up applied the two changes those tests justified as one `suppress_partial` flag in `modelled` and one `AND NOT suppress_partial` in the `WHERE`, so a partial index whose reading rests on statistics that do not describe its predicate subset **returns no row at all**. Re-measured over the same 74 requirements: 12 critical false positives become 1, and the four true detections above 50% all survive ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)). The one survivor is test 47, a wide `INCLUDE` column reading 84.0% on a fresh index; size any partial index that the statement does report, and any partial index it silences, with [Method C](#method-c-unchanged-answer-different-write-path) before acting on a rebuild. On non-partial indexes nothing about this recommendation changes, and the exclusion cannot touch them: it carries `is_partial` as a conjunct, measured as 0 of 4 non-partial controls suppressed ([Why the exclusion carries is_partial](#why-the-exclusion-carries-is_partial)).
 
 This section is the page's single pointer to that answer, and it is meant to be kept current. The rest of the page is in filing order, so the statement a reader meets first is not the one to run; whichever statement currently wins on accuracy, fixes and version coverage is named here.
 
@@ -573,11 +610,11 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 | the same plus changes 1-5, the form this statement had before change 6 | key-group round-up, extended statistics, the invisible-statistics caveat, and the baseline framing | 5 over-credits, 0 under-credits; 3 fixtures above 30% on `wasted_space_pct`, 0 on the floor | 12.2, 14.23, 17.11 |
 | **[The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes) — recommended** | [change 6](#change-6-name-the-support-function-do-not-just-count-it): the `prosrc` whitelist in place of the existence test | **0 over-credits, 1 under-credit; 0 fixtures above 30% on either column** | 12.2, 14.23, 17.11 |
 
-- **Most accurate, on non-partial indexes.** Over-crediting is the dangerous direction, because it invents reclaimable space on a healthy index, and the recommended text is the only variant with none over the deduplication-gate fixtures: the worst over-credit of the pre-change-6 form reports 78.1% waste on a 1931-block index a rebuild would reproduce block for block, and change 6 removes all five ([The seventeen deduplication-gate tests, and the verdict on each](#the-seventeen-deduplication-gate-tests-and-the-verdict-on-each), [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)). Over the partial-index fixtures it over-credits 13 times; that population is excluded above. The five changes supply the rest: `i_q1000` moves from `+5.5%` to `−0.3%`, `i_ext` and `i_sup` from `−206.4%` to `+0.1%`, and the genuinely 49.8%-reclaimable `i_ext50` from an unalertable `−38.3%` to `+49.9%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)).
+- **Most accurate, on non-partial indexes.** Over-crediting is the dangerous direction, because it invents reclaimable space on a healthy index, and the recommended text is the only variant with none over the deduplication-gate fixtures: the worst over-credit of the pre-change-6 form reports 78.1% waste on a 1931-block index a rebuild would reproduce block for block, and change 6 removes all five ([The seventeen deduplication-gate tests, and the verdict on each](#the-seventeen-deduplication-gate-tests-and-the-verdict-on-each), [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)). Over the partial-index fixtures the pre-change text over-credits 13 times; changes A and B drop 12 of those 13 rows from the output, leaving test 47 ([The re-scored suite, test by test](#the-re-scored-suite-test-by-test)). The five changes supply the rest: `i_q1000` moves from `+5.5%` to `−0.3%`, `i_ext` and `i_sup` from `−206.4%` to `+0.1%`, and the genuinely 49.8%-reclaimable `i_ext50` from an unalertable `−38.3%` to `+49.9%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)).
 - **Most fixes.** Six numbered changes on top of the portable statement's own gate conjuncts and both reporting corrections, and the gate it ends with is the catalog form of what the engine actually does: `_bt_allequalimage` looks the support function up **and calls it**, so a registered function that returns false is the same outcome as no function at all ([nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [nbtutils.c:5156-5169](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5156-L5169)); a fresh build recomputes that answer from the current opclasses ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563)) and `_bt_load` deduplicates only when it, non-uniqueness and the reloption all agree ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152)); the documentation states the same rule from the operator-class side ([btree.sgml#equalimage](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L499-L509)); and `prosrc`, not `proname`, is the identity the engine resolves for a `LANGUAGE internal` function ([fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178)).
 - **Most compatible.** It runs unchanged on 12 through 17, and change 6 adds no construct that 12 lacks: `pg_language.lanname` and `pg_proc.prosrc` both exist on 12.2, where the gate cannot open anyway because no B-tree opfamily has an `amprocnum = 4` row ([The deduplication-gate tests on a 12.2 server](#the-deduplication-gate-tests-on-a-122-server), [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)). Measured coverage for this exact text is 12.2, 14.23 and 17.11 ([How the same statement behaves on 12.2, 14.23 and 17.11](#how-the-same-statement-behaves-on-122-1423-and-1711)); majors 13, 15 and 16 have no checkout in this repo and were never run.
 
-**What it costs, and in which direction.** Seven residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — one is the honest false positive a random-insertion index produces, and the last two are the partial-index families that make the exclusion above necessary:
+**What it costs, and in which direction.** Nine residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — one is the honest false positive a random-insertion index produces, two are the partial-index families the exclusion now removes from the output rather than repairs, and the last two are the two false positives that survive it:
 
 | Residual error | Measured | Direction |
 |---|---|---|
@@ -586,10 +623,12 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 | change 2 on independent columns | `i_ind2` moves from `−2.0%` to `−88.3%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)) | over-prediction |
 | change 6 cannot call a custom support function, so it answers FALSE | `i_ei_true` reads `−226.4%`; registering a **non-internal** working `FUNCTION 4` on an opclass that had none makes a rebuild reclaim a true 69.4% that this gate reports as 0.1% ([What change 6 costs](#what-change-6-costs)) | one under-credit, i.e. a missed rebuild win, on custom operator classes only |
 | a randomly inserted, never-deleted index | `27.1%` on both columns with the model exact to the block ([Change 4](#change-4-a-randomly-inserted-never-deleted-index)) | false positive that no gate or caveat catches |
-| a partial index whose subset's value width or NULL fraction differs from the table's | `87.6%`, `90.1%`, `84.0%`, `92.1%`, `91.2%` and `94.0%` on the floor, on six fresh indexes with 0% reclaimable ([The twelve critical false positives](#the-twelve-critical-false-positives)) | critical false positive; not repairable by `ANALYZE`, and not repairable in core SQL at all |
-| a partial index whose `reltuples` predates a bulk insert into its subset | `93.5%`, `99.5%` and `99.6%` on the floor, with **no caveat and `status = ok`** ([The twelve critical false positives](#the-twelve-critical-false-positives)) | critical false positive; one `ANALYZE` removes it |
+| a partial index whose subset's value width or NULL fraction differs from the table's | `87.6%`, `90.1%`, `89.2%`, `91.7%` and `94.3%` on the floor, on five fresh indexes with 0% reclaimable (tests 30, 32, 78, 79, 85) — **all five now excluded** by change A ([The re-scored suite, test by test](#the-re-scored-suite-test-by-test)) | was a critical false positive; the row no longer appears |
+| a partial index whose `reltuples` predates a bulk insert into its subset | `93.5%`, `99.5%` and `99.6%` on the floor, with no caveat at all under the pre-change text (tests 64, 69, 84) — **all three now excluded** by change B | was a critical false positive; the row no longer appears |
+| a partial index with a wide `INCLUDE` column | `84.0%` on the floor on a fresh 787-block index, with an empty `caveats` string and `status = ok` (test 47) | **critical false positive, still unsuppressed**: no caveat and no catalog signal reveal it |
+| a **non-partial** expression index with no statistics row | `64.9%` on the floor on a freshly built 5201-block index, `66.4%` once its table has grown (control `np97`) | false positive the exclusion deliberately does not catch, because it carries `is_partial` |
 
-**How to read the output.** Alert on `wasted_space_pct_floor`, not on the point estimate, and only when `status` is `ok`, the index is **not partial**, and `caveats` holds none of `never analyzed`, `row-count sources disagree: analyze first` or `statistics not visible to this role`; read `wasted_space_pct` and `wasted_space` for sizing only, and treat a wide gap between the two percentages as "this answer rests on a duplication estimate" ([Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate), [Change 5](#change-5-what-the-baseline-is-and-what-a-reading-means)). The `is_partial` term is the tenth follow-up's addition, and it is the whole of the partial-index exclusion: over 74 partial fixtures the rule as filed fires on 13 healthy indexes and adding that one term removes all 13 while costing 5 true detections that Method C can confirm cheaply ([Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify)). The statement sets `statement_timeout = '30s'` and `lock_timeout = '2s'` itself; both are `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)), so they apply at session/transaction scope and need no reload or restart. The gate costs no measurable time: over 28 indexes and 34,164 blocks, interleaved, the two texts cross — 12.9 and 12.0 ms with change 6 against 14.3 and 16.0 ms without it, after a 32 ms cold first run — because the two added joins are on syscache-backed `pg_proc` and `pg_language` ([What change 6 costs](#what-change-6-costs)). The five earlier changes are not free: they add roughly 5 ms, about 30%, over the portable statement on a 46-index database ([The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes)).
+**How to read the output.** Alert on `wasted_space_pct_floor`, not on the point estimate, and only when `status` is `ok` and `caveats` holds none of `never analyzed`, `row-count sources disagree: analyze first` or `statistics not visible to this role`; read `wasted_space_pct` and `wasted_space` for sizing only, and treat a wide gap between the two percentages as "this answer rests on a duplication estimate" ([Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate), [Change 5](#change-5-what-the-baseline-is-and-what-a-reading-means)). The rule no longer carries a `NOT is_partial` term, because the statement itself drops the partial indexes that term existed to hide: a partial index missing an index-column statistics row, one whose duplicate count comes from table statistics, or one whose table has changed past its auto-analyze trigger is filtered out in the `WHERE` clause and never reaches the reader ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)). Two consequences are worth planning for: a partial index can disappear from the report entirely, and the fix is an `ANALYZE` on its table, not a change to the query — measured as tests 49 and 50 returning to `−3.0%` and `−0.4%` and losing their exclusion after one `ANALYZE`; and the rows that vanish free up slots under the `LIMIT 20`, measured as 9 of the pre-change top-20 triage rows suppressed, 6 of them reading above 50%. The statement sets `statement_timeout = '30s'` and `lock_timeout = '2s'` itself; both are `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)), so they apply at session/transaction scope and need no reload or restart. The gate costs no measurable time: over 28 indexes and 34,164 blocks, interleaved, the two texts cross — 12.9 and 12.0 ms with change 6 against 14.3 and 16.0 ms without it, after a 32 ms cold first run — because the two added joins are on syscache-backed `pg_proc` and `pg_language` ([What change 6 costs](#what-change-6-costs)). The five earlier changes are not free: they add roughly 5 ms, about 30%, over the portable statement on a 46-index database ([The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes)).
 
 **Before adopting the gate change on an existing database**, run the zero-fixture audit query in [The harness, runnable](#the-harness-runnable). It lists exactly the indexes whose reading depends on the swap, and it returned 6 rows in the custom-opclass fixture database against 0 on a stock 17.11 database and 0 on 12.2, because every stock B-tree equal-image row names `btequalimage` or `btvarstrequalimage` and both are `LANGUAGE internal` in `pg_catalog` ([pg_amproc.dat:143](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L143), [pg_amproc.dat:206](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L206), [pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241)).
 
@@ -1981,6 +2020,8 @@ The 27.1% the rebuild reclaimed at 1.0M rows was 11.5% gone again after 50% more
 
 Three CTEs are new (`keyatts` and `extstat` for change 2, `statvis` for change 3), `classfit`/`classpages` carry change 1, `idx` gains `t.relrowsecurity`, `cols` gains two booleans, `key_groups` gains its extended-statistics branch, the `all_equalimage` subquery carries [change 6](#change-6-name-the-support-function-do-not-just-count-it), and the final `SELECT` gains two caveat strings. Nothing else moved: the collation conjunct, `dedup_applies`, both models, `status`, the two percentage columns, the signed `wasted_space`, the `ORDER BY` and the tag are as filed.
 
+The eleventh follow-up adds four things to that text and nothing else: two input columns in `idx` (`tbl_mod_since_analyze`, and the auto-analyze trigger computed from the GUCs and the table's own reloptions), the `partial: table changed since the last ANALYZE` caveat, the `suppress_partial` flag in `modelled`, and `AND NOT suppress_partial` in the final `WHERE`. No arithmetic moved — `expected_blocks` and `floor_blocks` are untouched, so every percentage in every table below still reads exactly as it did ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)).
+
 This is the statement [The current recommended statement](#the-current-recommended-statement) names, and it is the text scored in every table below; the five-change form it replaced differs from it in exactly the ten lines of the gate.
 
 ```sql
@@ -2003,6 +2044,20 @@ idx AS (
            c.reltuples::numeric                         AS idx_reltuples,
            coalesce(s.n_live_tup, 0)::numeric           AS tbl_live_tup,
            coalesce(s.n_dead_tup, 0)::numeric           AS tbl_dead_tup,
+           coalesce(s.n_mod_since_analyze, 0)::numeric  AS tbl_mod_since_analyze,
+           -- the auto-analyze trigger, in catalog terms:
+           --   anl_base_thresh + anl_scale_factor * reltuples
+           -- with a per-table reloption overriding either GUC, and a negative
+           -- reltuples read as zero, exactly as relation_needs_vacanalyze does
+           (coalesce((SELECT option_value::int FROM pg_options_to_table(t.reloptions)
+                       WHERE option_name = 'autovacuum_analyze_threshold'
+                         AND option_value::int >= 0),
+                     current_setting('autovacuum_analyze_threshold')::int)
+            + coalesce((SELECT option_value::float8 FROM pg_options_to_table(t.reloptions)
+                         WHERE option_name = 'autovacuum_analyze_scale_factor'
+                           AND option_value::float8 >= 0),
+                       current_setting('autovacuum_analyze_scale_factor')::float8)
+              * greatest(t.reltuples, 0))::numeric       AS tbl_autoanalyze_threshold,
            greatest(s.last_analyze, s.last_autoanalyze) AS last_analyze,
            -- rows to model: -1 is v14+ "unknown"; a 0 on a non-empty index
            -- whose table reports live rows is a pre-14 stale zero
@@ -2250,7 +2305,17 @@ modelled AS (
            (SELECT sum(v.pages) FROM levels v
              WHERE v.idxoid = l.idxoid AND v.variant = 'dedup') + 1 AS expected_blocks,
            (SELECT sum(v.pages) FROM levels v
-             WHERE v.idxoid = l.idxoid AND v.variant = 'floor') + 1 AS floor_blocks
+             WHERE v.idxoid = l.idxoid AND v.variant = 'floor') + 1 AS floor_blocks,
+           -- changes A and B: the three conditions under which a partial
+           -- index's reading rests on statistics that do not describe the
+           -- predicate subset.  One flag, so the caveat list below and the
+           -- WHERE clause cannot drift apart.
+           (l.is_partial
+            AND ((l.any_no_stats AND NOT l.any_stats_hidden
+                  AND l.last_analyze IS NOT NULL)
+              OR (l.dedup_applies AND l.tids > 1)
+              OR l.tbl_mod_since_analyze > l.tbl_autoanalyze_threshold))
+                                                        AS suppress_partial
       FROM leaves l
 )
 SELECT schemaname, tablename, indexname,
@@ -2280,6 +2345,9 @@ SELECT schemaname, tablename, indexname,
               THEN 'row-count sources disagree: analyze first' END,
          CASE WHEN is_partial AND (tbl_dead_tup > 0 OR last_analyze IS NULL)
               THEN 'partial: predicate subset may be stale' END,
+         CASE WHEN is_partial
+                   AND tbl_mod_since_analyze > tbl_autoanalyze_threshold
+              THEN 'partial: table changed since the last ANALYZE' END,
          CASE WHEN is_partial AND dedup_applies AND tids > 1
               THEN 'partial: duplicates from table statistics' END,
          CASE WHEN dedup_applies AND tids > 1 THEN 'deduplication credited' END,
@@ -2292,7 +2360,7 @@ SELECT schemaname, tablename, indexname,
        fsm_bytes > 0                                    AS fsm_written_since_build,
        server_version_num
   FROM modelled
- WHERE actual_bytes > 1024 * 1024
+ WHERE actual_bytes > 1024 * 1024 AND NOT suppress_partial
  ORDER BY (actual_bytes - floor_blocks * bs) DESC NULLS FIRST
  LIMIT 20;
 ```
@@ -3052,7 +3120,7 @@ That makes the five a hard boundary for a catalog-only method, and the honest re
 
 ### Two changes the partial-index tests justify
 
-Neither is applied to the filed statement, because both are answers to a brief this follow-up did not have; both are measured, and together they take the 12 critical false positives to 1.
+Both are now applied to the filed statement, as a hard `WHERE` exclusion, and the prediction below was confirmed by re-running the whole suite against the amended text — 8 from change A, 3 more from change B, test 47 left over ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)). What follows is the case as it was made from the tenth follow-up's recorded output, before either change was installed; one detail of change B did not survive contact with a server, and is corrected at the end of this section.
 
 **Change A — add two existing caveats to the alert-suppression set.** `no statistics row for an index column` and `partial: duplicates from table statistics` are already emitted; the alerting rule just does not consult them. Suppressing on both catches tests 30, 32, 49, 50, 78, 79, 83 and 85 — **8 of the 12** — and over all 74 partial fixtures it costs **zero** true detections, because every reading that is both above 50 on the floor and genuinely reclaimable (tests 68, 74, 75 and 77, plus the borderline 73) has an empty `caveats` string.
 
@@ -3065,11 +3133,13 @@ Neither is applied to the filed statement, because both are answers to a brief t
 | `mi3` | 399,000 inserted, then VACUUM, no ANALYZE | 1,000 | **399,000** | 99.5 | yes |
 | `mi4` | genuine 89% reclaimable, VACUUM + ANALYZE | 9,827 | **0** | 89.5 | no |
 
-The separation is total: 0 against 300,000 and 399,000, with both a healthy fresh index and a genuinely bloated one on the zero side. Adding `CASE WHEN is_partial AND tbl_mod_since_analyze > 0 THEN 'partial: table changed since the last ANALYZE' END` to the caveat list, and that string to the suppression set, catches tests 64, 69 and 84 — **3 more** — and leaves only test 47, the wide INCLUDE column, which no catalog signal reveals.
+The separation is total: 0 against 300,000 and 399,000, with both a healthy fresh index and a genuinely bloated one on the zero side. Adding a `partial: table changed since the last ANALYZE` caveat, and that string to the suppression set, catches tests 64, 69 and 84 — **3 more** — and leaves only test 47, the wide INCLUDE column, which no catalog signal reveals.
 
 Change B has one measured hazard, which is the same `pgstat` ordering behavior the harness hit: because `pgstat_report_analyze` zeroes `mod_since_analyze` absolutely ([pgstat_relation.c:331-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337)) while pending `changed_tuples` are added afterwards ([pgstat_relation.c:857-859](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L859)), a session that bulk-loads and then analyses in the same second can leave the counter non-zero — measured at 500,000 on a table whose `ANALYZE` had just completed. That direction is safe: it suppresses an alert that would have been correct, rather than raising one that is not.
 
-**What neither change does.** Neither improves a single number: `expected_blocks` and `floor_blocks` are untouched, so both are alert-routing changes on top of the same arithmetic. The eight false negatives are unaffected by both, and the five unrepairable false positives keep reporting 84-92% for any reader who looks at the percentage instead of the caveats.
+**The correction: the threshold is not zero.** This section originally proposed `is_partial AND tbl_mod_since_analyze > 0`, and that test is wrong in production even though it scores these 74 tests identically to the corrected one. `> 0` means "one changed row since the last `ANALYZE` silences every partial index on the table", which on a table taking writes is always true; on two purpose-built fixtures it silenced genuinely 89.1%-reclaimable partial indexes that the corrected form reports ([Why the trigger rather than any change at all](#why-the-trigger-rather-than-any-change-at-all)). The filed statement therefore compares the counter against the threshold autovacuum itself uses to decide a table needs analysing, reloption overrides included ([The auto-analyze trigger, in catalog terms](#the-auto-analyze-trigger-in-catalog-terms)).
+
+**What neither change does.** Neither improves a single number: `expected_blocks` and `floor_blocks` are untouched, so both are alert-routing changes on top of the same arithmetic. The eight false negatives are unaffected by both, and a reader who pulls the percentage out of a monitoring table instead of taking the statement's own output still sees 84-94% on the rows the statement now withholds.
 
 ### Three findings the partial-index run turned up in passing
 
@@ -3136,7 +3206,7 @@ CALL score(32, 'extreme width mismatch, 27 against 401 bytes', 'p32',
            'SELECT count(*) FROM pw32 WHERE hot');
 ```
 
-Two harness rules that the measurements above depend on. Any fixture that runs `VACUUM` or `ANALYZE` after its DML must call `pg_stat_force_next_flush()` **before** the `VACUUM`, or the pending delta re-inflates `n_dead_tup` and raises a caveat that is not real. And `WITH (fillfactor = ...)` precedes `WHERE` in `CREATE INDEX`, so tests 54 and 55 are `CREATE INDEX p54 ON pf (k) WITH (fillfactor = 100) WHERE hot`.
+Two harness rules that the measurements above depend on. Any fixture that runs `VACUUM` or `ANALYZE` after its DML must call `pg_stat_force_next_flush()` **before** the `VACUUM`, or the pending delta re-inflates `n_dead_tup` and raises a caveat that is not real. The rule got stricter once change B was in the statement: the flush must precede every `ANALYZE` too, because the same ordering leaves `n_mod_since_analyze` at the full load — measured at 200,000 on a freshly analysed 200,000-row table, against 0 with the flush ([Why the trigger rather than any change at all](#why-the-trigger-rather-than-any-change-at-all)). And `WITH (fillfactor = ...)` precedes `WHERE` in `CREATE INDEX`, so tests 54 and 55 are `CREATE INDEX p54 ON pf (k) WITH (fillfactor = 100) WHERE hot`.
 
 Scoring is one query over `res`:
 
@@ -3182,6 +3252,191 @@ What the re-run confirmed, and what it moved:
 
 The one number that mattered operationally is still the same: over 28 fixtures with nothing to reclaim, the filed statement over-credits nothing, and its one under-credit is the custom-opclass case the mandatory list asks for.
 
+### Follow-up: changes A and B applied, and the suite re-scored
+
+**Both changes are in the statement, and the twelve critical false positives are now one.** The two changes [the partial-index tests justified](#two-changes-the-partial-index-tests-justify) are no longer advice for the reader; they are a `suppress_partial` flag in `modelled` and one `AND NOT suppress_partial` conjunct in the final `WHERE`, so an untrustworthy partial-index reading is not annotated, it is **withheld**. All 74 partial-index requirements were rebuilt on a fresh 17.11 server and scored against both texts in the same transaction, index by index:
+
+| Verdict on `wasted_space_pct_floor` | Text as filed before this change | With changes A and B |
+|---|---|---|
+| PASS | 53 | 65 — 34 reported, **31 withheld** |
+| CRITICAL FALSE POSITIVE | **12** (30, 32, 47, 49, 50, 64, 69, 78, 79, 83, 84, 85) | **1** (47) |
+| FALSE POSITIVE | 1 (66) | **0** |
+| FALSE NEGATIVE | 8 (65, 67, 86-91) | 8 — 4 reported (86, 88, 89, 91), 4 withheld (65, 67, 87, 90) |
+
+The split between the two changes is exactly what the tenth follow-up predicted from the recorded caveat strings, test for test:
+
+| Withheld by | Tests | Caveat that does it |
+|---|---|---|
+| change A | 30, 32, 78, 79, 85 | `partial: duplicates from table statistics` |
+| change A | 49, 50, 83 | `no statistics row for an index column` |
+| change B | 64, 69, 84, and 85 again | `partial: table changed since the last ANALYZE` |
+| neither | **47** | none — empty `caveats`, `status = ok` |
+
+Test 66, the one plain false positive (79.9% against a measured 39.9% reclaim), is withheld by change B as well, which the prediction did not claim. Test 47 is the wide `INCLUDE` column: `keys_only` is false so the deduplication gate never opens, no statistics row is missing, and the index is mispriced only because the `INCLUDE` column's table-wide `avg_width` is 13 against the subset's 204 — 84.0% on a 787-block index a `REINDEX` reproduces block for block.
+
+**No true detection was lost.** Every genuinely reclaimable partial index that reads above 50% on the floor still reports, and reports accurately:
+
+| Test | Fixture | live -> rebuilt | actual | floor | Reported? |
+|---|---|---|---|---|---|
+| 68 | `p68` | 1099 -> 276 | 74.9 | 75.0 | yes |
+| 74 | `p74` | 276 -> 71 | 74.3 | 74.3 | yes |
+| 75 | `p75` | 276 -> 30 | 89.1 | 89.1 | yes |
+| 77 | `p77` | 276 -> 16 | 94.2 | 94.2 | yes |
+
+The four false negatives that changes A and B additionally withhold — 65, 67, 87, 90 — were already missed by the arithmetic before the exclusion existed: they read 0.0, 0.0, 16.1 and 18.4 against measured reclaims of 89.1, 89.1, 73.6 and 73.6. Withholding a row that was going to be read as "nothing to do" costs nothing; it is the same missed rebuild either way.
+
+### The auto-analyze trigger, in catalog terms
+
+Change B compares `pg_stat_all_tables.n_mod_since_analyze` ([system_views.sql:689](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L689)) against the threshold the autovacuum launcher itself uses. `relation_needs_vacanalyze` computes `anlthresh = anl_base_thresh + anl_scale_factor * reltuples` and analyses when `mod_since_analyze` exceeds it ([autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3096)), reading the counter straight out of the table's pgstat entry ([autovacuum.c:3068](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3068)) and clamping a negative `reltuples` to zero first ([autovacuum.c:3070-3072](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3070-L3072)). Each of the two constants comes from the table's own reloption when it is set and from the GUC otherwise ([autovacuum.c:3011-3017](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3011-L3017)); the two reloptions are heap-only, default `-1` for "unset", and land in `StdRdOptions.autovacuum` ([reloptions.c:243-251](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L243-L251), [reloptions.c:417-425](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L417-L425), [reloptions.c:1857-1858](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L1857-L1858), [reloptions.c:1883-1884](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L1883-L1884)). The two GUCs default to 50 and 0.1 and are `PGC_SIGHUP` ([guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3368-L3375), [guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3906-L3914)), so changing either needs a **reload**, not a restart, and the statement reads whatever value the current session sees through `current_setting`.
+
+Trigger values the statement computed, measured on the run's own fixtures:
+
+| Table | `reltuples` | reloptions | trigger | `n_mod_since_analyze` | Caveat fires? |
+|---|---|---|---|---|---|
+| `pt1` | 1,000,000 | none | **100,050** | 0 | no |
+| `pb` | 500,000 | none | **50,050** | 0 | no |
+| `ps64` | 100,000 | none | **10,050** | 300,000 | yes |
+| `mb3` | 500,000 | `analyze_threshold = 100, scale_factor = 0` | **100** | 1,000 | yes |
+| `mb4` | 500,000 | `analyze_threshold = 1000000, scale_factor = 0` | **1,000,000** | 100,000 | no |
+| `hz3` | 100 | none | **60** | 100 | yes |
+| `hz3` after `TRUNCATE` | **−1** | none | **50** | 160 | yes |
+
+The last row is the `reltuples < 0` clamp: `TRUNCATE` leaves `pg_class.reltuples` at `-1`, `greatest(t.reltuples, 0)` reads that as zero, and the trigger falls back to the base threshold alone — the same arithmetic `relation_needs_vacanalyze` performs. Two deliberate non-inputs: the caveat does **not** consult `autovacuum` or the table's `autovacuum_enabled`, because a table autovacuum will never analyze is more likely to hold stale statistics, not less; and it does not consult `last_autoanalyze`, because `n_mod_since_analyze` is already relative to the last analyze of either kind.
+
+### Why the trigger rather than any change at all
+
+The `> 0` form scores these 74 tests **identically** — the fixtures are analysed immediately before their index is built, so their counter is 0 — and is still the wrong test. On four purpose-built fixtures, each a genuinely 89.1%-reclaimable partial index that has been `VACUUM`ed and `ANALYZE`d and then disturbed by a known number of row changes:
+
+| Fixture | Disturbance | trigger | `n_mod_since_analyze` | floor | `> 0` form | trigger form |
+|---|---|---|---|---|---|---|
+| `b92` | 1,000 rows updated | 41,050 | 1,000 | 89.5 | **withheld** | reported |
+| `b93` | 100,000 rows updated | 41,050 | 100,000 | 89.5 | withheld | withheld |
+| `b94` | 1,000 rows updated, trigger lowered to 100 by reloption | 100 | 1,000 | 89.9 | withheld | **withheld** |
+| `b95` | 100,000 rows updated, trigger raised to 1,000,000 by reloption | 1,000,000 | 100,000 | 89.1 | **withheld** | reported |
+
+`b92` and `b95` are the cost of `> 0`: a real 89.1% rebuild win, correctly estimated, silenced because something changed. `b94` and `b95` are the cost of ignoring reloptions: a GUC-only threshold would have got both backwards, since the table's own policy is what says whether 1,000 or 100,000 changes make its statistics stale. Over all 78 partial indexes in the final database the two forms differ on exactly these two, 36 withheld against 38.
+
+One hazard is worth stating because the harness hit it first: `pgstat_report_analyze` writes `mod_since_analyze` absolutely ([pgstat_relation.c:326-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L326-L337)) while a backend's pending `changed_tuples` are added afterwards ([pgstat_relation.c:847-867](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L847-L867)), so a session that bulk-loads and then analyses without flushing in between leaves the counter at the full load. Measured on two identical 200,000-row tables: without `pg_stat_force_next_flush()` before the `ANALYZE`, `n_mod_since_analyze` read **200,000** and `n_live_tup` **400,000**; with it, **0** and **200,000**. Every fixture in this follow-up flushes before every `ANALYZE` and `VACUUM` for that reason, and a production reader should know that the caveat can fire for a few seconds after a load-then-analyze script finishes. The direction is safe — it withholds a reading rather than inventing one.
+
+### Why the exclusion carries is_partial
+
+Change A's first caveat, `no statistics row for an index column`, is not partial-specific: a non-partial expression index that has not been analysed since it was built raises it too. The exclusion is scoped to partial indexes all the same, because every measurement behind change A is a partial fixture and because the recommendation's promise — that nothing changes for non-partial indexes — should be true by construction rather than by hope. Measured with four non-partial controls in the same database:
+
+| Control | Shape | floor | `caveats` | Withheld? |
+|---|---|---|---|---|
+| `np96` | plain index, fresh statistics | 0.0 | *(empty)* | no |
+| `np97` | expression index, no statistics row | **64.9** | `no statistics row for an index column` | **no** |
+| `np96` after 300,000 inserts | plain index, stale row counts | 49.9 | `row-count sources disagree: analyze first` | no |
+| `np99` | duplicate-heavy index, genuinely 94.2% reclaimable | 83.3 | `deduplication credited` | no |
+
+`np97` is the price of that choice, stated plainly: a freshly built non-partial expression index reads 64.9% waste on 5201 blocks that a `REINDEX` reproduces exactly, and 66.4% at 5437 blocks once its table has grown, and neither the exclusion nor the alerting rule catches it. Widening the exclusion to any index carrying that caveat would remove it, at the cost of hiding non-partial rows that this page has never measured; the trade is recorded in [Open Questions](#open-questions) rather than taken silently.
+
+### What the exclusion costs, and what it does to the report
+
+Silence is a cost, and it is a large one: of the 74 test indexes, **35 are withheld** — 31 whose readings should not be acted on, and 4 that were already false negatives. That is the honest comparison, though, only against the arithmetic; against the recommendation this replaces it is a strict improvement, because [the previous rule](#the-current-recommended-statement) told readers to filter out **all** partial indexes, which would have withheld all 74 including the four true detections above.
+
+What it does to the output, measured on the final state of the fixture database, in which the harness has just rebuilt all 86 indexes so that every true reclaim is 0%:
+
+| Measurement | Text as filed before this change | With changes A and B |
+|---|---|---|
+| rows returned, whole database | 82 | **46** |
+| rows over the 50% alert line | 8 (7 partial) | **2** — `p47` at 84.0 and the non-partial `np97` at 66.4 |
+| indexes over the 1 MB triage filter | 41 | 28 |
+| of the pre-change top-20 triage list | — | 9 rows withheld, **6** of them reading above 50% |
+
+Cost in time is inside the noise. Three interleaved pairs of runs of the two exact statement texts over the 86-index database: 33.4 / 38.0 / 32.8 ms as filed against 37.5 / 33.6 / 35.2 ms with both changes. Neither change adds a CTE or a join — `n_mod_since_analyze` comes from the `pg_stat_all_tables` row the statement already joins, and the two reloption lookups are `pg_options_to_table` subqueries on the `pg_class` row it already reads.
+
+### The re-scored suite, test by test
+
+Both texts were read for every index in the same procedure call, before the `REINDEX` that measures it, so the two columns differ only in the statement text. `actual` is `actual_reclaim_pct` from the measured `REINDEX`; `floor` is `wasted_space_pct_floor`, identical in both texts because no arithmetic changed; "out" means the amended text returned no row for that index.
+
+| # | Fixture | live -> rebuilt | actual | floor | Amended | Verdict |
+|---|---|---|---|---|---|---|
+| 18 | `p18` | 551 -> 551 | 0.0 | 0.0 | reported | PASS |
+| 19 | `p19` | 30 -> 30 | 0.0 | 0.0 | reported | PASS |
+| 20 | `p20` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 21 | `p21` | 2196 -> 2196 | 0.0 | 0.0 | reported | PASS |
+| 22 | `p22` | 87 -> 87 | 0.0 | −217.2 | reported | PASS |
+| 23 | `p23` | 71 -> 71 | 0.0 | 0.0 | out | PASS |
+| 24 | `p24` | 346 -> 346 | 0.0 | 0.0 | out | PASS |
+| 25 | `p25` | 5 -> 5 | 0.0 | 0.0 | out | PASS |
+| 26 | `p26` | 16 -> 16 | 0.0 | 0.0 | out | PASS |
+| 27 | `p27` | 105 -> 105 | 0.0 | −162.9 | out | PASS |
+| 28 | `p28` | 71 -> 71 | 0.0 | 0.0 | out | PASS |
+| 29 | `p29` | 108 -> 108 | 0.0 | −220.4 | out | PASS |
+| 30 | `p30` | 792 -> 792 | 0.0 | **87.6** | **out** | was CRITICAL FALSE POSITIVE |
+| 31 | `p31` | 98 -> 98 | 0.0 | −659.2 | reported | PASS |
+| 32 | `p32` | 636 -> 636 | 0.0 | **90.1** | **out** | was CRITICAL FALSE POSITIVE |
+| 33 | `p33` | 3000 -> 3000 | 0.0 | 2.7 | reported | PASS |
+| 34 | `p34` | 87 -> 87 | 0.0 | −217.2 | out | PASS |
+| 35 | `p35` | 276 -> 276 | 0.0 | 0.0 | out | PASS |
+| 36 | `p36` | 87 -> 87 | 0.0 | −217.2 | out | PASS |
+| 37 | `p37` | 87 -> 87 | 0.0 | −217.2 | out | PASS |
+| 38 | `p38` | 278 -> 278 | 0.0 | 0.7 | reported | PASS |
+| 39 | `p39` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 40 | `p40` | 89 -> 89 | 0.0 | −336.0 | reported | PASS |
+| 41 | `p41` | 91 -> 91 | 0.0 | −326.4 | reported | PASS |
+| 42 | `p42` | 88 -> 88 | 0.0 | −340.9 | reported | PASS |
+| 43 | `p43` | 388 -> 388 | 0.0 | 0.0 | reported | PASS |
+| 44 | `p44a` | 89 -> 89 | 0.0 | −336.0 | reported | PASS |
+| 45 | `p45` | 98 -> 98 | 0.0 | 0.0 | out | PASS |
+| 46 | `p46` | 388 -> 388 | 0.0 | 0.0 | reported | PASS |
+| 47 | `p47` | 787 -> 787 | 0.0 | **84.0** | reported | **CRITICAL FALSE POSITIVE** |
+| 48 | `p48` | 88 -> 88 | 0.0 | −593.2 | out | PASS |
+| 49 | `p49` | 792 -> 792 | 0.0 | **80.4** | **out** | was CRITICAL FALSE POSITIVE |
+| 50 | `p50` | 1845 -> 1845 | 0.0 | **86.7** | **out** | was CRITICAL FALSE POSITIVE |
+| 51 | `p51` | 89 -> 89 | 0.0 | −336.0 | out | PASS |
+| 52 | `p52` | 389 -> 389 | 0.0 | 0.3 | reported | PASS |
+| 53 | `p53` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 54 | `p54` | 249 -> 249 | 0.0 | 0.4 | reported | PASS |
+| 55 | `p55` | 357 -> 357 | 0.0 | 0.0 | reported | PASS |
+| 56 | `p56` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 57 | `p57` | 346 -> 346 | 0.0 | 0.0 | reported | PASS |
+| 58 | `p58` | 219 -> 219 | 0.0 | 0.0 | reported | PASS |
+| 59 | `p59` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 60 | `p60` | 1099 -> 1099 | 0.0 | 0.0 | reported | PASS |
+| 61 | `p61` | 71 -> 71 | 0.0 | 0.0 | reported | PASS |
+| 62 | `p62` | 91 -> 91 | 0.0 | −203.3 | out | PASS |
+| 63 | `p63` | 91 -> 91 | 0.0 | −203.3 | out | PASS |
+| 64 | `p64` | 880 -> 881 | −0.1 | **93.5** | **out** | was CRITICAL FALSE POSITIVE |
+| 65 | `p65` | 276 -> 30 | 89.1 | 0.0 | out | FALSE NEGATIVE, withheld |
+| 66 | `p66` | 1373 -> 825 | 39.9 | **79.9** | **out** | was FALSE POSITIVE |
+| 67 | `p67` | 276 -> 30 | 89.1 | 0.0 | out | FALSE NEGATIVE, withheld |
+| 68 | `p68` | 1099 -> 276 | 74.9 | 75.0 | reported | PASS, true detection |
+| 69 | `p69` | 1099 -> 1099 | 0.0 | **99.5** | **out** | was CRITICAL FALSE POSITIVE |
+| 70 | `p70` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 71 | `p71` | 276 -> 276 | 0.0 | 0.0 | reported | PASS |
+| 72 | `p72` | 276 -> 207 | 25.0 | 24.6 | reported | PASS |
+| 73 | `p73` | 276 -> 139 | 49.6 | 48.9 | reported | PASS |
+| 74 | `p74` | 276 -> 71 | 74.3 | 74.3 | reported | PASS, true detection |
+| 75 | `p75` | 276 -> 30 | 89.1 | 89.1 | reported | PASS, true detection |
+| 76 | `p76` | 551 -> 276 | 49.9 | 49.9 | reported | PASS |
+| 77 | `p77` | 276 -> 16 | 94.2 | 94.2 | reported | PASS, true detection |
+| 78 | `f78` | 1560 -> 1560 | 0.0 | **89.2** | **out** | was CRITICAL FALSE POSITIVE |
+| 79 | `f79` | 605 -> 605 | 0.0 | **91.7** | **out** | was CRITICAL FALSE POSITIVE |
+| 80 | `f80` | 276 -> 276 | 0.0 | 0.0 | out | PASS |
+| 81 | `f81` | 87 -> 87 | 0.0 | −217.2 | out | PASS |
+| 82 | `f82` | 91 -> 91 | 0.0 | −326.4 | out | PASS |
+| 83 | `f83` | 3121 -> 3121 | 0.0 | **92.1** | **out** | was CRITICAL FALSE POSITIVE |
+| 84 | `f84` | 1363 -> 1363 | 0.0 | **99.6** | **out** | was CRITICAL FALSE POSITIVE |
+| 85 | `f85` | 4815 -> 4815 | 0.0 | **94.3** | **out** | was CRITICAL FALSE POSITIVE |
+| 86 | `f86` | 87 -> 23 | 73.6 | 20.7 | reported | FALSE NEGATIVE |
+| 87 | `f87` | 87 -> 23 | 73.6 | 16.1 | out | FALSE NEGATIVE, withheld |
+| 88 | `f88` | 388 -> 98 | 74.7 | −76.3 | reported | FALSE NEGATIVE |
+| 89 | `f89` | 89 -> 24 | 73.0 | −7.9 | reported | FALSE NEGATIVE |
+| 90 | `f90` | 87 -> 23 | 73.6 | 18.4 | out | FALSE NEGATIVE, withheld |
+| 91 | `f91` | 388 -> 22 | 94.3 | 16.0 | reported | FALSE NEGATIVE |
+
+The expression-index rows also confirm that the exclusion lifts by itself. Tests 49 and 50 are withheld while their expression index has no statistics of its own; one `ANALYZE` on the table gives it some, and the same index then reads **−3.0%** and **−0.4%** and is reported again. Test 48 is the reverse case and stays withheld after its `ANALYZE`, because its predicate-conditioned `n_distinct` of 20 makes the statement credit deduplication from table statistics — a caveat, not an error, with the floor at −334.1%.
+
+### How the re-score was run
+
+One isolated **17.11** server, built out of tree from this page's pin `786db8dcf168bd9df8f55047337525ac19118b1c` and configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`, in a scratch database of its own. `autovacuum = off` matters twice over: it keeps a background analyze from repairing a fixture mid-test, and it demonstrates that change B's trigger is computed from the GUC values whether or not the launcher is running.
+
+Three estimator texts were installed as views, all generated mechanically from Markdown by the same script: the amended text from this page, the pre-change text from `git show HEAD:` of the same file, and a copy of the amended text with `> tbl_autoanalyze_threshold` replaced by `> 0` to price the rejected form. The harness edits are the three this page already documents — the 1 MB triage filter, the `ORDER BY` and the `LIMIT 20` removed, internal columns exposed — plus one new one that the exclusion forces: `AND NOT suppress_partial` is dropped from the `WHERE` and `suppress_partial` is exposed as a column instead, so a withheld index can still be scored rather than raising "no row returned". The exact statement text, filter and `LIMIT` included, was also executed as filed to confirm it parses and runs.
+
+74 partial indexes over 58 tables carry the sixty requirements, the eight critical-false-positive constructions and the six critical-false-negative constructions; four more fixtures calibrate change B's threshold and four non-partial controls check that the exclusion cannot reach them. Every test runs the prescribed order through one procedure — count the true subset, record `pg_relation_size`, read all three estimators, `REINDEX INDEX`, record the size again — and `pg_stat_force_next_flush()` precedes every `ANALYZE` and `VACUUM`. The fixtures are a fresh reconstruction from the tenth follow-up's published requirements and block counts, not the original harness, which was deleted with its sandbox; where the reconstruction lands on a different fixture shape the numbers differ, and the deviations are listed in [Open Questions](#open-questions).
+
 ## Context Reviewed
 
 - Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number on this page is now a 17.11 observation taken on that pin; the original 17.10 run was superseded table by table by the re-run in [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured). The two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged, which the re-run confirms.
@@ -3204,6 +3459,8 @@ The one number that mattered operationally is still the same: over 28 fixtures w
 - Mandatory-tests follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, in a scratch database created for this run, plus the isolated 12.2 server from its own pin for test 17. Fixtures: `t`, 500,000 rows with 5,000 distinct keys over `int4`, `int8`, `text`, `numeric`, `float4`, `float8`, a unique `int4` and a 7-value `int4`, carrying 24 B-tree indexes that cover the seventeen requirements — two deterministic-collation text indexes (default and ICU `und`), one nondeterministic ICU index, four expression indexes chosen so the expression's type and collation differ from the underlying column's, an `INCLUDE` index, a `deduplicate_items = off` twin per key type, a unique index, and six custom-opclass indexes; and `t2`, the same shape on `(int4, int8)` with a `CREATE STATISTICS ... (ndistinct)` object so the mixed-key over-credit becomes visible as a percentage. Eight custom operator classes registered SQL, PL/pgSQL and `LANGUAGE internal` support functions returning true, false and NULL, plus one that raises. Ground truth per index is the build's own `DEBUG1` verdict, `bt_metap().allequalimage`, and `count(tids) > 0` over `bt_page_items(index, 1)`, with a `deduplicate_items = off` twin as the physical size baseline; `pageinspect` and `amcheck` were installed as ground truth only. Both statements on this page were installed as views generated mechanically from this page's own SQL text — the filed text and a copy with only the `all_equalimage` subquery replaced — with the 1 MB triage filter, `ORDER BY` and `LIMIT` removed and `dedup_applies`, `all_equalimage`, `slot`, `leaf_cap`, `expected_blocks` and `floor_blocks` exposed. Additional probes: `amvalidate` on every custom opclass, four rejected `ADD FUNCTION 4`/`CREATE INDEX` DDL shapes, `CREATE OR REPLACE FUNCTION pg_catalog.btequalimage`, a rename-and-squat of `pg_catalog.btvarstrequalimage`, a post-build support-function mutation followed by `bt_index_check` and `REINDEX`, the reverse mutation via `ALTER OPERATOR FAMILY ... ADD FUNCTION 4` followed by `REINDEX`, and a stock-database census of B-tree `amprocnum = 4` rows. Both servers were stopped afterwards, with the scratch databases dropped and `pg_catalog.btequalimage` restored to `LANGUAGE internal`.
 - Partial-index mandatory-tests follow-up, source coverage: how `ANALYZE` treats a partial index in `analyze.c` (`do_analyze_rel`'s per-index `AnlIndexData` setup and its `ii_Expressions != NIL` condition, the `tupleFract = 1.0` default, `compute_index_stats`'s "ignore index if no columns to analyze and not partial" skip, its `ExecPrepareQual`/`ExecQual` predicate filter and the `continue` that excludes non-matching sample rows, the `numindexrows`/`tupleFract`/`totalindexrows` derivation, the `compute_stats` call over the predicate-selected sample, and the per-index `vac_update_relstats` that writes only `relpages` and `reltuples`); index row-count writers in `index.c` (`index_update_stats`), `vacuumlazy.c` (`update_relstats_all_indexes` and its `istat == NULL || istat->estimated_count` skip, `lazy_cleanup_all_indexes`'s `estimated_count` computation, `lazy_vacuum_one_index`'s unconditional `ivinfo.estimated_count = true`) and `nbtree.c` (`btvacuumcleanup`'s `stats == NULL` branch, its `_bt_vacuum_needs_cleanup` early return, and the cleanup-only `stats->estimated_count = true`); statistics visibility in `system_views.sql` (`pg_stats` over `pg_statistic` joined to `pg_class`, so index rows appear, plus its `has_column_privilege`/RLS filter; `pg_stats_ext`'s `pg_has_role` filter; `pg_stat_all_tables`'s `n_mod_since_analyze`/`n_live_tup`/`n_dead_tup`); the cumulative-statistics write model in `pgstat_relation.c` (`pgstat_report_vacuum` and `pgstat_report_analyze` writing `live_tuples`/`dead_tuples`/`mod_since_analyze` absolutely under a lock, against `pgstat_relation_flush_cb` adding the backend's pending `delta_live_tuples`/`delta_dead_tuples`/`changed_tuples` on top and clamping at zero, plus `AtEOXact_PgStat`'s delta construction); index-tuple sizing in `indextuple.c` (`index_form_tuple_context`'s external-fetch branch and its in-line `toast_compress_datum` above the size target) with `heaptoast.h`'s `TOAST_INDEX_TARGET` definition and comment; leaf-split density in `nbtsplitloc.c` (`_bt_findsplitloc`'s header comment on the rightmost-page case, the `state.is_rightmost` branch that always applies `fillfactormult`, and `_bt_afternewitemoff`); and the deduplication surfaces the partial fixtures re-exercise in `nbtutils.c` (`_bt_allequalimage`'s INCLUDE early return, `_bt_keep_natts_fast`'s NULL equality) and `nbtsort.c` (`_bt_load`'s three-way condition).
 - Partial-index mandatory-tests follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, in its own scratch database. 74 partial B-tree indexes over 60 tables of 200,000 to 1,000,000 rows cover the sixty partial-index requirements, the eight critical-false-positive constructions and the six critical-false-negative constructions: four selectivity steps from 1% to 80%; duplicated, unique, skewed-`n_distinct`, MCV-mismatched, NULL-heavy, NULL-free, all-NULL, wider, narrower, extreme-width and variable-width subsets; six deduplication shapes including a single 100,000-TID key group, a NULL-only subset, a `deduplicate_items = off` twin and a partial unique index; eight multi-column, extended-statistics and `INCLUDE` shapes with and without `CREATE STATISTICS ... (ndistinct)`; three partial expression indexes read before and after the `ANALYZE` that first gives them statistics; two ICU collations, one deterministic and one not; three fillfactors; eight predicate shapes including `IS NULL`, `IS NOT NULL`, a timestamp range and a two-column predicate; six staleness and churn paths; eight physical-bloat fixtures from 25% to 95% deletion, indexed-key `UPDATE`s and a contiguous deletion that produces 259 deleted pages; and seven "probe" tables that materialise a predicate subset as its own table so the same statement can be pointed at correct statistics. Ground truth per index is a measured `REINDEX INDEX` (size before and after, from `pg_relation_size`), with `pgstattuple`, `pageinspect` and `amcheck` installed as ground truth only. The statement under test was generated mechanically from this page's own Markdown by heading, with the 1 MB triage filter, `ORDER BY` and `LIMIT` removed and `expected_blocks`, `floor_blocks`, `actual_bytes`, `dedup_applies`, `ext_used`, `is_partial`, `slot`, `leaf_cap` and `nmax` exposed, then installed as a view; one procedure performed every test's capture-then-`REINDEX` sequence so no step could be reordered. Additional probes: `pg_stats` row counts for plain-column against expression partial indexes, per-subset `avg(pg_column_size(...))` and NULL fractions against `pg_stats`, a re-read of all twelve failing indexes after one `ANALYZE`, an `n_mod_since_analyze` separation over four purpose-built indexes, and a compressible-versus-incompressible key pair either side of the 510-byte in-index compression threshold. The server was stopped afterwards.
+- Changes-A-and-B follow-up, source coverage: the auto-analyze decision in `autovacuum.c` (`relation_needs_vacanalyze`'s header comment on the analyze equation, the `anl_scale_factor`/`anl_base_thresh` reloption-or-GUC selection, `anltuples = tabentry->mod_since_analyze`, the `reltuples < 0` clamp, `anlthresh` and the `*doanalyze = (anltuples > anlthresh)` test, plus the `av_enabled` early return and `AutoVacuumingActive()` branch that the caveat deliberately ignores); the two reloptions in `reloptions.c` (`autovacuum_analyze_threshold` and `autovacuum_analyze_scale_factor` entries with their `-1` "unset" defaults and `RELOPT_KIND_HEAP` scope, and their `StdRdOptions.autovacuum` parse-table rows); the two GUCs in `guc_tables.c` (`autovacuum_analyze_threshold` 50 and `autovacuum_analyze_scale_factor` 0.1, both `PGC_SIGHUP`); the counter's exposure in `system_views.sql` (`pg_stat_all_tables.n_mod_since_analyze` over `pg_stat_get_mod_since_analyze`) with `pgstatfuncs.c` and `pgstat.h` (`PgStat_StatTabEntry.mod_since_analyze`) behind it; and the absolute-write-versus-pending-delta ordering in `pgstat_relation.c` (`pgstat_report_analyze`'s reset against `pgstat_relation_flush_cb`'s addition), re-read because change B's counter is the one that ordering distorts.
+- Changes-A-and-B follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/tmp/partial17b/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`, in a scratch database of its own. The 74 partial-index requirements were rebuilt from the tenth follow-up's published shapes and block counts as 74 partial B-tree indexes over 58 tables, joined by four change-B calibration fixtures (small and large disturbances, and a per-table reloption that lowers and raises the trigger) and four non-partial controls (plain, expression-without-statistics, stale-row-count, and genuinely reclaimable). Three estimator texts were installed as views by one script that extracts the SQL block from Markdown by heading: the amended text from this page, the pre-change text from `git show HEAD:` of the same file, and an amended copy with the trigger comparison replaced by `> 0`. Harness edits are the three already documented plus one new one — `AND NOT suppress_partial` removed from the `WHERE` and `suppress_partial` exposed as a column, so a withheld index can still be scored. Ground truth per index is a measured `REINDEX INDEX`; one procedure performs count, size, three estimator reads, `REINDEX` and size again, and `pg_stat_force_next_flush()` precedes every `ANALYZE` and `VACUUM`. Additional probes: the exact filed statement text executed with its triage filter and `LIMIT` intact, database-wide withheld counts for both threshold forms, top-20 triage-list overlap, three interleaved timing pairs, a flushed-versus-unflushed `ANALYZE` pair on identical 200,000-row tables, a never-analyzed table, and a `TRUNCATE`d table for the `reltuples = -1` clamp. The server was stopped afterwards.
 - Recommended-statement follow-up (no server run; it selects among statements already filed and measured above): re-read the equal-image decision in `nbtutils.c` (`_bt_allequalimage`'s lookup-then-call and its first-false `break`), `nbtsort.c` (`_bt_leafbuild`'s recomputed flag, `_bt_load`'s three-way `deduplicate` condition), function resolution in `fmgr.c` (`fmgr_info_cxt_security`'s built-in fast path and the `INTERNALlanguageId` branch that resolves by `prosrc`), the stock B-tree `amprocnum => '4'` rows in `pg_amproc.dat`, the operator-class rule in `btree.sgml`, and `guc_tables.c` for `statement_timeout` and `lock_timeout`; plus every statement variant, measurement table, caveat and open question already on this page, which is where the ranking's numbers come from.
 - Change-6-integration follow-up, exact-pin execution on four servers: the whole page was re-measured. One isolated **17.11** install built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, carrying four scratch databases — the 15 named fixtures plus the 9 x 3 x {full, partial} matrix and the duplication-ratio sweep for Methods A/A-prime/B/C/D; the twelve-issue-review fixture family with its nine-point duplication band, statistics-visibility `probe` role and `security_invoker` copies; the 28 mandatory-test fixtures with their eight custom operator classes; and a fresh database for the runnable harness — plus a second 17.11 cluster for the 12-through-17 fixture family, an isolated **14.23** server and an isolated **12.2** server carrying that same family, the mandatory-test subset and the portability probes. Every scored statement text was generated mechanically from this page's own Markdown by `mkviews.py`: the SQL block is extracted by heading, the triage filter, `ORDER BY` and `LIMIT` are stripped, `expected_blocks`, `floor_blocks`, `dedup_applies`, `all_equalimage`, `key_groups`, `tids_per_tuple`, `slot` and `leaf_cap` are exposed, and the result is installed as a view; the pre-change-6 text was produced from the same source by substituting the existence-test gate, and the earlier sweep's three-conjunct form the same way. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy plus, on 17.11, `pgstattuple` page classes and densities, `pageinspect`'s `bt_metap`/`bt_page_stats`/`bt_page_items`, `amcheck`'s `bt_index_check`, and the build's own `DEBUG1` equal-image verdict — all as ground truth only. New probes in this run: `ei_alias(oid)` versus `ei_true(oid)` registered in turn on the same custom opfamily to price change 6's one under-credit, a never-rebuilt 1.5M-row random-insertion twin for change 5, and per-server timing of both texts. All servers were stopped afterwards.
 
@@ -3311,12 +3568,22 @@ The one number that mattered operationally is still the same: over 28 fixtures w
 | An append-only index's rightmost leaf splits at fillfactor rather than 50:50, so a monotonically loaded index is already at the model's reference density | [nbtsplitloc.c:94-101](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L94-L101), [nbtsplitloc.c:286-291](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L286-L291), measured as 880 blocks live against 881 rebuilt |
 | The floor model cannot be moved by a duplication estimate, only by `live_rows`, `slot` and `fillfactor` | the statement's own `leaves`/`levels`/`modelled` CTEs in [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), confirmed by tests 80, 81 and 82 reading 0.0, −217.2 and 0.0 on the floor while their point estimates reach 70.6 |
 | The partial-index failures are a statistics-sourcing defect, not an arithmetic one | the seven probe tables in [Why a partial index is scored against whole-table statistics](#why-a-partial-index-is-scored-against-whole-table-statistics), each modelling its subset to within 4.1 points and each matching the partial twin's rebuilt size exactly |
+| Autovacuum analyses a table when `mod_since_analyze` exceeds `anl_base_thresh + anl_scale_factor * reltuples`, which is the threshold change B reuses | [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3096), [autovacuum.c:3068](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3068), [autovacuum.c:2919-2928](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L2919-L2928) |
+| Each half of that threshold comes from the table's reloption when set and from the GUC otherwise, and a negative `reltuples` counts as zero | [autovacuum.c:3011-3017](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3011-L3017), [autovacuum.c:3070-3072](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3070-L3072), [reloptions.c:243-251](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L243-L251), [reloptions.c:417-425](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L417-L425), [reloptions.c:1857-1858](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L1857-L1858), [reloptions.c:1883-1884](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L1883-L1884), plus the measured trigger values 100,050 / 50,050 / 10,050 / 100 / 1,000,000 / 60 / 50 |
+| The two analyze GUCs default to 50 and 0.1 and are `PGC_SIGHUP`, so a change needs a reload | [guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3368-L3375), [guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3906-L3914) |
+| `n_mod_since_analyze` is the counter autovacuum reads, exposed unchanged through `pg_stat_all_tables` | [system_views.sql:689](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L689), [pgstatfuncs.c:79-80](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L79-L80), [pgstat.h:415](../../../../raw/postgres-17/src/include/pgstat.h#L415) |
+| Changes A and B take the 12 critical false positives to 1 without costing a true detection | the re-scored suite in [The re-scored suite, test by test](#the-re-scored-suite-test-by-test): 12 -> 1 critical false positives, 1 -> 0 false positives, 8 false negatives unchanged, and tests 68/74/75/77 still reporting 75.0/74.3/89.1/94.2 against measured 74.9/74.3/89.1/94.2 |
+| `> 0` is the wrong staleness test even though it scores these 74 tests identically | the four calibration fixtures in [Why the trigger rather than any change at all](#why-the-trigger-rather-than-any-change-at-all): `b92` and `b95`, both genuinely 89.1% reclaimable, are withheld by `> 0` and reported by the trigger form |
+| The exclusion cannot reach a non-partial index | the four controls in [Why the exclusion carries is_partial](#why-the-exclusion-carries-is_partial): 0 of 4 withheld, including `np97` at 64.9% carrying the same caveat that withholds partial indexes |
+| Neither change moves a percentage, and neither costs measurable time | `expected_blocks`/`floor_blocks` are untouched in [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes); three interleaved pairs read 33.4 / 38.0 / 32.8 ms as filed against 37.5 / 33.6 / 35.2 ms amended over 86 indexes |
 
 ## Open Questions
 
 - **The 74 partial-index tests scored one statement, on one server, at one scale.** Only [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes) was run against them, at the asker's direction, so neither the earlier v17 sweep nor the v12 page's Method A has a partial-index verdict — and the earlier sweep would fail more of them, since it has no floor column to fall back on. Everything was measured on one 17.11 server at `block_size` 8192, `fillfactor` 90 unless the test varies it, `MAXALIGN` 8, and tables of 200,000 to 1,000,000 rows. No 12.2 or 14.23 run was made for this group, so the portability claim the rest of the page carries is not established for the partial-index numbers.
-- **Neither proposed change was applied or re-scored end to end.** [Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify) is arithmetic over the recorded `caveats` strings plus one four-index measurement, not a re-run of all 74 tests against an amended statement. The claim that change A catches 8 and change B another 3 follows from which caveat each failing row carries; a statement carrying both changes was never installed as a view and scored, and the interaction between them (a row that would carry both caveats) was never exercised.
-- **The `n_mod_since_analyze` threshold is untested at any value but zero.** Change B was measured as 0 against 300,000 and 399,000, which is a total separation on four purpose-built indexes but says nothing about where to put a threshold on a real workload. `> 0` would suppress every partial index on any table with recent writes, which is most of them; a ratio against `idx_reltuples` is the obvious refinement and no fixture calibrated one.
+- **The re-score reconstructs the fixtures rather than reusing them.** The original 74-fixture harness was deleted with its sandbox, so the eleventh follow-up rebuilt each requirement from the tenth's published shape and block counts. **61 of the 74 reproduce their filed live-block count exactly** — including every one of the twelve critical false positives except the three noted below, `p47` 787, `p50` 1845, `f78` 1560, `f84` 1363 and the whole 72-77 deletion ladder — and 13 do not: `p25` 5 blocks against 4, `p27` 105 against 96, `p33` 3000 against 2574, `p41` 91 against 388, `p48` 88 against 91, `p58` 219 against 227, `p62` and `p63` 91 against 276, `p68` 1099 against 1374, `f79` 605 against 464, `f82` 91 against 194, `f83` 3121 against 3147, and `f85` 4815 against 3686. Three of the 13 are reconstruction errors rather than sampling noise: `p41`'s "independent" subset is not independent (both columns derive from `i`, so it deduplicated to 91 blocks), and `p62`/`p63` were built on a duplicate-key column where the filed pair used distinct keys, which moves their readings from 0.0/59.4 to −203.3. None of the 13 changes a verdict class, but the two runs are not the same population, and no per-cell number here should be read as a repeat measurement of the same fixture.
+- **The exclusion is scoped to partial indexes on judgement, not on measurement.** `no statistics row for an index column` fires on non-partial expression indexes too, and control `np97` shows what that costs: 64.9% on a freshly built 5201-block index, reported and unsuppressed. Widening the exclusion would catch it; whether that hides non-partial rows worth seeing was never measured, because no non-partial fixture family was re-scored against a widened form.
+- **The auto-analyze trigger is a borrowed threshold, not a calibrated one.** It is exactly what autovacuum uses to decide a table needs analysing, which makes it defensible and self-documenting, but nothing here shows it is the right line for "these statistics no longer describe the predicate subset". A subset can go stale under the trigger — a load that touches only the predicate's rows is invisible against a whole-table scale factor — and a table can cross the trigger with its subset untouched, which is exactly what withheld `b93`. A threshold expressed against `idx_reltuples` rather than the table's `reltuples` is the obvious refinement, and no fixture calibrated one.
+- **The two new terms were never run on 12.2 or 14.23.** `pg_stat_all_tables.n_mod_since_analyze`, `pg_options_to_table` over a heap's `reloptions`, and both `autovacuum_analyze_*` GUCs are old enough that the statement should stay portable across 12 through 17, but this follow-up ran only 17.11, and citing a v12 or v14 checkout for a v17 page is not allowed here. The page's "runs unchanged on 12 through 17" claim therefore covers the text as it stood before these changes, not the text now filed.
 - **The five unrepairable false positives have a named repair that was not implemented.** A sampled probe of the predicate subset would supply the width and NULL fraction the catalog cannot, and the probe-table experiment shows the arithmetic is right once it has them, but no SQL that evaluates `pg_get_expr(indpred, indrelid)` against the table and feeds the result back into the model was written or measured. Whether such a probe can stay inside this page's core-SQL-only constraint, what it costs on a large table, and how it interacts with the 1% sampling Method A-prime uses are all open.
 - **"0% reclaimable" is again an argument from freshly built.** As with the deduplication-gate fixtures, the 52 PASSes and the 12 critical false positives rest on live-equals-rebuilt, which the `REINDEX` in each test confirms by returning the same block count — but no independent `CREATE INDEX CONCURRENTLY` copy was taken, so a `REINDEX` that happened to reproduce a suboptimal layout would not have been caught. The eight physically bloated fixtures are the exception: their `REINDEX` moved the size, so the reclaim is measured rather than assumed.
 - **The compression finding is one pair of columns.** 142 blocks against 1560 came from one compressible and one incompressible key shape at 1001 and 481 bytes on the same table. The 510-byte threshold is read from `TOAST_INDEX_TARGET` and not bisected, no intermediate width was tried, and `pglz` was the only compression method exercised — `lz4` was not available in this build and the per-attribute `COMPRESSION` clause was never set.
@@ -3528,6 +3795,17 @@ The one number that mattered operationally is still the same: over 28 fixtures w
 - [heaptoast.h#TOAST_INDEX_TARGET](../../../../raw/postgres-17/src/include/access/heaptoast.h#L56-L70)
 - [nbtsplitloc.c#rightmost-leaf-fillfactor](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L86-L102)
 - [nbtree.c#btvacuumcleanup-stats-null](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L856-L894)
+- [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L2907-L3111)
+- [autovacuum.c#anl-thresh-reloptions](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3011-L3017)
+- [autovacuum.c#doanalyze-decision](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3096)
+- [reloptions.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L243-L251)
+- [reloptions.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L417-L425)
+- [reloptions.c#StdRdOptions-autovacuum-parse-table](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L1849-L1890)
+- [guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3367-L3376)
+- [guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3905-L3915)
+- [system_views.sql#n_mod_since_analyze](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L687-L690)
+- [pgstatfuncs.c#pg_stat_get_mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L75-L82)
+- [pgstat.h#PgStat_StatTabEntry-mod_since_analyze](../../../../raw/postgres-17/src/include/pgstat.h#L405-L425)
 
 ## Navigation
 
