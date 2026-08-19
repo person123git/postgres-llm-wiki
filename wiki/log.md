@@ -8533,3 +8533,47 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   rewritten of which three are retired as resolved (the "did not re-measure the rest
   of the page" gap, the un-measured collation conjunct, and the un-recomputed alert
   table). The page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-19] cleanup | removed every disposable build, install, and cluster from .wiki-runtime
+
+- Nothing was reverted: the working tree was already clean at `ab9b295`, with no
+  modified, staged, or untracked file under `git status --porcelain -uall`, so the
+  user's revert request was a no-op.
+- Stopped the one server still running from an earlier session, a 17.11 postmaster
+  (pid 148760) launched from `.wiki-runtime/pg17/install/bin/postgres` on
+  `.wiki-runtime/tmp/review17/data`, with `pg_ctl -D data -m fast stop`. It shut
+  down cleanly and no `postmaster.pid` and no postgres process remained before any
+  deletion began.
+- Reclaimed 27 GB at the user's request; `.wiki-runtime/` went from 27 GB to 18 MB.
+  Eight disposable cluster data directories accounted for 26 GB of it:
+  `tmp/rerun6/data` (5.9 GB), `portable-sweep/data12` (4.9 GB),
+  `portable-sweep/data1711` (3.9 GB), `tmp/review1711/data` (3.9 GB),
+  `portable-sweep/data14` (3.7 GB), `pg12/data` (1.5 GB), `tmp/review17/data`
+  (945 MB), and `tmp/dedup-gate-data` (623 MB).
+- Removed the four out-of-tree build trees (580 MB): `tmp/dedup-gate-1711icu`
+  (252 MB), `pg12/build` (183 MB), and `pg18/build` and `tmp/review1711/build`
+  (73 MB each). Sources are untouched in the pinned `raw/postgres-NN/` checkouts.
+- Removed all seven compiled install trees (482 MB) on the user's instruction:
+  `pg17` and `pg1711icu` (91 MB each), `pg17icu` (90 MB), `pg14` (77 MB), `pg12`
+  (66 MB), and `pg17_11` and `pg18` (35 MB each). No compiled install now remains,
+  so the next exact-pin experiment must configure and build from
+  `raw/postgres-NN/` again, including any contrib module and `--with-icu`.
+- Removed the scratch SQL, harness drivers, `.out` transcripts, server logs, and
+  draft Markdown fragments that went with them, because the filed pages already
+  carry the results: `pg17/sql/`, all of `portable-sweep/` (`run.sh`,
+  `rescore.sh`, `analyze.py`, `section_head.md`, `section_tail.md`, `out/`,
+  `sql/`), and every remaining `tmp/` sandbox (`partbounds`, `bpt`, `bpt17`,
+  `mandtests`, `dedup-gate`, `dedup-upgrade`, `repin-2026-08-17`). The ad-hoc
+  helper `.wiki-runtime/check_page.py` went with them; durable tooling belongs
+  under `scripts/`.
+- One consequence to note: the pg_upgrade deduplication entry in `wiki/versions.md`
+  points a re-verifier at captured output under `.wiki-runtime/tmp/dedup-upgrade/`,
+  which no longer exists. That pointer is now dangling, and the run behind it must
+  be redone from the pinned checkout if the numbers are ever challenged.
+- Kept `venv/`, `cache/`, `indexes/`, and `logs/`, which the tooling reads and
+  appends to; `scripts/wiki_lint` recreated the empty `tmp/` scaffold through
+  `ensure_runtime_dirs()` on its next run.
+- No wiki page, index, version pin, verification field, or `raw/` checkout changed;
+  this entry is the only edit. All five pinned checkouts (`postgres-12`, `-14`,
+  `-17`, `-18`, `-19`) are intact. `.wiki-runtime/venv/bin/python scripts/wiki_lint`:
+  0 errors, 0 warnings.
