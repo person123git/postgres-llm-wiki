@@ -333,7 +333,7 @@ The headline commit `b46e1e54d07` added the `rel_read_only` parameter to `heap_p
 
 ## Context Reviewed
 
-- `wiki/versions.md`, `wiki/index.md`, `wiki/v19/index.md`, and the last ~20 `wiki/log.md` entries for navigation and the v19 pin. The 2026-06-10 log note records an earlier orphan draft of this question that was removed at the user's request; this page is the filed replacement.
+- `wiki/versions.md`, `wiki/index.md`, `wiki/v19/index.md`, and the last ~20 `wiki/log.md` entries for navigation and the v19 pin.
 - Autovacuum daemon: `src/backend/postmaster/autovacuum.c` (score weights, `AutoVacuumScores`, `TableToProcess`, `relation_needs_vacanalyze`, `do_autovacuum`, comparator, `table_recheck_autovac` worker selection, launcher `avl_dbase`/`adl_score`).
 - Parallel vacuum: `src/backend/commands/vacuumparallel.c` (`parallel_vacuum_compute_workers`, `PVSharedCostParams`), `src/backend/commands/vacuum.c` (delay-point refresh), `src/include/commands/vacuum.h` (`nworkers`).
 - GUC/reloption definitions: `src/backend/utils/misc/guc_parameters.dat`, `src/backend/access/common/reloptions.c`, `src/backend/utils/init/globals.c`, `src/include/miscadmin.h`.
