@@ -3272,3 +3272,169 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Nothing else changed: no other wiki page, index, version pin, or verification
   field, and no `raw/` checkout. All five pinned checkouts (`postgres-12`, `-14`,
   `-17`, `-18`, `-19`) are intact.
+
+## [2026-08-19] cleanup | emptied .wiki-runtime of the partial-index sandbox, the 17.11 install, and all caches and logs
+
+- Reclaimed 3.6 GB at the user's request; `.wiki-runtime/` went from 3,667 MB to
+  13 MB. The user chose the widest of four offered scopes ("everything
+  disposable") and, unlike the earlier cleanup today, also chose to clear the
+  tooling caches and logs.
+- Nothing had to be stopped. `tmp/partial17/data/postmaster.pid` still named pid
+  488985 and `tmp/partial17/server.log` ended on `received smart shutdown request`
+  at 09:20 EDT with no shutdown-complete line, but that process was already gone
+  and no postgres, `pg_ctl`, `initdb`, or `psql` process existed before any
+  deletion began. The pid file and the `.s.PGSQL.54417` socket were stale traces.
+- Removed `tmp/partial17/` (3,552 MB): the cluster data directory (3,283 MB), the
+  out-of-tree build of the v17 pin (270 MB), and 152 KB of harness files in 24
+  pieces (`00_setup.sql` through `80_bloat.sql` with their `.out` transcripts,
+  `extract_stmt.py`, `make_view.py`, `filed_stmt.sql`, `est_view.sql`,
+  `initdb.log`, `server.log`).
+- What that sandbox was, since nothing was filed from it: it re-ran the estimator
+  statement already filed in
+  [Estimating B-tree Index Bloat With Core SQL Only in PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) against
+  partial-index fixtures on a 17.11 ICU build of the pin, with `pageinspect` and
+  `amcheck` installed and per-fixture output collected in a `res` table.
+  `make_view.py` turned the filed text into a view `est` mechanically, dropping
+  only the two leading `SET` lines, the `WHERE actual_bytes > 1024 * 1024` triage
+  filter, and `LIMIT 20` — the same two harness edits the page already documents.
+  The run never finished: the harness was still being authored at 09:05 (the
+  server logged a syntax error on `CREATE INDEX ... WHERE active WITH (fillfactor
+  = 100)`), `80_bloat.out` stops mid-script after its last `CALL`, and the newest
+  wiki edit (08:49) predates the whole sandbox (08:55-09:20). No page, table,
+  number, or verification field ever took anything from it, so those
+  partial-index measurements must be redone from the pinned checkout if they are
+  wanted.
+- Removed the one compiled install, `pg1711icu/` (98 MB: `bin` 65 MB, `lib` 22 MB,
+  `include` 8 MB, `share` 4 MB). It was 17.11 built `--with-icu` from the current
+  v17 pin `786db8dcf168bd9df8f55047337525ac19118b1c` and it is what ran the
+  sandbox. As after the earlier cleanup, no compiled install remains, so the next
+  exact-pin experiment must configure and build from `raw/postgres-NN/` again,
+  including any contrib module and `--with-icu`.
+- Cleared the caches and logs the previous cleanup deliberately kept.
+  `cache/repin_citations/` held 4.3 MB of per-version JSON written by the
+  2026-08-17 repin (`v12.json` 2.0 MB, `v17.json` 978 KB, `v18.json` 724 KB,
+  `v14.json` 452 KB, `v19.json` 200 KB); `scripts/repin_citations` rebuilds it
+  from the checkouts, so the next repin re-reads raw source instead of a cache.
+  Also gone: `cache/wiki_lint/last-run.txt` and all three tool logs
+  (`wiki_lint.log` 18,879 bytes, `recent_log.log` 9,192 bytes,
+  `repin_citations.log` 4,645 bytes), so tool run history now starts from this
+  cleanup. The three `indexes/` subdirectories held 0 files already and were left
+  alone.
+- Kept `venv/` (13 MB), which every script runs from. `scripts/wiki_lint`
+  recreated the rest of the scaffold through `ensure_runtime_dirs()` —
+  `cache/wiki_lint`, `indexes/{ctags,search,tree-sitter}`, `logs`, `tmp` — and
+  wrote a fresh `logs/wiki_lint.log` and `cache/wiki_lint/last-run.txt`.
+- No new dangling pointer. Every `wiki/**/*.md` except `log.md` was scanned for
+  `partial17`, `pg1711icu`, and `wiki-runtime`: no page named either deleted
+  directory. The generic `.wiki-runtime/` harness pointers that pages do carry —
+  including v17 and v12 `comment-stored-bytes-per-table-tuple-non-btree.md`, v17
+  `btree-index-bloat-core-sql-only.md`, and the `tmp/dedup-upgrade/` pointer in
+  `wiki/versions.md` — were already dangling before this cleanup and are no worse
+  for it.
+- No wiki page, index, version pin, verification field, or `raw/` checkout
+  changed; this entry is the only edit. All five pinned checkouts are intact at
+  the commits `wiki/versions.md` names (`postgres-12` `45b88269a35`,
+  `postgres-14` `a92fbdfb830`, `postgres-17` `786db8dcf16`, `postgres-18`
+  `baa7b142aac`, `postgres-19` `67342a14863`).
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-19] follow-up v17 | seventy-four partial-index mandatory tests, and the twelve critical false positives they found
+
+- Folded 74 partial-index tests into the mandatory-tests section of [Testing the
+  PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The section is
+  retitled [Follow-up: ninety-one mandatory
+  tests](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-ninety-one-mandatory-tests):
+  tests 1-17 are the deduplication-gate group, tests 18-91 the partial-index group,
+  one continuous numbering as the asker chose.
+- Prompt hygiene: the request ("follow agents.md, in postgresql 17 , for question:
+  ... on the section with mandatory tests to question,  add these tests only for
+  partial B-tree indexes.") had a space before a comma, lowercase "postgresql", a
+  double space, and an ungrammatical header clause; the asker approved a corrected
+  restatement of the header only. The 60 test cases, the two adversarial lists, the
+  pass/fail rule and the primary requirement are the asker's own text, reflowed to
+  one bullet each. Four scoping answers are recorded: fold into the existing section
+  rather than add a new one; score only the recommended six-change statement; decide
+  each verdict on `wasted_space_pct_floor` with `wasted_space_pct` recorded beside
+  it; and read the pass/fail rule's "Estimator" as that same floor column.
+- **The recommended statement fails the primary requirement.** Scored on the floor:
+  52 PASS, **12 critical false positives**, 1 false positive, 8 false negatives, and
+  1 cell the rule as written does not classify (test 73, 50.7% against 49.6%). The
+  twelve read 84.0% to 99.6% on freshly built or freshly grown partial indexes that a
+  `REINDEX` reproduces block for block, and the page's filed alerting rule suppresses
+  **none** of the 21 failures — every one has `status = ok` and none carries a
+  suppressing caveat. Scored on the point estimate instead it is 43 / 21 / 1 / 8 / 1.
+- One structural fact explains 20 of the 22 failures: `ANALYZE` builds per-column
+  statistics for an index only when the index has expressions
+  (`analyze.c:448-478`, `analyze.c:861-863`), so a partial index on a plain column
+  gets a row count and nothing else — measured as 0 `pg_stats` rows for the six
+  plain-column partial indexes in the failing set against 3 for the expression ones —
+  and the statement falls through to whole-table `avg_width`, `null_frac`,
+  `n_distinct` and MCVs. Expression keys are the exception and the proof:
+  `compute_index_stats` evaluates the predicate and skips every sample row that fails
+  it, so `lower(name)` reported `n_distinct` 20 inside `WHERE active` against 100
+  across the table.
+- The defect is in the inputs, not the arithmetic. Materialising each of seven
+  predicate subsets as its own table, analysing it, indexing it and pointing the
+  **same statement** at the result modelled every one within 4.1 points and matched
+  the partial twin's rebuilt size exactly in all seven (793/792, 641/636, 819/787,
+  1575/1560, 465/464, 98/98, 22/22).
+- Proved the floor column's immunity boundary and measured both sides: `n_distinct`,
+  MCV and extended-statistics mismatch move only the point estimate (worst 70.6%
+  against 0.0% on the floor, tests 80/81/82), because `leaf_pages_floor` contains no
+  `key_groups` term; width, NULL-fraction and row-count mismatch move both (87.6%,
+  90.1%, 84.1%, 92.1%, 91.2%, 94.0%, 93.5%, 99.5%, 99.6%).
+- One `ANALYZE` repairs 7 of the 12 — 93.5% to 0.3%, 99.5% to 0.0%, 99.6% to 0.0%,
+  80.4% to −0.4%, 86.7% to 1.1%, 92.2% to 1.6%, 98.1% to 0.9% — and **nothing in core
+  SQL repairs the other 5**, which stayed at 87.9%, 90.6%, 84.1%, 91.9% and 91.2%
+  after a second `ANALYZE`, because no catalog holds a plain-column partial index's
+  subset width or NULL fraction and `SET (n_distinct = ...)` only moves the point
+  estimate.
+- Two alert-routing changes are filed with measurements and neither is applied to the
+  statement: suppressing on two caveats it already emits catches 8 of the 12 at zero
+  cost in true detections (every genuinely reclaimable reading above 50 has an empty
+  `caveats` string), and a partial-index staleness caveat keyed on
+  `n_mod_since_analyze` catches 3 more, measured as 0 against 300,000 and 399,000
+  across a healthy fresh index, two stale ones and a genuinely 89%-reclaimable one.
+  Only test 47, a wide INCLUDE column, resists both.
+- Three incidental findings, all measured: a B-tree index datum above 510 bytes is
+  pglz-compressed in place (`indextuple.c:116-133`, `TOAST_INDEX_TARGET`), so 20,000
+  compressible 1001-byte keys built 142 blocks where 20,000 incompressible 481-byte
+  keys built 1560; a same-session `DELETE; VACUUM` leaves `n_dead_tup` at exactly the
+  delete count because VACUUM and ANALYZE write the counters absolutely while pending
+  per-backend deltas add on top (`pgstat_relation.c:326-337` against `:847-867`), which
+  raised a false caveat on six correct readings until the harness flushed first; and
+  an append-only partial index measured 880 blocks live against 881 rebuilt, because
+  the rightmost leaf splits at fillfactor (`nbtsplitloc.c:286-291`).
+- Page edits: the new prompt and its note in `## Question`, a tenth-follow-up bullet
+  in `### Verdict`, a partial-index exclusion plus two new residual-error rows and an
+  `is_partial` term in the alerting rule in [The current recommended
+  statement](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-current-recommended-statement)
+  (the standing requirement to keep that section current), four renamed
+  deduplication-group headings with every reference followed, ten new `###`
+  subsections, 22 new Contents entries, two Context Reviewed bullets, nine Evidence
+  Map rows, nine Open Questions, and 13 Source References. All 85 Contents links and
+  all 215 page-internal anchors were checked to resolve.
+- Measured on one isolated 17.11 server built out of tree from the pin
+  `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192,
+  `autovacuum`/`fsync` off, `maintenance_work_mem` 256MB: 74 partial indexes over 60
+  tables of 200,000 to 1,000,000 rows, `REINDEX INDEX` as ground truth, the statement
+  extracted mechanically from the page's own Markdown with the documented harness
+  edits, and `pgstattuple`/`pageinspect`/`amcheck` as ground truth only. The sweep
+  costs 35.2 ms cold then 22.6 and 21.7 ms over the 86 indexes and 41,576 blocks the
+  scored run left. The server was shut down cleanly afterwards (`pg_ctl -m fast
+  stop`, no `postmaster.pid` and no postgres process left); the sandbox under
+  `.wiki-runtime/tmp/partial17/` is retained, 4.0 GB in a 3.7 GB data directory, a
+  252 MB build tree, a 91 MB install and 116 KB of harness SQL, transcripts and the
+  scoreboard. No wiki page points at that path, so removing it breaks no link.
+- Nine open questions record the gaps: one statement, one server and one scale; no
+  12.2 or 14.23 run for this group; neither proposed change applied and re-scored end
+  to end; no threshold calibrated for `n_mod_since_analyze`; the subset probe named
+  but not implemented in SQL; "0% reclaimable" argued from freshly built; the
+  compression finding from one column pair; test 47 undetectable; and the borderline
+  cell resolved by judgement.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
+  unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

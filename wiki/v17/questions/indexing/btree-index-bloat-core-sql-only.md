@@ -67,9 +67,9 @@ verified_by_agent: not yet
   - [Direction, magnitude, and whether the floor was immune](#direction-magnitude-and-whether-the-floor-was-immune)
   - [Two rejected fixes](#two-rejected-fixes)
   - [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)
-  - [Follow-up: seventeen mandatory tests for the deduplication gate](#follow-up-seventeen-mandatory-tests-for-the-deduplication-gate)
-  - [The seventeen mandatory tests, and the verdict on each](#the-seventeen-mandatory-tests-and-the-verdict-on-each)
-  - [How the mandatory tests were run](#how-the-mandatory-tests-were-run)
+  - [Follow-up: ninety-one mandatory tests](#follow-up-ninety-one-mandatory-tests)
+  - [The seventeen deduplication-gate tests, and the verdict on each](#the-seventeen-deduplication-gate-tests-and-the-verdict-on-each)
+  - [How the deduplication-gate tests were run](#how-the-deduplication-gate-tests-were-run)
   - [What the engine decides, and when](#what-the-engine-decides-and-when)
   - [Change 6: name the support function, do not just count it](#change-6-name-the-support-function-do-not-just-count-it)
   - [Why prosrc and not proname](#why-prosrc-and-not-proname)
@@ -77,8 +77,18 @@ verified_by_agent: not yet
   - [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)
   - [The earlier v17 sweep needs three conjuncts](#the-earlier-v17-sweep-needs-three-conjuncts)
   - [Post-build mutation, and why the metapage is still not the answer](#post-build-mutation-and-why-the-metapage-is-still-not-the-answer)
-  - [The mandatory tests on a 12.2 server](#the-mandatory-tests-on-a-122-server)
+  - [The deduplication-gate tests on a 12.2 server](#the-deduplication-gate-tests-on-a-122-server)
   - [The harness, runnable](#the-harness-runnable)
+  - [The seventy-four partial-index tests, and the verdict on each](#the-seventy-four-partial-index-tests-and-the-verdict-on-each)
+  - [How the partial-index tests were run](#how-the-partial-index-tests-were-run)
+  - [Why a partial index is scored against whole-table statistics](#why-a-partial-index-is-scored-against-whole-table-statistics)
+  - [Which inputs move the floor, and which cannot](#which-inputs-move-the-floor-and-which-cannot)
+  - [The twelve critical false positives](#the-twelve-critical-false-positives)
+  - [The eight false negatives](#the-eight-false-negatives)
+  - [What one ANALYZE repairs, and what nothing repairs](#what-one-analyze-repairs-and-what-nothing-repairs)
+  - [Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify)
+  - [Three findings the partial-index run turned up in passing](#three-findings-the-partial-index-run-turned-up-in-passing)
+  - [The partial-index harness, runnable](#the-partial-index-harness-runnable)
   - [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
@@ -330,6 +340,187 @@ all five changes" by adding change 6, and re-run all tests.
 > [The current recommended statement](#the-current-recommended-statement) are gone
 > for the same reason.
 
+Follow-up: in PostgreSQL 17, in the mandatory-tests section of this question, add
+these tests only for partial B-tree indexes.
+
+For each test:
+
+- Populate the table.
+- Run ANALYZE.
+- Create the partial index.
+- Record `pg_relation_size(index)`.
+- Run the wasted-space estimator.
+- Record `wasted_space_pct`, `wasted_space_pct_floor`, `modelled_rows`,
+  `key_groups`, `tids_per_tuple`, and `caveats`.
+- Run REINDEX.
+- Measure the actual reclaimed space.
+- Compare estimated versus actual reclaim percentage.
+
+Partial-index test cases:
+
+- Baseline partial index — predicate subset has approximately the same data
+  distribution as the whole table.
+- Very selective predicate — partial index contains approximately 1% of table rows.
+- Moderately selective predicate — partial index contains approximately 10% of
+  table rows.
+- Large predicate subset — partial index contains approximately 50-90% of table
+  rows.
+- Highly duplicated subset — indexed values inside the predicate subset have very
+  few distinct values, while values outside the predicate are mostly unique.
+- Highly unique subset — indexed values inside the predicate subset are mostly
+  unique, while values outside the predicate contain heavy duplication.
+- Different `n_distinct` distribution — the number of distinct values inside the
+  predicate subset is radically different from the whole-table statistics.
+- Different MCV distribution — one or more values are extremely common inside the
+  predicate subset but uncommon across the complete table.
+- Reverse MCV distribution — values reported as table-wide MCVs are absent or rare
+  inside the predicate subset.
+- NULL-heavy subset — indexed column is almost entirely NULL inside the predicate
+  subset but mostly non-NULL outside it.
+- NULL-free subset — predicate subset contains no NULLs while the complete table
+  has a high NULL fraction.
+- All-NULL partial index — predicate selects rows where the indexed value is NULL.
+- Different average value width — partial-index values are much wider than values
+  outside the predicate.
+- Reverse width distribution — partial-index values are much narrower than values
+  outside the predicate.
+- Extreme width mismatch — whole-table `avg_width` is approximately 20-30 bytes
+  while the partial-index subset averages 300-500+ bytes.
+- Variable-width values — partial subset contains a wide range of text, varchar, or
+  bytea lengths.
+- Dedup-heavy partial index — the predicate subset contains extremely large
+  duplicate groups that should benefit strongly from B-tree deduplication.
+- No-dedup subset — whole table contains many duplicates but the predicate-selected
+  rows are almost completely unique.
+- Large posting-list groups — duplicate groups inside the predicate subset are large
+  enough to require multiple posting tuples during REINDEX.
+- NULL deduplication — many predicate-selected rows contain identical NULL keys.
+- `deduplicate_items = off` partial index — verify that no deduplication savings are
+  credited.
+- Partial UNIQUE index — verify that the model does not credit deduplication.
+- Two-column partial index with correlated keys — indexed columns are strongly
+  correlated only inside the predicate subset.
+- Two-column partial index with reverse correlation — indexed columns are correlated
+  globally but independent inside the predicate subset.
+- Multi-column duplicate keys — complete indexed key has very few distinct
+  combinations inside the predicate subset.
+- Multi-column unique keys — leading columns have duplicates but complete keys are
+  unique inside the predicate subset.
+- Partial index with extended ndistinct statistics — compare estimates with and
+  without `CREATE STATISTICS ... (ndistinct)`.
+- Extended statistics mismatch — extended statistics accurately represent the full
+  table but badly represent the predicate subset.
+- Partial index with INCLUDE columns — verify sizing and that deduplication is not
+  incorrectly credited.
+- Wide INCLUDE columns — INCLUDE values are much wider inside the predicate-selected
+  subset than globally.
+- Partial expression index — for example `INDEX (lower(name)) WHERE active`.
+- Expression width mismatch — indexed expression produces values much wider or
+  narrower inside the predicate subset than statistics imply.
+- Missing expression statistics — verify that the 32-byte fallback cannot create a
+  false >50% result.
+- Partial index with deterministic collation — verify normal deduplication modeling.
+- Partial index with nondeterministic collation — verify that deduplication is not
+  credited.
+- Partial index with default fillfactor 90.
+- Partial index with fillfactor 100.
+- Partial index with low fillfactor such as 70 — a freshly built index must not be
+  classified as bloated merely because intentional free space exists.
+- Boolean predicate — `WHERE active`.
+- Equality predicate — `WHERE status = 'OPEN'`.
+- Range predicate — for example `WHERE created_at >= ...`.
+- IS NULL predicate.
+- IS NOT NULL predicate.
+- Multi-column predicate — predicate columns correlated with indexed columns.
+- Predicate strongly correlated with indexed value.
+- Predicate negatively correlated with indexed value.
+- Stale statistics after inserts — insert many rows satisfying the predicate without
+  running ANALYZE again.
+- Stale statistics after deletes — delete many predicate-selected rows without
+  ANALYZE.
+- Rows entering the partial index — UPDATE many rows so the predicate changes from
+  false to true.
+- Rows leaving the partial index — UPDATE many rows so the predicate changes from
+  true to false.
+- Heavy predicate churn — repeatedly change rows between predicate true and false.
+- Stale `reltuples` — index row estimate differs substantially from the real
+  partial-index population.
+- Freshly created partial index — immediately after CREATE INDEX, estimated
+  reclaimable waste should be close to zero.
+- Freshly REINDEXed partial index — immediately after REINDEX, estimated reclaimable
+  waste should be close to zero.
+- Physically bloated partial index after 25% deletion.
+- Physically bloated partial index after 50% deletion.
+- Physically bloated partial index after 75% deletion.
+- Physically bloated partial index after 90% deletion.
+- Partial index bloated through indexed-key UPDATEs.
+- Partial index with many empty/deleted B-tree pages.
+
+Critical false-positive tests. Specifically try to produce a freshly created or
+freshly REINDEXed partial index where the estimator incorrectly reports
+`wasted_space_pct_floor >= 50` using:
+
+- Predicate-conditioned width mismatch.
+- Predicate-conditioned NULL mismatch.
+- Predicate-conditioned `n_distinct` mismatch.
+- Predicate-conditioned MCV mismatch.
+- Predicate-conditioned multi-column correlation.
+- Missing index/expression statistics.
+- Stale partial-index `reltuples`.
+- Stale table statistics.
+
+A freshly created or freshly REINDEXed partial index reporting >= 50% waste should
+be considered a critical model failure.
+
+Critical false-negative tests. Try to create genuinely bloated partial indexes where
+actual REINDEX savings are >= 50%, but the estimator reports < 50%, using:
+
+- Extreme duplicate concentration only inside the predicate subset.
+- Extreme NULL concentration only inside the predicate subset.
+- Partial-subset values much narrower than table-wide statistics.
+- Strong conditional multi-column correlation.
+- Actual deduplication much stronger than predicted.
+- Large numbers of deleted/empty pages.
+
+Pass/fail rule. Calculate:
+
+```text
+actual_reclaim_pct =
+100 * (size_before_reindex - size_after_reindex)
+    / size_before_reindex
+```
+
+Classify each partial-index test as:
+
+- PASS — estimator reasonably matches actual REINDEX savings.
+- FALSE POSITIVE — estimator >= 50%, actual reclaim < 45%.
+- CRITICAL FALSE POSITIVE — estimator >= 50%, but actual reclaim < 10% or
+  approximately zero.
+- FALSE NEGATIVE — estimator < 45%, actual reclaim >= 50%.
+
+The primary requirement is:
+
+A healthy freshly created or freshly REINDEXed partial index must never cross the
+50% REINDEX threshold solely because statistics for the complete table do not
+represent the predicate-selected subset.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "follow
+> agents.md, in postgresql 17 , for question: Testing the PostgreSQL 12 Core-SQL
+> B-Tree Bloat Method on PostgreSQL 17 (unverified) , on the section with mandatory
+> tests to question, add these tests only for partial B-tree indexes. ...", per the
+> repository's prompt-hygiene rule. Only the request header was reworded; the test
+> list, the two adversarial lists, the pass/fail rule and the primary requirement
+> are the asker's own text, reflowed to one bullet each with code formatting applied
+> to identifiers. None was added, dropped, merged or reordered. The asker confirmed
+> four scoping decisions: the tests are **folded into the existing mandatory-tests
+> section** and numbered on from the seventeen deduplication-gate tests, so this page
+> has one mandatory-test suite of 91; "the wasted-space estimator" means [the
+> corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes)
+> only, which is what [The current recommended statement](#the-current-recommended-statement)
+> names; each test's verdict is decided on `wasted_space_pct_floor`, with
+> `wasted_space_pct` recorded beside it; and the estimator column named in the
+> critical-false-positive list is the one the pass/fail rule means by "Estimator".
+
 ## Answer
 
 ### Verdict
@@ -359,9 +550,13 @@ A sixth follow-up works a twelve-issue external review of the portable statement
 
 A ninth follow-up folds [change 6](#change-6-name-the-support-function-do-not-just-count-it) into that statement, so the filed text is now the recommended text, and **re-runs every server-measured table on this page on 17.11**. Nothing on this page is a 17.10 observation any more. The re-run reproduced the earlier results almost everywhere, moved a handful of statistics-sampled cells, and corrected one wrong claim about what change 6 costs — see [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured).
 
+A tenth follow-up adds 74 partial-index tests to the mandatory suite, and **the recommended statement fails the primary requirement they set**: 12 freshly built or freshly grown partial indexes with nothing to reclaim report `wasted_space_pct_floor` between 84.0% and 99.6%, and not one of them is suppressed by the filed alerting rule. The cause is one structural fact, not an arithmetic error: `ANALYZE` gives a partial index statistics of its own **only when it is an expression index** ([analyze.c:448-478](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478), [analyze.c:861-863](../../../../raw/postgres-17/src/backend/commands/analyze.c#L861-L863)), so a partial index on a plain column is priced with whole-table `avg_width`, `null_frac` and `n_distinct`. Rebuilding each predicate subset as its own table and pointing the same statement at it makes the model exact on 7 of 7 fixtures, which locates the defect entirely in the statistics input. See [The seventy-four partial-index tests, and the verdict on each](#the-seventy-four-partial-index-tests-and-the-verdict-on-each).
+
 ### The current recommended statement
 
-**Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen mandatory tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
+**Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed — but do not act on its reading for a partial index.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen deduplication-gate tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
+
+**The partial-index carve-out is not a caveat, it is an exclusion.** Over the 74 partial-index tests added by the tenth follow-up, this statement produces 12 critical false positives on indexes with nothing to reclaim, the worst reading 99.6% on an index a `REINDEX` reproduces byte for byte, and the filed alerting rule suppresses none of them ([The twelve critical false positives](#the-twelve-critical-false-positives)). Until the two changes in [Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify) are applied, filter partial indexes out of any alert built on this statement — `x.indpred IS NULL`, or equivalently `NOT is_partial` — and size them with [Method C](#method-c-unchanged-answer-different-write-path) instead. On non-partial indexes nothing about this recommendation changes.
 
 This section is the page's single pointer to that answer, and it is meant to be kept current. The rest of the page is in filing order, so the statement a reader meets first is not the one to run; whichever statement currently wins on accuracy, fixes and version coverage is named here.
 
@@ -369,7 +564,7 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 
 **Why this variant, on the three criteria.** Each row below adds to the row above it, so "more fixes" is a superset relation rather than a judgement:
 
-| Variant on this page | What it adds | Gate errors over the 28 mandatory-test fixtures | Servers it ran on |
+| Variant on this page | What it adds | Gate errors over the 28 deduplication-gate fixtures | Servers it ran on |
 |---|---|---|---|
 | the v12 page's Method A, run verbatim | nothing; one index tuple charged per row | no gate at all, and not run on those fixtures; its worst phantom reading elsewhere on this page is `+223.3%` on an all-duplicate 1,000,000-row index with nothing to reclaim | 12.2, 14.23, 17.11 |
 | [A deduplication-aware sweep for v17](#a-deduplication-aware-sweep-for-v17) | the posting-list term, `n_distinct > 0`, `deduplicate_items`, non-unique, and the `reltuples = -1` guard | 8 over-credits, 0 under-credits; 4 fixtures above 30% | 12.2, 14.23, 17.11 |
@@ -378,11 +573,11 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 | the same plus changes 1-5, the form this statement had before change 6 | key-group round-up, extended statistics, the invisible-statistics caveat, and the baseline framing | 5 over-credits, 0 under-credits; 3 fixtures above 30% on `wasted_space_pct`, 0 on the floor | 12.2, 14.23, 17.11 |
 | **[The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes) — recommended** | [change 6](#change-6-name-the-support-function-do-not-just-count-it): the `prosrc` whitelist in place of the existence test | **0 over-credits, 1 under-credit; 0 fixtures above 30% on either column** | 12.2, 14.23, 17.11 |
 
-- **Most accurate.** Over-crediting is the dangerous direction, because it invents reclaimable space on a healthy index, and the recommended text is the only variant with none: the worst over-credit of the pre-change-6 form reports 78.1% waste on a 1931-block index a rebuild would reproduce block for block, and change 6 removes all five ([The seventeen mandatory tests, and the verdict on each](#the-seventeen-mandatory-tests-and-the-verdict-on-each), [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)). The five changes supply the rest: `i_q1000` moves from `+5.5%` to `−0.3%`, `i_ext` and `i_sup` from `−206.4%` to `+0.1%`, and the genuinely 49.8%-reclaimable `i_ext50` from an unalertable `−38.3%` to `+49.9%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)).
+- **Most accurate, on non-partial indexes.** Over-crediting is the dangerous direction, because it invents reclaimable space on a healthy index, and the recommended text is the only variant with none over the deduplication-gate fixtures: the worst over-credit of the pre-change-6 form reports 78.1% waste on a 1931-block index a rebuild would reproduce block for block, and change 6 removes all five ([The seventeen deduplication-gate tests, and the verdict on each](#the-seventeen-deduplication-gate-tests-and-the-verdict-on-each), [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)). Over the partial-index fixtures it over-credits 13 times; that population is excluded above. The five changes supply the rest: `i_q1000` moves from `+5.5%` to `−0.3%`, `i_ext` and `i_sup` from `−206.4%` to `+0.1%`, and the genuinely 49.8%-reclaimable `i_ext50` from an unalertable `−38.3%` to `+49.9%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)).
 - **Most fixes.** Six numbered changes on top of the portable statement's own gate conjuncts and both reporting corrections, and the gate it ends with is the catalog form of what the engine actually does: `_bt_allequalimage` looks the support function up **and calls it**, so a registered function that returns false is the same outcome as no function at all ([nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [nbtutils.c:5156-5169](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5156-L5169)); a fresh build recomputes that answer from the current opclasses ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563)) and `_bt_load` deduplicates only when it, non-uniqueness and the reloption all agree ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152)); the documentation states the same rule from the operator-class side ([btree.sgml#equalimage](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L499-L509)); and `prosrc`, not `proname`, is the identity the engine resolves for a `LANGUAGE internal` function ([fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178)).
-- **Most compatible.** It runs unchanged on 12 through 17, and change 6 adds no construct that 12 lacks: `pg_language.lanname` and `pg_proc.prosrc` both exist on 12.2, where the gate cannot open anyway because no B-tree opfamily has an `amprocnum = 4` row ([The mandatory tests on a 12.2 server](#the-mandatory-tests-on-a-122-server), [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)). Measured coverage for this exact text is 12.2, 14.23 and 17.11 ([How the same statement behaves on 12.2, 14.23 and 17.11](#how-the-same-statement-behaves-on-122-1423-and-1711)); majors 13, 15 and 16 have no checkout in this repo and were never run.
+- **Most compatible.** It runs unchanged on 12 through 17, and change 6 adds no construct that 12 lacks: `pg_language.lanname` and `pg_proc.prosrc` both exist on 12.2, where the gate cannot open anyway because no B-tree opfamily has an `amprocnum = 4` row ([The deduplication-gate tests on a 12.2 server](#the-deduplication-gate-tests-on-a-122-server), [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)). Measured coverage for this exact text is 12.2, 14.23 and 17.11 ([How the same statement behaves on 12.2, 14.23 and 17.11](#how-the-same-statement-behaves-on-122-1423-and-1711)); majors 13, 15 and 16 have no checkout in this repo and were never run.
 
-**What it costs, and in which direction.** Five residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — and the last is the one honest false positive on this page, an index whose model is exactly right but whose reclaimable space comes back under continued random insertion:
+**What it costs, and in which direction.** Seven residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — one is the honest false positive a random-insertion index produces, and the last two are the partial-index families that make the exclusion above necessary:
 
 | Residual error | Measured | Direction |
 |---|---|---|
@@ -391,8 +586,10 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 | change 2 on independent columns | `i_ind2` moves from `−2.0%` to `−88.3%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)) | over-prediction |
 | change 6 cannot call a custom support function, so it answers FALSE | `i_ei_true` reads `−226.4%`; registering a **non-internal** working `FUNCTION 4` on an opclass that had none makes a rebuild reclaim a true 69.4% that this gate reports as 0.1% ([What change 6 costs](#what-change-6-costs)) | one under-credit, i.e. a missed rebuild win, on custom operator classes only |
 | a randomly inserted, never-deleted index | `27.1%` on both columns with the model exact to the block ([Change 4](#change-4-a-randomly-inserted-never-deleted-index)) | false positive that no gate or caveat catches |
+| a partial index whose subset's value width or NULL fraction differs from the table's | `87.6%`, `90.1%`, `84.0%`, `92.1%`, `91.2%` and `94.0%` on the floor, on six fresh indexes with 0% reclaimable ([The twelve critical false positives](#the-twelve-critical-false-positives)) | critical false positive; not repairable by `ANALYZE`, and not repairable in core SQL at all |
+| a partial index whose `reltuples` predates a bulk insert into its subset | `93.5%`, `99.5%` and `99.6%` on the floor, with **no caveat and `status = ok`** ([The twelve critical false positives](#the-twelve-critical-false-positives)) | critical false positive; one `ANALYZE` removes it |
 
-**How to read the output.** Alert on `wasted_space_pct_floor`, not on the point estimate, and only when `status` is `ok` and `caveats` holds none of `never analyzed`, `row-count sources disagree: analyze first` or `statistics not visible to this role`; read `wasted_space_pct` and `wasted_space` for sizing only, and treat a wide gap between the two percentages as "this answer rests on a duplication estimate" ([Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate), [Change 5](#change-5-what-the-baseline-is-and-what-a-reading-means)). The statement sets `statement_timeout = '30s'` and `lock_timeout = '2s'` itself; both are `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)), so they apply at session/transaction scope and need no reload or restart. The gate costs no measurable time: over 28 indexes and 34,164 blocks, interleaved, the two texts cross — 12.9 and 12.0 ms with change 6 against 14.3 and 16.0 ms without it, after a 32 ms cold first run — because the two added joins are on syscache-backed `pg_proc` and `pg_language` ([What change 6 costs](#what-change-6-costs)). The five earlier changes are not free: they add roughly 5 ms, about 30%, over the portable statement on a 46-index database ([The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes)).
+**How to read the output.** Alert on `wasted_space_pct_floor`, not on the point estimate, and only when `status` is `ok`, the index is **not partial**, and `caveats` holds none of `never analyzed`, `row-count sources disagree: analyze first` or `statistics not visible to this role`; read `wasted_space_pct` and `wasted_space` for sizing only, and treat a wide gap between the two percentages as "this answer rests on a duplication estimate" ([Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate), [Change 5](#change-5-what-the-baseline-is-and-what-a-reading-means)). The `is_partial` term is the tenth follow-up's addition, and it is the whole of the partial-index exclusion: over 74 partial fixtures the rule as filed fires on 13 healthy indexes and adding that one term removes all 13 while costing 5 true detections that Method C can confirm cheaply ([Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify)). The statement sets `statement_timeout = '30s'` and `lock_timeout = '2s'` itself; both are `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)), so they apply at session/transaction scope and need no reload or restart. The gate costs no measurable time: over 28 indexes and 34,164 blocks, interleaved, the two texts cross — 12.9 and 12.0 ms with change 6 against 14.3 and 16.0 ms without it, after a 32 ms cold first run — because the two added joins are on syscache-backed `pg_proc` and `pg_language` ([What change 6 costs](#what-change-6-costs)). The five earlier changes are not free: they add roughly 5 ms, about 30%, over the portable statement on a 46-index database ([The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes)).
 
 **Before adopting the gate change on an existing database**, run the zero-fixture audit query in [The harness, runnable](#the-harness-runnable). It lists exactly the indexes whose reading depends on the swap, and it returned 6 rows in the custom-opclass fixture database against 0 on a stock 17.11 database and 0 on 12.2, because every stock B-tree equal-image row names `btequalimage` or `btvarstrequalimage` and both are `LANGUAGE internal` in `pg_catalog` ([pg_amproc.dat:143](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L143), [pg_amproc.dat:206](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L206), [pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241)).
 
@@ -2208,9 +2405,16 @@ What 12.2 does with the rest is unchanged from [How the same statement behaves o
 
 The `i_rand` row is the portability point that matters for change 5: split-point density is not a v13-and-later behavior, so a 12 server reports the same healthy index as 26.6% waste.
 
-### Follow-up: seventeen mandatory tests for the deduplication gate
+### Follow-up: ninety-one mandatory tests
 
-**Before change 6 the statement failed 3 of the 17 mandatory tests, and the earlier deduplication-aware sweep fails 6. One replaced conjunct — change 6, now part of the filed statement — passes all 17, at no measurable cost.** Every failure is the same defect wearing a different disguise: the gate asks whether an equal-image support function *exists* in `pg_amproc`, while the engine asks what that function *returns*.
+This page's mandatory suite has two groups and one continuous numbering. Tests 1-17 are the deduplication-gate requirements, filed first; tests 18-91 are the partial-index requirements added by the tenth follow-up. Both groups score [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes); the deduplication group also scores [the earlier v17 sweep](#a-deduplication-aware-sweep-for-v17).
+
+| Group | Tests | Fixtures | Result for the filed statement |
+|---|---|---|---|
+| deduplication gate | 1-17 | 28 indexes, none with anything to reclaim | passes 17 of 17; the pre-change-6 form fails 3 and the earlier sweep fails 6 |
+| partial indexes | 18-91 | 74 indexes over 60 tables | **fails 21 of 74**: 12 critical false positives, 1 false positive, 8 false negatives; 1 more cell falls outside the pass/fail rule as written |
+
+**Before change 6 the statement failed 3 of the 17 deduplication-gate tests, and the earlier deduplication-aware sweep fails 6. One replaced conjunct — change 6, now part of the filed statement — passes all 17, at no measurable cost.** Every failure is the same defect wearing a different disguise: the gate asks whether an equal-image support function *exists* in `pg_amproc`, while the engine asks what that function *returns*.
 
 Measured on 28 freshly built fixtures, each with nothing to reclaim, on an isolated 17.11 server built from this page's pin:
 
@@ -2225,7 +2429,7 @@ Over-crediting is the dangerous direction, because it invents reclaimable space 
 
 The one under-credit is unavoidable in core SQL, and the mandatory list anticipates it. Test 14 asks for `all_equalimage = TRUE` on a custom opclass whose support function returns true *"if the implementation can safely determine the result"*; a SQL statement cannot call a function it can only see by OID, so it cannot safely determine it, and test 16 requires that such cases resolve to FALSE rather than TRUE. Change 6 answers FALSE, and pays for it on one fixture.
 
-### The seventeen mandatory tests, and the verdict on each
+### The seventeen deduplication-gate tests, and the verdict on each
 
 The `Engine` column is the engine's own answer, taken from the `DEBUG1` line `_bt_allequalimage` emits during the build and cross-checked against the metapage flag and against whether the first leaf really holds posting tuples. Every percentage is `wasted_space_pct` on an index with 0% genuinely reclaimable space, so any non-zero number is model error.
 
@@ -2251,7 +2455,7 @@ The `Engine` column is the engine's own answer, taken from the `DEBUG1` line `_b
 
 Tests 1, 2, 3, 7 and 14 are the positives; the rest are negatives. Two readings in that table are arithmetic error rather than gate error, and both are already filed above: the 8.0% on the text fixtures is [the leaf-capacity loss](#change-1-round-each-key-group-up-to-whole-posting-tuples) that `i_cd` reports as 8.0%, and `i_multi_ok`'s −320.0% is the per-column product rule that [change 2](#change-2-extended-statistics-for-a-multicolumn-key) fixes — the same index with a `CREATE STATISTICS ... (ndistinct)` object is `i2_ok`, at 8.1%. The gate verdict is identical either way.
 
-### How the mandatory tests were run
+### How the deduplication-gate tests were run
 
 One isolated **17.11** server, built out of tree from this page's pin `786db8dcf168bd9df8f55047337525ac19118b1c` and configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, in a scratch database created for this run. `pageinspect` and `amcheck` were installed as ground truth only. One isolated **12.2** server from its own pin, without ICU, carried test 17.
 
@@ -2393,7 +2597,7 @@ The mandatory tests also settle a question [rejected fix B](#two-rejected-fixes)
 
 Two things follow. First, core tooling treats the divergence as corruption, not as a stale cache: `bt_index_check` re-runs `_bt_allequalimage` against the current catalog and raises `ERRCODE_INDEX_CORRUPTED` when the metapage disagrees ([verify_nbtree.c:379-400](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L379-L400)). The catalog, which is what change 6 reads, is the authority. Second, change 6's "over-prediction" was the correct prediction: −226.4% against an actual rebuild of 1376 blocks from 421, which is −226.8%. The metapage would have said "true" and the older gate "−0.7%", both of which described an index that no longer existed in that form.
 
-### The mandatory tests on a 12.2 server
+### The deduplication-gate tests on a 12.2 server
 
 Test 17 on an isolated 12.2 server, `server_version_num` 120002, built without ICU. The engine has no equal-image concept at all, so the correct verdict for every fixture — positive and negative alike — is "deduplication disabled", and all four statement variants delivered it:
 
@@ -2551,6 +2755,408 @@ Scoring needs the engine's answer per index. Three sources agree in all 28 fixtu
 2. `bt_metap(indexname).allequalimage`, which is superuser-only and true even for `deduplicate_items = off` and unique indexes;
 3. `count(tids) > 0` over `bt_page_items(indexname, 1)`, the only one of the three that proves posting lists were actually written.
 
+### The seventy-four partial-index tests, and the verdict on each
+
+**The filed statement fails the primary requirement.** Twelve freshly built or freshly grown partial indexes with nothing to reclaim report `wasted_space_pct_floor` between 84.0% and 99.6%, and the filed alerting rule suppresses none of them. Scored on the floor column, as the requirement specifies:
+
+| Verdict | Count | Tests |
+|---|---|---|
+| PASS | 52 | 18-29, 31, 33-46, 48, 51-63, 68, 70-72, 74-77, 80-82 |
+| CRITICAL FALSE POSITIVE | **12** | 30, 32, 47, 49, 50, 64, 69, 78, 79, 83, 84, 85 |
+| FALSE NEGATIVE | 8 | 65, 67, 86-91 |
+| FALSE POSITIVE | 1 | 66 |
+| borderline, outside the rule as written | 1 | 73 |
+
+Scored on `wasted_space_pct` instead, the point estimate turns 9 more PASSes into critical false positives (23, 24, 26, 28, 35, 45, 63, 80, 82), for 43 / 21 / 8 / 1 / 1. That difference is the whole value of the floor column, and it is exactly the population the next section explains: the floor cannot be moved by a duplication estimate.
+
+Live blocks equal the rebuilt blocks wherever `actual` is 0.0, so every non-zero reading in those rows is model error. `wsp` is `wasted_space_pct`, `floor` is `wasted_space_pct_floor`, and `actual` is `actual_reclaim_pct` from the measured `REINDEX`.
+
+**Tests 18-21, predicate selectivity.** One 1,000,000-row table, `k` distinct, four predicates:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Verdict |
+|---|---|---|---|---|---|---|---|
+| 18 | baseline, subset distribution = table (20%) | `p18` | 551 -> 551 | 0.0 | 0.0 | 0.0 | PASS |
+| 19 | very selective, ~1% | `p19` | 30 -> 30 | 0.0 | 0.0 | 0.0 | PASS |
+| 20 | moderately selective, ~10% | `p20` | 276 -> 276 | 0.0 | 0.0 | 0.0 | PASS |
+| 21 | large subset, ~80% | `p21` | 2196 -> 2196 | 0.0 | 0.0 | 0.0 | PASS |
+
+Selectivity alone costs nothing: the index's own `reltuples` is exact after the build ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842)), so `modelled_rows` equalled the true subset population in all four — 200,000, 10,000, 100,000 and 800,000 — and with distinct `bigint` keys the model has nothing else to get wrong.
+
+**Tests 22-33, distribution, NULL and width mismatch.** 500,000-row tables; the predicate selects a subset whose distribution differs from the table's:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Verdict |
+|---|---|---|---|---|---|---|---|
+| 22 | highly duplicated subset, unique outside | `p22` | 87 -> 87 | 0.0 | −217.2 | −217.2 | PASS |
+| 23 | highly unique subset, duplicated outside | `p23` | 71 -> 71 | 0.0 | **60.6** | 0.0 | PASS on the floor |
+| 24 | `n_distinct` radically different in the subset | `p24` | 346 -> 346 | 0.0 | **61.8** | 0.0 | PASS on the floor |
+| 25 | MCV distribution differs inside the subset | `p25` | 4 -> 4 | 0.0 | −25.0 | −125.0 | PASS |
+| 26 | table-wide MCVs absent inside the subset | `p26` | 16 -> 16 | 0.0 | **50.0** | 0.0 | PASS on the floor |
+| 27 | NULL-heavy subset, non-NULL outside | `p27` | 96 -> 96 | 0.0 | −227.1 | −187.5 | PASS |
+| 28 | NULL-free subset, NULL-heavy table (`bigint`) | `p28` | 71 -> 71 | 0.0 | **62.0** | 0.0 | PASS on the floor |
+| 29 | all-NULL partial index, `WHERE s IS NULL` | `p29` | 108 -> 108 | 0.0 | −723.1 | −861.1 | PASS |
+| 30 | subset values wider than outside (13 against 204 bytes) | `p30` | 792 -> 792 | 0.0 | **96.2** | **87.6** | **CRITICAL FALSE POSITIVE** |
+| 31 | subset values narrower than outside | `p31` | 98 -> 98 | 0.0 | −684.7 | −684.7 | PASS |
+| 32 | extreme width mismatch (27 against 404 bytes) | `p32` | 636 -> 636 | 0.0 | **97.6** | **90.1** | **CRITICAL FALSE POSITIVE** |
+| 33 | variable-width values, same range inside and out | `p33` | 2574 -> 2574 | 0.0 | −0.5 | −0.5 | PASS |
+
+Two results in that block are worth naming. Test 28 is the NULL-free subset of a 95%-NULL table on a **fixed-width** key, and its floor reads 0.0 because the model's slot arithmetic is accidentally right: `ceil((8 + 8*0.95 + 0.05*8) / 8) * 8 + 4` is 20, which is what a non-NULL `bigint` index tuple really costs. Give the same shape a 304-byte `text` key and the same expression produces 28 against a true 316 — that is test 79, and it crosses the floor at 91.2%. And tests 25, 26 and 29 confirm from the output side what the statement's own `kstat` CTE says: for a partial index the most-common-value list and the NULL fraction are discarded (`CASE WHEN p.is_partial THEN 0 ... THEN '{}'::real[]`), so an MCV mismatch can only ever make the model over-predict, never over-credit.
+
+**Tests 34-39, deduplication inside the subset.** 500,000-row tables, 20% subsets:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Posting lists | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 34 | dedup-heavy subset, 1000 rows per key | `p34` | 87 -> 87 | 0.0 | −4.6 | −217.2 | yes | PASS |
+| 35 | duplicate-heavy table, unique subset | `p35` | 276 -> 276 | 0.0 | **59.4** | 0.0 | — | PASS on the floor |
+| 36 | one key group, 100,000 TIDs against a 132 cap | `p36` | 87 -> 87 | 0.0 | **0.0** | −217.2 | yes | PASS |
+| 37 | NULL deduplication, every subset key NULL | `p37` | 87 -> 87 | 0.0 | −256.3 | −217.2 | yes | PASS |
+| 38 | `deduplicate_items = off` | `p38` | 278 -> 278 | 0.0 | 0.7 | 0.7 | **no** | PASS |
+| 39 | partial UNIQUE index | `p39` | 276 -> 276 | 0.0 | 0.0 | 0.0 | **no** | PASS |
+
+Test 36 is the strongest single-cell result on this page: one key group of 100,000 TIDs, and the model lands on the built size **exactly** (0.0%). `bt_page_items` over every page of that index counts **758 posting tuples holding exactly 100,000 TIDs, none above 132**, which is the posting-list arithmetic of [change 1](#change-1-round-each-key-group-up-to-whole-posting-tuples) measured rather than derived. Tests 38 and 39 confirm both gate conjuncts do their job on partial indexes — `dedup_applies` came back false and `bt_page_items` found no posting lists, so the floor equals the point estimate and both are right.
+
+**Tests 40-47, multi-column keys, extended statistics, INCLUDE.**
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Verdict |
+|---|---|---|---|---|---|---|---|
+| 40 | two-column key correlated only in the subset | `p40` | 89 -> 89 | 0.0 | −336.0 | −336.0 | PASS |
+| 41 | two-column key independent only in the subset | `p41` | 388 -> 388 | 0.0 | 0.0 | 0.0 | PASS |
+| 42 | multi-column duplicate keys in the subset | `p42` | 88 -> 88 | 0.0 | −340.9 | −340.9 | PASS |
+| 43 | multi-column unique keys in the subset | `p43` | 388 -> 388 | 0.0 | 0.0 | 0.0 | PASS |
+| 44 | with and without `CREATE STATISTICS (ndistinct)` | `p44a` | 89 -> 89 | 0.0 | −42.7 -> **−2.2** | −336.0 | PASS |
+| 45 | extended statistics wrong for the subset | `p45` | 98 -> 98 | 0.0 | **69.4** | 0.0 | PASS on the floor |
+| 46 | partial index with INCLUDE columns | `p46` | 388 -> 388 | 0.0 | 0.0 | 0.0 | PASS |
+| 47 | wide INCLUDE values inside the subset | `p47` | 787 -> 787 | 0.0 | **84.0** | **84.0** | **CRITICAL FALSE POSITIVE** |
+
+Test 44 is [change 2](#change-2-extended-statistics-for-a-multicolumn-key) working as designed on a partial index: the per-column product gave `key_groups` 10,000 and −42.7%, and an `ndistinct` object on the same two columns gave 100 and −2.2%. Test 45 is the same machinery pointed the wrong way — an object that describes the table correctly and the subset not at all — and it moves only the point estimate. Test 47 is the one INCLUDE failure and it is not about deduplication at all: `keys_only` is false so no credit is given, and the index is mispriced purely because the INCLUDE column's table-wide `avg_width` is 13 while the subset's is 204.
+
+**Tests 48-55, expression keys, collations, fillfactor.** The `-> after ANALYZE` column re-reads the same index after one `ANALYZE` on its table, which is the first moment an expression index can have statistics of its own:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | after ANALYZE | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 48 | partial expression index, `lower(name) WHERE active` | `p48` | 91 -> 91 | 0.0 | −570.3 | −570.3 | −3.3 / −705.5 | PASS |
+| 49 | expression width mismatch in the subset | `p49` | 792 -> 792 | 0.0 | **80.4** | **80.4** | **−0.4 / −0.4** | **CRITICAL FALSE POSITIVE** |
+| 50 | missing expression statistics, 32-byte fallback | `p50` | 1845 -> 1845 | 0.0 | **86.7** | **86.7** | **1.1 / 1.1** | **CRITICAL FALSE POSITIVE** |
+| 51 | deterministic ICU collation | `p51` | 89 -> 89 | 0.0 | −2.2 | −336.0 | — | PASS |
+| 52 | nondeterministic ICU collation | `p52` | 389 -> 389 | 0.0 | 0.3 | 0.3 | — | PASS |
+| 53 | default fillfactor 90 | `p53` | 276 -> 276 | 0.0 | 0.0 | 0.0 | — | PASS |
+| 54 | `fillfactor = 100` | `p54` | 249 -> 249 | 0.0 | 0.4 | 0.4 | — | PASS |
+| 55 | `fillfactor = 70` | `p55` | 357 -> 357 | 0.0 | 0.0 | 0.0 | — | PASS |
+
+Test 50 answers its own requirement with a no: **the 32-byte fallback can create a false >50% result**, and it did, 86.7% on both columns on an index a `REINDEX` reproduces byte for byte. The three fillfactor tests are the cleanest PASSes in the suite — 276, 249 and 357 blocks modelled to within 1 block of the build at fillfactor 90, 100 and 70 — because the statement reads the index's own reloption rather than assuming 90, so intentional free space is never counted as waste.
+
+Tests 51 and 52 are the deduplication gate seen from the partial side, and they agree with tests 3 and 4: the deterministic ICU index deduplicated to 89 blocks with `tids_per_tuple` 130.0 and the nondeterministic one refused at 389 blocks with `dedup_applies` false, both correctly modelled.
+
+**Tests 56-63, predicate shapes and predicate/key correlation.** One 500,000-row table for 56-61:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Verdict |
+|---|---|---|---|---|---|---|---|
+| 56 | boolean predicate, `WHERE flag` | `p56` | 276 -> 276 | 0.0 | 0.0 | 0.0 | PASS |
+| 57 | equality predicate, `status = 'OPEN'` | `p57` | 346 -> 346 | 0.0 | 0.0 | 0.0 | PASS |
+| 58 | range predicate, `created >= ...` | `p58` | 227 -> 227 | 0.0 | 0.0 | 0.0 | PASS |
+| 59 | `IS NULL` predicate on a non-key column | `p59` | 276 -> 276 | 0.0 | 0.0 | 0.0 | PASS |
+| 60 | `IS NOT NULL` predicate | `p60` | 1099 -> 1099 | 0.0 | 0.0 | 0.0 | PASS |
+| 61 | multi-column predicate | `p61` | 71 -> 71 | 0.0 | 0.0 | 0.0 | PASS |
+| 62 | predicate correlated with the indexed value | `p62` | 276 -> 276 | 0.0 | 0.0 | 0.0 | PASS |
+| 63 | predicate negatively correlated with the value | `p63` | 276 -> 276 | 0.0 | **59.4** | 0.0 | PASS on the floor |
+
+Eight predicate shapes, eight exact floors. The predicate's *shape* is irrelevant to the model, which never looks at `indpred` beyond `indpred IS NOT NULL`; what matters is only whether the subset's value distribution resembles the table's. Test 58 makes that concrete: a timestamp range predicate whose subset `ANALYZE` estimated at 82,151 rows was modelled at 82,151 and built at 227 blocks, dead on.
+
+**Tests 64-69, statistics staleness and predicate churn.**
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Caveat present | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 64 | stale statistics after inserts into the subset | `p64` | 880 -> 881 | −0.1 | **93.5** | **93.5** | none | **CRITICAL FALSE POSITIVE** |
+| 65 | stale statistics after deletes, no VACUUM | `p65` | 276 -> 30 | 89.1 | 0.0 | 0.0 | `partial: predicate subset may be stale` | FALSE NEGATIVE |
+| 66 | rows entering the index (false -> true) | `p66` | 1373 -> 825 | 39.9 | **79.9** | **79.9** | `partial: predicate subset may be stale` | FALSE POSITIVE |
+| 67 | rows leaving the index (true -> false) | `p67` | 276 -> 30 | 89.1 | 0.0 | 0.0 | `partial: predicate subset may be stale` | FALSE NEGATIVE |
+| 68 | heavy predicate churn, then VACUUM + ANALYZE | `p68` | 1374 -> 551 | 59.9 | 59.9 | 59.9 | none | PASS |
+| 69 | stale `reltuples`, VACUUM but no ANALYZE | `p69` | 1099 -> 1099 | 0.0 | **99.5** | **99.5** | none | **CRITICAL FALSE POSITIVE** |
+
+Test 68 is the best result in the suite: five rounds of flipping a third of the table in and out of the predicate, then one `VACUUM` and one `ANALYZE`, and the statement reports **59.9%** against a measured 59.9%. Everything that fails here fails on the row count, and tests 64 and 69 fail with `status = ok` and an empty `caveats` string, which is why they are the two that matter operationally.
+
+Test 69 is the sharpest of the two, because a `VACUUM` ran. `btvacuumcleanup` returns NULL outright when `_bt_vacuum_needs_cleanup()` says no scan is needed ([nbtree.c:859-874](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L859-L874)), and even when it does scan in cleanup-only mode it sets `estimated_count = true` ([nbtree.c:876-893](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L876-L893)) — and `update_relstats_all_indexes` skips exactly those two cases ([vacuumlazy.c:3069-3099](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099)). So a `VACUUM` that finds nothing to delete can never refresh a B-tree index's `reltuples`, in either branch, while it does clear `n_dead_tup` and with it the only partial-index caveat the statement emits.
+
+**Tests 70-77, freshly built and physically bloated.** Deletions are of the subset, followed by `VACUUM` and `ANALYZE`:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Verdict |
+|---|---|---|---|---|---|---|---|
+| 70 | freshly created partial index | `p70` | 276 -> 276 | 0.0 | 0.0 | 0.0 | PASS |
+| 71 | freshly REINDEXed partial index | `p71` | 276 -> 276 | 0.0 | 0.0 | 0.0 | PASS |
+| 72 | 25% of the subset deleted | `p72` | 276 -> 207 | 25.0 | 23.9 | 23.9 | PASS |
+| 73 | 50% of the subset deleted | `p73` | 276 -> 139 | 49.6 | 50.7 | 50.7 | borderline |
+| 74 | 75% of the subset deleted | `p74` | 276 -> 71 | 74.3 | 73.6 | 73.6 | PASS |
+| 75 | 90% of the subset deleted | `p75` | 276 -> 30 | 89.1 | 88.8 | 88.8 | PASS |
+| 76 | bloated through indexed-key UPDATEs | `p76` | 551 -> 276 | 49.9 | 49.7 | 49.7 | PASS |
+| 77 | many empty and deleted B-tree pages | `p77` | 276 -> 16 | 94.2 | 94.6 | 94.6 | PASS |
+
+This is the block the estimator exists for, and it is accurate to within 1.5 points on all eight: 23.9 against 25.0, 50.7 against 49.6, 73.6 against 74.3, 88.8 against 89.1, 49.7 against 49.9, 94.6 against 94.2. Test 77's fixture deletes a *contiguous* 95% of the subset, which is what makes pages empty rather than merely sparse — `pgstatindex` reported 15 leaf pages at 82.07% density and **259 deleted pages** before the rebuild, against 274 leaf pages at 4.77% density and 0 deleted when the same 95% was deleted uniformly.
+
+Test 73 is the one cell the pass/fail rule as written does not classify: the estimator reads 50.7% and the actual reclaim is 49.6%, so it is neither "estimator >= 50, actual < 45" nor "estimator < 45, actual >= 50". It is filed as a PASS with the gap stated — 1.1 points — on the reading that "reasonably matches actual REINDEX savings" is the rule's own PASS criterion and a 1.1-point gap meets it. Anyone applying the thresholds mechanically should widen FALSE POSITIVE to "estimator >= 50 and actual < 45" *or* "estimator exceeds actual by more than 5 points", which classifies 73 as a PASS explicitly rather than by omission.
+
+**Tests 78-85, critical false positives.** Every index here is freshly built, so `actual` is 0.0 by construction and any reading above 50 on the floor is a model failure by the requirement's own definition:
+
+| # | Requirement | Fixture | live -> rebuilt | wsp | floor | Caveat present | Crossed? |
+|---|---|---|---|---|---|---|---|
+| 78 | predicate-conditioned width mismatch | `f78` | 1560 -> 1560 | 98.1 | **92.1** | `partial: duplicates from table statistics` | **yes** |
+| 79 | predicate-conditioned NULL mismatch | `f79` | 464 -> 464 | 97.4 | **91.2** | `partial: duplicates from table statistics` | **yes** |
+| 80 | predicate-conditioned `n_distinct` mismatch | `f80` | 276 -> 276 | 65.9 | 0.0 | `partial: duplicates from table statistics` | no |
+| 81 | predicate-conditioned MCV mismatch | `f81` | 87 -> 87 | −217.2 | −217.2 | none | no |
+| 82 | predicate-conditioned multi-column correlation | `f82` | 194 -> 194 | 70.6 | 0.0 | `key groups from extended statistics` | no |
+| 83 | missing index/expression statistics | `f83` | 3147 -> 3147 | 92.2 | **92.2** | `no statistics row for an index column` | **yes** |
+| 84 | stale partial-index `reltuples` | `f84` | 1363 -> 1363 | 99.6 | **99.6** | **none** | **yes** |
+| 85 | stale table statistics | `f85` | 3686 -> 3686 | 98.1 | **94.0** | `partial: duplicates from table statistics` | **yes** |
+
+Five of the eight attempts crossed the floor and three could not, and the split is not luck — it is the structure of the two models, which the next section derives.
+
+**Tests 86-91, critical false negatives.** Each fixture is genuinely bloated, `VACUUM`ed and `ANALYZE`d, so no caveat suppresses the reading:
+
+| # | Requirement | Fixture | live -> rebuilt | actual | wsp | floor | Verdict |
+|---|---|---|---|---|---|---|---|
+| 86 | duplicate concentration inside the subset | `f86` | 87 -> 23 | 73.6 | 18.4 | 18.4 | **FALSE NEGATIVE** |
+| 87 | NULL concentration inside the subset | `f87` | 87 -> 23 | 73.6 | −9.2 | 16.1 | **FALSE NEGATIVE** |
+| 88 | subset narrower than table statistics | `f88` | 388 -> 98 | 74.7 | −86.9 | −86.9 | **FALSE NEGATIVE** |
+| 89 | conditional multi-column correlation | `f89` | 89 -> 24 | 73.0 | −13.5 | −13.5 | **FALSE NEGATIVE** |
+| 90 | real deduplication stronger than predicted | `f90` | 87 -> 23 | 73.6 | 18.4 | 18.4 | **FALSE NEGATIVE** |
+| 91 | many deleted pages plus an over-predicting model | `f91` | 388 -> 22 | 94.3 | 16.2 | 16.2 | **FALSE NEGATIVE** |
+
+Six attempts, six false negatives, and all six are the mirror image of the false positives: the model over-predicts the rebuilt size by enough to swallow a real 73-94% win. Test 91 is the worst — 388 blocks live, 22 after the rebuild, a **94.3%** reclaim reported as 16.2% — because two errors compound: a contiguous 95% deletion that leaves the file full of deleted pages, and a table-wide `avg_width` of 399 bytes against a subset whose values are 9.
+
+### How the partial-index tests were run
+
+One isolated **17.11** server, built out of tree from this page's pin `786db8dcf168bd9df8f55047337525ac19118b1c` and configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, in its own scratch database. `pageinspect`, `amcheck` and `pgstattuple` were installed as ground truth only; no scored statement reads them. ICU is required for tests 51 and 52.
+
+The statement under test is [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), extracted from this page's own Markdown by heading and installed as a view, with the same three harness edits the earlier runs document — the `WHERE actual_bytes > 1024 * 1024` triage filter, the `ORDER BY` and the `LIMIT 20` removed — plus `expected_blocks`, `floor_blocks`, `actual_bytes`, `dedup_applies`, `ext_used`, `is_partial`, `slot`, `leaf_cap` and `nmax` exposed. The triage filter has to go: 24 of the 74 fixtures are smaller than 1 MB, and test 19's 1% subset is 30 blocks.
+
+Each test follows the prescribed order exactly — populate, `ANALYZE`, `CREATE INDEX`, record `pg_relation_size`, read the estimator, `REINDEX`, record `pg_relation_size` again — driven by one procedure so that no step can be skipped or reordered. Tests whose population is identical share a table; each still gets its own `ANALYZE`, its own index, its own estimator reading and its own `REINDEX`. `REINDEX INDEX` rather than `REINDEX CONCURRENTLY` is the arbiter here, because the fixtures are private to the run and the blocking form is what a reader would use to reclaim the space.
+
+One ordering detail is load-bearing and was got wrong first. The cumulative statistics system's `ANALYZE` and `VACUUM` reports write `live_tuples` and `dead_tuples` **absolutely** ([pgstat_relation.c:326-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L326-L337)), while a backend's own pending per-relation deltas are **added** on top when they flush ([pgstat_relation.c:847-867](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L847-L867)). A harness that deletes and then vacuums inside one session therefore sees `n_dead_tup` come back — measured at exactly 25,000 on a table whose 25,000 deleted rows `VACUUM` had already removed, with `n_live_tup` reading 950,000 for 475,000 real rows — which raised the `partial: predicate subset may be stale` caveat on six correct readings. Calling `pg_stat_force_next_flush()` before the `VACUUM` fixes it: the six caveats disappear and no percentage moves. Every table above is from the corrected ordering.
+
+### Why a partial index is scored against whole-table statistics
+
+One branch in `ANALYZE` explains 20 of the 22 failures. `do_analyze_rel` builds per-column statistics for an index **only if that index has expressions**, and otherwise leaves `attr_cnt` at zero ([analyze.c:448-478](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478)). `compute_index_stats` then skips any index with no columns to analyze *unless* it is partial ([analyze.c:861-863](../../../../raw/postgres-17/src/backend/commands/analyze.c#L861-L863)) — and the only thing it does for that partial index is count how many sampled rows pass the predicate, so it can write the index's `reltuples` ([analyze.c:948-953](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953), [analyze.c:647-663](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663)).
+
+So, measured on this server: `pg_stats` holds **0 rows** for the six plain-column partial indexes in the failing set and **3 rows** for the expression ones. A partial index on a plain column has a row count of its own and nothing else, and the statement's `cols` CTE falls through to the table's column statistics for `avg_width`, `null_frac`, `n_distinct` and the MCV list.
+
+Expression keys are the exception, and the exception is instructive: `compute_index_stats` evaluates the predicate first and `continue`s past every row that fails it ([analyze.c:899-908](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L908)), then computes the expression statistics over just those rows and over the derived `totalindexrows` ([analyze.c:955-975](../../../../raw/postgres-17/src/backend/commands/analyze.c#L955-L975)). Predicate-conditioned statistics are therefore exactly what a partial expression index gets. Test 48 shows it as a number: `lower(name)` has 100 distinct values across the table and **20** inside `WHERE active`, and `pg_stats` for the index says 20 — which moved the reading from −570.3% to −3.3%.
+
+The gap that leaves is measurable, and it is the whole defect:
+
+| Fixture | table-wide `null_frac` / `avg_width` | the subset's own | floor as filed |
+|---|---|---|---|
+| `p30` | 0 / 13 | 0 / 204 | 87.6 |
+| `p32` | 0 / 27 | 0 / 404 | 90.1 |
+| `p47` (INCLUDE column) | 0 / 13 | 0 / 204 | 84.0 |
+| `f78` | 0 / 26 | 0 / 484 | 92.1 |
+| `f79` | **0.9757** / 304 | **0** / 304 | 91.2 |
+| `f85` | 0 / 3 | 0 / 304 | 94.0 |
+| `f88` | 0 / 192 | 0 / 9 | −86.9 |
+| `f91` | 0 / 399 | 0 / 9 | 16.2 |
+
+`f79` is the isolated case: its `avg_width` is *correct*, because `pg_stats.avg_width` is the mean width of non-null values only, and the entire error is the table's 0.9757 `null_frac` scaling that width down inside `data_size` and `p_null`.
+
+**The arithmetic is not what is wrong.** Materialising each predicate subset as its own table, analysing it, indexing it and pointing the *same statement* at the result — same text, same formula, statistics that now describe what is indexed — gives:
+
+| Subset of | probe index | probe reading | probe modelled blocks | rebuilt size of the partial twin |
+|---|---|---|---|---|
+| `p30` | `qi30` | −0.1 | 793 | 792 |
+| `p32` | `qi32` | −0.8 | 641 | 636 |
+| `p47` | `qi47` | −4.1 | 819 | 787 |
+| `f78` | `qi78` | −1.0 | 1575 | 1560 |
+| `f79` | `qi79` | −0.2 | 465 | 464 |
+| `f88` | `qi88` | 0.0 | 98 | 98 |
+| `f91` | `qi91` | 0.0 | 22 | 22 |
+
+Seven of seven probe indexes came out at exactly the rebuilt size of the partial index they stand in for, and seven of seven readings are within 4.1 points of zero. The model is right; its inputs are not.
+
+### Which inputs move the floor, and which cannot
+
+The two models the statement emits differ in one term, and that difference decides which mismatches are dangerous. `leaf_pages_floor` is `ceil(live_rows / leaf_cap)`, and `leaf_cap` is a function of `slot`, `fillfactor` and `block_size` only; `slot` in turn is a function of `null_frac` and the per-column `width`. Nothing in the floor path reads `key_groups`, `tids`, the MCV list or an extended-statistics estimate — those enter only through `classpages`, which feeds `leaf_pages` and therefore `wasted_space_pct` alone.
+
+That predicts a clean split, and the eight adversarial tests confirm it:
+
+| Mismatched input | Feeds | Tests | Worst point estimate | Worst floor |
+|---|---|---|---|---|
+| `n_distinct` (absolute) | `key_groups` -> `tids` | 23, 24, 26, 28, 35, 63, 80 | **65.9** | **0.0** |
+| MCV list | discarded outright for partial indexes | 25, 26, 81 | no MCV contribution at all; these three read −25.0, 50.0 and −217.2 on `n_distinct` alone | −125.0, 0.0, −217.2 |
+| extended `ndistinct` | `key_groups` -> `tids` | 45, 82 | **70.6** | **0.0** |
+| `avg_width` | `slot` -> `leaf_cap` | 30, 32, 47, 78, 85, 88, 91 | 98.1 | **94.0** |
+| `null_frac` | `slot` and `p_null` | 27, 28, 29, 79, 87 | 97.4 | **91.2** |
+| `reltuples` | `live_rows` | 64, 65, 67, 69, 84 | 99.6 | **99.6** |
+
+So the floor column is immune, by construction, to every duplication-estimate error — which is precisely what it was added for — and it is fully exposed to the width, NULL-fraction and row-count family. A reader who follows this page's alerting rule is protected against 9 of the 21 point-estimate false positives and against none of the 12 critical ones.
+
+### The twelve critical false positives
+
+All twelve, with what a reader would see and whether anything in the output warns them:
+
+| # | Fixture | floor | actual | `status` | `caveats` | Suppressed by the filed rule? |
+|---|---|---|---|---|---|---|
+| 84 | `f84` | **99.6** | 0.0 | ok | *(empty)* | no |
+| 69 | `p69` | **99.5** | 0.0 | ok | *(empty)* | no |
+| 85 | `f85` | **94.0** | 0.0 | ok | `partial: duplicates from table statistics; deduplication credited` | no |
+| 64 | `p64` | **93.5** | −0.1 | ok | *(empty)* | no |
+| 83 | `f83` | **92.2** | 0.0 | ok | `no statistics row for an index column` | no |
+| 78 | `f78` | **92.1** | 0.0 | ok | `partial: duplicates from table statistics; deduplication credited` | no |
+| 79 | `f79` | **91.2** | 0.0 | ok | `partial: duplicates from table statistics; deduplication credited` | no |
+| 32 | `p32` | **90.1** | 0.0 | ok | `partial: duplicates from table statistics; deduplication credited` | no |
+| 30 | `p30` | **87.6** | 0.0 | ok | `partial: duplicates from table statistics; deduplication credited` | no |
+| 50 | `p50` | **86.7** | 0.0 | ok | `no statistics row for an index column` | no |
+| 47 | `p47` | **84.0** | 0.0 | ok | *(empty)* | no |
+| 49 | `p49` | **80.4** | 0.0 | ok | `no statistics row for an index column` | no |
+
+Every one has `status = ok`, and the filed rule suppresses on `never analyzed`, `row-count sources disagree: analyze first` and `statistics not visible to this role` — none of which appears. **Zero of twelve are caught.** The `row-count sources disagree` test is the one that would have fired, and the statement disables it for partial indexes on purpose (`CASE WHEN NOT is_partial AND ...`), because a partial index legitimately holds fewer rows than its table.
+
+The four with no caveat at all are the two worst classes. Tests 64, 69 and 84 are stale `reltuples`: build the index over a small subset, then grow the subset. Test 84 is the extreme — 1,000 rows at build time, 496,000 at read time, `modelled_rows` 1,000 against 1,363 live blocks, 99.6%. Test 47 is the wide INCLUDE column, which produces no caveat because `dedup_applies` is false (INCLUDE closes the gate, [nbtutils.c:5144-5147](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147)) and no statistics row is missing — the model simply believes a 13-byte payload where a 204-byte one is stored.
+
+### The eight false negatives
+
+Eight readings under 45% against a measured reclaim of 50% or more:
+
+| # | Fixture | floor | actual | Cause | Caveat present |
+|---|---|---|---|---|---|
+| 65 | `p65` | 0.0 | 89.1 | `reltuples` predates the delete; no VACUUM | `partial: predicate subset may be stale` |
+| 67 | `p67` | 0.0 | 89.1 | rows left the predicate; no VACUUM | `partial: predicate subset may be stale` |
+| 86 | `f86` | 18.4 | 73.6 | one key group in the subset, table-wide `n_distinct` negative so no credit | none |
+| 87 | `f87` | 16.1 | 73.6 | subset is all-NULL, table-wide `null_frac` small | `partial: duplicates from table statistics` |
+| 88 | `f88` | −86.9 | 74.7 | table-wide `avg_width` 192 against a 9-byte subset | none |
+| 89 | `f89` | −13.5 | 73.0 | two-column key correlated only in the subset; the product clamps | none |
+| 90 | `f90` | 18.4 | 73.6 | real deduplication far stronger than the estimate | none |
+| 91 | `f91` | 16.2 | 94.3 | width over-prediction plus 95% deleted pages | none |
+
+Tests 65 and 67 are the already-filed `i_stale_part` failure with a caveat attached; the repair was not re-measured here, but the same shape is measured earlier on this page, where one `ANALYZE` moves a drained partial index's model from 112 blocks to 12 against a 12-block rebuild ([Partial indexes and the statistics state](#partial-indexes-and-the-statistics-state)). The other six are new, and they are the same statistics gap running the other way: a model that over-prices the rebuilt index cannot see real reclaimable space. Note that a false negative is the *safe* direction for an alert — nothing is claimed that is not there — and the cost is a missed rebuild, so these six sit behind the twelve false positives in priority.
+
+Tests 86 and 90 also expose why the negative-`n_distinct` guard, which is correct for the point estimate, is expensive here: for a partial index the statement refuses to trust a negative `n_distinct` at all (`WHEN c.n_distinct < 0 AND NOT i.is_partial`), so `key_groups` becomes "all distinct" and `tids_per_tuple` 1.0, while the real index holds one key group of 25,000 TIDs.
+
+### What one ANALYZE repairs, and what nothing repairs
+
+The twelve critical false positives split cleanly in two, and the dividing line is the `ANALYZE` branch from two sections up. Re-reading each index after one `ANALYZE` on its table, with nothing else changed:
+
+| # | Fixture | floor as filed | floor after one `ANALYZE` | Repaired? |
+|---|---|---|---|---|
+| 64 | `p64` | 93.5 | **0.3** | yes |
+| 69 | `p69` | 99.5 | **0.0** | yes |
+| 84 | `f84` | 99.6 | **0.0** | yes |
+| 49 | `p49` | 80.4 | **−0.4** | yes |
+| 50 | `p50` | 86.7 | **1.1** | yes |
+| 83 | `f83` | 92.2 | **1.6** | yes |
+| 85 | `f85` | 94.0 | **0.9** | yes |
+| 30 | `p30` | 87.6 | 87.9 | **no** |
+| 32 | `p32` | 90.1 | 90.6 | **no** |
+| 47 | `p47` | 84.0 | 84.1 | **no** |
+| 78 | `f78` | 92.1 | 91.9 | **no** |
+| 79 | `f79` | 91.2 | 91.2 | **no** |
+
+Seven are repairable and five are not, and which group an index lands in is decided by where its inputs come from. `reltuples` and expression statistics are both written by `ANALYZE`, so tests 64, 69, 84, 49, 50 and 83 are cured by one; test 85's table changed uniformly, so re-analysing the table fixed its `avg_width` too. The five survivors are plain-column partial indexes whose subset's width or NULL fraction differs from the table's — and no `ANALYZE` can help, because there is no catalog row for `ANALYZE` to write. `ALTER TABLE ... ALTER COLUMN ... SET (n_distinct = ...)` cannot substitute: it overrides `n_distinct`, which only moves the point estimate, and there is no equivalent override for `avg_width` or `null_frac`.
+
+That makes the five a hard boundary for a catalog-only method, and the honest repair is a sampled probe of the predicate subset — the same trick [Method A-prime](#method-a-prime-still-fixes-variable-key-width) already uses for variable-width keys, applied to the predicate rather than the whole table. On `f79` that probe reads `null_frac` 0 and mean width 304 against the table's 0.9757 and 304, which is the difference between a 28-byte modelled slot and the 316-byte real one.
+
+### Two changes the partial-index tests justify
+
+Neither is applied to the filed statement, because both are answers to a brief this follow-up did not have; both are measured, and together they take the 12 critical false positives to 1.
+
+**Change A — add two existing caveats to the alert-suppression set.** `no statistics row for an index column` and `partial: duplicates from table statistics` are already emitted; the alerting rule just does not consult them. Suppressing on both catches tests 30, 32, 49, 50, 78, 79, 83 and 85 — **8 of the 12** — and over all 74 partial fixtures it costs **zero** true detections, because every reading that is both above 50 on the floor and genuinely reclaimable (tests 68, 74, 75 and 77, plus the borderline 73) has an empty `caveats` string.
+
+**Change B — give a partial index its own staleness caveat.** A partial index's `live_rows` comes only from `pg_class.reltuples`, which nothing but a build, an `ANALYZE`, or a non-estimated `VACUUM` refreshes, so `pg_stat_all_tables.n_mod_since_analyze` is the signal that it may be stale. Measured on four purpose-built indexes:
+
+| Index | State | `idx_reltuples` | `n_mod_since_analyze` | floor | Would change B fire? |
+|---|---|---|---|---|---|
+| `mi1` | healthy, freshly built | 100,000 | **0** | 0.0 | no |
+| `mi2` | 300,000 rows inserted into the subset, no ANALYZE | 20,000 | **300,000** | 93.5 | yes |
+| `mi3` | 399,000 inserted, then VACUUM, no ANALYZE | 1,000 | **399,000** | 99.5 | yes |
+| `mi4` | genuine 89% reclaimable, VACUUM + ANALYZE | 9,827 | **0** | 89.5 | no |
+
+The separation is total: 0 against 300,000 and 399,000, with both a healthy fresh index and a genuinely bloated one on the zero side. Adding `CASE WHEN is_partial AND tbl_mod_since_analyze > 0 THEN 'partial: table changed since the last ANALYZE' END` to the caveat list, and that string to the suppression set, catches tests 64, 69 and 84 — **3 more** — and leaves only test 47, the wide INCLUDE column, which no catalog signal reveals.
+
+Change B has one measured hazard, which is the same `pgstat` ordering behavior the harness hit: because `pgstat_report_analyze` zeroes `mod_since_analyze` absolutely ([pgstat_relation.c:331-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337)) while pending `changed_tuples` are added afterwards ([pgstat_relation.c:857-859](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L859)), a session that bulk-loads and then analyses in the same second can leave the counter non-zero — measured at 500,000 on a table whose `ANALYZE` had just completed. That direction is safe: it suppresses an alert that would have been correct, rather than raising one that is not.
+
+**What neither change does.** Neither improves a single number: `expected_blocks` and `floor_blocks` are untouched, so both are alert-routing changes on top of the same arithmetic. The eight false negatives are unaffected by both, and the five unrepairable false positives keep reporting 84-92% for any reader who looks at the percentage instead of the caveats.
+
+### Three findings the partial-index run turned up in passing
+
+**A B-tree index tuple over 510 bytes is compressed in place, which the model does not know.** `index_form_tuple` tries pglz on any varlena datum above `TOAST_INDEX_TARGET` when the attribute's storage is extended or main ([indextuple.c:116-133](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L116-L133)), and that threshold is `MaxHeapTupleSize / 16` = 510 bytes at `block_size` 8192 ([heaptoast.h:63-68](../../../../raw/postgres-17/src/include/access/heaptoast.h#L63-L68)). Measured on one table with two partial indexes over columns of the same length: 20,000 incompressible 481-byte keys built a **1560**-block index, and 20,000 highly compressible 1001-byte keys built a **142**-block one. The model priced the second at a 68-byte slot and read 76.8% / −35.2% — over-prediction, the safe direction, but for a reason no width statistic can express.
+
+**A same-session `VACUUM` after a `DELETE` can leave `n_dead_tup` non-zero.** Measured at exactly the delete count on three tables, cleared by a second `VACUUM` from a fresh session. The mechanism is the absolute-write-versus-pending-delta ordering cited above; it matters here because `n_dead_tup > 0` is one half of the statement's only partial-index caveat, so the caveat can appear on a table that has no dead tuples and disappear on one that does.
+
+**An append-only partial index is denser than its own rebuild.** Test 64's index measured 880 blocks live and **881** after `REINDEX`, an actual reclaim of −0.1%, because inserting monotonically increasing keys splits the rightmost leaf at fillfactor rather than 50:50 ([nbtsplitloc.c:286-291](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L286-L291), [nbtsplitloc.c:94-101](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L94-L101)) and the last page is left partly full either way. It is the counterpart of [change 5](#change-5-what-the-baseline-is-and-what-a-reading-means)'s point: for an append-only workload the live index is already at the model's reference density, so the only correct reading is zero.
+
+### The partial-index harness, runnable
+
+The scoring procedure below is the whole harness; the fixtures are one `CREATE TABLE` plus one `CREATE INDEX` each, and the per-test shapes are stated in the tables above. Run it in a scratch database, never beside production data — it writes tables, rebuilds indexes and reads the estimator view.
+
+```sql
+SET statement_timeout = '600s';
+SET lock_timeout = '2s';
+
+-- the estimator, installed as a view: the corrected statement with all six
+-- changes, with the triage filter, ORDER BY and LIMIT removed and the internal
+-- columns exposed.  See "The corrected statement, with all six changes".
+-- CREATE VIEW est AS WITH RECURSIVE idx AS ( ... ) SELECT ... FROM modelled;
+
+CREATE TABLE res (
+  num int primary key, req text, idx text,
+  blocks_before int, blocks_after int, size_before bigint, size_after bigint,
+  status text, wsp numeric, wspf numeric, ws text,
+  modelled_rows bigint, key_groups bigint, tids numeric, caveats text,
+  exp_blocks numeric, floor_blocks numeric, slot numeric, leaf_cap numeric,
+  nmax numeric, dedup_applies bool, is_partial bool, idx_reltuples bigint,
+  true_rows bigint, note text
+);
+
+CREATE PROCEDURE score(p_num int, p_req text, p_idx text,
+                       p_rowsql text DEFAULT NULL, p_note text DEFAULT NULL)
+LANGUAGE plpgsql AS $$
+DECLARE r record; sb bigint; sa bigint; tr bigint;
+BEGIN
+  IF p_rowsql IS NOT NULL THEN EXECUTE p_rowsql INTO tr; END IF;
+  sb := pg_relation_size(p_idx::regclass);
+  SELECT * INTO r FROM est WHERE indexname = p_idx;
+  IF NOT FOUND THEN RAISE EXCEPTION 'estimator returned no row for %', p_idx; END IF;
+  EXECUTE format('REINDEX INDEX %I', p_idx);
+  sa := pg_relation_size(p_idx::regclass);
+  INSERT INTO res VALUES (p_num, p_req, p_idx, sb / 8192, sa / 8192, sb, sa,
+    r.status, r.wasted_space_pct, r.wasted_space_pct_floor, r.wasted_space,
+    r.modelled_rows, r.key_groups, r.tids_per_tuple, r.caveats,
+    r.expected_blocks, r.floor_blocks, r.slot, r.leaf_cap, r.nmax,
+    r.dedup_applies, r.is_partial, r.idx_reltuples, tr, p_note);
+END $$;
+```
+
+One fixture per test, in the prescribed order. Test 32, the extreme width mismatch, is representative:
+
+```sql
+CREATE TABLE pw32 AS
+SELECT (i % 50 = 0) AS hot,
+       CASE WHEN i % 50 = 0 THEN repeat('W', 390) || lpad(i::text, 10, '0')
+            ELSE repeat('n', 18) || (i % 9)::text END AS s
+  FROM generate_series(1, 500000) i;
+ANALYZE pw32;
+CREATE INDEX p32 ON pw32 (s) WHERE hot;
+SELECT pg_stat_force_next_flush();
+CALL score(32, 'extreme width mismatch, 27 against 401 bytes', 'p32',
+           'SELECT count(*) FROM pw32 WHERE hot');
+```
+
+Two harness rules that the measurements above depend on. Any fixture that runs `VACUUM` or `ANALYZE` after its DML must call `pg_stat_force_next_flush()` **before** the `VACUUM`, or the pending delta re-inflates `n_dead_tup` and raises a caveat that is not real. And `WITH (fillfactor = ...)` precedes `WHERE` in `CREATE INDEX`, so tests 54 and 55 are `CREATE INDEX p54 ON pf (k) WITH (fillfactor = 100) WHERE hot`.
+
+Scoring is one query over `res`:
+
+```sql
+SELECT num, idx, blocks_before, blocks_after,
+       round(100.0 * (size_before - size_after) / greatest(size_before, 1), 1) AS actual,
+       wsp, wspf,
+       CASE
+         WHEN wspf IS NULL THEN 'UNMEASURED'
+         WHEN wspf >= 50 AND 100.0 * (size_before - size_after) / greatest(size_before,1) < 10  THEN 'CRITICAL FALSE POSITIVE'
+         WHEN wspf >= 50 AND 100.0 * (size_before - size_after) / greatest(size_before,1) < 45  THEN 'FALSE POSITIVE'
+         WHEN wspf >= 50 AND 100.0 * (size_before - size_after) / greatest(size_before,1) < 50  THEN 'BORDERLINE'
+         WHEN wspf <  45 AND 100.0 * (size_before - size_after) / greatest(size_before,1) >= 50 THEN 'FALSE NEGATIVE'
+         ELSE 'PASS'
+       END AS verdict, caveats
+  FROM res ORDER BY num;
+```
+
+Cost, on the database as the scored run left it — 86 B-tree indexes over 41,576 blocks, 76 of them partial: 35.2 ms cold, then 22.6 and 21.7 ms. `pg_stat_force_next_flush()` and `statement_timeout`/`lock_timeout` are the only settings the harness touches; both timeouts are `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)), so they apply at session or transaction scope and need no reload or restart.
+
 ### Follow-up: change 6 in the statement, and every table re-measured
 
 Change 6 is now inside [the corrected statement](#the-corrected-statement-with-all-six-changes) rather than beside it, and **every server-measured table on this page was re-run on 17.11**. Nothing here is a 17.10 observation any more, and the four servers used are:
@@ -2596,6 +3202,8 @@ The one number that mattered operationally is still the same: over 28 fixtures w
 - Column-rename follow-up, source coverage (no server run; this follow-up is source-only): output column labelling and sorting in `queries.sgml` (the Column Labels section and the `ORDER BY`-by-output-column rule); query-jumble surfaces in `queryjumblefuncs.c` (`CleanQuerytext`, `JumbleQuery`, `_jumbleNode` and the two generated includes), `gen_node_support.pl` (per-field `query_jumble_ignore` emission), `primnodes.h` (`TargetEntry.resname`), and `pgstatstatements.sgml` (the `queryid` post-parse-analysis and stability paragraphs); query-text surfaces in `pg_stat_statements.c` (`pgss_store`'s entry lookup, `generate_normalized_query`, `qtext_store`) and `postgres.c` (`log_statement` and duration logging in `exec_simple_query`); identifier limits in `pg_config_manual.h` (`NAMEDATALEN`), `scan.l` (the `{identifier}` rule) and `scansup.c` (`downcase_truncate_identifier`, `truncate_identifier`); type and error surfaces in `pg_proc.dat` (`pg_size_pretty` return types), `varlena.c` (`bttextcmp`, `text_cmp`, `varstr_cmp`) and `parse_relation.c` (`errorMissingColumn`); vocabulary in `glossary.sgml` (the Bloat entry), `ref/copy.sgml` ("recover the wasted space"), `maintenance.sgml` (routine reindexing), `pgstattuple--1.4.sql` (`free_space`/`free_percent`), plus whole-tree string searches for `bloat` across `system_views.sql`, `pg_proc.dat` and every contrib SQL script.
 - Mandatory-tests follow-up, source coverage: the equal-image decision in `nbtutils.c` (`_bt_allequalimage`'s INCLUDE early return, its per-key-attribute loop over `rd_opfamily`/`rd_opcintype`/`rd_indcollation`, the `get_opfamily_proc` lookup followed by the actual call and the first-false `break`, and the `debugmessage` block that the early return skips), `nbtsort.c` (`_bt_leafbuild`'s `debugmessage = true` call, `_bt_load`'s three-way `deduplicate` condition), `nbtree.h` (`BTEQUALIMAGE_PROC`, `BTNProcs`, `BTGetDeduplicateItems`); the two stock support functions in `datum.c` (`btequalimage`'s unconditional true and its header comment about `opcintype`) and `varlena.c` (`btvarstrequalimage`'s C-collation/default-collation/`get_collation_isdeterministic` branches); function resolution in `fmgr.c` (`fmgr_info_cxt_security`'s built-in fast path that never consults `pg_proc`, the `INTERNALlanguageId` branch that resolves an alias by `prosrc` through `fmgr_lookupByName`, `OidFunctionCall1Coll`, and `FunctionCall1Coll`'s NULL-result `elog`); support-function validation in `opclasscmds.c` (`assignProcTypes`'s one-argument, boolean-return and non-cross-type checks for `BTEQUALIMAGE_PROC`, and the two `amadjustmembers` call sites) and `nbtvalidate.c` (`btvalidate`'s `check_amproc_signature` for support number 4 and its `invalid support number` default), with the SQL entry point in `amapi.c` (`amvalidate`); the nondeterministic-collation DDL refusal for the three pattern opclasses in `index.c`; catalog shape in `pg_amproc.dat` (every B-tree `amprocnum => '4'` row), `pg_proc.dat` (`btequalimage`, `btvarstrequalimage`), `pg_index.h` (`indclass`, `indcollation`, `indnatts`, `indnkeyatts`), `pg_collation.h` (`collisdeterministic`); `analyze.c`'s `stawidth = total_width / nonnull_cnt` assignment; `guc_tables.c` (`client_min_messages`); the contrib cross-check in `amcheck/verify_nbtree.c` (`bt_index_check`'s metapage-versus-`_bt_allequalimage` comparison and its `ERRCODE_INDEX_CORRUPTED` message) and `pageinspect/btreefuncs.c` (`bt_metap`, `bt_page_items`); the documentation in `btree.sgml` (the `equalimage` support-function contract, the every-column-must-return-true rule, the stock-function convention and the third-party-extension recommendation, and the unsafe-case list covering nondeterministic collations, `numeric`, `jsonb`, `float4`/`float8`, container types and `INCLUDE`); and the upstream tests `alter_generic.sql`/`.out` (cross-type `ADD FUNCTION 4`) and `opr_sanity.sql`/`.out` (which core opclasses may omit `btequalimage`).
 - Mandatory-tests follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, in a scratch database created for this run, plus the isolated 12.2 server from its own pin for test 17. Fixtures: `t`, 500,000 rows with 5,000 distinct keys over `int4`, `int8`, `text`, `numeric`, `float4`, `float8`, a unique `int4` and a 7-value `int4`, carrying 24 B-tree indexes that cover the seventeen requirements — two deterministic-collation text indexes (default and ICU `und`), one nondeterministic ICU index, four expression indexes chosen so the expression's type and collation differ from the underlying column's, an `INCLUDE` index, a `deduplicate_items = off` twin per key type, a unique index, and six custom-opclass indexes; and `t2`, the same shape on `(int4, int8)` with a `CREATE STATISTICS ... (ndistinct)` object so the mixed-key over-credit becomes visible as a percentage. Eight custom operator classes registered SQL, PL/pgSQL and `LANGUAGE internal` support functions returning true, false and NULL, plus one that raises. Ground truth per index is the build's own `DEBUG1` verdict, `bt_metap().allequalimage`, and `count(tids) > 0` over `bt_page_items(index, 1)`, with a `deduplicate_items = off` twin as the physical size baseline; `pageinspect` and `amcheck` were installed as ground truth only. Both statements on this page were installed as views generated mechanically from this page's own SQL text — the filed text and a copy with only the `all_equalimage` subquery replaced — with the 1 MB triage filter, `ORDER BY` and `LIMIT` removed and `dedup_applies`, `all_equalimage`, `slot`, `leaf_cap`, `expected_blocks` and `floor_blocks` exposed. Additional probes: `amvalidate` on every custom opclass, four rejected `ADD FUNCTION 4`/`CREATE INDEX` DDL shapes, `CREATE OR REPLACE FUNCTION pg_catalog.btequalimage`, a rename-and-squat of `pg_catalog.btvarstrequalimage`, a post-build support-function mutation followed by `bt_index_check` and `REINDEX`, the reverse mutation via `ALTER OPERATOR FAMILY ... ADD FUNCTION 4` followed by `REINDEX`, and a stock-database census of B-tree `amprocnum = 4` rows. Both servers were stopped afterwards, with the scratch databases dropped and `pg_catalog.btequalimage` restored to `LANGUAGE internal`.
+- Partial-index mandatory-tests follow-up, source coverage: how `ANALYZE` treats a partial index in `analyze.c` (`do_analyze_rel`'s per-index `AnlIndexData` setup and its `ii_Expressions != NIL` condition, the `tupleFract = 1.0` default, `compute_index_stats`'s "ignore index if no columns to analyze and not partial" skip, its `ExecPrepareQual`/`ExecQual` predicate filter and the `continue` that excludes non-matching sample rows, the `numindexrows`/`tupleFract`/`totalindexrows` derivation, the `compute_stats` call over the predicate-selected sample, and the per-index `vac_update_relstats` that writes only `relpages` and `reltuples`); index row-count writers in `index.c` (`index_update_stats`), `vacuumlazy.c` (`update_relstats_all_indexes` and its `istat == NULL || istat->estimated_count` skip, `lazy_cleanup_all_indexes`'s `estimated_count` computation, `lazy_vacuum_one_index`'s unconditional `ivinfo.estimated_count = true`) and `nbtree.c` (`btvacuumcleanup`'s `stats == NULL` branch, its `_bt_vacuum_needs_cleanup` early return, and the cleanup-only `stats->estimated_count = true`); statistics visibility in `system_views.sql` (`pg_stats` over `pg_statistic` joined to `pg_class`, so index rows appear, plus its `has_column_privilege`/RLS filter; `pg_stats_ext`'s `pg_has_role` filter; `pg_stat_all_tables`'s `n_mod_since_analyze`/`n_live_tup`/`n_dead_tup`); the cumulative-statistics write model in `pgstat_relation.c` (`pgstat_report_vacuum` and `pgstat_report_analyze` writing `live_tuples`/`dead_tuples`/`mod_since_analyze` absolutely under a lock, against `pgstat_relation_flush_cb` adding the backend's pending `delta_live_tuples`/`delta_dead_tuples`/`changed_tuples` on top and clamping at zero, plus `AtEOXact_PgStat`'s delta construction); index-tuple sizing in `indextuple.c` (`index_form_tuple_context`'s external-fetch branch and its in-line `toast_compress_datum` above the size target) with `heaptoast.h`'s `TOAST_INDEX_TARGET` definition and comment; leaf-split density in `nbtsplitloc.c` (`_bt_findsplitloc`'s header comment on the rightmost-page case, the `state.is_rightmost` branch that always applies `fillfactormult`, and `_bt_afternewitemoff`); and the deduplication surfaces the partial fixtures re-exercise in `nbtutils.c` (`_bt_allequalimage`'s INCLUDE early return, `_bt_keep_natts_fast`'s NULL equality) and `nbtsort.c` (`_bt_load`'s three-way condition).
+- Partial-index mandatory-tests follow-up, exact-pin execution: one isolated **17.11** server built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, in its own scratch database. 74 partial B-tree indexes over 60 tables of 200,000 to 1,000,000 rows cover the sixty partial-index requirements, the eight critical-false-positive constructions and the six critical-false-negative constructions: four selectivity steps from 1% to 80%; duplicated, unique, skewed-`n_distinct`, MCV-mismatched, NULL-heavy, NULL-free, all-NULL, wider, narrower, extreme-width and variable-width subsets; six deduplication shapes including a single 100,000-TID key group, a NULL-only subset, a `deduplicate_items = off` twin and a partial unique index; eight multi-column, extended-statistics and `INCLUDE` shapes with and without `CREATE STATISTICS ... (ndistinct)`; three partial expression indexes read before and after the `ANALYZE` that first gives them statistics; two ICU collations, one deterministic and one not; three fillfactors; eight predicate shapes including `IS NULL`, `IS NOT NULL`, a timestamp range and a two-column predicate; six staleness and churn paths; eight physical-bloat fixtures from 25% to 95% deletion, indexed-key `UPDATE`s and a contiguous deletion that produces 259 deleted pages; and seven "probe" tables that materialise a predicate subset as its own table so the same statement can be pointed at correct statistics. Ground truth per index is a measured `REINDEX INDEX` (size before and after, from `pg_relation_size`), with `pgstattuple`, `pageinspect` and `amcheck` installed as ground truth only. The statement under test was generated mechanically from this page's own Markdown by heading, with the 1 MB triage filter, `ORDER BY` and `LIMIT` removed and `expected_blocks`, `floor_blocks`, `actual_bytes`, `dedup_applies`, `ext_used`, `is_partial`, `slot`, `leaf_cap` and `nmax` exposed, then installed as a view; one procedure performed every test's capture-then-`REINDEX` sequence so no step could be reordered. Additional probes: `pg_stats` row counts for plain-column against expression partial indexes, per-subset `avg(pg_column_size(...))` and NULL fractions against `pg_stats`, a re-read of all twelve failing indexes after one `ANALYZE`, an `n_mod_since_analyze` separation over four purpose-built indexes, and a compressible-versus-incompressible key pair either side of the 510-byte in-index compression threshold. The server was stopped afterwards.
 - Recommended-statement follow-up (no server run; it selects among statements already filed and measured above): re-read the equal-image decision in `nbtutils.c` (`_bt_allequalimage`'s lookup-then-call and its first-false `break`), `nbtsort.c` (`_bt_leafbuild`'s recomputed flag, `_bt_load`'s three-way `deduplicate` condition), function resolution in `fmgr.c` (`fmgr_info_cxt_security`'s built-in fast path and the `INTERNALlanguageId` branch that resolves by `prosrc`), the stock B-tree `amprocnum => '4'` rows in `pg_amproc.dat`, the operator-class rule in `btree.sgml`, and `guc_tables.c` for `statement_timeout` and `lock_timeout`; plus every statement variant, measurement table, caveat and open question already on this page, which is where the ranking's numbers come from.
 - Change-6-integration follow-up, exact-pin execution on four servers: the whole page was re-measured. One isolated **17.11** install built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, carrying four scratch databases — the 15 named fixtures plus the 9 x 3 x {full, partial} matrix and the duplication-ratio sweep for Methods A/A-prime/B/C/D; the twelve-issue-review fixture family with its nine-point duplication band, statistics-visibility `probe` role and `security_invoker` copies; the 28 mandatory-test fixtures with their eight custom operator classes; and a fresh database for the runnable harness — plus a second 17.11 cluster for the 12-through-17 fixture family, an isolated **14.23** server and an isolated **12.2** server carrying that same family, the mandatory-test subset and the portability probes. Every scored statement text was generated mechanically from this page's own Markdown by `mkviews.py`: the SQL block is extracted by heading, the triage filter, `ORDER BY` and `LIMIT` are stripped, `expected_blocks`, `floor_blocks`, `dedup_applies`, `all_equalimage`, `key_groups`, `tids_per_tuple`, `slot` and `leaf_cap` are exposed, and the result is installed as a view; the pre-change-6 text was produced from the same source by substituting the existence-test gate, and the earlier sweep's three-conjunct form the same way. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy plus, on 17.11, `pgstattuple` page classes and densities, `pageinspect`'s `bt_metap`/`bt_page_stats`/`bt_page_items`, `amcheck`'s `bt_index_check`, and the build's own `DEBUG1` equal-image verdict — all as ground truth only. New probes in this run: `ei_alias(oid)` versus `ei_true(oid)` registered in turn on the same custom opfamily to price change 6's one under-credit, a never-rebuilt 1.5M-row random-insertion twin for change 5, and per-server timing of both texts. All servers were stopped afterwards.
 
@@ -2694,9 +3302,27 @@ The one number that mattered operationally is still the same: over 28 fixtures w
 | The recommended gate swap can only move an index whose key opclass is custom, because every stock B-tree equal-image row names one of the two whitelisted `LANGUAGE internal` functions and a built-in OID never reaches `pg_proc` at all | [pg_amproc.dat:143](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L143), [pg_amproc.dat:206](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L206), [pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241), [fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178) |
 | An internal alias of a whitelisted function is credited by change 6 and really does deduplicate, so the gate's one under-credit is confined to non-internal support functions | [fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), plus the two-row `ALTER OPERATOR FAMILY ... ADD FUNCTION 4` re-measurement in [What change 6 costs](#what-change-6-costs) |
 | The whole page's numbers come from one pin and one set of servers, because each statement variant is generated from this page's own SQL blocks before it is scored | the re-run recorded in [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured); pin `786db8dcf168bd9df8f55047337525ac19118b1c` |
+| `ANALYZE` builds per-column statistics for an index only when the index has expressions, so a partial index on a plain column gets no statistics of its own | [analyze.c:448-478](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478), [analyze.c:861-863](../../../../raw/postgres-17/src/backend/commands/analyze.c#L861-L863), plus the measured 0 `pg_stats` rows for six plain-column partial indexes against 3 for the expression ones |
+| A partial index's own statistics, when it has them, are conditioned on the predicate: `ANALYZE` evaluates the predicate and skips every sample row that fails it | [analyze.c:899-908](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L908), [analyze.c:955-975](../../../../raw/postgres-17/src/backend/commands/analyze.c#L955-L975), measured as `n_distinct` 20 on `lower(name)` inside `WHERE active` against 100 across the table |
+| A partial index's `reltuples` is `ceil(tupleFract * totalrows)` from the same predicate-filtered sample, and it is the only per-index number `ANALYZE` writes for a plain-column partial index | [analyze.c:948-953](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953), [analyze.c:647-663](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663) |
+| A VACUUM that finds nothing to delete can never refresh a B-tree index's `reltuples`, in either branch | [nbtree.c:859-874](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L859-L874), [nbtree.c:876-893](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L876-L893), [vacuumlazy.c:3069-3099](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099), [vacuumlazy.c:2420-2435](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2420-L2435) |
+| VACUUM and ANALYZE write the live/dead/modified counters absolutely, while a backend's pending deltas are added on top when they flush, so a same-session `DELETE; VACUUM` can leave `n_dead_tup` non-zero | [pgstat_relation.c:326-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L326-L337), [pgstat_relation.c:847-867](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L847-L867), measured at exactly the delete count on three tables |
+| A B-tree index datum above `MaxHeapTupleSize / 16` (510 bytes at `block_size` 8192) is pglz-compressed in place, so a width-based model can over-predict as well as under-predict | [indextuple.c:116-133](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L116-L133), [heaptoast.h:63-68](../../../../raw/postgres-17/src/include/access/heaptoast.h#L63-L68), measured as 142 blocks for 20,000 compressible 1001-byte keys against 1560 for 20,000 incompressible 481-byte ones |
+| An append-only index's rightmost leaf splits at fillfactor rather than 50:50, so a monotonically loaded index is already at the model's reference density | [nbtsplitloc.c:94-101](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L94-L101), [nbtsplitloc.c:286-291](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L286-L291), measured as 880 blocks live against 881 rebuilt |
+| The floor model cannot be moved by a duplication estimate, only by `live_rows`, `slot` and `fillfactor` | the statement's own `leaves`/`levels`/`modelled` CTEs in [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), confirmed by tests 80, 81 and 82 reading 0.0, −217.2 and 0.0 on the floor while their point estimates reach 70.6 |
+| The partial-index failures are a statistics-sourcing defect, not an arithmetic one | the seven probe tables in [Why a partial index is scored against whole-table statistics](#why-a-partial-index-is-scored-against-whole-table-statistics), each modelling its subset to within 4.1 points and each matching the partial twin's rebuilt size exactly |
 
 ## Open Questions
 
+- **The 74 partial-index tests scored one statement, on one server, at one scale.** Only [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes) was run against them, at the asker's direction, so neither the earlier v17 sweep nor the v12 page's Method A has a partial-index verdict — and the earlier sweep would fail more of them, since it has no floor column to fall back on. Everything was measured on one 17.11 server at `block_size` 8192, `fillfactor` 90 unless the test varies it, `MAXALIGN` 8, and tables of 200,000 to 1,000,000 rows. No 12.2 or 14.23 run was made for this group, so the portability claim the rest of the page carries is not established for the partial-index numbers.
+- **Neither proposed change was applied or re-scored end to end.** [Two changes the partial-index tests justify](#two-changes-the-partial-index-tests-justify) is arithmetic over the recorded `caveats` strings plus one four-index measurement, not a re-run of all 74 tests against an amended statement. The claim that change A catches 8 and change B another 3 follows from which caveat each failing row carries; a statement carrying both changes was never installed as a view and scored, and the interaction between them (a row that would carry both caveats) was never exercised.
+- **The `n_mod_since_analyze` threshold is untested at any value but zero.** Change B was measured as 0 against 300,000 and 399,000, which is a total separation on four purpose-built indexes but says nothing about where to put a threshold on a real workload. `> 0` would suppress every partial index on any table with recent writes, which is most of them; a ratio against `idx_reltuples` is the obvious refinement and no fixture calibrated one.
+- **The five unrepairable false positives have a named repair that was not implemented.** A sampled probe of the predicate subset would supply the width and NULL fraction the catalog cannot, and the probe-table experiment shows the arithmetic is right once it has them, but no SQL that evaluates `pg_get_expr(indpred, indrelid)` against the table and feeds the result back into the model was written or measured. Whether such a probe can stay inside this page's core-SQL-only constraint, what it costs on a large table, and how it interacts with the 1% sampling Method A-prime uses are all open.
+- **"0% reclaimable" is again an argument from freshly built.** As with the deduplication-gate fixtures, the 52 PASSes and the 12 critical false positives rest on live-equals-rebuilt, which the `REINDEX` in each test confirms by returning the same block count — but no independent `CREATE INDEX CONCURRENTLY` copy was taken, so a `REINDEX` that happened to reproduce a suboptimal layout would not have been caught. The eight physically bloated fixtures are the exception: their `REINDEX` moved the size, so the reclaim is measured rather than assumed.
+- **The compression finding is one pair of columns.** 142 blocks against 1560 came from one compressible and one incompressible key shape at 1001 and 481 bytes on the same table. The 510-byte threshold is read from `TOAST_INDEX_TARGET` and not bisected, no intermediate width was tried, and `pglz` was the only compression method exercised — `lz4` was not available in this build and the per-attribute `COMPRESSION` clause was never set.
+- **Test 47's failure has no detection signal at all, and that was not pursued further.** A wide INCLUDE column is priced from the table's `avg_width` with no caveat and no missing statistics row, and neither proposed change touches it. Whether `pg_stats` for the INCLUDE column could be compared against the subset cheaply, or whether the statement should simply refuse to price partial `INCLUDE` indexes, was not tested.
+- **The borderline cell was resolved by judgement, not by measurement.** Test 73 reads 50.7% against 49.6% and the pass/fail rule as written classifies it as neither pass nor fail. It is filed as a PASS on a 1.1-point gap, and the suggested "exceeds actual by more than 5 points" refinement was applied to no other cell, because no other cell falls in the band.
+- **The two `pgstat` artifacts are measured but their flush path is not traced to a single call site.** The absolute-write-versus-pending-delta explanation is read from `pgstat_report_analyze`/`pgstat_report_vacuum` against `pgstat_relation_flush_cb`, and the fix (flush before `VACUUM`) is confirmed to work, but no instrumented run confirmed the ordering. This is the third time this page has hit the same class of artifact, and the earlier two open questions on it remain open.
 - **The v12 fixtures were reconstructed, not recovered.** The v12 page records each fixture's shape and its resulting block counts but not its DDL, so `idx_multi`, `idx_var`, `idx_rand` and `idx_churn` differ from the v12 page's block counts for reasons that include fixture choice. Nine of fifteen fixtures reproduce the v12 block count exactly, which bounds but does not eliminate the risk that a difference attributed to v17 is really a difference in the recipe.
 - **v12 numbers in the original comparison are quoted, not re-measured.** Every "v12 page" figure in the sections above comes from that page's own tables, so those figures are attributions rather than evidence from the v12 checkout. The 12.2 server used for the v12/v17 follow-up carried new fixtures and does not re-measure the v12 page's own numbers.
 - **The 12.2 column of the follow-up is measurement plus history, not v12 source citation.** This page may cite only `raw/postgres-17/`, so every 12.2 statement above rests on exact-pin execution against a 12.2 server plus this checkout's own commit history. The v12-side source analysis — where v12's `BTNProcs` is 3, what its `btoptions` accepts, and what writes its `reltuples` — belongs on [Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md) and is not filed there yet.
@@ -2889,6 +3515,19 @@ The one number that mattered operationally is still the same: over 28 fixtures w
 - [opr_sanity.out#btree-equalimage](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222)
 - [alter_generic.sql#cross-type-equalimage](../../../../raw/postgres-17/src/test/regress/sql/alter_generic.sql#L444-L446)
 - [alter_generic.out#cross-type-equalimage](../../../../raw/postgres-17/src/test/regress/expected/alter_generic.out#L504-L507)
+- [analyze.c#do_analyze_rel-index-setup](../../../../raw/postgres-17/src/backend/commands/analyze.c#L438-L479)
+- [analyze.c#do_analyze_rel-index-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L620-L664)
+- [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L825-L987)
+- [analyze.c#examine_attribute](../../../../raw/postgres-17/src/backend/commands/analyze.c#L989-L1100)
+- [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099)
+- [vacuumlazy.c#lazy_cleanup_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2349-L2405)
+- [vacuumlazy.c#lazy_vacuum_one_index](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2407-L2470)
+- [pgstat_relation.c#pgstat_report_vacuum](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L206-L268)
+- [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L270-L350)
+- [indextuple.c#index_form_tuple-compression](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L100-L145)
+- [heaptoast.h#TOAST_INDEX_TARGET](../../../../raw/postgres-17/src/include/access/heaptoast.h#L56-L70)
+- [nbtsplitloc.c#rightmost-leaf-fillfactor](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L86-L102)
+- [nbtree.c#btvacuumcleanup-stats-null](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L856-L894)
 
 ## Navigation
 

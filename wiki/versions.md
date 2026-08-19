@@ -14,6 +14,51 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-19: folded **74 partial-index mandatory tests** into the mandatory-tests
+  section of [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), taking
+  that suite to 91 tests in one numbering, against unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). **The recommended statement
+  fails the primary requirement.** Scored on `wasted_space_pct_floor`, as the
+  requirement specifies: 52 PASS, **12 critical false positives**, 1 false positive,
+  8 false negatives, 1 cell the pass/fail rule leaves undefined. The twelve report
+  84.0% to 99.6% waste on freshly built or freshly grown partial indexes that a
+  `REINDEX` reproduces block for block, and the page's filed alerting rule suppresses
+  none of them; the eight false negatives are indexes a `REINDEX` shrinks by 73-94%
+  reading under 20%. One structural fact explains 20 of the 22: `ANALYZE` builds
+  per-column statistics for an index only when the index has expressions, so a
+  partial index on a plain column carries a row count and nothing else and is priced
+  from whole-table `avg_width`, `null_frac` and `n_distinct` — measured as 0
+  `pg_stats` rows for six plain-column partial indexes against 3 for the expression
+  ones. Materialising each predicate subset as its own table and pointing the same
+  statement at it modelled all seven within 4.1 points and matched the partial twin's
+  rebuilt size exactly in all seven, which locates the defect entirely in the
+  statistics input rather than the arithmetic. The floor column is proved immune by
+  construction to the duplication family (`n_distinct`, MCV and extended-statistics
+  mismatches reach 70.6% on the point estimate and 0.0% on the floor) and fully
+  exposed to width, NULL-fraction and row-count mismatch. One `ANALYZE` repairs 7 of
+  the 12 (93.5% to 0.3%, 99.6% to 0.0%, 86.7% to 1.1%) and nothing in core SQL
+  repairs the other 5, because no catalog holds a plain-column partial index's
+  subset width or NULL fraction. Two measured alert-routing changes would take the 12
+  to 1 at zero cost in true detections — suppress on two caveats the statement
+  already emits, and add a partial-index staleness caveat keyed on
+  `n_mod_since_analyze`, which separated 0 from 300,000 and 399,000 across a healthy
+  index, two stale ones and a genuinely 89%-reclaimable one — and until they are
+  applied the recommended-statement section excludes partial indexes from any alert.
+  Three incidental findings were filed: a B-tree index datum over 510 bytes is
+  pglz-compressed in place (142 blocks for 20,000 compressible 1001-byte keys against
+  1560 for 20,000 incompressible 481-byte ones), a same-session `DELETE; VACUUM`
+  leaves `n_dead_tup` non-zero because VACUUM and ANALYZE write the counters
+  absolutely while pending per-backend deltas add on top, and an append-only partial
+  index measured 880 blocks live against 881 rebuilt. Measured on one isolated 17.11
+  server built from the pin `--with-icu --enable-debug`, 74 partial indexes over 60
+  tables, with `REINDEX INDEX` as ground truth and the statement extracted
+  mechanically from the page's own Markdown; the server was shut down cleanly
+  afterwards and its sandbox retained under `.wiki-runtime/tmp/partial17/`. Nine
+  open questions record what was not done, including that no 12.2 or 14.23 run backs
+  the partial-index numbers and that neither proposed change was applied and
+  re-scored end to end. The page remains human-unverified and agent-unverified.
+
 - 2026-08-18: folded change 6 into the recommended B-tree wasted-space statement on
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) and
