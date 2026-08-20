@@ -110,6 +110,12 @@ verified_by_agent: not yet
   - [What change D costs, and what lifts it](#what-change-d-costs-and-what-lifts-it)
   - [Change D on a 12.2 server](#change-d-on-a-122-server)
   - [How the change-D re-score was run](#how-the-change-d-re-score-was-run)
+  - [Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun)
+  - [What the rebuild changes, stage by stage](#what-the-rebuild-changes-stage-by-stage)
+  - [The ninety-one tests and fixtures 92-112, rerun](#the-ninety-one-tests-and-fixtures-92-112-rerun)
+  - [What the rebuild costs](#what-the-rebuild-costs)
+  - [The same suite on a 12.2 server](#the-same-suite-on-a-122-server)
+  - [How the rebuild was run](#how-the-rebuild-was-run)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -609,6 +615,27 @@ a false positive.
 > well as 17.11, so change D matches change C in having been executed on a server
 > older than 17.
 
+Follow-up: Follow AGENTS.md. In PostgreSQL 17, for the question "Testing the
+PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified)",
+review and rebuild "The current recommended statement" for readability and
+maintainability, and rerun all tests on v12 and v17.
+
+> Prompt note: filed as an approved corrected restatement of "follow agents.md,
+> in postgresql 17 , for question:  Testing the PostgreSQL 12 Core-SQL B-Tree
+> Bloat Method on PostgreSQL 17 (unverified) , review and rebuild it for
+> reability and maintenanbility  "The current recommended statement" and rerun
+> all tests on v12 and v17", per the repository's prompt-hygiene rule. The asker
+> confirmed three scoping decisions. The rebuild is a **pure refactor**: every
+> column of every row must match the filed text on every fixture, proven by
+> running both texts side by side, and any behavioral difference is a defect
+> rather than an improvement. "All tests" is the 91 mandatory tests — the 17
+> deduplication-gate tests and the 74 partial-index tests — plus the
+> calibration, `INCLUDE` and non-partial fixtures numbered 92-112. And the
+> rebuilt SQL replaces the block in [The corrected statement, with all six
+> changes](#the-corrected-statement-with-all-six-changes) in place, so
+> [The current recommended statement](#the-current-recommended-statement) keeps
+> naming the same section.
+
 ## Answer
 
 ### Verdict
@@ -646,6 +673,8 @@ A twelfth follow-up removes that last survivor with a third exclusion term, and 
 
 A thirteenth follow-up turns the exclusion on the **non-partial** side for the first time, and the flag is renamed `suppress_row` because it is no longer partial-only. A non-partial expression index with no statistics row of its own is withheld: `ANALYZE` writes an index its own `pg_statistic` rows only for expression attributes ([analyze.c:588-602](../../../../raw/postgres-17/src/backend/commands/analyze.c#L588-L602)), and `index_drop` states the equivalence from the other end — it removes an index's statistics only when `pg_index.indexprs` is non-null ([index.c#index_drop-hasexprs](../../../../raw/postgres-17/src/backend/catalog/index.c#L2341-L2363)) — so an expression index that has none is priced from the statement's 32-byte default width whatever the expression really returns. Control `np97` is the case: **64.9% on a 5201-block index a `REINDEX` reproduces block for block**, from a 44-byte modelled tuple against a measured mean item length of 120 bytes, on leaves `pgstatindex` reads at 91.31% density. Two critical false positives go, none of the 74 partial-index verdicts moves, and unlike change C this silence lifts — one `ANALYZE` takes `np97` to `−16.6%` and reports it again. The price is one true detection: an identical index that a `REINDEX` shrinks 5201 blocks to 523, estimated at 96.4% against a measured 89.9%, is withheld until its table is analysed. See [Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored).
 
+A fourteenth follow-up **rebuilds that statement for readability and maintainability and changes nothing it returns**. It is still sixteen CTEs, but different ones: the three one-column CTEs `sized`, `fit` and `posting` collapse into one `page` CTE of three commented laterals, and the two that replace them take work *out* of the 77-line `idx` CTE — an `env` CTE for the server constants and a `gate` CTE for the whole deduplication decision, leaving `idx` at 62 lines of catalog inputs. Three statistics-state facts are named once in `modelled`, so the caveat list and the `WHERE` clause read the same three booleans instead of two copies of the same conditions, and a 35-line header maps every named change to the stage that carries it. Identity is measured, not asserted: over 95 indexes on 17.11 and 92 on 12.2 the two texts differ by **zero rows in either direction** across every exposed column, the exact texts produce byte-identical `psql` output on both servers, and all 91 mandatory tests plus fixtures 92-112 were rerun on fresh clusters and score identically. The cost is small but real and measured — one extra scan of the `idx` CTE, `+1.3 ms` of planning and `+0.8 ms` of execution on 123 indexes, `+3.2%` of execution on 600. See [Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun).
+
 ### The current recommended statement
 
 **Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen deduplication-gate tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
@@ -653,6 +682,8 @@ A thirteenth follow-up turns the exclusion on the **non-partial** side for the f
 **The carve-out is now inside the statement, not in the reader's head.** The tenth follow-up measured 12 critical false positives over 74 partial-index fixtures — the worst reading 99.6% on an index a `REINDEX` reproduces block for block — and the alerting rule of the day suppressed none of them ([The twelve critical false positives](#the-twelve-critical-false-positives)). The eleventh follow-up applied the two changes those tests justified as one suppression flag in `modelled` and one `AND NOT` conjunct in the `WHERE`, so a partial index whose reading rests on statistics that do not describe its predicate subset **returns no row at all**; that took 12 critical false positives to 1 ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)). The twelfth added change C for the survivor — a partial index carrying a variable-width `INCLUDE` column, whose non-key width can only come from whole-table statistics — and the count over the 74 requirements is **0 critical false positives**, with the same four true detections above 50% still reported ([Follow-up: the wide INCLUDE column excluded, and the suite re-scored](#follow-up-the-wide-include-column-excluded-and-the-suite-re-scored)). Size any index that the statement reports, and any index it silences, with [Method C](#method-c-unchanged-answer-different-write-path) before acting on a rebuild.
 
 **One term now reaches non-partial indexes, and the flag is called `suppress_row`.** Change D withholds a **non-partial expression index with no statistics row of its own**, because `ANALYZE` gives an index statistics only for its expression attributes and the statement then prices the expression at a 32-byte default: control `np97` read 64.9% waste on 5201 blocks a `REINDEX` reproduces exactly, and a mixed `(k, upper(s))` key read 60.5% on 5477 ([Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored)). Three things bound it. It cannot touch a plain index whose statistics come from its table column, measured as 4 of 11 non-partial indexes withheld and every plain control reported, including one with a variable-width `INCLUDE` column reading a correct `−4.0%` ([What change D costs, and what lifts it](#what-change-d-costs-and-what-lifts-it), [What change C costs](#what-change-c-costs)). It **lifts after one `ANALYZE`**, unlike change C, which is why the operational advice for a vanished non-partial index is "analyse the table, then look again". And it leaves one measured hole: a plain index whose column carries `SET STATISTICS 0` reads 64.9% on a healthy 5201-block index and is still reported, because the term requires expressions ([Why expression indexes rather than any missing statistics row](#why-expression-indexes-rather-than-any-missing-statistics-row)).
+
+**The text is now built to be read and edited, and that rebuild moved no number.** The statement had grown by accretion through ten named changes, and the fourteenth follow-up rewrote its shape without touching its arithmetic: a `gate` CTE that holds the whole deduplication decision, a `page` CTE that holds the whole page geometry, three named statistics-state booleans that the caveat list and the `WHERE` clause now share instead of re-spelling, and a header comment that maps every named change to the stage carrying it. The proof that nothing moved is a measurement, not a claim: `EXCEPT` in both directions between the two texts returns **0 rows over 95 indexes on 17.11 and 92 on 12.2**, and all 91 mandatory tests plus fixtures 92-112 score identically ([Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun)). It is not free: the `gate` stage costs one more scan of the `idx` CTE, worth `+1.3 ms` of planning and `+0.8 ms` of execution on a 123-index database and `+3.2%` of execution on a 600-index one ([What the rebuild costs](#what-the-rebuild-costs)).
 
 This section is the page's single pointer to that answer, and it is meant to be kept current. The rest of the page is in filing order, so the statement a reader meets first is not the one to run; whichever statement currently wins on accuracy, fixes and version coverage is named here.
 
@@ -671,7 +702,7 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 
 - **Most accurate.** Over-crediting is the dangerous direction, because it invents reclaimable space on a healthy index, and the recommended text is the only variant with none over the deduplication-gate fixtures: the worst over-credit of the pre-change-6 form reports 78.1% waste on a 1931-block index a rebuild would reproduce block for block, and change 6 removes all five ([The seventeen deduplication-gate tests, and the verdict on each](#the-seventeen-deduplication-gate-tests-and-the-verdict-on-each), [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)). Over the partial-index fixtures the pre-change text over-credits 13 times; changes A and B drop 12 of those 13 rows from the output and change C drops the thirteenth ([The re-scored suite, test by test](#the-re-scored-suite-test-by-test), [Follow-up: the wide INCLUDE column excluded, and the suite re-scored](#follow-up-the-wide-include-column-excluded-and-the-suite-re-scored)). Change D removes two more on the non-partial side, 64.9% and 60.5% on indexes a `REINDEX` reproduces block for block ([Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored)). The five changes supply the rest: `i_q1000` moves from `+5.5%` to `−0.3%`, `i_ext` and `i_sup` from `−206.4%` to `+0.1%`, and the genuinely 49.8%-reclaimable `i_ext50` from an unalertable `−38.3%` to `+49.9%` ([Measured on 17.11, per fixture](#measured-on-1711-per-fixture)).
 - **Most fixes.** Six numbered changes on top of the portable statement's own gate conjuncts and both reporting corrections, and the gate it ends with is the catalog form of what the engine actually does: `_bt_allequalimage` looks the support function up **and calls it**, so a registered function that returns false is the same outcome as no function at all ([nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [nbtutils.c:5156-5169](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5156-L5169)); a fresh build recomputes that answer from the current opclasses ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563)) and `_bt_load` deduplicates only when it, non-uniqueness and the reloption all agree ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152)); the documentation states the same rule from the operator-class side ([btree.sgml#equalimage](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L499-L509)); and `prosrc`, not `proname`, is the identity the engine resolves for a `LANGUAGE internal` function ([fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178)).
-- **Most compatible.** It runs unchanged on 12 through 17, and change 6 adds no construct that 12 lacks: `pg_language.lanname` and `pg_proc.prosrc` both exist on 12.2, where the gate cannot open anyway because no B-tree opfamily has an `amprocnum = 4` row ([The deduplication-gate tests on a 12.2 server](#the-deduplication-gate-tests-on-a-122-server), [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)). Changes C and D add none either, and they are the two exclusion terms that have been run on a 12 server: `pg_attribute.attlen`, `pg_index.indnkeyatts` and `pg_index.indexprs` are all there, the same `INCLUDE` fixture builds the same 787 blocks and the same expression fixture the same 5201, and in both cases the pre-change text reports the index (84.1% and 64.9%) while the amended text withholds it ([Change C on a 12.2 server](#change-c-on-a-122-server), [Change D on a 12.2 server](#change-d-on-a-122-server)). Measured coverage for this exact text is 12.2, 14.23 and 17.11 ([How the same statement behaves on 12.2, 14.23 and 17.11](#how-the-same-statement-behaves-on-122-1423-and-1711)); majors 13, 15 and 16 have no checkout in this repo and were never run, and changes A and B have still only been run on 17.11.
+- **Most compatible.** It runs unchanged on 12 through 17, and change 6 adds no construct that 12 lacks: `pg_language.lanname` and `pg_proc.prosrc` both exist on 12.2, where the gate cannot open anyway because no B-tree opfamily has an `amprocnum = 4` row ([The deduplication-gate tests on a 12.2 server](#the-deduplication-gate-tests-on-a-122-server), [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)). Changes C and D add none either, and they are the two exclusion terms that have been run on a 12 server: `pg_attribute.attlen`, `pg_index.indnkeyatts` and `pg_index.indexprs` are all there, the same `INCLUDE` fixture builds the same 787 blocks and the same expression fixture the same 5201, and in both cases the pre-change text reports the index (84.1% and 64.9%) while the amended text withholds it ([Change C on a 12.2 server](#change-c-on-a-122-server), [Change D on a 12.2 server](#change-d-on-a-122-server)). Measured coverage for this exact text is 12.2, 14.23 and 17.11 ([How the same statement behaves on 12.2, 14.23 and 17.11](#how-the-same-statement-behaves-on-122-1423-and-1711)); majors 13, 15 and 16 have no checkout in this repo and were never run. Changes A and B have now been run on a 12 server too — the whole partial-index suite was rebuilt there for the rebuild follow-up — and that run found the one portability limit the exclusions have: **two of the four partial terms cannot fire on 12**, so tests 30 and 64 come back as unsuppressed critical false positives at 87.6% and 93.5% ([The same suite on a 12.2 server](#the-same-suite-on-a-122-server)).
 
 **What it costs, and in which direction.** Eleven residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — one is the honest false positive a random-insertion index produces, four are families the exclusion now removes from the output rather than repairs, and the last two are the two false positives that survive it:
 
@@ -2087,58 +2118,124 @@ The twelfth adds three lines and no new CTE: the `any_varlena_include` aggregate
 
 The thirteenth adds one input column and one disjunct, and **renames the flag**. `has_expressions` is `x.indexprs IS NOT NULL` on the `pg_index` row `idx` already reads; the new disjunct withholds a non-partial expression index with no statistics row of its own; and because the flag is no longer partial-only it is `suppress_row` here and in the final `WHERE`, where the earlier follow-ups wrote `suppress_partial`. Those two earlier paragraphs describe the text as each of them filed it, and this is the one identifier that has moved since. Change D reuses change A's exact statistics-state test, so it fires precisely when the `no statistics row for an index column` caveat does and no new caveat string is needed; no arithmetic moved here either ([Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored)).
 
+The fourteenth **rebuilt the text without changing a value it returns**, so the four paragraphs above describe changes that are still all present but no longer all in the places those paragraphs name. Three stages moved: the deduplication gate left `idx` for a `gate` CTE of its own, `sized`/`fit`/`posting` became one `page` CTE of three laterals, and change A's statistics-state test, change B's staleness test and the duplicates-credited test became three named booleans in `modelled` that the caveat list reads too. The block below is the rebuilt text; [Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun) is the stage-by-stage diff and the proof that the output is unchanged.
+
 This is the statement [The current recommended statement](#the-current-recommended-statement) names, and it is the text scored in every table below; the five-change form it replaced differs from it in exactly the ten lines of the gate.
 
 ```sql
 SET statement_timeout = '30s';
 SET lock_timeout = '2s';
 
+-- Estimate, from catalogs and planner statistics only, how much smaller each
+-- B-tree index would be if it were rebuilt now.  Reads no index or table
+-- pages, and runs unchanged on PostgreSQL 12 through 17.
+--
+-- Stages, one CTE each, in order:
+--   env         server constants: block size, version, auto-analyze GUCs
+--   idx         candidate indexes: identity, size, reloptions, row counts
+--   gate        may a fresh build deduplicate this index?
+--   keyatts     key columns as table attnums, spelled as pg_ndistinct spells them
+--   extstat     whole-key n_distinct from a matching extended-statistics object
+--   cols        per-column width, NULL fraction, n_distinct, MCVs, visibility
+--   statvis     per-index rollup of the column statistics state
+--   tuple       modelled tuple contents, and the number of distinct key groups
+--   page        tuple slot, leaf and internal capacity, posting-list limits
+--   kstat       single-key statistics that split the rows into key classes
+--   gclass      key classes: the NULL run, each MCV, the remainder, or one class
+--   classfit    TIDs per posting tuple inside each class
+--   classpages  leaf pages each class needs
+--   leaves      leaf pages, with and without deduplication credit
+--   levels      recursive: the internal levels stacked above the leaves
+--   modelled    block totals, statistics-state flags, and the suppression rule
+--
+-- Where each named change on the page lives:
+--   1  posting-tuple round-up ............. classpages
+--   2  extended statistics for a key ...... keyatts, extstat, tuple.key_groups
+--   3  invisible statistics ............... cols.stats_hidden, statvis, caveats
+--   6  name the equal-image function ...... gate.all_equalimage
+--   A  partial, no statistics row ......... modelled.stats_row_missing
+--   B  partial, table changed since ANALYZE modelled.stats_stale
+--   C  partial, variable-width INCLUDE .... statvis.any_varlena_include
+--   D  non-partial expression index ....... modelled.suppress_row
+-- Changes 4 and 5 are readings of the output, not SQL.
+
 WITH RECURSIVE
-idx AS (
+env AS (
     SELECT /* wiki_btree_wasted_space_sweep_12_17 */
-           c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
-           c.relname AS indexname, t.oid AS tbloid, x.indkey, x.indisunique,
-           x.indnkeyatts, t.relrowsecurity                AS tbl_rls,
+           current_setting('block_size')::int                         AS bs,
+           current_setting('server_version_num')::int                 AS server_version_num,
+           current_setting('autovacuum_analyze_threshold')::int       AS anl_threshold,
+           current_setting('autovacuum_analyze_scale_factor')::float8 AS anl_scale_factor
+),
+idx AS (
+    -- one row per candidate index: everything the model reads from the
+    -- catalogs.  Column statistics arrive in `cols`, the deduplication
+    -- decision in `gate`.
+    SELECT c.oid AS idxoid, n.nspname AS schemaname, t.relname AS tablename,
+           c.relname AS indexname, t.oid AS tbloid,
+           x.indkey, x.indclass, x.indcollation, x.indisunique, x.indnkeyatts,
+           t.relrowsecurity                             AS tbl_rls,
            (x.indpred IS NOT NULL)                      AS is_partial,
            (x.indexprs IS NOT NULL)                     AS has_expressions,
            (x.indnatts = x.indnkeyatts)                 AS keys_only,
-           z.actual_bytes, z.fsm_bytes, z.bs, z.server_version_num,
-           coalesce((SELECT option_value::int FROM pg_options_to_table(c.reloptions)
-                      WHERE option_name = 'fillfactor'), 90)            AS fillfactor,
-           coalesce((SELECT option_value::bool FROM pg_options_to_table(c.reloptions)
-                      WHERE option_name = 'deduplicate_items'), true)   AS dedup_on,
+           e.bs, e.server_version_num, z.actual_bytes, z.fsm_bytes,
+           o.fillfactor, o.dedup_on,
            c.reltuples::numeric                         AS idx_reltuples,
            coalesce(s.n_live_tup, 0)::numeric           AS tbl_live_tup,
            coalesce(s.n_dead_tup, 0)::numeric           AS tbl_dead_tup,
            coalesce(s.n_mod_since_analyze, 0)::numeric  AS tbl_mod_since_analyze,
            -- the auto-analyze trigger, in catalog terms:
-           --   anl_base_thresh + anl_scale_factor * reltuples
-           -- with a per-table reloption overriding either GUC, and a negative
+           --   anl_threshold + anl_scale_factor * reltuples
+           -- with the per-table reloptions `o` already applied and a negative
            -- reltuples read as zero, exactly as relation_needs_vacanalyze does
-           (coalesce((SELECT option_value::int FROM pg_options_to_table(t.reloptions)
-                       WHERE option_name = 'autovacuum_analyze_threshold'
-                         AND option_value::int >= 0),
-                     current_setting('autovacuum_analyze_threshold')::int)
-            + coalesce((SELECT option_value::float8 FROM pg_options_to_table(t.reloptions)
-                         WHERE option_name = 'autovacuum_analyze_scale_factor'
-                           AND option_value::float8 >= 0),
-                       current_setting('autovacuum_analyze_scale_factor')::float8)
-              * greatest(t.reltuples, 0))::numeric       AS tbl_autoanalyze_threshold,
+           (o.anl_threshold
+            + o.anl_scale_factor * greatest(t.reltuples, 0))::numeric
+                                                        AS tbl_autoanalyze_threshold,
            greatest(s.last_analyze, s.last_autoanalyze) AS last_analyze,
            -- rows to model: -1 is v14+ "unknown"; a 0 on a non-empty index
            -- whose table reports live rows is a pre-14 stale zero
            CASE
              WHEN c.reltuples < 0 THEN NULL
-             WHEN c.reltuples = 0 AND z.actual_bytes > z.bs
+             WHEN c.reltuples = 0 AND z.actual_bytes > e.bs
                   AND coalesce(s.n_live_tup, 0) > 0 THEN NULL
              WHEN x.indpred IS NOT NULL THEN c.reltuples::numeric
              ELSE least(c.reltuples::numeric,
                         coalesce(nullif(s.n_live_tup, 0), c.reltuples)::numeric)
-           END                                          AS live_rows,
-           -- deduplication gate, in catalog terms: every key opclass must
-           -- register a *known* equal-image support function (amprocnum 4).
-           -- A row's mere existence proves nothing: the engine calls the
-           -- function, and a custom one may return false.
+           END                                          AS live_rows
+      FROM pg_class c
+      JOIN pg_index x     ON x.indexrelid = c.oid
+      JOIN pg_class t     ON t.oid = x.indrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_am am       ON am.oid = c.relam
+      LEFT JOIN pg_stat_all_tables s ON s.relid = t.oid
+      CROSS JOIN env e
+      CROSS JOIN LATERAL (
+            SELECT pg_relation_size(c.oid)        AS actual_bytes,
+                   pg_relation_size(c.oid, 'fsm') AS fsm_bytes) z
+      CROSS JOIN LATERAL (
+            -- the reloptions that move the model, and their defaults
+            SELECT coalesce((SELECT option_value::int FROM pg_options_to_table(c.reloptions)
+                              WHERE option_name = 'fillfactor'), 90)          AS fillfactor,
+                   coalesce((SELECT option_value::bool FROM pg_options_to_table(c.reloptions)
+                              WHERE option_name = 'deduplicate_items'), true) AS dedup_on,
+                   coalesce((SELECT option_value::int FROM pg_options_to_table(t.reloptions)
+                              WHERE option_name = 'autovacuum_analyze_threshold'
+                                AND option_value::int >= 0),
+                            e.anl_threshold)                                  AS anl_threshold,
+                   coalesce((SELECT option_value::float8 FROM pg_options_to_table(t.reloptions)
+                              WHERE option_name = 'autovacuum_analyze_scale_factor'
+                                AND option_value::float8 >= 0),
+                            e.anl_scale_factor)                               AS anl_scale_factor) o
+     WHERE am.amname = 'btree' AND c.relkind = 'i' AND x.indisvalid
+       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+),
+gate AS (
+    -- deduplication gate, in catalog terms: every key opclass must register a
+    -- *known* equal-image support function (amprocnum 4), and no key column
+    -- may use a nondeterministic collation.  A row's mere existence proves
+    -- nothing: the engine calls the function, and a custom one may return
+    -- false, so only the two built-ins are credited (change 6).
+    SELECT i.idxoid,
            (SELECT bool_and(EXISTS (SELECT 1 FROM pg_amproc ap
                                      JOIN pg_proc pr     ON pr.oid = ap.amproc
                                      JOIN pg_language pl ON pl.oid = pr.prolang
@@ -2149,27 +2246,14 @@ idx AS (
                                        AND pl.lanname = 'internal'
                                        AND pr.prosrc IN ('btequalimage',
                                                          'btvarstrequalimage')))
-              FROM generate_subscripts(x.indclass, 1) k
-              JOIN pg_opclass op ON op.oid = x.indclass[k]
-             WHERE k < x.indnkeyatts)                   AS all_equalimage,
-           -- ... and no key column may use a nondeterministic collation
-           NOT EXISTS (SELECT 1 FROM generate_subscripts(x.indcollation, 1) k
-                         JOIN pg_collation cl ON cl.oid = x.indcollation[k]
-                        WHERE k < x.indnkeyatts
+              FROM generate_subscripts(i.indclass, 1) k
+              JOIN pg_opclass op ON op.oid = i.indclass[k]
+             WHERE k < i.indnkeyatts)                     AS all_equalimage,
+           NOT EXISTS (SELECT 1 FROM generate_subscripts(i.indcollation, 1) k
+                         JOIN pg_collation cl ON cl.oid = i.indcollation[k]
+                        WHERE k < i.indnkeyatts
                           AND NOT cl.collisdeterministic) AS all_deterministic
-      FROM pg_class c
-      JOIN pg_index x     ON x.indexrelid = c.oid
-      JOIN pg_class t     ON t.oid = x.indrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      JOIN pg_am am       ON am.oid = c.relam
-      LEFT JOIN pg_stat_all_tables s ON s.relid = t.oid
-      CROSS JOIN LATERAL (
-            SELECT pg_relation_size(c.oid)                  AS actual_bytes,
-                   pg_relation_size(c.oid, 'fsm')           AS fsm_bytes,
-                   current_setting('block_size')::int       AS bs,
-                   current_setting('server_version_num')::int AS server_version_num) z
-     WHERE am.amname = 'btree' AND c.relkind = 'i' AND x.indisvalid
-       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+      FROM idx i
 ),
 keyatts AS (
     -- the index's key columns as table attnums, spelled the way
@@ -2198,6 +2282,9 @@ extstat AS (
      GROUP BY k.idxoid
 ),
 cols AS (
+    -- one row per index attribute, priced from the index's own pg_stats row
+    -- when ANALYZE wrote one (expression attributes only), else from the
+    -- table column's row, else from the defaults.
     SELECT i.idxoid, a.attnum, a.attlen, a.attalign,
            CASE WHEN a.attlen > 0 THEN a.attlen::numeric
                 ELSE coalesce(se.avg_width, st.avg_width, 32)::numeric END AS width,
@@ -2221,6 +2308,8 @@ cols AS (
                            AND st.tablename = i.tablename AND st.attname = ta.attname
 ),
 statvis AS (
+    -- per-index rollup of that statistics state, read by the caveat list and
+    -- by the suppression rule at the end.
     SELECT c.idxoid,
            bool_or(c.no_stats_row)                    AS any_no_stats,
            bool_or(c.no_stats_row AND c.stats_hidden) AS any_stats_hidden,
@@ -2237,6 +2326,9 @@ statvis AS (
 ),
 tuple AS (
     SELECT i.*,
+           -- the tuple's data bytes: every attribute aligned the way
+           -- heap_compute_data_size aligns it, weighted by how often it is
+           -- non-NULL.  A short varlena carries no alignment padding.
            (SELECT sum((1 - c.null_frac) *
                        CASE WHEN c.attlen < 0 AND c.width <= 127 THEN c.width
                             ELSE ceil(c.width / al.a) * al.a END)
@@ -2244,6 +2336,8 @@ tuple AS (
               CROSS JOIN LATERAL (SELECT CASE c.attalign WHEN 'c' THEN 1 WHEN 's' THEN 2
                                               WHEN 'i' THEN 4 ELSE 8 END AS a) al
              WHERE c.idxoid = i.idxoid)                          AS data_size,
+           -- probability that a tuple holds at least one NULL, which is what
+           -- widens its header from 8 bytes to 16
            (SELECT 1 - coalesce(exp(sum(ln(greatest(1 - c.null_frac, 1e-9)))), 1)
               FROM cols c WHERE c.idxoid = i.idxoid)             AS p_null,
            -- distinct key groups: an ndistinct extended-statistics estimate for
@@ -2270,37 +2364,46 @@ tuple AS (
       LEFT JOIN extstat e ON e.idxoid = i.idxoid
       LEFT JOIN statvis v ON v.idxoid = i.idxoid
 ),
-sized AS (
-    SELECT t.*, ceil((8 + 8 * t.p_null + t.data_size) / 8) * 8 + 4 AS slot
+page AS (
+    -- page geometry, one lateral per derived quantity.  48 is nbtree's fixed
+    -- overhead: a 24-byte page header, 16 bytes of special space, the high-key
+    -- line pointer a sorted build reserves up front, and the line pointer
+    -- PageGetFreeSpace already subtracts.  Internal levels use the fixed
+    -- BTREE_NONLEAF_FILLFACTOR of 70, i.e. 30% free space.
+    SELECT t.*, g.all_equalimage, g.all_deterministic,
+           s.slot, f.leaf_cap, f.int_cap, f.leaf_bytes, f.dedup_applies,
+           f.groups_est, f.maxposting, p.nmax
       FROM tuple t
-),
-fit AS (
-    SELECT s.*,
-           greatest(floor((s.bs - 48 - floor(s.bs * (100 - s.fillfactor) / 100)) / s.slot), 1)
-               AS leaf_cap,
-           greatest(floor((s.bs - 48 - floor(s.bs * 30 / 100)) / s.slot), 2)
-               AS int_cap,
-           (s.bs - 48 - floor(s.bs * (100 - s.fillfactor) / 100))     AS leaf_bytes,
-           (NOT s.indisunique AND s.dedup_on AND s.keys_only
-                AND coalesce(s.all_equalimage, false)
-                AND s.all_deterministic)                             AS dedup_applies,
-           least(greatest(s.live_rows, 0), greatest(s.key_groups, 1)) AS groups_est,
-           -- maxpostingsize = MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)
-           floor(floor(s.bs * 10 / 100) / 8) * 8 - 4                  AS maxposting
-      FROM sized s
-),
-posting AS (
-    SELECT f.*,
-           -- largest n with MAXALIGN(base + n * sizeof(ItemPointerData)) <= maxposting
-           greatest(floor(4 * floor((f.maxposting - (f.slot - 4)) / 8) / 3), 1) AS nmax
-      FROM fit f
+      JOIN gate g ON g.idxoid = t.idxoid
+      CROSS JOIN LATERAL (
+            -- one index entry: MAXALIGN(header + data) plus its line pointer
+            SELECT ceil((8 + 8 * t.p_null + t.data_size) / 8) * 8 + 4         AS slot) s
+      CROSS JOIN LATERAL (
+            SELECT greatest(floor((t.bs - 48 - floor(t.bs * (100 - t.fillfactor) / 100)) / s.slot), 1)
+                                                                              AS leaf_cap,
+                   greatest(floor((t.bs - 48 - floor(t.bs * 30 / 100)) / s.slot), 2)
+                                                                              AS int_cap,
+                   (t.bs - 48 - floor(t.bs * (100 - t.fillfactor) / 100))     AS leaf_bytes,
+                   (NOT t.indisunique AND t.dedup_on AND t.keys_only
+                        AND coalesce(g.all_equalimage, false)
+                        AND g.all_deterministic)                              AS dedup_applies,
+                   least(greatest(t.live_rows, 0), greatest(t.key_groups, 1)) AS groups_est,
+                   -- maxpostingsize = MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)
+                   floor(floor(t.bs * 10 / 100) / 8) * 8 - 4                  AS maxposting) f
+      CROSS JOIN LATERAL (
+            -- largest n with MAXALIGN(base + n * sizeof(ItemPointerData)) <= maxposting
+            SELECT greatest(floor(4 * floor((f.maxposting - (s.slot - 4)) / 8) / 3), 1)
+                                                                              AS nmax) p
 ),
 kstat AS (
+    -- the first key column's statistics, which split a single-key index's rows
+    -- into classes below.  A partial index gets neither: the table's NULL
+    -- fraction and MCV list describe the wrong population.
     SELECT p.idxoid,
            CASE WHEN p.is_partial THEN 0 ELSE c.null_frac END AS null_frac,
            CASE WHEN p.is_partial THEN '{}'::real[]
                 ELSE coalesce(c.mcf, '{}'::real[]) END        AS mcf
-      FROM posting p
+      FROM page p
       JOIN cols c ON c.idxoid = p.idxoid AND c.attnum = 1
      WHERE p.indnkeyatts = 1 AND p.dedup_applies AND p.live_rows > 0
 ),
@@ -2308,12 +2411,12 @@ gclass AS (
     -- the NULL run is one key group
     SELECT p.idxoid, greatest(p.live_rows, 0) * k.null_frac AS class_rows,
            1::numeric AS class_groups
-      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+      FROM page p JOIN kstat k ON k.idxoid = p.idxoid
      WHERE k.null_frac > 0
     UNION ALL
     -- every most-common value is one key group
     SELECT p.idxoid, greatest(p.live_rows, 0) * f, 1::numeric
-      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+      FROM page p JOIN kstat k ON k.idxoid = p.idxoid
       CROSS JOIN LATERAL unnest(k.mcf) f
     UNION ALL
     -- the rest of the rows spread over the remaining distinct values
@@ -2324,19 +2427,21 @@ gclass AS (
            greatest(p.groups_est
                     - CASE WHEN k.null_frac > 0 THEN 1 ELSE 0 END
                     - coalesce(array_length(k.mcf, 1), 0), 1)
-      FROM posting p JOIN kstat k ON k.idxoid = p.idxoid
+      FROM page p JOIN kstat k ON k.idxoid = p.idxoid
     UNION ALL
     -- multi-column keys: one uniform class over the whole-key estimate
     SELECT p.idxoid, greatest(p.live_rows, 0), p.groups_est
-      FROM posting p
+      FROM page p
      WHERE p.indnkeyatts > 1 AND p.dedup_applies AND p.live_rows > 0
 ),
 classfit AS (
+    -- how many TIDs one posting tuple carries inside each class, capped by the
+    -- posting-list limit
     SELECT g.idxoid, g.class_rows, g.class_groups,
            least(g.class_rows / greatest(g.class_groups, 1), p.nmax) AS tids,
            p.slot, p.leaf_bytes
       FROM gclass g
-      JOIN posting p ON p.idxoid = g.idxoid
+      JOIN page p ON p.idxoid = g.idxoid
      WHERE g.class_rows > 0
 ),
 classpages AS (
@@ -2363,7 +2468,7 @@ leaves AS (
                 ELSE ceil(greatest(p.live_rows, 0) / p.leaf_cap)
            END                                                AS leaf_pages,
            ceil(greatest(p.live_rows, 0) / p.leaf_cap)         AS leaf_pages_floor
-      FROM posting p
+      FROM page p
       LEFT JOIN classpages cp ON cp.idxoid = p.idxoid
 ),
 levels AS (
@@ -2375,32 +2480,37 @@ levels AS (
       FROM levels l WHERE l.pages > 1
 ),
 modelled AS (
-    SELECT l.*,
-           (SELECT sum(v.pages) FROM levels v
-             WHERE v.idxoid = l.idxoid AND v.variant = 'dedup') + 1 AS expected_blocks,
-           (SELECT sum(v.pages) FROM levels v
-             WHERE v.idxoid = l.idxoid AND v.variant = 'floor') + 1 AS floor_blocks,
-           -- changes A, B and C: the four conditions under which a partial
-           -- index's reading rests on statistics that do not describe the
-           -- predicate subset.  One flag, so the caveat list below and the
-           -- WHERE clause cannot drift apart.  Change C is the exception that
-           -- proves that rule: it emits no caveat, because it is a property of
-           -- the index definition rather than of the statistics state.
+    SELECT l.*, b.expected_blocks, b.floor_blocks,
+           w.stats_row_missing, w.dedup_credited, w.stats_stale,
+           -- Five conditions withhold the row entirely.  Four are changes A, B
+           -- and C: a partial index whose reading rests on statistics that do
+           -- not describe its predicate subset.  Only change C emits no
+           -- caveat, because it is a property of the index definition rather
+           -- than of the statistics state.
            -- Change D is the one non-partial term.  ANALYZE writes an index
            -- its own statistics row only for an expression attribute, so an
            -- expression index that has none is priced from the 32-byte default
            -- width and an all-distinct assumption, whatever the expression
            -- really returns.  One ANALYZE lifts it.
-           ((l.is_partial
-             AND ((l.any_no_stats AND NOT l.any_stats_hidden
-                   AND l.last_analyze IS NOT NULL)
-               OR (l.dedup_applies AND l.tids > 1)
-               OR l.tbl_mod_since_analyze > l.tbl_autoanalyze_threshold
-               OR l.any_varlena_include))
+           ((l.is_partial AND (w.stats_row_missing
+                            OR w.dedup_credited
+                            OR w.stats_stale
+                            OR l.any_varlena_include))
             OR (NOT l.is_partial AND l.has_expressions
-                AND l.any_no_stats AND NOT l.any_stats_hidden
-                AND l.last_analyze IS NOT NULL))        AS suppress_row
+                AND w.stats_row_missing))                       AS suppress_row
       FROM leaves l
+      CROSS JOIN LATERAL (
+            SELECT (SELECT sum(v.pages) FROM levels v
+                     WHERE v.idxoid = l.idxoid AND v.variant = 'dedup') + 1 AS expected_blocks,
+                   (SELECT sum(v.pages) FROM levels v
+                     WHERE v.idxoid = l.idxoid AND v.variant = 'floor') + 1 AS floor_blocks) b
+      CROSS JOIN LATERAL (
+            -- the three statistics-state facts that the caveat list and the
+            -- suppression rule both read, named once so they cannot drift apart
+            SELECT (l.any_no_stats AND NOT l.any_stats_hidden
+                    AND l.last_analyze IS NOT NULL)                        AS stats_row_missing,
+                   (l.dedup_applies AND l.tids > 1)                        AS dedup_credited,
+                   (l.tbl_mod_since_analyze > l.tbl_autoanalyze_threshold) AS stats_stale) w
 )
 SELECT schemaname, tablename, indexname,
        pg_size_pretty(actual_bytes)                     AS index_size,
@@ -2421,7 +2531,7 @@ SELECT schemaname, tablename, indexname,
          CASE WHEN last_analyze IS NULL THEN 'never analyzed' END,
          CASE WHEN any_stats_hidden
               THEN 'statistics not visible to this role' END,
-         CASE WHEN any_no_stats AND NOT any_stats_hidden AND last_analyze IS NOT NULL
+         CASE WHEN stats_row_missing
               THEN 'no statistics row for an index column' END,
          CASE WHEN NOT is_partial
                    AND greatest(tbl_live_tup, idx_reltuples)
@@ -2429,12 +2539,11 @@ SELECT schemaname, tablename, indexname,
               THEN 'row-count sources disagree: analyze first' END,
          CASE WHEN is_partial AND (tbl_dead_tup > 0 OR last_analyze IS NULL)
               THEN 'partial: predicate subset may be stale' END,
-         CASE WHEN is_partial
-                   AND tbl_mod_since_analyze > tbl_autoanalyze_threshold
+         CASE WHEN is_partial AND stats_stale
               THEN 'partial: table changed since the last ANALYZE' END,
-         CASE WHEN is_partial AND dedup_applies AND tids > 1
+         CASE WHEN is_partial AND dedup_credited
               THEN 'partial: duplicates from table statistics' END,
-         CASE WHEN dedup_applies AND tids > 1 THEN 'deduplication credited' END,
+         CASE WHEN dedup_credited THEN 'deduplication credited' END,
          CASE WHEN ext_used THEN 'key groups from extended statistics' END
        ], NULL), '; ')                                  AS caveats,
        key_groups::bigint                               AS key_groups,
@@ -2657,7 +2766,7 @@ The last one matters for the collation conjunct. `text_pattern_ops` registers `b
 
 ### Change 6: name the support function, do not just count it
 
-Change 6 is the `all_equalimage` subquery in the `idx` CTE of [the corrected statement](#the-corrected-statement-with-all-six-changes), and reading that block is the way to see it; it is not repeated here, so there is no second copy to drift. The statement it replaced asked only `EXISTS (... AND ap.amprocnum = 4)`. The filed form keeps that `EXISTS` and adds two joins and two conjuncts inside it — `pg_proc`, `pg_language`, `pl.lanname = 'internal'` and `pr.prosrc IN ('btequalimage', 'btvarstrequalimage')` — so a registered function that is not one of the engine's own two resolves to false. Nothing else in the statement moved: not the collation conjunct next to it, not `dedup_applies`, not either model, not a column.
+Change 6 is the `all_equalimage` subquery in the `gate` CTE of [the corrected statement](#the-corrected-statement-with-all-six-changes) — it sat inside `idx` until the [rebuild](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun) gave the deduplication decision a stage of its own — and reading that block is the way to see it; it is not repeated here, so there is no second copy to drift. The statement it replaced asked only `EXISTS (... AND ap.amprocnum = 4)`. The filed form keeps that `EXISTS` and adds two joins and two conjuncts inside it — `pg_proc`, `pg_language`, `pl.lanname = 'internal'` and `pr.prosrc IN ('btequalimage', 'btvarstrequalimage')` — so a registered function that is not one of the engine's own two resolves to false. Nothing else in the statement moved: not the collation conjunct next to it, not `dedup_applies`, not either model, not a column.
 
 The two whitelisted names are safe to hard-code because their behavior is fixed in C: one always returns true, and the other returns true exactly when the collation conjunct beside it already requires. Everything else — a SQL function, a PL/pgSQL function, a third-party C function, or no row at all — resolves to false, which is test 16. An internal *alias* for one of the two is credited, because `prosrc` is what the engine resolves; the next section is the evidence for that.
 
@@ -3767,6 +3876,92 @@ Both exact statement texts, triage filter and `LIMIT 20` intact, were also execu
 
 Two ordering facts about this run belong in the record. The `ANALYZE` probes that measure the lift were run **after** the database-wide counts, the above-50 lists, the exact-text runs and the eight timing pairs, so those figures describe the state the scored suite left. The top-20 overlap was measured afterwards, so `np97` and `x106` were dropped and rebuilt — without an `ANALYZE`, which restores a zero-statistics-row state — before it was taken; `np97` is a different index in that state, built over a table that has since grown to 600,000 rows, and it reads 33.2% there rather than 66.4%. That is why the top-20 line is reported separately from the rest of the table above.
 
+### Follow-up: the recommended statement rebuilt for readability, and every test rerun
+
+**The statement was rebuilt and it returns exactly what it returned before.** Ten named changes had accreted into one 357-line block whose largest CTE was 77 lines and whose suppression rule and caveat list spelled the same four conditions twice. The rebuilt text is 433 lines — 17 more lines of code and 58 more of comment — organised as a pipeline a reader can walk in order. Identity is the hard requirement of this follow-up, not an aspiration, and it is measured four ways on two servers:
+
+| Check | 17.11 | 12.2 |
+|---|---|---|
+| `SELECT * FROM est EXCEPT SELECT * FROM est_filed`, over every exposed column | **0 rows**, 95 indexes | **0 rows**, 92 indexes |
+| the same `EXCEPT` in the other direction | **0 rows** | **0 rows** |
+| both exact texts run as filed, `psql` output diffed | **byte-identical** | **byte-identical** |
+| scored tests where the two texts disagree on `status`, either percentage, `caveats` or `suppress_row` | **0 of 129** | **0 of 106** |
+
+Both views come out of the same generator, one reading the working copy of this page and the other `git show HEAD:` of it, so a difference between them could only be a difference between the two Markdown code blocks.
+
+### What the rebuild changes, stage by stage
+
+Sixteen CTEs before, sixteen after, but not the same sixteen. Three one-column CTEs collapse into one, and the two that replace them take work out of `idx`:
+
+| Stage | Before | After | Why |
+|---|---|---|---|
+| `env` | — | new, 7 lines | `block_size`, `server_version_num` and the two auto-analyze GUCs were read inline, twice each in the reloption fallbacks; now they are read once and named |
+| `idx` | 77 lines: identity, sizes, reloptions, row counts, freshness, **and** the deduplication gate | 62 lines: catalog inputs only, with the reloptions in one commented lateral | the gate is a different question from "what does the catalog say about this index" |
+| `gate` | — | new, 26 lines | [change 6](#change-6-name-the-support-function-do-not-just-count-it) and the nondeterministic-collation test are the whole deduplication decision, and they are now the only thing in their stage |
+| `sized`, `fit`, `posting` | three CTEs of 4, 15 and 6 lines, each adding one column to `SELECT prev.*` | one `page` CTE, 31 lines, three laterals | the page geometry is one subject; the lateral chain keeps every expression byte for byte and adds the source note for the 48-byte constant |
+| `modelled` | 28 lines, the suppression rule as one nine-line boolean | 33 lines, three named booleans plus the rule that ORs them | `stats_row_missing`, `dedup_credited` and `stats_stale` are now read by both the `WHERE` clause and the caveat list, so the two cannot drift |
+| the final `SELECT` | four caveat cases re-spelled the suppression conditions | the same four cases read the three booleans | the drift the eleventh follow-up's comment warned about is now structurally impossible |
+| header | none | 35 lines | the stage list, and a map from each named change 1-6 and A-D to the stage that carries it |
+
+The comments the rebuild adds are source claims, so they carry sources. The 48-byte constant is nbtree's own arithmetic — `PageGetPageSize - SizeOfPageHeaderData - MAXALIGN(sizeof(BTPageOpaqueData))` is 8152 ([nbtsplitloc.c:157-160](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L157-L160), [bufpage.h:214](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214), [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L69)) — less the high-key line pointer `_bt_blnewpage` marks allocated up front ([nbtsort.c#_bt_blnewpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L625-L626)) and the one `PageGetFreeSpace` subtracts before comparing against the fill threshold ([bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L907-L923)). The internal-level 30 is `100 - BTREE_NONLEAF_FILLFACTOR` ([nbtree.h:201](../../../../raw/postgres-17/src/include/access/nbtree.h#L201)). The `slot` lateral's "MAXALIGN(header + data) plus its line pointer" is `index_form_tuple`'s own rounding ([indextuple.c:162-163](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L162-L163)) plus `sizeof(ItemIdData)` ([itemid.h#ItemIdData](../../../../raw/postgres-17/src/include/storage/itemid.h#L25-L30)), and "a short varlena carries no alignment padding" is the packable branch of `heap_compute_data_size` ([heaptuple.c:234-242](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L234-L242)).
+
+Two things deliberately did **not** change. Every arithmetic expression is byte-identical to the filed one, moved but not rewritten, because the model mixes `numeric` and `float8` and a re-association could move a percentage without moving a line of visible logic. And the names the rest of this page cites — `idx`, `cols`, `statvis`, `tuple`, `kstat`, `classfit`, `classpages`, `leaves`, `levels`, `modelled`, and every output column — are unchanged, so the only prose elsewhere on the page that went stale is the opening sentence of [Change 6](#change-6-name-the-support-function-do-not-just-count-it), which named `idx` as the CTE holding the gate and now names `gate`.
+
+### The ninety-one tests and fixtures 92-112, rerun
+
+Every test on this page's mandatory list was rebuilt from scratch on a fresh 17.11 cluster and scored against both texts in the same transaction, index by index:
+
+| Group | Tests | Fixtures scored | Result, rebuilt text | Result, filed text |
+|---|---|---|---|---|
+| deduplication gate | 1-17 | 30 | 0 gate over-credits, 1 under-credit, 0 fixtures above 30% on either column | **identical, cell for cell** |
+| partial indexes | 18-91 | 74 | 66 PASS (34 reported, 32 withheld), 0 critical false positives, 0 false positives, 8 false negatives (4 reported, 4 withheld) | **identical, verdict for verdict** |
+| change B, C and D fixtures | 92-112 | 21 | every filed live-block count and every withheld/reported state reproduced | **identical** |
+| auxiliary re-reads after `ANALYZE` | 144, 148-150 | 4 | unchanged | **identical** |
+
+The deduplication group reproduces the [seventeen-test table](#the-seventeen-deduplication-gate-tests-and-the-verdict-on-each) exactly: 421 blocks and `−0.2%` on `i_int4` and `i_int8`, 460 and `8.0%` on both deterministic `text` fixtures, 1931 and `0.2%` on the nondeterministic one, 1376 and `0.1%` on `numeric`, `float4`, `float8`, `i_inc`, `i_dupoff`, `i_ei_none` and `i_ei_false`, 459 and `−320.0%` on `i_multi_ok` against `8.1%` on its `i2_ok` twin, 1931 and `28.8%` on `i_multi_bad`, and the single under-credit at `−226.4%` on `i_ei_true`. The engine's own `DEBUG1` verdicts came back 14 "can safely use deduplication", 13 "cannot", and nothing at all for `i_inc`, which is the `INCLUDE` early return ([nbtutils.c:5144-5147](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147)). Test 16's four cases reproduce too: `CREATE INDEX` fails with `function 17076 returned NULL` and with `equalimage probe exploded`, the three `ALTER OPERATOR FAMILY` refusals and the `text_pattern_ops` refusal print verbatim, and `i_squat` — the real `btvarstrequalimage` renamed away and a false-returning SQL impostor put under its name in `pg_catalog` — builds 1931 blocks with the gate correctly false, while `i_text_det2` built during the same rename still deduplicates to 460 with the gate true. The zero-fixture [audit query](#the-harness-runnable) returned the same **6 rows** in the fixture database and **0** in a stock 17.11 one.
+
+The partial-index group reproduces the [filed re-scored table](#the-re-scored-suite-test-by-test) for the **fourth consecutive run**: 74 of 74 live-block counts match, and all 74 reported/withheld states agree. Six floors moved by more than a point from `ANALYZE` sampling (86, 87, 88, 89, 90, 91), none across a verdict boundary; the eight cells the change-D run flagged included 72 and 73, which are stable this time.
+
+Fixtures 92-112 reproduce as well, including every number the change-C and change-D sections lean on: `np97` at 5201 blocks and 64.9% withheld, its analysed twin `x107` at 89.2% reported against a measured 89.9% reclaim, `x106` at 96.4% withheld on the same 5201 -> 523 rebuild, `x109` — the `SET STATISTICS 0` hole — at 64.9% reported, the mixed `(k, upper(s))` key `x110` at 60.5% withheld, `x111` at `−614.9%`, `i103` at 84.1% reported on 792 blocks, and `i102`'s variable-width `INCLUDE` control at `−4.0%`. One cell moved by sampling: `i100`, change C's measured cost, reads 89.7% here against the 89.5% filed, on the same 1273 -> 129 rebuild.
+
+### What the rebuild costs
+
+It is not free, and the cost is one extra scan of the materialized `idx` CTE — 5 `CTE Scan on idx` nodes in the filed plan against 6 in the rebuilt one, because the inlined `gate` reads `idx` again. Measured on 17.11 over the 123-index fixture database, 24 interleaved runs of each exact text:
+
+| Measure | Filed | Rebuilt |
+|---|---|---|
+| end-to-end, min / median / max | 41.8 / 43.5 / 51.5 ms | 44.7 / 46.2 / 73.0 ms |
+| `EXPLAIN (ANALYZE)` planning time, 6 runs | 7.87 ms | **9.17 ms** |
+| `EXPLAIN (ANALYZE)` execution time, 6 runs | 36.17 ms | **37.01 ms** |
+| the same on a 600-index database, 4 runs | 10.74 ms plan, 192.33 ms exec | 11.10 ms plan, **198.49 ms** exec |
+
+So roughly `+1.3 ms` of planning and `+0.8 ms` of execution at 123 indexes, and `+3.2%` of execution at 600. The planning share does not grow with the number of indexes; the execution share does, at about three percent. On 12.2, six interleaved pairs ran 37.7-59.6 ms filed against 39.4-51.1 ms rebuilt, which at that sample size says only that the difference is smaller than the noise there.
+
+### The same suite on a 12.2 server
+
+The suite was rebuilt on an isolated 12.2 server too, and three of the 74 partial-index fixtures are **unconstructible** on that major: test 38 needs the `deduplicate_items` reloption, and tests 51 and 52 need ICU. Everything else built, once `pg_stat_force_next_flush()` — which 12 does not have — was dropped from the fixture scripts. That leaves 106 scored fixtures against 129 on 17.11, and the two texts agree on every one of them.
+
+The interesting result is not the rebuild, which is invisible here as everywhere else; it is what the recommended statement does on a 12 server, measured over the whole partial-index suite for the first time:
+
+| Over tests 18-91 | 17.11 | 12.2 |
+|---|---|---|
+| fixtures scored | 74 | 71 |
+| withheld | 36 | 23 |
+| withheld by "duplicates from table statistics" | 25 | **0** |
+| withheld by "table changed since the last ANALYZE" | 7 | **19** |
+| rows carrying `never analyzed` | 0 | **17** |
+| CRITICAL FALSE POSITIVE | 0 | **5** (tests 30, 32, 64, 79, 83) |
+
+Both halves of that swing are 12-era facts rather than model error. `dedup_applies` is false for all 106 indexes on 12.2, because no B-tree opfamily there has an `amprocnum = 4` row at all, so change A's duplicates disjunct — which does most of the withholding on 17.11 — can never fire. And 12 has no `pg_stat_force_next_flush()`, so the statistics collector lags the harness: `n_mod_since_analyze` stays high enough to fire change B nineteen times, and `last_analyze` is still unset on 17 tables when they are scored. Of the five critical false positives, three (32, 79, 83) carry `never analyzed`, which [the reading rule](#the-current-recommended-statement) already tells a reader to discard; two do not. **Tests 30 and 64 read 87.6% and 93.5% on the floor with `status = ok` and an empty `caveats` string on 12.2, on indexes a `REINDEX` reproduces block for block** — the same two shapes 17.11 withholds through a term that has nothing to fire on.
+
+The deduplication group on 12.2 reproduces its own [filed table](#the-deduplication-gate-tests-on-a-122-server) as well: 10 constructible fixtures, all with `all_equalimage` and `dedup_applies` false, `i_int4` at 1376 blocks against 421 on 17.11 and `i_text_det` at 1931 against 460, readings of 0.0-0.2% on nine and the same `28.8%` on `i_multi_bad`, no `DEBUG1` deduplication line ever logged, and the four refusals verbatim: **0** B-tree `pg_amproc` rows at `amprocnum = 4` while 55 exist for other access methods, `invalid function number 4, must be between 1 and 3`, `unrecognized parameter "deduplicate_items"`, and `ICU is not supported in this build`.
+
+### How the rebuild was run
+
+Two **new** isolated clusters, both `initdb`-ed for this follow-up rather than restarted from an earlier one, each from the install this page has been using: 17.11 built out of tree from the pin `786db8dcf168bd9df8f55047337525ac19118b1c` and configured `--without-readline --without-zlib --with-icu --enable-debug`, and 12.2 from this repo's pinned checkout at `45b88269a353ad93744772791feb6d01bc7e1e42`, configured `--without-readline --without-zlib --enable-debug` and therefore without ICU. Both ran `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`, in a scratch database created for the run. `pageinspect`, `pgstattuple` and `amcheck` are installed on 17.11 as ground truth only; no scored statement reads them, and 12.2 has no contrib extension installed at all.
+
+The fixture scripts are the eleventh to thirteenth follow-ups', unchanged, which is why the 74 live-block counts reproduce for the fourth time; the deduplication-gate fixtures were rebuilt from [the runnable harness on this page](#the-harness-runnable) plus the `text` `deduplicate_items = off` twin and the four-index `t2` table. The 12.2 variants were produced by one script that drops only `pg_stat_force_next_flush()`, the `deduplicate_items` reloption and the two ICU collations, and prints every line it dropped. Two estimator views were installed by the same generator used since the eleventh follow-up, one from this page's working copy and one from `git show HEAD:` of it, with the four documented harness edits — the 1 MB triage filter, the `ORDER BY` and the `LIMIT 20` removed, and `AND NOT suppress_row` dropped with the flag exposed as a column. Ground truth per index is a measured `REINDEX INDEX`; both exact texts were also executed as filed, triage filter and `LIMIT 20` intact, on both servers. Both servers were shut down cleanly afterwards, and this sandbox keeps both data directories rather than deleting them, so the run can be repeated without rebuilding the fixtures.
+
 ## Context Reviewed
 
 - Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number on this page is now a 17.11 observation taken on that pin; the original 17.10 run was superseded table by table by the re-run in [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured). The two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged, which the re-run confirms.
@@ -3797,6 +3992,8 @@ Two ordering facts about this run belong in the record. The `ANALYZE` probes tha
 - Change-D follow-up, exact-pin execution on two servers: the twelfth follow-up's isolated **17.11** cluster restarted with another fresh scratch database, from the same out-of-tree install of the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`; plus the twelfth follow-up's isolated **12.2** build of this repo's pinned 12.2 checkout, restarted for this run. Fixtures on 17.11: the eleventh and twelfth follow-ups' 74 partial-index scripts and their eight calibration/control fixtures unchanged, the six `INCLUDE` fixtures numbered 100-105, and seven new non-partial fixtures numbered 106-112 — a genuinely 90%-reclaimable expression index without statistics, its analysed twin, a never-analysed table, a plain index whose column carries `SET STATISTICS 0`, a mixed plain-plus-expression key, a narrow expression, and a partial expression index that changes A and D both cover. Five estimator texts were installed as views from this page's own Markdown: the amended text, the pre-change text from `git show HEAD:`, two rejected-variant copies substituting only the new disjunct, and a `security_invoker` copy for the unprivileged-role probe. Ground truth per index is a measured `REINDEX INDEX`; `pageinspect` and `pgstattuple` are ground truth only. Extra probes: `bt_page_items` and `pgstatindex` on the never-analysed twin `x108`, `pg_column_size` over the expression, `pg_stats` row counts for six indexes before and after `ANALYZE`, one `ANALYZE` each on `np` and `xd106` to measure the lift, an unprivileged role reading three indexes through the `security_invoker` copy, whole-database withheld counts and above-50 lists for all four scored texts, a top-20 triage overlap, eight interleaved timing pairs, and both exact statement texts executed as filed on both servers. Both servers were stopped cleanly afterwards; the sandbox is retained under `.wiki-runtime/tmp/partial17d/`.
 - Recommended-statement follow-up (no server run; it selects among statements already filed and measured above): re-read the equal-image decision in `nbtutils.c` (`_bt_allequalimage`'s lookup-then-call and its first-false `break`), `nbtsort.c` (`_bt_leafbuild`'s recomputed flag, `_bt_load`'s three-way `deduplicate` condition), function resolution in `fmgr.c` (`fmgr_info_cxt_security`'s built-in fast path and the `INTERNALlanguageId` branch that resolves by `prosrc`), the stock B-tree `amprocnum => '4'` rows in `pg_amproc.dat`, the operator-class rule in `btree.sgml`, and `guc_tables.c` for `statement_timeout` and `lock_timeout`; plus every statement variant, measurement table, caveat and open question already on this page, which is where the ranking's numbers come from.
 - Change-6-integration follow-up, exact-pin execution on four servers: the whole page was re-measured. One isolated **17.11** install built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, carrying four scratch databases — the 15 named fixtures plus the 9 x 3 x {full, partial} matrix and the duplication-ratio sweep for Methods A/A-prime/B/C/D; the twelve-issue-review fixture family with its nine-point duplication band, statistics-visibility `probe` role and `security_invoker` copies; the 28 mandatory-test fixtures with their eight custom operator classes; and a fresh database for the runnable harness — plus a second 17.11 cluster for the 12-through-17 fixture family, an isolated **14.23** server and an isolated **12.2** server carrying that same family, the mandatory-test subset and the portability probes. Every scored statement text was generated mechanically from this page's own Markdown by `mkviews.py`: the SQL block is extracted by heading, the triage filter, `ORDER BY` and `LIMIT` are stripped, `expected_blocks`, `floor_blocks`, `dedup_applies`, `all_equalimage`, `key_groups`, `tids_per_tuple`, `slot` and `leaf_cap` are exposed, and the result is installed as a view; the pre-change-6 text was produced from the same source by substituting the existence-test gate, and the earlier sweep's three-conjunct form the same way. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy plus, on 17.11, `pgstattuple` page classes and densities, `pageinspect`'s `bt_metap`/`bt_page_stats`/`bt_page_items`, `amcheck`'s `bt_index_check`, and the build's own `DEBUG1` equal-image verdict — all as ground truth only. New probes in this run: `ei_alias(oid)` versus `ei_true(oid)` registered in turn on the same custom opfamily to price change 6's one under-credit, a never-rebuilt 1.5M-row random-insertion twin for change 5, and per-server timing of both texts. All servers were stopped afterwards.
+- Rebuild follow-up, source coverage: the constants the rebuilt text now names in comments, read to confirm each note — `nbtsplitloc.c` (the `leftspace`/`rightspace` fixed-overhead arithmetic), `bufpage.h` (`SizeOfPageHeaderData` as `offsetof(PageHeaderData, pd_linp)`), `nbtree.h` (`BTPageOpaqueData`'s five fields, `BTREE_NONLEAF_FILLFACTOR`), `nbtsort.c` (`_bt_blnewpage`'s "Make the P_HIKEY line pointer appear allocated" `pd_lower` bump), `bufpage.c` (`PageGetFreeSpace` subtracting one `ItemIdData` before returning), `itemid.h` (`ItemIdData`'s three bit-fields), `indextuple.c` (`index_form_tuple`'s `size = MAXALIGN(hoff + data_size)`), `heaptuple.c` (`heap_compute_data_size`'s `ATT_IS_PACKABLE`/`VARATT_CAN_MAKE_SHORT` branch that charges no alignment, against the `att_align_nominal` path), and `nbtutils.c` (`_bt_allequalimage`'s `INCLUDE` early return, which is why one fixture logs no verdict). No new engine behavior is claimed by this follow-up; the source reading exists to keep the new comments citable.
+- Rebuild follow-up, exact-pin execution on two **newly initialised** servers: one isolated **17.11** cluster from the same out-of-tree install of the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, and one isolated **12.2** cluster from this repo's pinned 12.2 checkout, configured `--without-readline --without-zlib --enable-debug` and therefore without ICU; both `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`, each with a scratch database created for the run. Fixtures: the eleventh to thirteenth follow-ups' scripts unchanged for tests 18-112, and the deduplication-gate fixtures rebuilt from this page's own runnable harness plus the `text` `deduplicate_items = off` twin and the four-index `t2` table, giving 30 gate fixtures on 17.11 and the 10 constructible ones on 12.2. Two estimator texts only — the rebuilt text from this page's working copy and the filed text from `git show HEAD:` — installed as views by the same generator, with the four documented harness edits. Ground truth per index is a measured `REINDEX INDEX`; `pageinspect`, `pgstattuple` and `amcheck` are installed on 17.11 as ground truth only and 12.2 has no contrib extension at all. Extra probes: `EXCEPT` in both directions between the two views over every index, both exact texts executed as filed and their `psql` output diffed, `EXPLAIN (ANALYZE)` planning/execution splits and `CTE Scan on idx` node counts for both texts, 24 interleaved end-to-end runs of each on 17.11 and six pairs on 12.2, a second scratch database of 600 single-index tables for the cost-scaling reading, test 16's `ei_null`/`ei_boom`/`i_squat` cases including a renamed `pg_catalog.btvarstrequalimage` restored afterwards, the four DDL refusals, the zero-fixture audit query on the fixture database and on a stock one, and per-term withheld attribution on both servers. Both servers were shut down cleanly.
 
 ## Evidence Map
 
@@ -3919,10 +4116,20 @@ Two ordering facts about this run belong in the record. The `ANALYZE` probes tha
 | An expression index with no statistics row is priced at the 32-byte default and reads phantom waste on a healthy index | the statement's `cols` CTE in [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes); measured on `np97` as `slot` 44 and 1825 modelled blocks against 5201 live, with `bt_page_items` item length 120.0 and `pgstatindex` `avg_leaf_density` 91.31% on the identical twin `x108` |
 | The same index with a statistics row is priced correctly, so change D's silence is a refusal to price *yet* | fixtures 106 and 107 in [What change D costs, and what lifts it](#what-change-d-costs-and-what-lifts-it): identical DDL and an identical 5201 -> 523 rebuild, 96.4% without a statistics row against 89.2% with one, measured reclaim 89.9% |
 | `ANALYZE` writes no row for a column whose `attstattarget` is 0, which is the one way a plain index reaches change D's statistics state without expressions | [analyze.c:1015-1030](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1015-L1030), measured as fixture `x109` reading 64.9% on a healthy 5201-block index and still being reported |
+| The rebuilt text returns exactly what the filed text returns | `EXCEPT` in both directions between two views generated from the two Markdown blocks: 0 rows over 95 indexes on 17.11 and 92 on 12.2, 0 of 129 and 0 of 106 scored fixtures disagreeing, and byte-identical `psql` output from both exact texts on both servers ([Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun)) |
+| The 48-byte page constant is a page header, nbtree's special space, and two line pointers | [nbtsplitloc.c:157-160](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L157-L160), [bufpage.h:214](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214), [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L69), [nbtsort.c#_bt_blnewpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L625-L626), [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L907-L923) |
+| A short varlena is charged no alignment padding, which is what the `data_size` `CASE` models | [heaptuple.c:234-242](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L234-L242), [indextuple.c:162-163](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L162-L163) |
+| The rebuild costs one extra scan of the `idx` CTE and a few percent of run time | `CTE Scan on idx` node counts 5 against 6 in the two `EXPLAIN (ANALYZE)` plans, planning 7.87 against 9.17 ms and execution 36.17 against 37.01 ms at 123 indexes, 192.33 against 198.49 ms at 600 ([What the rebuild costs](#what-the-rebuild-costs)) |
+| On a 12 server two of the four partial-index exclusion terms cannot fire, and two critical false positives return | `dedup_applies` false for all 106 indexes on 12.2 against 25 partial indexes withheld by the duplicates disjunct on 17.11; tests 30 and 64 reading 87.6% and 93.5% on the floor with `status = ok` and an empty `caveats` string ([The same suite on a 12.2 server](#the-same-suite-on-a-122-server)) |
 | Change D moves no partial-index verdict and no percentage | the identical verdict distribution in [Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored) (66 PASS / 0 / 0 / 8 under both texts) and eight interleaved timing pairs at 40.1-48.2 ms as filed against 38.7-47.6 ms amended |
 
 ## Open Questions
 
+- **Identity is proven on two fixture databases, not in general.** The `EXCEPT` proof covers the shapes those fixtures build — 95 indexes on 17.11, 92 on 12.2 — all at `block_size` 8192 and `MAXALIGN` 8 on one platform. The page-geometry laterals the rebuild moved contain integer division (`bs * 30 / 100`, `bs * 10 / 100`), and every operand's type was preserved deliberately for that reason, but **no run at a block size other than 8192 was made**, so the one class of divergence that reasoning identifies is the one class the measurement does not cover. The rebuilt text has also been executed on 12.2 and 17.11 only, while the page claims 12 through 17; the 14.23 server the earlier follow-ups used was not rebuilt for this run.
+- **Two critical false positives on a 12 server are now measured and unaddressed.** Tests 30 and 64 read 87.6% and 93.5% on the floor on 12.2 with `status = ok` and an empty `caveats` string, on indexes a `REINDEX` reproduces block for block, because `dedup_applies` is false for every index on that major and change A's duplicates disjunct therefore has nothing to fire on ([The same suite on a 12.2 server](#the-same-suite-on-a-122-server)). No term was proposed for them here, and the obvious candidate — withholding any partial index whose duplicate estimate comes from table statistics regardless of whether deduplication would apply — was neither written nor scored. Whether a 13, 14, 15 or 16 server sits closer to 12 or to 17 on this axis is untested.
+- **The 12.2 partial-index run is not comparable to the 17.11 one cell for cell.** 12 has no `pg_stat_force_next_flush()`, so the fixture scripts could not flush the statistics collector before scoring, and the consequences are visible in the numbers: 17 fixtures were scored while `last_analyze` was still unset, and change B's staleness term fired 19 times against 7 on 17.11. Both effects push toward withholding, which is the safe direction, but they mean the 12.2 verdict distribution measures the harness as much as the statement.
+- **The readability claim itself is not measured.** Line counts, CTE sizes and the removal of the duplicated suppression conditions are facts; "easier to read and maintain" is a judgement, and no second reader has reviewed the rebuilt text. The one structural claim that *is* checkable — that the caveat list and the `WHERE` clause can no longer disagree — holds only for the four conditions now named as booleans; the `never analyzed`, `statistics not visible to this role` and `row-count sources disagree` caveats are still spelled once each in the final `SELECT`.
+- **The cost measurement is two databases on one machine.** 123 indexes and 600 indexes, warm cache, no concurrent load, `shared_buffers = '512MB'`, and `EXPLAIN (ANALYZE)` timing overhead included in the plan/execution split. The end-to-end spread on 17.11 (41.8-51.5 ms filed, 44.7-73.0 ms rebuilt) is wide enough that the median difference of 2.7 ms is the only figure worth quoting, and the 12.2 pairs are too few to separate the texts at all.
 - **The 74 partial-index tests scored one statement, on one server, at one scale.** Only [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes) was run against them, at the asker's direction, so neither the earlier v17 sweep nor the v12 page's Method A has a partial-index verdict — and the earlier sweep would fail more of them, since it has no floor column to fall back on. Everything was measured on one 17.11 server at `block_size` 8192, `fillfactor` 90 unless the test varies it, `MAXALIGN` 8, and tables of 200,000 to 1,000,000 rows. No 12.2 or 14.23 run was made for this group, so the portability claim the rest of the page carries is not established for the partial-index numbers.
 - **The re-score reconstructs the fixtures rather than reusing them.** The original 74-fixture harness was deleted with its sandbox, so the eleventh follow-up rebuilt each requirement from the tenth's published shape and block counts. **61 of the 74 reproduce their filed live-block count exactly** — including every one of the twelve critical false positives except the three noted below, `p47` 787, `p50` 1845, `f78` 1560, `f84` 1363 and the whole 72-77 deletion ladder — and 13 do not: `p25` 5 blocks against 4, `p27` 105 against 96, `p33` 3000 against 2574, `p41` 91 against 388, `p48` 88 against 91, `p58` 219 against 227, `p62` and `p63` 91 against 276, `p68` 1099 against 1374, `f79` 605 against 464, `f82` 91 against 194, `f83` 3121 against 3147, and `f85` 4815 against 3686. Three of the 13 are reconstruction errors rather than sampling noise: `p41`'s "independent" subset is not independent (both columns derive from `i`, so it deduplicated to 91 blocks), and `p62`/`p63` were built on a duplicate-key column where the filed pair used distinct keys, which moves their readings from 0.0/59.4 to −203.3. None of the 13 changes a verdict class, but the two runs are not the same population, and no per-cell number here should be read as a repeat measurement of the same fixture.
 - **Resolved for expression indexes, still open for the rest: the exclusion's non-partial scope.** This question used to read that `np97` was reported and unsuppressed, and that widening the exclusion was never measured. [Change D](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored) measured it and took the narrow half: a non-partial **expression** index with no statistics row is now withheld, and the two wider forms were scored beside it and not applied. What stays open is the residual — fixture `x109`, a plain index whose column carries `SET STATISTICS 0`, reads 64.9% on a healthy 5201-block index with a caveat the alerting rule does not suppress — and whether the wider form's cost on a real, un-analysed database is worth paying to close it. No production index population was surveyed for either shape.
@@ -4171,6 +4378,14 @@ Two ordering facts about this run belong in the record. The `ANALYZE` probes tha
 - [pg_index.h#indexprs](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L52-L62)
 - [catalogs.sgml#indexprs](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L4553-L4564)
 - [relcache.c#RelationGetIndexExpressions](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L5050-L5110)
+- [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L210-L216)
+- [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L900-L923)
+- [nbtsort.c#_bt_blnewpage-hikey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L605-L629)
+- [nbtree.h#BTREE_NONLEAF_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L196-L202)
+- [itemid.h#ItemIdData](../../../../raw/postgres-17/src/include/storage/itemid.h#L20-L41)
+- [itup.h#IndexInfoFindDataOffset](../../../../raw/postgres-17/src/include/access/itup.h#L96-L110)
+- [indextuple.c#index_form_tuple-maxalign](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L150-L170)
+- [heaptuple.c#heap_compute_data_size](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L211-L263)
 
 ## Navigation
 

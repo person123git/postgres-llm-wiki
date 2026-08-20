@@ -3711,3 +3711,94 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
   unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-20] follow-up v17 | recommended B-tree statement rebuilt for readability, and all 91 mandatory tests plus fixtures 92-112 rerun on 12.2 and 17.11
+
+- Rebuilt the SQL block in [The corrected statement, with all six
+  changes](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-corrected-statement-with-all-six-changes)
+  for readability and maintainability, against unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). It is a **pure refactor**: still
+  sixteen CTEs, but `sized`/`fit`/`posting` collapse into one `page` CTE of three commented
+  laterals, while a new `env` and a new `gate` take the server constants and the whole
+  deduplication decision out of `idx`, which drops from 77 lines to 62. Three
+  statistics-state facts — `stats_row_missing`, `dedup_credited`, `stats_stale` — are named
+  once in `modelled` and read by both the `WHERE` clause and the caveat list, so the drift
+  the eleventh follow-up's comment warned about is now structurally impossible. A 35-line
+  header lists the stages and maps each named change 1-6 and A-D to the stage carrying it.
+  Text grows 357 -> 433 lines: +17 code, +58 comment.
+- Prompt hygiene: the request had "agents.md" for AGENTS.md, lowercase "postgresql",
+  "reability", "maintenanbility", a space before two commas and three double spaces; the
+  asker approved a corrected restatement. Three scoping answers are filed in the prompt
+  note: a pure refactor with byte-identical output as the hard requirement, "all tests"
+  meaning the 91 mandatory tests plus fixtures 92-112, and the rebuilt SQL replacing the
+  block in place so the recommended-statement pointer keeps naming the same section.
+- **Every arithmetic expression is byte-identical and moved rather than rewritten**, because
+  the model mixes `numeric` and `float8` and a re-association could move a percentage
+  invisibly. Every CTE and output-column name the rest of the page cites is unchanged; the
+  only prose that went stale is the opening sentence of `### Change 6`, which named `idx` as
+  the CTE holding the gate and now names `gate`.
+- **Identity is measured four ways on two servers, not asserted.** `SELECT * FROM est EXCEPT
+  SELECT * FROM est_filed` and its reverse return **0 rows over 95 indexes on 17.11 and 92
+  on 12.2**, across every exposed column including internals (`slot`, `leaf_cap`, `nmax`,
+  `expected_blocks`, `floor_blocks`, `key_groups`, `tids`, `suppress_row`); both exact texts
+  produce byte-identical `psql` output on both servers; and **0 of 129 and 0 of 106 scored
+  fixtures** disagree on status, either percentage, caveats or the suppression flag. Both
+  views come from one generator, one reading the working copy of the page and the other
+  `git show HEAD:` of it.
+- **The rerun scores identically to the filed tables.** Deduplication gate: 30 fixtures,
+  421/460/1376/1931 blocks and `−0.2`/`8.0`/`0.1`/`0.2`% exactly as filed, `28.8%` on
+  `i_multi_bad`, `−320.0%` on `i_multi_ok` against `8.1%` on `i2_ok`, 0 over-credits and the
+  single `i_ei_true` under-credit at `−226.4%`, 0 fixtures above 30% on either column, and
+  the engine's `DEBUG1` verdicts 14 "can safely" / 13 "cannot" / nothing for `i_inc`. Test
+  16 reproduces in full: `function 17076 returned NULL`, `equalimage probe exploded`, the
+  three `ALTER OPERATOR FAMILY` refusals, the `text_pattern_ops` refusal, `i_squat` at 1931
+  blocks with the gate false and `i_text_det2` at 460 with it true during the same
+  `pg_catalog.btvarstrequalimage` rename (restored afterwards), and the audit query at 6
+  rows in the fixture database against 0 in a stock one. Partial indexes: **66 PASS (34
+  reported, 32 withheld), 0 critical false positives, 0 false positives, 8 false negatives**,
+  **74 of 74 live-block counts matching for the fourth consecutive run**, all 74
+  reported/withheld states agreeing, and six floors moved by `ANALYZE` sampling (86-91) with
+  none across a verdict boundary.
+- **The cost is stated rather than hidden.** The inlined `gate` reads the materialized `idx`
+  CTE once more — 5 `CTE Scan on idx` nodes against 6 — worth `+1.3 ms` of planning
+  (7.87 -> 9.17 ms) and `+0.8 ms` of execution (36.17 -> 37.01 ms) on the 123-index fixture
+  database, and `+3.2%` of execution on a 600-index one (192.33 -> 198.49 ms). End to end
+  over 24 interleaved runs each: filed 41.8/43.5/51.5 ms min/median/max against rebuilt
+  44.7/46.2/73.0.
+- **Running the whole partial suite on a 12 server for the first time found the exclusions'
+  portability limit.** `dedup_applies` is false for all 106 indexes on 12.2, so change A's
+  duplicates disjunct — 25 of the 36 withheld rows on 17.11 — cannot fire, and **tests 30
+  and 64 return as unsuppressed critical false positives at 87.6% and 93.5%** with
+  `status = ok` and an empty caveat string on indexes a `REINDEX` reproduces block for
+  block. Three of the five 12.2 critical false positives carry `never analyzed`, which the
+  reading rule already discards. 12 has no `pg_stat_force_next_flush()`, so 17 fixtures were
+  scored with `last_analyze` unset and change B fired 19 times against 7 on 17.11; that half
+  of the swing measures the harness, not the statement. Three fixtures are unconstructible
+  on 12.2 (test 38's `deduplicate_items`, tests 51-52's ICU), and the ten constructible
+  deduplication-gate fixtures reproduce their filed 12.2 table including `i_int4` at 1376
+  blocks against 421 on 17.11 and the four refusals verbatim.
+- Page edits: the new prompt and its note in `## Question`, a fourteenth-follow-up paragraph
+  in `### Verdict`, a rebuild paragraph in `### The current recommended statement`, a
+  fourteenth paragraph above the SQL block, the rebuilt SQL itself, the corrected `Change 6`
+  sentence, an updated most-compatible bullet, six new `###` sections, 6 new Contents
+  entries, 2 Context Reviewed bullets, 5 Evidence Map rows, 5 new Open Questions, and 9
+  Source References. All 318 page-internal anchors were checked to resolve.
+- Measured on **two newly initialised clusters** rather than restarted ones: 17.11 from the
+  `--with-icu --enable-debug` install of the pin, and 12.2 from this repo's pinned checkout
+  at `45b88269a353ad93744772791feb6d01bc7e1e42`, both `block_size` 8192, `autovacuum = off`,
+  `fsync = off`. Fixture scripts for tests 18-112 are the eleventh to thirteenth follow-ups'
+  unchanged; the deduplication-gate fixtures were rebuilt from the page's own runnable
+  harness; the 12.2 variants were produced by a script that drops only
+  `pg_stat_force_next_flush()`, the `deduplicate_items` reloption and the two ICU
+  collations, and prints every dropped line. `REINDEX INDEX` is ground truth;
+  `pageinspect`/`pgstattuple`/`amcheck` are ground truth only on 17.11 and 12.2 has no
+  contrib extension at all. Both servers were shut down cleanly; the sandbox is retained
+  under `.wiki-runtime/tmp/refactor17/`, including both 9 GB data directories, so the run
+  can be repeated without rebuilding the fixtures.
+- Five open questions record the gaps: identity is proven at `block_size` 8192 only and the
+  rebuilt text has not been run on 14.23, the two new 12.2 false positives have no proposed
+  term, the 12.2 verdict distribution partly measures the harness, the readability claim
+  itself is a judgement no second reader has checked, and the cost figures are one machine.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
+  the page keeps `verified: false` and `verified_by_agent: not yet`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

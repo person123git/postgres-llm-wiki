@@ -14,6 +14,43 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-20: **rebuilt the recommended B-tree wasted-space statement for readability and
+  maintainability** in [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17 (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md),
+  on unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), and **reran all 91
+  mandatory tests plus fixtures 92-112 on newly initialised 17.11 and 12.2 clusters**. The
+  rebuild is a **pure refactor and moves nothing the statement returns**: still sixteen
+  CTEs, but `sized`/`fit`/`posting` collapse into one `page` CTE of three commented
+  laterals while a new `env` and a new `gate` take the server constants and the whole
+  deduplication decision out of `idx` (77 lines to 62); three statistics-state facts are
+  named once in `modelled` so the caveat list and the `WHERE` clause stop spelling the same
+  conditions twice; and a 35-line header maps each named change 1-6 and A-D to its stage.
+  Every arithmetic expression is byte-identical and moved rather than rewritten, because
+  the model mixes `numeric` and `float8`. **Identity is measured four ways on both
+  servers**: `EXCEPT` in each direction between views generated from the two Markdown
+  blocks returns **0 rows over 95 indexes on 17.11 and 92 on 12.2**, both exact texts give
+  byte-identical `psql` output, and **0 of 129 and 0 of 106 scored fixtures disagree** on
+  status, either percentage, caveats or the suppression flag. The reran suite scores
+  identically under both texts: 30 deduplication-gate fixtures reproducing 421/460/1376/1931
+  blocks, 0 gate over-credits and the single `i_ei_true` under-credit at `−226.4%`; 74
+  partial-index tests at **66 PASS / 0 critical false positives / 0 false positives / 8
+  false negatives**, with **74 of 74 live-block counts matching for the fourth consecutive
+  run** and six floors moved by `ANALYZE` sampling but none across a verdict boundary; test
+  16's `ei_null`/`ei_boom`/`i_squat` cases and the four DDL refusals verbatim; and the
+  zero-fixture audit query at 6 rows in the fixture database against 0 in a stock one. The
+  cost is stated rather than hidden — one extra `CTE Scan on idx` (5 nodes to 6), `+1.3 ms`
+  of planning and `+0.8 ms` of execution at 123 indexes, `+3.2%` of execution at 600. And
+  running the whole partial suite on a 12 server for the first time found the exclusions'
+  portability limit: `dedup_applies` is false for all 106 indexes on 12.2, so change A's
+  duplicates disjunct (25 of the 36 withheld rows on 17.11) cannot fire and **tests 30 and
+  64 return as unsuppressed critical false positives at 87.6% and 93.5%** with `status = ok`
+  and an empty caveat string, while the missing `pg_stat_force_next_flush()` leaves 17
+  fixtures scored with `last_analyze` unset and fires change B nineteen times. Three
+  fixtures are unconstructible on 12.2 (test 38's `deduplicate_items`, tests 51-52's ICU).
+  Five open questions record the gaps, including no run at a block size other than 8192, no
+  14.23 run of the rebuilt text, and the two new 12.2 false positives. The page remains
+  human-unverified and agent-unverified.
+
 - 2026-08-20: **applied change D** to the recommended B-tree wasted-space statement in
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), on unchanged
