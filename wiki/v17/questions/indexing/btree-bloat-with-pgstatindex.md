@@ -15,12 +15,13 @@ verified_by_agent: not yet
   - [The statement](#the-statement)
   - [How to read the output](#how-to-read-the-output)
   - [Follow-up: no threshold, no verdict column](#follow-up-no-threshold-no-verdict-column)
+  - [Follow-up: wasted space measured against the fillfactor](#follow-up-wasted-space-measured-against-the-fillfactor)
   - [What one pgstatindex call actually measures](#what-one-pgstatindex-call-actually-measures)
   - [Why every candidate filter is there](#why-every-candidate-filter-is-there)
   - [The one behavioural difference between 12 and 17](#the-one-behavioural-difference-between-12-and-17)
   - [The model, from avg_leaf_density to a rebuilt size](#the-model-from-avg_leaf_density-to-a-rebuilt-size)
   - [Why the two page-layout constants are safe](#why-the-two-page-layout-constants-are-safe)
-  - [wasted_space is not est_reclaimable](#wasted_space-is-not-est_reclaimable)
+  - [wasted_vs_fillfactor is not est_reclaimable](#wasted_vs_fillfactor-is-not-est_reclaimable)
   - [NaN is the trap](#nan-is-the-trap)
   - [Accuracy against REINDEX INDEX](#accuracy-against-reindex-index)
   - [The three shapes it gets wrong](#the-three-shapes-it-gets-wrong)
@@ -69,6 +70,24 @@ of wasted space.
 > exactly as it was; and both retained servers were restarted, their fixtures
 > rebuilt, and the amended text run on each.
 
+Second follow-up: adjust every wasted-space-related calculation to the index
+fillfactor.
+
+> Prompt note: filed as an approved corrected restatement of `follow agents.md,
+> in postgresql 17 , for question: B-Tree Bloat and Wasted Space From
+> pgstatindex Alone, on PostgreSQL 12 and 17 (unverified) , adjust any wasted
+> space related calculation to the index fillfactor`, per the repository's
+> prompt-hygiene rule; the original had `agents.md` for AGENTS.md, lowercase
+> `postgresql`, two spaces before commas, and unhyphenated `wasted space
+> related`. Four scoping answers are recorded with it: the baseline is the
+> build-code target density the estimate already uses,
+> `(leaf_capacity - BLCKSZ * (100 - fillfactor) / 100) / leaf_capacity`, not the
+> literal `fillfactor / 100`, so both columns rest on one target; an index denser
+> than that target reports zero rather than a negative number; the two output
+> columns are renamed `wasted_vs_fillfactor` and `wasted_ff_pct` so the baseline
+> is in the name and no old output is silently reinterpreted; and both retained
+> servers were restarted and both texts run on each.
+
 ## Answer
 
 ### The statement
@@ -84,13 +103,14 @@ returned 27 rows on the 12.2 server and 28 on the 17.11 server, from the same te
 --   cand      every index pgstatindex can be called on without raising
 --   measured  one pgstatindex() call per candidate
 --   modelled  per-index constants: leaf capacity, fillfactor, target free space
---   sized     bytes actually holding index entries, and bytes that do not
+--   sized     bytes holding entries, dead-page bytes, the fillfactor target
 --   est       leaf pages a rebuild at this index's fillfactor would need
 --   final     the modelled rebuilt size
 --
--- wasted_space measures the file against perfect packing, so a healthy index
--- reports roughly its fillfactor's worth of waste.  est_reclaimable measures it
--- against a rebuild at its own fillfactor, which is what REINDEX gives back.
+-- wasted_vs_fillfactor measures the file against a rebuild at this index's own
+-- fillfactor: free bytes in live leaf pages beyond what such a build leaves,
+-- never below zero, plus every empty and deleted page.  est_reclaimable is the
+-- same target read as a file size, which is what REINDEX gives back.
 -- The statement sets no threshold and reaches no verdict.  It reports the
 -- measurements and the estimate, ordered by est_reclaimable, largest first.
 
@@ -153,7 +173,10 @@ sized AS (
 ),
 est AS (
     SELECT s.*,
-           s.leaf_bytes - s.live_leaf_bytes + s.dead_bytes AS wasted_space,
+           -- free leaf bytes a rebuild at this fillfactor would not leave,
+           -- never negative, plus pages that hold nothing at any fillfactor
+           GREATEST(round(s.leaf_bytes * s.target_density) - s.live_leaf_bytes, 0)
+               + s.dead_bytes AS wasted_vs_fillfactor,
            CASE WHEN s.leaf_pages = 0 THEN 0
                 ELSE ceil(s.leaf_pages * s.density / s.target_density) END
                AS est_leaf_pages
@@ -178,8 +201,8 @@ SELECT /* wiki_btree_bloat_pgstatindex_12_17 */
            AS avg_leaf_density,
        CASE WHEN f.leaf_pages > 0 THEN round(f.leaf_fragmentation::numeric, 2) END
            AS leaf_fragmentation,
-       pg_size_pretty(f.wasted_space::bigint) AS wasted_space,
-       round(100 * f.wasted_space / f.index_size, 1) AS wasted_pct,
+       pg_size_pretty(f.wasted_vs_fillfactor::bigint) AS wasted_vs_fillfactor,
+       round(100 * f.wasted_vs_fillfactor / f.index_size, 1) AS wasted_ff_pct,
        pg_size_pretty(f.est_rebuilt_bytes::bigint) AS est_rebuilt_size,
        pg_size_pretty((f.index_size - f.est_rebuilt_bytes)::bigint) AS est_reclaimable,
        round(100 * (f.index_size - f.est_rebuilt_bytes) / f.index_size, 1)
@@ -229,22 +252,24 @@ Read the other columns as supporting detail:
 
 | Column | Means | Watch for |
 |---|---|---|
-| `wasted_space`, `wasted_pct` | Free bytes inside live leaf pages, plus every empty and deleted page, measured against perfect packing | A healthy index reports roughly `100 - fillfactor`. A fresh `fillfactor = 10` index reads 89.6% here and −0.5% reclaimable |
-| `avg_leaf_density` | Share of leaf-page space holding entries | Low density is the usual bloat signal, but it is blind to whole pages that hold nothing |
-| `dead_pages` | `empty_pages + deleted_pages` | These are 100% waste and invisible to `avg_leaf_density`. A measured index read 89.94% density and was still 69.9% reclaimable |
+| `wasted_vs_fillfactor`, `wasted_ff_pct` | Free bytes inside live leaf pages beyond what a build at this index's fillfactor leaves, never below zero, plus every empty and deleted page | A fresh index reports 0.0 at any fillfactor. It counts payload bytes, so it runs about `(leaf_capacity - target_free) / block_size` of `est_reclaimable_pct` — 0.895 of it at 8192/90 |
+| `avg_leaf_density` | Share of leaf-page space holding entries | Low density is the usual bloat signal, but it is blind to whole pages that hold nothing, and a low number is normal at a low fillfactor |
+| `dead_pages` | `empty_pages + deleted_pages` | These are 100% waste at any fillfactor and invisible to `avg_leaf_density`. A measured index read 89.94% density and was still 69.9% reclaimable |
 | `leaf_fragmentation` | Share of leaves whose right sibling sits at a lower block number | Not wasted space at all. Physical disorder that costs sequential-scan I/O; the note says so |
 | `notes` | Why a row looks odd | `no leaf pages`, `fillfactor N`, `fragmented, not wasted space`, `denser than a rebuild would leave it`, `reclaim is mostly empty/deleted pages` |
 
 Two rows from the 17.11 run show why both percentages exist:
 
 ```text
- index_name  | index_size | leaf_pages | dead_pages | avg_leaf_density | wasted_pct | est_reclaimable_pct | notes
- i_delhead   | 21 MB      |        821 |       1918 |            89.94 |       72.9 |                69.9 | reclaim is mostly empty/deleted pages
- i_ff10      | 206 MB     |      26316 |          0 |             9.62 |       89.6 |                -0.5 | fillfactor 10
+ index_name  | index_size | leaf_pages | dead_pages | avg_leaf_density | wasted_ff_pct | est_reclaimable_pct | notes
+ i_delhead   | 21 MB      |        821 |       1918 |            89.94 |          69.9 |                69.9 | reclaim is mostly empty/deleted pages
+ i_ff10      | 206 MB     |      26316 |          0 |             9.62 |           0.0 |                -0.5 | fillfactor 10
 ```
 
-`i_delhead` has textbook-perfect leaves and is two thirds reclaimable. `i_ff10`
-looks catastrophic by density and is exactly the size its owner asked for.
+`i_delhead` has textbook-perfect leaves and is two thirds reclaimable, and here
+the two columns agree to the tenth because every wasted byte is in a whole page
+that holds nothing. `i_ff10` looks catastrophic by density and is exactly the
+size its owner asked for, so both columns say there is nothing to take back.
 
 ### Follow-up: no threshold, no verdict column
 
@@ -302,6 +327,199 @@ a rule: the sort is on reclaimable **bytes** and the old label was on reclaimabl
 A caller that wants a threshold applies it to `est_reclaimable_pct` at the call
 site, where it can differ per environment and per index size, instead of being
 frozen at 20 inside a report whose job is to measure.
+
+### Follow-up: wasted space measured against the fillfactor
+
+Every wasted-space calculation is now rebased on the index's own fillfactor, so
+a correctly built index reports no waste whatever its fillfactor is. The filed
+column measured the file against perfect packing, which meant a healthy default
+index always reported about 10% wasted and a deliberate `fillfactor = 10` index
+reported 89.6% — a number that described the DBA's own instruction, not a
+problem. Four edits, in one CTE and one `SELECT` list:
+
+| Where | Was | Is |
+|---|---|---|
+| `est` | `s.leaf_bytes - s.live_leaf_bytes + s.dead_bytes AS wasted_space` | `GREATEST(round(s.leaf_bytes * s.target_density) - s.live_leaf_bytes, 0) + s.dead_bytes AS wasted_vs_fillfactor` |
+| presentation `SELECT` | `pg_size_pretty(f.wasted_space::bigint) AS wasted_space` | `pg_size_pretty(f.wasted_vs_fillfactor::bigint) AS wasted_vs_fillfactor` |
+| presentation `SELECT` | `round(100 * f.wasted_space / f.index_size, 1) AS wasted_pct` | `round(100 * f.wasted_vs_fillfactor / f.index_size, 1) AS wasted_ff_pct` |
+| header comment, stage list | `wasted_space measures the file against perfect packing` | the fillfactor-relative definition, and `sized` now names the target |
+
+The text grows from 122 lines and 5,839 bytes to 126 lines and 6,154 bytes, and
+the output keeps its 14 columns. `notes` is untouched, and so is every other
+expression in the statement.
+
+Three decisions are worth stating, because each could have gone the other way:
+
+- **The baseline is `target_density`, not `fillfactor / 100`.** It is the same
+  `(leaf_capacity - BLCKSZ * (100 - fillfactor) / 100) / leaf_capacity` the
+  rebuild estimate already uses — 89.95% at 8192 and fillfactor 90, not 90.00% —
+  so the two columns now measure against one target instead of two that differ
+  by 0.05 points ([nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L645-L671),
+  [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1145)).
+- **The leaf term is clamped at zero.** An index denser than its target is not
+  holding negative waste; it is denser than a rebuild would leave it, which the
+  `notes` column already says. `GREATEST(..., 0)` applies to the leaf term only,
+  so empty and deleted pages still count in full — they hold nothing at any
+  fillfactor.
+- **The columns are renamed.** `wasted_space` and `wasted_pct` meant something
+  else in the two earlier versions of this report, and an archived output should
+  not be silently reinterpreted. The baseline is now in the name.
+
+**Measured on both restarted servers, and nothing outside those two fields
+moved.** Both clusters reproduced their filed output byte for byte before the
+comparison started, so this is a comparison of two texts and not of two database
+states:
+
+| Check | 12.2 | 17.11 |
+|---|---|---|
+| Rows returned, either text | 27 | 28 |
+| Output columns, either text | 14 | 14 |
+| The 12 untouched fields, filed against fillfactor-relative | identical, 2,109 bytes | identical, 2,180 bytes |
+| Columns exposed by the internal `final` stage | 28 against 28; `wasted_space` out, `wasted_vs_fillfactor` in | 28 against 28; same one-for-one swap |
+| `EXCEPT` in both directions over the 27 shared columns | 0 rows, 214 indexes | 0 rows, 220 indexes |
+| Rows byte-identical across the two servers, new text | 24 of 27 shared | 24 of 27 shared |
+| Rows where the new column exceeds the old one | 0 of 214 | 0 of 220 |
+| Rows where the new column is negative | 0 of 214 | 0 of 220 |
+
+The same 24-of-27 cross-server agreement holds under the new text as under the
+filed one, with the same three exceptions — the two duplicate-key indexes and
+the non-deterministic churn fixture.
+
+**What actually changed, on the 17.11 report.** No row read `0.0` under the
+filed text; eleven of 28 do now, and every remaining row fell by roughly a tenth
+of the file:
+
+```text
+ index_name  | index_size | avg_leaf_density | old wasted_pct | wasted_ff_pct | est_reclaimable_pct | notes
+ i_del90     | 21 MB      |             9.27 |           89.9 |          79.9 |                89.7 |
+ i_delhead   | 21 MB      |            89.94 |           72.9 |          69.9 |                69.9 | reclaim is mostly empty/deleted pages
+ i_del50     | 21 MB      |            45.18 |           54.3 |          44.4 |                49.7 |
+ i_ff100     | 19 MB      |            99.86 |            0.1 |           0.1 |                 0.1 | fillfactor 100
+ i_fresh     | 21 MB      |            90.06 |            9.8 |           0.0 |                -0.1 |
+ i_ff50      | 39 MB      |            49.85 |           49.7 |           0.0 |                -0.2 | fillfactor 50
+ i_ff10      | 206 MB     |             9.62 |           89.6 |           0.0 |                -0.5 | fillfactor 10
+ i_dup_ins   | 6368 kB    |            95.94 |            4.0 |           0.0 |                -6.7 | denser than a rebuild would leave it
+```
+
+Both servers produced this pattern; 12.2 has ten such rows out of 27, the one
+difference being the 17-only `deduplicate_items = off` fixture.
+
+The `fillfactor = 100` rows are the exception that proves the arithmetic: at
+fillfactor 100 the target free space is zero, so
+`target_density` is exactly 1 and the new column equals the old one to the byte.
+That happened for 110 of 214 indexes on 12.2 and 110 of 220 on 17.11 — two
+`fillfactor = 100` fixtures plus the 104 and 108 indexes with no leaf pages,
+where both definitions reduce to the dead-page term.
+
+**A rebuilt index must report zero, and it does.** After `REINDEX INDEX` over
+every scored index, the new column was measured again on both servers:
+
+| Post-`REINDEX` residual | 12.2 | 17.11 |
+|---|---|---|
+| Indexes scored | 97 | 96 |
+| Exactly `0` bytes | 81 | 76 |
+| At or below 0.1% | 87 | 85 |
+| Worst residual, all indexes | 44.6%, 7,309 bytes | 44.6%, 7,309 bytes |
+| Worst residual, indexes the report shows (≥ 1 MB) | 0.4%, 35,252 bytes | 0.4%, 35,252 bytes |
+
+The 44.6% is the honest limit of the definition and it is the same fixture on
+both servers: `c_one_idx`, a one-row index whose single leaf page is 0.29% dense.
+A rebuild cannot make one tuple fill 89.95% of a page, so the column claims
+7,309 wasted bytes that no operation will ever return. Every index in that state
+has three leaf pages or fewer and sits far below the statement's 1 MB
+`min_index_bytes` prefilter, which is why the report itself never shows one; the
+worst residual among the rows it does print is 0.4%. The old baseline had the
+same blind spot and read worse on the same index: 8,128 bytes and 49.6%.
+
+**The two columns are related, not redundant.** For waste that sits inside live
+leaf pages, the new column is a fixed fraction of the reclaim estimate, because
+it counts payload bytes while `est_reclaimable` counts whole file pages including
+each one's 24-byte header and 16-byte special area:
+
+```text
+wasted_vs_fillfactor / est_reclaimable  ->  (leaf_capacity - target_free) / block_size
+                                        =   (8152 - 819) / 8192  =  0.8951   at 8192/90
+```
+
+Measured over the 15 indexes with more than a megabyte of estimated reclaim,
+identically on both servers: `0.8868` to `0.8921` for the thirteen with no dead
+pages, `1.0001` for `i_delhead`, whose waste is 1,918 whole dead pages, and
+`0.8321` for `i_wide`, which mixes 44 dead pages with wide-tuple leaves. So the
+ratio reads as a composition signal: near 0.89 the waste is inside pages, at 1.0
+it is whole pages, and a rebuild is the only way to return either.
+
+**At a low fillfactor the two columns diverge, and the new one is the smaller.**
+Every fixture in the original suite that carries real waste has the default
+fillfactor 90, so four more were built for this change — a table filled, indexed
+at a stated fillfactor, then nine tenths of the rows deleted and the table
+vacuumed. Both servers produced these four rows identically:
+
+```text
+ index_name     | ff  | leaf | dead | density | target | old wasted_pct | wasted_ff_pct | est_pct | actual_pct | ratio pred/meas | after
+ i_ff100_del90  | 100 |  493 |    0 |   10.25 | 100.00 |           88.6 |          88.6 |    89.5 |       89.5 | 0.9951 / 0.9895 |   1.5
+ i_ff50_del90   |  50 |  991 |    0 |    5.25 |  49.75 |           93.7 |          44.0 |    89.3 |       89.8 | 0.4951 / 0.4931 |   0.4
+ i_ff10_del90   |  10 | 1579 |    0 |    1.23 |   9.57 |           97.8 |           8.3 |    87.1 |       89.9 | 0.0952 / 0.0948 |   0.0
+ i_ff50_delhead |  50 |  100 |  894 |   49.36 |  49.75 |           94.7 |          89.7 |    89.7 |       89.8 | 0.4951 / 1.0004 |   0.4
+```
+
+The predicted ratio holds across the whole fillfactor range, to four decimal
+places on both servers, and the consequence is blunt: **`i_ff10_del90` is 89.9%
+reclaimable and reports 8.3% wasted.** That is the definition working, not
+failing. At fillfactor 10 the index is *supposed* to be nine tenths free space,
+so the bytes that a rebuild would not leave free are a small share of the file
+even though the rebuild takes it from 1,579 leaf pages to 158. A reader who wants
+"how much disk will `REINDEX` give back" must read `est_reclaimable_pct`, at any
+fillfactor; `wasted_ff_pct` answers "how much of this file is space its own
+fillfactor does not justify", and the lower the fillfactor the further apart
+those two questions are. The old baseline hid the difference by reporting 97.8%
+for the same index, which was neither answer. `i_ff50_delhead` shows the other
+end: its waste is 894 whole dead pages, the ratio goes to `1.0004`, and the two
+columns agree at 89.7%.
+
+The last column is the post-`REINDEX` residual, and `i_ff100_del90`'s 1.5% is
+worth naming: rebuilt, it holds 20,000 rows in 50 leaf pages at 98.42% density,
+because the rightmost page of any build takes whatever is left over. Against a
+100% target that partial page is 6,440 bytes, and on a 416 kB index that is 1.5%.
+The effect is per-index, not per-byte, so it shrinks as the index grows.
+
+These four fixtures also found the reclaim estimate's own worst under-estimate
+for a vacuumed index anywhere on this page: `i_ff10_del90` at `87.1` against an
+actual `89.9`, `−2.8` points, where every fixture in the original suite came
+within `1.0`. The likely cause is in the same numbers. Every non-rightmost page
+holds a high key in item 1
+([nbtree.h#P_HIKEY](../../../../raw/postgres-17/src/include/access/nbtree.h#L348-L369)),
+which a rebuild into 158 pages writes 158 times and the 1,579-page original
+carries 1,579 times, and `avg_leaf_density` counts that per-page overhead as
+occupied space because `PageGetFreeSpace` reports only what is unallocated
+([pgstatindex.c#leaf-accounting](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L304-L324),
+[bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L898-L923)).
+At a density of 1.23% that overhead is most of the measured payload, so the model
+believes there is more to re-pack than there is. The error is in the safe
+direction; the per-page accounting that would confirm the size of each term was
+not done, and it is recorded under [Open Questions](#open-questions).
+
+**Cost is unchanged.** The plan shape is identical on both servers (4 `CTE Scan`
+nodes; 68 plan lines on 17.11, 60 on 12.2) and so is the page count: the two
+texts read exactly 108,021 buffers on 17.11 and 108,327 on 12.2, differing only
+in the hit/read split. `EXPLAIN (ANALYZE, BUFFERS)` execution was 131.1 ms
+against 120.9 ms on 17.11 and 123.6 ms against 117.5 ms on 12.2, and six
+interleaved end-to-end runs of each text spanned 124.0-127.7 ms against
+122.1-125.6 ms on 17.11 and 120.6-129.2 ms against 121.2-123.8 ms on 12.2 — the
+fillfactor-relative text is at or just inside the filed text's range, which for
+one multiplication over an already-materialized CTE is noise.
+
+**What this column does not become.** It is still a description of the file, not
+a prescription for it. `pgstatindex` cannot see entries that are deleted but not
+yet vacuumed, so `i_novac` now reads `0.0` where it used to read 9.8, on an index
+a rebuild would shrink by 90%; the 9.8 was never a signal, but zero is a flatter
+way to be wrong. And fillfactor is a build-time and rightmost-split target, not
+a property a growing index holds: an ordinary leaf split divides 50:50, and a
+page full of one value splits at `BTREE_SINGLEVAL_FILLFACTOR`, 96%
+([nbtsplitloc.c#fillfactormult](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L279-L335),
+[nbtsplitloc.c#SPLIT_SINGLE_VALUE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416),
+[nbtree.h#BTREE_SINGLEVAL_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202)).
+The column measures the file against what a rebuild would produce, which is the
+only fillfactor-relative question `REINDEX` can answer.
 
 ### What one pgstatindex call actually measures
 
@@ -469,20 +687,40 @@ The statement reads `block_size` from the server, so a cluster built at another
 `BLCKSZ` scales; the 24 and the 16 do not depend on `BLCKSZ`. Nothing was run at a
 block size other than 8192.
 
-### wasted_space is not est_reclaimable
+### wasted_vs_fillfactor is not est_reclaimable
 
 ```text
-wasted_space = leaf_pages * leaf_capacity * (1 - avg_leaf_density/100)
-             + (empty_pages + deleted_pages) * block_size
+target_density       = (leaf_capacity - block_size * (100 - fillfactor) / 100)
+                       / leaf_capacity
+wasted_vs_fillfactor = max(leaf_pages * leaf_capacity
+                             * (target_density - avg_leaf_density/100), 0)
+                     + (empty_pages + deleted_pages) * block_size
 ```
 
-That is the file measured against 100% packing, which no B-tree ever reaches on
-purpose. It answers "how many bytes hold nothing", and it is the literal reading
-of "wasted space". It is not an action threshold: a perfectly healthy default
-index reports about 10% wasted, and the `fillfactor = 10` fixture reports 89.6%.
-`est_reclaimable` is the action threshold. Both are in the output because they
-answer different questions, and the header comment in the statement says which is
-which.
+That is the file measured against the density a rebuild at this index's own
+fillfactor reaches, which is the only fillfactor-relative question `REINDEX` can
+answer. It counts bytes that hold nothing **and that a rebuild would not leave
+empty**, so a correctly packed index reports zero at any fillfactor, and the
+`fillfactor = 10` fixture that used to report 89.6% now reports 0.0.
+
+`est_reclaimable` answers a different question with the same target: not "how
+many bytes in this file are surplus" but "how large would the file be after a
+rebuild". The gap between them is per-page overhead. `wasted_vs_fillfactor`
+counts payload bytes inside leaf pages; `est_reclaimable` counts whole 8 kB file
+pages, each carrying a 24-byte header and a 16-byte special area that the payload
+figure excludes. For in-page waste that makes the first a fixed fraction
+`(leaf_capacity - target_free) / block_size` of the second — 0.8951 at 8192 and
+fillfactor 90, measured at 0.8868 to 0.8921 — and for whole dead pages the two
+coincide, because a dead page wastes all 8,192 of its bytes and gives all 8,192
+back. Both are in the output because a reader who wants to know how much of the
+file is surplus and a reader who wants to know how much disk a rebuild returns
+are asking different things.
+
+An earlier version of this report measured the same free bytes against 100%
+packing under the names `wasted_space` and `wasted_pct`. That number was the
+literal reading of "wasted space" but it was mostly a restatement of the
+fillfactor: a healthy default index reported about 10%. See
+[Follow-up: wasted space measured against the fillfactor](#follow-up-wasted-space-measured-against-the-fillfactor).
 
 ### NaN is the trap
 
@@ -679,13 +917,14 @@ the error per index and keeps going.
 
 Of the 27 rows the 12.2 report produced and the 28 from 17.11, **24 are identical
 character for character across the two servers**, including `leaf_pages`,
-`avg_leaf_density`, `wasted_space`, `est_reclaimable` and `notes`. The exceptions
-are the two duplicate-key indexes (deduplication) and `i_churn`, where the churn
-fixture is not deterministic (2,551 leaves against 2,550, and 48.38% against
-48.36%). Both servers also produced the same error text for every rejected shape,
-the same `+1.7` worst over-estimate, the same `−90.0` and `−5.1` under-estimates,
-the same implied leaf capacity, and the same fresh-build densities at four
-fillfactors.
+`avg_leaf_density`, `wasted_vs_fillfactor`, `est_reclaimable` and `notes`. The
+exceptions are the two duplicate-key indexes (deduplication) and `i_churn`, where
+the churn fixture is not deterministic (2,551 leaves against 2,550, and 48.38%
+against 48.36%). Both servers also produced the same error text for every rejected
+shape, the same `+1.7` worst over-estimate, the same `−90.0` and `−5.1`
+under-estimates, the same implied leaf capacity, and the same fresh-build
+densities at four fillfactors. The count is 24 under the fillfactor-relative text
+and was 24 under both earlier texts, with the same three exceptions each time.
 
 ### How this was measured
 
@@ -714,6 +953,20 @@ than of two database states. The amended text was derived from the filed one by
 a script that asserts each of the five edits appears exactly once and prints it,
 and the page's SQL block was then verified byte-identical to the executed file
 (5,839 bytes, 122 lines).
+
+The follow-up that rebased wasted space on the fillfactor restarted the same two
+clusters again and needed no fixture rebuild: both servers returned their filed
+output byte for byte on the first run (2,448 bytes over 27 rows on 12.2, 2,531
+over 28 on 17.11), because the previous follow-up ended with the fixtures rebuilt
+rather than reindexed. The fillfactor-relative text was derived from the filed
+one by the same kind of script — four edits, each asserted to appear exactly once
+and printed — and the page's SQL block was verified byte-identical to the
+executed file (6,154 bytes, 126 lines). Presentation identity is measured by
+cutting the two changed fields out of both outputs; internal identity by
+generating one view per text over the `final` stage with `min_index_bytes` set to
+0, so all 214 and 220 indexes in each database are compared and not only those
+over a megabyte. The post-`REINDEX` residual pass is destructive and ran last, in
+the order the earlier passes need: report, comparison, timing, then rebuild.
 
 ## Context Reviewed
 
@@ -750,6 +1003,12 @@ and the page's SQL block was then verified byte-identical to the executed file
   `deleted_pages`, `avg_leaf_density`, `leaf_fragmentation`), leaves `tree_level`
   and `root_block_no` unused, and none of them was reached through the removed
   `alert_pct`.
+- `src/backend/access/nbtree/nbtsplitloc.c`, re-read when wasted space was
+  rebased on the fillfactor: `_bt_findsplitloc` reads `BTGetFillFactor` but
+  applies it as `fillfactormult` only on a rightmost page, uses 0.50 for an
+  ordinary leaf split, and switches to `BTREE_SINGLEVAL_FILLFACTOR` for a page
+  full of one value. That is why the new column is defined against what a
+  *rebuild* targets and not against how a growing index packs itself.
 
 ## Evidence Map
 
@@ -772,6 +1031,13 @@ and the page's SQL block was then verified byte-identical to the executed file
 | Deduplication is the only thing that made the two servers' numbers differ | [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1151); 24 of the report's rows identical, `i_dup`/`i_dup_ins` 21 MB against 6800 kB and 20 MB against 6368 kB |
 | Dropping `alert_pct` and `status` changes nothing else the statement returns | measured on both restarted servers: the amended output equals the filed output with field 14 cut, byte for byte (2,448 and 2,531 bytes); one view per text over the internal `final` stage exposes 29 columns against 28 with `alert_pct` the only loss, and `EXCEPT` in both directions over the 28 shared columns returns 0 rows across 214 and 220 indexes |
 | Removing the column costs nothing to run | measured: identical plan shape (4 `CTE Scan` nodes; 68 and 60 plan lines), `EXPLAIN (ANALYZE, BUFFERS)` execution 136.3 against 135.7 ms on 17.11 and 134.7 against 127.9 ms on 12.2, over six interleaved end-to-end runs of each text per server |
+| Fillfactor is a build and rightmost-split target, not a property a growing index holds | [nbtsplitloc.c#fillfactormult](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L279-L335), [nbtsplitloc.c#SPLIT_SINGLE_VALUE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416), [nbtree.h#BTREE_SINGLEVAL_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202) |
+| Rebasing wasted space on the fillfactor moves those two fields and nothing else | measured on both restarted servers: the 12 untouched presentation fields identical byte for byte (2,109 and 2,180 bytes); the internal `final` stage exposes 28 columns either way with `wasted_space` swapped one-for-one for `wasted_vs_fillfactor`; `EXCEPT` in both directions over the 27 shared columns returns 0 rows across 214 and 220 indexes |
+| At fillfactor 100 the two definitions coincide exactly | `target_free` is `BLCKSZ * 0 / 100`, so `target_density` is 1 ([nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1145)); measured equal to the byte on `i_ff100` and `probe_ff_100`, and equal for 110 of 214 and 110 of 220 indexes once the no-leaf-page indexes are included |
+| A rebuilt index reports no waste at its own fillfactor | measured after `REINDEX INDEX` over every scored index: exactly 0 bytes for 81 of 97 and 76 of 96, at or below 0.1% for 87 and 85, and at or below 0.4% for every index the report actually prints |
+| The new column over-reports on indexes too small to fill a page | measured: `c_one_idx`, one tuple on one leaf page at 0.29% density, reports 7,309 bytes and 44.6% after a rebuild on both servers; the old baseline read 8,128 bytes and 49.6% on the same index |
+| For in-page waste the new column is `(leaf_capacity - target_free) / block_size` of `est_reclaimable` | predicted 0.8951 at 8192/90; measured 0.8868-0.8921 over the 13 dead-page-free indexes with more than 1 MB of estimated reclaim, `1.0001` on the dead-page fixture `i_delhead`, and `0.8321` on `i_wide`, identically on both servers |
+| Rebasing costs nothing to run | measured: identical plan shape (4 `CTE Scan` nodes; 68 and 60 plan lines) and identical total buffers, 108,021 on 17.11 and 108,327 on 12.2, differing only in the hit/read split; execution 131.1 against 120.9 ms on 17.11 and 123.6 against 117.5 ms on 12.2 |
 
 ## Open Questions
 
@@ -786,8 +1052,10 @@ and the page's SQL block was then verified byte-identical to the executed file
   checkout, but whether some later 12.x minor changed anything relevant was not
   checked and cannot be checked from this page's evidence base.
 - **One block size.** Every measurement is at `block_size` 8192. The statement
-  reads `block_size` from the server, but the 24 and 16 constants and the whole
-  target-density model are unverified at 4 kB, 16 kB or 32 kB.
+  reads `block_size` from the server, but the 24 and 16 constants, the whole
+  target-density model, and the `(leaf_capacity - target_free) / block_size`
+  ratio between the two percentage columns are unverified at 4 kB, 16 kB or
+  32 kB.
 - **The internal-page term is a proportional guess.** `round(internal_pages *
   est_leaf / leaf_pages)` was never tested against a case where the rebuilt tree
   loses a level; internal pages were under 0.5% of every fixture, so the suite
@@ -797,10 +1065,40 @@ and the page's SQL block was then verified byte-identical to the executed file
   rounding rather than noise, but no per-page accounting was done to confirm it,
   and no fixture was built to find the worst case for small indexes.
 - **`i_novac` and `i_dedup_off` have no in-statement warning.** Both come back
-  with an empty `notes` string and a near-zero estimate (`−0.1%` and `−0.3%`) on
-  an index a rebuild would shrink by 90% and 69%. Neither condition is visible in
+  with an empty `notes` string, a near-zero estimate (`−0.1%` and `−0.3%`) and,
+  since wasted space was rebased on the fillfactor, `0.0` wasted as well, on an
+  index a rebuild would shrink by 90% and 69%. Neither condition is visible in
   any `pgstatindex` column, so closing them would require a second tool and would
   break the "pgstatindex only" constraint; the page documents them instead.
+- **The fillfactor-relative column over-reports on indexes too small to fill a
+  page**, and nothing in the statement says so. A one-row index measured 44.6%
+  wasted immediately after `REINDEX` on both servers, because one tuple cannot
+  fill 89.95% of a page. The 1 MB `min_index_bytes` prefilter keeps every such
+  index out of the report, but a caller who lowers that threshold gets the
+  over-report with no note attached, and no term was designed to catch it. The
+  same effect leaves a 1.5% residual on a freshly rebuilt 416 kB `fillfactor =
+  100` index, whose rightmost page holds the remainder.
+- **The clamp hides how far above target an index sits.** Every index denser than
+  its fillfactor target reports the same `0`, whether it is 0.11 points over like
+  `i_fresh` at 90.06% or 6 points over like `i_dup_ins` at 95.94%, both against a
+  89.95% target. The `denser than a rebuild would leave it` note does not close
+  the gap, because it fires on `est_reclaimable_pct <= -1` rather than on the
+  clamp: measured, `i_dup_ins` carries the note and `i_fresh` clamps to `0` with
+  an empty `notes` string. Thirteen indexes per server clamped in this run.
+- **Whether both percentage columns should still exist was not settled by
+  measurement.** For in-page waste the new column is a fixed multiple of
+  `est_reclaimable_pct`, so on a default-fillfactor database it carries little
+  independent information; at fillfactor 10 it carries a great deal, since the
+  same index reads 8.3% and 89.9%. No reader other than the author has judged
+  whether two near-proportional columns help or confuse.
+- **The `−2.8` under-estimate on `i_ff10_del90` is explained but not proven.**
+  The per-page high-key and line-pointer overhead that `avg_leaf_density` counts
+  as payload is the plausible cause and the arithmetic is consistent with it, but
+  no per-page accounting was done, and doing it needs a tool this page excludes.
+  It is also the first vacuumed fixture on this page to miss by more than a
+  point, which means the accuracy figures in
+  [Accuracy against REINDEX INDEX](#accuracy-against-reindex-index) are a
+  fillfactor-90 result, not a general one.
 - **Removing the verdict column moves the judgement off the page.** The statement
   now returns numbers only, and nothing in this repository measures what
   threshold is right for a given environment. The 20% that the removed `status`
@@ -835,10 +1133,13 @@ and the page's SQL block was then verified byte-identical to the executed file
 - [nbtree.h#MaxTIDsPerBTreePage](../../../../raw/postgres-17/src/include/access/nbtree.h#L185-L187)
 - [nbtree.h#BTREE_DEFAULT_FILLFACTOR](../../../../raw/postgres-17/src/include/access/nbtree.h#L189-L202)
 - [nbtree.h#P_ISLEAF](../../../../raw/postgres-17/src/include/access/nbtree.h#L212-L227)
+- [nbtree.h#P_HIKEY](../../../../raw/postgres-17/src/include/access/nbtree.h#L348-L369)
 - [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1145)
 - [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1151)
 - [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L645-L671)
 - [nbtsort.c#_bt_buildadd](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L845-L860)
+- [nbtsplitloc.c#fillfactormult](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L279-L335)
+- [nbtsplitloc.c#SPLIT_SINGLE_VALUE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416)
 - [nbtree.c#_bt_pendingfsm_finalize](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1048-L1059)
 - [nbtree.c#RecordFreeIndexPage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1165-L1170)
 - [reloptions.c#btree-fillfactor](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L185-L194)

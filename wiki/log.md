@@ -3949,3 +3949,83 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   (`−0.1%` and `−0.3%`) instead of the deleted `status = ok`.
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
   the page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-20] follow-up v17 | wasted space rebased on the index fillfactor in the pgstatindex bloat report
+
+- Rebased every wasted-space calculation on the index's own fillfactor in
+  [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md), against unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Four edits: the `est` CTE's
+  `leaf_bytes - live_leaf_bytes + dead_bytes` becomes
+  `GREATEST(round(leaf_bytes * target_density) - live_leaf_bytes, 0) + dead_bytes`, the two
+  presentation columns become `wasted_vs_fillfactor` and `wasted_ff_pct`, and the header
+  comment plus the `sized` stage line state the new baseline. 122 lines and 5,839 bytes to
+  126 and 6,154; still 14 output columns; `notes` untouched.
+- Prompt hygiene: the request had `agents.md` for AGENTS.md, lowercase `postgresql`, two
+  spaces before commas, and unhyphenated `wasted space related`; the asker approved a
+  corrected restatement, which `## Question` carries as a second follow-up with a note.
+  Four scoping answers are filed there: the baseline is the build-code target density the
+  rebuild estimate already uses rather than the literal `fillfactor / 100`, the leaf term
+  clamps at zero rather than going negative, the columns are renamed so no archived output
+  is silently reinterpreted, and both retained servers are restarted and both texts run.
+- **No fixture rebuild was needed this time.** Both clusters reproduced their filed output
+  byte for byte on the first run (2,448 bytes over 27 rows on 12.2, 2,531 over 28 on
+  17.11), because the previous follow-up ended with the fixtures rebuilt rather than
+  reindexed. So this is a comparison of two texts, not of two database states.
+- **Only the two renamed fields moved, measured two ways on both servers.** The 12
+  untouched presentation fields are byte-identical (2,109 and 2,180 bytes); one view per
+  text over the internal `final` stage exposes 28 columns either way with `wasted_space`
+  swapped one-for-one for `wasted_vs_fillfactor`, and `EXCEPT` in both directions over the
+  27 shared columns returns **0 rows across 214 indexes on 12.2 and 220 on 17.11**. Over
+  every index: 0 negative values, 0 values above the old column, 121 and 117 now exactly
+  zero, and 110 and 110 unchanged — the two `fillfactor = 100` fixtures, where
+  `target_density` is exactly 1, plus the 108 and 104 indexes with no leaf pages. 24 of 27
+  rows remain byte-identical across the two servers, the same three exceptions as before.
+- **Cost is unchanged**: identical plan shape (4 `CTE Scan` nodes; 68 plan lines on 17.11,
+  60 on 12.2) and **identical total buffers, 108,021 and 108,327**, differing only in the
+  hit/read split; `EXPLAIN (ANALYZE, BUFFERS)` 131.1 against 120.9 ms on 17.11 and 123.6
+  against 117.5 ms on 12.2, over six interleaved end-to-end runs of each text per server.
+- **Ground truth is a rebuild, and it was run last because it is destructive.** After
+  `REINDEX INDEX` over every scored index the new column reads exactly 0 for 81 of 97 and
+  76 of 96, ≤ 0.1% for 87 and 85, and **≤ 0.4% for every index the report actually prints**.
+  The worst residual anywhere is the same fixture on both servers: `c_one_idx`, one tuple
+  on one leaf page at 0.29% density, 7,309 bytes and 44.6% — a real limit of the
+  definition, excluded from the report by the 1 MB `min_index_bytes` prefilter and worse
+  under the old baseline (8,128 bytes, 49.6%). A freshly rebuilt 416 kB `fillfactor = 100`
+  index leaves 1.5% because its rightmost page holds the remainder.
+- **The two percentage columns are related by a closed form that was predicted and then
+  measured**: for in-page waste, `wasted_vs_fillfactor / est_reclaimable` tends to
+  `(leaf_capacity - target_free) / block_size`, 0.8951 at 8192/90, measured 0.8868-0.8921
+  over the 13 dead-page-free indexes with more than 1 MB of reclaim; `1.0001` on the
+  1,918-dead-page fixture and `0.8321` on the wide-key one that mixes both.
+- **Four new fixtures were built because every previous fixture with real waste had
+  fillfactor 90.** Bloated at 100/50/10, they reproduce the predicted ratio to four
+  decimals on both servers (0.9951/0.9895, 0.4951/0.4931, 0.0952/0.0948) and expose the
+  consequence of the user's request: **`i_ff10_del90` is 89.9% reclaimable and reports 8.3%
+  wasted**, because at fillfactor 10 nine tenths of the file is free space by instruction.
+  The page states plainly that `est_reclaimable_pct` remains the column to read for "how
+  much disk will `REINDEX` return". A `fillfactor = 50` fixture whose pages are all dead
+  reads 89.7% on both columns, confirming dead pages stay 100% waste at any fillfactor.
+- Those fixtures also found the reclaim estimate's first vacuumed miss over one point on
+  this page (`87.1` against `89.9` on `i_ff10_del90`), attributed with source citations to
+  the per-page high key that `avg_leaf_density` counts as payload but a rebuild writes ten
+  times less often; the attribution is labelled plausible-not-proven and filed as an open
+  question, along with the note that the page's accuracy figures are a fillfactor-90 result.
+- Page edits: the second follow-up prompt and its note in `## Question`, the four SQL edits,
+  a rewritten `wasted_space` row and example block in `### How to read the output`, one new
+  `### Follow-up: wasted space measured against the fillfactor` section, the renamed and
+  rewritten `### wasted_vs_fillfactor is not est_reclaimable`, a new paragraph in
+  `### How this was measured`, an updated `### Everything the two servers agreed on`, 2
+  Contents entries changed, 1 Context Reviewed bullet, 7 Evidence Map rows, 5 new or
+  rewritten Open Questions, and 3 Source References. Checked mechanically: 122 citations
+  resolve with in-file line ranges, 32 page-internal anchors resolve, and the Contents list
+  matches the page's 26 sections in order.
+- Measured by restarting the two clusters retained under `.wiki-runtime/tmp/pgsi/` — 12.2
+  built from this repo's v12 pin with `contrib/pgstattuple` compiled through PGXS, and
+  17.11 from the `--with-icu --enable-debug` install of this pin — both at `block_size`
+  8192, `autovacuum = off`, `fsync = off`. `pgstatindex` remains the only measurement
+  function; no `pageinspect`, no `pgstattuple()`, no `amcheck`. Both servers were shut down
+  cleanly and the sandbox is retained; note that the residual pass reindexed the fixtures,
+  so a future run must re-run `10_fixtures.sql`/`11_fixtures17.sql` first.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
+  the page keeps `verified: false` and `verified_by_agent: not yet`.
