@@ -3881,3 +3881,71 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
   the page keeps `verified: false` and `verified_by_agent: not yet`. Both servers were shut
   down cleanly; the sandbox is retained under `.wiki-runtime/tmp/pgsi/`.
+
+## [2026-08-20] follow-up v17 | alert_pct and the status column removed from the pgstatindex bloat report
+
+- Removed the threshold and the verdict column from the statement in
+  [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md), against unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Five edits: the
+  `20::numeric AS alert_pct` entry in `params`, the `p.alert_pct` pass-through in
+  `modelled`, the `CASE ... >= f.alert_pct THEN 'rebuild candidate' ELSE 'ok' END AS
+  status` column, the header comment that told the reader to alert, and the stage-list
+  line that called `params` a set of tunables. The text drops from 125 lines and 6,002
+  bytes to 122 lines and 5,839 bytes, and the output from 15 columns to 14. `notes` is
+  untouched.
+- Prompt hygiene: the request had `agents.md` for AGENTS.md, lowercase `postgresql`, three
+  spaces before commas, and a comma splice; the asker approved a corrected restatement,
+  which `## Question` carries as a follow-up with a note. Three scoping answers are filed
+  there: `status` goes with `alert_pct` because the parameter existed only to drive it,
+  `notes` stays exactly as it was, and both retained servers are restarted and re-run
+  rather than reasoned about.
+- **The fixtures had to be rebuilt before anything could be compared.** The accuracy pass
+  that produced the page's scoring tables ends by running `REINDEX INDEX` over every index
+  it scores, so the retained databases no longer reproduced the filed report — the first
+  run came back with 26 rows, all `ok`. After re-running both fixture scripts the filed
+  text returned the archived 17.11 table **character for character**, and the 12.2 one as
+  the same 27 rows with two swapped: `i_expr` and `i_text_del` are both 27 MB reclaimable
+  at 79.4%, and `ORDER BY index_size - est_rebuilt_bytes DESC` has no tie-break. That is a
+  property of the filed statement and is now an open question.
+- **Identity is measured two ways on both servers, not asserted.** At the presentation
+  level, the amended output equals the filed output with field 14 cut, byte for byte
+  (2,448 bytes over 27 rows on 12.2, 2,531 over 28 on 17.11). At the internal level, one
+  view per text over the `final` stage — generated mechanically from each text with the
+  two `SET` lines dropped and `min_index_bytes` set to 0 — exposes **29 columns against 28
+  with `alert_pct` the only loss**, and `EXCEPT` in both directions over the 28 shared
+  columns returns **0 rows across 214 indexes on 12.2 and 220 on 17.11**. The amended text
+  itself was derived by a script that asserts each of the five edits appears exactly once
+  and prints it, and the page's SQL block was verified byte-identical to the executed file
+  (5,839 bytes, 122 lines).
+- **Cost is unchanged**, as a removed `CASE` over an already-computed expression should be:
+  the same plan shape on both servers (4 `CTE Scan` nodes; 68 plan lines on 17.11, 60 on
+  12.2), `EXPLAIN (ANALYZE, BUFFERS)` execution of 136.3 against 135.7 ms on 17.11 and
+  134.7 against 127.9 ms on 12.2, and six interleaved end-to-end runs of each text
+  spanning 131.5-143.8 against 132.2-137.6 ms on 17.11 and 132.6-140.2 against
+  128.7-139.4 ms on 12.2.
+- What the reader loses is the label, not the ranking: on this suite the 15 rows per server
+  the old column called `rebuild candidate` are exactly the first 15 rows of the amended
+  output, in the same order. The page says plainly that this is a coincidence of the
+  fixtures — the sort is on reclaimable bytes and the label was on reclaimable percent, so
+  a small badly bloated index can sort below a large healthy one.
+- Page edits: the follow-up prompt and its note in `## Question`, the five SQL edits, a
+  rewritten opening to `### How to read the output` and the `status` row deleted from its
+  column table, one new `### Follow-up: no threshold, no verdict column` section, a new
+  paragraph in `### How this was measured`, 1 Contents entry, 1 Context Reviewed bullet
+  citing the ten-column result tuple `pgstatindex` builds, 2 Evidence Map rows, 1 rewritten
+  and 2 new Open Questions, and 1 Source Reference. All 107 citations were re-checked to
+  resolve and to fall inside their files, all 28 page-internal anchors to resolve, and the
+  Contents list to match the page's 25 sections in order.
+- Measured by restarting the two clusters retained under `.wiki-runtime/tmp/pgsi/` — 12.2
+  built from this repo's v12 pin with `contrib/pgstattuple` compiled through PGXS, and
+  17.11 from the `--with-icu --enable-debug` install of this pin — both at `block_size`
+  8192, `autovacuum = off`, `fsync = off`. `pgstatindex` remains the only measurement
+  function; no `pageinspect`, no `pgstattuple()`, no `amcheck`. Both servers were shut down
+  cleanly and the sandbox is retained.
+- Three open questions were added or rewritten: no replacement alerting rule was measured
+  and the removed 20% was never derived from anything but convention, the `ORDER BY` has no
+  tie-break, and the `i_novac`/`i_dedup_off` bullet now names the near-zero estimates
+  (`−0.1%` and `−0.3%`) instead of the deleted `status = ok`.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
+  the page keeps `verified: false` and `verified_by_agent: not yet`.

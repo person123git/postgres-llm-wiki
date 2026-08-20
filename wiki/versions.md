@@ -14,6 +14,30 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-20: **removed the threshold and the verdict column** from the statement in
+  [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md), on unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The `20::numeric AS alert_pct`
+  parameter, its `p.alert_pct` pass-through and the `CASE ... THEN 'rebuild candidate'
+  ELSE 'ok' END AS status` column are gone, so the report **measures and estimates
+  without judging**: 122 lines instead of 125, 14 output columns instead of 15, `notes`
+  untouched. **Both retained clusters were restarted and their fixtures rebuilt first**,
+  because the accuracy pass ends by rebuilding every index it scores and that state no
+  longer reproduces the report; after the rebuild the filed text returned the archived
+  17.11 table character for character and the 12.2 one as the same 27 rows with two tied
+  rows swapped, which is how the missing `ORDER BY` tie-break surfaced. Identity is
+  measured two ways on both servers: the amended output equals the filed output with
+  field 14 cut, byte for byte (2,448 and 2,531 bytes), and one view per text over the
+  internal `final` stage exposes **29 columns against 28 with `alert_pct` the only loss**
+  and **0 rows from `EXCEPT` in both directions over the 28 shared columns, across 214
+  and 220 indexes**. Cost is unchanged (4 `CTE Scan` nodes either way; 136.3 against
+  135.7 ms on 17.11 and 134.7 against 127.9 ms on 12.2). The 15 rows per server that the
+  old column called `rebuild candidate` are the first 15 rows of the amended output on
+  this suite, but the sort is on reclaimable bytes while the label was on percent, so
+  that is a coincidence rather than a rule. Three open questions were added or rewritten,
+  including that no replacement alerting rule was measured. The page remains
+  human-unverified and agent-unverified.
+
 - 2026-08-20: filed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12
   and 17 (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) against
   unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). **One statement, one

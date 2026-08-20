@@ -14,6 +14,7 @@ verified_by_agent: not yet
 - [Answer](#answer)
   - [The statement](#the-statement)
   - [How to read the output](#how-to-read-the-output)
+  - [Follow-up: no threshold, no verdict column](#follow-up-no-threshold-no-verdict-column)
   - [What one pgstatindex call actually measures](#what-one-pgstatindex-call-actually-measures)
   - [Why every candidate filter is there](#why-every-candidate-filter-is-there)
   - [The one behavioural difference between 12 and 17](#the-one-behavioural-difference-between-12-and-17)
@@ -54,6 +55,20 @@ as a new page rather than a follow-up on
 [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17](btree-index-bloat-core-sql-only.md),
 which is deliberately the no-contrib method.
 
+Follow-up: remove `alert_pct`. Report only the index statistics and the estimate
+of wasted space.
+
+> Prompt note: filed as an approved corrected restatement of `in postgresql 17 ,
+> for question: B-Tree Bloat and Wasted Space From pgstatindex Alone, on
+> PostgreSQL 12 and 17 (unverified) , remove the alert_pct , just report on the
+> index stats and estimation of wasted space`, per the repository's
+> prompt-hygiene rule; the original had `agents.md` for AGENTS.md, lowercase
+> `postgresql`, three spaces before commas, and a comma splice. Three scoping
+> answers are recorded with it: the `status` column goes with `alert_pct`,
+> because the parameter existed only to drive it; the `notes` column stays
+> exactly as it was; and both retained servers were restarted, their fixtures
+> rebuilt, and the amended text run on each.
+
 ## Answer
 
 ### The statement
@@ -65,7 +80,7 @@ returned 27 rows on the 12.2 server and 28 on the 17.11 server, from the same te
 -- B-tree bloat and wasted space from pgstatindex alone.
 -- Runs unchanged on PostgreSQL 12 and 17.
 --
---   params    tunables and the two page-layout constants
+--   params    the size prefilter and the two page-layout constants
 --   cand      every index pgstatindex can be called on without raising
 --   measured  one pgstatindex() call per candidate
 --   modelled  per-index constants: leaf capacity, fillfactor, target free space
@@ -76,7 +91,8 @@ returned 27 rows on the 12.2 server and 28 on the 17.11 server, from the same te
 -- wasted_space measures the file against perfect packing, so a healthy index
 -- reports roughly its fillfactor's worth of waste.  est_reclaimable measures it
 -- against a rebuild at its own fillfactor, which is what REINDEX gives back.
--- Alert on est_reclaimable_pct; read wasted_pct for composition only.
+-- The statement sets no threshold and reaches no verdict.  It reports the
+-- measurements and the estimate, ordered by est_reclaimable, largest first.
 
 SET statement_timeout = '15min';
 SET lock_timeout = '5s';
@@ -85,8 +101,7 @@ WITH params AS (
     SELECT current_setting('block_size')::bigint AS bs,
            24::bigint      AS page_header,     -- SizeOfPageHeaderData
            16::bigint      AS btree_special,   -- MAXALIGN(sizeof(BTPageOpaqueData))
-           1048576::bigint AS min_index_bytes, -- skip anything smaller
-           20::numeric     AS alert_pct        -- rebuild-candidate threshold
+           1048576::bigint AS min_index_bytes  -- skip anything smaller
 ),
 cand AS MATERIALIZED (
     SELECT c.oid       AS idx_oid,
@@ -116,7 +131,6 @@ measured AS (
 modelled AS (
     SELECT m.*,
            p.bs,
-           p.alert_pct,
            p.bs - p.page_header - p.btree_special AS leaf_capacity,
            COALESCE(m.fillfactor_opt, 90)         AS fillfactor,
            -- what a build leaves free on a leaf page: BLCKSZ * (100 - fillfactor) / 100
@@ -170,8 +184,6 @@ SELECT /* wiki_btree_bloat_pgstatindex_12_17 */
        pg_size_pretty((f.index_size - f.est_rebuilt_bytes)::bigint) AS est_reclaimable,
        round(100 * (f.index_size - f.est_rebuilt_bytes) / f.index_size, 1)
            AS est_reclaimable_pct,
-       CASE WHEN 100 * (f.index_size - f.est_rebuilt_bytes) / f.index_size >= f.alert_pct
-            THEN 'rebuild candidate' ELSE 'ok' END AS status,
        array_to_string(array_remove(ARRAY[
            CASE WHEN f.leaf_pages = 0 THEN 'no leaf pages' END,
            CASE WHEN f.version < 4 THEN 'metapage version ' || f.version END,
@@ -204,9 +216,14 @@ of every index it reports on; see [What it costs to run](#what-it-costs-to-run).
 
 ### How to read the output
 
-Alert on `est_reclaimable_pct`. It is the modelled answer to "how much smaller
+Read `est_reclaimable_pct` first. It is the modelled answer to "how much smaller
 would `REINDEX INDEX` make this file", and on the fixture suite it landed within
-one point of the truth for 91 of 94 indexes on 12.2 and 89 of 93 on 17.11.
+one point of the truth for 91 of 94 indexes on 12.2 and 89 of 93 on 17.11. The
+statement itself reaches no verdict. It carries no threshold, labels no row, and
+returns the measurements and the estimate ordered by estimated reclaim, largest
+first. Why the column that used to carry a verdict is gone, and where the
+threshold belongs instead, is
+[Follow-up: no threshold, no verdict column](#follow-up-no-threshold-no-verdict-column).
 
 Read the other columns as supporting detail:
 
@@ -216,7 +233,6 @@ Read the other columns as supporting detail:
 | `avg_leaf_density` | Share of leaf-page space holding entries | Low density is the usual bloat signal, but it is blind to whole pages that hold nothing |
 | `dead_pages` | `empty_pages + deleted_pages` | These are 100% waste and invisible to `avg_leaf_density`. A measured index read 89.94% density and was still 69.9% reclaimable |
 | `leaf_fragmentation` | Share of leaves whose right sibling sits at a lower block number | Not wasted space at all. Physical disorder that costs sequential-scan I/O; the note says so |
-| `status` | `est_reclaimable_pct >= 20` | Tune `alert_pct` in `params` |
 | `notes` | Why a row looks odd | `no leaf pages`, `fillfactor N`, `fragmented, not wasted space`, `denser than a rebuild would leave it`, `reclaim is mostly empty/deleted pages` |
 
 Two rows from the 17.11 run show why both percentages exist:
@@ -229,6 +245,63 @@ Two rows from the 17.11 run show why both percentages exist:
 
 `i_delhead` has textbook-perfect leaves and is two thirds reclaimable. `i_ff10`
 looks catastrophic by density and is exactly the size its owner asked for.
+
+### Follow-up: no threshold, no verdict column
+
+The statement measures and estimates; it no longer judges. Five edits took out
+the threshold and the column it drove, and nothing else in the text moved:
+
+| Where | Was | Is |
+|---|---|---|
+| `params` | `20::numeric AS alert_pct` | gone, so `min_index_bytes` is the last entry |
+| `modelled` | `p.alert_pct,` carried it down the pipeline | gone |
+| presentation `SELECT` | `CASE WHEN 100 * (index_size - est_rebuilt_bytes) / index_size >= f.alert_pct THEN 'rebuild candidate' ELSE 'ok' END AS status` | gone |
+| header comment | `Alert on est_reclaimable_pct; read wasted_pct for composition only.` | the statement sets no threshold and reaches no verdict, and returns rows ordered by `est_reclaimable`, largest first |
+| stage list | `params  tunables and the two page-layout constants` | `params  the size prefilter and the two page-layout constants` |
+
+The text drops from 125 lines and 6,002 bytes to 122 lines and 5,839 bytes, and
+the output from 15 columns to 14. `notes` is untouched.
+
+**Nothing else the statement returns moved.** Both servers were restarted from
+the retained sandbox, both fixture scripts were re-run, and both texts were then
+executed on each server:
+
+| Check | 12.2 | 17.11 |
+|---|---|---|
+| Rows returned, either text | 27 | 28 |
+| Filed text, `rebuild candidate` / `ok` | 15 / 12 | 15 / 13 |
+| Amended output against the filed output with column 14 cut | identical, 2,448 bytes | identical, 2,531 bytes |
+| Columns exposed by the internal `final` stage, filed against amended | 29 against 28, and `alert_pct` is the only one missing | 29 against 28, and `alert_pct` is the only one missing |
+| `EXCEPT` in both directions over the 28 shared columns | 0 rows, 214 indexes | 0 rows, 220 indexes |
+
+The row check compares `psql -A -F '|'` output with field 14 removed from the
+filed run. The column check builds one view per text over the internal `final`
+stage, generated mechanically from each text with the two `SET` lines dropped
+and `min_index_bytes` set to 0, so every index in the database is compared and
+not only those over a megabyte.
+
+**The same run reproduces the report this page already filed.** On 17.11 the
+filed text returned the archived table character for character. On 12.2 it
+returned the same 27 rows with two of them swapped: `i_expr` and `i_text_del`
+are both 27 MB reclaimable at 79.4%, and `ORDER BY index_size -
+est_rebuilt_bytes DESC` has no tie-break, so tied rows may arrive in either
+order. That belongs to the filed statement, not to this edit.
+
+**Cost is unchanged**, which is what a removed `CASE` over an already-computed
+expression should cost: the same plan shape on both servers (4 `CTE Scan` nodes,
+68 plan lines on 17.11 and 60 on 12.2), `EXPLAIN (ANALYZE, BUFFERS)` execution
+of 136.3 ms against 135.7 ms on 17.11 and 134.7 ms against 127.9 ms on 12.2, and
+six interleaved end-to-end runs of each text spanning 131.5-143.8 ms against
+132.2-137.6 ms on 17.11 and 132.6-140.2 ms against 128.7-139.4 ms on 12.2.
+
+What a reader loses is the label, not the ranking. On this fixture suite the 15
+rows the filed text called `rebuild candidate` are exactly the first 15 rows of
+the amended output, in the same order, on both servers. That coincidence is not
+a rule: the sort is on reclaimable **bytes** and the old label was on reclaimable
+**percent**, so a small, badly bloated index can sort below a large, healthy one.
+A caller that wants a threshold applies it to `est_reclaimable_pct` at the call
+site, where it can differ per environment and per index size, instead of being
+frozen at 20 inside a report whose job is to measure.
 
 ### What one pgstatindex call actually measures
 
@@ -631,6 +704,17 @@ as ground truth, and `pgstatindex` as the only measurement tool — no
 `pageinspect`, no `pgstattuple()`, no `amcheck`. The sandbox is retained at
 `.wiki-runtime/tmp/pgsi/`.
 
+The follow-up that removed `alert_pct` restarted those same two clusters and
+re-ran both fixture scripts first, because the scoring pass that produced the
+accuracy tables ends by rebuilding every index it scores, which leaves the
+database in a rebuilt state that no longer reproduces the report. After the
+rebuild the filed text returned its filed rows again on both servers, which is
+what makes the before-and-after comparison a comparison of the two texts rather
+than of two database states. The amended text was derived from the filed one by
+a script that asserts each of the five edits appears exactly once and prints it,
+and the page's SQL block was then verified byte-identical to the executed file
+(5,839 bytes, 122 lines).
+
 ## Context Reviewed
 
 - `contrib/pgstattuple/pgstatindex.c` in both pinned checkouts, function by
@@ -659,6 +743,13 @@ as ground truth, and `pgstatindex` as the only measurement tool — no
   that does not apply to function calls.
 - The v17 checkout's own history for `13503eb5905` and its containing release
   tags.
+- The ten-column result tuple `pgstatindex` builds
+  ([pgstatindex.c#result-tuple](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L339-L378)),
+  re-read when the threshold was removed: the statement consumes eight of the ten
+  (`version`, `index_size`, `internal_pages`, `leaf_pages`, `empty_pages`,
+  `deleted_pages`, `avg_leaf_density`, `leaf_fragmentation`), leaves `tree_level`
+  and `root_block_no` unused, and none of them was reached through the removed
+  `alert_pct`.
 
 ## Evidence Map
 
@@ -679,6 +770,8 @@ as ground truth, and `pgstatindex` as the only measurement tool — no
 | A concurrent drop aborts the whole report | measured `could not open relation with OID 16897` (17.11) and `17173` (12.2) after 6.0 s |
 | The scan uses a 256 kB bulk-read ring | [pgstatindex.c#BAS_BULKREAD](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L215-L222), [freelist.c#GetAccessStrategy](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L540-L574) |
 | Deduplication is the only thing that made the two servers' numbers differ | [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1151); 24 of the report's rows identical, `i_dup`/`i_dup_ins` 21 MB against 6800 kB and 20 MB against 6368 kB |
+| Dropping `alert_pct` and `status` changes nothing else the statement returns | measured on both restarted servers: the amended output equals the filed output with field 14 cut, byte for byte (2,448 and 2,531 bytes); one view per text over the internal `final` stage exposes 29 columns against 28 with `alert_pct` the only loss, and `EXCEPT` in both directions over the 28 shared columns returns 0 rows across 214 and 220 indexes |
+| Removing the column costs nothing to run | measured: identical plan shape (4 `CTE Scan` nodes; 68 and 60 plan lines), `EXPLAIN (ANALYZE, BUFFERS)` execution 136.3 against 135.7 ms on 17.11 and 134.7 against 127.9 ms on 12.2, over six interleaved end-to-end runs of each text per server |
 
 ## Open Questions
 
@@ -703,11 +796,20 @@ as ground truth, and `pgstatindex` as the only measurement tool — no
   both servers on the same 456 kB TOAST primary key, which suggests per-page
   rounding rather than noise, but no per-page accounting was done to confirm it,
   and no fixture was built to find the worst case for small indexes.
-- **`i_novac` and `i_dedup_off` have no in-statement warning.** Both return
-  `status = ok` with an empty `notes` string on an index a rebuild would shrink by
-  90% and 69%. Neither condition is visible in any `pgstatindex` column, so
-  closing them would require a second tool and would break the "pgstatindex only"
-  constraint; the page documents them instead.
+- **`i_novac` and `i_dedup_off` have no in-statement warning.** Both come back
+  with an empty `notes` string and a near-zero estimate (`−0.1%` and `−0.3%`) on
+  an index a rebuild would shrink by 90% and 69%. Neither condition is visible in
+  any `pgstatindex` column, so closing them would require a second tool and would
+  break the "pgstatindex only" constraint; the page documents them instead.
+- **Removing the verdict column moves the judgement off the page.** The statement
+  now returns numbers only, and nothing in this repository measures what
+  threshold is right for a given environment. The 20% that the removed `status`
+  column used was never derived from anything but convention, which is part of
+  why it is gone, but no replacement rule was measured either.
+- **The ordering has no tie-break.** `ORDER BY index_size - est_rebuilt_bytes
+  DESC` left two equal-sized 12.2 rows in a different order on the two runs
+  recorded here. It never changed a value, but a caller diffing two reports will
+  see tied rows move.
 - **The churn fixture is not deterministic**, so `i_churn` is the one row that
   cannot be used as a cross-version identity check.
 - **No test of a partitioned table with hundreds of partitions**, where the report
@@ -720,6 +822,7 @@ as ground truth, and `pgstatindex` as the only measurement tool — no
 - [pgstatindex.c#pgstatindex_v1_5](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L162-L180)
 - [pgstatindex.c#pgstatindexbyid_v1_5](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L204-L213)
 - [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L215-L381)
+- [pgstatindex.c#result-tuple](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L339-L378)
 - [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L30)
 - [pgstattuple--1.4--1.5.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)
 - [pgstattuple.control:1-5](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.control#L1-L5)
