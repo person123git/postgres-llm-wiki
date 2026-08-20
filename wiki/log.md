@@ -3521,3 +3521,94 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
   unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-20] follow-up v17 | change C: partial indexes with a variable-width INCLUDE column excluded, suite re-scored to zero critical false positives
+
+- Applied change C to the recommended statement in [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). One more
+  disjunct in `suppress_partial` — `bool_or(c.attnum > i.indnkeyatts AND c.attlen <
+  0)` added to the `statvis` CTE with the `idx` join it needs, carried through
+  `tuple` — so a partial index with a variable-width `INCLUDE` column returns no
+  row.
+- Prompt hygiene: the request had lowercase "postgresql", a space before a comma,
+  two double spaces, and "exclude Partial B-tree with a wide INCLUDE column"
+  missing its noun; the asker approved a corrected restatement. Four scoping
+  answers are filed in the prompt note: narrow the term to variable-width non-key
+  columns rather than any `INCLUDE` column, rebuild and re-score the whole
+  74-fixture suite, emit **no caveat**, and read "wide" as a property of the type
+  rather than a byte threshold so no tunable constant enters the statement.
+- **1 critical false positive becomes 0.** Scored on `wasted_space_pct_floor` over
+  tests 18-91: PASS 65 -> 66 (34 reported, 32 withheld), CRITICAL FALSE POSITIVE 1
+  -> 0, FALSE POSITIVE 0 -> 0, FALSE NEGATIVE 8 -> 8 with the same 4-reported /
+  4-withheld split. Exactly one test changes state, 47; the four true detections
+  still report at 74.7 / 74.3 / 89.1 / 94.2 against measured 74.9 / 74.3 / 89.1 /
+  94.2.
+- **The run reproduces the eleventh follow-up cell for cell**: 74 of 74 live-block
+  counts match the filed table and all 74 pre-change reported/withheld verdicts
+  agree. Seven floors moved by more than a point from `ANALYZE` sampling (72, 73,
+  86, 87, 89, 90, 91), none across a verdict boundary.
+- The defect is not repairable in core SQL and the source says why: a non-key
+  column can never be an expression (`create_index.sgml:185-188`), `ANALYZE`
+  examines only expression attributes when building index statistics
+  (`analyze.c:450-478`), an index's non-key attribute copies `attlen` from the
+  table (`index.c:336-360`), and `attlen` is `pg_type.typlen`, negative exactly for
+  variable-length types. Measured on test 47: `attlen` −1, 0 `pg_stats` rows for
+  the index, table-wide `avg_width` 13 against a subset mean `pg_column_size` of
+  207, a modelled 36-byte slot and 126 blocks against 787 live, `bt_page_items`
+  mean item length 217.7 and `pgstatindex` `avg_leaf_density` 89.71% with zero
+  fragmentation. One `ANALYZE` moves the reading only from 84.0% to 83.6%. A
+  purpose-built partial expression index with an `INCLUDE` column got exactly one
+  `pg_stats` row, for the expression, and none for the payload.
+- Both wider forms were generated from the page's own Markdown by substituting the
+  `bool_or` argument and scored beside the filed one: any `INCLUDE` column withholds
+  37 of the 74 rather than 36 and costs test 46's correct 0.0%; any variable-width
+  column withholds 41, costs tests 31, 33 and 52, and is the only form that catches
+  the wide-**key** fixture `i103`. None of the three loses a true detection. The
+  trade is recorded, not taken.
+- The price is measured and stated three ways: fixture 100, a genuinely
+  89.9%-reclaimable partial index with a `text` payload estimated at 89.5%, is now
+  withheld — the first correct answer any exclusion on this page throws away;
+  fixtures 101 and 104 lose correct readings of −1.3% and −709.2%; and the term
+  emits no caveat, so the flag and the caveat list are no longer one-to-one and a
+  reader cannot tell that this silence never lifts.
+- Report-level effect over the final 88-index, 54,351-block database: 52 rows to
+  47 (33 to 29 over the 1 MB triage filter), 4 readings above the 50% line to 2, 36
+  partial indexes withheld to 41, and 0 of 5 non-partial indexes touched —
+  including `i102`, which carries a variable-width `INCLUDE` column and reads a
+  correct −4.0%. Cost is inside the noise over eight interleaved pairs: 38.5-41.3
+  ms as filed against 39.0-42.3 ms amended.
+- Change C is the only exclusion term run on a server older than 17. A new
+  isolated 12.2 build from this repo's 12 pin builds the same fixtures at the same
+  sizes (787 / 388 / 276 blocks), reports 84.1% on the `INCLUDE` fixture under the
+  pre-change text and withholds it under the amended one; it also reproduced change
+  B's counter hazard from the other side, since 12 has no
+  `pg_stat_force_next_flush()` and the collector had to settle before
+  `n_mod_since_analyze` fell to 0.
+- Page edits: the new prompt and its note in `## Question`, a twelfth-follow-up
+  paragraph in `### Verdict`, the recommended-statement section (carve-out
+  paragraph, compatibility bullet, two new residual-error rows, and the reading
+  rule's fourth term), the statement text itself, a current-state note under the
+  ninety-one-tests summary, forward pointers from two eleventh-follow-up tables,
+  seven new `###` sections, 7 new Contents entries, 2 Context Reviewed bullets, 5
+  Evidence Map rows, 6 rewritten or new Open Questions, and 7 Source References.
+  All 265 page-internal anchors were checked to resolve.
+- Measured by restarting the eleventh follow-up's isolated 17.11 cluster
+  (`.wiki-runtime/tmp/partial17b/data`, from the `--with-icu --enable-debug` install
+  of the pin) with a **fresh scratch database**, re-running its unchanged fixture
+  scripts plus six new `INCLUDE` fixtures numbered 100-105, and installing four
+  estimator views generated mechanically from the page's Markdown; `REINDEX INDEX`
+  is ground truth and `pageinspect`/`pgstattuple`/`amcheck` are ground truth only.
+  Both exact statement texts were also run as filed, on both servers. Both servers
+  were shut down cleanly; the new sandbox is retained under
+  `.wiki-runtime/tmp/partial17c/` (harness SQL, the four view texts, `res.tsv`, and
+  the 12.2 build, install and data directory).
+- Six open questions record the gaps: the discarded true detection and the absence
+  of any signal that would separate it, the wide-**key** family the term does not
+  close and the measured-but-unapplied wider form, the caveat-free silence, the
+  six new fixtures being one shape each with only `text` payloads, and changes A
+  and B still being 17.11-only.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
+  unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

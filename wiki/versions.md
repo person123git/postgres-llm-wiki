@@ -14,6 +14,47 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-20: **applied change C** to the recommended B-tree wasted-space statement in
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) and
+  re-scored all 74 partial-index tests against the amended text, on unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The change is one more
+  disjunct in `suppress_partial` — `bool_or(attnum > indnkeyatts AND attlen < 0)`
+  in the `statvis` CTE — so **a partial index with a variable-width `INCLUDE`
+  column returns no row**, and the suite reaches **0 critical false positives**
+  (from 1). Exactly one of the 74 tests changes state, test 47; the four true
+  detections still report at 74.7 / 74.3 / 89.1 / 94.2 against measured 74.9 /
+  74.3 / 89.1 / 94.2, and the 8 false negatives are unchanged. The defect cannot
+  be repaired in core SQL: a non-key column can never be an expression and
+  `ANALYZE` writes index statistics only for expression attributes, so the width
+  can only come from whole-table `avg_width` — 13 bytes against a stored 207 on
+  test 47, a 36-byte modelled tuple against a measured 217.7, on a 787-block index
+  `pgstatindex` reads at 89.71% leaf density and one `ANALYZE` moves only from
+  84.0% to 83.6%. The term is scoped to `attlen < 0`, so an `INCLUDE (int)` index
+  keeps its correct 0.0%; both wider forms were built from the page's own Markdown
+  and priced rather than adopted — any `INCLUDE` column costs one more correct row,
+  any variable-width column costs three more and is the only form that catches a
+  wide **key** column, which still reads 84.1% on a fresh 792-block index with an
+  empty `caveats` string. The price is measured and stated: a genuinely
+  89.9%-reclaimable partial index with a `text` payload, estimated at 89.5%, is now
+  withheld too, and the term emits **no caveat**, so this is the one silence a
+  reader cannot see or lift. Whole-database effect over 88 indexes: 52 rows to 47,
+  4 readings above the 50% line to 2, 36 partial indexes withheld to 41, 0 of 5
+  non-partial indexes touched (including one with a variable-width `INCLUDE` column
+  reading a correct −4.0%); cost is inside the noise over eight interleaved pairs
+  (38.5-41.3 ms as filed against 39.0-42.3 ms amended). Measured by restarting the
+  previous follow-up's isolated 17.11 cluster with a fresh scratch database and
+  re-running its unchanged fixture scripts — **74 of 74 live-block counts and all
+  74 pre-change reported/withheld verdicts reproduce exactly** — plus six new
+  `INCLUDE` fixtures numbered 100-105, four estimator texts generated mechanically
+  from the page's Markdown, and `REINDEX INDEX` as ground truth. Change C is also
+  the only exclusion term run on an older server: a new isolated 12.2 build reports
+  84.1% on the same 787-block fixture under the pre-change text and withholds it
+  under the amended one. Six open questions record the gaps, including the discarded
+  true detection, the wide-key family the term does not close, the caveat-free
+  silence, and that changes A and B are still 17.11-only. The page remains
+  human-unverified and agent-unverified.
+
 - 2026-08-19: **applied changes A and B** to the recommended B-tree wasted-space
   statement in [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL
   17 (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) and
