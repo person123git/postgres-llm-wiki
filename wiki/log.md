@@ -3802,3 +3802,82 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
   the page keeps `verified: false` and `verified_by_agent: not yet`.
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-20] answer v17 | B-tree bloat and wasted space from pgstatindex alone, on 12 and 17
+
+- Filed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and
+  17 (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) against
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Filed under
+  `indexing`, because the subject is B-tree page density and rebuild sizing even
+  though a statistics interface supplies the numbers.
+- Prompt hygiene: the request had lowercase `postgresql` and `sql`, a space before a
+  comma, a double space, `that using` for `that uses`, `btree` for `B-tree`, and two
+  comma splices; the asker approved a corrected restatement, which `## Question`
+  carries with a note. Four scoping answers are recorded there: `pgstatindex` is the
+  only measurement function while catalogs may be read to select and label indexes,
+  one text must run unchanged on both majors, both servers must actually be run and
+  scored against `REINDEX INDEX`, and it is a new page rather than a follow-up on the
+  deliberately no-contrib
+  [core-SQL bloat page](v17/questions/indexing/btree-index-bloat-core-sql-only.md).
+- **The deliverable is one 125-line statement, eight stages, tagged
+  `wiki_btree_bloat_pgstatindex_12_17`.** It reports two percentages on purpose:
+  `wasted_pct`, free bytes in live leaf pages plus every empty and deleted page against
+  perfect packing, and `est_reclaimable_pct`, the same file against a rebuild at its own
+  fillfactor. The rebuild target comes from the build code, not the reloption — a sorted
+  build closes a leaf when free space drops below `BLCKSZ * (100 - fillfactor) / 100`
+  (`nbtsort.c:645-671`, `nbtree.h:1138-1145`), so at 8192/90 the reachable density is
+  89.95% and the estimate is conservative by construction. The two columns disagree
+  correctly: a fresh `fillfactor = 10` index reads **89.6% wasted, −0.5% reclaimable**,
+  and an index whose leaves are 89.94% dense is **69.9% reclaimable** on 1,918 empty or
+  deleted pages that `avg_leaf_density` cannot see (`pgstatindex.c:304-324`).
+- **Every candidate filter guards a shape `pgstatindex` raises on**, and one raised call
+  aborts the whole report. Reproduced on both servers: the five non-B-tree access methods
+  and a partitioned index (`relation "..." is not a btree index`), another session's temp
+  index (a 4.4 MB one moved the candidate count 27 -> 28 on 17.11 and 26 -> 27 on 12.2),
+  a stale OID (`could not open relation with OID 2147483647`), and **the one behavioural
+  difference between the majors**: 17.11 refuses an invalid index with `index "..." is
+  not valid` while 12.2 returns a full row for the same fixture (version 4, 820 leaves,
+  90.05%). The check is `13503eb5905` (2023-10-30), whose earliest containing release tag
+  in this checkout is `REL_17_0`; `git tag --contains` lists no 12-16 tag, and the same
+  command on an older commit does list 28 `REL_12_*` tags, so it was not back-patched.
+- **Scored against `REINDEX INDEX` on two newly initialised isolated servers**, 12.2 built
+  from this repo's v12 pin with `contrib/pgstattuple` compiled through PGXS from a copy of
+  that checkout (never into `raw/`), and 17.11 from the `--with-icu --enable-debug` install
+  of this pin. One shared 24-shape fixture script plus one 17-only `deduplicate_items = off`
+  fixture: **91 of 94 and 89 of 93 scored indexes within 1.0 point**, 92 and 90 within 2.0,
+  and the identical `+1.7` worst over-estimate on both (a 456 kB TOAST primary key; every
+  other row over-estimates by at most `+0.1`). **24 of the report's rows are byte-identical
+  across the two servers**; the three that differ are the two duplicate-key indexes
+  (21 MB against 6800 kB, 20 MB against 6368 kB — deduplication changes the input, not the
+  arithmetic, and the estimator is right on both) and a non-deterministic churn fixture.
+- Three under-estimates are documented rather than hidden: entries deleted but not vacuumed
+  (`−0.1%` against 89.9% actual, both servers), an index whose rebuild would deduplicate
+  (`−0.3%` against 69.1%, 17-only because 12.2 rejects the reloption), and 400-byte keys
+  (69.9% against 75.0%, because wide tuples close a page fuller than the model's bound and
+  the rebuilt index measured 92.77% density). All three are in the safe direction.
+- Also measured on both servers: `index_size` equal to `pg_relation_size` for **218 of 218
+  and 212 of 212** candidates; `NaN` density for an index with no leaf pages, with
+  `NaN > 20` true for `float8` **and** `numeric`, and all 62 and 59 `NaN` rows scoring
+  exactly 0.0 through the statement's `leaf_pages > 0` guard; leaf capacity implied at
+  **8151.6 and 8152.1** from a one-tuple page and an empty leaf page against the hard-coded
+  `8192 - 24 - 16`; fresh-build densities 99.82 / 90.00 / 49.81 / 9.62 at fillfactor
+  100/90/50/10, identical on both, against a model predicting 100.00 / 89.95 / 49.75 / 9.57;
+  a `pg_stat_scan_tables` member reading every row while the same role's
+  `pgstatindex('bl.i_del90')` by **name** fails with `permission denied for schema bl`,
+  which is why the statement passes `c.idx_oid::regclass`; ~830 MB read per run through a
+  256 kB `BAS_BULKREAD` ring (106,351 and 105,413 buffers at the function scan, 124.2 ms and
+  132.6 ms execution); `lock_timeout` cancelling at 2000.9 ms and 2001.0 ms behind an
+  uncommitted `DROP INDEX`; and a drop committed three seconds into a run aborting the whole
+  statement.
+- The scoring view was generated mechanically from the page's own statement text with two
+  printed edits (the two `SET` lines dropped, `min_index_bytes` set to 0), and the filed
+  Markdown block was verified byte-identical to the executed file (6,002 bytes, 125 lines).
+  All 105 page links were checked to resolve, and every source citation's line range was
+  checked to fall inside its file and to start and end on the intended lines.
+- Eight open questions record the gaps: no standby run (the unlogged-in-recovery filter is
+  reasoning, not measurement), only two minor versions, one block size, an untested
+  internal-page term, an unexplained `+1.7`, two silent under-estimates with no in-statement
+  warning, a non-deterministic churn fixture, and no roll-up for partitioned tables.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
+  the page keeps `verified: false` and `verified_by_agent: not yet`. Both servers were shut
+  down cleanly; the sandbox is retained under `.wiki-runtime/tmp/pgsi/`.
