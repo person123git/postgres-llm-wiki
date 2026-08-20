@@ -3612,3 +3612,102 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
   unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-20] follow-up v17 | change D: non-partial expression indexes with no statistics row excluded, and the flag renamed suppress_row
+
+- Applied change D to the recommended statement in [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). It is the first
+  exclusion term that reaches **non-partial** indexes, so the flag is renamed
+  `suppress_partial` -> `suppress_row`: one new input column in `idx`
+  (`has_expressions`, i.e. `x.indexprs IS NOT NULL`) and one disjunct — `NOT
+  is_partial AND has_expressions AND any_no_stats AND NOT any_stats_hidden AND
+  last_analyze IS NOT NULL` — so a non-partial expression index with no statistics
+  row of its own returns no row.
+- Prompt hygiene: the request had lowercase "postgresql", a space before two
+  commas, three double spaces, and "Non-partial expression B-tree" missing its
+  noun; the asker approved a corrected restatement. Four scoping answers are filed
+  in the prompt note: a hard `WHERE` exclusion with the flag renamed, the term
+  narrowed to indexes that actually carry expressions rather than any index missing
+  a statistics row, the whole 74-fixture suite rebuilt and re-scored, and a 12.2 run
+  so change D matches change C in having been executed on a server older than 17.
+- **Two critical false positives go and no partial-index verdict moves.** Over tests
+  18-91 the two texts score identically — PASS 66 (34 reported, 32 withheld),
+  CRITICAL FALSE POSITIVE 0, FALSE POSITIVE 0, FALSE NEGATIVE 8 (4 reported, 4
+  withheld) — because the disjunct carries `NOT is_partial`. Exactly four rows differ
+  between the texts over the 95 indexes in the database, all non-partial: `np97`
+  64.9% on 5201 blocks a `REINDEX` reproduces exactly and a mixed `(k, upper(s))` key
+  60.5% on 5477, both withheld; a −614.9% over-prediction withheld at no cost; and
+  one true detection lost.
+- **The run reproduces the eleventh and twelfth follow-ups cell for cell**: 74 of 74
+  live-block counts match the filed table for the third consecutive run, and all 74
+  pre-change reported/withheld states agree, test 47 included. Eight floors moved by
+  more than a point from `ANALYZE` sampling (72, 73, 86, 87, 88, 89, 90, 91), none
+  across a verdict boundary; test 73 is the borderline cell again at 50.4 against
+  49.6.
+- The source says why the shape cannot be priced: `ANALYZE` builds per-column
+  statistics for an index only for its expression attributes (`analyze.c:450-478`)
+  and writes them under the index's own relid (`analyze.c:588-602`), and `index_drop`
+  states the same equivalence from the other end, removing an index's statistics only
+  when `pg_index.indexprs` is non-null (`index.c:2341-2363`, with the comment "if it
+  has any expression columns, we might have stored statistics about them");
+  `indexprs` is documented as null exactly when every attribute is a simple reference
+  (`pg_index.h:57-59`, `catalogs.sgml:4553-4564`). Measured on `np97`: 0 `pg_stats`
+  rows for the index against 3 for the table, `slot` 44 and 1825 modelled blocks
+  against 5201 live, `bt_page_items` item length 120.0 on the identical never-analysed
+  twin, and `pgstatindex` `avg_leaf_density` 91.31% with zero fragmentation — denser
+  than the fillfactor-90 build the model predicts.
+- **Unlike change C, the silence lifts.** One `ANALYZE` takes `np97` from a withheld
+  66.4% to a reported `−16.6%` (one `pg_stats` row, `avg_width` 59) and `x106` from a
+  withheld 64.6% to `−7.3%`. The identical-DDL pair 106/107 prices the whole trade: the
+  same index that a `REINDEX` shrinks 5201 blocks to 523 reads 96.4% with no statistics
+  row and 89.2% with one, against a measured 89.9% reclaim.
+- Two wider forms were generated from the page's own Markdown by substituting only the
+  new disjunct and scored beside the filed one. Dropping `has_expressions` also catches
+  fixture `x109`, a plain index whose column carries `SET STATISTICS 0` — the one
+  alertable hole change D leaves, 64.9% on a healthy 5201-block index, and the only way
+  a plain column loses its row while its table keeps one (`analyze.c:1015-1030`).
+  Dropping `last_analyze IS NOT NULL` also catches `x108`, an expression index on a
+  never-analysed table the alerting rule already suppresses through `never analyzed`.
+  Neither was applied. An unprivileged role reading through a `security_invoker` copy is
+  untouched: `any_stats_hidden` is true, so the term does not fire and the row is
+  returned with `statistics not visible to this role`.
+- Report-level effect over 95 B-tree indexes and 73,867 blocks, 84 partial and 11
+  non-partial: 53 rows to 49, 35 to 31 over the 1 MB triage filter, 6 readings above the
+  50% line to 3, 42 withheld to 46, and 0 of 11 non-partial indexes withheld to 4. Three
+  of the six above-50 rows are fixtures built for this follow-up, which the page says
+  plainly. Cost is inside the noise over eight interleaved pairs: 42.0-48.2 ms as filed
+  against 38.7-47.6 ms amended; the term adds no CTE and no join.
+- Change D is the second exclusion term executed on a server older than 17. The 12.2
+  server (`server_version_num` 120002) builds the same fixtures at the same sizes (5201 /
+  5201 / 5201 / 825), reports `np97` at 64.9% under the pre-change text and withholds it
+  under the amended one, and leaves `x107`, `x109` and `np96` untouched. Its counters
+  reproduced the known 12-era artifact — `n_live_tup` 600,000 for a 300,000-row table
+  after `CREATE TABLE AS` plus `ANALYZE`, since 12 has no `pg_stat_force_next_flush()`.
+- Page edits: the new prompt and its note in `## Question`, a thirteenth-follow-up
+  paragraph in `### Verdict`, the recommended-statement section (the carve-out paragraph
+  split so one paragraph covers the non-partial term, a rewritten reading rule naming all
+  five conditions, the accuracy and compatibility bullets, one rewritten and one new
+  residual-error row), the statement text itself, a current-state note under the
+  ninety-one-tests summary, a superseded-in-part note on [Why the exclusion carries
+  is_partial](v17/questions/indexing/btree-index-bloat-core-sql-only.md#why-the-exclusion-carries-is_partial),
+  six new `###` sections, 6 new Contents entries, 2 Context Reviewed bullets, 6 Evidence
+  Map rows, 4 rewritten or new Open Questions, and 10 Source References. All 292
+  page-internal anchors were checked to resolve.
+- Measured by restarting the twelfth follow-up's isolated 17.11 cluster
+  (`.wiki-runtime/tmp/partial17b/data`, from the `--with-icu --enable-debug` install of
+  the pin) with a **fresh scratch database**, re-running its unchanged fixture scripts
+  plus seven new non-partial fixtures numbered 106-112, and installing five estimator
+  views generated mechanically from the page's Markdown (amended, pre-change from `git
+  show HEAD:`, two rejected variants, and a `security_invoker` copy); `REINDEX INDEX` is
+  ground truth and `pageinspect`/`pgstattuple` are ground truth only. Both exact statement
+  texts were also run as filed, on both servers. Both servers were shut down cleanly; the
+  new sandbox is retained under `.wiki-runtime/tmp/partial17d/`.
+- Four open questions record the gaps: the discarded true detection and the absence of a
+  marker that would report it instead, the `SET STATISTICS 0` residual and the unapplied
+  wider form, the seven new fixtures being one shape each with only `text` expressions and
+  the above-50 count being fixture-inflated, and changes A and B still being 17.11-only.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
+  unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

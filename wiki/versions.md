@@ -14,6 +14,48 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-20: **applied change D** to the recommended B-tree wasted-space statement in
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), on unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). It is the **first exclusion
+  term that reaches non-partial indexes**, so the flag is renamed `suppress_partial` ->
+  `suppress_row`: with one new input column (`has_expressions`, i.e. `pg_index.indexprs
+  IS NOT NULL`) and one disjunct, **a non-partial expression index with no statistics
+  row of its own returns no row**. The source says why the shape cannot be priced —
+  `ANALYZE` writes an index its own `pg_statistic` rows only for expression attributes
+  (`analyze.c:450-478`, `:588-602`), and `index_drop` uses the same `indexprs` test when
+  deciding whether an index has statistics to remove (`index.c:2341-2363`) — so the
+  expression falls to the statement's 32-byte default width. Control `np97` read **64.9%
+  waste on 5201 blocks a `REINDEX` reproduces exactly**: a 44-byte modelled tuple against
+  a measured 120-byte item, on leaves `pgstatindex` puts at 91.31% density with zero
+  fragmentation. **Two critical false positives go and no partial-index verdict moves**
+  (66 PASS / 0 / 0 / 8 under both texts over tests 18-91, the disjunct carrying `NOT
+  is_partial`); exactly four rows differ between the texts, all non-partial: `np97` 64.9%
+  and a mixed `(k, upper(s))` key 60.5% withheld as false positives, a −614.9%
+  over-prediction withheld at no cost, and one true detection lost. **Unlike change C the
+  silence lifts** — one `ANALYZE` takes `np97` to a reported `−16.6%` — and an
+  identical-DDL pair prices the whole trade: the same index that a `REINDEX` shrinks 5201
+  blocks to 523 reads 96.4% with no statistics row and 89.2% with one, against a measured
+  89.9%. Two wider forms were generated from the page's own Markdown and scored beside the
+  filed one: dropping `has_expressions` also catches a plain index whose column carries
+  `SET STATISTICS 0` (the one alertable hole change D leaves, 64.9% on a healthy index),
+  and dropping `last_analyze IS NOT NULL` also catches a never-analysed table the alerting
+  rule already covers; neither was applied. An unprivileged role reading through a
+  `security_invoker` copy is untouched, because `any_stats_hidden` blocks the term.
+  Report-level effect over 95 indexes and 73,867 blocks: 53 rows to 49, 35 to 31
+  over the 1 MB filter, 6 readings above the 50% line to 3, 0 of 11 non-partial indexes
+  withheld to 4; cost is inside the noise over eight interleaved pairs (40.1-48.2 ms as
+  filed against 38.7-47.6 ms amended). Measured by restarting the change-C run's isolated
+  17.11 cluster with a fresh scratch database — **74 of 74 live-block counts and all 74
+  pre-change reported/withheld verdicts reproduce for the third consecutive run** — plus
+  seven new non-partial fixtures numbered 106-112, four estimator texts generated
+  mechanically from the page's Markdown, and `REINDEX INDEX` as ground truth; change D is
+  the second term also run on the isolated 12.2 server, where the same expression fixture
+  builds the same 5201 blocks and moves from a reported 64.9% to withheld. Four open
+  questions record the gaps, including the discarded true detection, the `SET STATISTICS
+  0` residual, the fixture-inflated above-50 count, and changes A and B still being
+  17.11-only. The page remains human-unverified and agent-unverified.
+
 - 2026-08-20: **applied change C** to the recommended B-tree wasted-space statement in
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) and
