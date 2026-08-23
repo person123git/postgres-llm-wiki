@@ -2351,9 +2351,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 ## [2026-08-13] answer v17 | copy and review the v12 COMMENT-stored bytes-per-table-tuple REINDEX threshold
 
-- Filed [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for
-  Every Non-B-Tree Index in PostgreSQL 17
-  (unverified)](v17/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+- Filed Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 17 (unverified)
   against unchanged pin `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10,
   `REL_17_10-3-g54eeefaedbe`). Applied `MANDATORY Prompt Hygiene`: the request
   said `follow agents.md, In PostgreSQL 17, ...` and quoted the v12 title with
@@ -2650,7 +2648,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - The v12 page of the same name was removed on 2026-08-13, so no supported
   version carries this index/heap-ratio proposal any more. COMMENT-stored
   index-bloat screening in v17 now runs through
-  [Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 17 (unverified)](v17/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md)
+  Calibrating a COMMENT-Stored Bytes-per-Table-Tuple REINDEX Threshold for Every Non-B-Tree Index in PostgreSQL 17 (unverified)
   and core-SQL B-tree bloat measurement through
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md).
 - No source citation, pin, or verification field on any surviving page changed.
@@ -3801,6 +3799,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   itself is a judgement no second reader has checked, and the cost figures are one machine.
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
   the page keeps `verified: false` and `verified_by_agent: not yet`.
+
   `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
 
 ## [2026-08-20] answer v17 | B-tree bloat and wasted space from pgstatindex alone, on 12 and 17
@@ -4029,3 +4028,28 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   so a future run must re-run `10_fixtures.sql`/`11_fixtures17.sql` first.
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
   the page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-23] remove v17 | delete COMMENT-stored bytes-per-table-tuple REINDEX threshold question
+
+- Removed
+  `wiki/v17/questions/indexing/comment-stored-bytes-per-table-tuple-non-btree.md`
+  at the user's request. The user named its exact visible title, including the
+  ` (unverified)` state marker. The request's casing and punctuation issues drive
+  no document generation and are restated on no wiki page, so no prompt-hygiene
+  correction was needed.
+- Removed the active page entry from `wiki/index.md` and `wiki/v17/index.md`.
+  No surviving v17 content page linked to the deleted page, so no `## Navigation`
+  section required an edit.
+- Removed the page's 132-cell re-measurement clause from the PostgreSQL 17
+  coverage cell in `wiki/versions.md`. The PostgreSQL 12 page with the same
+  basename remains filed and indexed.
+- Neutralized the two historical Markdown links in `wiki/log.md` and the one in
+  `wiki/versions.md`; they now retain the deleted title as plain text without a
+  dangling link. Historical filename mentions remain historical records.
+- No source citation, version pin, or verification field on a surviving page
+  changed. `raw/postgres-17/` is unchanged and no server was started.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint` completed with 9 errors and
+  0 warnings, all outside this change set: six missing v18 source-citation targets
+  under `src/test/modules/injection_points/`, plus unavailable pinned commits in
+  the v14, v18, and v19 raw checkouts. The requested deletion leaves no Markdown
+  link to the removed v17 page. `git diff --check` passed.
