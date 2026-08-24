@@ -4228,3 +4228,79 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Re-checked after the edits: 0 anchor problems, 0 category problems, and
   `.wiki-runtime/venv/bin/python scripts/wiki_lint --warnings-as-errors`: 0 errors,
   0 warnings. `git diff --check` passed.
+
+## [2026-08-24] follow-up v17 | removed the reltuples = 0 guard from the recommended bloat statement
+
+- Removed the five-line `live_rows` branch the asker quoted from
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). `live_rows` is a two-arm `CASE`
+  again — only the v14+ `-1` sentinel stops the model — so **change E is now unconditional**:
+  every `reltuples = 0` is priced as an empty index on 12 through 17 and the row reports its
+  whole file as reclaimable. The header comment above the branch and the stage-map line for
+  change E were rewritten to match; `server_version_num` is still read and reported but **no
+  expression in the statement tests it any more**.
+- Prompt hygiene: the request had `agents.md` for AGENTS.md, lowercase `postgresql`, spaces
+  before commas and `statatement` for statement; the asker approved a corrected restatement,
+  which `## Question` carries with the quoted SQL character for character. Three scoping
+  answers are filed there: the removal is **literal** and its false positives are accepted,
+  rather than moving the condition into `suppress_row` or turning it into a caveat; **both
+  servers are rebuilt and the whole suite re-scored**; and change E is **rewritten in place**
+  rather than left as history beside a new follow-up.
+- One consequence was not requested and is filed as part of the change: with the branch gone,
+  `live_rows IS NULL` means `reltuples < 0` and nothing else, so the `status` arm reporting
+  `unmeasured: reltuples 0, table has live rows` is unreachable and was deleted. A **third
+  statement text** that keeps the arm returns **0 rows from `EXCEPT` in both directions over
+  all 52 exposed columns** on both servers and scores an identical verdict distribution, so
+  the deletion is proven output-identical rather than argued.
+- **The two majors move in opposite directions, which is the whole result.** On 17.11 the
+  change buys nothing and costs one critical false positive: `EXCEPT` moves **3 of 118 rows**,
+  `p115` and `p117` are withheld by change B either way, and `p118` — a queue that refilled
+  after `ANALYZE` measured its subset empty — goes from `unmeasured` to **99.3% waste on a
+  1.1 MB index a `REINDEX` reproduces block for block**, with `status = ok` and an empty
+  `caveats`. That is the same fixture and the same reading that got change B's auto-analyze
+  trigger rejected as change E's test in the previous follow-up, so the failure is adopted
+  knowingly. Verdicts go 43 PASS / 70 WITHHELD / 1 UNMEASURED / 3 critical / 1 borderline /
+  1 false negative to 43 / 70 / **0** / **4** / 1 / 1, and the as-filed report changes by
+  exactly one line.
+- On 12.2 it is a real trade, because change E's counter test began with
+  `server_version_num < 140000` and withheld every zero there: **7 of 103 rows** move, three
+  of them genuinely reclaimable (`p113b`, `p113c`, `p75` at 100.0 / 100.0 / 99.6 against
+  measured 100.0 / 100.0 / 99.6) and two of them false positives (`p118` at 99.3, `p120` at
+  87.5). Verdicts go 54 PASS / 5 UNMEASURED / 5 critical to **57 / 0 / 7**, and the drained
+  job-queue demo reads `unmeasured` before and `ok | 100.0 | 21 MB` after, on an index a
+  `REINDEX` takes 2745 blocks to 1.
+- **A new non-partial fixture family (121) prices the majors' difference from source.** An
+  index whose table is emptied, `VACUUM`ed and reloaded reads 100.0 on both servers against a
+  measured 50.0; add a `REINDEX` while the table is empty, or use a `TRUNCATE`, and 17.11
+  reads `unmeasured: reltuples unknown` while **12.2 reads 100.0 and 99.9 on dense indexes a
+  `REINDEX` cannot shrink**. The mechanism is `RelationSetNewRelfilenumber` writing
+  `reltuples = -1` with a new relfilenode plus `index_update_stats` leaving that `-1` alone
+  when the build counts zero rows; traced live on 17.11 as `1e+06` after the build, `0` after
+  `VACUUM`, `-1` after `REINDEX`. All three non-partial fixtures carry `row-count sources
+  disagree: analyze first`, which the page's reading rule already excludes; the partial
+  `p118` carries nothing, because that caveat is written `WHEN NOT is_partial`.
+- Timing is unchanged: six interleaved pairs read 43.4-51.3 ms filed against 43.5-53.1 ms
+  amended on 17.11 and 36.0-42.0 against 35.3-63.3 on 12.2, the two outliers being first runs.
+- Measured on the two servers the previous follow-up kept under `.wiki-runtime/tmp/pstate/`,
+  restarted rather than rebuilt, with a **fresh database on each** so that run's post-`REINDEX`
+  databases survive as a reproduction check. Fixture fidelity against its stored result table:
+  same 119 index names, **119 of 119 identical pre-rebuild block counts**, 119 of 119 identical
+  `status` values, 118 of 119 identical post-rebuild block counts, 107 of 119 identical floor
+  readings. The verdict totals differ from that run (43/70 against 50/62) because nine tables'
+  `CREATE TABLE AS` counts reached the cumulative statistics after their `ANALYZE` rather than
+  before, firing change B. Two fixture defects were found in passing and are filed: `p75`
+  deletes 100% of its predicate subset where its comment says 90%, and
+  `CREATE INDEX np99 ON np99 (v)` cannot run at all because an index and a table share a
+  namespace.
+- Page edits: the new follow-up prompt and its note in `## Question`, the SQL block (branch,
+  comment, stage map, dead status arm), 4 Contents entries renamed, the fifteenth-follow-up
+  Verdict paragraph, the change-E paragraph in [The current recommended
+  statement](v17/questions/indexing/btree-index-bloat-core-sql-only.md), 2 new residual-error
+  rows, the `modelled_rows = 0` reading rule in two places, the whole change-E section block
+  rewritten in place (3 sections retitled), 2 Context Reviewed bullets, 6 Evidence Map rows,
+  and 8 rewritten or new Open Questions. Checked mechanically: the Contents list matches all
+  120 headings in order and all 365 page-internal anchors resolve.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. `wiki/index.md`,
+  `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged; the page keeps
+  `verified: false` and `verified_by_agent: not yet`.
