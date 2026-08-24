@@ -4053,3 +4053,57 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   under `src/test/modules/injection_points/`, plus unavailable pinned commits in
   the v14, v18, and v19 raw checkouts. The requested deletion leaves no Markdown
   link to the removed v17 page. `git diff --check` passed.
+
+## [2026-08-24] cleanup | removed the idxmaint sandbox and purged .wiki-runtime caches and logs
+
+- Removed `.wiki-runtime/tmp/idxmaint/` at the user's request, reclaiming 11 GB
+  and leaving `.wiki-runtime/tmp/` empty. The cluster data directory was nearly
+  all of it at 11 GB, with `pg_wal` alone at 8.1 GB and `base` at 2.3 GB; the
+  rest was a 412 MB in-tree PostgreSQL 17 build under `src17/`, a 98 MB
+  `install/`, and 1.1 MB of build transcripts (`make.log` 908 KB, `install.log`
+  188 KB, `configure.log` 16 KB).
+- The 128 KB harness was removed with the bulk, on the user's instruction:
+  `cells.sh`, `probes.sh`, `harness.sh`, `analyze.py`, five files under `sql/`,
+  three under `work/`, and both result sets, `results/eval.csv` (12 KB) and
+  `results/metrics.csv` (21 KB).
+- The sandbox was unfiled work, not the reproduction base for any page.
+  `harness.sh` describes it as the harness for the "@idxmaint COMMENT-stored
+  index-inflation heuristic (PostgreSQL 17.11)", the successor to the v17
+  question deleted in the entry above. It ran 11:12-11:47 on 2026-08-24, after
+  the 10:56 bookkeeping writes that were the last wiki edits of that session, so
+  no page was ever written from it. `run_all.log` also shows all 17 cells,
+  `c0_control` through `c16_partial_churn`, reporting `table "tN" does not
+  exist, skipping`, so the run was already misfiring before it stopped.
+- No PostgreSQL instance was running at cleanup time and none had to be stopped.
+  The host restarted at roughly 11:51, which killed postmaster PID 508251
+  mid-shutdown: `server.log` records `received smart shutdown request` at
+  11:50:37 and no completion, and the tree still held a stale
+  `data/postmaster.pid` reading `stopping` plus a stale
+  `sock/.s.PGSQL.55417`. PID 508251 was confirmed absent from `/proc`, and no
+  postgres, `pg_ctl`, or `initdb` process remained.
+- Purged the runtime scaffold as well: `cache/wiki_lint/last-run.txt`,
+  `logs/recent_log.log`, `logs/wiki_lint.log`, and the three empty `indexes/`
+  subdirectories. `venv/` was kept, as the tooling requires it. The cache is
+  write-only — `write_cache()` never feeds back into `lint()` — so removing it
+  suppresses no check, and `ensure_runtime_dirs()` recreated `cache/wiki_lint`,
+  `indexes/ctags`, `indexes/search`, `indexes/tree-sitter`, `logs`, and `tmp` on
+  the next tooling run. `.wiki-runtime/` is back to 13 MB and the repo to
+  3.3 GB, down from 15 GB.
+- No compiled install remains again, so the next exact-pin PostgreSQL 17
+  experiment must rebuild from `raw/postgres-17/`.
+- No wiki page, index, version pin, or `raw/` checkout changed; this entry is the
+  only edit. All five checkouts remain clean with zero modified files and sit on
+  their manifest pins: `45b88269` (12), `a92fbdfb` (14), `786db8dc` (17),
+  `baa7b142` (18), and `67342a14` (19).
+- Stale pointer left uncorrected: [B-Tree Bloat and Wasted Space From
+  pgstatindex Alone, on PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) still
+  states its sandbox is retained at `.wiki-runtime/tmp/pgsi/`. That directory was
+  already absent before this cleanup — `tmp/` held only `idxmaint/` — so the
+  claim was stale beforehand and this cleanup did not cause it.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. The
+  nine errors recorded in the entry above are gone, and this cleanup did not mask
+  them: all nine were `raw/` availability errors, the `raw/*/.git` directories
+  were refreshed at 10:12 on 2026-08-24 before any deletion here, the six
+  `src/test/modules/injection_points/` citation targets now exist in
+  `raw/postgres-18/`, and each of the v14, v18, and v19 pins now resolves.
