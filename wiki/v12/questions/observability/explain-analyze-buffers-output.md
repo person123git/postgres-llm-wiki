@@ -15,7 +15,7 @@ verified_by_agent: not yet
 - [What Each Field Means](#what-each-field-means)
 - [How The Counters Are Collected](#how-the-counters-are-collected)
 - [Where It Appears In The Plan](#where-it-appears-in-the-plan)
-- [I/O Timing And `track_io_timing`](#io-timing-and-trackiotiming)
+- [I/O Timing And `track_io_timing`](#io-timing-and-track_io_timing)
 - [Reading Common Patterns](#reading-common-patterns)
 - [Tests And Examples](#tests-and-examples)
 - [Context Reviewed](#context-reviewed)

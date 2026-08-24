@@ -18,7 +18,7 @@ verified_by_agent: not yet
   - [2. A failed or cancelled REINDEX CONCURRENTLY](#2-a-failed-or-cancelled-reindex-concurrently)
   - [3. A failed or interrupted DROP INDEX CONCURRENTLY](#3-a-failed-or-interrupted-drop-index-concurrently)
   - [4. An incomplete partitioned index](#4-an-incomplete-partitioned-index)
-  - [5. pg_upgrade from PostgreSQL 9.6 or earlier](#5-pgupgrade-from-postgresql-96-or-earlier)
+  - [5. pg_upgrade from PostgreSQL 9.6 or earlier](#5-pg_upgrade-from-postgresql-96-or-earlier)
   - [Operations that do not leave an invalid index](#operations-that-do-not-leave-an-invalid-index)
   - [What an invalid index costs, and what rejects it](#what-an-invalid-index-costs-and-what-rejects-it)
   - [How to clear an invalid index](#how-to-clear-an-invalid-index)

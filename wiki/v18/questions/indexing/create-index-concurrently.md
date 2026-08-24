@@ -14,7 +14,7 @@ verified_by_agent: not yet
 - [Answer](#answer)
   - [Short answer](#short-answer)
   - [Entry points and preconditions](#entry-points-and-preconditions)
-  - [The pg_index state machine](#the-pgindex-state-machine)
+  - [The pg_index state machine](#the-pg_index-state-machine)
   - [Step-by-step implementation](#step-by-step-implementation)
   - [All steps and locks required on the table](#all-steps-and-locks-required-on-the-table)
   - [What changed from PostgreSQL 17](#what-changed-from-postgresql-17)

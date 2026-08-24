@@ -4107,3 +4107,41 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   were refreshed at 10:12 on 2026-08-24 before any deletion here, the six
   `src/test/modules/injection_points/` citation targets now exist in
   `raw/postgres-18/`, and each of the v14, v18, and v19 pins now resolves.
+
+## [2026-08-24] lint-fix | repaired eight broken ## Contents anchors across five pages
+
+- `scripts/wiki_lint` reported 0 errors and 0 warnings, plain and with
+  `--warnings-as-errors`, and no other linter is configured in the repo. The
+  defects fixed here are in the two areas `MANDATORY Table of Contents` and
+  `MANDATORY Question Categories` state that lint does not cover: page-internal
+  `#`-anchor links and question category placement. Both were checked directly.
+- Category placement is clean: every `type: question` page sits in one of the six
+  closed category directories and none is filed directly under
+  `wiki/vNN/questions/`.
+- Eight `## Contents` links resolved to no heading, all one root cause — the
+  anchor dropped an underscore or a hyphen that the heading keeps:
+
+  | Page | Was | Now |
+  |---|---|---|
+  | `v12/questions/indexing/how-pgstatindex-calculates-information.md` | `#how-indexsize-is-calculated` | `#how-index_size-is-calculated` |
+  | same | `#how-avgleafdensity-is-calculated` | `#how-avg_leaf_density-is-calculated` |
+  | same | `#how-leaffragmentation-is-calculated` | `#how-leaf_fragmentation-is-calculated` |
+  | `v12/questions/indexing/invalid-index-outcomes.md` | `#5-pgupgrade-from-postgresql-96-or-earlier` | `#5-pg_upgrade-from-postgresql-96-or-earlier` |
+  | `v12/questions/indexing/null-values-in-indexes.md` | `#btree` | `#b-tree` |
+  | same | `#spgist` | `#sp-gist` |
+  | `v12/questions/observability/explain-analyze-buffers-output.md` | `#io-timing-and-trackiotiming` | `#io-timing-and-track_io_timing` |
+  | `v18/questions/indexing/create-index-concurrently.md` | `#the-pgindex-state-machine` | `#the-pg_index-state-machine` |
+
+- Targets were generated with the `MANDATORY Table of Contents` slug rule — trim,
+  lowercase, whitespace runs to `-`, strip punctuation such as backticks, `/` and
+  `.`, preserve underscores and hyphens — after checking that implementation
+  reproduces all three worked examples in that section
+  (`the-three-pg_index-state-flags`, `how-maintenance_work_mem-is-used`,
+  `open-questions`). `GiST` -> `#gist` was already correct and was left alone.
+- Only the eight anchor targets changed. No heading, body, citation, front matter,
+  or verification field was touched, so the timestamped `verified_by_agent` values
+  on the `how-pgstatindex-calculates-information` and `null-values-in-indexes`
+  pages still stand; a Contents typo is not a claim change. `raw/` is unchanged.
+- Re-checked after the edits: 0 anchor problems, 0 category problems, and
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint --warnings-as-errors`: 0 errors,
+  0 warnings. `git diff --check` passed.
