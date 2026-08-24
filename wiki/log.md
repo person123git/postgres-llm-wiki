@@ -2,6 +2,89 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-24] follow-up v17 | mandatory test 113 and change E in the core-SQL bloat statement
+
+- Added a 92nd mandatory test and one correction to [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), on
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Test 113 is
+  the asker's shape: 1,000,000 rows inserted as `state = 'pending'`, a partial
+  index `WHERE state = 'pending'`, then every row updated to `'done'`. A
+  `REINDEX` takes that index from **2745 blocks to 1** — the largest true reading
+  on the page — and the recommended statement **failed all three states**.
+- Prompt hygiene: the request had "a additional", "after change the state to
+  done", spaces before commas and a run-on final clause; the asker approved a
+  corrected restatement, which `## Question` carries with the original quoted in
+  its prompt note. Four scoping answers are recorded there: both post-`UPDATE`
+  states are measured, a failing statement is corrected rather than only
+  reported, the test is numbered **113** so nothing filed is renumbered, and
+  `state = 'pending'` is read as the predicate with a distinct `bigint` key.
+- **The failure was never arithmetic.** `expected_blocks` was already 1 in all
+  three states. The guard `reltuples = 0 AND actual_bytes > bs AND n_live_tup > 0`
+  turned that into `unmeasured: reltuples 0, table has live rows`, and change B
+  withheld the unmaintained state. The guard is right for 12 and 13 and wrong
+  from 14: commit `3d351d916b2` in this checkout says in its own message that the
+  point of the `-1` sentinel is that "it's impossible to distinguish 'never yet
+  vacuumed' from 'vacuumed and seen to be empty'", earliest containing tag
+  `REL_14_0`.
+- **Change E** is two lines in that branch: the guard now also requires
+  `server_version_num < 140000 OR n_mod_since_analyze > 0`. Both maintained
+  states then read **100.0% / 100.0% and 21 MB against a measured 100.0%**. It is
+  the first lettered change on the page that adds rows rather than withholding
+  them, it adds no CTE, no join and no construct 12 lacks, and the header map,
+  the intro paragraphs, the recommended-statement section, the reading rule and
+  the residual-error table were all updated for it.
+- **The threshold is deliberately not change B's.** A third text substituting the
+  auto-analyze trigger was built and measured: fixture 118 — a subset measured
+  empty, then 50,000 rows arriving under a 100,050 trigger — reports **99.3% on a
+  139-block index a `REINDEX` reproduces exactly**, `status = ok`, no caveat. The
+  `> 0` form withholds it and one `ANALYZE` gives the correct 2.9%.
+- **Change E's own cost is filed, not hidden.** Fixture 120 is a tail-clustered
+  2,000-row subset read at `default_statistics_target = 1`: the 300-row sample
+  wrote `reltuples = 0` in **8 of 10** consecutive `ANALYZE`s, and change E then
+  reads **87.5% on a live 8-block index**. It is recorded as a critical false
+  positive in the residual table, identifiable by `modelled_rows = 0`, with the
+  size bound that keeps it under the 1 MB triage filter marked as derived rather
+  than measured.
+- **Regression evidence is an `EXCEPT`, both directions, over 119 indexes**: the
+  page's own runnable deduplication-gate harness verbatim, a shape rebuild of
+  partial requirements 18-91, the 92-112 controls, and the eight change-E
+  fixtures. **Exactly 4 rows move**, all in the branch: `p113b` and `p113c`
+  `unmeasured` -> 100.0 (PASS), `p120` `unmeasured` -> 87.5 (the false positive),
+  and `p118` unmoved. Verdicts go 50 PASS / 2 critical false positives / 4
+  unmeasured to 52 / 3 / 1; the trigger form would be 52 / 4 / 0. Seven indexes
+  reach the branch at all, and the page now carries an audit query that lists
+  them on any database.
+- Fidelity check on the rebuilt fixtures: `x109` reproduces the filed **64.9% on
+  5201 blocks** exactly, and `p74`/`p75`/`p77`/`f91` land within 0.4 points of
+  their filed values. The page states plainly that the 18-112 fixtures are shape
+  rebuilds — the original scripts went with the sandbox deleted earlier today —
+  so this run does not claim to re-verify the filed per-test table.
+- Cost is unchanged: 58.0-68.4 ms filed against 57.4-65.1 ms amended over six
+  interleaved pairs of the exact texts on the 119-index database; on the
+  post-`REINDEX` state both exact texts produce byte-identical `psql` output.
+- Measured on **two newly initialised clusters**, both built for this run because
+  `.wiki-runtime/tmp/` was emptied earlier today: 17.11 from this page's pin
+  configured `--without-readline --without-zlib --with-icu --enable-debug`, and
+  12.2 from `45b88269a353ad93744772791feb6d01bc7e1e42` configured
+  `--without-readline --without-zlib --enable-debug`; both `block_size` 8192,
+  `autovacuum = off`, `fsync = off`. On 12.2 the same fixture reads `unmeasured`
+  under **both** texts with `n_mod_since_analyze` at 0, so the version gate alone
+  holds it — the change is a measured no-op there — while a `REINDEX` reclaims the
+  same 2745 blocks to 1. `EXCEPT` returns 0 rows either way on that server. Both
+  servers were shut down cleanly and both data directories are retained under
+  `.wiki-runtime/tmp/pstate/`.
+- Page edits: the corrected prompt and its note in `## Question`, one header-map
+  line and four logic lines in the SQL block, a new paragraph in the statement's
+  intro, a `### Verdict` paragraph, a new `### The current recommended statement`
+  paragraph plus a `modelled_rows = 0` reading rule and two residual-error rows,
+  a third row in the mandatory-suite group table, nine new `###` sections, 9
+  Contents entries, 2 Context Reviewed bullets, 5 Evidence Map rows, 5 Open
+  Questions and 12 Source References.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
+  unchanged and both checkouts are clean on their manifest pins; the page keeps
+  `verified: false` and `verified_by_agent: not yet`.
+
 ## [2026-08-12] answer v12 | extract declarative range partition bounds with SQL and no regex
 
 - Filed [Extracting Declarative Range Partition Bounds With SQL and No Regex in

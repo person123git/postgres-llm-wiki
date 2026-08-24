@@ -116,6 +116,15 @@ verified_by_agent: not yet
   - [What the rebuild costs](#what-the-rebuild-costs)
   - [The same suite on a 12.2 server](#the-same-suite-on-a-122-server)
   - [How the rebuild was run](#how-the-rebuild-was-run)
+  - [Follow-up: the drained partial index, and change E](#follow-up-the-drained-partial-index-and-change-e)
+  - [Test 113, measured in three states](#test-113-measured-in-three-states)
+  - [Why the filed statement cannot see it](#why-the-filed-statement-cannot-see-it)
+  - [Change E: believe a measured zero, once](#change-e-believe-a-measured-zero-once)
+  - [Why exactly zero rather than the auto-analyze trigger](#why-exactly-zero-rather-than-the-auto-analyze-trigger)
+  - [What change E costs](#what-change-e-costs)
+  - [The suite re-scored for change E](#the-suite-re-scored-for-change-e)
+  - [Change E on a 12.2 server](#change-e-on-a-122-server)
+  - [How the test-113 run was run](#how-the-test-113-run-was-run)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -636,6 +645,31 @@ maintainability, and rerun all tests on v12 and v17.
 > [The current recommended statement](#the-current-recommended-statement) keeps
 > naming the same section.
 
+Follow-up: in PostgreSQL 17, add an additional mandatory test for partial
+indexes. Define the partial index with the predicate `state = 'pending'`, insert
+rows only with `state = 'pending'`, then change every row's state to `'done'`.
+Measure the wasted space: it should be very high, and the index should be
+recommended for REINDEX maintenance.
+
+> Prompt note: filed as an approved grammar-corrected restatement of "follow
+> agents.md, in postgresql 17 , for question: Testing the PostgreSQL 12 Core-SQL
+> B-Tree Bloat Method on PostgreSQL 17 (unverified) , add a additional mandatory
+> test for partial indexes, have the partial index on a column state = pending ,
+> add rows only with state = pending , after change the state to  done, so
+> measure the wasted space it should be very high and the index should be
+> recommended for reindex maintenance.", per the repository's prompt-hygiene
+> rule. The asker confirmed four scoping decisions. The estimator is read in
+> **both** states after the `UPDATE` — immediately, and again after
+> `VACUUM` + `ANALYZE` — because the two states fail differently and only one of
+> them is repairable. A statement that fails the new test is **corrected and the
+> suite re-scored**, not merely reported, which is the precedent follow-ups 11
+> through 13 set. The test is numbered **113**, the next free number in this
+> page's shared test-and-fixture space, so the mandatory suite becomes 92 tests
+> numbered 1-91 and 113 and no filed number is renumbered. And "the partial
+> index on a column `state = pending`" is read as the index *predicate*; the
+> indexed key is a distinct `bigint`, the suite's baseline shape, so that
+> nothing but the predicate is under test.
+
 ## Answer
 
 ### Verdict
@@ -675,6 +709,8 @@ A thirteenth follow-up turns the exclusion on the **non-partial** side for the f
 
 A fourteenth follow-up **rebuilds that statement for readability and maintainability and changes nothing it returns**. It is still sixteen CTEs, but different ones: the three one-column CTEs `sized`, `fit` and `posting` collapse into one `page` CTE of three commented laterals, and the two that replace them take work *out* of the 77-line `idx` CTE — an `env` CTE for the server constants and a `gate` CTE for the whole deduplication decision, leaving `idx` at 62 lines of catalog inputs. Three statistics-state facts are named once in `modelled`, so the caveat list and the `WHERE` clause read the same three booleans instead of two copies of the same conditions, and a 35-line header maps every named change to the stage that carries it. Identity is measured, not asserted: over 95 indexes on 17.11 and 92 on 12.2 the two texts differ by **zero rows in either direction** across every exposed column, the exact texts produce byte-identical `psql` output on both servers, and all 91 mandatory tests plus fixtures 92-112 were rerun on fresh clusters and score identically. The cost is small but real and measured — one extra scan of the `idx` CTE, `+1.3 ms` of planning and `+0.8 ms` of execution on 123 indexes, `+3.2%` of execution on 600. See [Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun).
 
+A fifteenth follow-up adds **test 113**, a fully drained job queue — 1,000,000 rows inserted as `state = 'pending'`, a partial index `WHERE state = 'pending'`, every row then updated to `'done'` — and **the recommended statement failed it in all three states**, on an index a `REINDEX` takes from 2745 blocks to 1. Not by getting the arithmetic wrong: `expected_blocks` was already 1, and a guard written for the majors where `reltuples = 0` was ambiguous replaced the answer with `unmeasured`. [Change E](#change-e-believe-a-measured-zero-once) believes that 0 when it is provably current — v14 or later, and `n_mod_since_analyze = 0` — and the two maintained states now read **100.0% against a measured 100.0%**. The strict counter test is not the one change B uses, and the reason is measured: with change B's auto-analyze trigger in its place, a queue that refills after being measured empty reports **99.3% waste on a 1.1 MB index that is entirely live**. Change E's own cost is one false positive of the same family — an `ANALYZE` sample that misses the whole predicate subset, produced 8 times in 10 at `default_statistics_target = 1` — and its 12.2 leg is a measured no-op. See [Follow-up: the drained partial index, and change E](#follow-up-the-drained-partial-index-and-change-e).
+
 ### The current recommended statement
 
 **Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen deduplication-gate tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
@@ -682,6 +718,8 @@ A fourteenth follow-up **rebuilds that statement for readability and maintainabi
 **The carve-out is now inside the statement, not in the reader's head.** The tenth follow-up measured 12 critical false positives over 74 partial-index fixtures — the worst reading 99.6% on an index a `REINDEX` reproduces block for block — and the alerting rule of the day suppressed none of them ([The twelve critical false positives](#the-twelve-critical-false-positives)). The eleventh follow-up applied the two changes those tests justified as one suppression flag in `modelled` and one `AND NOT` conjunct in the `WHERE`, so a partial index whose reading rests on statistics that do not describe its predicate subset **returns no row at all**; that took 12 critical false positives to 1 ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)). The twelfth added change C for the survivor — a partial index carrying a variable-width `INCLUDE` column, whose non-key width can only come from whole-table statistics — and the count over the 74 requirements is **0 critical false positives**, with the same four true detections above 50% still reported ([Follow-up: the wide INCLUDE column excluded, and the suite re-scored](#follow-up-the-wide-include-column-excluded-and-the-suite-re-scored)). Size any index that the statement reports, and any index it silences, with [Method C](#method-c-unchanged-answer-different-write-path) before acting on a rebuild.
 
 **One term now reaches non-partial indexes, and the flag is called `suppress_row`.** Change D withholds a **non-partial expression index with no statistics row of its own**, because `ANALYZE` gives an index statistics only for its expression attributes and the statement then prices the expression at a 32-byte default: control `np97` read 64.9% waste on 5201 blocks a `REINDEX` reproduces exactly, and a mixed `(k, upper(s))` key read 60.5% on 5477 ([Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored)). Three things bound it. It cannot touch a plain index whose statistics come from its table column, measured as 4 of 11 non-partial indexes withheld and every plain control reported, including one with a variable-width `INCLUDE` column reading a correct `−4.0%` ([What change D costs, and what lifts it](#what-change-d-costs-and-what-lifts-it), [What change C costs](#what-change-c-costs)). It **lifts after one `ANALYZE`**, unlike change C, which is why the operational advice for a vanished non-partial index is "analyse the table, then look again". And it leaves one measured hole: a plain index whose column carries `SET STATISTICS 0` reads 64.9% on a healthy 5201-block index and is still reported, because the term requires expressions ([Why expression indexes rather than any missing statistics row](#why-expression-indexes-rather-than-any-missing-statistics-row)).
+
+**One term now adds rows instead of withholding them.** Change E is the only lettered change that widens the output: an index whose `reltuples` is a *measured* zero — v14 or later, and no row changed in its table since — is priced at that zero instead of returning `unmeasured`. It exists because a fully drained partial index is the one genuinely 100%-reclaimable shape the statement could not report at all, and it is deliberately stricter than change B's staleness test, because change B withholding too often costs detections while change E reporting too often invents them ([Why exactly zero rather than the auto-analyze trigger](#why-exactly-zero-rather-than-the-auto-analyze-trigger)). Two bounds make it auditable. It can only reach an index satisfying all four of `reltuples = 0`, more than one block, a table with live rows and `n_mod_since_analyze = 0` — an [audit query](#the-suite-re-scored-for-change-e) lists them before adoption — and every row it adds carries `modelled_rows = 0`, which nothing else on a multi-block index produces. Its one measured cost is an `ANALYZE` sample that misses a whole predicate subset, which reads 87.5% on a live 8-block index ([What change E costs](#what-change-e-costs)).
 
 **The text is now built to be read and edited, and that rebuild moved no number.** The statement had grown by accretion through ten named changes, and the fourteenth follow-up rewrote its shape without touching its arithmetic: a `gate` CTE that holds the whole deduplication decision, a `page` CTE that holds the whole page geometry, three named statistics-state booleans that the caveat list and the `WHERE` clause now share instead of re-spelling, and a header comment that maps every named change to the stage carrying it. The proof that nothing moved is a measurement, not a claim: `EXCEPT` in both directions between the two texts returns **0 rows over 95 indexes on 17.11 and 92 on 12.2**, and all 91 mandatory tests plus fixtures 92-112 score identically ([Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun)). It is not free: the `gate` stage costs one more scan of the `idx` CTE, worth `+1.3 ms` of planning and `+0.8 ms` of execution on a 123-index database and `+3.2%` of execution on a 600-index one ([What the rebuild costs](#what-the-rebuild-costs)).
 
@@ -704,7 +742,7 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 - **Most fixes.** Six numbered changes on top of the portable statement's own gate conjuncts and both reporting corrections, and the gate it ends with is the catalog form of what the engine actually does: `_bt_allequalimage` looks the support function up **and calls it**, so a registered function that returns false is the same outcome as no function at all ([nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [nbtutils.c:5156-5169](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5156-L5169)); a fresh build recomputes that answer from the current opclasses ([nbtsort.c:561-563](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L561-L563)) and `_bt_load` deduplicates only when it, non-uniqueness and the reloption all agree ([nbtsort.c:1151-1152](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152)); the documentation states the same rule from the operator-class side ([btree.sgml#equalimage](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L499-L509)); and `prosrc`, not `proname`, is the identity the engine resolves for a `LANGUAGE internal` function ([fmgr.c:216-240](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [fmgr.c:166-178](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L166-L178)).
 - **Most compatible.** It runs unchanged on 12 through 17, and change 6 adds no construct that 12 lacks: `pg_language.lanname` and `pg_proc.prosrc` both exist on 12.2, where the gate cannot open anyway because no B-tree opfamily has an `amprocnum = 4` row ([The deduplication-gate tests on a 12.2 server](#the-deduplication-gate-tests-on-a-122-server), [The corrected statement on a 12.2 server](#the-corrected-statement-on-a-122-server)). Changes C and D add none either, and they are the two exclusion terms that have been run on a 12 server: `pg_attribute.attlen`, `pg_index.indnkeyatts` and `pg_index.indexprs` are all there, the same `INCLUDE` fixture builds the same 787 blocks and the same expression fixture the same 5201, and in both cases the pre-change text reports the index (84.1% and 64.9%) while the amended text withholds it ([Change C on a 12.2 server](#change-c-on-a-122-server), [Change D on a 12.2 server](#change-d-on-a-122-server)). Measured coverage for this exact text is 12.2, 14.23 and 17.11 ([How the same statement behaves on 12.2, 14.23 and 17.11](#how-the-same-statement-behaves-on-122-1423-and-1711)); majors 13, 15 and 16 have no checkout in this repo and were never run. Changes A and B have now been run on a 12 server too — the whole partial-index suite was rebuilt there for the rebuild follow-up — and that run found the one portability limit the exclusions have: **two of the four partial terms cannot fire on 12**, so tests 30 and 64 come back as unsuppressed critical false positives at 87.6% and 93.5% ([The same suite on a 12.2 server](#the-same-suite-on-a-122-server)).
 
-**What it costs, and in which direction.** Eleven residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — one is the honest false positive a random-insertion index produces, four are families the exclusion now removes from the output rather than repairs, and the last two are the two false positives that survive it:
+**What it costs, and in which direction.** Thirteen residual errors survive. Four over-predict the rebuilt size, which surfaces as a negative reading — useless for sizing, harmless for a floor-based alert — one is the honest false positive a random-insertion index produces, four are families the exclusion now removes from the output rather than repairs, and the last two are the two false positives that survive it:
 
 | Residual error | Measured | Direction |
 |---|---|---|
@@ -719,8 +757,12 @@ No assembly is needed. Until the ninth follow-up the recommendation was a pairin
 | a partial index whose **key** column's width differs from the table's, with no other caveat | `84.1%` on the floor on a fresh 792-block index with an empty `caveats` string and `status = ok` (fixture `i103`) | **critical false positive, still unsuppressed**: change C carries the non-key test, so it does not reach this ([The width defect change C does not close](#the-width-defect-change-c-does-not-close)) |
 | a **non-partial** expression index with no statistics row | `64.9%` on the floor on a freshly built 5201-block index (control `np97`), `60.5%` on a mixed `(k, upper(s))` key — **both now excluded** by change D, along with a genuinely 89.9%-reclaimable index of the same shape ([What change D costs, and what lifts it](#what-change-d-costs-and-what-lifts-it)) | was a critical false positive; the row no longer appears, and one `ANALYZE` brings the whole family back |
 | a **non-partial plain** index whose column has no statistics row, because `ANALYZE` was told to skip it | `64.9%` on the floor on a fresh 5201-block index whose column carries `SET STATISTICS 0`, with `status = ok` and no suppressing caveat (fixture `x109`) | **critical false positive, still unsuppressed**: change D requires expressions, so it does not reach this ([Why expression indexes rather than any missing statistics row](#why-expression-indexes-rather-than-any-missing-statistics-row)) |
+| a partial index whose predicate subset an `ANALYZE` sample missed entirely, so its `reltuples` is a measured but wrong zero | `87.5%` on the floor on a live 8-block index, produced 8 times in 10 at `default_statistics_target = 1` (fixture 120) | **critical false positive introduced by change E**, identifiable by `modelled_rows = 0` and below the 1 MB triage filter at every size reproduced ([What change E costs](#what-change-e-costs)) |
+| a partial index drained by DML with no `ANALYZE` since | `0.0%` on both columns on an index a `REINDEX` takes 2745 blocks to 1, withheld by change B; a `VACUUM` alone does not lift it (tests 113a, 117) | false negative, withheld rather than reported; no core-SQL method can see it, and one `ANALYZE` turns it into a correct `100.0%` ([Test 113, measured in three states](#test-113-measured-in-three-states)) |
 
 **How to read the output.** Alert on `wasted_space_pct_floor`, not on the point estimate, and only when `status` is `ok` and `caveats` holds none of `never analyzed`, `row-count sources disagree: analyze first` or `statistics not visible to this role`; read `wasted_space_pct` and `wasted_space` for sizing only, and treat a wide gap between the two percentages as "this answer rests on a duplication estimate" ([Read the floor, not the point estimate](#read-the-floor-not-the-point-estimate), [Change 5](#change-5-what-the-baseline-is-and-what-a-reading-means)). The rule no longer carries a `NOT is_partial` term, because the statement itself drops the rows that term existed to hide. Five conditions now set `suppress_row` and filter the index out in the `WHERE` clause, so it never reaches the reader: a **partial** index missing an index-column statistics row, one whose duplicate count comes from table statistics, one whose table has changed past its auto-analyze trigger, or one carrying a variable-width `INCLUDE` column; and a **non-partial expression** index with no statistics row of its own ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored), [Follow-up: the wide INCLUDE column excluded, and the suite re-scored](#follow-up-the-wide-include-column-excluded-and-the-suite-re-scored), [Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored)). Three consequences are worth planning for: an index can disappear from the report entirely, and for four of the five terms the fix is an `ANALYZE` on its table, not a change to the query — measured as tests 49 and 50 returning to `−3.0%` and `−0.4%` and losing their exclusion after one `ANALYZE`, and as control `np97` going from a withheld 66.4% to a reported `−16.6%` after one more; the `INCLUDE` term never lifts, because a partial index with a variable-width non-key column is permanently outside the report and has to be sized with [Method C](#method-c-unchanged-answer-different-write-path); and the rows that vanish free up slots under the `LIMIT 20`, measured as 9 of the pre-change-A/B top-20 triage rows suppressed, 6 of them reading above 50%, and 3 more under change D, 2 of them above 50%. The statement sets `statement_timeout = '30s'` and `lock_timeout = '2s'` itself; both are `PGC_USERSET` ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631)), so they apply at session/transaction scope and need no reload or restart. The gate costs no measurable time: over 28 indexes and 34,164 blocks, interleaved, the two texts cross — 12.9 and 12.0 ms with change 6 against 14.3 and 16.0 ms without it, after a 32 ms cold first run — because the two added joins are on syscache-backed `pg_proc` and `pg_language` ([What change 6 costs](#what-change-6-costs)). The five earlier changes are not free: they add roughly 5 ms, about 30%, over the portable statement on a 46-index database ([The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes)).
+
+**One reading needs its own rule: `modelled_rows = 0`.** That is a change-E row, and it says the last `ANALYZE` or `VACUUM` counted the index as empty while the file is still multiple blocks. On a drained queue it is exactly right and the percentage will be near 100 ([Test 113, measured in three states](#test-113-measured-in-three-states)); if the index is not one you expect to be empty, the likely cause is an `ANALYZE` sample that missed the predicate subset, so `ANALYZE` the table again and re-read before rebuilding ([What change E costs](#what-change-e-costs)). Change E's own audit query lists every index it can reach, before adoption ([The suite re-scored for change E](#the-suite-re-scored-for-change-e)).
 
 **Before adopting the gate change on an existing database**, run the zero-fixture audit query in [The harness, runnable](#the-harness-runnable). It lists exactly the indexes whose reading depends on the swap, and it returned 6 rows in the custom-opclass fixture database against 0 on a stock 17.11 database and 0 on 12.2, because every stock B-tree equal-image row names `btequalimage` or `btvarstrequalimage` and both are `LANGUAGE internal` in `pg_catalog` ([pg_amproc.dat:143](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L143), [pg_amproc.dat:206](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L206), [pg_amproc.dat:241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L241)).
 
@@ -2120,6 +2162,8 @@ The thirteenth adds one input column and one disjunct, and **renames the flag**.
 
 The fourteenth **rebuilt the text without changing a value it returns**, so the four paragraphs above describe changes that are still all present but no longer all in the places those paragraphs name. Three stages moved: the deduplication gate left `idx` for a `gate` CTE of its own, `sized`/`fit`/`posting` became one `page` CTE of three laterals, and change A's statistics-state test, change B's staleness test and the duplicates-credited test became three named booleans in `modelled` that the caveat list reads too. The block below is the rebuilt text; [Follow-up: the recommended statement rebuilt for readability, and every test rerun](#follow-up-the-recommended-statement-rebuilt-for-readability-and-every-test-rerun) is the stage-by-stage diff and the proof that the output is unchanged.
 
+The fifteenth adds [change E](#change-e-believe-a-measured-zero-once) and nothing else: two lines inside the second branch of `live_rows`, which stop the pre-14 stale-zero guard from firing on a zero that is provably current. It is the only lettered change that widens the output rather than narrowing it, it adds no CTE, no join and no construct that 12 lacks, and over 119 indexes it moves exactly the four rows in that branch ([Follow-up: the drained partial index, and change E](#follow-up-the-drained-partial-index-and-change-e)).
+
 This is the statement [The current recommended statement](#the-current-recommended-statement) names, and it is the text scored in every table below; the five-change form it replaced differs from it in exactly the ten lines of the gate.
 
 ```sql
@@ -2157,6 +2201,7 @@ SET lock_timeout = '2s';
 --   B  partial, table changed since ANALYZE modelled.stats_stale
 --   C  partial, variable-width INCLUDE .... statvis.any_varlena_include
 --   D  non-partial expression index ....... modelled.suppress_row
+--   E  a measured reltuples 0 is believed .. idx.live_rows
 -- Changes 4 and 5 are readings of the output, not SQL.
 
 WITH RECURSIVE
@@ -2192,12 +2237,21 @@ idx AS (
             + o.anl_scale_factor * greatest(t.reltuples, 0))::numeric
                                                         AS tbl_autoanalyze_threshold,
            greatest(s.last_analyze, s.last_autoanalyze) AS last_analyze,
-           -- rows to model: -1 is v14+ "unknown"; a 0 on a non-empty index
-           -- whose table reports live rows is a pre-14 stale zero
+           -- rows to model.  -1 is the v14+ "unknown" sentinel.  From v14 on a
+           -- 0 is a measurement instead: VACUUM and ANALYZE write it and only
+           -- CREATE INDEX preserves the sentinel, so an index that is empty
+           -- and one that was never measured are different states.  Believe
+           -- that 0 only when it is provably current -- the server is 14 or
+           -- later and nothing has changed in the table since it was written.
+           -- One changed row is enough to disqualify it, because that row may
+           -- be in the predicate subset (change E).
            CASE
              WHEN c.reltuples < 0 THEN NULL
              WHEN c.reltuples = 0 AND z.actual_bytes > e.bs
-                  AND coalesce(s.n_live_tup, 0) > 0 THEN NULL
+                  AND coalesce(s.n_live_tup, 0) > 0
+                  AND (e.server_version_num < 140000
+                       OR coalesce(s.n_mod_since_analyze, 0) > 0)
+                                                        THEN NULL
              WHEN x.indpred IS NOT NULL THEN c.reltuples::numeric
              ELSE least(c.reltuples::numeric,
                         coalesce(nullif(s.n_live_tup, 0), c.reltuples)::numeric)
@@ -2668,12 +2722,13 @@ The `i_rand` row is the portability point that matters for change 5: split-point
 
 ### Follow-up: ninety-one mandatory tests
 
-This page's mandatory suite has two groups and one continuous numbering. Tests 1-17 are the deduplication-gate requirements, filed first; tests 18-91 are the partial-index requirements added by the tenth follow-up. Both groups score [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes); the deduplication group also scores [the earlier v17 sweep](#a-deduplication-aware-sweep-for-v17).
+This page's mandatory suite has three groups and one continuous numbering. Tests 1-17 are the deduplication-gate requirements, filed first; tests 18-91 are the partial-index requirements added by the tenth follow-up; test 113 is the drained-queue requirement added by the fifteenth, numbered past the calibration fixtures 92-112 so that nothing filed had to be renumbered. All three score [the corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes); the deduplication group also scores [the earlier v17 sweep](#a-deduplication-aware-sweep-for-v17).
 
 | Group | Tests | Fixtures | Result for the filed statement |
 |---|---|---|---|
 | deduplication gate | 1-17 | 28 indexes, none with anything to reclaim | passes 17 of 17; the pre-change-6 form fails 3 and the earlier sweep fails 6 |
 | partial indexes | 18-91 | 74 indexes over 60 tables | **fails 21 of 74**: 12 critical false positives, 1 false positive, 8 false negatives; 1 more cell falls outside the pass/fail rule as written |
+| drained partial index | 113 | 3 states of one shape, plus 7 calibration fixtures | **failed all three states** before [change E](#change-e-believe-a-measured-zero-once), on a 100.0% reclaim; passes the two maintained states with it ([Test 113, measured in three states](#test-113-measured-in-three-states)) |
 
 That partial-index row is the tenth follow-up's result and it is what the two follow-ups after it set out to fix. As the statement stands today the same 74 tests produce **0 critical false positives, 0 false positives and the same 8 false negatives**, because 36 of the 74 readings are withheld rather than repaired — changes A and B took 12 critical false positives to 1 ([Follow-up: changes A and B applied, and the suite re-scored](#follow-up-changes-a-and-b-applied-and-the-suite-re-scored)) and change C took the last one out ([Follow-up: the wide INCLUDE column excluded, and the suite re-scored](#follow-up-the-wide-include-column-excluded-and-the-suite-re-scored)). Change D leaves this row exactly as it stands, verdict for verdict, because its disjunct carries `NOT is_partial` ([Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored)).
 
@@ -3962,6 +4017,179 @@ Two **new** isolated clusters, both `initdb`-ed for this follow-up rather than r
 
 The fixture scripts are the eleventh to thirteenth follow-ups', unchanged, which is why the 74 live-block counts reproduce for the fourth time; the deduplication-gate fixtures were rebuilt from [the runnable harness on this page](#the-harness-runnable) plus the `text` `deduplicate_items = off` twin and the four-index `t2` table. The 12.2 variants were produced by one script that drops only `pg_stat_force_next_flush()`, the `deduplicate_items` reloption and the two ICU collations, and prints every line it dropped. Two estimator views were installed by the same generator used since the eleventh follow-up, one from this page's working copy and one from `git show HEAD:` of it, with the four documented harness edits — the 1 MB triage filter, the `ORDER BY` and the `LIMIT 20` removed, and `AND NOT suppress_row` dropped with the flag exposed as a column. Ground truth per index is a measured `REINDEX INDEX`; both exact texts were also executed as filed, triage filter and `LIMIT 20` intact, on both servers. Both servers were shut down cleanly afterwards, and this sandbox keeps both data directories rather than deleting them, so the run can be repeated without rebuilding the fixtures.
 
+### Follow-up: the drained partial index, and change E
+
+**The filed statement failed the new mandatory test in all three states, and one added condition fixes two of them.** Test 113 is a job queue: 1,000,000 rows inserted as `state = 'pending'`, a partial index `WHERE state = 'pending'`, then every row updated to `'done'`. A `REINDEX` takes that index from 2745 blocks to 1 — a **100.0%** reclaim, the largest true reading anywhere on this page — and the filed text reported it as `0.0`, as `NULL`, or not at all:
+
+| Reading | Filed text | With change E |
+|---|---|---|
+| immediately after the `UPDATE` | `0.0` on both columns, then **withheld** by change B | unchanged, still withheld |
+| after `VACUUM` + `ANALYZE` | `unmeasured: reltuples 0, table has live rows`, both columns `NULL` | **`100.0` / `100.0`, 21 MB, `status = ok`** |
+| after `ANALYZE` alone | the same `unmeasured` row | **`100.0` / `100.0`, 21 MB, `status = ok`** |
+
+The cause is one branch, and it is not arithmetic: `expected_blocks` was already **1** in every one of those rows. The statement computed the right answer and then threw it away, because a guard written for PostgreSQL 12 and 13 reads any `reltuples = 0` on a multi-block index as a stale zero. From v14 that reading is wrong — a 0 is a measurement — and [change E](#change-e-believe-a-measured-zero-once) believes it when, and only when, the table has not changed since it was written.
+
+Change E is the first lettered change on this page that **adds** rows to the output rather than withholding them, so it is also the first that can invent a false positive. It does, once, and the fixture that produces it is filed below.
+
+### Test 113, measured in three states
+
+One 1,000,000-row table per state, so that the `REINDEX` which measures one state cannot disturb another. `id` is a distinct `bigint`, the predicate is `state = 'pending'`, and the index is 2745 blocks at 90.06% leaf density before the `UPDATE` — the same shape as `i_seq`, modelled exactly. `leaf`/`del`/`density` are `pgstatindex` ground truth, read but never scored:
+
+| # | State after the `UPDATE` | `idx_reltuples` | `n_mod` | leaf / del / density | live -> rebuilt | actual | Filed | With change E | Verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| 113a | nothing run | 1,000,000 | 1,000,000 | 2733 / 0 / 90.06 | 2745 -> 1 | 100.0 | `0.0`, withheld | `0.0`, withheld | FALSE NEGATIVE, withheld |
+| 113b | `VACUUM` + `ANALYZE` | **0** | 0 | 1 / **2741** / 0.05 | 2745 -> 1 | 100.0 | `unmeasured` | **100.0 / 100.0** | **PASS** |
+| 113c | `ANALYZE` only | **0** | 0 | 2733 / 0 / 90.06 | 2745 -> 1 | 100.0 | `unmeasured` | **100.0 / 100.0** | **PASS** |
+
+Four facts in that table are worth reading slowly.
+
+**The index never grows, and that is why it ends up entirely dead.** The new row versions carry `state = 'done'`, and `ExecInsertIndexTuples` evaluates each partial index's predicate against the new tuple and skips the index when it fails ([execIndexing.c:373-387](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L373-L387)). So the `UPDATE` adds nothing to this index and leaves all 1,000,000 old entries behind it.
+
+**113b and 113c differ physically and read identically.** After `VACUUM` the file holds 1 leaf page and **2741 deleted pages** at 0.05% density; after `ANALYZE` alone it still holds 2733 leaf pages at 90.06%, every entry pointing at a dead heap tuple. Both rebuild to 1 block, so both are 100% reclaimable, and the model — which reads neither — says 100.0% for both. That is the model working exactly as designed: it prices the rebuild, not the current pages.
+
+**113a is a real limit, not a tuning choice.** Nothing in the catalogs distinguishes it from a healthy index. `idx_reltuples` still says 1,000,000, `pg_class.relpages` still says 2745, and the only signal that anything happened is `n_dead_tup` on the *table*, which says nothing about which index entries those dead tuples had. Reading index pages is the only way to know, and that is `pgstatindex`, which this page's core-SQL constraint excludes. Change B withholds the row rather than reporting the wrong `0.0`, and one `ANALYZE` turns it into 113c.
+
+**A rebuilt empty B-tree is one block.** `REINDEX` produced 8192 bytes in all three states, which is the metapage alone ([nbtree.h:148](../../../../raw/postgres-17/src/include/access/nbtree.h#L148)) — the same 1 block the model's `levels` recursion predicts when `leaf_pages` is 0.
+
+### Why the filed statement cannot see it
+
+The guard is the second branch of `live_rows`, and as filed it had no version test:
+
+```sql
+WHEN c.reltuples = 0 AND z.actual_bytes > e.bs
+     AND coalesce(s.n_live_tup, 0) > 0 THEN NULL
+```
+
+It exists because `reltuples = 0` used to be ambiguous. Commit `3d351d916b2` in this checkout's history says so in its own message — "it's impossible to distinguish 'never yet vacuumed' from 'vacuumed and seen to be empty'" — and fixes it by making the initial state `-1`: "If the table is empty, VACUUM or ANALYZE (but not CREATE INDEX) will override that to `reltuples = relpages = 0`". The earliest release tag containing it in this checkout is `REL_14_0`. The catalog header carries the result, "-1 means unknown" ([pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)), and `index_update_stats` implements the exception the message names: a build that counts zero rows leaves an existing `-1` alone ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842)).
+
+So on 17.11 a `0` in an index's `reltuples` has exactly two possible writers, and both of them measured it:
+
+- `ANALYZE` writes `ceil(tupleFract * totalrows)` for **every** index it processes ([analyze.c:647-663](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663)). `tupleFract` is 1.0 unless the index is partial ([analyze.c:443-449](../../../../raw/postgres-17/src/backend/commands/analyze.c#L443-L449)), in which case it is the fraction of sampled rows that pass the predicate ([analyze.c:948-953](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953)). That is what wrote the 0 in 113b and 113c.
+- `VACUUM` writes `istat->num_index_tuples`, and only when the index scan really ran and returned a non-estimated count ([vacuumlazy.c:3082-3098](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3082-L3098)). `vac_update_relstats` stores whatever it is given, with no sentinel handling of its own ([vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1444-L1461)).
+
+Neither writer can produce a 0 it did not measure. What it can be is **out of date**, and the filed guard's real content is "assume it always is".
+
+### Change E: believe a measured zero, once
+
+Two lines, in the branch that already existed:
+
+```sql
+             WHEN c.reltuples = 0 AND z.actual_bytes > e.bs
+                  AND coalesce(s.n_live_tup, 0) > 0
+                  AND (e.server_version_num < 140000
+                       OR coalesce(s.n_mod_since_analyze, 0) > 0)
+                                                        THEN NULL
+```
+
+The guard now fires only when the zero cannot be trusted: on a server that predates the sentinel, or when the table has changed at all since the zero was written. `n_mod_since_analyze` counts insert, update and delete alike — "insert, update, delete each count as one change event" ([pgstat_relation.c:565-575](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L565-L575), [pgstat_relation.c:855-861](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L855-L861)) — and `ANALYZE` rebases it to zero ([pgstat_relation.c:326-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L326-L337)), so `= 0` is exactly the statement "no row has entered or left the predicate subset since the subset was counted". That is the condition under which believing the count is not an estimate but a deduction.
+
+No CTE, no join and no new catalog is added: `server_version_num` is already in `env` and `n_mod_since_analyze` is already read from the `pg_stat_all_tables` row the statement joins. Every construct exists in 12. Nothing else in the text moved.
+
+Two properties of the change are worth stating because they bound everything below. It can only affect an index that satisfies **all four** of `reltuples = 0`, more than one block, a table with live rows, and `n_mod_since_analyze = 0`; and every row it adds is identifiable in the output by `modelled_rows = 0`, which no other reading produces on a multi-block index.
+
+### Why exactly zero rather than the auto-analyze trigger
+
+[Change B](#the-auto-analyze-trigger-in-catalog-terms) tests staleness against the auto-analyze trigger rather than against zero, because `> 0` would silence genuinely reclaimable partial indexes. Change E takes the opposite decision on the same counter, and the reason is that the two changes fail in opposite directions: change B withholds, so an over-eager test costs detections; change E reports, so an over-eager test invents them.
+
+The trigger form was built as a third statement text and measured. Fixture 118 is the shape that breaks it, and it is the ordinary life of a queue rather than a corner case:
+
+| Fixture | State | `idx_reltuples` | `n_mod` | trigger | live -> rebuilt | actual | `> 0` form | trigger form |
+|---|---|---|---|---|---|---|---|---|
+| 118 | subset empty at the last `ANALYZE`, then 50,000 rows arrive | 0 | 50,000 | 100,050 | 139 -> 139 | 0.0 | `unmeasured` | **99.3%, `status = ok`, no caveat** |
+| 119 | the same, after one `ANALYZE` | 48,370 | 0 | 105,050 | 139 -> 139 | 0.0 | **2.9%** | 2.9% |
+
+A 1,000,000-row table has a trigger of 100,050, so 50,000 new jobs do not cross it; the index is 1.1 MB, above the statement's own 1 MB triage filter; and the trigger form reports **99.3% waste on an index a `REINDEX` reproduces block for block**, with `status = ok` and an empty `caveats` string. That is precisely the class of failure changes A through D were filed to remove. The `> 0` form withholds it, and one `ANALYZE` gives the correct 2.9% under both forms.
+
+The price of the strict test is stated plainly: on a table taking any writes at all, `n_mod_since_analyze` is rarely zero, so change E fires in the window after an `ANALYZE` and not otherwise. Fixture 117 is that price measured — the same fully drained index as 113, `VACUUM`ed but not `ANALYZE`d, `n_mod` still at 1,000,000: both texts leave it `unmeasured` and change B withholds it, and a `REINDEX` there reclaims the same 100.0%. **`VACUUM` alone never lifts this; `ANALYZE` is what the reader needs.**
+
+### What change E costs
+
+One false positive, on one shape, and it is the shape the whole partial-index model has always been weakest on: `ANALYZE`'s sample missing the predicate subset entirely.
+
+Fixture 120 is a queue whose pending rows are the newest ones, so they sit in the last blocks of the heap: 1,000,000 rows, the last 2,000 of them `'pending'`, index 8 blocks. With `default_statistics_target` lowered to 1 — a `PGC_USERSET` setting, so session or transaction scope and no reload or restart ([guc_tables.c:2071-2078](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2078)) — the 300-row sample found no pending row in **8 of 10 consecutive `ANALYZE`s**, writing `reltuples = 0` for an index that really holds 2,000 live entries; the other two estimated 6,664 and 6,667. In the zero state change E reads **87.5% on an index a `REINDEX` reproduces at 8 blocks**, and no caveat suppresses it.
+
+Three things bound that cost, and none of them removes it:
+
+- **It is a sampling failure, not a change-E failure.** The same missed sample sets a wrong `reltuples` for every other consumer of it, the planner included; change E is only the first reader on this page to act on it.
+- **The 1 MB triage filter hides it at realistic sizes.** For a sampled-zero index to reach the filter it needs roughly 46,000 rows in the subset, and for a 30,000-row default sample to find none of 46,000 rows the table must be far larger than the 30,000 blocks that sample covers, with the subset tightly clustered. Fixture 120 needed a statistics target of 1 to produce it at 8 blocks; it was not reproduced at the default target.
+- **The output names it.** Every change-E row carries `modelled_rows = 0`, so "the estimator thinks this index is empty" is visible rather than implied, and [Method C](#method-c-unchanged-answer-different-write-path) settles it in one command.
+
+### The suite re-scored for change E
+
+Both texts, plus the rejected trigger form, were installed as views generated from this page's own Markdown and read for **every** B-tree index in one database before that index's `REINDEX`. 119 indexes were scored: the deduplication-gate harness from [The harness, runnable](#the-harness-runnable) run verbatim, a shape rebuild of the partial-index requirements 18-91, the non-partial and `INCLUDE` controls of the 92-112 family, and the eight change-E fixtures.
+
+| Verdict on `wasted_space_pct_floor` | Filed text | With change E | Rejected trigger form |
+|---|---|---|---|
+| PASS | 50 | **52** | 52 |
+| WITHHELD | 62 | 62 | 62 |
+| UNMEASURED | 4 | **1** | 0 |
+| CRITICAL FALSE POSITIVE | 2 | **3** | **4** |
+| FALSE NEGATIVE | 1 | 1 | 1 |
+
+`SELECT * FROM est EXCEPT SELECT * FROM est_filed` over every exposed column returns **4 rows**, and so does the reverse. They are the whole difference between the two texts:
+
+| Index | blocks | `reltuples` | `n_mod` | Filed | With change E | actual | Moved to |
+|---|---|---|---|---|---|---|---|
+| `p113b` | 2745 | 0 | 0 | `unmeasured` | **100.0** | 100.0 | PASS |
+| `p113c` | 2745 | 0 | 0 | `unmeasured` | **100.0** | 100.0 | PASS |
+| `p120` | 8 | 0 | 0 | `unmeasured` | **87.5** | 0.0 | CRITICAL FALSE POSITIVE |
+| `p118` | 139 | 0 | 50,000 | `unmeasured` | `unmeasured` | 0.0 | unmoved by change E; the trigger form moves it to a fourth critical false positive at 99.3 |
+
+Seven indexes in that database reached the branch at all; the four that did not move are `p115` and `p117` (`n_mod` at 1,000,000), `p118` (50,000) and — on the other side — nothing else, because no other index in 119 has `reltuples = 0` on a file bigger than one page. That enumeration is the whole safety argument, and a reader can run it on their own database before adopting the change:
+
+```sql
+SET statement_timeout = '30s';
+SET lock_timeout = '2s';
+
+SELECT /* wiki_btree_change_e_audit */
+       n.nspname, t.relname AS tablename, c.relname AS indexname,
+       pg_size_pretty(pg_relation_size(c.oid)) AS index_size,
+       s.n_mod_since_analyze,
+       (s.n_mod_since_analyze = 0)             AS change_e_would_report
+  FROM pg_class c
+  JOIN pg_index x     ON x.indexrelid = c.oid
+  JOIN pg_class t     ON t.oid = x.indrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_am am       ON am.oid = c.relam
+  LEFT JOIN pg_stat_all_tables s ON s.relid = t.oid
+ WHERE am.amname = 'btree' AND c.relkind = 'i' AND x.indisvalid
+   AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+   AND c.reltuples = 0
+   AND pg_relation_size(c.oid) > current_setting('block_size')::int
+   AND coalesce(s.n_live_tup, 0) > 0
+ ORDER BY pg_relation_size(c.oid) DESC;
+```
+
+Everything else held. The two critical false positives already present under the filed text are the two this page documents as still unsuppressed, and the rebuild reproduced one of them to the digit: fixture `x109`, a plain index whose column carries `SET STATISTICS 0`, reads **64.9% on 5201 blocks** here, the same reading on the same block count as [the change-D run](#why-expression-indexes-rather-than-any-missing-statistics-row). The other is `res_pkey`, the harness's own result table, which carries `never analyzed` and which [the reading rule](#the-current-recommended-statement) already tells a reader to discard. The true detections above 50% are unchanged text to text — `p68` 66.7 against a measured 66.7, `p74` 73.9 against 74.3, `p75` 88.8 against 89.1, `p77` 94.2 against 94.2, `f91` 83.0 against 83.3, `p114` 98.9 against 98.9 — and the four `p7x` figures reproduce the filed suite's values within 0.4 points on fixtures rebuilt from prose.
+
+Cost is inside the noise, as it should be for one term in an existing `CASE`: six interleaved pairs of the two exact texts over the 119-index database ran 58.0-68.4 ms filed against 57.4-65.1 ms amended. Both exact texts, triage filter and `LIMIT 20` intact, were also executed as filed on both servers to confirm they parse and run; on 17.11's post-`REINDEX` database, where no index satisfies the branch any more, their `psql` output is byte-identical.
+
+The operational shape of the change is best seen on one table:
+
+```text
+-- filed
+ tablename |    indexname     | index_size |                    status                    | wasted_space_pct | modelled_rows
+ jobs      | jobs_pending_idx | 21 MB      | unmeasured: reltuples 0, table has live rows |                  |
+
+-- with change E
+ tablename |    indexname     | index_size | status | wasted_space_pct | modelled_rows
+ jobs      | jobs_pending_idx | 21 MB      | ok     |            100.0 |             0
+```
+
+### Change E on a 12.2 server
+
+**The version gate is load-bearing, and it was measured rather than assumed.** The same fixture was built on an isolated 12.2 server: 1,000,000 rows, the partial index, the full drain, `VACUUM` and `ANALYZE`. Its statistics collector caught up, so `n_mod_since_analyze` read **0** there — the counter test alone would have opened the guard — and the index still reads `unmeasured: reltuples 0, table has live rows` under both texts, because `server_version_num` is 120002. `EXCEPT` in both directions between the two views returns 0 rows, and both exact texts run as filed on that server.
+
+The cost of that gate is one missed detection per drained queue on 12 and 13: a `REINDEX` on the 12.2 fixture also went 2745 blocks to 1. It is the right trade, because 12 has no way to tell "measured empty" from "never measured" — which is the whole reason commit `3d351d916b2` exists — and inventing 100% waste on every never-measured index on those majors would be far worse than missing a drained one.
+
+### How the test-113 run was run
+
+Two **newly initialised** clusters, both built out of tree for this follow-up because the sandbox behind the earlier runs was deleted on 2026-08-24: 17.11 from this page's pin `786db8dcf168bd9df8f55047337525ac19118b1c` configured `--without-readline --without-zlib --with-icu --enable-debug`, and 12.2 from this repo's pinned checkout at `45b88269a353ad93744772791feb6d01bc7e1e42` configured `--without-readline --without-zlib --enable-debug`. Both ran `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`. `pageinspect`, `pgstattuple` and `amcheck` are installed on 17.11 as ground truth only; no scored statement reads them.
+
+Three estimator texts were installed as views by one generator that extracts the SQL block from this page's Markdown by heading: the amended text from the working copy, the filed text from `git show HEAD:` of the same file, and a copy of the amended text with only `coalesce(s.n_mod_since_analyze, 0) > 0` replaced by the auto-analyze trigger expression, to price the rejected form. The harness edits are the four this page already documents — the 1 MB triage filter, the `ORDER BY` and the `LIMIT 20` removed, and `AND NOT suppress_row` dropped with the flag exposed as a column — plus `live_rows`, `tbl_mod_since_analyze`, `tbl_autoanalyze_threshold`, `stats_row_missing`, `dedup_credited` and `stats_stale` exposed so a withheld or unmeasured index can be attributed to a term. Ground truth per index is a measured `REINDEX INDEX`, read immediately after the three estimator readings for that index, and `pg_stat_force_next_flush()` precedes every `ANALYZE` and `VACUUM` on 17.11; 12.2 has no such function, so that leg waits for the collector.
+
+One honest limitation of this run, stated because it changes how the re-scored table should be read: **the fixtures for tests 18-112 are shape rebuilds, not the filed scripts.** Those scripts went with the sandbox, so the numbers in [The re-scored suite, test by test](#the-re-scored-suite-test-by-test) are not reproduced here index for index, and this follow-up does not claim to. What it claims is what it measured: over 119 indexes covering those shapes, the two texts differ on 4 rows, all four in the branch change E touches. The one fixture that reproduced a filed number exactly (`x109`, 64.9% on 5201 blocks) is reported above as a check on the rebuild, not as a re-verification of the suite.
+
 ## Context Reviewed
 
 - Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number on this page is now a 17.11 observation taken on that pin; the original 17.10 run was superseded table by table by the re-run in [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured). The two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged, which the re-run confirms.
@@ -3994,6 +4222,8 @@ The fixture scripts are the eleventh to thirteenth follow-ups', unchanged, which
 - Change-6-integration follow-up, exact-pin execution on four servers: the whole page was re-measured. One isolated **17.11** install built out of tree from the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, `block_size` 8192, `autovacuum = off`, `fsync = off`, carrying four scratch databases — the 15 named fixtures plus the 9 x 3 x {full, partial} matrix and the duplication-ratio sweep for Methods A/A-prime/B/C/D; the twelve-issue-review fixture family with its nine-point duplication band, statistics-visibility `probe` role and `security_invoker` copies; the 28 mandatory-test fixtures with their eight custom operator classes; and a fresh database for the runnable harness — plus a second 17.11 cluster for the 12-through-17 fixture family, an isolated **14.23** server and an isolated **12.2** server carrying that same family, the mandatory-test subset and the portability probes. Every scored statement text was generated mechanically from this page's own Markdown by `mkviews.py`: the SQL block is extracted by heading, the triage filter, `ORDER BY` and `LIMIT` are stripped, `expected_blocks`, `floor_blocks`, `dedup_applies`, `all_equalimage`, `key_groups`, `tids_per_tuple`, `slot` and `leaf_cap` are exposed, and the result is installed as a view; the pre-change-6 text was produced from the same source by substituting the existence-test gate, and the earlier sweep's three-conjunct form the same way. Ground truth per index is a `CREATE INDEX CONCURRENTLY` copy plus, on 17.11, `pgstattuple` page classes and densities, `pageinspect`'s `bt_metap`/`bt_page_stats`/`bt_page_items`, `amcheck`'s `bt_index_check`, and the build's own `DEBUG1` equal-image verdict — all as ground truth only. New probes in this run: `ei_alias(oid)` versus `ei_true(oid)` registered in turn on the same custom opfamily to price change 6's one under-credit, a never-rebuilt 1.5M-row random-insertion twin for change 5, and per-server timing of both texts. All servers were stopped afterwards.
 - Rebuild follow-up, source coverage: the constants the rebuilt text now names in comments, read to confirm each note — `nbtsplitloc.c` (the `leftspace`/`rightspace` fixed-overhead arithmetic), `bufpage.h` (`SizeOfPageHeaderData` as `offsetof(PageHeaderData, pd_linp)`), `nbtree.h` (`BTPageOpaqueData`'s five fields, `BTREE_NONLEAF_FILLFACTOR`), `nbtsort.c` (`_bt_blnewpage`'s "Make the P_HIKEY line pointer appear allocated" `pd_lower` bump), `bufpage.c` (`PageGetFreeSpace` subtracting one `ItemIdData` before returning), `itemid.h` (`ItemIdData`'s three bit-fields), `indextuple.c` (`index_form_tuple`'s `size = MAXALIGN(hoff + data_size)`), `heaptuple.c` (`heap_compute_data_size`'s `ATT_IS_PACKABLE`/`VARATT_CAN_MAKE_SHORT` branch that charges no alignment, against the `att_align_nominal` path), and `nbtutils.c` (`_bt_allequalimage`'s `INCLUDE` early return, which is why one fixture logs no verdict). No new engine behavior is claimed by this follow-up; the source reading exists to keep the new comments citable.
 - Rebuild follow-up, exact-pin execution on two **newly initialised** servers: one isolated **17.11** cluster from the same out-of-tree install of the current pin under `.wiki-runtime/`, configured `--without-readline --without-zlib --with-icu --enable-debug`, and one isolated **12.2** cluster from this repo's pinned 12.2 checkout, configured `--without-readline --without-zlib --enable-debug` and therefore without ICU; both `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`, each with a scratch database created for the run. Fixtures: the eleventh to thirteenth follow-ups' scripts unchanged for tests 18-112, and the deduplication-gate fixtures rebuilt from this page's own runnable harness plus the `text` `deduplicate_items = off` twin and the four-index `t2` table, giving 30 gate fixtures on 17.11 and the 10 constructible ones on 12.2. Two estimator texts only — the rebuilt text from this page's working copy and the filed text from `git show HEAD:` — installed as views by the same generator, with the four documented harness edits. Ground truth per index is a measured `REINDEX INDEX`; `pageinspect`, `pgstattuple` and `amcheck` are installed on 17.11 as ground truth only and 12.2 has no contrib extension at all. Extra probes: `EXCEPT` in both directions between the two views over every index, both exact texts executed as filed and their `psql` output diffed, `EXPLAIN (ANALYZE)` planning/execution splits and `CTE Scan on idx` node counts for both texts, 24 interleaved end-to-end runs of each on 17.11 and six pairs on 12.2, a second scratch database of 600 single-index tables for the cost-scaling reading, test 16's `ei_null`/`ei_boom`/`i_squat` cases including a renamed `pg_catalog.btvarstrequalimage` restored afterwards, the four DDL refusals, the zero-fixture audit query on the fixture database and on a stock one, and per-term withheld attribution on both servers. Both servers were shut down cleanly.
+- Change-E follow-up, source coverage: what a `reltuples` of 0 means on this major and who writes it — `pg_class.h` (the `-1 means unknown` comment and the `BKI_DEFAULT(-1)` it annotates), `index.c` (`index_update_stats`'s empty-table hack preserving an existing `-1`, and the two calls that write a build's heap and index counts), `analyze.c` (`do_analyze_rel`'s per-index `vac_update_relstats` loop, `tupleFract` initialised to 1.0 and overridden only for a partial index, and `compute_index_stats`'s predicate-filtered `numindexrows / numrows`), `vacuumlazy.c` (`update_relstats_all_indexes`'s `istat == NULL || istat->estimated_count` skip, and the `lazy_vacuum_one_index`/`lazy_cleanup_one_index` `estimated_count` settings that decide it), `vacuum.c` (`vac_update_relstats` writing `num_pages`/`num_tuples` in place with no sentinel handling of its own); the counter change E tests — `pgstat_relation.c` (`changed_tuples` accumulating inserts, updates and deletes alike in both the transaction-end and the sub-transaction paths, `pgstat_relation_flush_cb`'s `mod_since_analyze +=`, and `pgstat_report_analyze`'s absolute rebase) and `system_views.sql` (`pg_stat_all_tables.n_mod_since_analyze` and `n_dead_tup`); why the drained index never grows — `execIndexing.c` (both `ExecInsertIndexTuples` predicate skips); and the size of an empty rebuild — `nbtree.h` (`BTREE_METAPAGE`). Source history read in the same checkout: commit `3d351d916b2`, its message, and its earliest containing release tag.
+- Change-E follow-up, exact-pin execution on two **newly initialised** servers, both built for this run because the sandbox behind the earlier follow-ups was deleted on 2026-08-24: 17.11 built out of tree from this page's pin `786db8dcf168bd9df8f55047337525ac19118b1c` and configured `--without-readline --without-zlib --with-icu --enable-debug`, and 12.2 built out of tree from this repo's pinned checkout at `45b88269a353ad93744772791feb6d01bc7e1e42` and configured `--without-readline --without-zlib --enable-debug`; both `block_size` 8192, `autovacuum = off`, `fsync = off`, `maintenance_work_mem = '256MB'`, `shared_buffers = '512MB'`. Fixtures on 17.11, in one scratch database of 119 B-tree indexes: the deduplication-gate harness from [The harness, runnable](#the-harness-runnable) run verbatim plus its `text` `deduplicate_items = off` twin and the `t2` object, a **shape rebuild** of partial-index requirements 18-91 from their filed descriptions, the non-partial, `INCLUDE`, `SET STATISTICS 0` and mixed-key controls of the 92-112 family, and test 113's three states with calibration fixtures 114-120 — a 99% drain, an index built on an analysed empty table and then loaded, that index after one `ANALYZE`, a drain followed by `VACUUM` alone, a subset that refills below the auto-analyze trigger, that subset after one `ANALYZE`, and a tail-clustered subset read at `default_statistics_target = 1`. Three estimator texts were installed as views by one generator that extracts the SQL block from this page's Markdown by heading: the amended text, the filed text from `git show HEAD:`, and a copy substituting only the trigger expression for `> 0`. Ground truth per index is a measured `REINDEX INDEX` taken immediately after that index's three readings; `pageinspect`, `pgstattuple` and `amcheck` are installed on 17.11 as ground truth only and 12.2 has no contrib extension at all. Extra probes: `EXCEPT` in both directions over every exposed column on both servers, an enumeration of every index reaching the change-E branch, ten consecutive target-1 `ANALYZE`s on the tail-clustered fixture, `pgstatindex` page classes on all three test-113 states, six interleaved timing pairs, and both exact texts executed as filed on both servers. Both servers were shut down cleanly and this sandbox keeps both data directories.
 
 ## Evidence Map
 
@@ -4097,6 +4327,11 @@ The fixture scripts are the eleventh to thirteenth follow-ups', unchanged, which
 | The documentation names wide non-key columns as a size hazard, which is the shape change C refuses to price | [create_index.sgml#include-wide-columns](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L168-L176) |
 | A partial index's own statistics, when it has them, are conditioned on the predicate: `ANALYZE` evaluates the predicate and skips every sample row that fails it | [analyze.c:899-908](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L908), [analyze.c:955-975](../../../../raw/postgres-17/src/backend/commands/analyze.c#L955-L975), measured as `n_distinct` 20 on `lower(name)` inside `WHERE active` against 100 across the table |
 | A partial index's `reltuples` is `ceil(tupleFract * totalrows)` from the same predicate-filtered sample, and it is the only per-index number `ANALYZE` writes for a plain-column partial index | [analyze.c:948-953](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953), [analyze.c:647-663](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663) |
+| A partial index's rows are skipped at insert time when the new tuple fails its predicate, so a drained subset leaves the index full of dead entries and adds none | [execIndexing.c:373-387](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L373-L387), [execIndexing.c:604-618](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L604-L618) |
+| From v14 a `reltuples` of 0 is a measurement, not the "never counted" state, and only `CREATE INDEX` preserves the sentinel | this checkout's history: commit `3d351d916b2` (2020-08-30, earliest containing release tag `REL_14_0`) and its message; [pg_class.h:62-66](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842) |
+| `ANALYZE` writes every index's `reltuples`, at `tupleFract` 1.0 unless the index is partial, in which case it is the predicate-filtered sample fraction | [analyze.c:647-663](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663), [analyze.c:443-449](../../../../raw/postgres-17/src/backend/commands/analyze.c#L443-L449), [analyze.c:948-953](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953) |
+| `n_mod_since_analyze` counts inserts, updates and deletes alike, so `= 0` means no row can have entered the predicate subset since the count | [pgstat_relation.c:565-575](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L565-L575), [pgstat_relation.c:855-861](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L855-L861), [pgstat_relation.c:326-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L326-L337), [system_views.sql:688-689](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L688-L689) |
+| A B-tree's first page is the metapage, which is why a rebuilt empty index is one block | [nbtree.h:148](../../../../raw/postgres-17/src/include/access/nbtree.h#L148) |
 | A VACUUM that finds nothing to delete can never refresh a B-tree index's `reltuples`, in either branch | [nbtree.c:859-874](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L859-L874), [nbtree.c:876-893](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L876-L893), [vacuumlazy.c:3069-3099](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099), [vacuumlazy.c:2420-2435](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2420-L2435) |
 | VACUUM and ANALYZE write the live/dead/modified counters absolutely, while a backend's pending deltas are added on top when they flush, so a same-session `DELETE; VACUUM` can leave `n_dead_tup` non-zero | [pgstat_relation.c:326-337](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L326-L337), [pgstat_relation.c:847-867](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L847-L867), measured at exactly the delete count on three tables |
 | A B-tree index datum above `MaxHeapTupleSize / 16` (510 bytes at `block_size` 8192) is pglz-compressed in place, so a width-based model can over-predict as well as under-predict | [indextuple.c:116-133](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L116-L133), [heaptoast.h:63-68](../../../../raw/postgres-17/src/include/access/heaptoast.h#L63-L68), measured as 142 blocks for 20,000 compressible 1001-byte keys against 1560 for 20,000 incompressible 481-byte ones |
@@ -4208,6 +4443,11 @@ The fixture scripts are the eleventh to thirteenth follow-ups', unchanged, which
 - **The post-build mutation was measured on one fixture in one session.** `ei_true` was rewritten, `bt_index_check` raised, and `REINDEX` produced 1376 blocks. Whether an ordinary `VACUUM`, an insert-time deduplication pass or a standby replaying the same index would behave the same way after such a catalog change was not tested, and `amcheck`'s verdict was taken as the definition of "wrong", not as a guarantee that reads of that index misbehave.
 - **The recommendation ranks this page's own statements and nothing else.** [The current recommended statement](#the-current-recommended-statement) compares the six variants filed here on the fixtures filed here. No third-party bloat query, no `pgstattuple`-based estimator and no database built for a purpose other than this page was scored against it, so "most accurate" is a statement about this population, not about the space of possible bloat queries.
 - **The recommended text now has four servers and four fixture families behind it, and still not one merged population.** The assembled six-change statement ran on 17.11 against the 28 mandatory-test fixtures, the twelve-issue-review family, the 15 v12 fixtures and the 12-through-17 family, and on 14.23 and 12.2 against the last of those. Majors 13, 15 and 16 still never ran it. Because each family lives in its own database, every aggregate figure — "0 over-credits", "0 fixtures above 30%", "4 of 5 with 0 false positives" — is scoped to the family it was counted on, and no cross-family scoreboard exists.
+- **Change E's false positive is bounded by argument, not by measurement.** Fixture 120 produced an 8-block critical false positive at `default_statistics_target = 1`, and the reasoning above says the shape needs a subset of roughly 46,000 rows and a table far larger than the sample's 30,000 blocks to clear the 1 MB triage filter at the default target. No fixture of that size was built, so the claim "the filter hides it in practice" is derived rather than measured, and a database with a very large table and a tightly clustered predicate subset should be checked with the change-E audit query before the term is trusted.
+- **The counter change E rests on can be reset.** `pg_stat_reset()`, a statistics-file loss, or any path that zeroes `n_mod_since_analyze` without an `ANALYZE` makes a stale zero look current, which is exactly the state fixture 118 shows reporting 99.3% on a live index under the rejected form. Neither the reset path nor a crash-recovery restart was exercised in this run.
+- **Test 113's three states are one shape at one scale.** 1,000,000 rows, a distinct `bigint` key, `block_size` 8192, default fillfactor, one predicate. A drained subset with duplicate keys, a wide key, an expression key, or a non-default fillfactor was not built, and neither was a partially drained subset between the 100% of test 113 and the 99% of fixture 114.
+- **The suite behind change E is a shape rebuild, not the filed fixtures.** The scripts for tests 18-91 and fixtures 92-112 went with the sandbox deleted on 2026-08-24, so [The re-scored suite, test by test](#the-re-scored-suite-test-by-test) was not reproduced index for index here; what was measured is that the two texts differ on 4 of 119 indexes. One filed number did reproduce exactly on a rebuilt fixture (`x109`, 64.9% on 5201 blocks) and four more within 0.4 points, which is evidence about the rebuild's fidelity rather than a re-verification of the filed table.
+- **Change E has not been run on 13, 14, 15 or 16.** The version gate turns on `server_version_num < 140000`, so 13 is the last major that keeps the old behavior and 14 the first that gains the new one, and neither boundary was executed: this run covers 17.11 and 12.2 only. A 14 server would be the cheapest check that the gate opens where it is meant to.
 - **"0% reclaimable" is an argument from freshly built, not a measured rebuild.** Unlike the earlier fixture families on this page, no `CREATE INDEX CONCURRENTLY` copy was taken for the 28 mandatory-test fixtures; each one was built once from static data and never modified, so live equals rebuilt by construction. The only two rebuilds actually performed are the mutation pair (`REINDEX` produced 1376 blocks for `i_ei_true` and 421 for `i_ei_none`, both matching the corresponding fresh builds exactly), which supports the construction argument without replacing it.
 
 ## Source References
@@ -4386,6 +4626,17 @@ The fixture scripts are the eleventh to thirteenth follow-ups', unchanged, which
 - [itup.h#IndexInfoFindDataOffset](../../../../raw/postgres-17/src/include/access/itup.h#L96-L110)
 - [indextuple.c#index_form_tuple-maxalign](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L150-L170)
 - [heaptuple.c#heap_compute_data_size](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L211-L263)
+- [execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L365-L390)
+- [execIndexing.c#ExecCheckIndexConstraints-predicate](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L596-L620)
+- [analyze.c#do_analyze_rel-index-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L612-L664)
+- [analyze.c#AnlIndexData-tupleFract](../../../../raw/postgres-17/src/backend/commands/analyze.c#L441-L452)
+- [analyze.c#compute_index_stats-tupleFract](../../../../raw/postgres-17/src/backend/commands/analyze.c#L944-L954)
+- [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3070-L3100)
+- [vacuumlazy.c#lazy_cleanup_all_indexes-estimated_count](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2350-L2360)
+- [vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1404-L1462)
+- [pgstat_relation.c#changed_tuples](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L560-L576)
+- [pgstat_relation.c#pgstat_relation_flush_cb-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L850-L862)
+- [nbtree.h#BTREE_METAPAGE](../../../../raw/postgres-17/src/include/access/nbtree.h#L140-L152)
 
 ## Navigation
 
