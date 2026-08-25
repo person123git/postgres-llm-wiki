@@ -14,6 +14,43 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-25: **re-ran every test** on [Detecting Inflated Non-B-Tree Indexes From
+  Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md),
+  on unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), which closes the
+  gap the review earlier the same day left open. The 13-cell matrix ran three more times
+  (runs 5, 6 and 7, about ten minutes each) plus the six original probes, the 13 review
+  probes and one new probe, all scored by the statement the page publishes rather than
+  the harness's copy. **The heuristic came out unchanged and the physical measurements
+  are exactly reproducible**: all 13 `(B, post-churn, C, R)` quadruples in runs 5-7 are
+  byte-identical to filed run 4 and therefore to runs 2 and 3 — six runs, two days, one
+  server restart — as are all 13 `reclaimed_bytes`, `reclaimed_pct` and
+  **recommendations**, which is also the direct proof that the new access-method guard is
+  inert on matrix data. The `ANALYZE` gate held in all 78 pre-`VACUUM` evaluations, with
+  `c05_gin_pending`'s pre-`VACUUM` 1.372 identical every time. **Nine of the 13
+  `size_inflation` figures are bit-identical across all six runs**; the four that drift
+  are exactly the cells whose population term is an `ANALYZE` sample, by at most 2.6%
+  (`c08_spgist_prefix` 7.228-7.419), so the two figures corrected earlier that day are
+  now given as ranges instead: `pf_shift` read 8.976-9.152 against a true 9.00x, and
+  `c10`'s churn ratio 5.31-5.48. Every probe reproduced, **including one that reproduced
+  its own bug**: the `reltuples` probe again failed with `VACUUM cannot run inside a
+  transaction block`, which is direct proof the filed third column never came from it,
+  while the corrected form returned 43 / 200000 / 22 for BRIN and 180000 for the other
+  four — the filed table exactly, 43 included. P4's GIN pending list was byte-identical
+  (491 pages / 16,654,336 -> 0 / 21,905,408), P3's reset block identical, P2's filenode
+  progression identical in shape, and P1's comment came to 340/243 where the filed
+  capture is 309/212 — a difference of exactly 31 bytes both times, the length of the
+  `dbr` key, which closes that figure arithmetically. Two corrections: the invalid-index
+  arm was demonstrated on a *B-tree*, which the guard now pre-empts, so it was re-tested
+  on an invalid **hash** index left by a divide-by-zero `CREATE INDEX CONCURRENTLY` and
+  does report `skip: index not valid`; and a parallel BRIN build's `reltuples` is not
+  reproducible at all — eight observations of the default build span 43 to 46 and the
+  four-worker build gave 102 then 90, while the serial build wrote 23 both days. Open
+  questions were rewritten to 15, dropping the now-answered "matrix not re-run" and
+  adding one-cluster scope, guard precedence, parallel-build non-determinism and the one
+  aside (a single hot key at 1 row per 90 seconds) that was not reproduced. The page
+  remains human-unverified and agent-unverified.
+
 - 2026-08-25: **reviewed** [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
   COMMENT-Stored Baseline in PostgreSQL 17
   (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)

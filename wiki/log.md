@@ -2,6 +2,89 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-25] review v17 | re-ran every test on the non-B-tree inflation heuristic
+
+- Second review of [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
+  COMMENT-Stored Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md) on
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), answering the gap the
+  first review left: **the tests were actually re-run**, which closes its open question
+  12.
+- Prompt hygiene: the request wrote `agents.md` for AGENTS.md, lowercase `postgresql`, a
+  space before a comma, and "run again all tests" for "run all tests again". The asker
+  chose "correct and restate", so `### Review prompts, 2026-08-25` now carries both
+  corrected prompts and names the corrections. Four scoping answers were taken up front:
+  all three test groups, **three** matrix runs, and scoring by the statement the page
+  publishes rather than the harness's copy.
+- Scope executed: the 13-cell matrix three times (**runs 5, 6, 7**; 10m24s / 10m11s /
+  10m09s wall, 622 / 611 / 608 s of measured phases), the six original probes P1-P6, the
+  13 review probes R1-R12, and one new probe R13. The evaluate and capture blocks were
+  extracted from the page itself, so what ran is what a reader would copy; the harness
+  copy differs from the filed one only in output paths and that switch, verified by diff.
+  Nothing under `results*/`, `sql/`, `cells/` or `logs/` was touched; all new artifacts
+  are in `.wiki-runtime/tmp/idxm/review2/`.
+- **The heuristic holds and the physical measurements are exactly reproducible.** All 13
+  `(B, post-churn, C, R)` quadruples in runs 5-7 are byte-identical to filed run 4, hence
+  to runs 2 and 3: **six runs, two days, one server restart**. So are all 13
+  `reclaimed_bytes` and `reclaimed_pct`. **All 13 recommendations match in all three
+  runs**, which is simultaneously the direct proof that yesterday's access-method guard
+  is inert on matrix data, since runs 5-7 used the guarded text and run 4 the unguarded
+  one.
+- The `ANALYZE` gate held in all 39 new pre-`VACUUM` evaluations (78 over six runs), and
+  `c05_gin_pending`'s pre-`VACUUM` inflation was 1.372 every time.
+- **Nine of 13 `size_inflation` figures are bit-identical across all six runs.** The four
+  that drift — `c04` 6.877-6.998, `c06` 4.801-4.907, `c08` 7.228-7.419, `c12`
+  0.178-0.181 — are exactly the cells whose population term is an `ANALYZE` sample. Worst
+  relative drift 2.6%, and no cell sits within 2% of its threshold. A full 13-cell,
+  six-run table replaces the old 4-cell, three-run one.
+- **The two figures corrected yesterday are sample-dependent, so they are now ranges.**
+  `pf_shift` on `c12` read 9.152 / 9.024 / 9.124 / 8.976 / 9.148 / 9.074 against a **true
+  9.00x** (200,000 of 2,000,000 rows to 1,800,000), and `c10`'s churn ratio 5.311 /
+  5.468 / 5.418 / 5.396 / 5.479 / 5.364. Yesterday's fix was right about internal
+  consistency and wrong about precision; quoting three decimals from one run is the
+  defect, not which run it came from.
+- **Every probe reproduced, and one reproduced its own bug.** P5 re-run unmodified again
+  failed with `VACUUM cannot run inside a transaction block` and again printed its
+  post-`ANALYZE` column twice — direct proof the filed third column never came from it —
+  while the corrected form returned **43 / 200000 / 22 for BRIN and 180000 for the other
+  four**, the filed table exactly, 43 included. P4's GIN pending list was byte-identical
+  (491 pages / 16,654,336 -> 0 / 21,905,408). P3's reset block reproduced character for
+  character with `d_ins` at `-200000`. P2's filenode/OID progression reproduced in shape
+  (17275/17275 -> 17275/17276 -> 17277/17277) with identical eval readings. P1 came to
+  **340/243** where the filed capture is 309/212, and both deltas are exactly 31 bytes —
+  the length of `"dbr": "...", ` — which closes that figure arithmetically. P6 wrote
+  **346** where the page says 348.
+- **Two corrections.** The invalid-index arm was demonstrated yesterday on a *B-tree*
+  fixture, which the guard now pre-empts with `unsupported access method`; re-tested on a
+  target AM — an invalid **hash** index left by a `CREATE INDEX CONCURRENTLY` whose
+  expression divided by zero — it fires as designed and reports `skip: index not valid`
+  (new probe R13). And a parallel BRIN build's `reltuples` is **not reproducible**: eight
+  observations of the default build span 43 to 46, the four-worker build gave 102 then
+  90, while the serial build wrote 23 on both days.
+- Re-confirmed from the review probes: the BRIN desummarize/summarize sequence byte for
+  byte (114688 -> 114688 -> 196608, `REINDEX` back to 114688); two captures in the same
+  second identical and one two seconds later differing only in `ts`; and the bloated
+  B-tree at inflation 2.978 now reading `unsupported access method` where it read `none`.
+- Page edits: `### Review prompt` became `### Review prompts` with both prompts, a new
+  `### The three-run re-execution` section with a 13-cell six-run inflation table and a
+  six-row probe table, 2 Contents entries, a Verdict paragraph, the Results
+  reproducibility paragraph rewritten from three runs to six, the old spread table
+  removed, three single-run figures turned into ranges, the BRIN build table gained a
+  re-run column, the `dbr` arithmetic, the pre-`VACUUM` count, the invalid-index
+  cross-reference, the GIN pending-list limitation, the hot-key aside softened to what it
+  is, 1 Context Reviewed bullet, and Open Questions rewritten from 14 to 15 (dropping the
+  now-answered "matrix not re-run", adding one-cluster scope, guard precedence, parallel
+  non-determinism and the one unreproduced aside). All 29 Contents links resolve against
+  the 30 `##`/`###` headings, in order, and so do both in-body anchors.
+- Server: the same cluster restarted, `block_size` 8192, `autovacuum = off`,
+  `fsync = off`, `shared_buffers` 512MB, `maintenance_work_mem` 256MB; shut down cleanly
+  afterwards, sandbox 8.3 GB, 53 GB free. `raw/` untouched and clean on the manifest pin.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. The page keeps
+  `verified: false` and `verified_by_agent: not yet`: one measured aside — a single hot
+  key at 1 row per 90 seconds — was not reproduced, and it is filed as open question 15
+  rather than quietly dropped.
+
 ## [2026-08-25] review v17 | the COMMENT-stored non-B-tree inflation heuristic
 
 - Reviewed [Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored

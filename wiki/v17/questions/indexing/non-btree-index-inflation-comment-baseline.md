@@ -11,10 +11,11 @@ verified_by_agent: not yet
 ## Contents
 
 - [Question](#question)
-  - [Review prompt, 2026-08-25](#review-prompt-2026-08-25)
+  - [Review prompts, 2026-08-25](#review-prompts-2026-08-25)
 - [Answer](#answer)
   - [Verdict](#verdict)
   - [What the 2026-08-25 review changed](#what-the-2026-08-25-review-changed)
+  - [The three-run re-execution](#the-three-run-re-execution)
   - [Why REINDEX is the only thing that shrinks these five access methods](#why-reindex-is-the-only-thing-that-shrinks-these-five-access-methods)
   - [Why a current-over-baseline size ratio is the wrong question](#why-a-current-over-baseline-size-ratio-is-the-wrong-question)
   - [Three catalog facts the design depends on](#three-catalog-facts-the-design-depends-on)
@@ -263,20 +264,27 @@ heuristic reports a large number, but whether a high heuristic score reliably
 predicts that `REINDEX INDEX` or `REINDEX INDEX CONCURRENTLY` will materially
 reduce the physical size of the index.
 
-### Review prompt, 2026-08-25
+### Review prompts, 2026-08-25
 
-Filed after prompt-hygiene correction, at the asker's request. The original prompt
-wrote `agents.md` for `AGENTS.md`, lowercase `postgresql`, and a space before a comma.
-The asker chose "correct and restate"; the corrected text is:
+Both filed after prompt-hygiene correction, at the asker's request. Both prompts wrote
+`agents.md` for `AGENTS.md`, lowercase `postgresql`, and a space before a comma; the
+second also wrote "run again all tests" for "run all tests again". The asker chose
+"correct and restate" each time. The corrected texts are:
 
 > Follow `AGENTS.md`, in PostgreSQL 17, review question: # Detecting Inflated
 > Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17
 > (unverified)
 
-Two scoping answers were taken before drafting: the review re-reads every citation and
-exercises the page's SQL on a server, but does not re-run the full 13-cell matrix; and
-defects are fixed in place rather than only reported. The outcome is
-[What the 2026-08-25 review changed](#what-the-2026-08-25-review-changed).
+> Follow `AGENTS.md`, in PostgreSQL 17, review question: # Detecting Inflated
+> Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17
+> (unverified), run all tests again and check the heuristic
+
+The first review re-read every citation and exercised the page's SQL, but deliberately
+did not re-run the matrix; defects were fixed in place. Its outcome is
+[What the 2026-08-25 review changed](#what-the-2026-08-25-review-changed). The second
+answered the gap that left: all tests again, meaning the 13-cell matrix three times
+plus every probe, scored by the statement this page now publishes. Its outcome is
+[The three-run re-execution](#the-three-run-re-execution).
 
 ## Answer
 
@@ -289,6 +297,11 @@ back**, through the closed form `1 - 1/size_inflation`, to within **0.0 percenta
 points on 7 of 13 cells and 2.5 points on 12 of 13**. Seven cells were flagged as
 `strong REINDEX candidate` and every one of them released between 37.7% and 85.7%
 of its file. Four negative and false-positive controls were correctly left alone.
+
+The matrix has since been run **six times in total across two days**, and every run
+produced identical sizes, identical reclaimed bytes and identical recommendations on all
+13 cells. The only quantity that moves at all is the inflation figure itself, on the
+four cells whose population term is an `ANALYZE` sample, and by at most 2.6%.
 
 Four findings changed the design away from what the prompt proposed:
 
@@ -359,10 +372,12 @@ things changed.
    all 13 cells plus the four non-B-tree review fixtures are byte-identical.
 
 Two further behaviours were measured for the first time and are filed as evidence, not
-corrections: a failed `CREATE UNIQUE INDEX CONCURRENTLY` leaves `indisvalid = false` and
-the statement correctly reports `skip: index not valid`; and an index with no baseline
-at all reports `churn_state = unknown: counters reset`, which is a mislabel — there are
-no counters to compare, and the `recommendation` of `capture new baseline` is right.
+corrections: a failed concurrent index build leaves `indisvalid = false` and the
+statement reports `skip: index not valid` (demonstrated on a B-tree fixture, which the
+guard now pre-empts — see [The three-run re-execution](#the-three-run-re-execution) for
+the same arm on a hash index); and an index with no baseline at all reports
+`churn_state = unknown: counters reset`, which is a mislabel — there are no counters to
+compare, and the `recommendation` of `capture new baseline` is right.
 
 Everything else held. The three-run reproducibility claim is confirmed from the stored
 CSVs — runs 2, 3 and 4 carry identical `(B, post-churn, C, R)` quadruples on all 13
@@ -370,6 +385,81 @@ cells, and run 1 does differ on exactly the two cells the page says were defecti
 13 published cell scripts match the scripts that ran, the 13 filed `size_inflation`
 values match run 4's recorded output, and every kB figure in the results table is the
 recorded byte count divided by 1024.
+
+### The three-run re-execution
+
+Every test on this page was then run again from scratch: the 13-cell matrix three more
+times (**runs 5, 6 and 7**, 10m24s / 10m11s / 10m09s), the six original edge-case
+probes, and the 13 review probes — all scored by the statement this page publishes,
+extracted from the block above rather than from the harness's copy. The heuristic came
+out of it unchanged, and three claims got sharper.
+
+**The physical measurements are exactly reproducible.** All 13 `(B, post-churn, C, R)`
+quadruples in runs 5, 6 and 7 are **byte-identical to filed run 4**, and therefore to
+runs 2 and 3: six runs, two days, across a server restart. So are all 13
+`reclaimed_bytes` and `reclaimed_pct` values. **All 13 recommendations are identical in
+all three runs**, which is also the direct proof that the new access-method guard is
+inert on matrix data: runs 5-7 were scored by the guarded text and run 4 by the
+unguarded one.
+
+**The `ANALYZE` gate held in all three runs.** Every one of the 39 pre-`VACUUM`
+evaluations returned `inconclusive: no ANALYZE since baseline`, and `c05_gin_pending`'s
+pre-`VACUUM` inflation was **1.372 in all three runs**, the filed value to three
+decimals.
+
+**Only four cells' inflation figures move at all.** Across all six runs, nine of the 13
+cells report a bit-identical `size_inflation`; the four that drift are exactly the cells
+whose population term is an `ANALYZE` sample rather than an exact count:
+
+| Cell | AM | run 2 | run 3 | run 4 | run 5 | run 6 | run 7 | spread |
+|---|---|---|---|---|---|---|---|---|
+| `c00_control` | hash | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 |
+| `c01_hash_dup` | hash | 2.347 | 2.347 | 2.347 | 2.347 | 2.347 | 2.347 | 0.000 |
+| `c02_hash_highwater` | hash | 5.063 | 5.063 | 5.063 | 5.063 | 5.063 | 5.063 | 0.000 |
+| `c03_gin_common` | gin | 1.171 | 1.171 | 1.171 | 1.171 | 1.171 | 1.171 | 0.000 |
+| `c04_gin_keychurn` | gin | 6.892 | 6.922 | 6.998 | 6.877 | 6.952 | 6.962 | **0.121** |
+| `c05_gin_pending` | gin | 1.247 | 1.247 | 1.247 | 1.247 | 1.247 | 1.247 | 0.000 |
+| `c06_gist_range` | gist | 4.861 | 4.801 | 4.907 | 4.812 | 4.812 | 4.833 | **0.106** |
+| `c07_gist_highwater` | gist | 3.706 | 3.706 | 3.706 | 3.706 | 3.706 | 3.706 | 0.000 |
+| `c08_spgist_prefix` | spgist | 7.299 | 7.228 | 7.405 | 7.419 | 7.258 | 7.295 | **0.191** |
+| `c09_spgist_highwater` | spgist | 3.971 | 3.971 | 3.971 | 3.971 | 3.971 | 3.971 | 0.000 |
+| `c10_brin_minmax` | brin | 0.209 | 0.209 | 0.209 | 0.209 | 0.209 | 0.209 | 0.000 |
+| `c11_brin_mmmulti` | brin | 0.690 | 0.690 | 0.690 | 0.690 | 0.690 | 0.690 | 0.000 |
+| `c12_partial` | hash | 0.178 | 0.180 | 0.178 | 0.181 | 0.178 | 0.179 | 0.003 |
+
+Worst relative drift is 2.6% (`c08_spgist_prefix`, 7.228 to 7.419) and no cell comes
+within 2% of its own threshold, so no recommendation can turn on it. The four movers are
+the two repeated-replacement cells and the two whose row count the sample must estimate;
+the stable nine either have an exactly-sampled population or a BRIN page-count
+population, which is not sampled at all.
+
+**Every probe reproduced, one of them including its own bug.** The six original probes
+were re-run through their original script:
+
+| Probe | Filed | Re-run |
+|---|---|---|
+| P1 comment size | 309 bytes / 212 payload | **340 / 243**, the `dbr` form; the difference is exactly 31 bytes both times, which is the length of the `"dbr": "...", ` key, so the filed figure is the same capture without it |
+| P2 filenode and OID | 16649/16649 -> 16649/16650 -> 16651/16651 | same shape at 17275/17275 -> 17275/17276 -> 17277/17277; eval `valid` / 2.179 / `strong REINDEX candidate`, then `rebuilt since baseline` / 0.991 / `capture new baseline` twice — identical |
+| P3 statistics reset | 3.167, churn `NULL`, `weak: inflated, churn unknown` | **identical**, with `d_ins` at `-200000` |
+| P4 GIN pending list | 491 pages / 16,654,336 -> 0 / 21,905,408 | **byte-identical** |
+| P5 `reltuples` progression | 43 / 200000 / 22 for BRIN | **reproduced the defect**: `ERROR: VACUUM cannot run inside a transaction block`, third column equal to the second |
+| P6 parallel BRIN build | 348 against a true 70 | **346** against a true 70; serial 70 both times |
+
+P5 is the useful one: running the original probe unchanged reproduces the aborted
+transaction, which is direct evidence that the filed third column cannot have come from
+it. The corrected probe re-run beside it returns **43 / 200000 / 22 for BRIN and 180000
+for the other four**, matching the filed table exactly, 43 included.
+
+**Three review findings were re-confirmed and one was corrected.** The BRIN
+desummarize/summarize sequence reproduced byte for byte (114688 -> 114688 -> 196608,
+`REINDEX` back to 114688). Two captures in the same second were identical and one two
+seconds later differed only in `ts`. The bloated B-tree that scored `none` before the
+guard now scores `unsupported access method`. The correction is the invalid-index arm:
+the first review demonstrated it on a *B-tree* fixture, and with the guard in place that
+same fixture now reads `unsupported access method`, because the guard is the first arm.
+Re-tested on a target AM — an invalid **hash** index left behind by a
+`CREATE INDEX CONCURRENTLY` whose expression divided by zero — the arm fires as designed
+and reports `skip: index not valid`.
 
 ### Why REINDEX is the only thing that shrinks these five access methods
 
@@ -406,9 +496,10 @@ and a sorted GiST build packs pages completely, explicitly ignoring fillfactor
 Because it cannot separate a table that grew from an index that rotted. The measured
 matrix contains a cell that makes the point without ambiguity: `c12_partial` grew its
 index from 40,976 kB to 66,688 kB, a raw ratio of 1.63, and a `REINDEX` reclaimed
-**2.5%**. The predicate-selected population had grown 9.12x, so nearly all of the
-growth was legitimate. The population-normalized reading for the same cell is 0.178,
-correctly below 1.
+**2.5%**. The predicate-selected population had grown 9.00x — 200,000 rows of 2,000,000
+to 1,800,000 — so nearly all of the growth was legitimate. The population-normalized
+reading for the same cell is 0.178 to 0.181 across six runs, correctly below 1 in every
+one of them.
 
 ### Three catalog facts the design depends on
 
@@ -505,17 +596,19 @@ about 262,000 pages is smaller than a 128-page BRIN range
 Measured on the 2,857-page table above, whose index holds 23 summary tuples by
 `brin_page_items`, building the same index three ways:
 
-| Build | `pg_class.reltuples` |
-|---|---|
-| `max_parallel_maintenance_workers = 0` | **23** (correct) |
-| default (one worker plus the leader) | **44**, then 45 on three repeats |
-| `max_parallel_maintenance_workers = 4`, `min_parallel_table_scan_size = 0` | **102** |
+| Build | `pg_class.reltuples`, first review | re-run next day |
+|---|---|---|
+| `max_parallel_maintenance_workers = 0` | **23** (correct) | **23** |
+| default (one worker plus the leader) | **44**, then 45 / 45 / 45 on repeats | **44**, then 46 / 45 / 44 |
+| `max_parallel_maintenance_workers = 4`, `min_parallel_table_scan_size = 0` | **102** | **90** |
 
-The filed 43 above is the same default-parallel artifact, measured earlier on an
-identically-shaped table in the same cluster, which is why the table flags it rather
-than presenting it as the AM's own entry count. On a
-2,000,000-row table (8,850 pages, 70 true ranges) a serial build wrote `reltuples = 70`
-and a 4-worker build wrote **348**, five participants times seventy ranges less two.
+Only the serial number is deterministic; the parallel ones depend on how the scan
+happens to hand pages out, and eight observations of the default build span 43 to 46.
+The filed 43 above is one of them, reproduced exactly on the re-run, which is why the
+table flags it as an artifact rather than presenting it as the AM's own entry count. On
+a 2,000,000-row table (8,850 pages, 70 true ranges) a serial build wrote
+`reltuples = 70` both times, while a 4-worker build wrote **348** and then **346** —
+about five participants times seventy ranges.
 
 #### There is no per-table statistics reset timestamp
 
@@ -583,8 +676,10 @@ Two qualifications on that sample, both measured:
 - **`dbr` is absent only because that database had never had its statistics reset.**
   `pg_stat_database.stats_reset` was still NULL, so `jsonb_strip_nulls` dropped the key.
   Re-capturing the identical human comment on the same cluster after a reset produced
-  **340 bytes total, 243 of them payload** — the `dbr` key is worth about 31 bytes.
-  Budget for the larger form; a 19-field payload is still far below any TOAST threshold.
+  **340 bytes total, 243 of them payload**, twice on two different days. Both deltas are
+  exactly 31 bytes, which is the length of `"dbr": "2026-08-25T15:46:03Z", `, so the two
+  captures are the same payload with and without that one key. Budget for the larger
+  form; a 19-field payload is still far below any TOAST threshold.
 - **Two captures are byte-identical only within the same clock second.** `jsonb` key
   ordering is canonical, so nothing moves *except* `ts` — but `ts` has one-second
   resolution and does move. Measured: two captures in the same second gave one md5,
@@ -967,9 +1062,12 @@ This works because `ANALYZE` genuinely measures the predicate fraction for a par
 index — `compute_index_stats` sets `tupleFract` from the sampled rows that pass the
 predicate
 ([analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953)).
-Measured in `c12_partial`: `pf_shift` 9.124, suppressed, and `REINDEX` reclaimed 2.5%.
-The true predicate population moves exactly 9.00x — 200,000 of 2,000,000 rows to
-1,800,000 — so `pf_shift` carries the `ANALYZE` sample's error, not just the shift.
+Measured in `c12_partial`: suppressed in all six runs, with `REINDEX` reclaiming 2.5%
+every time. The true predicate population moves exactly 9.00x — 200,000 of 2,000,000
+rows to 1,800,000 — and `pf_shift` read 9.152, 9.024, 9.124, 8.976, 9.148 and 9.074, so
+the column carries the `ANALYZE` sample's error on top of the shift. Read it to two
+significant figures; a suppression window as wide as `[0.7, 1.43]` is unaffected by a
+2% error, which is the point of choosing a wide one.
 
 **Human comments.** Preserved by replacing only the marker onwards. Measured across
 capture, re-capture, `REINDEX`, and `REINDEX CONCURRENTLY`: a two-line human comment
@@ -988,14 +1086,18 @@ and partial cells).
 
 The pre-`VACUUM` evaluation is the false-positive gate in action. In all 13 cells it
 returned `inconclusive: no ANALYZE since baseline`, including `c05_gin_pending`, whose
-pre-`VACUUM` raw inflation was 1.372 purely from pending pages.
+pre-`VACUUM` raw inflation was 1.372 purely from pending pages. Over the six runs that
+is 78 pre-`VACUUM` evaluations and the gate held in every one, with `c05`'s 1.372
+identical each time.
 
 `c01_hash_dup` had to be bounded. A single hot key puts every duplicate in one bucket,
 because the bucket is a pure function of the hash code
 ([hashutil.c#_hash_hashkey2bucket](../../../../raw/postgres-17/src/backend/access/hash/hashutil.c#L121-L135)),
-and `_hash_doinsert` walks that bucket's overflow chain on every insert. Measured, one
-hot key completed **1 row in 90 seconds** and was abandoned; the filed cell uses 100
-hot keys.
+and `_hash_doinsert` walks that bucket's overflow chain on every insert. Observed once
+during the original design session, one hot key completed **1 row in 90 seconds** and
+was abandoned; the filed cell uses 100 hot keys. That timing is the one measured aside
+on this page that the re-runs did not reproduce, because reproducing it means waiting on
+a deliberately quadratic workload.
 
 ### The 13 test cells
 
@@ -1177,7 +1279,8 @@ SELECT /* wiki_idxmaint_reclaimed */
 Server: isolated 17.11 built from the pin (`--without-readline --without-zlib
 --with-icu --enable-debug`), `block_size` 8192, `autovacuum = off`, `fsync = off`,
 `shared_buffers` 512MB, `maintenance_work_mem` 256MB. B, C and R are
-`pg_relation_size()` in kB. Ground truth per cell is a measured `REINDEX INDEX`.
+`pg_relation_size()` in kB. Ground truth per cell is a measured `REINDEX INDEX`. Every
+run below and every re-run used this one cluster; a full pass takes about ten minutes.
 
 | Cell | AM | B (kB) | C (kB) | R (kB) | Inflation | Reclaimed bytes | Reclaimed % | Recommendation | Correct? |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1200,26 +1303,21 @@ GIN, both below the GIN candidate threshold of 1.50, and both leave 14.6% and 18
 on the table; they are threshold choices rather than model errors, and the inflation
 figure predicted both amounts accurately (see below).
 
-The whole matrix was executed three times end to end (runs 2, 3 and 4; run 1 was
-discarded because two cells were defective). **All three runs produced identical
-`(B, post-churn, C, R)` quadruples on all 13 cells** — the physical measurements are
-exactly reproducible on this server. The table above is run 4, the run made with the
-statement exactly as filed.
+The whole matrix has now been executed **six times end to end** — runs 2, 3 and 4 on the
+day it was filed, runs 5, 6 and 7 on review the next day — with run 1 discarded because
+two cells were defective. **All six runs produced identical `(B, post-churn, C, R)`
+quadruples on all 13 cells**, and identical `reclaimed_bytes`, `reclaimed_pct` and
+recommendations: the physical measurements are exactly reproducible on this server,
+across a restart. The table above is run 4, the run made with the statement as first
+filed; runs 5-7 used the statement as it now stands, with the access-method guard.
 
-The *inflation* figures are not quite as stable as the sizes, because the population
-term comes from `ANALYZE`'s sample. Across the three runs, on identical physical
-state:
-
-| Cell | run 2 | run 3 | run 4 | spread |
-|---|---|---|---|---|
-| `c04_gin_keychurn` | 6.892 | 6.922 | 6.998 | 0.106 |
-| `c06_gist_range` | 4.861 | 4.801 | 4.907 | 0.106 |
-| `c08_spgist_prefix` | 7.299 | 7.228 | 7.405 | 0.177 |
-| `c12_partial` | 0.178 | 0.180 | 0.178 | 0.002 |
-
-That is roughly 1-2% of the reading, far too small to move any recommendation here,
-but it means the inflation number should be read as a two-significant-figure estimate
-and not compared against a threshold it sits within 2% of.
+The *inflation* figures are the only thing that moves, because the population term comes
+from `ANALYZE`'s sample. Nine of the 13 cells are bit-identical in all six runs and four
+drift, by at most 2.6% of the reading — see
+[The three-run re-execution](#the-three-run-re-execution) for the full six-run table.
+The consequence for a reader is unchanged: treat the inflation number as a
+two-significant-figure estimate and do not compare it against a threshold it sits within
+2% of.
 
 ### Inflation predicts reclaimable space, not just rank
 
@@ -1286,9 +1384,10 @@ operation, not a space-reclamation one, and it costs space.** The BRIN arm there
 uses the highest thresholds of any AM and never emits a resummarize recommendation.
 
 The BRIN negative control behaved exactly as the prompt predicted: `c10_brin_minmax`
-absorbed six full-table update rounds — a churn ratio of 5.418 — and grew from 3 pages
-to 4, with 0 bytes reclaimable, because a fixed-width minmax summary almost always
-takes the in-place branch
+absorbed six full-table update rounds — a churn ratio of 5.31 to 5.48 over six runs,
+against 10.8 million non-HOT updates on 2,000,000 rows — and grew from 3 pages to 4,
+with 0 bytes reclaimable in every run, because a fixed-width minmax summary almost
+always takes the in-place branch
 ([brin_pageops.c#brin_can_do_samepage_update](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L319-L328)).
 
 ### Experimental thresholds
@@ -1341,11 +1440,12 @@ rebuild, regardless of ratio.
    ([analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L828-L863)),
    which the statement does not read.
 6. **GIN pending-list growth is not what intuition says.** Flushing the pending list
-   makes the index *larger*, not smaller. Measured with `pageinspect` as ground truth:
-   491 pending pages / 16,654,336 bytes before `gin_clean_pending_list()`, and 0
-   pending pages / **21,905,408 bytes** after. Any GIN reading taken before the
-   pending list is processed understates the eventual size, which is the real reason
-   post-`VACUUM` evaluation matters for GIN — not the reverse.
+   makes the index *larger*, not smaller. Measured with `pageinspect` as ground truth,
+   and reproduced byte for byte on the re-run: 491 pending pages / 16,654,336 bytes
+   before `gin_clean_pending_list()`, and 0 pending pages / **21,905,408 bytes** after.
+   Any GIN reading taken before the pending list is processed understates the eventual
+   size, which is the real reason post-`VACUUM` evaluation matters for GIN — not the
+   reverse.
 7. **`VACUUM (INDEX_CLEANUP OFF)` leaves index relstats stale**
    ([vacuumlazy.c#heap_vacuum_rel](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L506-L513)),
    so `vacuum_count` can advance while the population reading does not refresh.
@@ -1407,6 +1507,13 @@ rebuild, regardless of ratio.
 - Parallel-build accounting and parallel-scan chunk sizing: `brin.c`
   (`form_and_spill_tuple`, `_brin_parallel_scan_and_build`, `_brin_parallel_heapscan`,
   `_brin_parallel_merge`, `brin_fill_empty_ranges`, `brinsummarize`), `tableam.c`.
+- 2026-08-25 re-execution, same pin and same cluster: the 13-cell matrix three more
+  times (runs 5-7) through a copy of the filed harness whose only changes are the
+  output paths and a switch to the statement extracted from this page; the six original
+  probes through their own script, unmodified apart from those same paths; the 13 review
+  probes; and one new probe for the invalid-index arm on a hash index. Artifacts under
+  `.wiki-runtime/tmp/idxm/review2/`, with the filed `results*/`, `sql/`, `cells/` and
+  `logs/` left untouched for comparison.
 
 ## Evidence Map
 
@@ -1490,19 +1597,28 @@ rebuild, regardless of ratio.
     values the dump carried
     ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2838-L2842)).
     The monotonicity check should catch this, but it was not tested.
-12. **The 13-cell matrix has not been re-run since the review.** The 2026-08-25 review
-    re-derived every filed number from the harness's stored CSVs and re-ran the probes,
-    but it did not execute the matrix a fourth time, so the results table remains run
-    4's output rather than an independently reproduced run.
+12. **Everything is measured on one cluster.** Six matrix runs and every probe have now
+    been re-executed, but always on the same 17.11 build, the same `block_size` 8192,
+    the same `shared_buffers` and `maintenance_work_mem`, and the same filesystem. The
+    byte-exact reproducibility is therefore a statement about repeatability on one
+    machine, not about portability to another.
 13. **The access-method guard is proven inert, not proven correct.** The added
     `unsupported access method` arm was regression-tested on 19 baselined indexes and
-    moves only the two B-tree rows. Whether refusing is the right answer for a
+    moves only the two B-tree rows, and the three re-runs then reproduced all 13 matrix
+    recommendations with it in place. Whether refusing is the right answer for a
     hypothetical seventh index AM, or for a `btree` index whose owner deliberately
-    captured a baseline, is a design choice this page does not test.
-14. **The `43` in the `reltuples` table cannot be reproduced exactly.** The same
-    default-parallel build now writes 44 and then 45 on repeats, because the count
-    depends on how the parallel scan happens to distribute pages. Only the serial
-    number (23) is deterministic, and only that one equals the true range count.
+    captured a baseline, is a design choice this page does not test. The guard being the
+    first arm also means it pre-empts `skip: index not valid` for a non-target AM, which
+    is deliberate but untested against any operator expectation.
+14. **A parallel BRIN build's `reltuples` is not reproducible.** Eight observations of
+    the default build on the same 23-range index span 43 to 46, and the four-worker
+    build gave 102 and then 90. Only the serial number (23) is deterministic, and only
+    that one equals the true range count.
+15. **One measured aside was not re-run: the single-hot-key timing.** The note that one
+    hot key completed "1 row in 90 seconds" comes from the original design session and
+    was not reproduced, because reproducing it means waiting on a deliberately
+    quadratic workload. The mechanism behind it is source-cited, and the filed cell's
+    100-key form is what every run measures.
 
 ## Source References
 
