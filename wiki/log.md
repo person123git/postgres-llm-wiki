@@ -2,6 +2,115 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-25] review v17 | the COMMENT-stored non-B-tree inflation heuristic
+
+- Reviewed [Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored
+  Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+- Prompt hygiene: the request wrote `agents.md` for AGENTS.md, lowercase `postgresql`,
+  and a space before a comma. The asker chose "correct and restate", so the page carries
+  a `### Review prompt, 2026-08-25` block naming the corrections. Two scoping answers
+  are recorded there: re-read every citation and exercise the SQL on a server but do
+  **not** re-run the 13-cell matrix, and fix defects in place rather than only report
+  them.
+- **The measurement sandbox survived**, which changed what the review could do. The
+  2026-08-24 cleanup removed `.wiki-runtime/tmp/idxmaint/` (the earlier, misfiring
+  harness for a deleted page); this page's sandbox is `.wiki-runtime/tmp/idxm/`, built
+  later the same day, and it still holds 7.6 GB: the cluster, all 13 fixture tables,
+  `cells/`, `sql/`, `logs/probes.log` and four result sets. The 17.11 install under
+  `pstate/install/` matches the configure line the page states. So the review restarted
+  that cluster instead of rebuilding, and audited the filed numbers against the
+  harness's own CSVs.
+- **Citations: 101 links over 57 distinct ranges before this review, all re-read; none
+  missing, none past EOF,
+  none misattributed.** Three were imprecise and were corrected or extended:
+  `index_update_stats` is not "skipped entirely" under `IsBinaryUpgrade` (only the
+  `relpages`/`reltuples` write is), `pg_relation_size`'s VOLATILE marking now cites
+  `pg_proc.dat`, and the `values_per_range` default of 32 now cites the macro rather
+  than only the reloption call that passes it.
+- **Three figures were run-3 values sitting in a run-4 table**: `pf_shift` 9.024, the
+  derived 9.02x, `size_inflation` 0.180 and `c10_brin_minmax`'s churn ratio 5.468 now
+  read 9.124, 9.12x, 0.178 and 5.418. No verdict moves; this is the page's own
+  documented 1-2% `ANALYZE`-sample drift surfacing as an internal inconsistency.
+- **Two "measured" claims had no recorded evidence. Both re-measure correctly.** The
+  `reltuples` progression's probe ran `DELETE ...; VACUUM ...` in a single `psql -c`,
+  which aborts with `VACUUM cannot run inside a transaction block` and rolls the
+  `DELETE` back — the recorded third column is just the second one repeated. Re-run with
+  the statements separated: **180000 for hash, GIN, GiST and SP-GiST, and 22 for BRIN**,
+  exactly as filed. The statistics-reset output block was produced by an older statement
+  (`churn_known` column, fabricated `-200000.000`); re-run with the filed text it
+  **reproduces character for character**.
+- **The BRIN parallel over-count mechanism was wrong and is now source-correct.** The
+  merge does not "increment it again per merged range": each participant counts its own
+  *partial* summaries in `form_and_spill_tuple`, adds them to `brinshared->indtuples`,
+  the leader adopts that sum in `_brin_parallel_heapscan`, and `_brin_parallel_merge`
+  unions the duplicates with `brin_doinsert` **without recounting**
+  (`brin_fill_empty_ranges` does not count either). So the stored number is
+  (participant, range) pairs. Overlap is the norm because a parallel scan's chunk is
+  `nblocks / 2048` rounded up to a power of two, smaller than a 128-page BRIN range for
+  any table under ~262,000 pages. Measured on one 23-range index: **23 serial, 44 then
+  45 on repeats at the default, 102 with four workers**, against 23 real summary tuples
+  by `brin_page_items` — which also explains the filed 348 on a 70-range index as five
+  participants times seventy. The filed `43` is flagged as the artifact it is, and open
+  question 14 records that only the serial number is reproducible.
+- **`brin_summarize_range()` had never been run.** The filed table measured
+  `brin_summarize_new_values()` while the prose and the prompt name
+  `brin_desummarize_range()` + `brin_summarize_range()`. Re-run with 318 explicit
+  desummarize calls then 318 summarize calls: **114688 -> 114688 -> 196608**, and
+  `REINDEX` back to 114688 — identical, so the page's headline BRIN result now rests on
+  the function pair the prompt asked about. `fresh` 49152/24576/11977 pages and
+  `after churn + VACUUM` 114688/32768/40701 reproduced exactly.
+- **Two captures are byte-identical only inside one clock second.** Measured md5s: two
+  captures in the same second match, one two seconds later differs, in `ts` and nothing
+  else. Also, the filed 309-byte/212-byte comment is the `dbr`-absent form — the field is
+  only dropped because that database had never had a statistics reset — and the identical
+  human comment re-captured after a reset is **340 bytes with a 243-byte payload**.
+- **One statement change, regression-tested.** A B-tree index at `size_inflation` 2.978
+  and `churn_ratio` 2.000 scored **`none`**, because the threshold table has no `btree`
+  row, so the `LEFT JOIN` left every comparison NULL and the `CASE` fell to its `ELSE` —
+  a refusal that reads as a verdict. Added
+  `WHEN t.amname IS NULL THEN 'unsupported access method'` as the first arm. Over all 19
+  indexes carrying a baseline on that cluster the filed and amended texts differ on
+  **exactly 2 rows, both `btree`**; all 13 cells and the four non-B-tree review fixtures
+  are byte-identical. The page's published block, extracted and run verbatim, matches the
+  tested text on all 19 rows, and the published capture block is line-identical to
+  `sql/capture.sql`.
+- Two behaviours were measured for the first time and filed as evidence: a failed
+  `CREATE UNIQUE INDEX CONCURRENTLY` leaves `indisvalid = false` and the statement
+  correctly reports `skip: index not valid`; and a baseline-less index prints
+  `churn_state = unknown: counters reset`, a mislabel (limitation 12) whose
+  `recommendation` is still the correct `capture new baseline`.
+- **What held.** Runs 2, 3 and 4 carry identical `(B, post-churn, C, R)` quadruples on
+  all 13 cells and run 1 differs on exactly the two cells the page calls defective; all
+  13 published cell scripts match the scripts that ran; the 13 `size_inflation` values
+  are run 4's recorded output; every kB in the results table is the recorded byte count
+  over 1024; the `1 - 1/inflation` column, the 7-of-13 and 12-of-13 counts, the seven
+  `strong` flags and their 37.7-85.7% range, the pre-`VACUUM` `inconclusive` sweep with
+  `c05`'s 1.372, the P1/P2/P4/P6 probe outputs, and the reset timestamp
+  `2026-08-24 16:19:17.78836-04` all check out.
+- Page edits: a `### Review prompt, 2026-08-25` block, a new
+  `### What the 2026-08-25 review changed` section, 2 Contents entries, the corrected
+  `reltuples` table plus a three-build comparison table, the rewritten parallel-build
+  paragraph, the corrected BRIN maintenance table, the qualified comment-format and
+  human-comment claims, the expanded reset paragraph, one new SQL arm with two comment
+  blocks, 2 new limitations (11-12), 3 new open questions (12-14), 2 Context Reviewed
+  bullets, 7 Evidence Map rows, and 3 Source References. All 28 Contents links resolve
+  against the 29 `##`/`###` headings, in document order, and so does the one new
+  in-body anchor.
+- Measured on the page's own restarted cluster (17.11, `block_size` 8192,
+  `autovacuum = off`, `fsync = off`, `shared_buffers` 512MB,
+  `maintenance_work_mem` 256MB), then shut down cleanly again; the data directory is
+  retained and the review's scripts, logs and CSVs are under
+  `.wiki-runtime/tmp/idxm/review/`. Review fixtures `r1`, `r3`, `r5`, `r11` and `r12`
+  were added to that database; the `c00`-`c12` fixtures, `results/` and
+  `results_run{1,2,3}/` were not touched. `raw/` is untouched and clean on the manifest
+  pin.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated. The page keeps
+  `verified: false` and `verified_by_agent: not yet`: the review re-derived and re-ran a
+  great deal, but it did not execute the 13-cell matrix again, so the results table is
+  still run 4's output rather than an independently reproduced run (open question 12).
+
 ## [2026-08-24] follow-up v17 | mandatory test 113 and change E in the core-SQL bloat statement
 
 - Added a 92nd mandatory test and one correction to [Testing the PostgreSQL 12
@@ -4304,3 +4413,91 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. `wiki/index.md`,
   `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged; the page keeps
   `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-24] answer v17 | COMMENT-stored inflation heuristic for the five non-B-tree AMs
+
+- Filed `wiki/v17/questions/indexing/non-btree-index-inflation-comment-baseline.md`
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): a designed
+  and measured `REINDEX`-candidate heuristic for HASH, GIN, GiST, SP-GiST and BRIN
+  whose only persistent state is an `@idxmaint:` JSON payload appended to the index's
+  own `COMMENT ON INDEX`. No table, no extension, no external store.
+- Prompt hygiene: the request wrote `agents.md` for AGENTS.md, lowercase `postgresql`,
+  spaces before commas, `minmax-multi` for the `minmax_multi` opclass family, and
+  `DESUMMARIZE + SUMMARIZE` for `brin_desummarize_range()` / `brin_summarize_range()`.
+  The asker chose "correct and restate", so `## Question` carries the corrected text
+  and names the corrections. Three further scoping answers were taken up front: a full
+  measured run rather than a design-only page, ~1M-row fixtures, and permission to
+  delete unused `.wiki-runtime` data before testing.
+- **Model.** `expected_fresh = base_size * cur_pop / base_pop`, with the population
+  unit chosen per access method: indexed tuples for hash/GiST/SP-GiST, index tuples x
+  summed `pg_stats.avg_width` for GIN, and `ceil(table relpages / pages_per_range)`
+  for BRIN. Two deliberate deviations from the brief are argued in the page: the churn
+  ratio is normalized by `n_live_tup` rather than by the logical population (dividing
+  BRIN churn by summarized ranges gives ratios in the thousands), and baseline
+  `n_live_tup` / `n_dead_tup` were dropped from the payload as having no decision
+  power, while `ppr`, `iw`, `anl` and `dbr` were added. Final payload is 19 fields,
+  measured at 212 bytes inside a 309-byte comment.
+- **Result.** 13-cell matrix on an isolated 17.11 server built from the pin,
+  `REINDEX INDEX` as ground truth, `VACUUM FULL` never used. Seven cells flagged
+  `strong REINDEX candidate` reclaimed 37.7% / 80.2% / 85.5% / 79.4% / 73.0% / 85.7% /
+  74.8%; four controls (no-churn hash, BRIN minmax, BRIN minmax_multi, partial hash)
+  were correctly left alone. **`1 - 1/size_inflation` predicted the actual reclaimed
+  fraction to 0.0 points on 7 of 13 cells and within 2.5 points on 12 of 13.** The
+  single large miss is `c01_hash_dup` at +19.7 points, where the key *distribution*
+  changed and a fresh build of the new data is legitimately larger.
+- **Reproducibility.** The matrix ran three times end to end. All three produced
+  identical `(B, post-churn, C, R)` quadruples on all 13 cells. Only the inflation
+  figures drift, by 1-2%, because the population term comes from an `ANALYZE` sample;
+  the per-run spread is filed as a table.
+- **Three catalog facts the design turns on**, each measured and cited: an index's
+  `pg_class.reltuples` means the AM's own `index_tuples` after `CREATE INDEX`, the
+  *table's* row estimate after `ANALYZE` (`analyze.c:449` sets `tupleFract = 1.0` and
+  `compute_index_stats` skips plain non-partial indexes), and the AM's
+  `num_index_tuples` after `VACUUM` - measured 300000 / 200000 / 180000 for GIN and
+  43 / 200000 / 22 for BRIN, so a baseline is only valid if captured after `ANALYZE`
+  and the evaluation refuses to score without one; **v17 has no per-table statistics
+  reset timestamp** (`PgStat_StatTabEntry` has no such field and the relation kind
+  registers no `reset_timestamp_cb`), so resets are caught only by counter
+  monotonicity, which is why the raw counters are stored; and a parallel BRIN build
+  writes `reltuples = 348` where the true range count is 70, because
+  `_brin_parallel_heapscan` copies the workers' partial count into `bs_numtuples` and
+  `form_and_insert_tuple` then increments it again.
+- **Two measured results contradict the brief and changed the design.**
+  `brin_desummarize_range()` over all 318 ranges freed **nothing**, and the following
+  `brin_summarize_new_values()` grew the index **71%**, from 114,688 to 196,608 bytes,
+  where `REINDEX` returned it to 114,688 - so the BRIN arm never recommends it and
+  uses the highest thresholds of any AM. And flushing a GIN pending list **grew** the
+  index from 16,654,336 to 21,905,408 bytes (`pageinspect` as ground truth, 491
+  pending pages to 0), so a pre-`VACUUM` GIN reading understates the eventual size
+  rather than overstating it.
+- Edge cases proven on the server: a manual `REINDEX` flips `baseline_state` to
+  `rebuilt since baseline` via the stored filenode, and so does
+  `REINDEX CONCURRENTLY`, which also moves the index OID 16649 -> 16651 while
+  `index_concurrently_swap` carries the `pg_description` row across; after
+  `pg_stat_reset_single_table_counters()` the statement reports
+  `churn_state = unknown: counters reset` with a NULL churn ratio and a `weak`
+  recommendation while still publishing the 3.167 size reading; the partial cell
+  suppressed at `pf_shift` 9.024 against 2.5% actually reclaimable; and a two-line
+  human comment containing `@` and `}` survived capture, re-capture and both `REINDEX`
+  forms unchanged.
+- Two revisions were made *because* the probes failed: the reset case originally
+  reported `inconclusive: no VACUUM since baseline` (a reset zeroes `vacuum_count`
+  too) and printed a fabricated `churn_ratio` of `-200000.000`; and `c01_hash_dup`
+  originally used a single hot key, which is O(n^2) because the bucket is a pure
+  function of the hash code - it completed 1 row in 90 seconds before being abandoned
+  for 100 hot keys.
+- Eleven open questions are filed, including that the BRIN arm is unvalidated against
+  any true positive (both BRIN cells reclaimed 0 bytes), that the multiplicative model
+  has no intercept and therefore reads 0.209 on a BRIN index whose truth is about 1.0,
+  that the `[0.7, 1.43]` partial suppression window is an unmeasured guess, that only
+  one fixture scale was tested, and that expression and multi-column indexes were not
+  exercised at all.
+- Environment: `.wiki-runtime/tmp/pstate/data`, `data12`, `src17`, `src12`,
+  `install12` and scratch files were deleted at the user's explicit instruction before
+  testing, reclaiming 17.3 GB; this makes stale the "the sandbox is retained" claim in
+  `wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md`. The exact-pin
+  17.11 install under `.wiki-runtime/tmp/pstate/install/` was kept and reused. The new
+  sandbox is `.wiki-runtime/tmp/idxm/` and is retained, holding the harness, the 13
+  cells, the probes and four result sets.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
+  unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.

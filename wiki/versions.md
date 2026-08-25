@@ -14,6 +14,82 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-08-25: **reviewed** [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
+  COMMENT-Stored Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)
+  on unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The page's
+  measurement sandbox survived an unrelated cleanup, so the review re-read the 57 source
+  ranges the page cited beforehand, re-derived every filed number from the harness's own CSVs, and
+  restarted the same 17.11 cluster with all 13 fixtures intact rather than rebuilding.
+  **Six corrections.** Three figures were run-3 values sitting in a run-4 table
+  (`pf_shift` 9.024 -> 9.124, 0.180 -> 0.178, churn ratio 5.468 -> 5.418); no verdict
+  moves. **Two "measured" claims had no recorded evidence and both re-measure
+  correctly**: the `reltuples` progression, whose probe had run `DELETE ...; VACUUM ...`
+  in one `psql -c` and so aborted with `VACUUM cannot run inside a transaction block`
+  and rolled the `DELETE` back (re-run: 180000 for hash/GIN/GiST/SP-GiST and 22 for
+  BRIN, exactly as filed), and the statistics-reset output block, whose recorded probe
+  predated the final statement (re-run with the filed text: reproduces character for
+  character). **The BRIN parallel over-count mechanism was wrong**: the merge does not
+  "increment per merged range" — each participant counts its own *partial* summaries,
+  the leader adopts the sum, and the union that follows inserts with `brin_doinsert`
+  without recounting, so the number is (participant, range) pairs; the same 23-range
+  index now reads **23 serial, 44-45 default, 102 with four workers**, which also
+  explains the filed 348 on a 70-range index as five participants times seventy.
+  **`brin_summarize_range()` had never actually been run** — the filed table measured
+  `brin_summarize_new_values()` — and 318 explicit `brin_desummarize_range()` plus 318
+  `brin_summarize_range()` calls reproduce it identically: 114688 -> 114688 -> 196608,
+  with `REINDEX` returning 114688. **Two captures are byte-identical only inside one
+  clock second** (`ts` moves), and the filed 309/212-byte comment grows to **340/243**
+  once `dbr` is present. **One statement change**: a 3x-bloated B-tree scored `none`,
+  because the threshold table has no `btree` row and every NULL comparison fell to
+  `ELSE`, so a `WHEN t.amname IS NULL THEN 'unsupported access method'` arm was added
+  and proven inert — over all 19 baselined indexes the filed and amended texts differ
+  on **exactly 2 rows, both B-tree**, with all 13 cells byte-identical, and the page's
+  published block re-run verbatim matches the tested text on all 19. Everything else
+  held: runs 2, 3 and 4 do carry identical (B, post-churn, C, R) quadruples on all 13
+  cells, run 1 differs on exactly the two cells named defective, all 13 published cell
+  scripts match the scripts that ran, and every kB in the results table is the recorded
+  byte count over 1024. Open questions grew from 11 to 14. The page remains
+  human-unverified and agent-unverified.
+
+- 2026-08-24: filed [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
+  COMMENT-Stored Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)
+  on unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): a
+  `REINDEX`-candidate heuristic for HASH, GIN, GiST, SP-GiST and BRIN whose only
+  persistent store is an `@idxmaint:` JSON payload in the index's own comment. It
+  predicts the size of a *fresh rebuild for the current logical population* instead of
+  comparing current size to baseline size, with a per-AM population unit: indexed
+  tuples for hash/GiST/SP-GiST, tuples x `avg_width` for GIN, and
+  `ceil(table relpages / pages_per_range)` for BRIN. **Validated on an isolated 17.11
+  server over a 13-cell matrix with `REINDEX INDEX` as ground truth**: the 7 flagged
+  candidates reclaimed 37.7-85.7%, the four controls were correctly left alone, and
+  `1 - 1/size_inflation` predicted the actual reclaimed fraction **to 0.0 points on 7
+  of 13 cells and within 2.5 points on 12 of 13**. The whole matrix ran three times
+  and produced **identical (B, post-churn, C, R) quadruples on all 13 cells**; only
+  the inflation figures drift, by 1-2%, because the population term comes from an
+  `ANALYZE` sample. Three catalog facts drive the design: an index's `reltuples` means
+  the AM's own entry count after `CREATE INDEX`, the *table's* row estimate after
+  `ANALYZE` (`tupleFract` is initialised to 1.0 and `compute_index_stats` skips plain
+  indexes) and the AM's `num_index_tuples` after `VACUUM` - measured as 300000 /
+  200000 / 180000 for GIN and 43 / 200000 / 22 for BRIN, so the baseline is only valid
+  if captured after `ANALYZE`; **no per-table statistics reset timestamp exists in
+  v17**, so a reset is detectable only as a stored counter going backwards; and a
+  parallel BRIN build writes `reltuples = 348` where the true range count is 70.
+  **Two measured results contradict the brief.** `brin_desummarize_range()` followed
+  by `brin_summarize_range()` freed nothing and then grew a churned `minmax_multi`
+  index by 71%, 114,688 to 196,608 bytes, where `REINDEX` returned it to 114,688; and
+  flushing a GIN pending list **grew** the index from 16,654,336 to 21,905,408 bytes,
+  so a pre-`VACUUM` GIN reading understates rather than overstates the eventual size.
+  Comment preservation is proven end to end: a two-line human comment containing `@`
+  and `}` survived capture, re-capture, `REINDEX` and `REINDEX CONCURRENTLY`, the
+  latter changing the index OID (16649 -> 16651) while `index_concurrently_swap` moved
+  the `pg_description` row with it. Eleven open questions are filed, chief among them
+  that **the BRIN arm is unvalidated against any true positive** (both BRIN cells
+  reclaimed 0 bytes) and that the multiplicative model has no intercept, which is why
+  `c10_brin_minmax` reads 0.209 where the truth is about 1.0. The page is
+  human-unverified and agent-unverified.
+
 - 2026-08-24: **removed the `reltuples = 0` guard** from the recommended statement in
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), on unchanged pin
