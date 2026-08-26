@@ -2,6 +2,345 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-26] follow-up v17 | eight open questions on the GIN waste page closed by measurement
+
+- Kept the review's rebuilt 17.11 sandbox running and answered eight of the thirteen
+  open questions on [Measuring Wasted and Reclaimable Bytes in a GIN Index With
+  Contrib Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) with
+  experiments rather than argument, on unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Nine new fixtures, `f8` through
+  `f16`, are published in the page's fixtures section; `pg_trgm` 1.6, `btree_gin` 1.3
+  and `pg_buffercache` 1.5 were installed from the same pinned tree.
+- **A single idle snapshot, not the transaction counter, is what pins recyclability.**
+  With a `REPEATABLE READ` snapshot held in another session, `f8_horizon_gin` reported
+  `768 newly deleted, 0 reusable` and then stayed at **0 reusable across two more
+  VACUUMs and six consumed xids**. The instant the holder was terminated, the very next
+  VACUUM — **with no new transaction ids at all** — reported `768 reusable` and the FSM
+  filled. The numbers close the loop: all 768 pages carry `prune_xid = 870`, which is
+  exactly the value the holder's `pg_stat_activity.backend_xmin` showed, and the
+  cluster's snapshot xmax was already 882 at release. So the earlier "three xids then
+  reusable" reading was a special case of the shared horizon moving, not a rule about
+  xid consumption. First attempt at this test was invalid and is filed as such: killing
+  `psql` leaves the backend in `pg_sleep`, so the "release" step released nothing until
+  `pg_terminate_backend` was used.
+- **The census's own self-check cannot see a concurrent writer.** 25 censuses of the new
+  1,000,000-row `f10_race_gin` while another session pushed 5,000 rows through the
+  pending list and flushed, in a loop: `census_total_pages = blocks` held **25 of 25**,
+  while the census's `pending_pages` disagreed with `meta_pending_pages` in **19 of 25**
+  (74 against 2, 12 against 74, 8 against 74 with 66 already `deleted`) and the block
+  count went stale against the file size read immediately afterwards in **25 of 25**, by
+  up to **664 blocks**. The self-check is blind by construction — both sides come from
+  the single `pg_relation_size` reading in the first CTE — so the page now names the
+  metapage cross-check as the thing that actually catches the race.
+- **Autoanalyze alone flushed a 491-page pending list in under 10 seconds.**
+  `autovacuum = on` is `PGC_SIGHUP` (`guc_tables.c:1449-1457`), so a reload sufficed;
+  with only *analyze* made eager, `pending_pages` went 491 -> 0 with `last_autoanalyze`
+  set and `last_autovacuum` still null, which is `ginvacuumcleanup`'s `analyze_only`
+  branch. The file grew 836 -> 958 blocks and the waste reading jumped to 51.25%, so two
+  censuses seconds apart can differ by 15% of the file with nobody touching the table.
+  The insert before it also demonstrated reuse again: 491 pending pages landed almost
+  entirely in the 490 dead pages left by the previous flush, for +1 block.
+- **`REINDEX INDEX CONCURRENTLY` is the same ground truth as the plain form**, at least
+  on this shape: `f9_ric_gin`, built by the identical recipe to `f6_slack_gin`, went
+  7,356,416 -> **3,948,544** bytes, the same byte count plain `REINDEX` gave `f6`, in
+  379 ms against 151 ms, with `indisvalid`/`indisready`/`indislive` all true, no
+  `_ccnew`/`_ccold` leftovers, and a plain `REINDEX` straight afterwards returning the
+  same number.
+- **Five more opclasses and shapes were built, churned and rebuilt**, and both bounds
+  held on all five, taking the totals to **upper bound 12 of 12, lower bound 11 of 12**:
+  `jsonb_path_ops` 32.69% dead / 39.74% slack / 50.90% reclaimed, `gin_trgm_ops` 29.63 /
+  47.87 / 68.98, `btree_gin` 62.71 / 18.22 / **62.84**, multicolumn 26.89 / 47.27 /
+  58.83, partial 83.53 / 10.30 / 89.60. The `btree_gin` row is a **0.13-point** margin
+  on the lower bound, which is now an open question in its own right. Fresh-build fill
+  is firmly opclass-dependent: 51.30% (`btree_gin`) to 72.11% (`pg_trgm`), with the
+  1,000,000-row six-key `int[]` at 68.98%, so "a fresh GIN build is about N% full" has
+  no single value.
+- **The payload-and-fill model's failure mode reproduced independently.** Four of the
+  five new fixtures are predicted to +0.65%, +1.49%, +0.00% and +0.63%; the multicolumn
+  one, whose churn replaced *both* key columns, misses by **+18.12%** — the same
+  dead-entry-tuple mechanism as `f1`'s +19.94%. The error tracks how much of the key
+  population died, not the opclass.
+- **A real all-zero page was produced, twice.** `pg_ctl stop -m immediate` during a
+  600,000-row insert left **4** all-zero pages in `f16_zero_gin` on the first attempt and
+  **7** on the second, out of 623 and 1043 blocks, so the census's NULL-row branch fires
+  on real pages and not only on a synthetic `bytea`. GIN extends through `GinNewBuffer`
+  and initializes afterwards, so a crash in between leaves a block that `PageIsNew` and
+  therefore `GinPageIsRecyclable` accept.
+- **Eviction was measured directly**, after a first attempt at `shared_buffers = 1MB`
+  proved self-defeating (the `pg_buffercache` query itself evicted the warmed table). At
+  64MB / 8,192 buffers: a census of the 6,665-block `f10_race_gin` left **all 6,665
+  pages resident** at `usagecount = 1` — 81% of the cache — while a plain
+  `SELECT count(*)` over the 4,092-block `t1_churn` left only **98**, because a seq scan
+  past `NBuffers / 4` takes a `BAS_BULKREAD` ring (`heapam.c:434-458`) and the census has
+  no such limiter. Censusing four more indexes (4,238 blocks) then dropped
+  `f10_race_gin` to **3,723** resident pages with 0 free buffers: the census evicts, and
+  the first victims are its own earlier pages.
+- Page edits: a follow-up fixture table in `### The fixtures`, a five-row opclass scoring
+  table and the RIC paragraph in `### What the census meant against REINDEX`, the
+  second model failure, the held-snapshot table in the horizon section, a new
+  `### Concurrency: a census of a busy index is a mixed-instant reading` section, three
+  new bullets in `### Cost of the census`, the crash finding in the all-zero-page design
+  point, three new reading rules, two `## Context Reviewed` bullets, seven new
+  `## Evidence Map` rows, and `## Open Questions` rewritten from 13 to 11 — eight
+  answered, five new ones raised by the answers (the 0.13-point margin, one-workload
+  race coverage, one-shape RIC, one-fixture-per-opclass, and the incidental zero-page
+  count). Two new citations: `heapam.c:434-458` and `guc_tables.c:1449-1457`, taking the
+  page to 123.
+- `verified_by_agent` refreshed to `claude-opus-5-max 2026-08-26T14:01:59Z`; `verified:`
+  is unchanged at `false`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings, plain and with
+  `--warnings-as-errors`; Contents matches all 27 headings and every page-internal anchor
+  resolves; all 123 citations resolve. Sandbox `.wiki-runtime/tmp/ginw2/` retained,
+  `shared_buffers` restored to 256MB and `autovacuum` back to `off`; `raw/postgres-17`
+  clean on `786db8dcf16`.
+
+## [2026-08-26] review v17 | GIN wasted-space page re-verified on a rebuilt 17.11 server
+
+- **Reviewed** [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
+  Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) on unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Corrections were made **in
+  place**, so the page now reads as one coherent answer whose numbers all come from
+  one reproducible run.
+- Prompt hygiene: the request read `follow agents.md , in postgresql 17 , review
+  question : ...` — `agents.md` for AGENTS.md, lowercase `postgresql`, and a space
+  before each comma and before the colon. The asker chose "correct and restate", so
+  `## Question` carries the corrected review prompt and names the corrections. Three
+  scoping answers were taken up front: a full review rather than source-only,
+  corrections in place, and permission to correct the stale sandbox pointer and
+  rebuild the sandbox.
+- **The page's sandbox was gone.** `.wiki-runtime/tmp/` was empty: no
+  `.wiki-runtime/tmp/ginw/` fixtures and no 17.11 install, so nothing could be
+  re-measured in place. PostgreSQL 17.11 was rebuilt from `raw/postgres-17/` with a
+  **VPATH build** (`configure` run from `.wiki-runtime/tmp/ginw2/build`), which leaves
+  the read-only evidence tree untouched — `git -C raw/postgres-17 status` stayed clean
+  — and `pageinspect` 1.12, `pgstattuple` 1.5 and `pg_freespacemap` 1.2 were installed
+  from the same tree.
+- **Source: all 119 citations re-read, zero broken.** Every unique
+  `(file, start, end)` on the page resolves, sits inside the file, and contains the
+  claimed code. Three repo-wide checks reproduced too: `RelationTruncate` and
+  `smgrtruncate` have **zero** hits under `src/backend/access/gin/`, `pages_deleted` is
+  incremented in exactly two places (`ginvacuum.c:235`, `ginfast.c:591`), and
+  `contrib/amcheck` declares only `bt_index_check`, `bt_index_parent_check` and
+  `verify_heapam`.
+- Two source-side additions were filed. `freespace.c`'s own category-table comment
+  works its example "assuming ... `MaxFSMRequestSize` is 8164 bytes", a value the macro
+  cannot produce on this build, so the page now warns against reading 8164 out of the
+  file it cites for 8160. And the `pd_lower`-is-maintained claim now cites
+  `GinDataPageSetDataSize` (ginblock.h:310-314), the macro that actually writes
+  `pd_lower`, rather than only its two call sites. One precision fix: "every
+  `pageinspect` entry point checks `superuser()` in C" is true in effect but not
+  per-function — 4 of 7 entry points in `rawpage.c` and 4 of 7 in `btreefuncs.c`
+  inherit the check from a shared internal — so the sentence now says so.
+- **The fixtures had never been published, so they were reconstructed and are now
+  printed in the page as SQL.** Two of the reconstructions are provably right: `f5`
+  (32 keys per row, first 95% of the heap deleted) and `f6` (same shape, every other
+  row deleted) came out at **7,356,416 bytes / 898 blocks** with page-class censuses of
+  1 / 96 / 32 / 768 and 1 / 864 / 32 / 0, `waste` 85.52% and 0.00%, slack 9.70%
+  (7,520 / 706,048) and 51.34% (7,520 / 3,769,344), payload 351,392 and 3,579,552, and
+  `REINDEX` results of **802,816** and **3,948,544** bytes — every one of those numbers
+  byte-identical to the filed page, together with rebuilt payload fractions of 43.28%
+  and 87.96% and model errors of +1.12% and +3.07%. `f4` (empty) reproduced 16,384 / 2
+  / 8,160 / 49.80% / 50.20% as well. The original `f5`/`f6` were therefore
+  all-32-keys-per-row fixtures, which is what the first run's "32 hot keys" meant.
+- **The horizon sequence reproduced line for line**: `898 in total, 768 newly deleted,
+  768 currently deleted, 0 reusable` with 0 FSM pages, then `0 / 0 / 0 reusable` on a
+  second VACUUM, then `0 / 0 / 768 reusable` with 768 FSM pages at `avail = 8160` after
+  three `pg_current_xact_id()` calls — and the B-tree sibling's `551 in total, 0 newly
+  deleted, 520 currently deleted, 520 reusable` in the same VACUUM. 768 pages carried
+  flags `{data,leaf,deleted,compressed}`, 130 blocks read `avail = 0`, and max `avail`
+  over every GIN index was 8160. The one number that cannot travel between clusters is
+  the delete xid: `prune_xid` read **791** here where the page said 768, which happened
+  to equal its own page count, so the page now says what the value is instead of
+  quoting it as a constant.
+- `f1`, `f2`, `f3` and `f7` are this run's own fixtures and their figures replaced the
+  first run's: `f1` 17,571,840 / 2145 blocks / 0.65% waste / 63.47% slack / 42.42%
+  reclaimed, `f2` 6,209,536 / 758 / 64.64% / 10.65% / 58.05%, `f3` 10,117,120 / 1235 /
+  0.00% / 48.05% / 0.00%, and the new `f7` 11,927,552 / 1456 / 9.89% / 44.26% / 13.26%.
+  `f1` rebuilt to exactly `f3`'s size and page-class census, which is a self-check on
+  the pair.
+- **Both headline conclusions survive.** `waste + slack` bounded the reclaimed bytes
+  from above in **7 of 7** fixtures, and `waste` alone was not a lower bound in 1 of 7:
+  `f2` held 64.64% dead pages while `REINDEX` returned 58.05%, its 268-block in-use core
+  rebuilding to 318 blocks (18.7% larger). The first run's figures for the same claim
+  were 65.49% against 50.07% and 44.7%.
+- **One filed claim did not reproduce and was rewritten.** The first run's pending-list
+  flush grew the file by exactly one block; this run's flush left it at **6,209,536
+  bytes, unchanged**, while still turning 490 of 758 blocks into dead pages and cutting
+  entry slack from 575,940 to 318,084 with the entry tree fixed at 170 pages. The page
+  now states the mechanism (the merge allocates through `GinNewBuffer` and extends only
+  when the FSM is empty) and files the unpredictability as an open question.
+- **A new failure mode was found in the payload-and-fill model**, which the first run
+  had filed as accurate to 3.07% on six fixtures. It predicts within 3.1% on six of
+  seven fixtures here but misses `f1` by **+19.94%**, and the mechanism is that GIN's
+  entry tree never deletes a tuple: after a churn that replaces every term, the index
+  still carries an entry tuple per dead term, which the census counts as payload and a
+  rebuild discards. `f7` was added specifically to isolate this — same corpus, three
+  rewrite passes that keep the term set — and it is predicted to **+0.07%**.
+- Three claims the first run argued only from source are now measured. Dead pages are
+  reused: with `f2` at 809 blocks of which 491 were dead, another 50,000 rows' pending
+  list grew the file by **26 blocks**, not ~490. A deleted page that is not yet
+  recyclable is counted as a *data* page by `ginvacuumcleanup`: `f1` read
+  `meta_data_pages 77` against 49 leaf + 14 internal live data pages, the difference
+  being its 14 deleted pages. And the recovery refusal was reproduced on a real
+  **physical standby** built with `pg_basebackup`: `ERROR: recovery is in progress` with
+  its hint, plus `cannot execute VACUUM during recovery`, while `pgstatginindex`,
+  `get_raw_page` and `gin_page_opaque_info` all answered — so the page's own
+  "settle the state first" step is impossible on a replica, which is now documented.
+- Everything else in the traps table reproduced verbatim: `index "f5_deleted_gin" (gin
+  index) is not supported`, `is not valid` for an invalid index from both `pgstattuple`
+  and `pgstatginindex` (whose raw pages still read `version 2` over 2 blocks),
+  `relation "..." is not a GIN index` for a B-tree and for a partitioned index,
+  `cannot get raw page from relation "..."` with the partitioned-index detail,
+  `pg_freespace` returning **0 rows** on the partitioned index and **answering anyway**
+  on another session's temp index where the other two refuse, `block number 100000 is
+  out of range`, `invalid page size` on a 100-byte `bytea`, the all-zero page's row of
+  NULLs and `lower 0 | upper 0 | pagesize 0`, `gin_clean_pending_list` returning 0 with
+  a `DEBUG1` on an invalid index, `must be superuser to use raw page functions` for a
+  `pg_stat_scan_tables`-only role that could still run `pgstatginindex`, `pg_freespace`
+  and `pgstattuple`, and `must be owner of index f6_slack_gin`. Cancellations came in at
+  **2001.272 ms** (`lock_timeout = '2s'`) and **1500.477 ms**
+  (`statement_timeout = '1500ms'`) against 2000.846 / 1500.252 filed, with the index
+  intact afterwards. `gin_leafpage_items` reports the page's own flags, so the filed
+  `Flags 0000` became `Flags 0002` when handed an entry leaf; the page now explains the
+  value instead of fixing it.
+- Cost and self-checks: `census_total_pages = blocks` on all 8 GIN indexes the statement
+  selected, the `OFFSET 0` form read **1234** buffers on a 1235-block index against
+  **2468** for the naive form (exactly twice), a cold census of a 1263-block index read
+  1262 blocks in 16.311 ms and warm runs took 11.330 / 11.669 / 11.656 ms, and two
+  consecutive whole-database runs were byte-identical at 1,244 bytes of CSV.
+- Page edits: the review prompt and its corrections in `## Question`, the short answer,
+  a new `### The fixtures` section carrying the published SQL, the two scoring tables,
+  the lower-bound section, the entry-slack section, the lifecycle table, the horizon
+  note, the cost paragraph, the privileges verification, two traps rows, the timeout
+  paragraph, a reading rule, `## Context Reviewed`, six `## Evidence Map` rows, and
+  `## Open Questions` rewritten from 11 to 13. The `## Contents` list gained one entry
+  and was checked mechanically against all 26 headings; all page-internal anchors
+  resolve.
+- Sandbox: `.wiki-runtime/tmp/ginw2/` is **retained** at 1.7 GB — `data/` 1.3 GB,
+  `data_sb/` (the standby) 319 MB, `build/` 74 MB, `install/` 35 MB, plus `work/` and
+  `logs/` — with both postmasters **stopped**, no `postmaster.pid` and no postgres
+  process left running; restart with
+  `install/bin/pg_ctl -D data -l logs/server.log start`. `work/` holds the fixture SQL,
+  the census statement as published, the horizon/lifecycle/reindex/probe scripts, the
+  session and standby shell scripts, and the citation, anchor and scoring checkers;
+  `results/` holds the censuses, probe transcripts and the final scoring table.
+  `wiki/versions.md`'s claim that `.wiki-runtime/tmp/ginw/` is retained was corrected,
+  since that directory no longer exists.
+- **`verified_by_agent` was set** to `claude-opus-5-max 2026-08-26T13:30:26Z`, because
+  every claim the page now makes is either re-read in the pinned source during this
+  review or measured on the rebuilt server, with the residual gaps declared under
+  `## Open Questions`. Two attributions are deliberately historical rather than
+  re-verifiable — the first run's one-block flush growth and its 38.88% fresh-control
+  slack — and both are named as the first run's, not as engine behaviour. `verified:`
+  stays `false`, it being human-only, so the title keeps its `(unverified)` suffix.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings, plain and
+  with `--warnings-as-errors`. `wiki/index.md`, `wiki/v17/index.md` and
+  `wiki/versions.md` updated; `raw/postgres-17` is clean and still on
+  `786db8dcf16`, the build having been run out-of-tree.
+
+## [2026-08-25] answer v17 | GIN wasted-space procedure from contrib extensions
+
+- Filed [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions
+  on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) against
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): a designed and
+  measured `pageinspect` page census, with `pgstattuple` and `pg_freespacemap` as
+  supporting checks, plus `REINDEX INDEX` as ground truth.
+- Prompt hygiene: the request's first line read `Follow AGENTS.md. in PostgreSQL 17.`,
+  whose stray period left a lowercase fragment, and item 5 wrote "the pg_stat_scan_tables
+  grant for pgstatginindex 1.5" where 1.5 is the *pgstattuple extension* version. The
+  asker chose "correct and restate", so `## Question` carries the corrected text and
+  names both corrections. Two scoping answers were taken up front: ~200k-row fixtures
+  rather than ~1M, and permission to delete the 8.3 GB `.wiki-runtime/tmp/idxm/` sandbox
+  first.
+- **Two premises of the brief are wrong and the page says so.** `pg_freespace()` cannot
+  return 8191: `RecordFreeIndexPage` does write `BLCKSZ - 1`, but the FSM stores one byte
+  per page, `fsm_space_avail_to_cat` collapses everything at or above `MaxFSMRequestSize`
+  into category 255, and `fsm_space_cat_to_avail` converts 255 back to exactly
+  `MaxFSMRequestSize` = `MaxHeapTupleSize` = **8160** on this build. Measured: 768 and 981
+  free pages all read `avail = 8160`, and the maximum `avail` over every GIN index in the
+  sandbox was 8160. And there is no `pages_free` field in `VACUUM VERBOSE` output — v17
+  prints `pages: %u in total, %u newly deleted, %u currently deleted, %u reusable`, where
+  only the fourth number is GIN's whole-index census; `pages_deleted` is incremented
+  per-run by `ginDeletePage` and `shiftList`, which the server confirmed by reporting
+  `0 currently deleted, 768 reusable` for the GIN index beside `520 currently deleted` for
+  the B-tree on the same table.
+- **Design.** Three numbers, never summed: whole-page waste (pages whose flags contain
+  `deleted`, plus pages where `gin_page_opaque_info` returns a NULL row, i.e. all-zero),
+  live-page slack (`page_header.upper - lower`, which is exactly GIN's own
+  `GinDataLeafPageGetFreeSpace` = `PageGetExactFreeSpace`) split into entry-tree and
+  posting-tree bytes, and pending-list bytes. `deleted` is tested before `data`/`list`
+  because `ginDeletePage` only ORs the bit in, leaving `{data,leaf,deleted,compressed}`;
+  `shiftList` by contrast *replaces* the flags word, so no stale `list` page can survive a
+  flush. The published statement reads each page exactly once through a
+  `(SELECT get_raw_page(...) OFFSET 0)` lateral — measured at **897** buffer hits on an
+  898-block index against **1794** for the naive form that calls `get_raw_page` inside
+  both functions — and carries its own self-check, `census_total_pages = blocks`, which
+  held on all 8 GIN indexes.
+- **Result against `REINDEX INDEX`, six ~200k-row fixtures.** `waste + slack` bounded the
+  reclaimed bytes from above in **6 of 6**; `waste` alone did **not** bound them from
+  below. The counterexample is a flushed pending list: **65.49% dead pages, 50.07%
+  reclaimed**, because a fresh GIN build is less dense than an aged one —
+  `entrySplitPage` equalizes data size, so key-ordered builds leave pages ~60% full
+  (measured fills after rebuild: 60.84 / 58.80 / 61.12 / 50.20 / 43.28 / 87.96%), and that
+  index's **517-block in-use core rebuilt to 748 blocks, 44.7% larger**.
+- **Entry-page slack is growth room, not waste**, proven three ways: the untouched control
+  reports 38.88% slack and `REINDEX` reclaims **0 bytes**; merging 50,000 rows of pending
+  entries dropped entry slack 1,493,880 -> 644,348 while the entry tree grew 515 -> 516
+  pages; and repeating that on a freshly rebuilt index (41.20% slack) absorbed another
+  50,000 rows with **zero** page growth. Posting-tree slack does track the truth: 51.34%
+  measured against 46.33% reclaimed.
+- **Pending-list lifecycle, byte-exact:** 4,227,072/516 blocks -> 12,263,424/1497 with 981
+  pending pages -> 12,271,616/1498 after `gin_clean_pending_list()` (which **grew the file
+  by one block** and turned 65.49% of it into dead pages, 981 of them, confirmed by the
+  FSM) -> 6,127,616/748 after `REINDEX`. `pgstatginindex` reads `0 / 0` in three of the
+  four states. A `VACUUM` instead of the SQL flush reports those pages reusable **in the
+  same run**, because `shiftList` leaves `pd_prune_xid` at 0.
+- **The horizon result.** Posting-tree deletions behave the opposite way:
+  `GinPageIsRecyclable` passes `NULL` to `GlobalVisCheckRemovableXid`, which selects
+  `VISHORIZON_SHARED`, the most conservative horizon. On the idle cluster, VACUUM 1
+  reported `768 newly deleted, 768 currently deleted, 0 reusable`, VACUUM 2 reported all
+  zeroes, and only after three `pg_current_xact_id()` calls did VACUUM 3 report **768
+  reusable** with 768 FSM entries at 8160. The census saw all 768 pages the whole time
+  (`prune_xid = 768`), which is the practical argument for reading flags over reading the
+  FSM. The file never shrank at any step, and there is no `RelationTruncate`/`smgrtruncate`
+  call anywhere under the GIN access-method directory.
+- Caveats measured, not asserted: superuser-only raw-page functions (a
+  `pg_stat_scan_tables`-only role ran `pgstatginindex`, `pg_freespace` and table
+  `pgstattuple`, but got `must be superuser to use raw page functions` and `must be owner
+  of index`); `pgstattuple` refusing an *invalid* GIN index as `is not valid` before it
+  ever reaches the AM switch, while `get_raw_page` + `gin_metapage_info` read it happily;
+  partitioned GIN indexes refused by two functions and answered with 0 rows by
+  `pg_freespace`; another session's temp GIN index refused by two functions and **answered
+  anyway** by `pg_freespace`, which has no such guard; `gin_leafpage_items` needing flags
+  to equal `{data,leaf,compressed}` exactly (`Flags 0000, expected 0083`); the page-at-a-
+  time, non-atomic scan; entry-page slack over-stating usable space by one `ItemIdData`
+  because `entryIsEnoughSpace` uses `PageGetFreeSpace`; no GIN verifier in v17 contrib
+  amcheck; and the census reading through the default buffer strategy where
+  `pgstattuple`/`pgstatindex` use `BAS_BULKREAD` (cold run: 1728 reads for a 1729-block
+  index, 13.781 ms; warm: 1728 hits, 9.039 ms). `lock_timeout = '2s'` cancelled at
+  2000.846 ms behind an uncommitted `DROP INDEX`; `statement_timeout = '1500ms'` at
+  1500.252 ms. Two consecutive runs of the published statement were byte-identical.
+- Eleven open questions, including no fixture producing an all-zero page, `ginVersion <> 2`
+  being untestable on a v17-only cluster, autovacuum being off throughout (autoanalyze
+  alone flushes a pending list, so the pending reading is inherently racy), only two index
+  shapes, and the payload-and-fill model that predicted every rebuild size within 3.07%
+  taking its fill fraction from the rebuild it predicts.
+- Environment: `.wiki-runtime/tmp/idxm/` (8.3 GB) was deleted first at the user's explicit
+  instruction, which destroys the recorded runs behind the non-B-tree inflation page; that
+  page's two "sandbox/artifacts under" pointers in `## Context Reviewed` were corrected to
+  say so. The new sandbox `.wiki-runtime/tmp/ginw/` is retained at 2.7 GB (cluster shut
+  down cleanly, 11 SQL scripts, `work/analyze.py`, `work/checkpage.py`, 11 result files
+  including `results/SUMMARY.md`), and the exact-pin 17.11 install under
+  `.wiki-runtime/tmp/pstate/install/` was reused rather than rebuilt.
+- Checked mechanically before filing: all 189 raw citations resolve to existing files with
+  in-range line numbers, the `## Contents` list matches all 24 headings in order, and every
+  page-internal anchor resolves. `wiki/index.md`, `wiki/v17/index.md` and
+  `wiki/versions.md` updated; `raw/` is unchanged; the page keeps `verified: false` and
+  `verified_by_agent: not yet`.
+
 ## [2026-08-25] review v17 | re-ran every test on the non-B-tree inflation heuristic
 
 - Second review of [Detecting Inflated Non-B-Tree Indexes From Catalogs and a

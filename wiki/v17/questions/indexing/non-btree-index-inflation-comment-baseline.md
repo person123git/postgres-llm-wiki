@@ -1493,7 +1493,9 @@ rebuild, regardless of ratio.
   `pg_class.h`, `pg_index.h`, `pg_statistic.h`.
 - Exact-pin execution: an isolated 17.11 cluster built from this pin, 13-cell matrix
   run three times plus six edge-case probes, with `pageinspect` used only as ground
-  truth. Sandbox under `.wiki-runtime/tmp/idxm/`.
+  truth. Sandbox was under `.wiki-runtime/tmp/idxm/`, deleted on 2026-08-25 at the
+  user's instruction to make room for other work; the fixtures are rebuildable from
+  the harness text quoted on this page.
 - 2026-08-25 review, same pin and same cluster restarted with all 13 fixtures and the
   four recorded runs intact: the 57 distinct source ranges cited before the review all
   re-read; the filed sizes, inflation figures and cell scripts diffed against the
@@ -1513,7 +1515,9 @@ rebuild, regardless of ratio.
   probes through their own script, unmodified apart from those same paths; the 13 review
   probes; and one new probe for the invalid-index arm on a hash index. Artifacts under
   `.wiki-runtime/tmp/idxm/review2/`, with the filed `results*/`, `sql/`, `cells/` and
-  `logs/` left untouched for comparison.
+  `logs/` left untouched for comparison. That whole tree, cluster included, was
+  deleted on 2026-08-25 at the user's instruction, so the recorded runs are no longer
+  on disk and the numbers on this page cannot be re-diffed without rebuilding.
 
 ## Evidence Map
 
