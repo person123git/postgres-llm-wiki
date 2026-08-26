@@ -2,6 +2,113 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-26] follow-up v17 | the GIN waste page's open questions attacked with measurements, 11 -> 10
+
+- Third pass over [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
+  Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md), unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), on the retained
+  `.wiki-runtime/tmp/ginw2/` sandbox (restarted, no rebuild needed). Open questions went
+  **11 -> 10**: two closed outright, one new, six materially narrowed. Fourteen new
+  fixtures, 251 source citations re-checked for in-bounds line ranges, `scripts/wiki_lint`
+  clean.
+- Prompt hygiene: the request read `follow agents.md , in postgresql 17 , for question :
+  ... , review open questions` — `agents.md` for AGENTS.md, lowercase `postgresql`, a
+  space before each comma and the colon. The asker chose "correct and restate", chose to
+  attack the questions with measurements rather than audit them, and **ruled out the two
+  expensive probes**: no second build at another `BLCKSZ` (open question 3) and no
+  repeated crash runs (open question 10). Both are recorded as out of scope by request.
+- **Reproducibility closed.** The page's published fixture SQL, re-run unmodified in two
+  freshly created databases, returned every filed number byte for byte: the seven sizes
+  (17,571,840 / 6,209,536 / 10,117,120 / 16,384 / 7,356,416 / 7,356,416 / 11,927,552),
+  every page-class count, `entry_slack` and `data_slack` to the byte, the `f2` lifecycle
+  states, the three-VACUUM `f5` sequence including its B-tree sibling line, and all seven
+  `REINDEX` results (42.42 / 58.05 / 0.00 / 0.00 / 89.09 / 46.33 / 13.26%). The only
+  figure that moved is the one the page said would: `f5`'s `prune_xid` read 953 against
+  791 and 870. The churn sweep also re-ran identically.
+- **`REINDEX CONCURRENTLY` closed.** Two identical fixtures under the same 100,000-row
+  insert stream: plain `REINDEX` 3,276,800 -> **2,662,400** in 1901 ms, `REINDEX
+  CONCURRENTLY` 3,276,800 -> **2,662,400** in 2013 ms, both ending
+  `indisvalid`/`indisready`/`indislive` true with both tables at 200,000 rows; with no
+  load both gave 1,548,288.
+- **New probe, and the answer to the payload model's detection gap.** On a GIN entry-leaf
+  page `(pd_lower - 24) / 4` is the entry-tuple count, because entry pages are ordinary
+  `PageAddItem` pages. Measured against `count(DISTINCT ...)`: 50,028 = 50,028 lexemes, 32
+  = 32 tags, and 53 = 50 tags plus GIN's three null categories (`GIN_CAT_NULL_KEY`,
+  `GIN_CAT_EMPTY_ITEM`, `GIN_CAT_NULL_ITEM`). It separates the two churn shapes at
+  **50,028 dead entry tuples against 1**, and the internal-downlink count is a free
+  structural check (1,198 downlinks over 6 internal pages against 1,193 leaves = a root of
+  5 plus 1,193). The probe is filed as a second published statement so the census's own
+  byte-identical output claims stay intact; it ran a 26,195-block database in 146-241 ms.
+- **The failure boundary is linear.** A five-point sweep holding churn volume constant
+  (all 200k rows updated every time) while varying the share of the key population
+  replaced: +0.09 / +12.62 / +25.16 / +37.69 / +50.19% at 0 / 25 / 50 / 75 / 100%, i.e.
+  increments of +12.53, +12.54, +12.53, +12.50. **The correction still fails**: dead
+  tuples are 16 bytes against live 32 (the average falls 32.0 -> 24.0 across the sweep),
+  so subtracting at the average over-corrects by -7.48% to -18.44%, and -36.80% on `f1`.
+  The two estimates bracket the truth on the 9 fixtures with dead tuples and coincide on
+  the 11 without.
+- **A second lower-bound violation, built on purpose.** Three fixtures grown entirely
+  through the pending list: `fh2_gin` reads **21.66% dead against 19.25% reclaimed**,
+  while `fh1_gin` holds by six blocks and `fh3_gin` holds. The bound is an identity —
+  `waste <= reclaimed` exactly when the aged in-use core is at least as big as its own
+  rebuild — and the density form of the test (aged-core fill against fresh fill) predicted
+  the direction 3 of 3, including the sign of the near miss. `f13_btgin_gin`'s filed
+  0.13-point margin is restated as what it is: one block.
+- **Flush growth has a mechanism now.** Five identical 50k-row insert-and-flush rounds:
+  the pending list is built from the FSM's free stock every time (0 free -> the file grew
+  by exactly its 736 pending pages; 736 free -> zero growth, four rounds running), and
+  every round reached its flush with `pg_freespace` reading 0, because
+  `RecordPageWithFreeSpace` writes only the bottom FSM level while `fsm_search` starts at
+  `FSM_ROOT_ADDRESS` and `ginInsertCleanup` vacuums the FSM only at the end — **a flush
+  can never reuse the pages it is freeing**. What the merge itself wants is still
+  unpredictable and is *not* a function of total slack: +194 blocks at 2,326,056 bytes of
+  slack against +0 at 3,197,144 and +649 at 1,885,966. Round 5's 649-page entry-tree jump
+  is filed as the one new open question.
+- **A concurrent VACUUM defeats every cross-check**, which is the worst case on the page:
+  14 censuses of an unchanging 2,594-block file reported 0, 0, 0, 74, 222, 444, 666, 888,
+  1110, 1406, 1628, 1850, 2072, 2294 dead pages against a truth of 2,368 — 91% of the file
+  — with the self-check, the metapage check and the size bracket all passing every time.
+  Under four writers the ranking inverted: the **size bracket caught 13 of 14** where the
+  metapage cross-check caught **0 of 14** (it caught 19 of 25 in the earlier
+  insert-and-flush test only because that writer kept moving the metapage). The page's
+  race advice was corrected accordingly, and "Three cross-checks" became "Four
+  cross-checks". A concurrent `REINDEX INDEX CONCURRENTLY` swap landed between censuses in
+  11 of 11 attempts, so the mid-census out-of-range trap is described but not reproduced.
+- **The eviction conclusion is corrected, not extended.** At 16,384 buffers a 26,195-block
+  census left a hot 3,704-page working set **fully resident** while destroying a
+  once-read set of the same size; the hot set's `usagecount` went 5 -> 1 and a second
+  census then took it. The mechanism is `PinBuffer`'s capped increment,
+  `BM_MAX_USAGE_COUNT = 5` and `StrategyGetBuffer`'s decrement-and-take clock sweep. So a
+  census spends usage count rather than pages, is safe for a genuinely hot set, and is
+  fatal to a read-once one. The 16,303-block seq-scan control left 96 pages, as before.
+- **Four more opclasses and a scale check.** `jsonb_ops` (+0.79% model error, 2 dead
+  tuples), `text[]` `array_ops` (+29.23%), weighted `tsvector` (+42.79%), and
+  `jsonb_path_ops` at 50,000 and 800,000 rows (+33.18% and +33.60%) — a 16x scale change
+  moving the error 0.42 points, which retires scale as a suspect. Tally: **26 fixtures, 26
+  of 26 upper bound, 24 of 26 lower**. Fresh-build fill now spans 50.16% to 72.11%.
+- Statement changes: the FSM cross-check derives `MaxFSMRequestSize` from
+  `pg_control_init()` (returning 8160, equal to the largest `avail` over 3,478 free GIN
+  pages, and executable by `PUBLIC`) instead of hardcoding 8160; the size bracket is added
+  as a cross-check; the entry-tuple probe is added. The main census statement is
+  unchanged, so every previously filed census number still stands.
+- Published SQL was re-tested verbatim: the printed churn-sweep recipe rebuilt `g100_gin`
+  at exactly 15,261,696 bytes in a sixth database, and the printed FSM cross-check, size
+  bracket and entry-tuple probe all ran as printed, the probe reproducing 1,713 entry leaf
+  pages / 200,020 entry tuples / 4,800,336 tuple bytes / 1,721 downlinks. All 141 distinct
+  file-and-range citations across 43 files were checked for in-bounds line ranges (0
+  broken, 0 wikilinks), and the `## Contents` block was verified to match the heading
+  order exactly.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` untouched;
+  `verified:` left `false` (human-only) and `verified_by_agent` refreshed to
+  `claude-opus-5-max 2026-08-26T15:02:41Z`. The sandbox is retained at
+  `.wiki-runtime/tmp/ginw2/` (4.2 GB): the exact-pin install, the primary and standby data
+  directories, 44 harness files under `work/`, 45 result sets under `results/`, and six
+  databases — `ginw` (the review's corpus), `ginw3` and `ginw5` (the two virgin-database
+  reproductions), `ginw4` (churn sweep and flush rounds), `ginw6` (violators, opclasses,
+  races, eviction) and `ginw7` (published-SQL verification). `shared_buffers` was returned
+  to 256MB after the eviction test and the server was stopped, leaving no process running.
+
 ## [2026-08-26] follow-up v17 | eight open questions on the GIN waste page closed by measurement
 
 - Kept the review's rebuilt 17.11 sandbox running and answered eight of the thirteen

@@ -3,7 +3,7 @@ type: question
 version: 17
 pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
-verified_by_agent: claude-opus-5-max 2026-08-26T14:01:59Z
+verified_by_agent: claude-opus-5-max 2026-08-26T15:02:41Z
 ---
 
 # Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17 (unverified)
@@ -18,12 +18,15 @@ verified_by_agent: claude-opus-5-max 2026-08-26T14:01:59Z
   - [The three waste classes, from GIN's own definitions](#the-three-waste-classes-from-gins-own-definitions)
   - [The procedure](#the-procedure)
   - [The census statement](#the-census-statement)
-  - [Three cross-checks](#three-cross-checks)
+  - [Four cross-checks](#four-cross-checks)
   - [The fixtures](#the-fixtures)
   - [What the census meant against REINDEX](#what-the-census-meant-against-reindex)
+  - [The failure boundary is a straight line](#the-failure-boundary-is-a-straight-line)
+  - [Counting entry tuples, and what that fixes](#counting-entry-tuples-and-what-that-fixes)
   - [Whole-page waste is not a lower bound](#whole-page-waste-is-not-a-lower-bound)
   - [Entry-page slack is growth room, not waste](#entry-page-slack-is-growth-room-not-waste)
   - [The pending-list lifecycle, measured end to end](#the-pending-list-lifecycle-measured-end-to-end)
+  - [Why a flush sometimes grows the file](#why-a-flush-sometimes-grows-the-file)
   - [Deleted pages need the horizon to move before they count](#deleted-pages-need-the-horizon-to-move-before-they-count)
   - [Concurrency: a census of a busy index is a mixed-instant reading](#concurrency-a-census-of-a-busy-index-is-a-mixed-instant-reading)
   - [Cost of the census](#cost-of-the-census)
@@ -116,12 +119,39 @@ a rebuilt server and re-measurement — with corrections made in place, and aske
 that the stale sandbox pointer be corrected and the sandbox rebuilt.
 
 What the review did: re-read every source citation on this page against the pinned
-checkout (119 of them at review time; 121 now, the review having added two),
+checkout (119 distinct file-and-range citations at review time, 121 when it
+finished; the open-questions pass below took that to 141 over 43 files),
 rebuilt PostgreSQL 17.11 from `raw/postgres-17/` because the original sandbox had
 been deleted, republished the fixtures as SQL so the numbers are reproducible,
 re-ran every measurement, and added a physical standby to test the one refusal the
 first run could not reach. See [The fixtures](#the-fixtures) for what reproduced
 and what did not.
+
+Second follow-up prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md, in PostgreSQL 17, for the question: Measuring Wasted and
+> Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17
+> (unverified). Review the open questions.
+
+The original read `follow agents.md , in postgresql 17 , for question : ... ,
+review open questions`: `agents.md` for AGENTS.md, lowercase `postgresql`, a space
+before each comma and before the colon, and no sentence capitalisation. The asker
+chose to attack the open questions with measurements rather than audit them on
+paper, and ruled out the two expensive probes — no second build at a different
+`BLCKSZ`, and no repeated crash runs.
+
+What this pass did, on the same pin and the retained `.wiki-runtime/tmp/ginw2/`
+sandbox: **three of the eleven open questions closed, six narrowed, two untouched
+by request**. The page's whole fixture corpus was rebuilt from the published SQL in
+two virgin databases and reproduced byte for byte; a five-point churn sweep mapped
+the payload model's failure boundary to a straight line; an entry-tuple probe built
+out of `pd_lower` was found to measure dead keys exactly; a second index was found
+that breaks the waste-is-a-lower-bound claim; the flush-growth question got a
+mechanism out of the FSM's upper levels; a concurrent VACUUM was shown to defeat
+every cross-check the page recommends; and the eviction claim was corrected — a
+census does not evict a hot working set, it strips one round of its usage count.
+Fourteen more fixtures were scored, twenty new citations were added, and all 141
+of the page's file-and-range citations were re-checked for in-bounds line ranges.
 
 ## Answer
 
@@ -137,11 +167,13 @@ numbers, never one:
 | Pending-list bytes | count of pages flagged `list`, times `block_size` | deferred insert work, not waste; flushing it frees pages inside the file and can grow it |
 
 Measured on an isolated 17.11 server with `REINDEX INDEX` as ground truth over
-seven fixtures, `whole_page_waste + live_page_slack` was an **upper bound** on the
-bytes a rebuild returned in 7 of 7 cases, and `whole_page_waste` alone was **not**
-a lower bound: one fixture had 64.64% of its file in dead pages while `REINDEX`
-returned only 58.05%, because a fresh GIN build is less dense than an aged one.
-`pgstatginindex` reported `0 / 0` for that same index.
+**26 fixtures**, `whole_page_waste + live_page_slack` was an **upper bound** on the
+bytes a rebuild returned in 26 of 26 cases, and `whole_page_waste` alone was **not**
+a lower bound: it failed on 2 of 26, one of them holding 64.64% of its file in dead
+pages while `REINDEX` returned only 58.05%, because a fresh GIN build can be less
+dense than an aged one. `pgstatginindex` reported `0 / 0` for that same index. The
+bound fails exactly when the aged index's in-use core is smaller than its own
+rebuild, and both failures were indexes grown entirely through the pending list.
 
 ### Deviations from the brief, and why
 
@@ -167,8 +199,11 @@ Three items in the plan did not survive contact with the source or the server.
    comment, which is illustrative and stale: it works its example "assuming
    default 8k `BLCKSZ`, and that `MaxFSMRequestSize` is 8164 bytes"
    ([freespace.c:36-62](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L36-L62)),
-   a value the macro cannot produce on this build. Derive it from
-   `MaxHeapTupleSize`, or read it off `pg_freespace` as above.
+   a value the macro cannot produce on this build. **Do not hardcode 8160
+   either** — derive it, as [Four cross-checks](#four-cross-checks) now does,
+   from `pg_control_init()`, which publishes both terms of the macro
+   ([pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L226),
+   [func.sgml#pg_control_init](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L27721-L27742)).
 
 2. **`VACUUM VERBOSE` has no field literally called `pages_free`.** v17 prints
    `index "%s": pages: %u in total, %u newly deleted, %u currently deleted, %u reusable`,
@@ -317,7 +352,8 @@ allocates pages through `GinNewBuffer` when it has to.
    counters ([ginfuncs.c#gin_metapage_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L30-L95)).
 4. **Census blocks 1 .. relpages-1**, reading each page once and passing the same
    `bytea` to `gin_page_opaque_info` and `page_header`.
-5. **Cross-check three ways** before believing any number.
+5. **Cross-check four ways** before believing any number, and run the entry-tuple
+   probe too if you intend to predict a rebuild.
 6. **Only then** compare with a rebuild, if you are deciding whether to rebuild.
 
 ### The census statement
@@ -455,26 +491,50 @@ Design points that are not cosmetic:
   an empty array rather than a NULL row, and each of the three rebuilt `tsvector`
   fixtures held exactly 6 of them beside 1193 entry leaves.
 
-### Three cross-checks
+### Four cross-checks
 
 **FSM.** `pg_freespace` reports the recorded value per block
 ([pg_freespacemap.c#pg_freespace](../../../../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.c#L24-L50)),
 and for indexes the documentation says the value is meaningful only as
 in-use-versus-empty
-([pgfreespacemap.sgml:61-71](../../../../raw/postgres-17/doc/src/sgml/pgfreespacemap.sgml#L61-L71)). Free index
-pages therefore read `8160`, and the count must match `deleted + new`:
+([pgfreespacemap.sgml:61-71](../../../../raw/postgres-17/doc/src/sgml/pgfreespacemap.sgml#L61-L71)). A free index
+page reads `MaxFSMRequestSize`, and the count must match `deleted + new`. Derive
+the constant rather than typing 8160 — `pg_control_init()` publishes both terms of
+`BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData))`, is executable by
+`PUBLIC` (measured: `has_function_privilege('public','pg_control_init()','execute')`
+is true), and needs no extension:
 
 ```sql
-SELECT /* wiki_gin_waste_fsm_check */ count(*) FILTER (WHERE avail = 8160) AS fsm_free_pages,
-       count(*) AS blocks
+SELECT /* wiki_gin_waste_fsm_check */
+       (SELECT database_block_size
+               - ((28 + max_data_alignment - 1) / max_data_alignment)
+                 * max_data_alignment          -- 28 = SizeOfPageHeaderData + sizeof(ItemIdData)
+        FROM pg_control_init())                          AS free_page_avail,
+       count(*) FILTER (WHERE avail = (SELECT database_block_size
+               - ((28 + max_data_alignment - 1) / max_data_alignment)
+                 * max_data_alignment FROM pg_control_init())) AS fsm_free_pages,
+       count(*)                                          AS blocks
 FROM pg_freespace('myschema.myindex');
 ```
 
-Measured: `768` FSM-free pages against `768` census-deleted pages on the
+On the pinned build that expression returns **8160**, equal to the largest `avail`
+seen over 3,478 free GIN pages, so the derived form and the measured form agree.
+Measured counts: `768` FSM-free pages against `768` census-deleted pages on the
 deleted-pages fixture, and `490` against `490` on the flushed pending fixture;
 every other GIN index reported no free pages and no deleted pages. Note the
 direction of the check — a page can be deleted but not yet recorded free, as it
 was immediately after the first VACUUM (768 deleted, 0 in the FSM).
+
+**Size bracket.** Read `pg_relation_size` again after the census and compare it
+with the statement's own `blocks` column. This is the cheapest and by far the most
+sensitive race detector: under four concurrent writers it caught the race in **13
+of 14** censuses where the metapage cross-check below caught **0 of 14**. See
+[Concurrency](#concurrency-a-census-of-a-busy-index-is-a-mixed-instant-reading).
+
+```sql
+SELECT /* wiki_gin_waste_size_bracket */ pg_relation_size('myschema.myindex','main') / 8192
+       AS blocks_after_census;
+```
 
 **VACUUM VERBOSE.** The fourth number of the index line is `pages_free`
 ([vacuumlazy.c:718-731](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L731)):
@@ -599,14 +659,61 @@ are the ones above with one thing changed each:
 predicate column rewritten too — and VACUUMed twice, so each one is scored the
 same way as the first seven.
 
-Provenance: these fixtures were rebuilt for the review because the first run's
-sandbox had been deleted and its fixture SQL was never published. Three of the
-seven — `f4`, `f5` and `f6` — came out byte-identical to the first run's filed
-figures (16,384 / 7,356,416 / 7,356,416 bytes, the same page-class censuses, the
-same `REINDEX` results), which is what identifies the reconstruction as faithful;
-the other numbers on this page are this run's. The recipe behind `f5`/`f6` has now
-built the same 7,356,416-byte, 898-block index **four** times (`f5`, `f6`, `f8`,
-`f9`), so that shape is the page's reproducibility anchor.
+Fourteen more fixtures were added by the open-questions pass. The five `g`
+fixtures are the churn sweep, and they are the only ones whose recipe is not a
+variation on the seven above, because they have to hold the *volume* of churn
+constant while varying the share of the key population that dies. Keys are owned
+by groups of four consecutive ids, so rewriting a contiguous id prefix kills
+exactly that prefix's keys, and every row is updated in every variant:
+
+```sql
+-- g0 / g25 / g50 / g75 / g100: p% of the key population replaced, 100% of rows updated
+CREATE TABLE s100 (id int primary key, doc text);
+INSERT INTO s100 SELECT i, 'w' || (i/4) || ' x' || (i/4) || ' hot' || (i % 7) || ' tog0'
+FROM generate_series(1, 200000) i;
+CREATE INDEX g100_gin ON s100 USING gin (to_tsvector('simple', doc))
+       WITH (fastupdate = off);
+-- threshold t = 200000 * p / 100; below it new keys, above it the same keys again
+UPDATE s100 SET doc = 'v'||(id/4)||' y'||(id/4)||' warm'||(id%7)||' tog1' WHERE id <= 200000;
+UPDATE s100 SET doc = 'w'||(id/4)||' x'||(id/4)||' hot' ||(id%7)||' tog1' WHERE id >  200000;
+VACUUM s100; VACUUM s100;
+```
+
+| Fixture | Recipe |
+|---|---|
+| `fh1_gin` | `int[]` over 1,000 keys, built at 50k rows then grown by 5 x 50k rows **entirely through the pending list**, flushed each round |
+| `fh2_gin` | the same growth pattern over a 50k-key `tsvector` space — the second lower-bound violation |
+| `fh3_gin` | the same growth pattern over 97 keys only, so every entry becomes a posting tree |
+| `fg_flush_gin` | posting-tree-dominated `int[]` (6 keys mod 5000/97, 300k rows), `fastupdate = on`, five identical 50k-row insert-and-flush rounds |
+| `fa_race_gin` | the `f5` shape at 600k rows, censused while its first VACUUM ran |
+| `fb_race_gin`, `fz_race_gin` | 600k-row `fastupdate` indexes censused under four concurrent writers |
+| `fw1`-`fw4_gin` | four identical `int[]` fixtures rebuilt by `REINDEX` and `REINDEX CONCURRENTLY`, with and without an insert stream |
+| `k1_gin` | 200k `jsonb` rows, `USING gin (doc jsonb_ops)` — the default opclass, which indexes keys *and* values |
+| `k2_gin` | 200k `text[]` rows, `USING gin (ws)` (`array_ops`) |
+| `k3_gin` | 200k rows, `USING gin ((setweight(to_tsvector('simple', doc), 'A')))` |
+| `k4_gin`, `k5_gin` | `jsonb_path_ops` at **50,000** and **800,000** rows, the scale check |
+| `tn_null` / `fn_null_gin` | 20k rows mixing NULL arrays, empty arrays and NULL elements, for the entry-tuple identity |
+
+`k1` through `k5` were churned so that every key changes, then VACUUMed twice, and
+scored exactly like `f11`-`f15`.
+
+Provenance, and the reproducibility answer. These fixtures were first rebuilt for
+the 2026-08-26 review because the original sandbox had been deleted and its fixture
+SQL was never published. The open-questions pass then re-ran the **published**
+fixture SQL above, unmodified, in two freshly created databases on the same
+cluster. All seven came out byte-identical to the filed figures — the same sizes
+(17,571,840 / 6,209,536 / 10,117,120 / 16,384 / 7,356,416 / 7,356,416 /
+11,927,552 bytes), the same page-class counts, the same `entry_slack` and
+`data_slack` to the byte, the same `f2` lifecycle states (2,195,456 -> 6,209,536 ->
+6,209,536 with `pgstatginindex` reading `2 | 490 | 50000`), the same three-VACUUM
+`f5` sequence including its B-tree sibling line, and the same seven `REINDEX`
+results (42.42 / 58.05 / 0.00 / 0.00 / 89.09 / 46.33 / 13.26 percent). The churn
+sweep also re-ran identically, all five sizes and all five model errors. The one
+number that moved is the one the page already said would: `f5`'s `prune_xid` read
+**953** in the new database against 791 and 870 in the two earlier runs, because it
+is whatever `ReadNextTransactionId()` returned during the deleting VACUUM. The
+`f5`/`f6` recipe has now built the same 7,356,416-byte, 898-block index **six**
+times.
 
 ### What the census meant against REINDEX
 
@@ -649,21 +756,57 @@ then churned so every key is replaced, then VACUUMed twice:
 | `f14_multi_gin` (multicolumn) | 12,795,904 | 26.89 | 47.27 | 74.16 | 58.83 | 53.48 |
 | `f15_partial_gin` (partial) | 2,834,432 | 83.53 | 10.30 | 93.82 | 89.60 | 58.54 |
 
-Both bounds hold on all five, so across all twelve scored fixtures
-`waste + slack` bounded the truth from above **12 of 12** and `waste` alone
-bounded it from below **11 of 12**. `f13_btgin_gin` is the near miss that shows
-the lower bound is not safe by much: 62.71% dead against 62.84% reclaimed, a
-margin of 0.13 points. Fresh-build fill is clearly opclass-dependent — 51.30% for
-`btree_gin` against 72.11% for `pg_trgm`, with `f10_race_gin`'s six-key `int[]`
-at 1,000,000 rows reading 68.98% — so "how full is a fresh GIN build" has no
-single answer to compare an aged index against.
+Both bounds hold on all five. Four more opclasses and shapes were scored the same
+way by the open-questions pass, including the same opclass at two scales:
 
-`REINDEX INDEX CONCURRENTLY` is the same ground truth as the plain form, at least
-on this shape: `f9_ric_gin`, built by the identical recipe to `f6_slack_gin`, went
-from 7,356,416 bytes to **3,948,544** — the same byte count plain `REINDEX` gave
-`f6` — in 379 ms against 151 ms, leaving `indisvalid`/`indisready`/`indislive` all
-true and no `_ccnew`/`_ccold` leftovers, and a plain `REINDEX` immediately
-afterwards returned the same 3,948,544.
+| Fixture | churned bytes | waste % | slack % | waste+slack % | REINDEX reclaimed % | fresh-build fill % | dead entry tuples |
+|---|---|---|---|---|---|---|---|
+| `k1_gin` (`jsonb_ops`) | 12,009,472 | 36.83 | 36.66 | 73.49 | 57.57 | 61.83 | 2 |
+| `k2_gin` (`text[]` `array_ops`) | 14,204,928 | 26.53 | 47.54 | 74.07 | 60.73 | 51.09 | 40,119 |
+| `k3_gin` (weighted `tsvector`) | 21,307,392 | 17.03 | 50.80 | 67.84 | 55.09 | 50.16 | 100,139 |
+| `k4_gin` (`jsonb_path_ops`, 50k rows) | 3,874,816 | 52.01 | 26.83 | 78.84 | 68.92 | 51.12 | 10,006 |
+| `k5_gin` (`jsonb_path_ops`, 800k rows) | 32,407,552 | 8.19 | 51.71 | 59.90 | 41.05 | 50.92 | 160,034 |
+
+Counting the churn sweep, the three pending-list-grown fixtures and the
+flush-rounds fixture, **26 fixtures** have now been scored against `REINDEX`:
+`waste + slack` bounded the truth from above **26 of 26**, and `waste` alone
+bounded it from below **24 of 26**. The two failures are `f2_pending_gin` and
+`fh2_gin`, and they share a mechanism; see
+[Whole-page waste is not a lower bound](#whole-page-waste-is-not-a-lower-bound).
+`f13_btgin_gin` remains the closest call on the right side of the line: 62.71%
+dead against 62.84% reclaimed, a margin of 0.13 points, which is **one block**.
+`fh1_gin` is the second-closest at 0.67 points, or six blocks.
+
+Fresh-build fill is clearly opclass-dependent — 50.16% for a weighted `tsvector`
+and 51.30% for `btree_gin` against 72.11% for `pg_trgm`, with `f10_race_gin`'s
+six-key `int[]` at 1,000,000 rows reading 68.98% and `jsonb_ops` 61.83% — so "how
+full is a fresh GIN build" has no single answer to compare an aged index against.
+It is, however, **scale-insensitive**: `k4` and `k5` are the same opclass and the
+same churn pattern 16x apart in row count, and they read 51.12% and 50.92% fill
+with model errors of +33.18% and +33.60%.
+
+`REINDEX INDEX CONCURRENTLY` is the same ground truth as the plain form, on three
+shapes including one under load. `f9_ric_gin`, built by the identical recipe to
+`f6_slack_gin`, went from 7,356,416 bytes to **3,948,544** — the same byte count
+plain `REINDEX` gave `f6` — in 379 ms against 151 ms, leaving
+`indisvalid`/`indisready`/`indislive` all true and no `_ccnew`/`_ccold` leftovers,
+and a plain `REINDEX` immediately afterwards returned the same 3,948,544. The
+open-questions pass then ran the case that matters operationally: **an index taking
+inserts while it is rebuilt**. Two identical `int[]` fixtures at 3,276,800 bytes
+each took the same 100,000-row insert stream, one rebuilt with `REINDEX` and one
+with `REINDEX CONCURRENTLY`:
+
+| Rebuild | elapsed | before | after | rows after |
+|---|---|---|---|---|
+| `REINDEX INDEX` under load | 1901 ms | 3,276,800 | **2,662,400** | 200,000 |
+| `REINDEX INDEX CONCURRENTLY` under load | 2013 ms | 3,276,800 | **2,662,400** | 200,000 |
+| `REINDEX INDEX`, no load | — | 3,276,800 | **1,548,288** | 100,000 |
+| `REINDEX INDEX CONCURRENTLY`, no load | — | 3,276,800 | **1,548,288** | 100,000 |
+
+Identical byte counts in both conditions, and both indexes ended
+`indisvalid`/`indisready`/`indislive` true. The loaded rebuild is legitimately
+larger than the quiet one because it indexes 100,000 more live rows. So either form
+is usable as ground truth; the concurrent form only costs elapsed time.
 
 The census's fourth number, `payload_bytes` (size minus dead pages minus pending
 pages minus slack), is the quantity that is *supposed* to survive a rebuild.
@@ -681,9 +824,99 @@ The five opclass fixtures reproduce that split independently. Four of them land 
 +0.65%, +1.49%, +0.00% and +0.63%, and the fifth — `f14_multi_gin`, whose churn
 replaced *both* key columns — misses by **+18.12%**, the same failure mode as
 `f1`. So the model's error is a function of how much of the key population died,
-not of the opclass. Two further caveats keep this out of predictor territory: the
-fill fraction comes from the rebuild it is predicting, and both terms are measured
-after the fact; see [Open Questions](#open-questions).
+not of the opclass. One caveat still keeps this out of predictor territory: the
+fill fraction comes from the rebuild it is predicting.
+
+### The failure boundary is a straight line
+
+The five-point churn sweep holds the churn volume constant — all 200,000 rows are
+updated in every variant — and varies only the share `p` of the key population
+that is replaced. There is no threshold and no safe region except `p` near zero:
+
+| Fixture | keys replaced | churned bytes | payload/fill prediction | error | dead entry tuples |
+|---|---|---|---|---|---|
+| `g0_gin` | 0% | 8,323,072 | 7,756,432 | **+0.09%** | 1 |
+| `g25_gin` | 25% | 10,067,968 | 8,727,825 | **+12.62%** | 25,001 |
+| `g50_gin` | 50% | 11,894,784 | 9,771,313 | **+25.16%** | 50,001 |
+| `g75_gin` | 75% | 13,615,104 | 10,670,309 | **+37.69%** | 75,001 |
+| `g100_gin` | 100% | 15,261,696 | 11,639,344 | **+50.19%** | 100,010 |
+
+The increments are +12.53, +12.54, +12.53 and +12.50 points per 25 points of `p`,
+so on this shape the model over-predicts by very close to **half a point per
+percent of the key population replaced**. The whole sweep re-ran with identical
+sizes and identical errors.
+
+### Counting entry tuples, and what that fixes
+
+The census can detect the failure case after all, because `pd_lower` counts line
+pointers. GIN entry pages are ordinary item-pointer pages — `entryPreparePage` and
+`entrySplitPage` place tuples with `PageAddItem`
+([ginentrypage.c:561-568](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L561-L568),
+[ginentrypage.c:683-691](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L683-L691)) — so
+on an entry page `pd_lower` is `SizeOfPageHeaderData + nitems * sizeof(ItemIdData)`
+([bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L211-L214)),
+and `page_header` exposes it. Entry **leaf** pages carry flags exactly `{leaf}` and
+entry-tree internal pages exactly `{}`, which separates the two:
+
+```sql
+SET /* wiki_gin_entry_probe_guards */ statement_timeout = '10min';
+SET /* wiki_gin_entry_probe_guards */ lock_timeout = '2s';
+
+WITH /* wiki_gin_entry_probe */ pages AS (
+    SELECT o.flags, h.lower, h.upper, h.special
+    FROM generate_series(1, pg_relation_size('myschema.myindex','main') / 8192 - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page('myschema.myindex', b.blkno) AS pg
+                             OFFSET 0) AS r
+         LEFT JOIN LATERAL gin_page_opaque_info(r.pg) AS o ON true
+         LEFT JOIN LATERAL page_header(r.pg)          AS h ON true
+)
+SELECT count(*)                 FILTER (WHERE flags = '{leaf}') AS entry_leaf_pages,
+       sum((lower - 24) / 4)    FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuples,
+       sum(special - upper)     FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuple_bytes,
+       sum((lower - 24) / 4)    FILTER (WHERE flags = '{}')     AS internal_downlinks
+FROM pages;
+```
+
+`entry_leaf_tuples` is the number of keys the index holds, live or dead, and the
+identity is exact on every shape tried:
+
+| Index | `entry_leaf_tuples` | distinct keys in the table |
+|---|---|---|
+| `f3_fresh_gin` (`tsvector`) | 50,028 | 50,028 lexemes |
+| `f6_slack_gin` (`int[]`) | 32 | 32 tags |
+| `fn_null_gin` (NULLs and empty arrays) | 53 | 50 tags, plus 3 |
+
+The `+3` on the last row is GIN's null bookkeeping: a null key, a null item and an
+empty item each get their own entry
+([ginblock.h#GinNullCategory](../../../../raw/postgres-17/src/include/access/ginblock.h#L204-L213)), and all three
+categories occur in that fixture. The internal-downlink count is a free structural
+check — `f3_fresh_gin` reads 1,198 downlinks over 6 internal pages against 1,193
+leaves, which is a root of 5 plus 1,193.
+
+Subtract the live key count and you have the dead-key population that the payload
+model trips over. It separates the two churn shapes exactly:
+
+| Index | entry tuples before | after `REINDEX` | dead | model error |
+|---|---|---|---|---|
+| `f1_churn_gin` (term set replaced) | 100,056 | 50,028 | **50,028** | +19.94% |
+| `f7_reupdate_gin` (same terms rewritten) | 50,030 | 50,029 | **1** | +0.07% |
+| `k1_gin` (`jsonb_ops`, values recur) | 20,016 | 20,014 | **2** | +0.79% |
+| `k3_gin` (weighted `tsvector`) | 200,278 | 100,139 | **100,139** | +42.79% |
+
+What the probe does **not** buy is a corrected prediction. Subtracting the dead
+tuples at the average entry-tuple size over-corrects, because a dead key's tuple is
+just the key with an empty posting list while a live key's carries its TIDs: on the
+sweep the average tuple falls from 32.0 bytes at `p = 0` to 24.0 bytes at
+`p = 100`, which puts the dead tuples at 16 bytes against the live 32. The
+corrected estimate therefore lands **under** the truth by −7.48%, −12.42%, −15.89%
+and −18.44% across the sweep, and by −36.80% on `f1`. The pair is still useful,
+because the two estimates **bracket** the rebuilt size on all nine fixtures with a
+material dead population (10,006 dead tuples and up), while on the eleven with
+none or a handful — `f2`-`f6` and `fh1`-`fh3` at zero, `f7` and `g0` at one, `k1`
+at two — the correction is a rounding of the plain estimate and the plain model's
+±3.07% band is what applies. Cost: the probe ran a whole 26,195-block database in
+146-241 ms and twice produced byte-identical output, and the live-key count it has
+to be compared against is a full table scan — 758 ms for one 200,000-row table.
 
 ### Whole-page waste is not a lower bound
 
@@ -693,8 +926,29 @@ FSM — yet `REINDEX` returned only 58.05%. The rebuild is *bigger* than the
 in-use part of the aged index: 268 in-use blocks became 318 blocks after
 `REINDEX`, 18.7% larger.
 
-The mechanism is in the entry-tree split rule. `entrySplitPage` divides a full
-page by equalizing data size, halving it
+**The rule is an identity, not a heuristic.** Reclaimed bytes are
+`size - rebuilt`, so `waste <= reclaimed` holds exactly when
+`rebuilt <= size - waste`: dead pages are a lower bound on what a rebuild returns
+if and only if **the aged index's in-use core is at least as big as its own
+rebuild**. With no dead keys in play that reduces to a density comparison — the
+aged core's fill against a fresh build's fill — and it gets *easier* to satisfy the
+more of the key population is dead, because then the rebuild has less to store.
+That predicted the direction on the three pending-list-grown fixtures, including
+the sign of a six-block near miss:
+
+| Fixture | waste % | reclaimed % | in-use bytes | rebuilt bytes | aged core fill % | fresh fill % | lower bound |
+|---|---|---|---|---|---|---|---|
+| `fh1_gin` | 54.69 | 55.36 | 3,325,952 | 3,276,800 | 68.71 | 69.62 | holds by 6 blocks |
+| `fh2_gin` | **21.66** | **19.25** | 10,903,552 | 11,239,424 | 53.18 | 51.61 | **fails** |
+| `fh3_gin` | 43.65 | 47.94 | 2,580,480 | 2,383,872 | 34.30 | 36.85 | holds |
+
+So `fh2_gin` is the second measured violation, and it was built to be one: all
+three fixtures were grown entirely through the pending list, which is the mechanism
+`f2` exposed. A merge appends into whichever entry page already holds the key,
+packing it, while a fresh build splits pages in half. Only the one whose aged core
+ended up denser than its rebuild broke the bound.
+
+`entrySplitPage` divides a full page by equalizing data size, halving it
 ([ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691)),
 and there is no fast-append special case, so a build that inserts keys in order
 leaves every page around half to two-thirds full. Payload as a fraction of file
@@ -779,6 +1033,57 @@ index "f2_pending_gin": pages: 835 in total, 0 newly deleted, 490 currently dele
 true at its "delete xid is invalid" branch
 ([ginvacuum.c:816-822](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L816-L822)).
 
+### Why a flush sometimes grows the file
+
+Two rules govern it, and the first one is exact. Five identical rounds — the same
+50,000-row insert, then `gin_clean_pending_list()` — on a posting-tree-dominated
+`fastupdate` index:
+
+| Round | free pages when the pending list was built | file growth building it | free pages at flush time | file growth flushing | what the merge added |
+|---|---|---|---|---|---|
+| 1 | 0 | **+736** (= the 736 pending pages) | 0 | +0 | nothing |
+| 2 | 736 | **+0** | 0 | **+194** | 194 data-leaf pages |
+| 3 | 736 | **+0** | 0 | +0 | nothing |
+| 4 | 736 | **+0** | 0 | +15 | 15 entry pages |
+| 5 | 736 | **+0** | 0 | **+649** | 649 entry pages |
+
+An earlier run of the same recipe that used `VACUUM` instead of
+`gin_clean_pending_list()` for round 4's flush produced the identical +15 blocks and
+the identical 834 entry pages, so the flush path does not change the arithmetic.
+
+**Rule one: the pending list is built out of the FSM's free stock, and the merge
+never gets any of it.** Round 1 had nothing to take and extended the file by exactly
+the number of pending pages it needed. Rounds 2 to 5 each started with 736 free
+pages and built the same pending list for **zero** growth — and every one of them
+then reached the flush with `pg_freespace` reporting **0** free pages again.
+
+**Rule two: a flush cannot reuse the pages it is itself freeing.**
+`RecordFreeIndexPage` is `RecordPageWithFreeSpace`
+([indexfsm.c:48-55](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55)), which
+updates only the bottom-level FSM page and says so: "the space might not become
+visible to searchers until the next `FreeSpaceMapVacuum` call, which updates the
+upper level pages"
+([freespace.c#RecordPageWithFreeSpace](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L186-L204)).
+The searcher is the other half of `GinNewBuffer`
+([ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L299-L328)):
+`GetFreeIndexPage` asks for half a block
+([indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L37-L46)),
+`GetPageWithFreeSpace` hands that to `fsm_search`
+([freespace.c#GetPageWithFreeSpace](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L136-L142)),
+and `fsm_search` starts at `FSM_ROOT_ADDRESS`
+([freespace.c#fsm_search](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L684-L691)) — the
+level that only an FSM vacuum maintains. `ginInsertCleanup` calls
+`IndexFreeSpaceMapVacuum` after the whole merge is done
+([ginfast.c:1014-1020](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1014-L1020)). So the pages
+`shiftList` frees mid-flush are invisible to the merge that is running.
+
+What is left unpredictable is how many pages the merge itself wants, and total
+slack does not answer it: round 2 grew by 194 blocks with 2,326,056 bytes of slack
+on hand while round 3 grew by nothing with 3,197,144, and round 5 grew by 649
+blocks with 1,885,966. Slack is bound to individual pages — an entry page with too
+little room for *its own* key's new TIDs splits no matter how much free space other
+pages have.
+
 ### Deleted pages need the horizon to move before they count
 
 Posting-tree deletions behave in the opposite way, and this is the single most
@@ -844,9 +1149,36 @@ through its pending list and flushed them in a loop:
 
 The self-check is structurally blind here: `census_total_pages` and `blocks` are
 both derived from the one `pg_relation_size` reading taken in the first CTE, so
-they agree even when that reading is already stale. What actually catches the race
-is the metapage cross-check — a census whose `pending_pages` does not equal
-`meta_pending_pages` has read pages from two different instants.
+they agree even when that reading is already stale.
+
+**Three more concurrency cases, and the detector ranking they produce.** Each
+census below was bracketed by a `pg_relation_size` reading taken in a separate
+statement before and after.
+
+| Case | What the census saw | `census_total_pages = blocks` | metapage check | size bracket |
+|---|---|---|---|---|
+| A: one VACUUM deleting posting-tree pages | dead pages read 0, 0, 0, 74, 222, 444, 666, 888, 1110, 1406, 1628, 1850, 2072, 2294 over 14 censuses of an unchanging 2,594-block file (final truth: 2,368) | held **14 of 14** | held 14 of 14 | held **14 of 14** |
+| B: four concurrent writers | block count stale by up to 134 blocks | held **14 of 14** | caught **0 of 14** | caught **13 of 14** |
+| D: concurrent `REINDEX INDEX CONCURRENTLY` | ten censuses at 2,594 blocks, then the eleventh silently read the swapped-in 162-block index | held 11 of 11 | held 11 of 11 | held 11 of 11 |
+
+Case A is the worst case on this page and it defeats everything. A VACUUM deletes
+posting-tree pages in place, so the file never changes size, `pending_pages` stays
+0 on both sides of the cross-check, and the census is free to report **any**
+intermediate dead-page count — here anything from 0% to 91% of the file — with
+every check passing. Two consecutive censuses disagreeing is the only signal.
+
+Case B reverses the earlier ranking. The metapage cross-check caught 19 of 25 in
+the insert-and-flush test above, because that writer kept moving the metapage; a
+writer that only inserts leaves `pending_pages` and `meta_pending_pages` agreeing
+while the file grows underneath. **Read the size again after the census** — that is
+the check to run, and it is the cheapest of the three.
+
+Case D is a trap rather than a wrong number: `get_raw_page` resolves the index name
+on every call and holds no lock between calls, so a concurrent rebuild's swap can
+land mid-census. It landed between censuses in all eleven attempts here, but a swap
+landing after the size read and before a page read would put the block number past
+the end of the new, smaller file — the documented
+`block number ... is out of range` error.
 
 **Autovacuum is the version of this that hits an idle-looking table.** With
 `autovacuum = on` — a reload, not a restart, since the GUC is `PGC_SIGHUP`
@@ -893,8 +1225,33 @@ The cache effect is real and was measured with `pg_buffercache` at
   resident pages to **3,723**, with 0 free buffers left. The census evicts, and
   what it evicts first is its own earlier pages.
 
-So on a production box, size the census against `shared_buffers`, or accept that
-an index-sized slice of the cache is going to turn over.
+**But it does not evict a genuinely hot working set, and that is worth knowing
+before you refuse to run it.** Re-measured at `shared_buffers = 128MB` (16,384
+buffers) against two 3,704-page tables — one read eight times, one read once — a
+single census of a **26,195-block** database, twice the size of the cache:
+
+| | before the census | after one census | after two |
+|---|---|---|---|
+| hot table (8 passes) | 3,704 pages at `usagecount = 5` | **3,704 pages**, `usagecount = 1` | **0 pages** |
+| table read once | 3,704 pages at `usagecount = 1` | **0 pages** | 0 pages |
+| the census's own pages | — | 12,481 resident (7,481 at 0, 5,000 at 1) | — |
+
+The mechanism is the clock sweep. `PinBuffer` raises a buffer's usage count on
+every touch, capped at `BM_MAX_USAGE_COUNT`
+([bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705),
+[buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-17/src/include/storage/buf_internals.h#L72-L79)),
+and `StrategyGetBuffer` decrements every non-zero buffer it passes and takes the
+first zero it finds
+([freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341)). A
+census reads each page once, so its own pages sit at 1 and are the cheapest victims
+in the cache. The real cost is therefore not eviction but **the usage count it
+spends**: one census cost the hot set four of its five levels of protection, and the
+second census, finding it at 1, took all of it. The control behaved as before — a
+16,303-block seq scan left 96 pages behind and disturbed the hot set not at all.
+
+So on a production box the census is safe for a working set that is genuinely hot
+and repeatedly read, dangerous for one that is read once, and should not be run
+back to back over a cache-sized index.
 
 ### Privileges
 
@@ -993,17 +1350,25 @@ afterwards.
 
 - Report the three classes separately. Never publish their sum as "bloat".
 - `whole_page_waste_bytes` is space this index will reuse. It is not a promise
-  about `REINDEX`, in either direction.
+  about `REINDEX`, in either direction. It under-states what a rebuild returns
+  exactly when the aged in-use core is smaller than the rebuild would be, which is
+  what happened on the two pending-list-grown fixtures that broke the bound.
 - `entry_slack` on a healthy index is a large fraction of an entry-tree-dominated
   file: the freshly built and freshly rebuilt indexes here read 41.06%, 47.19%,
   48.05% and 48.05% slack while reclaiming nothing, and across opclasses the fresh
   payload fraction ran from 51.30% (`btree_gin`) to 72.11% (`pg_trgm`). Treat it as
   a level, not a defect, and compare an index to its own history or to a rebuilt
   twin — never to another opclass.
-- Read a busy index twice before believing either reading, and check
-  `pending_pages` against `meta_pending_pages`: on a fixture under concurrent
-  inserts those two disagreed in 19 of 25 censuses while the statement's own
-  self-check passed every time.
+- Read a busy index twice before believing either reading, and **re-read
+  `pg_relation_size` after the census**: that bracket caught a four-writer race in
+  13 of 14 censuses where the metapage cross-check caught 0 of 14, and the
+  statement's own self-check passed every time in both tests. A concurrent VACUUM
+  defeats all three, so on a table being vacuumed, only two disagreeing censuses
+  tell you anything.
+- If the payload/fill model matters to your decision, run the entry-tuple probe
+  beside the census. Entry tuples far above the table's live distinct-key count
+  mean the model is over-predicting the rebuild, by about half a point per percent
+  of the key population that has died.
 - Dead pages that will not go away may be waiting on one idle transaction, not on
   VACUUM. A held `REPEATABLE READ` snapshot kept 768 recyclable-looking pages out
   of the FSM across three VACUUMs.
@@ -1073,6 +1438,30 @@ afterwards.
   [ginfast.c:590-591](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L590-L591)), and
   `contrib/amcheck` declares only `bt_index_check`, `bt_index_parent_check` and
   `verify_heapam` across all its SQL scripts.
+- Open-questions pass, source side: the FSM's write and search paths and the
+  asymmetry between them (`RecordPageWithFreeSpace`, `fsm_set_and_search`,
+  `fsm_search` from `FSM_ROOT_ADDRESS`, `GetPageWithFreeSpace`,
+  `FreeSpaceMapVacuum`, the FSM README's account of when upper nodes are updated),
+  the index FSM wrappers (`GetFreeIndexPage`, `RecordFreeIndexPage`,
+  `IndexFreeSpaceMapVacuum`) and `GinNewBuffer`'s use of them; `pg_control_init`
+  and its documented output columns; `SizeOfPageHeaderData` and the entry-page
+  `PageAddItem` call sites in `ginentrypage.c`; `GinNullCategory` and its five
+  category constants; and the buffer-replacement path — `PinBuffer`'s usage-count
+  increment, `BM_MAX_USAGE_COUNT`, and `StrategyGetBuffer`'s clock sweep.
+- Open-questions pass, server side, all on the same retained sandbox
+  (`.wiki-runtime/tmp/ginw2/`, exact-pin 17.11, port 55432): the published fixture
+  SQL re-run unmodified in two freshly created databases and scored again; a
+  five-point churn sweep; an entry-tuple probe validated against
+  `count(DISTINCT ...)` on three shapes including one with NULL and empty arrays;
+  three fixtures grown entirely through the pending list; a five-round
+  insert-and-flush experiment with `pg_freespace` and per-class slack captured at
+  every step; four concurrency cases (a VACUUM deleting posting-tree pages, four
+  writers, an insert-and-flush loop, a `REINDEX INDEX CONCURRENTLY`) with each
+  census bracketed by separate size readings; plain and concurrent rebuilds of
+  identical fixtures with and without a 100,000-row insert stream; four more
+  opclasses plus the same opclass at 50,000 and 800,000 rows; and a
+  `pg_buffercache` eviction experiment at `shared_buffers = 128MB` with a hot and a
+  cold working set, restored to 256MB afterwards.
 
 ## Evidence Map
 
@@ -1115,66 +1504,98 @@ afterwards.
 | Autoanalyze alone flushes the pending list | [ginvacuum.c:705-717](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L705-L717), [guc_tables.c:1449-1457](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1449-L1457); server: 491 pending pages -> 0 in under 10 s with `last_autovacuum` still null, the file growing 836 -> 958 blocks |
 | The census has no ring buffer, a seq scan does | [rawpage.c:181-196](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L181-L196), [heapam.c:434-458](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L434-L458); server at 8,192 buffers: a 6,665-block census left all 6,665 pages resident and later lost 2,942 of them to the next censuses, while a 4,092-block seq scan left 98 |
 | Real all-zero pages exist after a crash | [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335), [bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234); server: 4 and 7 all-zero pages after two `-m immediate` crashes during a bulk insert |
-| `REINDEX CONCURRENTLY` gives the same size as `REINDEX` | server: 7,356,416 -> 3,948,544 bytes either way on the same fixture recipe, 379 ms against 151 ms |
+| `REINDEX CONCURRENTLY` gives the same size as `REINDEX` | server: 7,356,416 -> 3,948,544 bytes either way on the same fixture recipe, 379 ms against 151 ms, and 3,276,800 -> 2,662,400 either way under a 100,000-row insert stream (1901 ms against 2013 ms) |
+| The published fixtures reproduce across runs | server: the published SQL re-run in two virgin databases gave all seven filed sizes, page-class counts, slack bytes, lifecycle states and `REINDEX` results byte for byte; only `f5`'s `prune_xid` moved (953 against 791 and 870) |
+| Entry-leaf `pd_lower` counts the index's keys | [ginentrypage.c:561-568](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L561-L568), [ginentrypage.c:683-691](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L683-L691), [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L211-L214); server: 50,028 = 50,028 lexemes, 32 = 32 tags, and 53 = 50 tags + 3 null categories ([ginblock.h#GinNullCategory](../../../../raw/postgres-17/src/include/access/ginblock.h#L204-L213)) |
+| The payload model's error is linear in the dead-key share | [README:389-396](../../../../raw/postgres-17/src/backend/access/gin/README#L389-L396); server: +0.09 / +12.62 / +25.16 / +37.69 / +50.19% at 0 / 25 / 50 / 75 / 100% of the key population replaced, increments of +12.53, +12.54, +12.53, +12.50 |
+| Dead entry tuples are smaller than live ones, so the average over-corrects | server: average entry tuple 32.0 bytes at `p = 0` falling to 24.0 at `p = 100`, putting dead tuples at 16 bytes; corrected estimate −7.48 to −18.44% on the sweep and −36.80% on `f1` |
+| A pending list is built from the FSM's free stock, the merge is not | [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L299-L328), [indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L37-L46); server: 0 free pages -> the file grew by exactly the 736 pending pages, 736 free -> zero growth on four consecutive rounds, and `pg_freespace` read 0 at every flush |
+| A flush cannot reuse the pages it frees | [freespace.c#RecordPageWithFreeSpace](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L186-L204), [freespace.c#fsm_search](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L684-L691), [ginfast.c:1014-1020](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1014-L1020) |
+| Flush growth is not a function of total slack | server: +194 blocks at 2,326,056 bytes of slack against +0 at 3,197,144 and +649 at 1,885,966 |
+| Waste is a lower bound iff the in-use core is at least the rebuild | server: `fh2_gin` 21.66% dead against 19.25% reclaimed with in-use 10,903,552 under a 11,239,424-byte rebuild, against `fh1_gin` holding by six blocks and `fh3_gin` holding; aged-core fill predicted the direction 3 of 3 |
+| The size bracket beats the metapage cross-check on writers | server: 13 of 14 against 0 of 14 under four concurrent writers, with the statement's self-check passing 14 of 14 |
+| A concurrent VACUUM defeats every check | server: 14 censuses of an unchanging 2,594-block file reported 0 to 2,294 dead pages against a truth of 2,368, all three checks passing every time |
+| A census strips usage count rather than evicting a hot set | [bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705), [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-17/src/include/storage/buf_internals.h#L72-L79), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341); server at 16,384 buffers: a 26,195-block census left a hot 3,704-page set fully resident at usagecount 1 (from 5) and destroyed a once-read set of the same size; a second census took the hot set too |
+| The FSM free-page value is derivable, not a constant to type | [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L226), [func.sgml#pg_control_init](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L27721-L27742), [htup_details.h#MaxHeapTupleSize](../../../../raw/postgres-17/src/include/access/htup_details.h#L563); server: the derived expression returned 8160, equal to the largest `avail` over 3,478 free GIN pages, and `pg_control_init()` is executable by `PUBLIC` |
+| Fresh-build fill is opclass-dependent but scale-insensitive | server: 50.16% to 72.11% across nine opclasses and shapes, while the same opclass at 50,000 and 800,000 rows read 51.12% and 50.92% with model errors of +33.18% and +33.60% |
 
 ## Open Questions
 
-1. **The `ginVersion <> 2` path is untested.** v17 always writes
+The eleven questions the review left are now ten. Two closed outright —
+`REINDEX CONCURRENTLY` on more than one shape, and cross-run reproducibility —
+one is new (number 7), and six of the survivors are materially narrower, including
+the payload model's, whose *detection* half is answered. Two were left alone at the
+asker's instruction: no second build at another `BLCKSZ`, and no repeated crash
+runs.
+
+1. **The `ginVersion <> 2` path is still untested.** v17 always writes
    `GIN_CURRENT_VERSION = 2` ([ginutil.c:355-382](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L355-L382)),
-   so no fixture could exercise the suppressed-slack branch or an uncompressed
-   posting-tree leaf. `uncompressed_pages` was 0 on every index measured, in both
-   runs.
-2. **The payload-and-fill model is now known to have a failure mode, and its
-   boundary is not mapped.** It predicts the rebuilt size within 3.1% on six of
-   seven fixtures and misses `f1` by +19.94% because dead entry tuples count as
-   payload. What is not known is how to detect that case from the census alone: a
-   count of entry tuples with empty posting lists would do it, but no contrib
-   function exposes one, and `gin_leafpage_items` only reads posting-tree leaves.
-   The fill fraction is still taken from the rebuild it predicts.
-3. **One page size, one alignment, one cluster.** Everything was measured at
-   `block_size` 8192, `MAXALIGN` 8, `fsync = off`, on a single 17.11 cluster, at
-   150k to 1,000,000 rows. `MaxFSMRequestSize` is 8160 only under those alignment
-   and block size assumptions; the FSM cross-check should read
-   `current_setting('block_size')`-derived values on unusual builds, and none was
-   tested.
-4. **Whether the flush grows the file is still not predictable from the census.**
-   The same fixture stayed at 758 blocks in one flush, grew by one block in the
-   first run's, and grew 836 -> 958 blocks in the autoanalyze flush. The deciding
-   factor is whether the FSM holds free pages when the merge needs them — the
-   pending list itself consumes them first — which the census cannot see before
-   the fact.
-5. **The lower bound has a 0.13-point margin, and no theory says it must hold at
-   all.** `f13_btgin_gin` read 62.71% dead against 62.84% reclaimed, and
-   `f2_pending_gin` already breaks the bound outright. What is missing is a rule
-   that says when dead pages *will* be given back by a rebuild; the twelve
-   fixtures only show that they usually are.
-6. **The race measurement is one workload at one index size.** 25 censuses of a
-   2,575-to-6,665-block index against a single-writer insert-and-flush loop showed
-   mixed-instant readings in 19 of 25, but nothing was measured for a concurrent
-   `VACUUM`, a concurrent posting-tree page deletion, or several writers, and no
-   bound is known on how wrong a single census can be.
-7. **`REINDEX CONCURRENTLY` was checked on one shape.** It returned the identical
-   byte count on the `f6`/`f9` recipe; a fixture whose rebuild is sensitive to the
-   extra transactions and waits (for example one still receiving inserts during the
-   rebuild) was not tried.
-8. **The opclass sweep is one fixture each, all at 200k rows.** `jsonb_path_ops`,
-   `gin_trgm_ops`, `btree_gin`, multicolumn and partial were each built once,
-   churned once, and rebuilt once; `jsonb_ops`, `array_ops` on other element types,
-   `tsvector` with weights, and `INCLUDE`-less multicolumn variants beyond the one
-   tried were not measured.
-9. **The eviction measurement used a 64 MB cache.** Eviction was demonstrated
-   (6,665 resident pages down to 3,723), but nothing shows what a census costs a
-   production workload with a large cache and a working set that matters — the
-   victim pages here were the census's own.
+   so no fixture can exercise the suppressed-slack branch or an uncompressed
+   posting-tree leaf. `uncompressed_pages` was 0 on every index measured, across
+   all three runs and all 26 scored fixtures.
+2. **The payload-and-fill model can be diagnosed but not corrected.** The
+   entry-tuple probe now measures the dead-key population exactly, and the error is
+   linear in it, but turning that into a corrected prediction needs the *size* of a
+   dead entry tuple, which no contrib function exposes: `gin_leafpage_items` reads
+   only posting-tree leaves, and using the average tuple size over-corrects by
+   −7.5% to −36.8%. The two estimates bracket the truth, which is weaker than a
+   prediction. The fill fraction is also still taken from the rebuild it predicts.
+3. **One page size and one alignment, though no longer hardcoded.** The FSM
+   cross-check now derives `MaxFSMRequestSize` from `pg_control_init()` instead of
+   assuming 8160, and the entry-tuple identity confirms
+   `SizeOfPageHeaderData = 24` and `sizeof(ItemIdData) = 4` empirically on this
+   build. But everything was still measured at `block_size` 8192 with `MAXALIGN` 8
+   on one cluster, and the asker ruled out a second build at another `BLCKSZ`, so
+   the derived expression is unverified off the default.
+4. **The merge's own page demand is still unpredictable.** Two of the three moving
+   parts are now pinned: the pending list is built from the FSM's free stock (0 free
+   pages -> the file grew by exactly the 736 pending pages; 736 free -> zero growth,
+   four times running), and a flush can never reuse the pages it is itself freeing.
+   What is left is how many pages the merge wants, and total slack does not predict
+   it — 194 blocks of growth at 2.33 MB of slack against none at 3.20 MB — because
+   slack is bound to the page that holds each key. Nothing was measured about the
+   distribution of per-page slack, which is what would close this.
+5. **The lower bound now has a rule, but the rule needs a rebuild to evaluate.**
+   `waste <= reclaimed` holds exactly when the in-use core is at least as big as the
+   rebuild, and the density form of that test predicted the direction on 3 of 3 new
+   fixtures including a six-block near miss. But the fresh-build fill it compares
+   against can only come from an actual rebuild or a twin, and fresh fill ranges
+   from 50.16% to 72.11% across opclasses, so there is still no way to evaluate the
+   rule in advance on an index you have not rebuilt.
+6. **A concurrent VACUUM defeats every cross-check, and no bound is known.** 14
+   censuses during one VACUUM of a 2,594-block index reported dead-page counts from
+   0 to 2,294 against a truth of 2,368 — 91% of the file — with the self-check, the
+   metapage check and the size bracket all passing every time. The size bracket
+   catches writers (13 of 14) but is blind here because the file does not change
+   size. Nothing was measured for several simultaneous vacuums, for a census
+   straddling a `REINDEX CONCURRENTLY` swap (11 of 11 attempts landed between
+   censuses, not inside one), or for how wrong a single census can get in the worst
+   case.
+7. **Round 5 of the flush test grew the entry tree by 649 pages at once and that
+   is not explained.** Entry slack jumped from 584,380 to 5,264,176 bytes in one
+   flush of the same 50,000 rows that the previous rounds absorbed for nothing. A
+   cascade of entry-page splits is the obvious reading, and inline posting lists
+   growing toward `GinMaxItemSize` is the obvious cause, but neither was verified
+   against the split path.
+8. **The opclass sweep is broader but still one fixture per opclass.** Nine
+   opclasses and shapes have now been scored — `array_ops` on `int[]` and `text[]`,
+   `jsonb_ops`, `jsonb_path_ops`, `gin_trgm_ops`, `btree_gin`, plain and weighted
+   `tsvector`, multicolumn, partial — and the 16x scale check moved the model error
+   by 0.42 points, so scale is no longer a suspect. Untested: collation-dependent
+   text keys, `INCLUDE`-style variants beyond the one multicolumn fixture, and any
+   opclass under a *mixture* of surviving and dying keys other than the five-point
+   `tsvector` sweep.
+9. **The eviction result is one cache size and a synthetic working set.** The
+   usage-count mechanism was measured at 16,384 buffers with two equal-sized tables,
+   one hot and one read once. What a census costs a real mixed workload — many
+   relations at different usage counts, a bgwriter and checkpointer running, and a
+   cache far larger than the index — was not measured, and neither was the point at
+   which repeated censuses start to hurt a set read more than eight times.
 10. **The crash test produced 4 and 7 all-zero pages, not a rule.** Both attempts
     used the same 600k-row insert and the same 4-second kill point, so the count is
-    incidental; what governs how many zeroed blocks survive a crash was not
-    investigated, and no case was found where a zero page appeared without a crash.
-11. **Cross-run reproducibility is established for one fixture family, not all.**
-    `f4`, `f5` and `f6` reproduced the first run's figures byte for byte, and the
-    `f5`/`f6` recipe has now built the same 898-block index four times. `f1`, `f2`,
-    `f3`, `f7` and everything from `f8` on are this run only, because the first
-    run's corpora were never published.
+    incidental. The asker ruled out further crash runs, so what governs how many
+    zeroed blocks survive a crash is still uninvestigated, and no case was found
+    where a zero page appeared without a crash.
 
 ## Source References
 
@@ -1199,9 +1620,17 @@ afterwards.
 - [src/backend/access/gin/ginentrypage.c](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L458-L692) — `entryIsEnoughSpace` and `entrySplitPage`.
 - [src/backend/access/gin/gindatapage.c](../../../../raw/postgres-17/src/backend/access/gin/gindatapage.c#L396-L528) — `pd_lower` maintenance and the compressed-only free-space rule.
 - [src/backend/access/gin/README](../../../../raw/postgres-17/src/backend/access/gin/README#L389-L412) — the page-deletion design.
-- [src/backend/storage/freespace/indexfsm.c](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L14-L74) — the index FSM's used/unused convention.
+- [src/backend/storage/freespace/indexfsm.c](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L14-L74) — the index FSM's used/unused convention, `GetFreeIndexPage` and `RecordFreeIndexPage`.
 - [src/backend/storage/freespace/freespace.c](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L36-L66) — the FSM category table and `MaxFSMRequestSize`.
+- [src/backend/storage/freespace/freespace.c](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L118-L204) — `GetPageWithFreeSpace` and `RecordPageWithFreeSpace`'s bottom-level-only warning.
+- [src/backend/storage/freespace/freespace.c](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L648-L691) — `fsm_set_and_search` and `fsm_search`, which starts at the root.
+- [src/backend/storage/freespace/README](../../../../raw/postgres-17/src/backend/storage/freespace/README#L183-L188) — when upper-level FSM nodes are brought up to date.
 - [src/backend/storage/page/bufpage.c](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L898-L973) — `PageGetFreeSpace` and `PageGetExactFreeSpace`.
+- [src/include/storage/bufpage.h](../../../../raw/postgres-17/src/include/storage/bufpage.h#L211-L234) — `SizeOfPageHeaderData` and `PageIsNew`.
+- [src/backend/storage/buffer/freelist.c](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341) — the clock sweep that decrements usage counts and takes the first zero.
+- [src/include/storage/buf_internals.h](../../../../raw/postgres-17/src/include/storage/buf_internals.h#L72-L79) — `BM_MAX_USAGE_COUNT` and why it is small.
+- [src/backend/storage/buffer/bufmgr.c](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705) — `PinBuffer` raising the usage count on an unstrategised read.
+- [src/backend/utils/misc/pg_controldata.c](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L226) — `pg_control_init`, source of `max_data_alignment` and `database_block_size`.
 - [src/backend/access/heap/vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L731) — the per-index VACUUM VERBOSE line.
 - [src/backend/access/heap/heapam.c](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L434-L458) — the `NBuffers / 4` seq-scan ring-buffer rule the census does not have.
 - [src/backend/storage/ipc/procarray.c](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1966-L1991) — horizon selection when the relation is NULL.
