@@ -2,6 +2,134 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-26] follow-up v17 | the GIN waste statements on PostgreSQL 12, and the whole corpus on both majors
+
+- Extended [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
+  Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) with a third
+  follow-up against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11):
+  make all four published statements run on v12, and run every test on both majors.
+- Prompt hygiene: the asker chose "correct and restate". The original read
+  `follow agents.md , in postgresql 17 , for question : ... , add follow up: make sure
+  that statement run on v12 , run all test on v12 and v17` - `agents.md` for AGENTS.md,
+  lowercase `postgresql`, spaces before commas and the colon, `for question :`,
+  `add follow up:`, `that statement run`, `all test`. Three scoping answers were taken
+  up front: all four statements (not just the census), the whole corpus (not a
+  portable subset), and both sandboxes deleted on filing.
+- New provenance: **two** isolated clusters built out of tree from this repo's own
+  pins - 12.2 (`server_version_num` 120002, port 55412, `pageinspect` 1.7) and 17.11
+  (170011, port 55417, `pageinspect` 1.12) - `--without-readline --without-zlib`,
+  `block_size` 8192, `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`. The
+  evidence trees were untouched; both sandboxes were deleted when the page was filed.
+- **Three edits make the statements portable.** `get_raw_page` takes `int4` on 12.2
+  (`f18aa1b2039` widened it to `int8`, earliest tag `REL_14_0`), so the block number
+  needs `::int`; the census needs a `pagesize = 0` class ahead of the flags tests; the
+  probe needs the same guard on its `'{}'` filter. The FSM cross-check and size bracket
+  run unchanged and derive 8160 on both. `page_header`'s widths are `smallint` on 12.2
+  and `int` on 17.11 (`127404fbe28`, `REL_15_0`), which is harmless at 8 kB pages.
+- **The decisive difference is all-zero pages.** 12.2 returns `flags = {}` where 17.11
+  returns a NULL row; the fix `cd4868a5700` is `Backpatch-through: 10` and its 12-branch
+  backport `5378d55cb2f` is first tagged `REL_12_11`, after the 12.2 pin. With two
+  zeroed blocks appended to an index file, the filed text reads 56 entry / 0 new /
+  0 waste bytes on 12.2 against 54 / 2 / 16,384 on 17.11, and the probe's downlinks read
+  41 against 53. A `dd`-zeroed metapage aborts the entire census on 12.2. `-m immediate`
+  mid-insert produced no zeroed pages on either server, so the earlier 4-and-7 result
+  did not reproduce.
+- **26 of 27 scored fixtures are byte-identical across the majors**, including all seven
+  published fixtures reproducing every filed figure, with identical tallies: lower bound
+  24 of 27, upper 25 of 27, upper-plus-pending 26 of 27. Identical as well: the `f2`
+  lifecycle in all four states, the three-VACUUM horizon sequence (`prune_xid` = the
+  holder's `backend_xmin`, 768 recycled on the next VACUUM after release with no new
+  xids), the five flush rounds and their FSM readings, the privilege matrix, both
+  timeouts, the standby refusals, the single-read proof (1125 against 2230 buffers on
+  17.11, 1122 against 2227 on 12.2) and rebuild equivalence.
+- **Two headline claims corrected.** `waste + slack` is not an upper bound with a large
+  dead-key population (an 800k-row `jsonb_path_ops` index with 819,770 dead entry tuples
+  read 43.43% against 50.00% reclaimed) nor with a live pending list (13.73% against
+  40.00%, repaired by adding `pending_pct`; the settled twin behaves). And a census does
+  evict a hot working set once the target exceeds the cache - at 8,192 buffers a
+  9,616-block census took a 1,862-page hot set from `usagecount` 3 to 80 pages on 17.11
+  and to 0 on 12.2, where a 16k-block seq scan left it intact.
+- **A rebuild is not one number.** The same index rebuilt to 34,611,200 bytes at
+  `maintenance_work_mem` 64MB and 50,814,976 at 96MB and above, on both majors, 47%
+  apart, with payload constant near 25.6 MB and all the movement in `entry_slack`;
+  `ginBuildCallback` spends a budget measured with `GetMemoryChunkSpace`, and 17.11 fits
+  about 7% more per flush (v12 at 68MB and 70MB bracket v17 at 64MB), which is the sole
+  reason the 27th fixture differs. Not parallelism: 0, 2 and 4 workers give the same
+  bytes.
+- **Open question 7 closed**: the round-five entry-tree explosion is slack exhaustion -
+  entry slack falls by an almost constant 395 kB a round (2,126,732 -> 538,900) with the
+  tree pinned at 572 pages, then 255 splits arrive at once.
+- Other differences filed: 12.2's `pgstatginindex` answers for an invalid index where
+  17.11 refuses (`13503eb5905`, `REL_17_0`), 12.2 prints the VACUUM cross-check as one
+  deleted-pages number inside a `DETAIL` block with no "newly deleted" split, three
+  refusal messages are worded differently, and v13+ picks up an insert-only table through
+  `autovacuum_vacuum_insert_threshold`, which 12.2 does not have. The race-detector
+  ranking is corrected: it depends on the writer, not the version (metapage check 23 of
+  25 under four `fastupdate` writers where the size bracket caught 4).
+- Page updates: Contents gained eleven entries; the Short answer gained a qualifying
+  paragraph; the census and probe now carry the portability edits inline; eleven new
+  `###` sections carry the port, the all-zero-page analysis, the corpus comparison with
+  the reconstructed fixture SQL, the two new bound failures, the `maintenance_work_mem`
+  result, the VACUUM wording, the refusal differences, the identical-behaviour list, the
+  concurrency correction, the flush cascade and the eviction re-measurement. Reading
+  rules gained seven bullets, Context Reviewed three, Evidence Map eighteen rows,
+  Open Questions went 10 -> 15 (one closed, five new), and Source References gained
+  seven entries.
+- All 302 markdown source citations re-checked for in-bounds line ranges against the
+  pinned checkout: zero problems, no wrong-version references, no wikilinks.
+  `verified_by_agent` refreshed to `claude-opus-5-max 2026-08-26T16:30:12Z`; the page
+  keeps `verified: false`. Root index, `wiki/v17/index.md`, the v17 coverage cell and a
+  new `## Coverage Notes` entry all describe the follow-up.
+- Cleanup: both servers were stopped and `.wiki-runtime/tmp/ginv/` removed at the
+  user's instruction, reclaiming **13,569,785,002 bytes** (13 GiB) and leaving
+  `.wiki-runtime/tmp/` empty. Both pinned checkouts are unmodified
+  (`45b88269a35`, `786db8dcf16`, zero-length `git status --porcelain`), because both
+  builds were made out of tree.
+
+## [2026-08-26] cleanup | removed the ginw2 GIN sandbox from .wiki-runtime/tmp
+
+- Removed `.wiki-runtime/tmp/ginw2/` at the user's request, reclaiming exactly
+  **4,248,710,531 bytes** (4.0 GiB) and leaving `.wiki-runtime/tmp/` empty.
+  `.wiki-runtime/` is now 13 MB, all of it `venv/`. This is the sandbox behind
+  [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md), which the
+  entry below had retained for re-verification.
+- Disposable cluster data accounted for nearly all of it: `data/` 3.6 GB (the six
+  databases `ginw`, `ginw3`, `ginw4`, `ginw5`, `ginw6`, `ginw7`) and the
+  `pg_basebackup` standby `data_sb/` 319 MB. The rest was the out-of-tree VPATH build
+  tree at 74 MB and the exact-pin 17.11 install at 35 MB, so **no compiled 17.11
+  install now remains** and the next exact-pin GIN experiment must rebuild from
+  `raw/postgres-17/`.
+- The 860 KB of harness, results and server logs went with it, on the user's
+  instruction — the 44 harness files under `work/` and 45 result sets under `results/`
+  inventoried in the entry below, plus 33 run logs under `logs/`. The cost of this is low
+  because that pass published its **fixture SQL inside the page** and then proved the
+  published SQL reproduces every filed number byte for byte in two virgin databases,
+  so the page is now its own reproduction recipe. That was not true of the earlier
+  `ginw` sandbox, whose deletion forced a rebuild *and* a re-derivation of unpublished
+  fixtures.
+- Nothing was running. No postgres, `initdb` or `pg_ctl` process existed, `sock/` held
+  no socket, and neither `data/` nor `data_sb/` had a `postmaster.pid` — the previous
+  pass had already stopped the server and returned `shared_buffers` to 256MB. No
+  `pg_ctl stop` was needed and no cluster was killed mid-write.
+- Also cleared three stale tooling files: `logs/recent_log.log`, `logs/wiki_lint.log`
+  and `cache/wiki_lint/last-run.txt`. Kept `venv/`, and kept the empty `cache/`,
+  `indexes/{ctags,search,tree-sitter}`, `logs/` and `tmp/` scaffold, which
+  `ensure_runtime_dirs()` recreates on every script run anyway.
+- **Three stale sandbox pointers corrected**, the same failure this page already hit
+  once: `wiki/versions.md` said `.wiki-runtime/tmp/ginw2/` "is retained" in the
+  2026-08-26 note and the 2026-08-25 note, and the page's own `## Context Reviewed`
+  described it in the present tense. All now say it was deleted and that reproduction
+  means rebuilding from `raw/postgres-17/`. No source citation, pin, measurement, or
+  verification field on any page changed; the page keeps
+  `verified_by_agent: claude-opus-5-max 2026-08-26T15:02:41Z`, because every claim it
+  makes rests on pinned source or on measurements it publishes, not on the sandbox
+  still existing.
+- `raw/` untouched. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors,
+  0 warnings.
+
 ## [2026-08-26] follow-up v17 | the GIN waste page's open questions attacked with measurements, 11 -> 10
 
 - Third pass over [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
