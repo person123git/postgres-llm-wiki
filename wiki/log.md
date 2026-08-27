@@ -2,6 +2,108 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-27] review v12 | VACUUM FULL I/O on a near-empty heap, plus the bookkeeping it never got
+
+- Reviewed
+  [How Much I/O a VACUUM FULL Performs on a Multi-GB, Near-Empty Heap in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/vacuum-full-io-on-near-empty-heap.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2, tag `REL_12_2`), with
+  corrections made **in place**. Scope confirmed with the user up front: **source-only
+  re-verification**, matching the original asker's scoping, so no 12.2 server was built.
+- **The page was an orphan.** It existed as an untracked file, linked from nothing and absent
+  from the log; `scripts/wiki_lint` was already reporting two warnings for it. This review
+  finishes the `MANDATORY Bookkeeping` steps: entries added to `wiki/index.md` (under
+  `#### Storage and Vacuum` for PostgreSQL 12.2) and `wiki/v12/index.md`, the v12 coverage cell
+  and a dated coverage note added to `wiki/versions.md`, and this entry.
+- **Mechanical checks first.** A throwaway checker under `.wiki-runtime/tmp/` extracted every
+  citation and validated path existence, range bounds, version match, and label-versus-range
+  agreement: **246 citations, 152 distinct ranges, zero problems** - no dead paths, no
+  out-of-range line numbers, no cross-version citation, and every `file.ext:NN-MM` label
+  agreeing with its own URL fragment. A second checker rebuilt the `## Contents` block from the
+  headings: **25 entries, all anchors resolve, correct nesting, document order**. Front matter
+  order, the `(unverified)` title suffix, the `storage-and-vacuum` category, and the
+  `../../../../raw/postgres-12/` prefix depth were all already correct.
+- **Finding 1, the observability advice was backwards.** The page said
+  `pg_stat_progress_cluster.heap_blks_scanned` "advances once per block with no skipping" and
+  called it "the honest number". It is not a per-block counter: the only write is inside the
+  per-tuple loop of `heapam_relation_copy_for_cluster`, immediately after
+  `table_scan_getnextslot` returns a tuple, as `heapScan->rs_cblock + 1`
+  (`heapam_handler.c:810-821`), and **no code sets it to `heap_blks_total` when the scan ends**
+  (the loop just exits into `end_heap_rewrite`, `heapam_handler.c:923-974`). Under `SnapshotAny`
+  a block yields a tuple only when it holds at least one `LP_NORMAL` line pointer, so on exactly
+  the shape this page is about the counter stands still across every run of tupleless blocks and
+  finishes below `heap_blks_total` - its last value is one past the block of the last tuple
+  returned. The section now leads with `pg_statio_all_tables.heap_blks_read`, and the read-side
+  section cross-links the caveat.
+- **Finding 2, "empty page" was too strong.** `PageGetMaxOffsetNumber(dp) == 0` holds only for a
+  page that never held a line pointer. v12's `PageRepairFragmentation` states "It doesn't remove
+  unused line pointers! Please don't change this." (`bufpage.c:471-482`), and nothing under
+  `src/backend/access/heap/` touches `pd_lower`, so a page emptied by `DELETE` plus `VACUUM`
+  keeps its array at its historical high-water mark; `heapgettup` walks it and rejects each
+  entry on `ItemIdIsNormal` (`heapam.c:651-700`), with no visibility test, no reform and no
+  rewrite call. Corrected in both the short answer and the read-side section, and added to the
+  evidence map.
+- **Finding 3, the published SQL could not apply its own timeouts.** Both statements opened with
+  `SET LOCAL statement_timeout` / `SET LOCAL lock_timeout` and no `BEGIN`. At top level outside a
+  transaction block, `ExecSetVariableStmt` calls `WarnNoTransactionBlock` (`guc.c:8115-8123`) and
+  `CheckTransactionBlock` raises `WARNING: SET LOCAL can only be used in transaction blocks`
+  (`xact.c:3404-3430`), leaving the following `SELECT` untimed. Both snippets are now wrapped in
+  `BEGIN` / `COMMIT`, with the reason cited.
+- **One arithmetic error.** The worked example's `t_len = 500` row printed
+  `MAXALIGN(t_len) + 4` as 504; `MAXALIGN(500)` is 504, so the column is **508**. No derived
+  column moves, since `floor(8168 / 508) = floor(8168 / 504) = 16`. The other three rows (36, 52,
+  108) were correct, and the whole capacity derivation
+  `floor(8168 / (MAXALIGN(t_len) + 4))` was re-derived from the `raw_heap_insert` test and
+  `PageGetHeapFreeSpace`'s one-`ItemIdData` deduction and holds exactly; `MaxHeapTuplesPerPage`
+  = `floor(8168 / 28)` = **291** was confirmed from `offsetof(HeapTupleHeaderData, t_bits)` = 23.
+- **Two citation ranges were too narrow for the claim they carried.**
+  `md.c#mdunlinkfork` 284-322 -> **284-359**: the deferred `register_unlink_segment` is line 323
+  and the immediate later-segment unlink loop is 326-359, both outside the old range.
+  `bufpage.c#PageGetHeapFreeSpace` 664-695 -> **664-714**: both `space = 0` returns are at 701
+  and 710. Fixed in the body and in the evidence map.
+- **Three precision fixes.** Writes are `ceil(live bytes / usable page bytes)` pages *including*
+  the final partial page, not "plus" it (the old wording double-counted). `VacuumCostBalance`
+  accrues only while `VacuumCostActive`, which needs `vacuum_cost_delay > 0`, so at the v12
+  default of `0` only `VacuumPageHit`/`VacuumPageMiss` move. And the `BAS_BULKREAD` ring does not
+  strictly spare the cache: `StrategyRejectBuffer` sets the rejected slot to `InvalidBuffer`
+  (`freelist.c:685-704`) so the retry in `BufferAlloc` (`bufmgr.c:1122-1139`) takes a buffer from
+  the clock sweep.
+- **Six uncited claims now carry evidence**: `XLogIsNeeded()` as `wal_level >= WAL_LEVEL_REPLICA`
+  plus `RelationNeedsWAL` (`xlog.h:177-181`, `xlog.h:159-165`, `rel.h:515-520`); the absence of
+  any free-space-map or `RelationGetBufferForTuple` call in `rewriteheap.c`, whose sole FSM
+  reference is the TOAST `HEAP_INSERT_SKIP_FSM` flag; the index-driven
+  `systable_beginscan_ordered` chunk read in `toast_fetch_datum` (`tuptoaster.c:1904-1935`); the
+  B-tree build's `maintenance_work_mem` sort budget (`nbtsort.c:442-445`); why the first plain
+  `VACUUM` after the rewrite cannot skip a block (`visibilitymap_get_status` returns 0 with no VM
+  fork, `visibilitymap.c:329-356` / `553-587`, feeding `vacuumlazy.c:609-636`); and
+  `XLogHintBitIsNeeded()` behind open question 3 (`xlog.h:183-192`,
+  `bufmgr.c#MarkBufferDirtyHint`).
+- **Evidence widened where the old wording was incomplete**: the "no `visibilitymap`" and "no
+  `PrefetchBuffer`" greps now also name `heapam_handler.c`, the file that actually holds the
+  scan-and-copy loop (both still return zero matches there), and the one `PrefetchBuffer` call in
+  `heapam.c` is placed in `heap_compute_xid_horizon_for_tuples`, outside this path. Three new
+  evidence-map rows and a `heap_tuples_scanned`-equals-`heap_tuples_written` note were added, the
+  latter because both come from one `pgstat_progress_update_multi_param` on `*num_tuples`.
+- Everything else re-derived and left standing: `VACUUM FULL` as `cluster_rel` with `InvalidOid`
+  and `AccessExclusiveLock`; `use_sort = false` so no tuplesort; one `ReadBufferExtended` per
+  block with page mode off under `SnapshotAny`; `smgrextend(..., skipFsync = true)` outside shared
+  buffers; the single closing `heap_sync`; relfilenode swap with dirty old buffers dropped
+  unwritten; index rebuilds over the new heap; TOAST swapped by content with `rd_toastoid`; the
+  32-buffer ring (`256 * 1024 / BLCKSZ`, capped at `NBuffers / 8`); cost GUC defaults
+  `0`/`200`/`1`/`10`/`20`, all `PGC_USERSET`; the eleven files that call `vacuum_delay_point`
+  (`analyze.c`, `vacuumlazy.c`, the three type-analyze functions, and the B-tree/hash/GiST/GIN
+  (including `ginfast.c`)/SP-GiST vacuum routines), none of them in the rewrite path; and
+  `pg_stat_progress_cluster` appearing in the test tree only as a `rules.out` view dump.
+- Citations **246 -> 307**, all re-checked clean; open questions stay at **6**, with open
+  question 1 now naming two newly identified unmeasured quantities (how far `heap_blks_scanned`
+  ends below `heap_blks_total`, and surviving line pointers per page).
+  `verified_by_agent` set to `claude-opus-5-max 2026-08-27T21:44:14Z`; `verified:` left `false`
+  for a human.
+- `raw/postgres-12/` untouched at `45b88269a35` with a zero-length `git status --porcelain`; no
+  server built, no `.wiki-runtime` sandbox created beyond two throwaway checker scripts under
+  `.wiki-runtime/tmp/`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-27] review v17 | GIN REINDEX COMMENT-baseline page re-verified on a second 17.11 build
 
 - Reviewed
