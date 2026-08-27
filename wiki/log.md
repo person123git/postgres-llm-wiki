@@ -2,6 +2,216 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-27] review v17 | index entry count from the catalogs, re-measured on a rebuilt cluster
+
+- **Reviewed** [Reading an Index's Entry Count From the Catalogs, for Every Index Type, in
+  PostgreSQL 17 (unverified)](v17/questions/indexing/index-entry-count-from-catalogs.md)
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), the page filed
+  earlier the same day. Corrections were made **in place**.
+- Prompt hygiene: the request read `follow agents.md , in postgresql 17 , review question:
+  ...` — `agents.md` for AGENTS.md, lowercase `postgresql`, and a space before each comma.
+  The asker chose "correct and restate", so `## Question` now carries a
+  `### Review prompt, 2026-08-27` block with the corrected prompt and the corrections named.
+  Three scoping answers were taken up front and are filed there: audit the citations **and**
+  re-measure on a server, correct **in place**, and recreate the test cluster then **delete
+  it** when the review is filed.
+- **The environment had to be half-rebuilt.** `.wiki-runtime/tmp/idxent/` still held the
+  full harness (11 SQL files plus the citation checker) and a working exact-pin install
+  (`postgres (PostgreSQL) 17.11`, `server_version_num` 170011), but the data directory and
+  build tree were gone, so the cluster was re-`initdb`'d and the fixtures were rebuilt in
+  two fresh databases.
+- **Source: 125 of 125 citations clean.** Every distinct `(file, start, end)` resolves,
+  sits in bounds, and contains the code, comment or documentation text the claim attributes
+  to it — re-read individually for the catalog headers, the seven AMs' build callbacks and
+  `amvacuumcleanup` paths, `index_update_stats`, `update_relstats_all_indexes`, `analyze.c`'s
+  three writers, the sentinel sites in `relcache.c`/`heap.c`/`index.c`, and all three SGML
+  files. **Three citation labels disagreed with their own line ranges** and were fixed:
+  `pg_class.h:62-70` -> `62-69`, and `nbtsort.c:585-600` -> `576-600` in both the body and
+  the Evidence Map. `scripts/wiki_lint` cannot see either class of defect.
+- **The published statement is byte-identical to the tested one.** 68 lines, compared line
+  by line against `32_statement_v3.sql` after stripping that file's header comment.
+- **Reproduction: every measured figure came back byte for byte except three that cannot.**
+  14 of 14 exact in one database and 14 of 14 again in a second built from scratch, with
+  every value identical (580766 / 597901 / 1178667 / 30000 / 150000 / 116 / 200000, plus the
+  on-disk truths 2000 and 150379); 15 of 16 at 180,000 rows with the same partial-BRIN miss
+  at `12` against `116`, delta `-104`, error `-89.655%`; the 522874 / 538110 / 1060984 GIN
+  truths; the 100 / 98 / 198 metapage `n_entries` against 200000 `reltuples`, with 100
+  distinct array elements and 98 distinct lexemes measured directly; the seven forgery
+  verdicts and the three `VACUUM (DISABLE_PAGE_SKIPPING)` repairs to 180000 while forged
+  btree and hash stayed at 777777; `115` against 116 summaries on a **3702**-block heap whose
+  range 115 starts at block **3680**; 116 on disk for the partial BRIN with **104** empty
+  summaries; 999 / 1000 on the partition leaves; `0` on an empty-table build while the table
+  read `-1`, `1000` after a rebuild, `-1` after `TRUNCATE` plus `REINDEX`, `0` on the
+  partitioned index and `0` on the invalid index left by a failed
+  `CREATE UNIQUE INDEX CONCURRENTLY`; and **20,000,001** GIN entries reading back as
+  `2e+07` / `20000000`, delta `-1`, with 20,000,000 exact.
+- **The three that moved are now labelled as run-specific, which is a correction to how the
+  page read.** The parallel BRIN count is nondeterministic by construction: a second
+  five-point `max_parallel_maintenance_workers` sweep returned **116, 221, 328, 305, 326**
+  against the filed 116, 222, 325, 328, 311, and three four-worker builds returned **326,
+  330, 325** against 317, 319, 328, so the page now gives the range 305-330 and notes the
+  on-disk count read 116 in all ten sweep builds. The two `ANALYZE` cells for *partial*
+  indexes are sample-derived through `tupleFract = numindexrows / numrows`: measured
+  **140142** and **18444** against the filed 139494 and 17736 (and 140478 / 17958 on a later
+  pass), so both cells are marked `(sampled)`. The provenance section's clock times
+  (`08:02:47` against `07:58:38`) were replaced by the invariant the review reproduced —
+  `vacuum_looks_newer = true` twice, once with BRIN unchanged at 180000 and once with btree
+  and hash left at 180000 while BRIN moved to 115.
+- **Four findings were added because the review measured them.** (1) A BRIN index on an
+  **empty** table reads `reltuples = 1`: the serial build's final `form_and_insert_tuple`
+  has no empty-range guard, unlike the parallel `form_and_spill_tuple`, so it counts an
+  empty final range — measured against one empty-range summary on disk and a zero-block
+  heap. The page's "serial builds exclude empty ranges" heading was wrong on attribution and
+  is now "empty ranges are backfilled without being counted". (2) Every access method
+  allocates at least one page during `ambuild`, measured on an empty table as `relpages` of
+  1 (btree, GiST, bloom), 2 (GIN), 3 (SP-GiST, BRIN) and 4 (hash), so the statement's
+  `zero: no storage yet` branch is **unreachable** for a valid non-partitioned index — the
+  two shapes that do read `relpages = 0` are caught by the earlier `relkind = 'I'` and
+  `NOT indisvalid` branches, and an index on an empty table therefore reports `plausible`
+  with `entry_count = 0`. (3) A **non-partial** BRIN undercount exists: a heap whose rows
+  were all deleted without a VACUUM read `1` against **8** summaries on disk over 256 blocks
+  at `pages_per_range = 32`. (4) That same fixture left `pg_class.relpages = 0` on a table
+  holding 256 real blocks, so the `ct.relpages > 0` guard silently disabled the BRIN bound
+  and `brin_max_ranges` came back NULL.
+- **A verdict census was added**, because the page described the statement's bounds without
+  ever saying which branches fire. Run over 20 indexes in one database and 16 in another,
+  eight of nine branches fired, and only two *prove* an overwrite: the BRIN bound caught all
+  three BRIN indexes after `ANALYZE` (180000, 180000 and 17790 against a bound of 116), and
+  the GIN bound caught `i_gin_multi` (180000 against a 360000 floor). The GIN bound needs
+  `indnatts >= 2` — a single-column GIN index's floor is one entry per row, exactly what an
+  overwrite writes, so `suspect` is the strongest verdict available there — and hash at
+  150000 against a 200,000-row table was correctly left `plausible`.
+- **GUC apply scopes were added** for every setting the page sets, per `MANDATORY GUC
+  Changes`: `statement_timeout` and `lock_timeout` are `PGC_USERSET` (session/transaction),
+  `max_parallel_maintenance_workers` is `PGC_USERSET`, and `autovacuum` is `PGC_SIGHUP`
+  (reload), each cited to `guc_tables.c` and added to Source References.
+- **Open question 2 narrowed with history**: the parallel BRIN count is written by
+  `b4375717147` ("Allow parallel CREATE INDEX for BRIN indexes", first tag `REL_17_BETA1`),
+  whose own commit message describes the leader merge that makes the number wrong, and
+  `bs_numtuples` is touched by no other commit reachable from this pin except the original
+  BRIN commit `7516f525941`. Open question 3 now carries the two-run 305-330 bracket, 8
+  carries the `relpages >= 1` caveat for out-of-core AMs, and a new question 9 records that
+  the two `impossible` verdicts were exercised on one fixture set with no false positive
+  constructed. Open questions 8 -> 9.
+- Page mechanics re-checked mechanically: 26 of 26 `## Contents` entries resolve and match
+  document order, all 27 page-internal anchors resolve, no citation label disagrees with its
+  URL, no Obsidian wikilinks, front-matter field order correct, and the title still carries
+  `(unverified)` with `verified: false`. Category placement is unchanged and correct
+  (`questions/indexing/`).
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. `wiki/index.md`,
+  `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged and clean; the page
+  keeps `verified: false` with `verified_by_agent` refreshed to
+  `claude-opus-5-max 2026-08-27T13:07:45Z`.
+- Environment: the recreated cluster under `.wiki-runtime/tmp/idxent/data` was **deleted**
+  at the asker's instruction once the review was filed, so the exact-pin install and the
+  harness remain but re-verification means another `initdb` plus a fixture rebuild.
+
+## [2026-08-27] answer v17 | reading an index's entry count from the catalogs, for every index type
+
+- Filed `wiki/v17/questions/indexing/index-entry-count-from-catalogs.md` against unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), answering how a SQL query reads
+  an index's entry count from the catalogs for all index types. 125 distinct source
+  citations, all machine-checked to resolve to a non-blank line range in the pinned
+  checkout.
+- Prompt hygiene: the request wrote `agents.md` for AGENTS.md, lowercase `postgresql`,
+  `sql` for SQL, spaces before commas, `all indexes types` for `all index types`, omitted
+  the main verb, and phrased the object as `the number of tuples from the heap are indexed
+  by the one index`. The asker chose "correct and restate", so `## Question` carries the
+  corrected text and `### Prompt corrections` names every change. Three scoping answers
+  were taken up front and are filed: report the **AM entry count** rather than the heap-row
+  count and explain the divergence; **build and measure** rather than answer from source
+  alone; and restrict the statement to **catalogs plus `pg_stat_*` views**, with
+  `pageinspect` used only as ground truth.
+- **The answer is one column.** `pg_class.reltuples` on the index's own row is the only
+  catalog column in 17.11 that can hold this count. Ruled out with line numbers:
+  `pg_class.relpages`/`relallvisible` (page counts), `pg_index.indnatts`/`indnkeyatts`
+  (column counts), all four `pg_am` columns, `pg_statistic.stadistinct` (a per-column
+  distinct estimate that can be a negative multiplier, even on the rows `ANALYZE` writes
+  keyed on an index OID), and both extended-statistics catalogs. No system view selects
+  `reltuples` at all, and `pg_stat_all_indexes` has no stored-entry column -
+  `idx_tup_read` is documented as entries *returned by scans*.
+- **The unit is set by the access method, and the units disagree by orders of magnitude.**
+  B-tree counts heap TIDs before deduplication (200000 catalog against **2000** on-disk
+  index tuples on a 200-duplicates-per-key index, a factor of 100; 200000 against 150379 on
+  a 25%-NULL column); hash omits every NULL-keyed row via `_hash_convert_tuple`'s early
+  return (150000 against B-tree's 200000 on the same column); GIN sums extracted entries
+  over rows **and** indexed columns (1178667 = 580766 + 597901 exactly), with one
+  placeholder entry for NULL and one for `'{}'` (both measured at 30000); BRIN counts
+  summarized page ranges (116 against 200000 rows); GiST, SP-GiST and contrib bloom count
+  one entry per row.
+- **Accuracy: 14 of 14 byte-exact** against `pageinspect` and plain-SQL ground truth
+  immediately after a serial rebuild, across all seven access methods, then **reproduced
+  byte for byte from scratch in a second database** - 580766, 597901, 1178667, 150000, 116,
+  200000 and 30000 all identical. A second pass at 180,000 rows scored 15 of 16, the one
+  miss being a partial BRIN index.
+- **Three writers disagree and `ANALYZE` wins.** `CREATE INDEX` writes
+  `IndexBuildResult.index_tuples`; VACUUM writes `num_index_tuples` only when the AM
+  returned a struct and did not set `estimated_count`; `ANALYZE` writes
+  `ceil(tupleFract * totalrows)` for **every** index unconditionally, because it is the only
+  one of the three that never consults the access method. Measured over six lifecycle
+  events: the first VACUUM takes GIN from 580766 to 200000 (the heap row count, per
+  `ginvacuum.c:738`'s own `XXX` comment), and one `ANALYZE` takes BRIN from 116 to 180000
+  and re-adds to hash the 40,000 NULL rows it never indexed. `DELETE` alone and
+  `VACUUM (INDEX_CLEANUP OFF)` change nothing.
+- **A forgery probe decides provenance per access method.** Every index's `reltuples` was
+  set to 777777 and a plain VACUUM with nothing dead was run: btree, hash and GIN kept the
+  forgery; GiST, SP-GiST, BRIN and bloom repaired it. Re-forging and running
+  `VACUUM (DISABLE_PAGE_SKIPPING)` then repaired GIN as well, pinning the behaviour exactly
+  to `estimated_count = vacrel->scanned_pages < vacrel->rel_pages`. So one VACUUM can leave
+  a B-tree stale, overwrite a GIN with the wrong quantity, and recompute a BRIN, in one
+  command - provenance is per index, never per table.
+- **Four different numbers for one BRIN index**, against 116 range summaries on disk:
+  **116** serial, **319** parallel, **12** for a partial index, **115** after a VACUUM. Each
+  traced to a line: the leader copies `brinshared->indtuples` into `bs_numtuples` and then
+  inserts merged ranges with `brin_doinsert` without incrementing, so the parallel figure is
+  the number of pre-merge worker slices - nondeterministic, measured at 116/222/325/328/311
+  over 0/1/2/4/8 workers and 317/319/328 across three four-worker builds of the same index;
+  `brin_fill_empty_ranges` never touches the counter, so empty ranges are uncounted; and
+  `brinvacuumcleanup` passes `include_partial = false`, so the trailing short range is
+  skipped. This refines the mechanism already noted on
+  `non-btree-index-inflation-comment-baseline.md` without contradicting it.
+- **The published statement is byte-identical to the one tested** (68 lines, verified
+  mechanically) and carries only catalog-decidable verdicts: two hard bounds - BRIN cannot
+  exceed `ceil(table relpages / pages_per_range)`, GIN cannot fall below `rows x indnatts` -
+  plus a `suspect` flag for equality with the table row estimate, and `n/a` branches for
+  partitioned and invalid indexes. It correctly labelled all 22 indexes in the fixture set,
+  with 2 documented false positives (single-column GIN indexes whose entry count
+  legitimately equals their row count) and one undetectable case (the partial BRIN
+  undercount, which is below the bound).
+- **A timestamp-ordering design was built, disproved and dropped.** `VACUUM
+  (INDEX_CLEANUP OFF)` advanced `last_vacuum` to 08:02:47 against `last_analyze` at
+  07:58:38 while BRIN kept the `ANALYZE` value, and a following plain VACUUM left btree and
+  hash at 180000 while moving BRIN to 115. The filed statement reports `analyzes` and
+  `vacuums` as context only.
+- Four further measured catalog facts: GIN's metapage holds an accurate **distinct-key**
+  count (100 / 98 / 198, the third defensible GIN entry count) that never reaches
+  `pg_class`; a newly created index reads **0** while its table reads **-1**, because
+  `RelationBuildLocalRelation` `palloc0`s `rd_rel` and `index_create` skips the
+  `reltuples = -1` step tables get in `AddNewRelationTuple` - measured on an empty-table
+  index, a partitioned index and the invalid index left by a failed
+  `CREATE INDEX CONCURRENTLY`, so `0` is ambiguous between empty and never-built; `-1`
+  appears only after a storage reset (`TRUNCATE` plus `REINDEX`); and `float4` loses the low
+  bit above 2^24, reading 20000000 for a measured **20,000,001** GIN entries.
+- Eight open questions filed, including a doc-versus-source discrepancy resolved in favour
+  of source per AGENTS.md: `indexam.sgml` says `amvacuumcleanup` statistics "will be
+  reported by `VACUUM` if `VERBOSE` is given", but the `ereport` carrying
+  `num_index_tuples` sits in `vac_cleanup_one_index` at `DEBUG2` at every reaching call
+  site, and v17's `VACUUM VERBOSE` per-index line is page-only. The page therefore makes no
+  VERBOSE claim. Also open: no upstream commit was identified for the parallel BRIN
+  overcount, only one `pages_per_range` and one table size were tested, GIN opclasses beyond
+  `array_ops`/`tsvector_ops` were not scored, SP-GiST has no `pageinspect` support so its
+  ground truth is weaker than the other six AMs, and nothing was tested under concurrency.
+- Environment: an isolated 17.11 server built VPATH out of tree from `raw/postgres-17/`
+  (`raw/` left untouched, verified clean) under `.wiki-runtime/tmp/idxent/`, with
+  `autovacuum = off`, 22 indexes over seven access methods, and two databases. The sandbox
+  is retained, holding the fixtures, the truth views, the stage/forgery/edge probes, both
+  statement revisions and the citation checker.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. All 23
+  `## Contents` anchors verified to resolve, in document order, with none missing.
+  `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
+  the page keeps `verified: false` with
+  `verified_by_agent: claude-opus-5-max 2026-08-27T12:13:11Z`.
+
 ## [2026-08-26] follow-up v17 | the GIN waste statements on PostgreSQL 12, and the whole corpus on both majors
 
 - Extended [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
