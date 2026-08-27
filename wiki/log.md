@@ -2,6 +2,121 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-27] review v17 | GIN REINDEX COMMENT-baseline page re-verified on a second 17.11 build
+
+- Reviewed
+  [A COMMENT-Stored Baseline and Normalized Index Growth for Finding GIN Indexes That Need
+  REINDEX CONCURRENTLY in PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md)
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), with corrections
+  made **in place** at the user's instruction. Scope chosen up front: rebuild and re-run the
+  published SQL plus the three named spot checks and a full citation pass, then delete the
+  sandbox.
+- **The page's own sandbox was gone**, deleted the same day it was filed, so 17.11 was built a
+  **second** time out of tree from `raw/postgres-17/` via `git archive` into
+  `.wiki-runtime/tmp/ginrev/src17/`, same `configure --without-icu --without-readline
+  --with-zlib --enable-debug`, contrib included, and a fresh cluster at the page's settings
+  (`shared_buffers` 512MB, `maintenance_work_mem` 256MB, `work_mem` 64MB, `autovacuum = off`).
+  `postgres (PostgreSQL) 17.11`, `gin_pending_list_limit` 4096, `block_size` 8192.
+- **Citations: 137, zero problems.** A purpose-built checker verified every Markdown inline link
+  into `raw/postgres-17/` resolves, sits inside its file, cites only this version, and carries a
+  label consistent with its own line range; 50 (now 53) distinct ranged citations were then read
+  in full and checked against the claim each supports. Two initial flags were false positives of
+  the checker, not the page - `maintenance.sgml#routine-reindex` names the enclosing
+  `<sect1 id="routine-reindex">` opened at line 1018, and the quoted sentence at L1042-L1046 is
+  verbatim - so the checker now accepts an sgml section id declared at or above the range. The
+  30 `## Contents` anchors all resolve, cover every heading and match document order; front
+  matter order and the `(unverified)` title rule are correct.
+- **The published statements are still the tested ones.** The extractor found **exactly three**
+  `wiki_gin` blocks at **41 / 18 / 76 lines**, and a re-extraction after every edit produced
+  byte-identical files, so nothing in this review touched them. All three **ran verbatim**.
+- **No absolute byte size could be reproduced, because the fixture SQL was never published.**
+  A 600,000-row table re-derived from the page's prose built a **14,737,408**-byte index against
+  the filed 16,474,112, and everything downstream moved with it. This is exactly the cost open
+  question 13 predicted, and it is now stated on the page.
+- **Every fixture-independent claim reproduced**: the nine-field capture with `bac` 0, `bti`
+  600000, `btu` 0, `btd` 0 and the two-line human comment (`{do not drop}`, `@ 100%`) preserved
+  byte for byte; the nine-field read round-trip returning only the two human lines;
+  `churn_ratio` **2.0000**; `heap_tuple_ratio` **1.0000**; verdict
+  `candidate: disproportionate growth`; `btu` **1200000** after re-capture; the
+  `insufficient churn: not evaluated` re-evaluation; and exactly one payload after re-capture,
+  confirming idempotence. The prediction identity landed at **60.90 predicted against 60.88
+  measured** - 0.02 off rather than 0.00 because the rebuild came back **one page** larger than
+  the baseline (14,745,600 against 14,737,408), the same one-page effect the filed run recorded
+  on c10 rather than the exact return it recorded on c02 and c12.
+- **The three requested spot checks.** (1) No file under `src/backend/access/gin/` calls
+  `RelationTruncate`, while `spgvacuum.c:896` does - the premise holds. (2) The `reltuples`
+  4-way swing reproduced **exactly**: **1000000 / 200000 / 100000 / 500000** over
+  `CREATE INDEX` / `ANALYZE` / `DELETE 50% + VACUUM` / `REINDEX` on a 200,000-row table with
+  1,000,000 entries. (3) The `fastupdate` pairing reproduced **exactly** where it counts:
+  **310** pending pages, **515** free pages in the FSM, **4,218,880 bytes** of growth on the
+  `fastupdate = on` index and **not one byte** on the `fastupdate = off` one, from equal
+  14,581,760-byte bases. Those three figures are governed by `gin_pending_list_limit`, not by
+  the fixture, which is the page's own claim about them. Six edge cases also returned
+  byte-identical output: E2, E3 (comment follows to a new index OID with a stale `bfn`), E4
+  (`rebuilt since baseline: re-capture`, firing ahead of the churn gate at `churn_ratio`
+  0.0000), E6 (one lock, `ShareUpdateExclusiveLock` on the index, none on the table), E11
+  (`not a GIN index: fresh_btree`), E13, E14
+  (`refusing baseline for t0_gin: table reltuples is -1 (run ANALYZE first)`).
+- **Finding 1, fixed: the comment-size arithmetic was wrong and self-inconsistent.** Measured on
+  the server, a matrix-shaped payload is **133** bytes of JSON and the page's own printed
+  example is **130**; the `@ginbase:` tag adds 9, the newline 1, the two-line human note 56. So
+  the whole comment is **142** bytes bare and **199** with the note, not the filed 143 and 192 -
+  and 192 contradicted the page's own E1 row of 196, which is right for a 130-byte payload. The
+  sentence now derives all four figures and reconciles them with E1.
+- **Finding 2, fixed: `VACUUM` is only a *conditional* writer of an index's `reltuples`.** The
+  page cited `vac_cleanup_one_index`, which merely *produces* the count; the `pg_class` write is
+  `update_relstats_all_indexes` (`vacuumlazy.c:3072-3099`) and is **skipped** by
+  `if (istat == NULL || istat->estimated_count) continue;`. `estimated_count` is
+  `vacrel->scanned_pages < vacrel->rel_pages`, passed to the AM through `ivinfo` and copied
+  straight back out by GIN. Measured: carrying the same 100,000-row table one step further from
+  the `500000` its `REINDEX` had written, a second plain `VACUUM` left it at **500000** and only
+  `VACUUM (DISABLE_PAGE_SKIPPING)` wrote **100000**. That is a fifth value the index's own
+  `reltuples` can hold - the one it held before - and a further argument for the brief's
+  table-`reltuples` denominator. Three citations and two Evidence Map rows added.
+- **Finding 3, filed as open question 14: one `maintenance_work_mem` row is off by one page.**
+  A fresh GIN build satisfies `total_pages = n_entry_pages + n_data_pages + n_pending_pages + 1`,
+  the `+ 1` being the metapage `ginvacuumcleanup` skips by starting at `GIN_ROOT_BLKNO`. Every
+  other measured table on the page satisfies it (7,495,680, 82,329,600 and 246,169,600 all
+  decompose exactly), and the review confirmed it with **residual 0 on six fresh builds**, in
+  both the all-inline and the posting-tree regime (500 data pages) and at both 64MB and 256MB.
+  The 64MB row does not: 109,371,392 bytes is 13,350 pages against 3,350 + 10,000 + 1 = 13,351.
+  One of the three numbers is off by one - most likely `n_entry_pages` 3,349 - and the original
+  fixture is gone, so it is flagged rather than guessed. The 32.8% conclusion is unaffected
+  either way, and the page now says so.
+- **Everything else checked out.** All internal arithmetic was re-derived by hand: every `pred`,
+  `reclaimed`, `isr`, `htr` and `norm` in the 12-cell table, all five accuracy bands, all six
+  rows of the growth sweep, and the page-count decomposition of the linearity table (915 = 914 +
+  1, 2514 = 2513 + 1, 10050 = 49 + 10000 + 1, 30050 = 49 + 30000 + 1). c10's 57.14% is exactly
+  4/7. The `pgstatginindex` column name asserted in open question 3 is real. `pgstat_report_analyze`
+  does increment `analyze_count` inside the same `pgstat_get_entry_ref_locked` /
+  `pgstat_unlock_entry` section as the `mod_since_analyze` reset. `index.c:1740-1784` is inside
+  `index_concurrently_swap` (1566-1836). All four GUCs are `PGC_USERSET`.
+- Page updates: a new `### Re-verification on a second 17.11 build` section with a
+  filed-against-re-measured table, the two fixed claims, the new open question 14, a
+  `## Contents` entry, a `## Context Reviewed` bullet, a `## Test methodology` bullet, three new
+  Evidence Map rows, `vacuumlazy.c` added to `## Source References`, and open question 13
+  updated to record that this review's sandbox was deleted too. Open questions 13 -> 14.
+  `verified: false` untouched (human-only); `verified_by_agent` refreshed to
+  `claude-opus-5-max 2026-08-27T15:31:08Z`.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated. `raw/postgres-17/` is
+  unchanged with a zero-length `git status --porcelain` at
+  `786db8dcf168bd9df8f55047337525ac19118b1c`, because the build was made out of tree.
+- Sandbox `.wiki-runtime/tmp/ginrev/` **deleted** after the review at the user's instruction,
+  reclaiming **2,097,872,850 bytes** (1.95 GiB) and taking `.wiki-runtime` from 2.11 GB back to
+  **10,659,287 bytes**, the venv alone. The cluster was shut down first with `pg_ctl -m fast
+  stop` (`server stopped`, PID 80475 plus checkpointer, background writer, walwriter and logical
+  replication launcher; no `postgres` process remained and `data/postmaster.pid` was gone), so
+  no `rm` touched a running data directory. Breakdown: `data/` 1,593,208,319 (the `pubsql` and
+  `spot` databases), the out-of-tree build tree `src17/` 407,271,774, the exact-pin install
+  97,292,483, and 92 KB of harness - `check_citations.py`, `check_anchors.py`,
+  `dump_citations.py`, `extract_published_sql.py`, the extracted statements and the result sets.
+  **No compiled 17.11 install remains again**, so a third rebuild from `raw/postgres-17/` would
+  be needed to re-measure. Unlike the fixture SQL, the four review scripts are generic and
+  cheap to rewrite; what stays unpublished is the page's own fixture builder, which is what
+  blocked byte-exact reproduction this time and is now named in open question 13.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-08-27] review v17 | index entry count from the catalogs, re-measured on a rebuilt cluster
 
 - **Reviewed** [Reading an Index's Entry Count From the Catalogs, for Every Index Type, in
@@ -5368,3 +5483,191 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   cells, the probes and four result sets.
 - `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is
   unchanged; the page keeps `verified: false` and `verified_by_agent: not yet`.
+
+## [2026-08-27] cleanup | emptied .wiki-runtime to the venv alone before the GIN work
+
+- At the user's explicit instruction ("everything except venv"), removed
+  `.wiki-runtime/tmp/idxent/` (98 MB, of which the exact-pin 17.11 `install/` was
+  98 MB and the harness SQL, `check_citations.py` and server logs 116 KB), plus
+  `cache/`, `indexes/` and `logs/`. `.wiki-runtime/` went from **111 MB to 13 MB**
+  and now holds only `venv/` and an empty `tmp/`. The repo is unchanged at 3.3 GB.
+- `tmp/idxent/` was the sandbox of the 2026-08-27 review of
+  [Reading an Index's Entry Count From the Catalogs, for Every Index Type, in
+  PostgreSQL 17 (unverified)](v17/questions/indexing/index-entry-count-from-catalogs.md).
+  That review's own coverage note already recorded the data directory as deleted and
+  the install as the only survivor, so this cleanup removed the install and the
+  harness; re-verifying that page now means rebuilding 17.11 from `raw/postgres-17/`
+  and re-running its published fixture SQL, which its note already says.
+- No PostgreSQL process was running at cleanup time (`pgrep -a postgres` empty) and
+  none had to be stopped. No data directory was present to remove.
+- No wiki page, index, version pin, or `raw/` checkout changed in this step.
+  `raw/postgres-17/` is clean at `786db8dcf168bd9df8f55047337525ac19118b1c`.
+
+## [2026-08-27] answer v17 | GIN REINDEX heuristic from a COMMENT baseline and normalized index growth
+
+- Filed `wiki/v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md`
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): a designed
+  and measured GIN-only `REINDEX CONCURRENTLY` candidate heuristic whose entire persistent
+  state is a **133-byte `@ginbase:` JSON payload** appended to the index's own
+  `COMMENT ON INDEX`. Nine flat fields, no table, no extension, four SQL statements.
+- Prompt hygiene: the request wrote `agents.md` for `AGENTS.md` and lowercase
+  `postgresql`, put a space before the comma after the last requirement, spliced the
+  `.wiki-runtime` cleanup instruction into the question text, and wrote `75–80%` with an
+  en dash. The asker chose "correct and restate", so `## Question` carries the corrected
+  text and names the corrections; the cleanup instruction is carried out (entry above) but
+  excluded from the filed question. Three scoping answers were taken up front: full purge
+  of `.wiki-runtime` except the venv, a measured run rather than a design-only page, and a
+  new GIN-specific page rather than a revision of the five-AM sibling.
+- **Premise, from source.** No file under `src/backend/access/gin/` calls
+  `RelationTruncate`; `ginvacuumcleanup` hands recyclable pages to the free space map and
+  `ginInsertCleanup` does the same for flushed pending pages, so `pg_relation_size` on a
+  GIN index is a high-water mark that only `REINDEX` lowers.
+- **Why the brief forbids the index's own `reltuples`, measured.** One 200,000-row table's
+  GIN index reads **1000000 / 200000 / 100000 / 500000** over `CREATE INDEX` / `ANALYZE` /
+  `DELETE 50% + VACUUM` / `REINDEX` - a 10x swing decided by whichever command wrote last,
+  because the build writes extracted entries, `ANALYZE` writes `ceil(1.0 * totalrows)`, and
+  GIN's `amvacuumcleanup` writes the heap tuple count under its own `XXX ... bogus` comment.
+- **Result.** 12-cell matrix, three full runs in three fresh databases, `REINDEX INDEX` as
+  ground truth, `VACUUM FULL` never used. **Right on 10 of 12 cells.**
+  `1 - 1/normalized_index_growth` predicted the reclaimed fraction to **within 0.05 points
+  on 5 of the 9 evaluable cells** (83.82/83.82, 54.63/54.63, 57.18/57.14, 11.91/11.95,
+  0.00/0.00). Runs 2 and 3 produced byte-identical ground-truth tables; baseline payloads
+  differ only in `ts` and `bfn`.
+- **The published statements are the tested ones.** A script extracts every fenced `sql`
+  block carrying a `wiki_gin` tag from the filed page, asserts there are exactly three, and
+  runs them verbatim (41 / 18 / 76 lines) in a fourth database against `orders_tags_gin`.
+  The whole capture -> churn -> evaluate -> rebuild -> re-capture lifecycle worked and the
+  prediction came out at **55.66% against a measured 55.66%** (37,150,720 -> 16,474,112).
+- **Four brief premises corrected on evidence.** (1) The
+  `index size remains >= 75-80% of baseline` clause is **vacuous** on GIN, so the shrinkage
+  rule reduces to `heap_tuple_ratio <= 0.50` and thereby forces `normalized >= 2.0` - a
+  strict subset of the growth rule that can never fire on its own; the only sub-1
+  `index_size_ratio` seen anywhere (0.5334) appeared after the ground-truth `REINDEX`, where
+  the `relfilenode` detector had already diverted the row. (2) "Both grew 50%, so
+  `normalized = 1.0`, so do nothing" is false: +50% rows grew the index **+120%**
+  (20,594,688 -> 45,391,872) for `normalized` 1.4694, and `REINDEX` reclaimed **39.51%**.
+  (3) A fresh GIN build is **not linear** in heap tuples - 7,495,680 / 13,729,792 /
+  20,594,688 / 82,329,600 / 82,329,600 / 246,169,600 bytes at 250k / 500k / 1M / 2M / 4M /
+  8M rows over one 10,000-key universe, quadrupling between 1M and 2M as every posting list
+  converts to a posting tree (`n_data_pages` 0 -> 10,000, `n_entry_pages` 2,513 -> 49) and
+  then adding zero bytes to 4M; this is exactly why the same-keys doubling over-predicted
+  67.65 against an actual 35.33 while the new-keys doubling, whose lists stayed inline, hit
+  11.91 against 11.95. (4) The blind spot is sized by `gin_pending_list_limit`, not by any
+  ratio: a paired probe added 150,000 rows to two identical 600,000-row tables and the
+  `fastupdate = on` index grew **515 pages / 4,218,880 bytes** while the `fastupdate = off`
+  index grew **nothing at all**; `VACUUM` flushed the pending list, the 515 pages showed up
+  in `pg_freespace` and stayed in the file, and `REINDEX` returned both to 16,474,112. A
+  six-point growth sweep therefore reads `normalized` 1.1419 / 1.0049 / 0.8374 against
+  20.39 / 20.39 / 0.48% reclaimable.
+- **Two design changes were forced by failed probes.** The first stale-statistics guard used
+  `n_mod_since_analyze > 0.10 * reltuples` and misfired on the mass-delete cell in every run,
+  reading 600000 while the same `VACUUM (ANALYZE)` had set `reltuples` correctly to 400000:
+  `pgstat_report_analyze` zeroes the counter, but a backend's pending counts are applied
+  **additively** afterwards and non-forced flushes are rate-limited to `PGSTAT_MIN_INTERVAL`
+  (1000 ms). Reproduced independently at **1 of 4** back-to-back `DELETE` +
+  `VACUUM (ANALYZE)` pairs, with `n_live_tup` clamped to 0 and `n_dead_tup` at 210000 while
+  `pg_class.reltuples` read 90000; a 2 s pause was clean every time. The counter is
+  demoted to an advisory `stats_lag` column and the veto replaced by an `analyze_count`
+  comparison - which is what caught the one cell whose ratios were silently meaningless
+  (60% deleted, no `ANALYZE`, `normalized` 1.0000 over a real 46.66% reclaim). Second, the
+  churn gate and the `ANALYZE` gate were originally the other way round, which made the
+  no-churn control report "no ANALYZE since baseline"; swapping them is the only difference
+  between run 2 and run 3 output.
+- **The baseline is a function of `maintenance_work_mem`**: the same 2M-row index rebuilt to
+  **109,371,392 bytes at 64MB against 82,329,600 at 256MB and 1GB**, 32.8% apart, because
+  `ginBuildCallback` dumps its accumulator at `maintenance_work_mem` and the 64MB build ends
+  up with 3,350 entry pages against 49 for the same 10,000 keys.
+- **Eleven edge cases proven on the server**, including `REINDEX CONCURRENTLY` moving the
+  `pg_description` row as the index OID goes 16900 -> 16904 (so the payload survives with a
+  stale `bfn`, and the detector fires), plain `REINDEX` keeping OID 16900 while the filenode
+  moves 16900 -> 16903, a two-line human comment containing `{do not drop}` and `@ 100%`
+  surviving capture and both rebuild forms, `COMMENT ON INDEX` holding
+  `ShareUpdateExclusiveLock` on the **index only** and none on the table, a non-owner reading
+  the baseline but refused a write at `SQLSTATE 42501`, `CREATE INDEX` itself setting the
+  table's `reltuples` (-1 -> 80000) so a `t0` capture needs no `ANALYZE`, `TRUNCATE` resetting
+  both to -1 and the capture refusing loudly, and `pg_dump --section=post-data` carrying the
+  whole payload.
+- **Citation check found and fixed a real error.** A purpose-built checker verified all
+  **119 citations** resolve, sit in range, cite only `raw/postgres-17/`, and carry labels
+  consistent with their own line ranges. It caught that the entry increment is in
+  `ginHeapTupleBulkInsert`, called once per indexed column by `ginBuildCallback`, not in
+  `ginBuildCallback` itself - which sharpened the claim to "summed over rows *and* columns" -
+  plus twelve label/range mismatches and one `analyze.c:952-953` label against an
+  `L948-L953` range. All fixed; the re-run reports zero problems. All 30 `## Contents`
+  anchors were separately verified to resolve, cover every heading, and match document order.
+- Thirteen open questions filed, including that **partial and multi-column GIN indexes were
+  never tested** - where the table `reltuples` the heuristic divides by is not the indexed
+  population at all, since `ginvacuumcleanup` says its own count is "bogus if the index is
+  partial" and `ANALYZE` computes a real `tupleFract` for one - that `normalized_index_growth`
+  is not monotone in reclaimable space (it ranks 3.0909/35.33% above 2.4733/56.24%), that
+  autovacuum was off throughout, and that `est_reclaimable` is still printed even though it
+  read 82 MB against a true 45 MB on one cell.
+- Environment: `.wiki-runtime` was emptied to the venv alone first (entry above), so 17.11
+  was rebuilt out of tree from `raw/postgres-17/` via `git archive` into
+  `.wiki-runtime/tmp/ginorm/src17/`. The sandbox is **retained** at
+  `.wiki-runtime/tmp/ginorm/`, holding the install, the data directory, the harness
+  (`matrix.sh`, `sweep.sh`, `verify_published_sql.sh`, `check_citations.py`), 12 SQL files
+  and all result sets. The cluster is left running on socket
+  `.wiki-runtime/tmp/ginorm/sock` port 55461.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; `raw/` is unchanged;
+  the page keeps `verified: false` (human-only) and sets
+  `verified_by_agent: claude-opus-5-max 2026-08-27T14:51:41Z` after the 126-citation and
+  30-anchor checks above.
+
+## [2026-08-27] cleanup | purged .wiki-runtime to the venv alone, removing the ginorm GIN sandbox
+
+- Removed `.wiki-runtime/tmp/ginorm/` at the user's request, taking `.wiki-runtime` from
+  **9,417,254,911 to 10,659,161 bytes** and reclaiming **9,406,595,750 bytes** (8.76 GiB).
+  What remains is `venv/` alone. This is the sandbox behind [A COMMENT-Stored Baseline and
+  Normalized Index Growth for Finding GIN Indexes That Need REINDEX CONCURRENTLY in
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md),
+  which the two entries above had retained. **This entry supersedes the "Environment"
+  bullet of the entry directly above**, which says the sandbox is retained and the cluster
+  is left running on port 55461; both statements were true when written and are now false.
+- **A live server had to be shut down first**, unlike the 2026-08-26 ginw2 cleanup where
+  nothing was running. `postgres` PID 43546 was still serving
+  `-D .wiki-runtime/tmp/ginorm/data` on socket `.wiki-runtime/tmp/ginorm/sock` port 55461,
+  with the checkpointer, background writer, walwriter and logical replication launcher
+  attached and one client backend (the inventory `psql`). `pg_ctl -m fast stop` returned
+  `server stopped`, after which no `postgres` process remained, `data/postmaster.pid` was
+  gone and the postmaster had removed its own socket. No cluster was killed mid-write and
+  no `rm` touched a running data directory.
+- Disposable cluster data was almost all of it: `data/` **8,900,731,994 bytes** holding the
+  four databases the page describes - `gin1` 3744 MB (the 12-cell matrix), `gin2` and
+  `gin3` 1790 MB each (the two repeat runs), and `pubsql` 120 MB (the verbatim replay of the
+  published statements). The out-of-tree `git archive` build tree `src17/` was 407,271,774
+  bytes and the exact-pin 17.11 install (`postgres (PostgreSQL) 17.11`) was 97,292,483, so
+  **no compiled 17.11 install now remains** and the next exact-pin GIN experiment must
+  re-`configure` and re-`make` from `raw/postgres-17/`.
+- **The harness went with it, and this one was not self-reproducing.** On the user's
+  instruction the 224 KB of `sql/` (16 files), `results/` (9 sets) and `logs/` (19 runs)
+  were deleted along with `matrix.sh`, `sweep.sh`, `verify_published_sql.sh`,
+  `check_citations.py` and the 1.1 MB of configure/make/install logs. The cost is higher
+  than for ginw2, which had published its fixture SQL inside the page: this page publishes
+  only its **three** operational statements, so the 12-cell fixture builder
+  (`00_fixtures.sql`), the churn script (`40_churn.sql`) and the probe, sweep and edge-case
+  files are gone and would have to be re-derived from the page's prose methodology. The
+  three published statements remain recoverable verbatim, and the page's measured figures
+  were already published in full.
+- Also cleared three stale tooling files: `logs/recent_log.log`, `logs/wiki_lint.log` and
+  `cache/wiki_lint/last-run.txt`. Kept `venv/` and the empty `cache/`,
+  `indexes/{ctags,search,tree-sitter}`, `logs/` and `tmp/` scaffold, which
+  `ensure_runtime_dirs()` recreates on every script run anyway. `venv/bin/python` still
+  reports Python 3.12.3.
+- **Two stale sandbox pointers corrected**, the same failure the 2026-08-26 cleanup had to
+  fix on the sibling page. `wiki/versions.md`'s 2026-08-27 coverage note said the sandbox
+  "is retained"; it now records the same-day deletion and says reproduction means rebuilding
+  out of tree from `raw/postgres-17/`. The page's open question 13 said "The sandbox is
+  retained but the cluster is not guaranteed"; it now states what was lost, points at
+  [Test methodology](v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md#test-methodology)
+  for the unpublished fixtures, and names the three statements that survive verbatim. Both
+  new anchor targets were checked against the page's own `## Contents` block. No source
+  citation, pin, measurement, heading or verification field changed, so the page keeps
+  `verified: false` and `verified_by_agent: claude-opus-5-max 2026-08-27T14:51:41Z` - every
+  claim it makes rests on pinned source or on measurements it publishes, not on the sandbox
+  still existing.
+- `raw/` untouched: all five checkouts sit at their pinned commits with a zero-length
+  `git status --porcelain` (`45b88269a35`, `a92fbdfb830`, `786db8dcf16`, `baa7b142aac`,
+  `67342a14863`), because the build was made out of tree.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
