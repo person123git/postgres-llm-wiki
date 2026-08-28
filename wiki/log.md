@@ -2,6 +2,100 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-08-28] cleanup | removed the vfio VACUUM FULL measurement sandbox
+
+- Deleted `.wiki-runtime/tmp/vfio/` at the asker's up-front instruction, taking `.wiki-runtime`
+  from **23,356,794,699 to 10,672,372 bytes** and reclaiming **23,346,122,327 bytes** (21.7 GiB).
+  What remains is `venv/` plus the empty `cache/`, `indexes/`, `logs/` and `tmp/` scaffold that
+  `ensure_runtime_dirs()` recreates anyway.
+- **A live server had to be stopped first.** `postgres` PID 69468 was serving
+  `-D .wiki-runtime/tmp/vfio/data` on port 55412 with logger, checkpointer, background writer and
+  walwriter attached. `pg_ctl -m fast stop` returned `server stopped` and no `postgres` process
+  remained; nothing was killed mid-write.
+- What went: the cluster `data/` (**11,578,576,021 bytes**) and the post-`VACUUM FREEZE`
+  restore snapshot `data.snap/` (**11,578,721,973**) that let the same fixture be replayed
+  seven times without a rebuild; the out-of-tree `git archive` build tree `src12/`
+  (160,787,308) and the exact-pin 12.2 install (26,621,827), so **no compiled 12.2 install now
+  remains**; and the harness, 475,202 bytes of `results/` (before/after snapshots, `/proc` io
+  CSVs and progress samples for 13 measured commands), 924,889 bytes of `logs/`, and 6,370 bytes
+  of `sql/`.
+- **Every published number is in the page**, and the fixture SQL is published there in full
+  under "How to reproduce", so re-measuring means rebuilding 12.2 out of tree from
+  `raw/postgres-12/` and re-running it. The `/proc` poller and the `\watch` progress sampler are
+  described but were not published verbatim; open question 8 on the page says so.
+- `raw/` untouched: all five checkouts sit at their pinned commits with a zero-length
+  `git status --porcelain` (`45b88269a35`, `a92fbdfb830`, `786db8dcf16`, `baa7b142aac`,
+  `67342a14863`), because the build was made out of tree.
+- No wiki page, index, version pin or verification field changed in this step.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-28] answer v12 | measured VACUUM FULL I/O on a 6.75 GB near-empty heap
+
+- The asker followed up on
+  [How Much I/O a VACUUM FULL Performs on a Multi-GB, Near-Empty Heap in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/vacuum-full-io-on-near-empty-heap.md)
+  and asked for the test to be run. The page had been **source-only by the original asker's
+  scoping**, so 12.2 was built out of tree from `raw/postgres-12/` at unchanged pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (tag `REL_12_2`) and the answer now carries
+  measurements. `raw/` untouched: `git status --porcelain` empty before and after.
+- Prompt hygiene: the request wrote `mesure`, `hypotesis`, `agents.md`, lowercase `postgresql`,
+  `i/o`, `db`, `200mil`, dropped the `so` in `to vacuum doesn't truncate the heap`, and put a
+  space before a comma. The asker chose "correct and restate", so `## Question` carries a
+  corrected follow-up paragraph naming every correction. Two scoping answers were taken up
+  front: a narrow `bigint` row shape (it reproduces the page's own `t_len = 32` worked-example
+  row) and deletion of the sandbox afterwards, with the fixture SQL published in the page.
+- **The hypothesis is confirmed, exactly.** Fixture as specified: 200,000,000 rows into
+  **884,956 blocks / 7,249,559,552 bytes** at **226 tuples per page** (the arithmetic the page
+  predicted from `floor(8168 / (MAXALIGN(32) + 4))`, and `pageinspect` confirms `lp_len = 32`),
+  `DELETE` of 199,800,000 rows keeping the physically last 200,000 so `VACUUM` could not
+  truncate, then `VACUUM` (27.0 s, no truncation) and `VACUUM FREEZE` (50 ms, skipping 884,070
+  already-frozen pages) leaving **all 884,956 pages all-visible and all-frozen** at unchanged
+  size. `VACUUM FULL` then read **884,956 blocks with `heap_blks_hit` 0**, and `/proc/<pid>/io`
+  `read_bytes` came to **7,249,559,552 - the file size to the byte** - in 2.15 s.
+- **The control makes the point sharper than the measurement alone.** A plain `VACUUM` on that
+  identical heap read **0 blocks in 17 ms**, skipping 884,955 frozen pages. The same visibility
+  map that let `VACUUM` read nothing let the rewrite read 6.75 GB.
+- **Seven `VACUUM FULL` runs.** The four comparable ones at `wal_level = minimal` agree
+  byte-for-byte: `heap_blks_read` 884,956, `rchar` 7,250,034,354, `syscr` 885,019, WAL 84,720.
+  `syscr` decomposes as **884,956 heap-block reads of exactly 8192 bytes** plus 63 other calls
+  carrying the residual 474,802 bytes - one `pread` per block. A **warm page cache** changed
+  only `read_bytes` (0 against 7,249,559,552) and the clock (1.25 s against 2.15 s); it did not
+  remove one of the 884,956 reads. Cache state was controlled with
+  `posix_fadvise(POSIX_FADV_DONTNEED)`, no privileges needed.
+- **The extreme case.** With `vacuum_truncate = off` and every row deleted, the same 6.75 GB
+  heap held **zero rows** and `VACUUM FULL` still read all 884,956 blocks - producing a
+  **0-byte** new heap, because `end_heap_rewrite` writes its last page only
+  `if (state->rs_buffer_valid)`.
+- **WAL, decomposed.** `pg_waldump --stats=record` over the exact LSN range at
+  `wal_level = replica`: 954 records, 7,349,944 bytes, of which **885 `XLOG/FPI` records** -
+  exactly one per new-heap page - are 98.84%. Nothing describes the 884,956 blocks that were
+  read. At `minimal` the same command logged **84,720 bytes**, 87x less.
+- **Four more page claims measured.** The index rebuild read only the new 885-block heap
+  (789 misses + 96 hits) with `idx_blks_read` 0, while the `CREATE INDEX` that preceded it read
+  884,984 blocks - the extra 28 being the visibility map, which `index_update_stats` reads
+  through `visibilitymap_count`. `VACUUM FULL` under `vacuum_cost_delay = 1ms` /
+  `vacuum_cost_limit = 200` ran **2.05 s** against a `VACUUM (DISABLE_PAGE_SKIPPING)` at
+  **57.27 s** over identical bytes. Immediately after commit the old relfilenode sat at
+  **0 bytes with segments `.1`-`.6` already unlinked**, and vanished at `CHECKPOINT`. Every
+  emptied page kept **226 of 226 line pointers** with `pd_lower` 928, which is why `pgstattuple`
+  reported **88.53%** free rather than ~100%.
+- **Two claims corrected on evidence.** `heap_blks_scanned` does **not** necessarily end below
+  `heap_blks_total`: it ends at the last returned tuple's block plus one, measured at exactly
+  884,956 where the last block holds live rows and at **0** on the rowless heap. During the scan
+  it is as bad as the page said - **0 of 884,956 across 49 of 51 samples**, and 0 across all 94
+  samples on the rowless heap. And the doc's "extra disk space approximately equal to the size
+  of the table" is off by a factor of **0.0001** here: 7,249,920 bytes against 7,249,559,552.
+- Open questions rewritten 6 -> 8: the three the run settled are gone, and TOAST (never built),
+  unfrozen hint bits, the single row width and scale, the fast local storage, and the deleted
+  sandbox are named as what remains. Citations **307 -> 362**, all re-checked by a throwaway
+  checker for path existence, range bounds, version match, and label-versus-range agreement
+  (including labels that name an enclosing function whose body contains the cited slice):
+  **zero problems**. All 40 `## Contents` anchors were checked to match the headings in order,
+  and every page-internal link resolves.
+- `wiki/index.md`, `wiki/v12/index.md` and `wiki/versions.md` (v12 coverage cell plus a dated
+  note) updated. The page keeps `verified: false` (human-only) and sets
+  `verified_by_agent: claude-opus-5-max 2026-08-28T12:11:54Z`.
+
 ## [2026-08-27] review v12 | VACUUM FULL I/O on a near-empty heap, plus the bookkeeping it never got
 
 - Reviewed
