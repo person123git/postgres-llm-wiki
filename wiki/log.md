@@ -5867,3 +5867,130 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `git status --porcelain` (`45b88269a35`, `a92fbdfb830`, `786db8dcf16`, `baa7b142aac`,
   `67342a14863`), because the build was made out of tree.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] answer v17 | how much I/O a VACUUM FULL performs on a multi-GB, near-empty heap, measured on 17.11
+
+- Filed [How Much I/O a VACUUM FULL Performs on a Multi-GB, Near-Empty Heap in PostgreSQL 17
+  (unverified)](v17/questions/storage-and-vacuum/vacuum-full-io-on-near-empty-heap.md) at pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11, `REL_17_11-7-g786db8dcf16`). This is the
+  PostgreSQL 17 counterpart of the same-basename v12 page, answered independently on v17 evidence and
+  with the asker's test run on a purpose-built 17.11 server. It is the **first `storage-and-vacuum`
+  page for v17**, so that category group was created in both `wiki/index.md` and `wiki/v17/index.md`.
+- **Prompt hygiene applied first.** The prompt carried a comma splice (`is multiple GBs in size,
+  however it has only a few thousand rows`), a comma after a question mark (`in relation to heap
+  size?, Run tests`), and a lowercased `postgresql 17`. The asker was offered the choice and selected
+  "correct and restate"; the restatement and every change are recorded under `## Question`. The asker
+  also chose the v12 page's `bigint` row shape (for comparability), a "what changed since PostgreSQL
+  12" section, and deletion of the sandbox afterwards.
+- **The hypothesis holds exactly.** Four byte-identical fixtures were built - 200,000,000 rows in
+  **884,956 blocks / 7,249,559,552 bytes** at 226 tuples per page, 99.9% deleted with the physically
+  last rows kept so `VACUUM` could not truncate, then `VACUUM` and `VACUUM FREEZE` leaving **all
+  884,956 pages all-visible and all-frozen** - and `VACUUM FULL` read **884,956 blocks with 0 buffer
+  hits**, with the block layer delivering **7,249,559,552 bytes, the file size to the byte**, in
+  3.02 s. `pg_stat_io` agreed with `pg_statio_all_tables` to the block in the `bulkread` context. A
+  plain `VACUUM` on the identical heap read **0 blocks** in 3.17 ms, skipping 884,955 pages: the same
+  map that let `VACUUM` read nothing let the rewrite read 6.75 GB.
+- **The headline v17 result is the syscall count, not the byte count.** Those 884,956 blocks arrived
+  in **55,361 read system calls**, 15.985 blocks each, against a theoretical floor of 55,310 for
+  16-block reads over seven segments. `b7b0f3f2724` (`REL_17_0`) routed sequential scans through the
+  read stream, `210622c60e1` added `io_combine_limit` (default 128 kB = 16 blocks), and
+  `4908c587205` added `smgrreadv`, so the rewrite's scan - an ordinary `table_beginscan`, which sets
+  `SO_TYPE_SEQSCAN` - inherits read combining. A **six-point sweep** on a 44,248-block fixture moved
+  the call count **28,179 / 14,122 / 7,088 / 3,586 / 1,823 / 976** across `8kB` / `16kB` / `32kB` /
+  `64kB` / `128kB` / `256kB`, i.e. 0.998 to 29.732 blocks per call, while
+  `heap_blks_read + heap_blks_hit` stayed at **exactly 44,248 in all six runs** and the device
+  delivered 231.3-232.2 MB every time. The syscall count is tunable; the block count is not.
+- **Nothing skips a page.** Searching all three rewrite files for `visibilitymap`, `VM_ALL_` and
+  `all_visible` returns **zero** matches in `cluster.c` and `rewriteheap.c` and exactly two in
+  `heapam_handler.c` - an `#include` and the bitmap-scan callback's `VM_ALL_VISIBLE` - and the
+  subagent's history sweep confirms **no commit has ever added VM skipping to this path**.
+- **Also measured**: the new heap at **885 blocks / 7,249,920 bytes** (`ceil(200000 / 226)`, a
+  999.95:1 read-to-write ratio); **28 `XLOG/FPI` records** carrying the 885 full-page images, because
+  `log_newpages` batches `XLR_MAX_BLOCK_ID` = 32 per record; WAL collapsing **7,353,992 -> 110,008
+  bytes** at `wal_level = minimal` with all 884,956 reads and 55,361 calls unchanged, and the
+  backend's writes there reducing to **889** calls of which 885 are the heap's 8 kB extends; a
+  **warm-cache** run identical on every read counter with **`read_bytes = 0`** and 1.20 s against
+  3.02 s; the **zero-row** extreme (`vacuum_truncate = off`, all rows deleted) reading all 6.75 GB to
+  produce a **0-byte** new heap in **three** write calls; an **indexed** run decomposing exactly to
+  **885,841 = 884,956 old heap + 885 new heap** with `idx_blks_read` +1 and a 4,513,792-byte index
+  rebuilt to the same size; `CREATE INDEX` on the small bloated heap reading 44,250 of 44,248 blocks;
+  and the old relfilenode left at **0 bytes with `.1`-`.6`, `_vm` and `_fsm` already unlinked** before
+  any checkpoint.
+- **Four differences from the older major, each traced to a commit in this checkout's history.**
+  (1) Emptied pages keep **zero** line pointers at `pd_lower = 24`, so `pgstattuple` reports
+  **99.56%** free rather than being inflated by a retained array: `PageRepairFragmentation` truncates
+  trailing unused line pointers, and because the fixture had no indexes `lazy_scan_prune` passed
+  `HEAP_PAGE_PRUNE_MARK_UNUSED_NOW`, sending dead items straight to `LP_UNUSED`. (2)
+  `heap_blks_scanned` still reports **0 of 884,956 for 427 of 434 samples** during the scan, but now
+  **ends at exactly 884,956** - observed on 14 of 14 samples in the `rebuilding index` phase -
+  because `3df51ca8b39` added the end-of-scan assignment; **it was back-patched to `REL_12_6`**, so
+  this is a 12.0-12.5 distinction, not a 12-vs-17 one, which corrects the framing the research brief
+  started from. (3) The write side goes through v17's bulk-write facility (`8af25652489`), which
+  batches 32 pages, hides the new heap's extends from `pg_stat_io` entirely, and hands the fsync to
+  the checkpointer via `smgrregistersync` instead of calling `smgrimmedsync`. (4) `reltuples` survived
+  the aggressive freeze at the correct 200,000, because `vac_estimate_reltuples` keeps the old value
+  when under 2% of an unchanged-size relation is scanned.
+- **Two conflicts filed as open questions.** `pg_stat_io.reads` is documented as a count of read
+  operations of `op_bytes` each, but `WaitReadBuffers` increments it by `io_buffers_len`, so it read
+  884,956 where the backend made 55,361 calls - source wins, and no counter in the server exposes the
+  call count. And `maintenance.sgml` still says a rewrite "temporarily use[s] extra disk space
+  approximately equal to the size of the table", which is off by a factor of **0.0001** here
+  (7,249,920 against 7,249,559,552).
+- **Verification.** A purpose-built checker confirmed all **343** citations resolve, sit in range,
+  cite only `raw/postgres-17/`, and carry labels consistent with their own line ranges; a second pass
+  confirmed all 39 `file#Symbol` labels appear inside their cited ranges. It caught one real error - a
+  `bufpage.h#PageGetHeapFreeSpace` citation pointing at `bufpage.h`'s `PageHeaderData` struct, now
+  `bufpage.c#PageGetHeapFreeSpace` - plus three `freelist.c` ranges running past the file's 816 lines
+  and eight labels naming an enclosing symbol the cited hunk did not contain. All 41 `## Contents`
+  anchors resolve and match document order. 8 open questions filed. The checker is kept at
+  `.wiki-runtime/tmp/check_citations.py`.
+- Environment: 17.11 built out of tree from `raw/postgres-17/` via `git archive` into
+  `.wiki-runtime/tmp/vf17/src17/`, `--without-icu --without-readline --without-zlib --enable-debug`,
+  contrib installed; cluster on socket `.wiki-runtime/tmp/vf17/sock` port 55617 with
+  `shared_buffers = 128MB`, `autovacuum = off`, `track_io_timing = on`, `max_wal_size = 4GB`,
+  `maintenance_work_mem = 256MB`. `io_combine_limit`, `effective_io_concurrency` and
+  `maintenance_io_concurrency` were left at their defaults except in the sweep. `raw/` untouched.
+- `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated; the page keeps
+  `verified: false` (human-only) and sets `verified_by_agent: claude-opus-5-max` with the run's
+  timestamp.
+
+## [2026-08-31] cleanup | removed the vf17 VACUUM FULL sandbox after filing the v17 page
+
+- Removed `.wiki-runtime/tmp/vf17/` at the asker's instruction, taking `.wiki-runtime` from
+  **5,218,136,443 to 10,673,516 bytes** and reclaiming **5,207,462,927 bytes** (4.85 GiB). This is
+  the sandbox behind [How Much I/O a VACUUM FULL Performs on a Multi-GB, Near-Empty Heap in
+  PostgreSQL 17
+  (unverified)](v17/questions/storage-and-vacuum/vacuum-full-io-on-near-empty-heap.md), filed in the
+  entry above. What remains under `.wiki-runtime` is `venv/`, the empty `cache/`, `indexes/`,
+  `logs/` scaffold, and four small Python checkers in `tmp/`.
+- **The cluster was shut down cleanly first.** `postgres` PID 160741 was still serving
+  `-D .wiki-runtime/tmp/vf17/data` on socket `.wiki-runtime/tmp/vf17/sock` port 55617.
+  `pg_ctl -m fast stop` returned `server stopped`, after which no `postgres` process remained and
+  `data/postmaster.pid` was gone. No cluster was killed mid-write and no `rm` touched a running data
+  directory.
+- Disposable cluster data was 90% of it: `data/` **4,702,638,876 bytes**, holding `vf1` at 14 MB
+  (the last 200-million-row fixture, already rewritten down to 885 blocks by the final `VACUUM
+  FULL`) and `vf2` at 353 MB (the `io_combine_limit` sweep's small fixture). The out-of-tree
+  `git archive` build tree `src17/` was 407,105,439 bytes and the exact-pin 17.11 install was
+  97,212,312, so **no compiled 17.11 install now remains** and the next exact-pin experiment must
+  re-`configure` and re-`make` from `raw/postgres-17/`. Peak disk use during the run was higher: four
+  200-million-row fixtures were built and destroyed in sequence, each one 7,249,559,552 bytes of heap
+  plus WAL.
+- **The harness went with it, and this one is partly self-reproducing.** The 470,376 bytes of
+  `results/` (240 files: per-run `summary.txt`, `procio.before`/`after`, `progress.samples`,
+  `statio*`, `segments*`, `cmd.out`), the 20,524 bytes of `logs/`, and `bin/run_vfull.sh`,
+  `bin/batch.sh`, `bin/sweep.sh`, `bin/evict.py`, `sql/00_fixture.sql`, `sql/small_fixture.sql` and
+  `sql/probes.sql` are gone. The cost is lower than for some earlier sandboxes because the page
+  publishes its fixture SQL in full, its counter statements, and the `posix_fadvise` eviction
+  snippet under
+  [How to reproduce](v17/questions/storage-and-vacuum/vacuum-full-io-on-near-empty-heap.md#how-to-reproduce);
+  what would have to be re-derived is the `/proc` and progress-view sampling loop, which the page
+  describes but does not publish. Every measured figure was already published in the page, and open
+  question 8 records the loss.
+- Kept `.wiki-runtime/tmp/check_citations.py`, the 343-citation / 41-anchor checker written for this
+  page, alongside the three earlier `check_page.py`, `check_toc.py` and `dump_citations.py` helpers.
+- `raw/` untouched: all five checkouts sit at their pinned commits with a zero-length
+  `git status --porcelain` (`45b88269a35`, `a92fbdfb830`, `786db8dcf16`, `baa7b142aac`,
+  `67342a14863`), because the build was made out of tree.
+- No wiki page changed in this entry, so no verification field moved.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
