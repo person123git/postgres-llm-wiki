@@ -3,7 +3,7 @@ type: question
 version: 17
 pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
-verified_by_agent: claude-opus-5-max 2026-08-26T16:30:12Z
+verified_by_agent: claude-opus-5-max 2026-08-31T18:49:20Z
 ---
 
 # Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17 (unverified)
@@ -18,6 +18,7 @@ verified_by_agent: claude-opus-5-max 2026-08-26T16:30:12Z
   - [The three waste classes, from GIN's own definitions](#the-three-waste-classes-from-gins-own-definitions)
   - [The procedure](#the-procedure)
   - [The census statement](#the-census-statement)
+  - [The bloat percentage column](#the-bloat-percentage-column)
   - [Four cross-checks](#four-cross-checks)
   - [The fixtures](#the-fixtures)
   - [What the census meant against REINDEX](#what-the-census-meant-against-reindex)
@@ -196,6 +197,37 @@ page's headline claims were corrected on evidence — `waste + slack` is not an 
 bound when the dead-key population is large, and a census *does* evict a hot working
 set once the target exceeds the cache — and open question 7 now has a mechanism.
 
+Fourth follow-up prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md, in PostgreSQL 17, for the question: Measuring Wasted and
+> Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17
+> (unverified). Add to the census statement a bloat percentage column based on
+> information the statement already calculates.
+
+The original read `follow agents.md, in postgresql 17, for question: ... , add to
+the census statement a bloat percentage column based on the already calculated
+information on the statement`: `agents.md` for AGENTS.md, lowercase `postgresql`,
+`for question:` for `for the question:`, a space before the comma after the page
+title, no sentence capitalisation, one comma splice where a second sentence belongs,
+and `based on the already calculated information on the statement` for `based on
+information the statement already calculates`; the restatement also adds the
+`(unverified)` suffix the page title carries. Three scoping answers were taken
+before drafting: the column reports **`waste + slack`** — the quantity the scoring
+tables below already print as `waste+slack %` — rather than the honest-signal subset
+or the everything-but-payload form; it had to be **verified on 12.2 as well as
+17.11**; and both sandboxes were to be deleted once the page was filed.
+
+What this pass did: added exactly one column, `bloat_pct`, as a four-line hunk in
+the census statement's `SELECT` list and nothing else. The column was scored against
+`REINDEX INDEX` on the seven published fixtures, rebuilt from this page's own
+fixture SQL on a 17.11 server and on a 12.2 server; it reproduces the `waste+slack %`
+column of the scoring table exactly, is **identical on both majors** for all seven,
+and costs nothing (`EXPLAIN (ANALYZE, BUFFERS)` reads `shared hit=7568` with and
+without it). It also required two of the page's own rules to be rewritten rather
+than quietly contradicted — "never publish their sum as bloat" was one of them —
+because a healthy index reads 48% to 50% on this column while a rebuild returns
+nothing.
+
 Version scope, stated once: this page may cite only `raw/postgres-17/`, so every
 12.2 statement below rests on exact-pin execution against a 12.2 server built from
 this repo's v12 pin, plus this checkout's own commit history. No v12 source file is
@@ -213,6 +245,13 @@ numbers, never one:
 | Whole-page waste | count of pages whose `gin_page_opaque_info` flags contain `deleted`, plus pages where that function returns a NULL row (all-zero pages), times `block_size` | dead pages inside the file; reusable by this index only, never returned to the filesystem without a rebuild |
 | Live-page slack | `page_header.upper - page_header.lower` summed over live pages, split into entry-tree and posting-tree (data) pages | free bytes inside live pages; on entry pages this is mostly *growth room*, not waste |
 | Pending-list bytes | count of pages flagged `list`, times `block_size` | deferred insert work, not waste; flushing it frees pages inside the file and can grow it |
+
+The statement also prints the first two of those as one derived percentage,
+`bloat_pct`, because that sum is the quantity every scoring table below uses. Read
+it as an upper bound on what a rebuild returns, never as reclaimable space: the
+never-churned control reads **48.05** while `REINDEX` returns **nothing**, and an
+index on an empty table reads **49.80**. See
+[The bloat percentage column](#the-bloat-percentage-column).
 
 Measured on an isolated 17.11 server with `REINDEX INDEX` as ground truth over
 **26 fixtures**, `whole_page_waste + live_page_slack` was an **upper bound** on the
@@ -292,7 +331,7 @@ Three items in the plan did not survive contact with the source or the server.
    [ginblock.h:302-309](../../../../raw/postgres-17/src/include/access/ginblock.h#L302-L309)). The
    census also classifies uncompressed data leaves separately, because GIN itself
    refuses to count their free space
-   ([gindatapage.c#dataPlaceToPageLeaf](../../../../raw/postgres-17/src/backend/access/gin/gindatapage.c#L520-L528)).
+   ([gindatapage.c#dataBeginPlaceToPageLeaf](../../../../raw/postgres-17/src/backend/access/gin/gindatapage.c#L520-L528)).
 
 ### Why no single contrib function suffices
 
@@ -492,6 +531,10 @@ SELECT m.idx_name                                       AS index_name,
        CASE WHEN m.version = 2
             THEN round(100.0 * (c.entry_slack + c.data_slack)
                        / nullif(m.main_bytes, 0), 2) END AS live_page_slack_pct,
+       CASE WHEN m.version = 2
+            THEN round(100.0 * ((c.deleted_pages + c.new_pages) * m.bs
+                                + c.entry_slack + c.data_slack)
+                       / nullif(m.main_bytes, 0), 2) END AS bloat_pct,
        c.entry_slack, c.data_slack,
        c.pending_pages * m.bs                           AS pending_bytes,
        round(100.0 * c.pending_pages * m.bs
@@ -556,6 +599,100 @@ Design points that are not cosmetic:
   `ELSE` arm necessary: their flags word is 0, so `gin_page_opaque_info` returns
   an empty array rather than a NULL row, and each of the three rebuilt `tsvector`
   fixtures held exactly 6 of them beside 1193 entry leaves.
+
+### The bloat percentage column
+
+`bloat_pct` is the statement's only derived column — dead pages plus live-page
+slack, over the main fork:
+
+```text
+bloat_pct = 100 * ((deleted_pages + new_pages) * block_size
+                   + entry_slack + data_slack) / main_fork_bytes
+```
+
+Every term is already in the census, so the column reads no extra page:
+`EXPLAIN (ANALYZE, BUFFERS)` over the seven-fixture database reported
+`shared hit=7568` for the text without it and `shared hit=7568` for the text with
+it. It is gated on `gin_version = 2` exactly like the slack columns, because
+`pd_lower` — which the slack term is built from — is only trustworthy in a
+version-2 index
+([ginblock.h#GinMetaPageData](../../../../raw/postgres-17/src/include/access/ginblock.h#L85-L103),
+[ginblock.h:302-309](../../../../raw/postgres-17/src/include/access/ginblock.h#L302-L309)). On a
+version-1 index it returns NULL, and `whole_page_waste_pct` is the only number left.
+
+It reports the quantity the scoring tables below print as `waste+slack %`, and it
+scores the way they do. The seven published fixtures, censused and then rebuilt with
+`REINDEX INDEX`:
+
+| Fixture | `bloat_pct` | `whole_page_waste_pct` | REINDEX reclaimed % | over-read |
+|---|---|---|---|---|
+| `f1_churn_gin` | 64.12 | 0.65 | 42.42 | +21.70 |
+| `f2_pending_gin` | 75.30 | 64.64 | 58.05 | +17.25 |
+| `f3_fresh_gin` | 48.05 | 0.00 | 0.00 | **+48.05** |
+| `f4_empty_gin` | 49.80 | 0.00 | 0.00 | **+49.80** |
+| `f5_deleted_gin` | 95.22 | 85.52 | 89.09 | +6.13 |
+| `f6_slack_gin` | 51.34 | 0.00 | 46.33 | +5.01 |
+| `f7_reupdate_gin` | 54.15 | 9.89 | 13.26 | +40.89 |
+
+**Both majors print the same column.** The amended text runs on 12.2 with no further
+edit — the `::int` cast and the `pagesize = 0` arm it already carries are what it
+needs there, see
+[Running all four statements on PostgreSQL 12](#running-all-four-statements-on-postgresql-12)
+— and over these seven fixtures **178 of 182 cells came out identical** on the two
+servers. The four that differ are `f7`'s slack bytes, the 128-and-10-byte difference
+already reported in
+[The corpus on both majors](#the-corpus-on-both-majors-26-of-27-fixtures-byte-identical);
+they round away, so `bloat_pct` is identical on all seven. The 12.2 rebuilds
+returned the same seven byte counts as the 17.11 rebuilds, so the reclaimed column
+above is the same on both too.
+
+Four things the column does not mean:
+
+1. **It is not reclaimable space, and on a healthy index it is not close.**
+   `f3_fresh_gin` was never churned: it reads **48.05** and `REINDEX` returns
+   **0 bytes**. `f4_empty_gin` indexes an empty table — one metapage and one entry
+   page — and reads **49.80**, because that entry page is 8,160 bytes empty. The
+   floor is structural rather than accidental: `entrySplitPage` splits a full entry
+   page by equalizing data size, so a fresh build leaves its pages about half full
+   ([ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691)).
+   Over-read across these seven fixtures ran from **+5.01 to +49.80 points**.
+2. **It is not an unconditional upper bound.** It bounded the truth on all seven
+   here and on 26 of 26 in the first corpus, but the second corpus broke it twice —
+   43.43% against 50.00% reclaimed on an index carrying 819,770 dead entry tuples,
+   which sit inside `payload_bytes` where neither term can see them
+   ([README:389-396](../../../../raw/postgres-17/src/backend/access/gin/README#L389-L396)). See
+   [Two more bound failures, and what they mean](#two-more-bound-failures-and-what-they-mean).
+3. **It excludes the pending list**, which is what step 2 of
+   [the procedure](#the-procedure) is for. A `fastupdate` index censused with 246
+   pending pages read `bloat_pct` **8.66** beside `pending_pct` **81.73**, and
+   `REINDEX` then took it from 2,465,792 to 794,624 bytes — **67.77% reclaimed**,
+   eight times what the column reported. Byte-identical on 12.2. On an unsettled
+   index the bound to use is `bloat_pct + pending_pct`, 90.39 here. Censused again
+   straight after the rebuild, the same index reads **44.96** with nothing left to
+   take, which is point 1 restated as a before-and-after pair.
+4. **It is not the sum of the two rounded columns.** It rounds the summed bytes
+   once, so it can land 0.01 above `whole_page_waste_pct + live_page_slack_pct`:
+   `f2_pending_gin` prints 64.64 and 10.65, which add to 75.29, against a
+   `bloat_pct` of **75.30**.
+
+The pending-list fixture, so that third reading is reproducible on either major
+(`gin_pending_list_limit` is `PGC_USERSET`, so this `SET` is session-scoped and needs
+no reload):
+
+```sql
+SET gin_pending_list_limit = '1GB';          -- or GIN flushes mid-insert at 4MB
+CREATE TABLE p1 (id int primary key, tags int[]);
+INSERT INTO p1 SELECT i, ARRAY[i % 1000, (i * 7) % 1000] FROM generate_series(1, 50000) i;
+CREATE INDEX p1_gin ON p1 USING gin (tags) WITH (fastupdate = on);
+VACUUM p1;
+INSERT INTO p1 SELECT i, ARRAY[i % 1000, (i * 7) % 1000]
+FROM generate_series(50001, 100000) i;       -- 50k rows left in the pending list
+```
+
+So the column earns its place for one job — comparing an index against its own
+earlier readings, or against a rebuilt twin — and for no other. A single reading of
+a single index says almost nothing, because about half of it is the fill fraction of
+any GIN build.
 
 ### Four cross-checks
 
@@ -784,7 +921,9 @@ times.
 ### What the census meant against REINDEX
 
 `REINDEX INDEX` before/after `pg_relation_size` is the ground truth for
-filesystem-reclaimable bytes.
+filesystem-reclaimable bytes. The `waste+slack %` column in every table below is
+what the statement prints as `bloat_pct`; see
+[The bloat percentage column](#the-bloat-percentage-column).
 
 | Fixture | What it is | bytes | blocks | entry / data-leaf / data-int / pending / deleted |
 |---|---|---|---|---|
@@ -1071,8 +1210,11 @@ census sees the difference in the split: `f6` holds 3,769,344 bytes of data slac
 against 7,520 bytes of entry slack, and it is the only fixture whose slack
 percentage lands near its reclaimed percentage.
 
-That is why the statement reports `entry_slack` and `data_slack` separately, and
-why summing them into a single "bloat" number is misleading.
+That is why the statement reports `entry_slack` and `data_slack` separately, and why
+`bloat_pct`, which sums them with the dead pages, has to be read beside that split
+rather than instead of it. On an entry-tree-dominated index most of that single
+number is growth room: `f3_fresh_gin`'s 48.05 is 4,796,424 bytes of entry slack
+against 65,192 of data slack, and a rebuild returns none of it.
 
 ### The pending-list lifecycle, measured end to end
 
@@ -1981,7 +2123,13 @@ set untouched on both servers, where the census has no such limiter.
 
 ### Reading rules
 
-- Report the three classes separately. Never publish their sum as "bloat".
+- Report the three classes separately, and keep them beside `bloat_pct` rather than
+  behind it. The single number is `waste + slack`, so it carries an entry tree's
+  growth room: a never-churned index reads 48.05 and an empty one 49.80, both with
+  nothing to reclaim. Publish it as an upper bound on a rebuild, never as
+  reclaimable space, and only ever against the same index's earlier readings or a
+  rebuilt twin. It also excludes the pending list, so on an unsettled index the
+  bound is `bloat_pct + pending_pct`.
 - `whole_page_waste_bytes` is space this index will reuse. It is not a promise
   about `REINDEX`, in either direction. It under-states what a rebuild returns
   exactly when the aged in-use core is smaller than the rebuild would be, which is
@@ -2009,8 +2157,9 @@ set untouched on both servers, where the census has no such limiter.
   slack far above a fresh rebuild's has genuinely reclaimable space.
 - `pending_bytes` is a `fastupdate` tuning signal, not waste. Fix it with VACUUM,
   `gin_clean_pending_list()`, or `gin_pending_list_limit`.
-- If `gin_version <> 2`, publish the page counts and suppress the slack columns,
-  which the statement already does.
+- If `gin_version <> 2`, publish the page counts and suppress the slack columns —
+  and `bloat_pct` with them, which the statement already does, leaving
+  `whole_page_waste_pct` as the only reading.
 - If `uncompressed_pages > 0`, the index carries pre-9.4 posting-tree leaves and
   its `data_slack` is understated.
 - Report the `maintenance_work_mem` a rebuild comparison was measured at. One
@@ -2152,6 +2301,30 @@ set untouched on both servers, where the census has no such limiter.
   restored to 256MB. Both sandboxes were deleted when this page was filed, at the
   asker's instruction, so reproducing any of it means rebuilding both servers from
   this repo's two pinned checkouts and re-running the SQL printed here.
+- `bloat_pct` pass, source side: the version gate the column inherits
+  (`GinMetaPageData` and the `pd_lower` trust note in `ginblock.h`) and
+  `entrySplitPage`, which is why a fresh build's fill sets the column's floor. No new
+  source surface was needed, because the column is arithmetic over terms the census
+  already computes.
+- `bloat_pct` pass, server side: two fresh clusters, both deleted when this page was
+  filed. **17.11** at `.wiki-runtime/tmp/ginpct17/` (port 55437, VPATH build from
+  `raw/postgres-17/`, `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`,
+  `pageinspect` 1.12 / `pgstattuple` 1.5 / `pg_freespacemap` 1.2) carrying the seven
+  published fixtures built from this page's own fixture SQL plus its documented
+  three-VACUUM sequence for `f5`, in an aged database and a rebuilt one. **12.2** at
+  `.wiki-runtime/tmp/ginpct12/` (port 55412, binaries from the retained
+  `.wiki-runtime/tmp/pta12/pg` install of this repo's v12 pin, with `pageinspect` 1.7
+  and `pg_freespacemap` 1.2 built from the same tree and removed again afterwards,
+  same server settings), carrying the same fixtures with `txid_current()` in place of
+  `pg_current_xact_id()`. Run on both: the filed census text and the amended text
+  compared cell by cell, the amended text scored against `REINDEX INDEX` over all
+  seven fixtures, a `fastupdate` fixture censused with a live 246-page pending list
+  and then rebuilt, and `EXPLAIN (ANALYZE, BUFFERS)` on both texts. The amended text
+  published above was extracted from this page's own Markdown and re-run on both
+  servers; on 17.11 it returned the aged corpus's table byte for byte. The 17.11
+  aged corpus was then rebuilt index by index and landed on the same seven byte
+  counts as the separately rebuilt database and as the 12.2 rebuilds, which is what
+  the `REINDEX reclaimed %` column above rests on.
 - Version scope of the 12.2 column: measurement plus this checkout's history only.
   No v12 source file is cited on this page, and the v12-side source analysis is not
   filed anywhere yet.
@@ -2229,6 +2402,14 @@ set untouched on both servers, where the census has no such limiter.
 | A census evicts a hot set once the target exceeds the cache | [bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341), [heapam.c:434-458](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L434-L458); server at 8,192 buffers: a 9,616-block census took a 1,862-page hot set from `usagecount` 3 to 80 resident pages (17.11) and to 0 (12.2), while a 16k-block seq scan left it intact on both |
 | v13+ also vacuums an insert-only table, which 12.2 does not | [guc_tables.c:3359-3366](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3359-L3366), [ginvacuum.c:705-717](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L705-L717); server: 17.11 recorded `last_autovacuum` until `autovacuum_vacuum_insert_threshold` was set to -1, 12.2 has no such setting, and both then flushed 246 pending pages in under 2 s with `last_autovacuum` null |
 | Rebuild equivalence holds on both majors | server: `f9` 7,356,416 -> 3,948,544 by either form; of four identical fixtures the two rebuilt under a 100,000-row insert stream both ended at 2,605,056 and the two rebuilt idle both stayed at 1,261,568, all ending valid/ready/live |
+| `bloat_pct` changes nothing else in the statement | server: the filed text and the amended text returned identical values in all 25 pre-existing columns over 7 indexes (175 of 175 cells), the amended text adding only `bloat_pct` |
+| The column reads no extra page | server: `EXPLAIN (ANALYZE, BUFFERS)` reported `shared hit=7568` for both texts over the same seven-index census |
+| `bloat_pct` reproduces the page's `waste+slack %` scoring column | server: 64.12 / 75.30 / 48.05 / 49.80 / 95.22 / 51.34 / 54.15 on `f1`-`f7`, the same seven values the scoring table prints |
+| A healthy GIN index reads about half its file as `bloat_pct` | [ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691); server: `f3_fresh_gin` 48.05 with `REINDEX` returning 0 bytes, `f4_empty_gin` 49.80 over one entry page holding 8,160 free bytes |
+| `bloat_pct` bounded the rebuild on all seven fixtures, loosely | server: over-read +5.01 to +49.80 points against `REINDEX` truths of 42.42 / 58.05 / 0.00 / 0.00 / 89.09 / 46.33 / 13.26% |
+| A live pending list makes the column under-read badly | server: 246 pending pages gave `bloat_pct` 8.66 and `pending_pct` 81.73 while `REINDEX` took the index 2,465,792 -> 794,624 bytes (67.77%), identical on 12.2; the sum, 90.39, bounds it |
+| The amended text needs no further edit on 12.2 | server: it ran there unchanged and returned 178 of 182 identical cells over the seven fixtures, the four differences being `f7`'s known 128-and-10-byte slack gap, with `bloat_pct` identical on all seven and the 12.2 rebuilds landing on the same seven byte counts |
+| Rounding the sum is not summing the rounded columns | server: `f2_pending_gin` prints 64.64 and 10.65 against a `bloat_pct` of 75.30 |
 
 ## Open Questions
 
@@ -2236,7 +2417,7 @@ The ten questions the open-questions pass left are now twelve: **one closed**
 (number 7, the flush cascade, which now has a mechanism), one materially answered
 (eviction, whose conclusion the two-major run corrected), four narrowed by being
 measured on a second major, and **five new** ones (numbers 11 to 15) that the
-two-major work opened.
+two-major work opened. The `bloat_pct` pass adds a sixteenth.
 
 1. **The `ginVersion <> 2` path is still untested.** v17 always writes
    `GIN_CURRENT_VERSION = 2` ([ginutil.c:355-382](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L355-L382)),
@@ -2362,6 +2543,17 @@ two-major work opened.
     source analysis — what its `ginfuncs.c` does with `PageGetSpecialPointer` on a
     zeroed page, and what its `GinPageIsRecyclable` macro compares against — belongs
     on a v12 page and is not filed anywhere yet.
+16. **`bloat_pct` has no actionable threshold, and was scored on eight fixtures.**
+    The column was run against `REINDEX` on the seven published fixtures plus one
+    live-pending-list fixture, on both majors; the two indexes that are known to
+    break the bound, `k5_gin` and `fh1_gin`, were scored by the earlier pass's
+    harness computing the same `waste + slack` arithmetic, not by this column, and
+    their corpus was not rebuilt here. More importantly, no reading of the column is
+    known to mean "rebuild this index": its floor is a fresh build's fill, which runs
+    from 50.16% to 72.11% across opclasses and moves with the rebuild's
+    `maintenance_work_mem` (numbers 5 and 14), so a threshold would have to be
+    per-opclass and per-budget. What a baseline reading costs to establish — a
+    rebuilt twin, or a stored history of the same index — was not measured.
 
 ## Source References
 

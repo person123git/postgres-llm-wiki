@@ -6248,3 +6248,104 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `67342a14863`), because the build was made out of tree.
 - No wiki page changed in this entry, so no verification field moved.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] answer v17 | a bloat percentage column for the GIN census statement, measured on 17.11 and 12.2
+
+- Fourth follow-up on [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
+  Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md), unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): add a bloat percentage column to the census
+  statement, built from information the statement already computes.
+- **Prompt hygiene first.** The asker chose "correct and restate". The original read
+  `follow agents.md, in postgresql 17, for question: ... , add to the census statement a bloat
+  percentage column based on the already calculated information on the statement`; the page records
+  the seven corrections. Three scoping answers were taken before drafting: the column reports
+  `waste + slack` rather than the honest-signal subset (dead pages + `data_slack`) or the
+  everything-but-payload form; it had to be verified on 12.2 as well as 17.11; and both sandboxes
+  were to be deleted after filing.
+- **The change to the statement is four lines**, generated as a one-hunk diff against the text
+  extracted from the page's own Markdown:
+  `CASE WHEN m.version = 2 THEN round(100.0 * ((c.deleted_pages + c.new_pages) * m.bs + c.entry_slack
+  + c.data_slack) / nullif(m.main_bytes, 0), 2) END AS bloat_pct`, placed after
+  `live_page_slack_pct` and gated on `gin_version = 2` exactly like the slack columns.
+- **Nothing else in the statement moved.** The filed text and the amended text were run against the
+  same seven-index database and compared cell by cell: all **175 pre-existing cells identical**, the
+  amended text adding only `bloat_pct`. `EXPLAIN (ANALYZE, BUFFERS)` read `shared hit=7568` for both,
+  so the column costs no page read.
+- **Two servers, both built from this repo's own pins and both deleted after filing.** 17.11 at
+  `.wiki-runtime/tmp/ginpct17/` (port 55437) carried the seven published fixtures rebuilt from the
+  page's own fixture SQL plus its documented three-VACUUM sequence for `f5`, in an aged database and
+  a rebuilt one; 12.2 at `.wiki-runtime/tmp/ginpct12/` (port 55412) ran the same fixtures with
+  `txid_current()` for `pg_current_xact_id()`, on binaries from the retained
+  `.wiki-runtime/tmp/pta12/pg` install with `pageinspect` 1.7 and `pg_freespacemap` 1.2 built from
+  the same tree.
+- **The column reproduces the page's own scoring column exactly**: 64.12 / 75.30 / 48.05 / 49.80 /
+  95.22 / 51.34 / 54.15 on `f1`-`f7`, which is the `waste+slack %` column the REINDEX tables already
+  print. Scored against `REINDEX INDEX` on both servers it bounded the truth on 7 of 7, loosely:
+  over-read **+5.01 to +49.80 points**.
+- **It runs on 12.2 with no further edit** - the `::int` cast and the `pagesize = 0` arm the text
+  already carries are what it needs there - and **178 of 182 cells matched** across the two majors,
+  the four differences being `f7`'s already-documented 128-and-10-byte slack gap, which rounds away.
+  Both majors' rebuilds landed on the same seven byte counts (10,117,120 / 2,605,056 / 10,117,120 /
+  16,384 / 802,816 / 3,948,544 / 10,346,496), so the reclaimed column is the same on each.
+- **Two of the page's own rules had to be rewritten rather than quietly contradicted.** "Report the
+  three classes separately. Never publish their sum as 'bloat'." now says to keep the three classes
+  beside `bloat_pct` and to publish it as an upper bound on a rebuild, never as reclaimable space;
+  and the entry-slack section's closing claim that summing is "misleading" now explains what the
+  single number carries. The evidence for keeping that warning loud is in the numbers:
+  `f3_fresh_gin`, never churned, reads **48.05** while `REINDEX` returns nothing, and
+  `f4_empty_gin`, an index over an empty table, reads **49.80** over one entry page holding 8,160
+  free bytes - a floor that comes from `entrySplitPage` halving what it splits.
+- **One new fixture** measures the pending-list hole the column inherits: censused with a live
+  246-page pending list an index read `bloat_pct` **8.66** beside `pending_pct` **81.73** while
+  `REINDEX` reclaimed **67.77%** (2,465,792 -> 794,624 bytes), byte-identical on 12.2, and read
+  **44.96** straight after its own rebuild. Its SQL is published on the page.
+- Rounding is documented as measured: the column rounds the summed bytes once, so `f2_pending_gin`
+  prints 64.64 and 10.65 against a `bloat_pct` of **75.30**, not 75.29.
+- **Verification.** The amended statement was extracted from the page's own Markdown
+  (SHA-256 `0caff083a317f308b159ae8dc2092e0aeca4e41a80d29e8a19d5a97f7a4a5af3`), confirmed
+  byte-identical to the tested prototype, and re-run on both servers; on 17.11 it returned the filed
+  table byte for byte. All **307 citations across 48 files** resolve, sit in range and cite only
+  `raw/postgres-17/`; of 96 `file#Symbol` labels, 71 name a symbol inside their hunk and 25 name the
+  function that encloses it, checked mechanically. One stale label was corrected:
+  `gindatapage.c#dataPlaceToPageLeaf` names no function in this checkout, and the hunk it cites is
+  inside `dataBeginPlaceToPageLeaf`. All 41 `## Contents` anchors resolve and match document order.
+- Open questions went **15 -> 16**: `bloat_pct` has no actionable threshold, because its floor is a
+  fresh build's fill (50.16% to 72.11% across opclasses, itself a function of
+  `maintenance_work_mem`), and it was scored on eight fixtures rather than the page's 27-fixture
+  corpus.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md` and the v17 coverage cell in `wiki/versions.md`
+  all had their "never their sum" / "three numbers that are never summed" wording corrected and a
+  paragraph added; a coverage note was appended. `verified_by_agent` moved to
+  `claude-opus-5-max 2026-08-31T18:49:20Z`; `verified: false` untouched.
+- `raw/` untouched: all five checkouts sit at their pinned commits with a zero-length
+  `git status --porcelain`, because both builds were made out of tree.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] cleanup | removed the two GIN bloat_pct measurement sandboxes
+
+- Removed `.wiki-runtime/tmp/ginpct17/` and `.wiki-runtime/tmp/ginpct12/` at the asker's up-front
+  instruction, taking `.wiki-runtime` from **5,614,889,150 to 1,754,367,778 bytes** and reclaiming
+  **3,860,521,372 bytes** (3.60 GiB): 2,003,464,146 for the 17.11 sandbox and 1,856,711,870 for the
+  12.2 one. These are the sandboxes behind the `bloat_pct` entry above.
+- **Both clusters were shut down cleanly first.** `pg_ctl -m fast stop` returned `server stopped`
+  for the 17.11 cluster on port 55437 and for the 12.2 cluster on port 55412; afterwards neither
+  `data/postmaster.pid` existed and no `postgres` process remained. No `rm` touched a running data
+  directory.
+- **The retained `pta12` sandbox was restored to how it was found.** The 12.2 run borrowed its
+  binaries from `.wiki-runtime/tmp/pta12/pg`, which ships only `pgstattuple`, so `pageinspect` and
+  `pg_freespacemap` were built from `pta12/src12/contrib` and installed there for the duration;
+  `make uninstall` removed both, and that install now lists exactly the `pgstattuple` and `plpgsql`
+  extension files it had before, with no `pageinspect.so` or `pg_freespacemap.so` in its `lib/`.
+  `pta12` is otherwise untouched and still present.
+- **What the deletion costs, and what it does not.** The page publishes the amended census statement,
+  the seven fixtures it was scored on, and the new pending-list fixture, all verified to run on both
+  majors, so re-measuring means rebuilding 17.11 from `raw/postgres-17/`, reusing or rebuilding a
+  12.2 install, and re-running that SQL. What is gone is the harness around it: the filed-versus-
+  amended cell comparison script, the `EXPLAIN` variants, and the CSV captures - every number they
+  produced is already in the page.
+- `raw/` untouched: all five checkouts sit at their pinned commits with a zero-length
+  `git status --porcelain` (`45b88269a35`, `a92fbdfb830`, `786db8dcf16`, `baa7b142aac`,
+  `67342a14863`), because both builds were made out of tree.
+- No wiki page changed in this entry, so no verification field moved.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
