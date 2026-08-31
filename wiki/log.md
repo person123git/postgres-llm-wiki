@@ -5994,3 +5994,71 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `67342a14863`), because the build was made out of tree.
 - No wiki page changed in this entry, so no verification field moved.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] answer v12 | heap and TOAST bloat with pgstattuple_approx, one statement, tested on 12.2
+
+- Filed [Measuring Heap and TOAST Bloat With pgstattuple_approx in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-and-toast-bloat.md) at pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2, tag `REL_12_2`). The asker specified a
+  fourteen-item requirement list for one runnable statement; this is the third `storage-and-vacuum`
+  page for v12 and is linked from `wiki/index.md` and `wiki/v12/index.md`.
+- Prompt hygiene: the prompt was read for typos and grammatical errors before drafting and none were
+  found, so it is restated verbatim under `## Question` and no clarification was needed.
+- **One requirement cannot be met as literally written on this major, and the page leads with that.**
+  `pgstattuple_approx` accepts only `RELKIND_RELATION` and `RELKIND_MATVIEW`
+  (`pgstatapprox.c#L280-L290`), so a TOAST relation returns
+  `ERROR: "pg_toast_16405" is not a table or materialized view` - reproduced on the build. The exact
+  `pgstattuple` does route `RELKIND_TOASTVALUE` to `pgstat_heap()`, so the filed statement measures
+  the main heap with `pgstattuple_approx`, the TOAST heap with `pgstattuple`, and carries a
+  `measured_by` column naming the function and its exactness on each row. Both functions ship in the
+  same extension, so "runnable after `CREATE EXTENSION pgstattuple`" still holds.
+- **"No main-table fillfactor adjustment for the TOAST heap" is source-backed, not stylistic.**
+  `heap_reloptions()` overwrites `fillfactor` with 100 for every `RELKIND_TOASTVALUE` relation,
+  `ALTER TABLE ... SET (toast.fillfactor = 70)` returns `ERROR: unrecognized parameter "fillfactor"`,
+  the TOAST relation's `reloptions` stayed `NULL` under a parent at `{fillfactor=70}`, and
+  `toast_save_datum()` inserts chunks through plain `heap_insert()`, so `saveFreeSpace` is zero.
+- **Scored against `VACUUM FULL` on an isolated 12.2 server, ten fixtures, 19 measured rows.** The
+  requested reserve-subtraction formula is algebraically identical to the rewrite-matching ratio form
+  at `fillfactor = 100` and the two agreed to the digit on 12 of 12 such rows, landing −4.02 to +8.98
+  points from the truth; on the one bloated `fillfactor = 70` table it read **34.46 against a 50.00
+  truth**, a 15.54-point understatement, because it charges the reserve against the pre-rewrite size
+  while `raw_heap_insert()` reserves against the new heap. The ratio form read 49.22 on the same row.
+  The page keeps the asked-for column and publishes the one-line alternative beside it.
+- **The new finding is on the TOAST side: free space there is mostly chunk geometry.** A
+  never-deleted TOAST relation reported **19.58% free** and `VACUUM FULL` reclaimed **0.00%**. It
+  reconciles to the byte from source constants: `TOAST_MAX_CHUNK_SIZE` = 1,996, measured chunk lengths
+  1,996/1,996/1,996/412, a full chunk row of 2,032 bytes and a tail row of 448, so 6,544 occupied +
+  40 (header + 4 line pointers) leaves `PageGetHeapFreeSpace` = 8,192 − 6,584 − 4 = **1,604** per
+  page, exactly the 1,604,000 over 1,000 pages that was measured. A payload sized to an exact chunk
+  multiple (3,992 bytes) read **0.24%** = 20 bytes per page, and `VACUUM FULL` reclaimed 0.00% there
+  too. Live length also reconciled exactly: 3,000 x 2,032 + 1,000 x 448 = 6,544,000.
+- **Also measured**: `f_toastonly` hiding 24 MB of reclaimable TOAST (75.00%) behind a healthy 200 kB
+  heap; the cost split - 45 buffer accesses and **zero heap reads** for the all-visible heap branch
+  against **10,006 for a 5,000-page TOAST scan**, exactly two per page because `pgstat_heap()`'s
+  free-space loop re-reads each block the sequential scan just brought in, and 20.706 ms / 3,449
+  physical reads against 0.404 ms / 5 for the two functions on one 27 MB heap (51x, 690x);
+  `scanned_percent` truncating to **0** with 1 page of 5,000 scanned; **10,000 dead TOAST chunks
+  present before any VACUUM**, because `heap_delete()` calls `toast_delete()` in the same transaction;
+  `pgstattuple(0)` raising `could not open relation with OID 0`, which is why the `reltoastrelid <> 0`
+  filter sits one level below the lateral call; the naive filter placement nonetheless returning 0
+  rows on 12.2 because the qual is a restriction on the outer relation and is pushed to its scan;
+  `pg_stat_scan_tables` sufficing for both rows while `SELECT` on the table stays denied; and the
+  VACUUM warning in one table - a trailing delete let plain `VACUUM` truncate a TOAST relation
+  16,384,000 -> 8,192,000 bytes, while an interior delete of the same row count changed nothing until
+  `VACUUM FULL` halved both forks.
+- **Integrity check**: the published SQL was extracted mechanically from the page's own Markdown with
+  a script and re-run against the fixtures; it reproduced the published output including the TOAST
+  relation OIDs. Every fixture was built at least twice with identical byte counts.
+- **Verification**: 136 citations, 32 files, all resolving, in range, `raw/postgres-12/` only, with
+  every `file#Symbol` label's symbol present inside its cited range (13 labels naming an enclosing
+  function whose header sat outside the hunk were fixed by widening the range or relabelling); 27
+  `## Contents` anchors resolve and match document order; 8 open questions filed, including why the
+  relkind gate excludes TOAST relations at all, given that they have both maps the gate cites.
+  `verified_by_agent` set to `claude-opus-5-max 2026-08-31T14:13:19Z`; `verified: false` untouched.
+- Environment: 12.2 built out of tree from `raw/postgres-12/` via `git archive` into
+  `.wiki-runtime/tmp/pta12/src12/`, `--without-readline --without-zlib --without-icu --enable-debug`,
+  `contrib/pgstattuple` installed; cluster on socket `.wiki-runtime/tmp/pta12/sock` port 55612 with
+  `shared_buffers = 256MB`, `maintenance_work_mem = 256MB`, `autovacuum = off`, `fsync = off`,
+  `track_io_timing = on`. `raw/` untouched: `git status --porcelain` empty before and after. Sandbox
+  retained at `.wiki-runtime/tmp/pta12/`, with the fixture and statement scripts under its `sql/`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
