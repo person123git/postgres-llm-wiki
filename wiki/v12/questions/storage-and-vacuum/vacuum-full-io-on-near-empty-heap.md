@@ -698,5 +698,4 @@ Measured on the 12.2 server built from this pin (see [Follow-Up: Measured On A 1
 - [versions](../../../versions.md)
 - [wiki index](../../../index.md)
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](../../codebase-navigation-guide.md)
-- [Proposing and Testing a fillfactor-Corrected pgstattuple_approx Metric for Table Heap Bloat in PostgreSQL 12 (unverified)](pgstattuple-approx-heap-bloat.md)
 - [PostgreSQL 12 Database Health Checklist (unverified)](../server-administration/database-health-checklist.md)

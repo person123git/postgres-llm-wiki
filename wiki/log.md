@@ -2088,9 +2088,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-11] review-fix v12 | fillfactor-corrected pgstattuple_approx metric
 
-- Reframed [Proposing and Testing a fillfactor-Corrected pgstattuple_approx
-  Metric for Table Heap Bloat in PostgreSQL 12
-  (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md)
+- Reframed Proposing and Testing a fillfactor-Corrected pgstattuple_approx
+  Metric for Table Heap Bloat in PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene applied first: the user chose silently
   corrected wording, a rewritten `## Question`, and fresh measurements. The
@@ -2147,9 +2146,8 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 
 ## [2026-08-11] answer v12 | pgstattuple_approx for table heap bloat
 
-- Filed [Proposing and Testing pgstattuple_approx for Table Heap Bloat in
-  PostgreSQL 12
-  (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md)
+- Filed Proposing and Testing pgstattuple_approx for Table Heap Bloat in
+  PostgreSQL 12 (unverified)
   against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
   (PostgreSQL 12.2). Prompt hygiene applied first; the user chose silently
   corrected wording, full exact-pin measurements, and a comparison against both
@@ -6061,4 +6059,56 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `shared_buffers = 256MB`, `maintenance_work_mem = 256MB`, `autovacuum = off`, `fsync = off`,
   `track_io_timing = on`. `raw/` untouched: `git status --porcelain` empty before and after. Sandbox
   retained at `.wiki-runtime/tmp/pta12/`, with the fixture and statement scripts under its `sql/`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] remove v12 | delete Proposing and Testing a fillfactor-Corrected pgstattuple_approx Metric for Table Heap Bloat
+
+- Removed `wiki/v12/questions/storage-and-vacuum/pgstattuple-approx-heap-bloat.md` at the user's
+  request, which named the page by its exact visible title including the ` (unverified)` state
+  marker. Prompt hygiene: the request's lowercased `postgresql` and uncapitalized opening drive no
+  document generation and are restated on no wiki page, so no correction was needed.
+- What went with it: 83,569 bytes over 776 lines, 237 Markdown citations across 33
+  `raw/postgres-12/` files, 92 `## Source References` bullets, and 9 open questions. The page was
+  human-unverified and agent-unverified (`verified: false`, `verified_by_agent: not yet`).
+- Removed the active page entry from `wiki/index.md` (a 2,207-character bullet) and
+  `wiki/v12/index.md` (1,985 characters). Both `Storage and Vacuum` groups still carry two pages, so
+  neither heading was dropped.
+- Removed the two inbound `## Navigation` links, in
+  `pgstattuple-approx-heap-and-toast-bloat.md` and `vacuum-full-io-on-near-empty-heap.md`.
+- **One surviving page referred to the deleted page in prose, and that claim is now
+  self-supporting.** The heap-and-TOAST page's "heap rows with real bloat come in 1.8 to 4.0 points
+  low" item deferred the detail to the deleted page; it now cites `pgstatapprox.c:97` and
+  `bufpage.h#SizeOfPageHeaderData` - the two citations that page already carries in its
+  exact-versus-approximate section - plus an in-page link to that section, whose anchor matches its
+  own `## Contents` entry. Both lines were re-read in `raw/postgres-12/` before filing: line 97 is
+  `stat->tuple_len += BLCKSZ - freespace;` and line 216 defines `SizeOfPageHeaderData`. That page
+  keeps its existing `verified_by_agent: claude-opus-5-max 2026-08-31T14:13:19Z`, because the edit
+  adds verified citations and changes no claim.
+- Dropped the 1,450-character clause describing the page from the v12 coverage cell in
+  `wiki/versions.md` (21,469 -> 20,019 characters): the `statapprox_heap()` visibility-map skip and
+  free-space-map estimate, the reloption-to-`saveFreeSpace` path, the seven-point sweep, the
+  closed-form residual model, the 44.93% growth case, the cost and accuracy numbers, the
+  false-positive and false-negative catalogue, and the catalog-only estimator. The cell's surviving
+  storage text describes the `VACUUM FULL` I/O page and its heap-and-TOAST companion.
+- Neutralized the historical Markdown links that pointed at the deleted file: 3 in
+  `wiki/versions.md` (the 2026-08-11 removal, review-fix, and filing notes) and 2 in `wiki/log.md`
+  (the 2026-08-11 review-fix and filing entries). They keep the page title as plain text. The one
+  backticked filename mention in the 2026-08-11 removal entry stays as a historical record.
+- Added a removal note to `## Coverage Notes` in `wiki/versions.md` naming what is no longer filed
+  anywhere in the wiki: the three-step screen/measure/confirm procedure, the seven-point fillfactor
+  sweep (uncorrected 0.44 to 91.02 on unbloated tables against corrected 0.02 to 1.79, except 10.16
+  at `fillfactor = 10`), the closed-form residual model, the reloption-lowered-after-load rewrite
+  that grows a table 44.93%, the 30.08-point unusable-page-tail false positive, the 84.22-point
+  dropped-column blind spot, the 6.9 ms / 42-read against 484.8 ms / 137,932-read cost comparison on
+  a 1.08 GB table, and the catalog-only-estimator scoring. v12 `pgstattuple_approx` coverage now runs
+  through [Measuring Heap and TOAST Bloat With pgstattuple_approx in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/pgstattuple-approx-heap-and-toast-bloat.md), which
+  keeps the `fillfactor` reserve derivation and the reserve-subtraction-versus-ratio comparison.
+- Its six outbound links went with it (`wiki/v12/index.md`, `wiki/versions.md`, `wiki/index.md`, the
+  v12 codebase navigation guide, `../indexing/btree-index-bloat-core-sql-only.md`, and
+  `../server-administration/database-health-checklist.md`); every one of those targets keeps inbound
+  links from other pages, so the deletion created no orphan.
+- No version pin, `verified:` field, or source checkout changed. `raw/postgres-12/` is still on
+  `45b88269a353ad93744772791feb6d01bc7e1e42` with an empty `git status --porcelain`, and no server
+  was started.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.

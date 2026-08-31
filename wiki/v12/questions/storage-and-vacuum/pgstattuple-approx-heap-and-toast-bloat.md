@@ -358,7 +358,7 @@ The raw numbers behind all ten fixtures, in bytes:
 
 Read this table as three separate error sources, not one accuracy number:
 
-1. **Heap rows with real bloat come in 1.8 to 4.0 points low.** The missing bytes are page headers and retained line pointers that the estimate counts as occupied but a rewrite discards. This is a known property of the approximate function's page arithmetic and is quantified in detail on the sibling page, [Proposing and Testing a fillfactor-Corrected pgstattuple_approx Metric for Table Heap Bloat](pgstattuple-approx-heap-bloat.md).
+1. **Heap rows with real bloat come in 1.8 to 4.0 points low.** The missing bytes are page headers and retained line pointers that the estimate counts as occupied but a rewrite discards ([pgstatapprox.c:97](../../../../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L97), [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-12/src/include/storage/bufpage.h#L216)); see [Which numbers are exact and which are approximate](#which-numbers-are-exact-and-which-are-approximate).
 2. **Small relations come in high, because of the partially-filled last page.** `f_fresh` has zero bloat and reads 8.98%: its heap is 7 pages, and almost all of the 5,148 free bytes are in page 7. Do not run a threshold against a relation of a few dozen pages; the last page alone is worth `100/nblocks` percent.
 3. **TOAST rows come in 0.2 to 9.5 points high**, for a reason that is specific to TOAST and is the subject of the next section but one.
 
@@ -584,7 +584,6 @@ Two gaps that matter for this statement:
 
 - [v12/index](../../index.md)
 - [PostgreSQL 12 Codebase Navigation Guide](../../codebase-navigation-guide.md)
-- [Proposing and Testing a fillfactor-Corrected pgstattuple_approx Metric for Table Heap Bloat](pgstattuple-approx-heap-bloat.md)
 - [How Much I/O a VACUUM FULL Performs on a Multi-GB, Near-Empty Heap in PostgreSQL 12](vacuum-full-io-on-near-empty-heap.md)
 - [versions](../../../versions.md)
 - [wiki index](../../../index.md)
