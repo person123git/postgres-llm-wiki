@@ -6112,3 +6112,139 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `45b88269a353ad93744772791feb6d01bc7e1e42` with an empty `git status --porcelain`, and no server
   was started.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] answer v12 | reliability of the catalog-statistics table and TOAST bloat query, measured on 12.2
+
+- Filed [How Reliable the Catalog-Statistics Table and TOAST Bloat Query Is in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/catalog-statistics-bloat-query-reliability.md) at pin
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2, tag `REL_12_2`). The asker supplied the widely
+  circulated `pg_stats`/`pg_class` bloat-estimate statement - the `constants`/`no_stats`/
+  `null_headers`/`data_headers`/`table_estimates`/`estimates_with_toast` chain - and asked how
+  reliable it is. This is the fourth `storage-and-vacuum` page for v12 and is linked from
+  `wiki/index.md` and `wiki/v12/index.md`.
+- **Prompt hygiene applied first.** Four issues were raised before any drafting: sentence-initial
+  `in postgresql 12`, the inverted embedded question `how reliable is this sql`, the lowercased
+  `sql` and `toast`, and a stray space in `bloat :`. The asker chose "correct and restate"; the
+  restatement and a four-row table of exactly what changed sit under `## Question`, and the SQL body
+  is reproduced byte for byte, comments and typos included, because it is the object under review.
+  The asker also chose score-only (no replacement query), `pgstattuple` as ground truth, and
+  deletion of the sandbox afterwards.
+- **Verdict: a usable screen and a bad measurement.** Three independent readings were taken for
+  every fixture - the statement itself, exact `pgstattuple` (`dead + free` over main plus TOAST
+  heap), and a real `VACUUM FULL` as arbiter. Over the 21 rows where the statement and the rewrite
+  both produced a number: mean absolute error **9.47 points**, **13 within 1 point**, min
+  **-50.00**, max **+33.00**, 5 worse than 20 points. The asker's chosen ground truth scored
+  **10.79** against the same rewrites, with a **-86.41** miss, so the arbiter column was added and
+  reported beside both rather than replacing the requested one.
+- **As a triage screen** against "a rewrite returns at least 10 MB and at least 25%", the published
+  `WHERE` clause scored **9 true positives, 2 false positives, 5 false negatives, 9 true
+  negatives** over 25 measurable fixtures.
+- **Every large error is attributed to a line of the statement, with the byte arithmetic shown.**
+  **-50.00** on a table deleted but neither vacuumed nor re-analyzed, against a byte-identical
+  fixture that was and read 50 against 50.00. **-25.05** because
+  `nullhdr2 = MAX(null_frac) * MAXALIGN(23 + 1 + n/8)` charges a whole second aligned header: 68.02
+  modelled bytes per tuple against a real `t_len` of 40 (on-page 44), where `heap_form_tuple`'s real
+  bitmap cost is `MAXALIGN(23 + BITMAPLEN(12)) - MAXALIGN(23)` = 8 bytes and only for rows that have
+  a null. **-11.98** because `ceil(toast.reltuples / 4)` is byte-exact at 6,400-byte payloads (three
+  1,996-byte chunks plus a 412-byte tail: predicted 8,192,000 bytes, rewrite delivered 8,192,000)
+  but over-predicts by exactly 1.5x when a 2,100-byte payload puts 6 chunks on a page. **-9.00** on
+  an inheritance parent, where `analyze_rel`'s second `relhassubclass` pass gives **4 `pg_stats`
+  rows for 2 live attributes** and `pg_stats` exposes `stainherit` without filtering it, doubling
+  `datawidth` to 24.00 against 12.00 on the child. **+21.00** from per-column alignment padding that
+  `sum((1 - null_frac) * avg_width)` cannot see (60.00 modelled against 72.00 real, chain verified:
+  `ceil(400000 * 60 / 8172) = 2937` pages = 22.945 MB against 29.211 MB actual). **+33.00** from
+  dividing by `bs - 20` with no per-page floor, implying 2.982 tuples per page where 2 fit; the
+  rewrite reclaimed 0.00% and, re-measured after it, `pgstattuple` still read the same 10,736,000
+  free bytes. **+31.00** from having no `fillfactor` term at all, with the rewrite preserving the
+  reserve through `raw_heap_insert`.
+- **Five relation classes never get a number**, three of them holding 25 MB to 32 MB with 50.00% to
+  74.99% reclaimable: materialized views (absent from `information_schema.columns`, which is
+  `relkind IN ('r','v','f','p')`), partitioned parents (absent from `pg_stat_user_tables`, which is
+  `relkind IN ('r','t','m')`), any table with one `STATISTICS 0` column, any never-analyzed table
+  (`do_analyze_rel` stores column statistics only inside `if (numrows > 0)`), and empty tables. And
+  **no `can_estimate = false` row can ever pass the published `WHERE` clause** - all four evaluated
+  it to `NULL` - so the `UNION ALL` that appends them is dead weight in the default configuration.
+- **The `no_stats` CTE's stated purpose does not fire on this major.** Its comment cites JSON, but a
+  `json` column does get a `pg_statistic` row: `json` has no default `=` operator and no opclass
+  (measured 0 and 0, against 1 for `jsonb`), so `std_typanalyze` falls through to
+  `compute_trivial_stats`, which still records `stanullfrac` and `stawidth`. Measured
+  `avg_width = 54`, `can_estimate = true`, error **+1.00**.
+- **One shape where the query beats the exact function.** A dropped 500-byte column reads **92**
+  against a **92.42%** rewrite (35,110,912 -> 2,662,400 bytes) while `pgstattuple` reads **6.01**,
+  because `reform_and_rewrite_tuple` nulls dropped attributes and the estimator only sees live
+  columns in `pg_stats`.
+- **The TOAST half has a bigger problem than its divisor.** A never-vacuumed TOAST relation keeps
+  `relpages = 0`, so a 31 MB table reports `table_mb = 0.203` - a factor of 155 - and because
+  `expected_bytes` omits the same relation it also reports `pct_bloat = 0`, which happens to match
+  the 0.00% rewrite for entirely the wrong reason. Source path: `ANALYZE` never calls
+  `vac_update_relstats` on the TOAST relation, `vacuum_rel`'s own comment says so, and autovacuum's
+  TOAST pass only fires on `n_dead_tuples` or wraparound, which an insert-only table never reaches.
+- **Also measured**: three incompatible size bases in one report (`relpages * bs` excludes FSM, VM
+  and the TOAST index, a 442,368-byte gap on one fixture, while the null branch's `pg_table_size`
+  includes them, giving 31.875 against 31.453 MB for the same shape); a stale `relpages` reporting
+  4.227 MB for a 25.34 MB table; the `bloat_data` duplicate-column `ambiguous` error and the fact
+  that `CREATE TABLE AS` over the whole statement still works because the outer list is unique; the
+  comment/code mismatch in the final `WHERE`; one `AccessExclusiveLock` on any `pg_table_size`-branch
+  table killing the whole statement at `lock_timeout` while the same lock on an estimated-branch
+  table does not delay it (and a 24-relation `pg_table_size` sweep leaving 0 locks held, since the
+  lock is taken and released per relation); a role with `SELECT` on 1 of 26 tables getting a
+  clean-looking one-row report; and run time of 36 ms at 27 tables against 224 ms at 427, where
+  analyzing everything made it **slower** because the cost is `information_schema.columns`, not
+  `pg_table_size` (319-line plan, 9.0 ms planning, 28.0 ms execution).
+- **Integrity checks**: the unfiltered scoring variant was generated from the verbatim statement by
+  script, with the shared 4,962-byte CTE prefix asserted byte-identical (SHA-256 `e523590d...`), so
+  every published number comes out of the asker's own arithmetic; and both SQL snippets published
+  under "How to reproduce" were extracted mechanically from the page's Markdown and re-run against
+  the same server.
+- **Verification**: 138 citations across 26 files, all resolving, in range, `raw/postgres-12/` only,
+  with every `file#Symbol` label's symbol present inside its cited range under word-boundary
+  matching (13 labels naming an enclosing function whose header sat outside the hunk were fixed by
+  widening the range or relabelling; two further false passes on substring matches -
+  `analyze_rel` inside `do_analyze_rel`, and `heap_multi_insert` matching a comment - were caught by
+  tightening the checker and fixed by widening to the definition line). 25 `## Contents` anchors
+  resolve and match document order; 8 open questions. A self-audit against the result files caught
+  13 numeric or wording errors in the draft, including a page-count slip (`2938` for `2937`), an
+  "eight fixtures" claim where the measurement says thirteen, a partitioned-parent size quoted in
+  bytes as MB, and three run-time triples printed sorted rather than as measured.
+  `verified_by_agent` set to `claude-opus-5-max 2026-08-31T16:02:19Z`; `verified: false` untouched.
+- Environment: 12.2 reused the exact-pin out-of-tree install at `.wiki-runtime/tmp/pta12/pg` (built
+  from `raw/postgres-12/` via `git archive`, `contrib/pgstattuple` installed) with a fresh cluster in
+  a separate sandbox at `.wiki-runtime/tmp/bsql12/`, socket `.wiki-runtime/tmp/bsql12/sock` port
+  55613, `shared_buffers = 256MB`, `autovacuum = off`, `fsync = off`, `track_io_timing = on`,
+  `default_statistics_target = 100`. `raw/` untouched: `git status --porcelain` empty before and
+  after.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-08-31] cleanup | removed the bsql12 bloat-query measurement sandbox
+
+- Removed `.wiki-runtime/tmp/bsql12/` at the asker's up-front instruction, taking `.wiki-runtime`
+  from **3,280,717,341 to 1,753,225,220 bytes** and reclaiming **1,527,492,121 bytes** (1.42 GiB).
+  This is the sandbox behind [How Reliable the Catalog-Statistics Table and TOAST Bloat Query Is in
+  PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/catalog-statistics-bloat-query-reliability.md),
+  filed in the entry above.
+- **The cluster was shut down cleanly first.** `postgres` PID 232676 was still serving
+  `-D .wiki-runtime/tmp/bsql12/data` on socket `.wiki-runtime/tmp/bsql12/sock` port 55613.
+  `pg_ctl -m fast stop` returned `server stopped`, after which `data/postmaster.pid` was gone and no
+  matching process remained. No `rm` touched a running data directory.
+- Almost all of it was the data directory: `data/` was **1,527,248,038 bytes**, holding the 26
+  fixture relations (roughly 500 MB of heaps and TOAST heaps at peak, plus WAL and the 400 throwaway
+  tables the cost probe created and dropped). The harness itself was small: `results/` 135,537 bytes
+  across 13 files and `sql/` 45,818 bytes across 15 files.
+- **This sandbox borrowed its binaries, so nothing had to be rebuilt or is now missing.** The 12.2
+  install at `.wiki-runtime/tmp/pta12/pg`, built out of tree from `raw/postgres-12/` for an earlier
+  page with `contrib/pgstattuple` installed, was reused as-is; `bsql12` held only its own
+  `initdb`-created cluster, SQL, and results. `pta12` is untouched and still present (1.7 GiB, of
+  which the reusable install is a small part).
+- **What the deletion costs, and what it does not.** The page publishes the three fixture
+  definitions that carry the headline structural errors (alignment padding, page flooring, and the
+  two-chunk TOAST geometry) and the full ground-truth statement, both verified to run. What is gone
+  is the rest of the fixture matrix DDL, the mutation script, the `mkvariant.py` derivation of the
+  scoring variant from the verbatim statement, and the lock, privilege and cost probe scripts; every
+  number they produced is already published in the page, and open question 8 records the harness's
+  one measurable artefact (its own scratch tables appearing in the report).
+- `raw/` untouched: all five checkouts sit at their pinned commits with a zero-length
+  `git status --porcelain` (`45b88269a35`, `a92fbdfb830`, `786db8dcf16`, `baa7b142aac`,
+  `67342a14863`), because the build was made out of tree.
+- No wiki page changed in this entry, so no verification field moved.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
