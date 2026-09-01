@@ -1,7 +1,7 @@
 ---
 type: codebase-navigation-guide
 version: 19
-pinned_commit: 67342a148632801d44c2fb9a7bf4231b6827c5d2
+pinned_commit: 135b867a530cac2e3796d87c852b53bef40f0077
 verified: false
 verified_by_agent: not yet
 ---
@@ -49,7 +49,7 @@ Use the PostgreSQL 19 checkout as a set of subsystem maps. The top-level `src/Ma
 
 1. For the simple-query protocol, start in `exec_simple_query()`. It parses the query string with `pg_parse_query()`, then proceeds through analysis, rewrite, planning, portal setup, and execution for each raw statement [postgres.c#exec_simple_query](../../raw/postgres-19/src/backend/tcop/postgres.c#L1029-L1225) [postgres.c#pg_parse_query](../../raw/postgres-19/src/backend/tcop/postgres.c#L616-L645).
 2. Parse analysis and rewrite live behind the `pg_analyze_and_rewrite_*()` wrappers and `pg_rewrite_query()`. The normal statement path reaches `QueryRewrite()` before planning [postgres.c#pg_analyze_and_rewrite](../../raw/postgres-19/src/backend/tcop/postgres.c#L682-L851) [rewriteHandler.c#QueryRewrite](../../raw/postgres-19/src/backend/rewrite/rewriteHandler.c#L4795-L4849).
-3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-19/src/backend/tcop/postgres.c#L987-L1025) [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L328-L370) [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L845).
+3. Planning begins at `pg_plan_queries()`. Normal queries enter `planner()`, which either uses `planner_hook` or `standard_planner()`, and `subquery_planner()` builds the per-query planner state [postgres.c#pg_plan_queries](../../raw/postgres-19/src/backend/tcop/postgres.c#L987-L1025) [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L328-L370) [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L844).
 4. Execution is portal-driven. `PortalRun()` dispatches portal execution, and the executor entry points are `ExecutorStart()` and `ExecutorRun()` with hook-aware standard implementations [pquery.c#PortalRun](../../raw/postgres-19/src/backend/tcop/pquery.c#L681-L850) [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345).
 5. Utility commands are routed outside normal plan execution. `ProcessUtility()` exposes `ProcessUtility_hook`; without a hook it calls `standard_ProcessUtility()` [utility.c#ProcessUtility](../../raw/postgres-19/src/backend/tcop/utility.c#L504-L600).
 
@@ -63,7 +63,7 @@ Keep these structs open when tracing behavior:
 
 | Structure | Why it matters |
 |---|---|
-| `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2183-L2206). |
+| `RawStmt` and `Query` | Raw parse trees become analyzed `Query` trees before rewrite and planning [parsenodes.h#Query](../../raw/postgres-19/src/include/nodes/parsenodes.h#L120-L172) [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2157-L2180). |
 | `PlannedStmt` | Planner output and utility wrappers are represented as `PlannedStmt` nodes [plannodes.h#PlannedStmt](../../raw/postgres-19/src/include/nodes/plannodes.h#L59-L135). |
 | `PlannerGlobal`, `RelOptInfo`, and `Path` | These are the planner's global state, relation state, and alternative access/join path records [pathnodes.h#PlannerGlobal](../../raw/postgres-19/src/include/nodes/pathnodes.h#L168-L245) [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095) [pathnodes.h#Path](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1964-L2005). |
 | `QueryDesc`, `EState`, and `PlanState` | Executor entry points receive a `QueryDesc`, build query-wide `EState`, and execute a `PlanState` tree [execdesc.h#QueryDesc](../../raw/postgres-19/src/include/executor/execdesc.h#L33-L58) [execnodes.h#EState](../../raw/postgres-19/src/include/nodes/execnodes.h#L690-L785) [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265). |
@@ -72,7 +72,7 @@ Keep these structs open when tracing behavior:
 
 ### Tests And Docs
 
-Use `src/test/Makefile` to choose between Perl/TAP, postmaster, regression, isolation, modules, authentication, recovery, and subscription test areas [test/Makefile#SUBDIRS](../../raw/postgres-19/src/test/Makefile#L15-L35). SQL regression tests build `pg_regress` and expose `check`/`installcheck` targets, while isolation tests build `isolationtester` and `pg_isolation_regress` [regress/GNUmakefile#targets](../../raw/postgres-19/src/test/regress/GNUmakefile#L36-L103) [isolation/Makefile#targets](../../raw/postgres-19/src/test/isolation/Makefile#L21-L64). Test-only extension modules live under `src/test/modules` [test/modules/Makefile#SUBDIRS](../../raw/postgres-19/src/test/modules/Makefile#L7-L85). Developer docs in `doc/src/sgml/filelist.sgml` include BKI, catalogs, table AM, index AM, source-layout, storage, and contrib docs [filelist.sgml#developer-docs](../../raw/postgres-19/doc/src/sgml/filelist.sgml#L87-L120).
+Use `src/test/Makefile` to choose between Perl/TAP, postmaster, regression, isolation, modules, authentication, recovery, and subscription test areas [test/Makefile#SUBDIRS](../../raw/postgres-19/src/test/Makefile#L15-L35). SQL regression tests build `pg_regress` and expose `check`/`installcheck` targets, while isolation tests build `isolationtester` and `pg_isolation_regress` [regress/GNUmakefile#targets](../../raw/postgres-19/src/test/regress/GNUmakefile#L36-L103) [isolation/Makefile#targets](../../raw/postgres-19/src/test/isolation/Makefile#L21-L64). Test-only extension modules live under `src/test/modules` [test/modules/Makefile#SUBDIRS](../../raw/postgres-19/src/test/modules/Makefile#L7-L86). Developer docs in `doc/src/sgml/filelist.sgml` include BKI, catalogs, table AM, index AM, source-layout, storage, and contrib docs [filelist.sgml#developer-docs](../../raw/postgres-19/doc/src/sgml/filelist.sgml#L87-L120).
 
 ### Navigation Checklist
 
@@ -93,6 +93,7 @@ Use `src/test/Makefile` to choose between Perl/TAP, postmaster, regression, isol
 - Repin range `8055e337..3aa54433`: reviewed all 31 commits and changed paths against this guide. The range stamped the source as `19beta2` in both supported build systems and adds a VM-consistency TAP test under the existing `pg_combinebackup` test tree [012_vm_consistency.pl#purpose](../../raw/postgres-19/src/bin/pg_combinebackup/t/012_vm_consistency.pl#L1-L6). Those two version lines now read `19beta3`, so the stamp citations live in the `99e47536..67342a148` note below. Neither change touches the guide's subsystem ownership map. All 58 existing source ranges remained content-identical at the same lines.
 - Repin range `3aa54433..99e47536`: reviewed all 52 commits and changed paths against this guide. The range adds no top-level source family and does not alter the parse/analyze/rewrite/plan/portal/utility routing described here. The `GROUP BY ALL` revert removes one `Query`/`SelectStmt` field, the `FOR PORTION OF` fix removes one executor-state field, the injection-point makefile adds the existing `nbtree` test module to autoconf builds, and the final commit hardens concurrent logical-decoding activation; affected structure anchors were refreshed.
 - Repin range `99e47536..67342a148`: reviewed all 152 commits and changed paths against this guide. The range adds no top-level source family and does not alter the parse/analyze/rewrite/plan/portal/utility routing described here. `f3a116a26ff` (WITH CHECK OPTION on `DELETE FOR PORTION OF` leftovers) shifted `QueryRewrite()` down by six lines [rewriteHandler.c#QueryRewrite](../../raw/postgres-19/src/backend/rewrite/rewriteHandler.c#L4795-L4849). `93b93f28fb1` and `424fb7160bc` add work only inside `ProcessUtilitySlow()`, so `ProcessUtility()` did not move [utility.c#ProcessUtility](../../raw/postgres-19/src/backend/tcop/utility.c#L504-L600), and `64a65ead123` changes `FillPortalStore()` one line for one, so `PortalRun()` did not move either [pquery.c#PortalRun](../../raw/postgres-19/src/backend/tcop/pquery.c#L681-L850). A 35-commit security batch dated 2026-08-10 precedes `3638289fb57` ("Stamp 19beta3."), so PostgreSQL is now stamped `19beta3` on `REL_19_STABLE` in both supported build systems [configure.ac#AC_INIT](../../raw/postgres-19/configure.ac#L20) [meson.build#project](../../raw/postgres-19/meson.build#L9-L12).
+- Repin range `67342a148..135b867a530`: reviewed all 104 commits and changed paths against this guide. No release stamp moved, so the source is still `19beta3`, and no top-level source family, subsystem makefile, or generated-header rule changed — `src/Makefile`, the backend/access/storage/bin/interfaces/contrib makefiles, `src/include/catalog/Makefile`, `pg_index.h`, and the regression/isolation makefiles are byte-identical across the range. The parse/analyze/rewrite/plan/portal/utility routing is unchanged, but three anchors moved: `0ab90a5c941` reimplements join removal by editing the query jointree and re-deriving planner state, shortening `subquery_planner()` by one line [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L844); `3e8bcc8644f` reverts `ALTER TABLE ... MERGE/SPLIT PARTITION(S)`, dropping the `SinglePartitionSpec` node, the `PartitionCmd.partlist` field, and two `AlterTableType` values, which moves the `RawStmt` anchor up by 26 lines [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2157-L2180); and `0ec36f4ba32` adds the `test_wait_lsn` module to `src/test/modules` [test/modules/Makefile#SUBDIRS](../../raw/postgres-19/src/test/modules/Makefile#L7-L86). `4f0af2635be` changes relation handling for AFTER triggers inside `execMain.c` without moving the executor entry points [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345).
 
 ## Evidence Map
 
@@ -118,11 +119,11 @@ None for this navigation-scope page. Subsystem pages still need fresh caller/cal
 - [pquery.c#PortalRun](../../raw/postgres-19/src/backend/tcop/pquery.c#L681-L850)
 - [utility.c#ProcessUtility](../../raw/postgres-19/src/backend/tcop/utility.c#L504-L600)
 - [planner.c#planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L328-L370)
-- [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L845)
+- [planner.c#subquery_planner](../../raw/postgres-19/src/backend/optimizer/plan/planner.c#L770-L844)
 - [execMain.c#ExecutorStart-Run](../../raw/postgres-19/src/backend/executor/execMain.c#L124-L345)
 - [backend/Makefile#generated-headers](../../raw/postgres-19/src/backend/Makefile#L183-L188)
 - [pg_index.h#CATALOG](../../raw/postgres-19/src/include/catalog/pg_index.h#L31-L78)
-- [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2183-L2206)
+- [parsenodes.h#RawStmt](../../raw/postgres-19/src/include/nodes/parsenodes.h#L2157-L2180)
 - [pathnodes.h#RelOptInfo](../../raw/postgres-19/src/include/nodes/pathnodes.h#L1009-L1095)
 - [execnodes.h#PlanState](../../raw/postgres-19/src/include/nodes/execnodes.h#L1195-L1265)
 - [tableam.h#TableAmRoutine](../../raw/postgres-19/src/include/access/tableam.h#L321-L420)

@@ -6349,3 +6349,68 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `67342a14863`), because both builds were made out of tree.
 - No wiki page changed in this entry, so no verification field moved.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-09-01] repin v19 | 19beta3 67342a14863 -> 19beta3 135b867a530, 104 commits reviewed
+
+- Repinned `raw/postgres-19/` to `135b867a530cac2e3796d87c852b53bef40f0077`
+  (`REL_19_BETA3-130-g135b867a530`, 2026-09-01) at the asker's request to move v19 to
+  the latest `REL_19_STABLE` commit. Prompt hygiene was applied first and the asker
+  chose "correct and restate": *Follow AGENTS.md. For PostgreSQL 19, repin the source
+  checkout to the latest `REL_19_STABLE` commit.*
+- **No new release stamp.** `configure.ac` and `meson.build` still read `19beta3`, and
+  upstream has no `REL_19_RC1` or `REL_19_0` tag, so the branch tip is the only
+  "latest" there is. The old pin remains an ancestor: a clean forward move.
+- Reviewed all 104 commits: 6 change a filed claim, 7 touch a cited file without
+  changing one, 91 are unrelated.
+- **REPACK page 55 -> 58 feature-scope commits** (title, Short Answer, tables, Evidence
+  Map). `9bb8e16bd53` adds an `already_locked` argument to
+  `repack_is_permitted_for_relation()`: the two unlocked discovery loops still skip a
+  concurrently dropped OID, while `cluster_rel_recheck()` passes `true` and the function
+  asserts both the held lock and that the relation cannot be missing. `f23de46e15b`
+  swaps `vacuum_relation` for `qualified_name opt_name_list` in `RepackStmt`, so
+  `REPACK ONLY t` and `REPACK t *` — accepted but never read by `repack.c`, which
+  touches no `->inh` — are now syntax errors; `VACUUM (FULL) ONLY t` is unaffected.
+  `dc8628e55d4` aligns `ddl.sgml`, `maintenance.sgml`, `monitoring.sgml` and `mvcc.sgml`
+  with REPACK's existence: `ctid` moves under any table-rewriting operation,
+  `pg_stat_progress_repack` is documented for all three commands, and REPACK joins the
+  `ACCESS EXCLUSIVE` list with its CONCURRENTLY-only-during-swap exception.
+- **Autovacuum page: two post-beta3 fixes.** `4af0528a0e4` calls
+  `parallel_vacuum_propagate_shared_delay_params()` right after
+  `AutoVacuumUpdateCostLimit()` in `vacuum_delay_point()`, gated on
+  `AmAutoVacuumWorkerProcess()`, so a rebalanced cost limit reaches the parallel workers
+  instead of waiting for a `SIGHUP` — until now they could keep spending up to twice the
+  configured budget; it also adds a third TAP case and the
+  `autovacuum-worker-cost-balanced` injection point. `7ddb9c41a13` gives
+  `pg_stat_get_autovacuum_scores()` the TOAST-to-main reloption fallback
+  `do_autovacuum()` already applied, through a pre-pass over `pg_class`, so the view
+  again matches its documented promise to compute scores the way a worker does.
+- **`pg_plan_advice` page 27 -> 28 module commits.** `400c810ddbd` tightens the
+  `FOREIGN_JOIN` sublist test from `== 1` to `< 2`, rejecting `FOREIGN_JOIN(())`.
+- **Navigation guide**: no subsystem-ownership change; every makefile, catalog rule and
+  routing entry point is byte-identical. Three anchors moved: `0ab90a5c941` (join removal
+  now edits `root->parse->jointree` and re-derives planner state) shortened
+  `subquery_planner()` by a line, `3e8bcc8644f` (revert of `ALTER TABLE ... MERGE/SPLIT
+  PARTITION(S)`) dropped `SinglePartitionSpec`, `PartitionCmd.partlist` and two
+  `AlterTableType` values and moved `RawStmt` up 26 lines, and `0ec36f4ba32` added
+  `test_wait_lsn` to `src/test/modules`.
+- **Files verified byte-identical across the range** for the claim scopes above:
+  `repack_worker.c`, `pgrepack.c`, `repack.h`, `repack_internal.h`, `ref/repack.sgml`,
+  `logical.c`, `logicalctl.c`, `slot.c`, the `test_decoding` repack test, `pruneheap.c`,
+  `visibilitymap.c`, `vacuumlazy.c`, `heapam*.c`, `vacuumparallel.c`, `execUtils.c`, the
+  six scan nodes, `reloptions.c`, `guc_parameters.dat`, `system_views.sql`,
+  `012_vm_consistency.pl`, all of `contrib/pg_plan_advice/` except the three syntax-test
+  files, `pg_stash_advice`, `pgplanadvice.sgml`, `test_plan_advice`, and `plancache.c`.
+- 102 citation fragments re-anchored by `scripts/repin_citations --apply --sync-labels
+  --update-pinned-commit`; the three `repack.c#repack_is_permitted_for_relation`
+  anchors were repointed by hand, since the old L2353-L2392 range started at the
+  signature and overran into the next function's comment (now L2344-L2395, comment plus
+  body). Two labels on new citations were corrected after a symbol check
+  (`tablecmds.c#RangeVarCallbackMaintainsTable`, `monitoring.sgml#pg_stat_autovacuum_scores`).
+  All 739 v19 citations resolve, sit in range and cite only `raw/postgres-19/`.
+- Bookkeeping: `wiki/versions.md` (pin, coverage cell, coverage note), `wiki/index.md`
+  and `wiki/v19/index.md` (pin, counts, new findings). `verified_by_agent` stays
+  `not yet` on all four v19 pages — a repin is not a claim-by-claim re-verification —
+  and `verified:` was not touched.
+- `raw/` otherwise untouched: the other four checkouts sit at their pinned commits, and
+  `raw/postgres-19/` has a zero-length `git status --porcelain` at the new pin.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
