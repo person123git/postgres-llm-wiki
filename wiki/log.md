@@ -2,6 +2,96 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-01] answer v17 | VACUUM/autovacuum relation truncation, TOAST, and what changed since v12
+
+- Filed [How VACUUM and Autovacuum Truncation Works in PostgreSQL 17, Whether It Covers TOAST,
+  and What Changed Since PostgreSQL 12
+  (unverified)](v17/questions/storage-and-vacuum/vacuum-truncation-and-toast.md) at the unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11, `REL_17_11-7-g786db8dcf16`).
+- **Prompt hygiene first.** The prompt had subject-verb disagreement twice ("how vacuum and
+  autovacuum truncate works", "does it also handles toast?"), spaces before commas, a missing
+  terminal question mark and lowercase `postgresql`/`toast`. The asker chose **correct and
+  restate**, so `## Question` reads: *Follow AGENTS.md. In PostgreSQL 17, question: how does VACUUM
+  and autovacuum truncation work? Does it also handle TOAST? What changed since version 12?*
+  The asker then chose **source-and-history scope**, so no 17.11 or 12.2 server was built and the
+  page contains **no measurements** - every number is a constant or a formula read from source.
+- **Category**: `storage-and-vacuum`. Most cited symbols are `vacuumlazy.c`, `vacuum.c`,
+  `pruneheap.c` and `storage.c`, i.e. heap pages and their reclamation.
+- **Core answer.** Truncation runs between index cleanup and the `pg_class` update
+  (`vacuumlazy.c:518-520`), is the only part of a lazy `VACUUM` that takes `AccessExclusiveLock`,
+  and removes a **suffix** only. Autovacuum reaches the same `heap_vacuum_rel` through the same
+  `vacuum_rel`; the code is identical.
+- **The `LP_DEAD` subtlety is the key to the design.** `heap_page_prune_and_freeze` deliberately
+  does not set `hastup` for `LP_DEAD` items, on the optimistic assumption the second heap pass
+  turns them into `LP_UNUSED` - without it "rel truncation will only happen every other VACUUM, at
+  most" (`pruneheap.c:1513-1521`). That makes `nonempty_pages` provisional, which is why
+  `count_nondeletable_pages` is documented as *necessary, not optional* and why it stops at any
+  `ItemIdIsUsed` line pointer rather than at a live tuple.
+- **Thresholds are OR-ed, and that has a consequence nothing in the tree states**: `>= 1000`
+  trailing pages **or** `>= rel_pages / 16`, so the fraction rule governs below 16,000 blocks and
+  the flat 1000-page rule above it - a 1 TB heap with 999 trailing empty pages is never truncated.
+  Filed as an open question.
+- **Lock behavior**: ~100 `ConditionalLockRelation` retries of 50 ms (5000/50), then
+  *"stopping truncate"*; self-suspension within 20 ms of a detected waiter, checked every 32
+  blocks, committing a partial truncation and looping; no `vacuum_delay_point` while the lock is
+  held, so `vacuum_cost_delay` does not slow the backwards scan; and, for autovacuum only, an
+  external `SIGINT` from `ProcSleep`'s `DS_BLOCKED_BY_AUTOVACUUM` branch unless
+  `PROC_VACUUM_FOR_WRAPAROUND` is set.
+- **TOAST: yes, with a version-sensitive twist.** A TOAST table is a heap reached by its own
+  `vacuum_rel` call after the parent commits, under the parent's session lock. Since **17.6**,
+  `2e0b5d252b1` (Michael Paquier, author Nathan Bossart, 2025-06-25, "Avoid scribbling of VACUUM
+  options", backpatched through 13) copies `VacuumParams` at the top of `vacuum_rel` and per
+  relation in `vacuum()`'s loop, so the TOAST table resolves its **own** `toast.vacuum_truncate`
+  and the second relation of `VACUUM a, b` no longer inherits the first's reloption. Before that -
+  and in v12, which passes the caller's pointer straight down with no copy at all - TOAST silently
+  used its parent's resolved value. The same commit added the six `vacuum-truncate-*` /
+  `vacuum-index-cleanup-*` injection points; their test emits four notices per `VACUUM a, b` in
+  enabled/disabled/disabled/enabled order, which is the direct proof of per-relation isolation.
+- **Two TOAST facts worth separating.** A main-table `vacuum_truncate` does **not** propagate:
+  `extract_autovac_opts`'s TOAST-to-main fallback covers only the `AutoVacOpts` sub-struct, and
+  `vacuum_truncate` lives in `StdRdOptions` outside it. And autovacuum never recurses into TOAST -
+  `do_autovacuum` says so explicitly ("we don't automatically vacuum toast tables along the parent
+  table") and schedules them in a second `pg_class` pass keyed on `RELKIND_TOASTVALUE`.
+- **Since v12: 16 changes**, each attributed to a commit in this checkout and to its first
+  containing release tag. Behavioral: the `old_snapshot_threshold < 0` condition disappeared with
+  the "snapshot too old" feature (v17 `f691f5b80a8`) - v12 refuses to truncate *at all* when that
+  feature is enabled; the wraparound failsafe became a new veto (v14 `1e55e7d1755` +
+  `60f1f09ff44`, globalized v16 `71a825194fd`); `pg_usleep` became `WaitLatch` with the
+  `VacuumTruncate` wait event (v15 `70685385d70`); `PROCESS_TOAST` (v14 `7cb3048f38e`) and
+  `PROCESS_MAIN` (v16 `4211fbd8413`) arrived; `toast_parent` moved TOAST privilege checks to the
+  parent (v17 `ecb0fd33720`); and 17.6 fixed the scribbling. `RelationTruncate` separately gained
+  batched three-fork truncation (v13 `6d05086c0a7`), `RelationPreTruncate` (v13 `c6b92041d38`) and
+  a critical section plus checkpoint interlock (v15 `412ad7a5563`, extended 17.3 `d4ffbf47b2d`,
+  with `66aaabe7a18` explaining the `smgrtruncate2` spelling). Reporting/refactor: `VacOptValue`
+  (v14 `3499df0dee8`), `LVRelState` (v14 `b4af70cb210`), the unconditional last-page rule (v15
+  `44fa84881ff`), the truncate error context (v13 `b61d161c146`, v14 `7e453634bb6`), log text (v15
+  `b175b9cde72`, `872770fd6cc`) and line-pointer-array truncation as a separate meaning of the
+  word (v14 `3c3b8a4b268`, v15 `10a8d138235`). Both `TRUNCATE` the option and the
+  `vacuum_truncate`/`toast.vacuum_truncate` reloptions already existed in v12 (`b84dbc8eb80b`,
+  `119dcfad988`).
+- **Unchanged since v12**: `REL_TRUNCATE_MINIMUM` 1000, `REL_TRUNCATE_FRACTION` 16, the 20/50/5000
+  ms timing constants, `ConditionalLockRelation` rather than a blocking upgrade, the relation-grew
+  bailout, the `ItemIdIsUsed` test, the 32-block prefetch window, the `truncating heap` progress
+  phase, and leaving `reltuples` alone while rewriting `relpages`.
+- **Test-coverage gap recorded explicitly**: nothing in `src/test/` asserts the *"stopping
+  truncate"* or *"suspending truncate"* messages, so the lock-retry, self-suspension and
+  relation-grew paths are uncovered, and none of the four `vacuum-*.spec` isolation tests touches
+  truncation.
+- Also confirmed absent in this branch: any `vacuum_truncate` entry in `guc_tables.c`, so the
+  reloption is the only lever and needs neither restart nor reload -
+  `ALTER TABLE ... SET (vacuum_truncate = ...)` takes `ShareUpdateExclusiveLock` and applies at the
+  next `VACUUM`.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md`, and the v17 coverage cell plus a dated note in
+  `wiki/versions.md`. `verified_by_agent` stays `not yet` - the page is a first draft, not a
+  claim-by-claim re-verification - and `verified:` was not touched.
+- 177 citations across 20 files verified to resolve, sit in range, match their labels' basenames
+  and cite only `raw/postgres-17/`; all 21 `## Contents` anchors resolve and match document order.
+- `raw/` untouched: `raw/postgres-17/` and `raw/postgres-12/` both sit at their pinned commits with
+  a zero-length `git status --porcelain`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings. The first run flagged a
+  bare `raw/postgres-12/...` path written inside backticks in an open question; it was reworded to
+  name the v12 files without a raw path, since a v17 page may not carry a v12 source reference.
+
 ## [2026-08-28] cleanup | removed the vfio VACUUM FULL measurement sandbox
 
 - Deleted `.wiki-runtime/tmp/vfio/` at the asker's up-front instruction, taking `.wiki-runtime`
