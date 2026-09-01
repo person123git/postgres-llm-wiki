@@ -6414,3 +6414,88 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `raw/` otherwise untouched: the other four checkouts sit at their pinned commits, and
   `raw/postgres-19/` has a zero-length `git status --porcelain` at the new pin.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-09-01] review v19 | pg_plan_advice page re-verified claim by claim, six corrections
+
+- Reviewed [How pg_plan_advice Works in PostgreSQL 19, and All Its Commits
+  (unverified)](v19/questions/query-planning/pg-plan-advice.md) against the unchanged pin
+  `135b867a530cac2e3796d87c852b53bef40f0077` (`REL_19_BETA3-130-g135b867a530`), with corrections made
+  **in place**. Prompt hygiene was applied first and the asker chose "correct and restate": *Follow
+  AGENTS.md. In PostgreSQL 19, review the question page: How pg_plan_advice Works in PostgreSQL 19,
+  and All Its Commits (unverified).* Scope was confirmed up front: **full claim-by-claim
+  re-verification, source-only**, so no v19 server was built.
+- **Mechanical checks first.** A throwaway checker under `.wiki-runtime/tmp/pparev/` plus the existing
+  `.wiki-runtime/tmp/check_citations.py` validated every citation for path existence, range bounds,
+  version prefix and label-versus-file agreement, and rebuilt the `## Contents` block from the
+  headings: **237 citations over 42 files and 56 anchors, zero problems** before the edits, **278
+  citations over 48 files** after. Front matter order, the `(unverified)` title suffix, the
+  `query-planning` category and the `../../../../raw/postgres-19/` prefix depth were already correct.
+- **All 56 listed commits re-verified** for hash, subject, author, author date and ancestry against
+  the pinned checkout: 20 core, 28 module, 8 support, every one an ancestor of the pin.
+  `git log -- contrib/pg_plan_advice/` returns **exactly the 28 module commits the page lists**, and
+  the support list is complete for the other three surfaces (`pgplanadvice.sgml` has 4 commits, 2 of
+  them module commits; `src/test/modules/test_plan_advice` has 5; plus the `headerscheck` exclusion).
+- **Finding 1, `PGS_CONSIDER_PARTITIONWISE` is never cleared.** The page said partitionwise
+  consideration "is preserved unless explicitly removed". All eight `pgs_mask` writes in the module
+  are `&= ~`, and none of their masks contains that bit — it appears in `contrib/pg_plan_advice/` only
+  inside a comment saying it must not be unset, because a higher-level joinrel builds partitionwise
+  paths from this level's paths (`pathnodes.h:52-58`). The section now names the two moves actually
+  used: clear `PGS_JOIN_ANY` to induce a partitionwise join, clear `PGS_APPEND | PGS_MERGE_APPEND` to
+  prevent one, plus the scan-level form where a single-rel `PARTITIONWISE` target leaves those two as
+  the only surviving scan strategies.
+- **Finding 2, the prepared-statement explanation had the wrong mechanism.** The page said
+  `EXPLAIN (PLAN_ADVICE) EXECUTE` shows nothing because "the plan was built earlier without that
+  trigger". `PREPARE` does not plan: `PrepareQuery` parse-analyzes, rewrites, calls
+  `CompleteCachedPlan` and stores the statement (`prepare.c:121-139`), so on the first `EXECUTE` the
+  planner runs *inside* the EXPLAIN. It still generates nothing because the plan cache never passes an
+  `ExplainState` to the planner: `ExplainExecuteQuery` calls `GetCachedPlan` without one
+  (`prepare.c:634-636`), `BuildCachedPlan` goes through `pg_plan_queries` (`plancache.c:1097-1101`),
+  and `pg_plan_queries` hardcodes `NULL` (`postgres.c:1012-1013`); `ExplainState` appears nowhere in
+  `plancache.c`/`plancache.h`. Core's own `c83ac02e` message says the argument "won't help with
+  EXPLAIN EXECUTE is used" (sic). The same `es == NULL` also suppresses feedback unless
+  `feedback_warnings` or `always_store_advice_details` is on. `pt2` in the `prepared` test is the
+  proof the planner does run there, and that is now stated.
+- **Finding 3, the regression example was silently truncated.** The star-schema block quoted three
+  generated lines from `join_order.out#L43-L46`; the block is four lines, and the fourth is
+  `NO_GATHER(f d1 d2)` at L47. Extended, and used to illustrate the documented emission order, with
+  the test's `max_parallel_workers_per_gather = 0` cited for why `NO_GATHER` is there.
+- **Finding 4, `3ab3f33281f` conflated supplied with generated advice.** The page said the
+  `alternatives` test "advises `DO_NOT_SCAN(alt_t2@exists_to_any_1)` where it previously said
+  `exists_2`". The commit's diff shows the renamed *generated* targets are
+  `SEQ_SCAN`/`NO_GATHER(alt_t1 alt_t2@exists_to_any_1)`, the generated
+  `DO_NOT_SCAN(alt_t2@exists_1)` line is unchanged because it names the *other* alternative, and the
+  `exists_to_any_1` spelling of `DO_NOT_SCAN` is *supplied* advice at `sql/alternatives.sql:25`.
+- **Finding 5, an author misattribution.** `ea203d371de` is authored and committed by **Richard Guo**,
+  not Robert Haas. Heading, `## Contents` entry and anchor updated. Its `53e6f51ee` master-counterpart
+  claim checks out: same subject and author date, resolves in this checkout's object store, not an
+  ancestor of the pin and on no branch here.
+- **Finding 6, the module's TAP test was missing.** `89f5f860cc5` is mostly test: 6 added and 2
+  removed lines in `pgpa_scan.c` against 83 new lines of `t/001_foreign_scan.pl`, plus
+  `TAP_TESTS = 1` and `postgres_fdw` in `EXTRA_INSTALL`. Round-Trip Testing is now three layers
+  instead of two and names the two exact-advice assertions (`NO_GATHER(ftab)` for a pushed-down
+  single-table aggregate, `FOREIGN_JOIN((ftab ftab2)) NO_GATHER(ftab ftab2)` for a real foreign join),
+  the `tsm_system_time` dependency behind the `scan` TABLESAMPLE cases, and `001_replan_regress.pl`.
+- **Smaller fixes.** The Open Questions bullet attributed "no control over aggregation strategy or
+  sort order" to the README's Future Work, which never mentions sort order — that is `5883ff30`'s
+  commit message, and the two are now attributed separately. The joinrel hook is documented as reading
+  only the trove's `REL` slice (Gather plus partitionwise), which is all
+  `pgpa_planner_apply_joinrel_advice` looks at. `dc47beac` and `47c110f7` were swapped so the core list
+  is chronological. `4321dcad`'s "factored out" became "filtered out" and now names
+  `pgpa_filter_out_join_relids`. `4f888d0f` is identified as touching only the two `prepared` test
+  files, and Álvaro Herrera's name carries its accent.
+- **Confirmed unchanged**, among much else: the 20-bit `PGS_*` list and the two enforcement styles,
+  `default_pgs_mask` seeded from the `enable_*` GUCs in `standard_planner`, the five hooks and where
+  core calls them, the full-join merge/hash exceptions, `IndexOptInfo.disabled` and the
+  disable-every-other-index loop, the 20-tag enum, the underscore occurrence-number rules and their
+  three regression cases, the fixed output order and column-76 wrap, the five `PGC_USERSET` GUCs with
+  their defaults, `choose_custom_plan`'s policy including `567286b762b`'s role callbacks, the nine
+  `5883ff30` reviewers, `wal_level=replica` from `5dbb63fc`, `f4a4f1a7`'s `FOREIGN_SCAN`->`FOREIGN_JOIN`
+  and `NESTED_LOOP_MEMOIZE` doc fixes, and the `3d2f2eb1664`/`c9bd90242db` follow-ups touching no
+  module file.
+- Bookkeeping: `wiki/index.md`, `wiki/v19/index.md` and the v19 coverage cell plus a dated note in
+  `wiki/versions.md`. `verified_by_agent` moved from `not yet` to
+  `claude-opus-5-max 2026-09-01T14:07:51Z`, since every claim on the page was re-checked against
+  pinned raw source; `verified: false` was not touched.
+- `raw/` untouched: all five checkouts sit at their pinned commits, and `raw/postgres-19/` has a
+  zero-length `git status --porcelain` at `135b867a530`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
