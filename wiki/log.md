@@ -2,6 +2,115 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-02] answer v17 | improvements since v12 in storage, planning, index bloat and vacuum, measured on 17.11 and 12.2
+
+- Filed [Improvements Since PostgreSQL 12 in Storage Performance, Query Planning, Index Bloat, and
+  Vacuum, as of PostgreSQL 17
+  (unverified)](v17/questions/storage-and-vacuum/improvements-since-v12.md) at the unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+- **Prompt hygiene first.** The asker chose "correct and restate". The original read
+  `follow agents.md, in postgresql 17, question: what are the improvement since version 12 in terms of
+  storage performance, query planning, index bloat , vacuum.`; the page records the six corrections
+  (`agents.md` -> `AGENTS.md`, `postgresql` -> `PostgreSQL`, `improvement` -> `improvements`,
+  `version 12` -> `PostgreSQL 12`, the stray space before a comma, and the missing `and`). Three
+  scoping answers were taken before drafting: **build and measure** rather than source-only, **one
+  combined page** filed under `storage-and-vacuum` rather than four split pages, and **comprehensive**
+  per-area coverage rather than a curated subset.
+- **Two servers, both built out of tree from this repo's own pins**, so `raw/` was never written to:
+  17.11 from `raw/postgres-17` at the pin (port 55717) and 12.2 from `raw/postgres-12` at
+  `45b88269a35` / `REL_12_2` (port 55712), both `configure --without-readline --without-zlib
+  --without-icu --enable-debug`, both with identical non-default settings, `autovacuum = off`, and
+  per-table `autovacuum_enabled = false` on every fixture. The retained `.wiki-runtime/tmp/pta12`
+  sandbox was **not** touched; a fresh 12.2 install was built instead.
+- **Release dating deliberately does not use `git tag --contains`.** That test is wrong for any
+  reverted-then-reintroduced feature, and two in scope are exactly that: it puts `MAINTAIN` in v16
+  (`60684dd834a` is an ancestor of `REL_16_0`, but `151c22deee6` reverted it on 2023-07-07 and
+  `ecb0fd33720` re-landed it for **v17**) and `recovery_prefetch` in v14 (`1d257577e08`, reverted,
+  re-landed as `5dc0418fab2` for **v15**). Every date on the page instead comes from a presence test of
+  the defining symbol at `REL_12_0` through `REL_17_0` and the pin: `MAINTAIN` reads 0 hits at
+  `REL_16_0` and 9 at `REL_17_0`. The same method excluded the eager/lazy freezing strategies
+  (`4d417992613`, reverted the same day by `6c6b4972664`, never shipped), showed v13's dedup entry
+  point was `_bt_dedup_one_page` rather than today's `_bt_dedup_pass`, and showed Memoize shipped in
+  v14 already renamed because the master rename `83f4fcc6550` was back-patched.
+- **Inventory was driven by the checkout, not by recall**: the working tree was diffed against
+  `REL_12_0` for GUCs (76 added, 12 removed), reloptions (5 added) and system views (15 added), and
+  commit ranges were enumerated per subsystem (333 vacuum, 491 index-AM, 676 planner, 643
+  storage/WAL).
+- **Index bloat, measured.** Deduplication (v13, `0d861bbb702`): 22,519,808 -> 6,979,584 bytes
+  (**-69.0%**) on 100 distinct keys, 66,486,272 -> 4,030,464 (**-93.9%**) on a single-value text index,
+  and **byte-identical** results on two all-distinct indexes (22,487,040 and 11,255,808, same 2,733
+  leaf pages, same 90.06% density). Bottom-up deletion (v14, `d168b666823`) was **separated from
+  dedup** by rebuilding the churn fixture with `deduplicate_items = off` - legitimate because
+  `_bt_delete_or_dedup_one_page` says it "deliberately omit[s] an index-is-allequalimage test" - which
+  gives **-64.3% from bottom-up alone** where the key never changes, a further -28.7% from dedup, and
+  **byte-identical to 12.2** (58,449,920) where the keys do change, proving the 61.6% saving there is
+  entirely dedup acting on incidental duplicates. Heap growth was identical (79,683,584 bytes) on both
+  servers, confirming identical churn.
+- **Vacuum, measured.** The v17 TidStore (`30e144287a7` plus radix tree `ee1b30f128d`) cuts index
+  passes **18 -> 2** over 3,000,000 dead tuples at `maintenance_work_mem = 1MB` on an identical
+  28,038-page heap, 12.2 capping at 174,517 TIDs per pass; `dead_items_alloc`'s byte budget
+  (`max_bytes = vac_work_mem * 1024L`) is why the progress view swapped `max_dead_tuples`/
+  `num_dead_tuples` for `max_dead_tuple_bytes`/`dead_tuple_bytes`/`num_dead_item_ids` plus
+  `indexes_total`/`indexes_processed`, both column lists captured from the two servers. The v14 bypass
+  (`5100010ee4d`) - gated on 2% of `rel_pages` **and** under 32 MB of TidStore in v17 - turned two full
+  index scans into `index scan bypassed: 1 pages from table (0.01% of total)` at 22 buffer hits, 0
+  misses and 391 bytes of WAL.
+- **A source-derived prediction was tested and confirmed.** v16 page-level freezing (`1de58df4fec`)
+  appeared to do nothing: after a 300,000-row bulk load a plain `VACUUM` left `all_frozen = 0` on
+  *both* majors. Reading `heap_page_prune_and_freeze` explained why - the opportunistic branch needs
+  `all_visible && all_frozen && nfrozen > 0` **and** an FPI to be written anyway, via `hint_bit_fpi`,
+  which is only set when the visibility checks themselves forced one. Turning on the
+  `postmaster`-context `wal_log_hints` (both clusters restarted) flipped 17.11 to **3,704 of 3,704
+  pages and 300,000 tuples frozen**, `relfrozenxid` age 0, for `11116 records, 3709 full page images,
+  31380997 bytes` of WAL, while 12.2 still froze **none**. Both the negative and positive runs are on
+  the page.
+- **Query planning, measured.** Memoize (v14) 572,305 -> 586 buffer hits (**977x**, `Hits: 99950
+  Misses: 50`, inner loops 100,000 -> 50); incremental sort (v13) 7,447 -> 11 buffers and 31.867 ->
+  0.601 ms while reading 1,000 rows instead of 1,000,000; GROUP BY key reordering (v17, `0452b461bc4`)
+  rewrote `GROUP BY b, a` to `a, b` and removed the sort entirely; the v16 presorted aggregate removed
+  a 2,947-block internal sort spill (144.799 -> 96.176 ms).
+- **The nbtree SAOP rework was measured with its own control.** 500 **clustered** keys: 1,504 -> **5**
+  buffers (0.296 -> 0.095 ms). 500 keys spread 2,000 apart: 1,504 versus 1,501 - **no benefit** - which
+  pins the v17 change (`5bf748b86bc`) to the removal of redundant descents rather than to arrays in
+  general.
+- **Storage, measured with a decisive control.** Read-syscall counts came from
+  `/proc/<backend-pid>/io` (`syscr`), no ptrace needed, with `max_parallel_workers_per_gather = 0`
+  after a first run mis-attributed only 18,602 of 53,192 blocks to the leader. On one 53,192-block
+  table: 12.2 issues **53,210** calls at exactly 1.000 blocks per call; 17.11 issues 53,210 / 13,318 /
+  3,346 / 1,685 at `io_combine_limit` 8/32/128/256 kB (1.000 / 3.994 / 15.897 / 31.568 blocks per
+  call). The 8 kB row **reproduces 12.2 exactly**, isolating block combining as the entire gain.
+- **Three results contradict the obvious expectation**, and are given their own section: v13
+  disk-based hash aggregation is *slower* than 17.11's own sort path (840.533 ms / 61,208 kB versus
+  786.466 ms / 23,504 kB, against 12.2's 992.216 ms / 27,416 kB), so the honest v12->v17 gain on that
+  query is the **sort** getting 20.7% faster and 14.3% smaller; the SAOP rework is worth nothing on
+  spread arrays; and page-level freezing changes nothing at default settings.
+- **Eight cross-version boundary checks** captured exact error text, including `unrecognized VACUUM
+  option "parallel"`, `relation "pg_stat_io" does not exist`, `unrecognized privilege type "maintain"`
+  and `unrecognized configuration parameter` for `io_combine_limit`, `default_toast_compression`,
+  `vacuum_failsafe_age` and `vacuum_buffer_usage_limit` on 12.2, against successful `GRANT MAINTAIN`,
+  `VACUUM (PARALLEL 4)` and a 35-row `pg_stat_io` on 17.11.
+- **Honest gaps, all filed as open questions.** This host has no `lz4.h` or `zstd.h`, so both builds
+  are pglz-only and the v14 TOAST / v15 WAL compression ratios are **not** measured; instead the build
+  gate itself is measured (`invalid value for parameter "default_toast_compression": "lz4"`) and
+  explained from `default_toast_compression_options`' `#ifdef USE_LZ4`. The pre-v17 1 GB dead-TID
+  ceiling is asserted only from measurement, since proving it would need v12 source citations the page
+  may not make. `read_bytes` was 0 on every read-stream run, so no physical device I/O was measured
+  anywhere.
+- Apply scopes for all 16 named settings were read from `pg_settings.context` on the 17.11 server and
+  mapped explicitly: `transaction_buffers` and `wal_log_hints` **restart**;
+  `autovacuum_vacuum_insert_threshold` and `recovery_prefetch` **reload**; the other twelve
+  session/transaction.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md`, and both the v17 coverage cell and a dated
+  coverage note in `wiki/versions.md`. `verified_by_agent` stays `not yet` - the page is newly drafted,
+  not re-verified claim by claim - and `verified:` was not touched.
+- **Verification**: 109 citations across 27 files resolve, sit in range and cite only
+  `raw/postgres-17/`; 87 identifier labels name a symbol inside their cited hunk and the 12 remaining
+  labels are explicit line ranges, each read by hand; all 16 `## Contents` anchors resolve in document
+  order.
+- `raw/` untouched: all five checkouts sit at their pinned commits, and both builds were made out of
+  tree.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-09-01] answer v17 | VACUUM/autovacuum relation truncation, TOAST, and what changed since v12
 
 - Filed [How VACUUM and Autovacuum Truncation Works in PostgreSQL 17, Whether It Covers TOAST,
