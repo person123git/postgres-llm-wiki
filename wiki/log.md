@@ -6698,3 +6698,67 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - `raw/` untouched: all five checkouts sit at their pinned commits, and `raw/postgres-19/` has a
   zero-length `git status --porcelain` at `135b867a530`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-09-02] answer v19 | REPACK throttling follow-up: no throttle exists, and what actually drives its I/O
+
+- Deepened `## I/O Impact and Throttling` **in place** on [How the REPACK Command Works in PostgreSQL 19,
+  and Its 58 Feature-Scope Commits
+  (unverified)](v19/questions/storage-and-vacuum/repack-command.md) at the unchanged pin
+  `135b867a530cac2e3796d87c852b53bef40f0077` (`REL_19_BETA3-130-g135b867a530`). No new page: the question
+  already had a section on this topic, so a second page would have duplicated it.
+- **Prompt hygiene first.** The asker chose "correct and restate". The original read
+  `follow agents.md, in postgresql 19, for question: How the REPACK Command Works in PostgreSQL 19, and
+  Its 58 Feature-Scope Commits (unverified), does repack has any way to throtle it, to make it nice on
+  i/o?`; the restated form under `## Question` fixes `does repack has` -> `does REPACK have`,
+  `throtle` -> `throttle`, and `i/o` -> `I/O`. Two scoping answers were taken before drafting:
+  **deepen the existing section** rather than file a new page, and **source-and-history scope**, so no
+  v19 server was built and the section carries no measurements.
+- **Answer: there is no throttle, and the old section understated why.** `ExecRepack()` takes exactly
+  three options (`VERBOSE`, `ANALYZE`, `CONCURRENTLY`), none about I/O; `vacuum_delay_point()` is absent
+  from `repack.c`, `heapam_relation_copy_for_cluster()` and `rewriteheap.c`, whose only interruption
+  point is `CHECK_FOR_INTERRUPTS()`; and nothing schedules a rewrite on its own, since the only callers
+  of `cluster_rel()` are `ExecRepack()` and `VACUUM (FULL)` and autovacuum never sets `VACOPT_FULL`.
+- **Correction to the previous section.** It described a "BULKWRITE ring buffer (automatic,
+  CONCURRENTLY)" and left the impression that the blocking rewrite writes through shared buffers. It
+  does not: `begin_heap_rewrite()` opens a `smgr_bulk_start_rel()` stream, so the blocking path
+  **bypasses the buffer manager entirely** and calls `smgrextend()` directly, WAL-logging in batches of
+  up to `XLR_MAX_BLOCK_ID` = 32 pages, and skipping WAL altogether under `wal_level = minimal` because
+  `RelationNeedsWAL()` is false for a relation created in the same transaction. `BAS_BULKWRITE` applies
+  only to the `CONCURRENTLY` copy, which uses `heap_insert()` with a bulk-insert state. Btree index
+  builds use the same bulk-write interface.
+- **New findings behind the answer.** (1) The blocking copy *dirties the old heap* — it takes an
+  **exclusive** buffer lock per tuple so `HeapTupleSatisfiesVacuum()` hint bits stick, and the source
+  comment admits "rewriting most of the old table during VACUUM FULL doesn't exactly help". (2) The
+  concurrent copy dirties it differently: its MVCC snapshot re-enables page-at-a-time mode, so
+  `heap_page_prune_opt()` runs per page, while the blocking `SnapshotAny` scan never reaches that call.
+  (3) TOAST is rewritten in **both** modes (`raw_heap_insert()` re-invokes the toaster) and each chunk
+  is a plain `heap_insert()` with no bulk-insert state, so TOAST is the one write stream with no ring at
+  all. (4) The index-scan copy path uses a bare `ReadBuffer()` — no strategy, no read stream, no
+  combining. (5) The v19 BULKREAD ring is no longer a flat 256 kB: it grows by
+  `io_combine_limit * effective_io_concurrency` blocks, capped by the pin limit and `NBuffers / 8`, and
+  the scan's `READ_STREAM_SEQUENTIAL` look-ahead comes from `effective_io_concurrency`, **not**
+  `maintenance_io_concurrency`. (6) `pg_stat_io` has a blind spot: `IOOP_WRITE`/`IOOP_EXTEND` are only
+  counted in `bufmgr.c`/`localbuf.c`, so the blocking rewrite's writes never appear there.
+- **Doc-versus-source discrepancy, filed under Open Questions.** `ref/repack.sgml` still advises
+  `enable_sort = off` to avoid the sort file, but in this checkout that cannot change the decision:
+  `plan_cluster_use_sort()` compares only `total_cost`, while `cost_sort()` records a disabled
+  `enable_sort` in `disabled_nodes` and adds no cost — Robert Haas's `e22253467942` representation,
+  an ancestor of the pin. The paragraph predates REPACK; the identical text is in `cluster.sgml` at
+  `ac58465e061^`. Only `enable_indexscan = off` still works, via an explicit short-circuit.
+- The section now has four subsections (`Where the writes and reads come from`, `Settings that change
+  the load`, `Recipes for a gentler REPACK`, `How to watch it`), a 13-row settings table with an apply
+  scope for every GUC, and a named list of non-controls. Every GUC row states restart/reload/session
+  scope: `wal_level` and `io_max_combine_limit` are `PGC_POSTMASTER` (restart), `temp_file_limit` is
+  `PGC_SUSET`, the rest are `PGC_USERSET`; `logical_decoding_work_mem` is `PGC_USERSET` but the decoding
+  worker is a plain background worker that does not inherit the leader's session values, so it must be
+  set in `postgresql.conf` or per database/role.
+- Verification: **377 citations across 61 files** resolve, sit in range and cite only
+  `raw/postgres-19/`; the `## Contents` block gained the four new anchors and all 31 headings resolve in
+  document order (the checker's only complaints are the pre-existing duplicate `Tests` heading, whose
+  `#tests-1` suffix follows the AGENTS.md rule). Seventeen new citations were re-anchored so the
+  identifier label names a symbol inside its own hunk.
+- Bookkeeping: `wiki/index.md`, `wiki/v19/index.md`, and the v19 coverage cell plus a dated note in
+  `wiki/versions.md`. `verified_by_agent` stays `not yet` — the new section is a close source read but
+  has not been re-checked claim by claim as a separate pass; `verified:` untouched.
+- `raw/` untouched: `raw/postgres-19/` has a zero-length `git status --porcelain` at `135b867a530`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
