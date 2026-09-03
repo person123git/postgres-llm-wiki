@@ -2,6 +2,93 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-03] answer v17 | bottom-up index deletion and B-tree deduplication, source and history only
+
+- Filed [How Bottom-Up Index Deletion and B-Tree Deduplication Work in PostgreSQL 17
+  (unverified)](v17/questions/indexing/bottom-up-deletion-and-btree-deduplication.md) at the unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11, `REL_17_11-7-g786db8dcf16`).
+- **Prompt hygiene first.** The original read `follow agents.md, in postgresql 17, question: explain how
+  Bottom-up index deletion works and B-tree deduplication works, provide examples`. The asker chose
+  "correct and restate", so `## Question` carries *Follow AGENTS.md. In PostgreSQL 17, explain how
+  bottom-up index deletion and B-tree deduplication work. Provide examples.* Three scoping answers were
+  taken before drafting: **source-and-history scope** (no server built, no measurements), a **single new
+  page** under `indexing`, and **comprehensive** coverage of the adjacent mechanisms.
+- **Answer: they are two of three page-split-avoidance strategies, in a fixed order.**
+  `_bt_findinsertloc` calls `_bt_delete_or_dedup_one_page` only when
+  `PageGetFreeSpace(page) < insertstate->itemsz`, and that function runs simple deletion, then bottom-up
+  deletion, then deduplication, returning as soon as the new item fits. The README's own ranking is
+  explicit: dedup is "our last line of defense", bottom-up "our second last".
+- **Two selection subtleties that a summary would miss.** `checkingunique && !uniquedup` returns early
+  after simple deletion, skipping both other strategies — that *is* the "special heuristic" the
+  documentation credits for letting a unique index "skip straight to splitting a leaf page", and it is
+  also why a unique index never applies single value strategy (dedup is only reached there with
+  `uniquedup` true, which is passed down as `bottomupdedup = true`). And `uniquedup` is set to true
+  *inside* `_bt_delete_or_dedup_one_page` when simple deletion ran but freed too little — "Might as well
+  assume duplicates" — so bottom-up deletion can fire on a non-unique index with no executor hint at all.
+- **The hint.** `indexUnchanged` is computed per index by `index_unchanged_by_update`, cached in
+  `IndexInfo`, considered only for a `TU_All` (non-HOT) update, and deliberately blind to two things:
+  `INCLUDE` column changes (non-key values are "opaque payload state to the index AM") and index
+  predicates (a partial index still gets the hint). Row-level BEFORE triggers do not change the answer
+  because they do not touch the `updatedCols` bitmaps.
+- **The budget.** `bottomupfreespace = Max(BLCKSZ/16, newitemsz)` (512 bytes at the default `BLCKSZ`) and
+  success is `PageGetExactFreeSpace(page) >= Max(BLCKSZ/24, newitemsz)` (341 bytes) — a *higher* bar than
+  "the new item fits", so the pass does not come straight back on the next insert. `neverdedup` returns
+  true on zero duplicate intervals purely to stop a pointless dedup pass, and the source states the
+  return value "is always just advisory information". heapam then keeps cost down by rounding promising-TID
+  counts to powers of two with a floor of 4, discarding all but the best `BOTTOMUP_MAX_NBLOCKS` = 6
+  blocks, treating blocks within `BOTTOMUP_TOLERANCE_NBLOCKS` = 3 as favorable, and applying three
+  give-up rules plus a target-halving decay that favorable blocks postpone.
+- **Finding 1: the two features have opposite safety requirements.** Deduplication is gated on
+  `allequalimage` because it discards all but one physical copy of the key; bottom-up deletion uses the
+  same `_bt_keep_natts_fast` equality routine but merges nothing, and the source says so outright — "We
+  deliberately omit an index-is-allequalimage test here". So on a `numeric` or nondeterministic-collation
+  index, bottom-up deletion works and deduplication never runs.
+- **Finding 2: `CREATE INDEX` never deduplicates a unique index.** `_bt_load`'s gate is
+  `allequalimage && !btspool->isunique && BTGetDeduplicateItems(...)`, which is stricter than the insert
+  path, where a unique index can be deduplicated. The build also uses a different cap,
+  `MAXALIGN_DOWN(BLCKSZ * 10 / 100) - sizeof(ItemIdData)`, with the acknowledged side effect that a high
+  leaf `fillfactor` becomes ineffective on duplicate-heavy indexes.
+- **Finding 3: bottom-up deletion is B-tree only.** Only nbtree calls `table_index_delete_tuples`
+  directly; GiST's `gistprunepage` and hash's `_hash_vacuum_one_page` go through
+  `index_compute_xid_horizon_for_tuples`, which hardcodes `bottomup = false` and `knowndeletable = true`
+  and exists only to obtain a conflict horizon.
+- **Finding 4: `Btree/DELETE` cannot tell the two deletion strategies apart**, because
+  `_bt_delitems_delete` is shared; the README confirms "the same WAL records are used for each operation".
+  `nupdated > 0` does prove granular TID removal from a posting list, and `delvacuum_desc` prints those
+  positions. `Btree/DEDUP` carries only `nintervals`, since the intervals array is registered as buffer
+  data that `XLogInsert` omits when it stores a full-page image.
+- **Six worked examples**, all derived from cited source rather than measured: a trigger matrix over six
+  workloads; byte arithmetic that reproduces the documentation's own 616-byte 100-TID posting list
+  (`16 + 100 * 6`) and derives a 222-TID ceiling for an `int4` key at `maxpostingsize` 1352 and
+  `BTMaxItemSize` 2704; `bt_page_items`/`bt_metap`/`amcheck` inspection with the documented output quoted;
+  the four `pg_waldump` record shapes; `deduplicate_items = off` and the four things it does not do; and
+  the `btree_index.sql` fixtures read against the code.
+- **Gaps recorded as gaps.** No counter, wait event, progress view or `EXPLAIN` field exists for either
+  mechanism in v17. And **no test in the tree names bottom-up index deletion** — an exhaustive search of
+  `src/test` and every contrib test directory for `bottom-up`/`bottomup` returns nothing; the closest is
+  `btree_index.sql`'s 1,350-iteration unique-index `DELETE`/`INSERT` loop, which creates exactly the churn
+  the README names as the non-hint trigger but asserts nothing about it. That inference is filed under
+  Open Questions rather than stated as fact.
+- **History dated by presence test, not `git tag --contains`.** `nbtdedup.c` is absent at `REL_12_0`,
+  carries `_bt_dedup_start_pending` from `REL_13_0` and `_bt_bottomupdel_pass` from `REL_14_0`. Fourteen
+  commits are listed from `0d861bbb702` (2020-02-26) and `d168b666823` (2021-01-13) through
+  `3b42bdb4716` (2024-02-16), all Peter Geoghegan's except the last. **v17 changed nothing behavioral**:
+  `git diff REL_16_0 HEAD -- nbtdedup.c` is one line, the copyright year; the extracted heapam
+  index-deletion region (788 lines) is byte-identical to `REL_17_0` and differs from `REL_16_0` only by a
+  comment renaming `XLOG_HEAP2_PRUNE` to `XLOG_HEAP2_PRUNE_VACUUM_SCAN`; `BOTTOMUP_MAX_NBLOCKS` = 6,
+  `BOTTOMUP_TOLERANCE_NBLOCKS` = 3, the `npromisingtids <= 4` floor and `curtargetfreespace /= 2` are
+  textually unchanged at every tag from `REL_14_0` to the pin; and v17's read-stream work left this path
+  on plain `PrefetchBuffer`/`ReadBuffer`.
+- Verification: **406 citations across 44 files** resolve, sit in range and cite only `raw/postgres-17/`;
+  **189 identifier labels** name a symbol inside their own hunk after 20 were re-anchored or relabelled,
+  and the 7 remaining descriptive labels are README section titles and SGML `sect3` ids that were checked
+  by hand. All 35 `## Contents` anchors resolve to a heading in document order.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md`, and the v17 coverage cell plus a dated note in
+  `wiki/versions.md`. `verified_by_agent` stays `not yet` — the page is a close source read but has not
+  been re-checked claim by claim as a separate pass; `verified:` untouched.
+- `raw/` untouched: `raw/postgres-17/` has a zero-length `git status --porcelain` at `786db8dcf16`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-09-02] answer v17 | improvements since v12 in storage, planning, index bloat and vacuum, measured on 17.11 and 12.2
 
 - Filed [Improvements Since PostgreSQL 12 in Storage Performance, Query Planning, Index Bloat, and
