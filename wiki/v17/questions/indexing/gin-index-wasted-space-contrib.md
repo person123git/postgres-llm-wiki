@@ -3,7 +3,7 @@ type: question
 version: 17
 pinned_commit: 786db8dcf168bd9df8f55047337525ac19118b1c
 verified: false
-verified_by_agent: claude-opus-5-max 2026-08-31T18:49:20Z
+verified_by_agent: not yet
 ---
 
 # Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17 (unverified)
@@ -13,6 +13,8 @@ verified_by_agent: claude-opus-5-max 2026-08-31T18:49:20Z
 - [Question](#question)
 - [Answer](#answer)
   - [Short answer](#short-answer)
+  - [Plan review](#plan-review)
+  - [Revised plan](#revised-plan)
   - [Deviations from the brief, and why](#deviations-from-the-brief-and-why)
   - [Why no single contrib function suffices](#why-no-single-contrib-function-suffices)
   - [The three waste classes, from GIN's own definitions](#the-three-waste-classes-from-gins-own-definitions)
@@ -228,6 +230,19 @@ than quietly contradicted — "never publish their sum as bloat" was one of them
 because a healthy index reads 48% to 50% on this column while a rebuild returns
 nothing.
 
+Fifth follow-up prompt, corrected with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, review the plan for the question:
+> Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions
+> on PostgreSQL 17 (unverified).
+
+The correction fixes capitalization, spacing around punctuation, and the missing
+articles in the request; the page title is unchanged. The original six-step plan
+above remains the record of the brief. The 2026-09-05 review and revised plan are
+filed under Answer. This pass reviewed source and the published SQL; it did not
+repeat the historical database experiments or re-verify every earlier claim, so
+the page's agent verification is `not yet`.
+
 Version scope, stated once: this page may cite only `raw/postgres-17/`, so every
 12.2 statement below rests on exact-pin execution against a 12.2 server built from
 this repo's v12 pin, plus this checkout's own commit history. No v12 source file is
@@ -237,18 +252,31 @@ cited, and none of the 12.2 findings should be read as v12 source analysis.
 
 ### Short answer
 
-Build a **page census** from `pageinspect`, and treat "wasted" as three separate
-numbers, never one:
+Build a **page census** from `pageinspect`, and report three separate quantities.
+They describe page allocation and free gaps; they do not determine how many bytes
+a rebuild will return. GIN can retain entry tuples with empty posting lists, while
+a rebuild constructs a new index from the heap
+([ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558),
+[gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406)).
 
 | Class | How it is measured | What it means |
 |---|---|---|
-| Whole-page waste | count of pages whose `gin_page_opaque_info` flags contain `deleted`, plus pages where that function returns a NULL row (all-zero pages), times `block_size` | dead pages inside the file; reusable by this index only, never returned to the filesystem without a rebuild |
+| Whole-page waste | count of pages whose `gin_page_opaque_info` flags contain `deleted`, plus uninitialized pages, times `block_size` | marked-deleted or uninitialized bytes inside the file; the deleted flag alone does not establish immediate recyclability |
 | Live-page slack | `page_header.upper - page_header.lower` summed over live pages, split into entry-tree and posting-tree (data) pages | free bytes inside live pages; on entry pages this is mostly *growth room*, not waste |
 | Pending-list bytes | count of pages flagged `list`, times `block_size` | deferred insert work, not waste; flushing it frees pages inside the file and can grow it |
 
+The flags and uninitialized-page result come from `gin_page_opaque_info`;
+recycling additionally tests the deletion transaction ID. Live-page gap and
+pending-list definitions come from GIN's page layout and cleanup path
+([ginfuncs.c#gin_page_opaque_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L98-L171),
+[ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829),
+[ginblock.h:267-287](../../../../raw/postgres-17/src/include/access/ginblock.h#L267-L287),
+[ginfast.c:951-987](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L951-L987),
+[ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335)).
+
 The statement also prints the first two of those as one derived percentage,
 `bloat_pct`, because that sum is the quantity every scoring table below uses. Read
-it as an upper bound on what a rebuild returns, never as reclaimable space: the
+it as a page-accounting percentage, with no guaranteed bound on a rebuild: the
 never-churned control reads **48.05** while `REINDEX` returns **nothing**, and an
 index on an empty table reads **49.80**. See
 [The bloat percentage column](#the-bloat-percentage-column).
@@ -270,6 +298,181 @@ read 43.43% against 50.00% reclaimed. And **the statement needs three edits to r
 on PostgreSQL 12**, one of which is not cosmetic: on 12.2 the census silently
 classifies an all-zero page as an entry page and reports its waste as zero. See
 [Running all four statements on PostgreSQL 12](#running-all-four-statements-on-postgresql-12).
+
+### Plan review
+
+**Keep the census approach, but revise the promises in steps 2 through 5.** The
+review below uses PostgreSQL 17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`.
+It checks the plan against implementation source and audits the filed statement;
+the existing experimental tables are historical results, not new measurements.
+
+1. **Steps 4 and 5: remove the promised bounds on REINDEX savings.** A page gap
+   measures available space on that page. The line-pointer deduction in
+   `PageGetFreeSpace` says how much room an insertion needs; it establishes no
+   bound on the size of a different index built later. VACUUM recreates an entry
+   tuple even when its posting list becomes empty. Those retained bytes are
+   outside `waste + slack`, and adding pending bytes does not account for them.
+   Rebuilds scan the heap and insert accumulated entries in batches controlled by
+   `maintenance_work_mem`. Report the census and measured rebuild reduction as
+   distinct outputs, and report failed bound hypotheses as failures
+   ([bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L898-L923),
+   [ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558),
+   [gininsert.c#ginBuildCallback](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L276-L314),
+   [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L378-L406)).
+
+2. **Step 2: distinguish marked-deleted bytes from recyclable bytes.**
+   `GinPageIsRecyclable` accepts an uninitialized page immediately. For a deleted
+   page, it accepts an invalid deletion transaction ID or requires
+   `GlobalVisCheckRemovableXid(NULL, delete_xid)` to succeed. This uses the most
+   conservative visibility horizon, the boundary needed to protect older scans.
+   The census does not evaluate that predicate. Its `whole_page_waste_bytes`
+   therefore measures a page class, not the number of bytes immediately available
+   for reuse. `GinNewBuffer` rechecks eligibility even after the free space map
+   supplies a candidate
+   ([ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829),
+   [procarray.c#GlobalVisHorizonKindForRel](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1966-L1991),
+   [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335)).
+
+3. **Step 3: require completed index cleanup before using VACUUM's statistics.**
+   `gin_clean_pending_list` calls `ginInsertCleanup`; it does not traverse the
+   entire index or refresh `n_entry_pages` and `n_data_pages`. That refresh is in
+   `ginvacuumcleanup`. A table VACUUM can skip this callback when index cleanup is
+   disabled, including through the table's `vacuum_index_cleanup` option, or when
+   the wraparound failsafe disables it. Thus neither a pending-list flush nor a
+   successful VACUUM command alone establishes refreshed page counts. Record the
+   maintenance outcome and any failsafe warning before interpreting cross-checks
+   ([ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1031-L1091),
+   [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L694-L802),
+   [vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178),
+   [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401),
+   [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066),
+   [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335)).
+
+4. **Step 3: treat consistency checks as diagnostics.** `get_raw_page` opens the
+   named relation, locks and copies one buffer, then releases both locks before
+   returning. Sharing its result between decoders gives one page image; it does
+   not give an index-wide snapshot. The filed `census_total_pages = blocks` is
+   principally an accounting identity: `generate_series` uses the captured size
+   and the `CASE` assigns every generated row a class. It cannot prove stable
+   contents or correct classification. The revised plan needs a controlled
+   measurement interval for exact comparisons, and an explicit mixed-time status
+   for an online scan. Size and metapage agreement alone cannot certify it
+   ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198),
+   [ginvacuum.c:754-789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L754-L789)).
+
+5. **Step 3: correct the free-space-map cross-check and its equality condition.**
+   The FSM records `BLCKSZ - 1` but decodes its highest category as
+   `MaxHeapTupleSize`, or `BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData))`.
+   This gives 8160 for an 8192-byte block and 8-byte alignment, not 8191. Derive
+   the value using the build's block size and alignment. Compare counts only after
+   accounting for deletion horizons, maintenance completion, and intervening
+   reuse. A nonrecyclable deleted data page still enters VACUUM's data-page count;
+   the SQL puts it in the deleted bucket. In the v17 verbose line, `pages_free`
+   appears as **reusable**
+   ([indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55),
+   [freespace.c:398-435](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L398-L435),
+   [htup_details.h#MaxHeapTupleSize](../../../../raw/postgres-17/src/include/access/htup_details.h#L563),
+   [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L228),
+   [ginvacuum.c:766-794](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L766-L794),
+   [vacuumlazy.c:718-731](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L731)).
+
+6. **Steps 2 and 5: make unsupported-format and malformed-page handling explicit.**
+   The SQL gates the combined slack fields and `bloat_pct` on version 2, but still
+   prints `entry_slack`, `data_slack`, and the derived `payload_bytes` without that
+   gate. Suppress or qualify every affected value. Also, `PageIsNew` tests only
+   `pd_upper == 0`; a NULL GIN decoder result is not a byte-for-byte zero-page
+   check. `gin_page_opaque_info` emits unknown flag bits as hexadecimal text, and
+   the SQL's final `ELSE 'entry'` has no unknown-class rejection. Define explicit
+   diagnostic outcomes for unknown flags, invalid headers, and a missing or
+   invalid metapage before trusting numeric results. These are inspection limits,
+   not a substitute for a GIN structural verifier
+   ([ginblock.h:302-309](../../../../raw/postgres-17/src/include/access/ginblock.h#L302-L309),
+   [bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234),
+   [ginfuncs.c#gin_metapage_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L30-L95),
+   [ginfuncs.c#gin_page_opaque_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L98-L171),
+   [amcheck/Makefile](../../../../raw/postgres-17/contrib/amcheck/Makefile#L3-L13)).
+
+7. **Step 4: name the measured size precisely.** A before/after comparison of
+   `pg_relation_size(index, 'main')` measures the reduction in the main fork's
+   file lengths. The implementation sums `stat.st_size` for that fork's segments;
+   it does not measure filesystem allocation, other forks, or the rebuild's peak
+   disk demand. Keep this denominator throughout the experiment, record signed
+   size changes, and record the rebuild settings and data state
+   ([dbsize.c#calculate_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L301-L343),
+   [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L370),
+   [index.c:3781-3789](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789)).
+
+**Retain step 1 and the privilege split in step 5.** The GIN rejection in
+`pgstattuple`, the three-field metapage-only result from `pgstatginindex`, and the
+superuser requirement in raw-page readers are correctly identified. The
+`pg_stat_scan_tables` grant in pgstattuple 1.5 does not satisfy the raw readers'
+own superuser checks. Keep the `OFFSET 0` page-read boundary: the planner rejects
+pull-up of a subquery with an offset or a volatile target list
+([pgstattuple.c#pgstat_relation](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L260-L296),
+[pgstatindex.c#pgstatginindex_internal](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L507-L576),
+[pgstattuple--1.4--1.5.sql:49-57](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L49-L57),
+[rawpage.c:150-173](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L150-L173),
+[prepjointree.c:1689-1701](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1689-L1701),
+[prepjointree.c:1772-1781](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1772-L1781)).
+
+### Revised plan
+
+This is the plan for the next implementation and validation pass. The source
+findings above are reviewed; the additional query guards and experiments below
+are not implemented by this review.
+
+1. **Specify the outputs and scope.** Select one physical GIN index and record
+   its identity, definition, main-fork size, block size, GIN format version, and
+   installed extension versions. Define marked-deleted/uninitialized bytes,
+   entry-page gaps, posting-tree gaps, pending bytes, and measured main-fork
+   reduction separately. Keep `bloat_pct` as the existing accounting formula
+   without promising a reclaimable percentage or either bound. See findings 1,
+   2, and 7.
+2. **Choose the measurement conditions before maintenance.** Use a controlled
+   interval for the calibration experiment, covering writers, VACUUM, pending
+   cleanup, and index replacement. For an online report, record that page images
+   can come from different instants. Capture the pre-maintenance state; then
+   record whether only pending cleanup or full index vacuum/cleanup completed.
+   Allow deletion-horizon mismatches to remain unresolved instead of treating a
+   fixed number of VACUUM runs as sufficient. See findings 2 through 5.
+3. **Implement explicit result validity.** Preserve the single raw-page read and
+   decoder sharing. Derive all block-size arithmetic, including the size bracket
+   that currently divides by 8192. Add explicit handling for unsupported versions,
+   untrusted slack-derived fields, unknown classes, metapage failures, and target
+   changes. Keep page accounting, FSM state, and metapage comparisons as separate
+   diagnostics. See findings 4 through 6.
+4. **Validate ordinary and adversarial cases on the exact pin.** Run the final
+   statement extracted from this page on an isolated build. Include fresh and
+   empty controls, posting-tree deletions with a held old snapshot, key-replacement
+   churn, a live pending list, cleanup-only versus full VACUUM, and disabled index
+   cleanup. Test reader privileges, invalid and temporary targets, malformed or
+   uninitialized page inputs, and unsupported-format handling. Exercise concurrent
+   writers and maintenance separately. Require diagnostic or withheld output for
+   unsupported cases. The shipped `pageinspect` tests cover basic GIN decoding,
+   error inputs, and all-zero pages; the `pgstattuple` tests cover metapage reads
+   and wrong access methods. They do not validate this combined report or a
+   REINDEX-savings bound
+   ([pageinspect/sql/gin.sql](../../../../raw/postgres-17/contrib/pageinspect/sql/gin.sql#L1-L41),
+   [pgstattuple/sql/pgstattuple.sql](../../../../raw/postgres-17/contrib/pgstattuple/sql/pgstattuple.sql#L47-L63)).
+5. **Score rebuild comparisons without assuming their result.** Rebuild each
+   calibration fixture with its definition and input data held constant. Record
+   `maintenance_work_mem`, the before/after main-fork byte counts, and prediction
+   error for each candidate metric. Include several build-memory budgets and the
+   dead-key and pending-list cases that challenge the proposed bounds. GIN's
+   accumulator flush and entry-page split rules make those relevant variables
+   ([gininsert.c#ginBuildCallback](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L276-L314),
+   [ginentrypage.c:667-691](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L667-L691)).
+6. **Apply the operational and filing checks to the tested text.** Retain
+   `statement_timeout = '10min'` and `lock_timeout = '2s'` as starting session
+   limits for the full scan, and apply them in each session running an operational
+   statement. Both settings, and any experimental `maintenance_work_mem` change,
+   use session/transaction scope and need no reload or restart
+   ([guc_tables.c:2611-2631](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631),
+   [guc_tables.c:2466-2474](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2466-L2474)).
+   Preserve the `/* wiki_... */` tags, capture the exact tested SQL, and file
+   unexecuted paths under Open Questions. Update this page's claim map, Contents,
+   navigation summaries, and log; run wiki lint. Change agent verification only
+   after a full claim review, and leave human verification to the user.
 
 ### Deviations from the brief, and why
 
@@ -298,7 +501,7 @@ Three items in the plan did not survive contact with the source or the server.
    a value the macro cannot produce on this build. **Do not hardcode 8160
    either** — derive it, as [Four cross-checks](#four-cross-checks) now does,
    from `pg_control_init()`, which publishes both terms of the macro
-   ([pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L226),
+   ([pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L228),
    [func.sgml#pg_control_init](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L27721-L27742)).
 
 2. **`VACUUM VERBOSE` has no field literally called `pages_free`.** v17 prints
@@ -367,7 +570,7 @@ and `pg_freespacemap` as an independent check.
 
 ### The three waste classes, from GIN's own definitions
 
-**Whole-page waste.** A GIN page is reusable when it is all-zero, or flagged
+**Whole-page waste.** A GIN page is reusable when `PageIsNew` is true, or flagged
 deleted with either no deletion xid or one the whole cluster has moved past
 ([ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829)).
 `PageIsNew` is `pd_upper == 0`
@@ -405,8 +608,9 @@ engine test is `PageGetFreeSpace`, which subtracts `sizeof(ItemIdData)` because 
 new tuple also needs a line pointer
 ([ginentrypage.c#entryIsEnoughSpace](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L458-L482),
 [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L898-L923)); the
-census therefore over-states entry-page slack by 4 bytes per tuple that would be
-added, which is why it is an upper bound.
+census includes gap bytes that a future insertion would spend on line pointers.
+This distinguishes physical gaps from insertion capacity; it establishes no
+upper bound on what a rebuild returns.
 
 **Pending-list pages.** With `fastupdate` on, inserts land in a linked list of
 `GIN_LIST` pages whose head, tail and counts live in the metapage
@@ -440,6 +644,11 @@ allocates pages through `GinNewBuffer` when it has to.
    `ERROR: recovery is in progress` for `gin_clean_pending_list`, while every
    census function kept working — so a standby census reads whatever state
    replay has produced.
+   For this step, require completed index cleanup: `INDEX_CLEANUP OFF` disables
+   the callback, and the failsafe can disable it even when cleanup was requested
+   ([vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401),
+   [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066),
+   [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335)).
 3. **Record the denominator and the metapage.** `pg_relation_size(idx, 'main')`
    is the main fork only
    ([func.sgml#pg_relation_size](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L29627-L29643)), which is
@@ -454,8 +663,10 @@ allocates pages through `GinNewBuffer` when it has to.
 
 ### The census statement
 
-Run on the pinned server exactly as printed; the timeouts are session-scoped and
-the tags are the `wiki_` markers this repo requires.
+This is the previously tested statement. The [plan review](#plan-review) records
+its interpretation limits and proposed guards; those query changes remain
+unimplemented. The timeout settings are session-scoped, and the tags are the
+`wiki_` markers this repo requires.
 
 ```sql
 SET /* wiki_gin_waste_guards */ statement_timeout = '10min';
@@ -571,8 +782,10 @@ Design points that are not cosmetic:
   index: this form reports **1234** shared hits, the naive form that calls
   `get_raw_page` inside each function reports **2468** — exactly twice, one read
   per function call.
-- **A NULL row means an all-zero page.** Both GIN functions return NULL early on
-  `PageIsNew`
+- **A NULL result means `PageIsNew`, which tests `pd_upper == 0`.** This is not
+  a check that every byte is zero
+  ([bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234)).
+  Both GIN functions return NULL early on that predicate
   ([ginfuncs.c:49-50](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L49-L50),
   [ginfuncs.c:119-120](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L119-L120)); the shipped
   test asserts exactly that
@@ -593,16 +806,20 @@ Design points that are not cosmetic:
   its `GIN_DATA` and `GIN_LEAF` bits, because `ginDeletePage` only ORs the deleted
   bit in ([ginvacuum.c:187-192](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L187-L192)); the
   server shows the resulting flag set as `{data,leaf,deleted,compressed}`.
-- **`census_total_pages` must equal `blocks`.** It did on all 8 GIN indexes the
-  statement selected in the sandbox, which is its own self-check that no page
-  class was missed. Entry-tree *internal* pages are the class that makes the
+- **`census_total_pages = blocks` checks accounting only.** The generated block
+  range and exhaustive `CASE` make every scanned row count toward the total,
+  including rows assigned by the fallback `ELSE`. Equality does not prove correct
+  classification or an unchanged index; the raw reader locks one page at a time
+  ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198)).
+  It held on all 8 selected GIN indexes in the historical sandbox. Entry-tree
+  *internal* pages are the class that makes the
   `ELSE` arm necessary: their flags word is 0, so `gin_page_opaque_info` returns
   an empty array rather than a NULL row, and each of the three rebuilt `tsvector`
   fixtures held exactly 6 of them beside 1193 entry leaves.
 
 ### The bloat percentage column
 
-`bloat_pct` is the statement's only derived column — dead pages plus live-page
+`bloat_pct` is the added derived column — dead pages plus live-page
 slack, over the main fork:
 
 ```text
@@ -618,7 +835,11 @@ it. It is gated on `gin_version = 2` exactly like the slack columns, because
 version-2 index
 ([ginblock.h#GinMetaPageData](../../../../raw/postgres-17/src/include/access/ginblock.h#L85-L103),
 [ginblock.h:302-309](../../../../raw/postgres-17/src/include/access/ginblock.h#L302-L309)). On a
-version-1 index it returns NULL, and `whole_page_waste_pct` is the only number left.
+version-1 index it returns NULL. The SQL still exposes `entry_slack`,
+`data_slack`, and `payload_bytes` without the version guard; do not interpret the
+untrusted components as measured payload or space. The revised plan calls for
+explicit handling of all affected fields. Page counts and pending bytes remain
+separate outputs.
 
 It reports the quantity the scoring tables below print as `waste+slack %`, and it
 scores the way they do. The seven published fixtures, censused and then rebuilt with
@@ -666,8 +887,11 @@ Four things the column does not mean:
    [the procedure](#the-procedure) is for. A `fastupdate` index censused with 246
    pending pages read `bloat_pct` **8.66** beside `pending_pct` **81.73**, and
    `REINDEX` then took it from 2,465,792 to 794,624 bytes — **67.77% reclaimed**,
-   eight times what the column reported. Byte-identical on 12.2. On an unsettled
-   index the bound to use is `bloat_pct + pending_pct`, 90.39 here. Censused again
+   eight times what the column reported. Byte-identical on 12.2. Adding
+   `pending_pct` gives 90.39 here, above this fixture's measured reduction, but
+   establishes no general bound: retained empty-key entry tuples remain outside
+   that sum
+   ([ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558)). Censused again
    straight after the rebuild, the same index reads **44.96** with nothing left to
    take, which is point 1 restated as a before-and-after pair.
 4. **It is not the sum of the two rounded columns.** It rounds the summed bytes
@@ -701,7 +925,12 @@ any GIN build.
 and for indexes the documentation says the value is meaningful only as
 in-use-versus-empty
 ([pgfreespacemap.sgml:61-71](../../../../raw/postgres-17/doc/src/sgml/pgfreespacemap.sgml#L61-L71)). A free index
-page reads `MaxFSMRequestSize`, and the count must match `deleted + new`. Derive
+page reads `MaxFSMRequestSize`. Its count can match `deleted + new` only when
+those deleted pages are recyclable, the free pages have been recorded, and no
+intervening allocation or maintenance changes the compared states
+([ginvacuum.c:766-794](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L766-L794),
+[ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829),
+[indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L32-L45)). Derive
 the constant rather than typing 8160 — `pg_control_init()` publishes both terms of
 `BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData))`, is executable by
 `PUBLIC` (measured: `has_function_privilege('public','pg_control_init()','execute')`
@@ -729,8 +958,8 @@ direction of the check — a page can be deleted but not yet recorded free, as i
 was immediately after the first VACUUM (768 deleted, 0 in the FSM).
 
 **Size bracket.** Read `pg_relation_size` again after the census and compare it
-with the statement's own `blocks` column. This is the cheapest and by far the most
-sensitive race detector: under four concurrent writers it caught the race in **13
+with the statement's own `blocks` column. In one historical four-writer test,
+this check caught the race in **13
 of 14** censuses where the metapage cross-check below caught **0 of 14**. See
 [Concurrency](#concurrency-a-census-of-a-busy-index-is-a-mixed-instant-reading).
 
@@ -1820,8 +2049,9 @@ it reported `waste 0.00 / slack 13.73` against **40.00%** reclaimed, because
 `REINDEX` rebuilds from the heap and therefore returns the pending pages too, while
 the census deliberately excludes them from waste. The pending share was 53.48% of
 the file, so `waste + slack + pending = 67.21%` bounds the truth comfortably. This is
-the price of skipping step 2 of the procedure, quantified: **settle the state, or add
-`pending_pct` to the upper bound.** The same recipe with the last round flushed and
+an effect of skipping step 2 of the procedure: **pending bytes must be reported
+beside the other quantities.** Adding them repaired the inequality for this
+fixture, not for every index. The same recipe with the last round flushed and
 the table VACUUMed — `fh1b_gin`, 3,948,544 bytes, 246 deleted pages, waste 51.04,
 slack 12.62 — rebuilds to 2,260,992 (42.74% reclaimed) and satisfies the upper bound
 with 63.66%.
@@ -1837,11 +2067,14 @@ after, so 819,770 dead tuples at the measured ~16 bytes each are roughly 13.1 MB
 17.6% of the file, sitting inside `payload_bytes` where neither `waste` nor `slack`
 can see them. Add that term and the bound holds again (43.43 + 17.6 >= 50.00).
 
-So the honest form of the upper bound is: **`waste + slack` bounds a rebuild from
-above only when the pending list is settled and the dead-key population is small.**
-Run the entry-tuple probe beside the census and the third term is measurable; the
-page's own caveat that the probe cannot produce a *corrected prediction* still
-applies, because the dead-tuple size is not exposed by any contrib function.
+These results establish **no universal upper bound**, including for an index with
+a settled pending list. The entry-tuple probe can help diagnose retained keys,
+but a tuple count is not their byte size. The source retains empty-key entries
+and rebuilds a new index from the heap; it supplies no identity equating a sum of
+old-page gaps with the new file's size
+([ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558),
+[gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406)).
+Treat the repaired inequality above as an observation about that fixture.
 
 ### A rebuild is not one number: maintenance_work_mem moves it
 
@@ -2126,14 +2359,20 @@ set untouched on both servers, where the census has no such limiter.
 - Report the three classes separately, and keep them beside `bloat_pct` rather than
   behind it. The single number is `waste + slack`, so it carries an entry tree's
   growth room: a never-churned index reads 48.05 and an empty one 49.80, both with
-  nothing to reclaim. Publish it as an upper bound on a rebuild, never as
-  reclaimable space, and only ever against the same index's earlier readings or a
-  rebuilt twin. It also excludes the pending list, so on an unsettled index the
-  bound is `bloat_pct + pending_pct`.
-- `whole_page_waste_bytes` is space this index will reuse. It is not a promise
-  about `REINDEX`, in either direction. It under-states what a rebuild returns
-  exactly when the aged in-use core is smaller than the rebuild would be, which is
-  what happened on the two pending-list-grown fixtures that broke the bound.
+  nothing to reclaim. Publish it as a page-accounting percentage with no guaranteed
+  bound on rebuild savings. Adding `pending_pct` still misses retained empty-key
+  entries, so it does not establish a bound either
+  ([ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558)).
+- `whole_page_waste_bytes` counts marked-deleted and uninitialized pages; immediate
+  reuse also depends on the deletion horizon and allocation path
+  ([ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829),
+  [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335)).
+  With `W = whole_page_waste_bytes`, `B = old main-fork bytes`, and
+  `R = rebuilt main-fork bytes`, the comparison is exact algebra:
+  `W > B - R` if and only if `B - W < R`. Whole-page waste therefore
+  **overstates** the size reduction when the aged in-use core is smaller than the
+  rebuild. A rebuild creates a new physical index
+  ([index.c:3781-3789](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789)).
 - `entry_slack` on a healthy index is a large fraction of an entry-tree-dominated
   file: the freshly built and freshly rebuilt indexes here read 41.06%, 47.19%,
   48.05% and 48.05% slack while reclaiming nothing, and across opclasses the fresh
@@ -2158,8 +2397,10 @@ set untouched on both servers, where the census has no such limiter.
 - `pending_bytes` is a `fastupdate` tuning signal, not waste. Fix it with VACUUM,
   `gin_clean_pending_list()`, or `gin_pending_list_limit`.
 - If `gin_version <> 2`, publish the page counts and suppress the slack columns —
-  and `bloat_pct` with them, which the statement already does, leaving
-  `whole_page_waste_pct` as the only reading.
+  and every payload estimate derived from untrusted slack
+  ([ginblock.h:302-309](../../../../raw/postgres-17/src/include/access/ginblock.h#L302-L309)).
+  The statement currently gates only the combined slack fields and `bloat_pct`;
+  its exposed component and payload fields are a known gap in the revised plan.
 - If `uncompressed_pages > 0`, the index carries pre-9.4 posting-tree leaves and
   its `data_slack` is understated.
 - Report the `maintenance_work_mem` a rebuild comparison was measured at. One
@@ -2180,6 +2421,50 @@ set untouched on both servers, where the census has no such limiter.
 
 ## Context Reviewed
 
+- **2026-09-05 plan review:** rechecked the seven findings in
+  [Plan review](#plan-review) against the pinned v17 implementation, and audited
+  the original six steps plus the published census and cross-check statements.
+  No database server was built or started; the historical observations below
+  were not rerun. SQL code blocks were preserved during this review.
+- **Caller and data-structure context for this review:** core `ginhandler`
+  installs `ginbulkdelete` and `ginvacuumcleanup`; the index AM dispatcher calls
+  those callbacks, with `IndexVacuumInfo` supplied by the heap vacuum path.
+  Contrib readers and GIN use the shared `GinPageOpaqueData`, `GinMetaPageData`,
+  and page-header definitions, rather than an extension-specific page layout
+  ([ginutil.c#ginhandler](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L69),
+  [indexam.c:748-777](../../../../raw/postgres-17/src/backend/access/index/indexam.c#L748-L777),
+  [vacuumlazy.c#lazy_cleanup_one_index](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2469-L2499),
+  [ginfuncs.c:10-22](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L10-L22),
+  [gin_private.h:13-21](../../../../raw/postgres-17/src/include/access/gin_private.h#L13-L21),
+  [ginblock.h:30-138](../../../../raw/postgres-17/src/include/access/ginblock.h#L30-L138),
+  [bufpage.h#PageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L155-L168)).
+- **Build and SQL interfaces for this review:** the `pageinspect` build links
+  `ginfuncs` and `rawpage` and installs the extension SQL upgrades. The core
+  catalog-header build generates `*_d.h`, including the catalog header included
+  by `gin_private.h`; those headers are build products, not evidence files to
+  manufacture in `raw/`. Block size comes from configuration, and the extension's
+  SQL version controls argument/result widths: `get_raw_page` takes `int8` in
+  1.9, while `page_header` exposes integer offsets from 1.10. The source-only
+  revision requires no core catalog, parser, or header edits
+  ([pageinspect/Makefile](../../../../raw/postgres-17/contrib/pageinspect/Makefile#L3-L35),
+  [catalog/Makefile:86-88](../../../../raw/postgres-17/src/include/catalog/Makefile#L86-L88),
+  [catalog/Makefile:126-143](../../../../raw/postgres-17/src/include/catalog/Makefile#L126-L143),
+  [gin_private.h:13-21](../../../../raw/postgres-17/src/include/access/gin_private.h#L13-L21),
+  [configure.ac:267-288](../../../../raw/postgres-17/configure.ac#L267-L288),
+  [pageinspect--1.8--1.9.sql:46-58](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L46-L58),
+  [pageinspect--1.9--1.10.sql:10-21](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.9--1.10.sql#L10-L21)).
+- **Additional boundaries reviewed:** maintenance-option parsing and callback
+  suppression, core function signatures, source GUC contexts, per-call raw-page
+  locks, the decoder's unknown-bit handling, the planner's subquery pull-up
+  restrictions, and the shipped contrib tests. The `SET`, `VACUUM (...)`, and
+  `REINDEX` grammar and the core function catalog entries were checked; no new
+  executable SQL is introduced by this review
+  ([gram.y:1663-1681](../../../../raw/postgres-17/src/backend/parser/gram.y#L1663-L1681),
+  [gram.y#ReindexStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L9189-L9202),
+  [gram.y:11821-11829](../../../../raw/postgres-17/src/backend/parser/gram.y#L11821-L11829),
+  [pg_proc.dat:7487-7495](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7487-L7495),
+  [pg_proc.dat:9513-9516](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L9513-L9516),
+  [pg_proc.dat:11989-11996](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11996)).
 - Contrib limits: `pgstat_relation`'s AM switch, `pgstatginindex_internal`, the
   `GinIndexStat` struct, the 1.5 grant script, and the `BAS_BULKREAD` strategy
   that `pgstattuple`/`pgstatindex` use and `pageinspect` does not.
@@ -2333,6 +2618,14 @@ set untouched on both servers, where the census has no such limiter.
 
 | Claim | Evidence |
 |---|---|
+| Plan review: page gaps exclude retained empty-key entry tuples; a rebuild builds from the heap | [ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558), [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406) |
+| Plan review: a pending flush does not perform the full metapage-count refresh | [ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1031-L1091), [ginvacuum.c:754-802](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L754-L802) |
+| Plan review: disabled cleanup and the failsafe can prevent the GIN cleanup callback | [vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178), [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401), [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066), [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335) |
+| Plan review: a raw-page copy releases its locks before the next call | [rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198) |
+| Plan review: `PageIsNew` tests one header field; the GIN opaque decoder reports unknown bits | [bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234), [ginfuncs.c:119-159](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L119-L159) |
+| Plan review: the version gate must cover every value derived from untrusted data-page offsets | [ginblock.h:302-309](../../../../raw/postgres-17/src/include/access/ginblock.h#L302-L309); static audit of the filed SELECT list: the component slack and payload expressions have no version guard |
+| Plan review: the offset and volatile-target checks preserve the raw-read subquery boundary | [prepjointree.c:1689-1701](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1689-L1701), [prepjointree.c:1772-1781](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1772-L1781) |
+| Plan review: the rebuild comparison measures main-fork file lengths | [dbsize.c#calculate_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L301-L343), [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L370) |
 | `pgstattuple` rejects GIN | [pgstattuple.c#pgstat_relation](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L260-L296); server: `index "f5_deleted_gin" (gin index) is not supported` |
 | `pgstattuple` checks validity before the AM | [pgstattuple.c:263-267](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L263-L267); server: invalid GIN index reported `is not valid` |
 | `pgstatginindex` reads only three metapage fields | [pgstatindex.c#pgstatginindex_internal](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L507-L577), [pgstattuple.sgml:298-350](../../../../raw/postgres-17/doc/src/sgml/pgstattuple.sgml#L298-L350); server: `0 / 0` on a 64.64%-dead index |
@@ -2382,7 +2675,7 @@ set untouched on both servers, where the census has no such limiter.
 | The size bracket beats the metapage cross-check on writers | server: 13 of 14 against 0 of 14 under four concurrent writers, with the statement's self-check passing 14 of 14 |
 | A concurrent VACUUM defeats every check | server: 14 censuses of an unchanging 2,594-block file reported 0 to 2,294 dead pages against a truth of 2,368, all three checks passing every time |
 | A census strips usage count rather than evicting a hot set | [bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705), [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-17/src/include/storage/buf_internals.h#L72-L79), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341); server at 16,384 buffers: a 26,195-block census left a hot 3,704-page set fully resident at usagecount 1 (from 5) and destroyed a once-read set of the same size; a second census took the hot set too |
-| The FSM free-page value is derivable, not a constant to type | [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L226), [func.sgml#pg_control_init](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L27721-L27742), [htup_details.h#MaxHeapTupleSize](../../../../raw/postgres-17/src/include/access/htup_details.h#L563); server: the derived expression returned 8160, equal to the largest `avail` over 3,478 free GIN pages, and `pg_control_init()` is executable by `PUBLIC` |
+| The FSM free-page value is derivable, not a constant to type | [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L228), [func.sgml#pg_control_init](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L27721-L27742), [htup_details.h#MaxHeapTupleSize](../../../../raw/postgres-17/src/include/access/htup_details.h#L563); server: the derived expression returned 8160, equal to the largest `avail` over 3,478 free GIN pages, and `pg_control_init()` is executable by `PUBLIC` |
 | Fresh-build fill is opclass-dependent but scale-insensitive | server: 50.16% to 72.11% across nine opclasses and shapes, while the same opclass at 50,000 and 800,000 rows read 51.12% and 50.92% with model errors of +33.18% and +33.60% |
 | The census statement needs a block-number cast to run on 12 | [pageinspect--1.8--1.9.sql#get_raw_page](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L46-L58) (`f18aa1b2039`, earliest tag `REL_14_0`); 12.2: `ERROR: function get_raw_page(text, bigint) does not exist`, and `::int` makes both servers produce byte-identical output |
 | `page_header`'s width columns are narrower on 12 | [pageinspect--1.9--1.10.sql#page_header](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.9--1.10.sql#L10-L21) (`127404fbe28`, earliest tag `REL_15_0`); 12.2 returns `smallint` for `lower`/`upper`/`special`/`pagesize`, which is harmless at `block_size` 8192 |
@@ -2413,11 +2706,9 @@ set untouched on both servers, where the census has no such limiter.
 
 ## Open Questions
 
-The ten questions the open-questions pass left are now twelve: **one closed**
-(number 7, the flush cascade, which now has a mechanism), one materially answered
-(eviction, whose conclusion the two-major run corrected), four narrowed by being
-measured on a second major, and **five new** ones (numbers 11 to 15) that the
-two-major work opened. The `bloat_pct` pass adds a sixteenth.
+Entries 1 through 16 retain the earlier investigation's results and gaps; the
+closed entry 7 remains for continuity. The 2026-09-05 plan review adds entries
+17 through 19 for work needed to implement and validate the revised procedure.
 
 1. **The `ginVersion <> 2` path is still untested.** v17 always writes
    `GIN_CURRENT_VERSION = 2` ([ginutil.c:355-382](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L355-L382)),
@@ -2492,7 +2783,7 @@ two-major work opened. The `bloat_pct` pass adds a sixteenth.
    `jsonb_ops`, `jsonb_path_ops`, `gin_trgm_ops`, `btree_gin`, plain and weighted
    `tsvector`, multicolumn, partial — and the 16x scale check moved the model error
    by 0.42 points, so scale is no longer a suspect. Untested: collation-dependent
-   text keys, `INCLUDE`-style variants beyond the one multicolumn fixture, and any
+   text keys, additional multicolumn or expression-index shapes, and any
    opclass under a *mixture* of surviving and dying keys other than the five-point
    `tsvector` sweep.
 9. **Eviction now has two cache sizes and a corrected conclusion, but still a
@@ -2555,8 +2846,40 @@ two-major work opened. The `bloat_pct` pass adds a sixteenth.
     per-opclass and per-budget. What a baseline reading costs to establish — a
     rebuilt twin, or a stored history of the same index — was not measured.
 
+17. **The proposed query guards are not implemented or executed.** The current
+    statement still exposes component slack and `payload_bytes` for unsupported
+    formats, assigns unrecognized classes through `ELSE 'entry'`, and has no
+    explicit result status for invalid metapage or header state. The size-bracket
+    snippet still divides by 8192. These are identified limitations, not successful
+    test outcomes; the revised plan requires a separately validated SQL change.
+18. **An exact comparison needs a tested consistency protocol.** The review
+    verified per-call raw-reader locking, but did not implement or test a protocol
+    that keeps the intended relation and its contents stable throughout the
+    measurement. The required controls must cover maintenance and replacement as
+    well as application writes. Agreeing size, metapage, or repeated census
+    readings do not prove that protocol exists
+    ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198)).
+19. **The revised acceptance cases have not been run.** In particular, this pass
+    adds no measurements for disabled index cleanup, unsupported-format output
+    guards, unknown flags, or target replacement during a scan. The existing
+    measurements also do not prove any general upper bound after adding pending
+    bytes or an estimated dead-entry term. Keep each future implementation's
+    exact SQL and results together before updating the verification state.
+
 ## Source References
 
+- [src/backend/catalog/index.c](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789) — replacement storage and rebuild in `reindex_index`.
+- [src/backend/access/gin/ginvacuum.c](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558) — reconstructing an entry tuple after deleting all posting-list items.
+- [src/backend/access/gin/gininsert.c](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L276-L406) — memory-triggered accumulator flush and heap-scan build.
+- [src/backend/access/index/indexam.c](../../../../raw/postgres-17/src/backend/access/index/indexam.c#L748-L777) — index vacuum callback dispatch.
+- [src/backend/access/heap/vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401) and [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335) — disabled cleanup and failsafe paths.
+- [src/backend/commands/vacuum.c](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178) — the table cleanup option.
+- [src/backend/utils/adt/dbsize.c](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L301-L370) — fork-specific file-length calculation.
+- [src/backend/optimizer/prep/prepjointree.c](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1689-L1701) and [prepjointree.c](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1772-L1781) — subquery pull-up restrictions.
+- [contrib/pageinspect/Makefile](../../../../raw/postgres-17/contrib/pageinspect/Makefile#L3-L35) — decoder objects, SQL upgrades, and regression targets.
+- [contrib/amcheck/Makefile](../../../../raw/postgres-17/contrib/amcheck/Makefile#L3-L13) — heap and B-tree verification objects and tests.
+- [src/include/catalog/Makefile](../../../../raw/postgres-17/src/include/catalog/Makefile#L126-L143) — generated catalog-header dependency rules.
+- [configure.ac](../../../../raw/postgres-17/configure.ac#L267-L288) — configured block sizes.
 - [contrib/pgstattuple/pgstattuple.c](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L236-L308) — `pgstat_relation`'s relkind/AM dispatch and the GIN refusal.
 - [contrib/pgstattuple/pgstattuple.c:544](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L544) — `BAS_BULKREAD` for index scans.
 - [contrib/pgstattuple/pgstatindex.c](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L484-L577) — `pgstatginindex` and its metapage-only read.
@@ -2589,7 +2912,7 @@ two-major work opened. The `bloat_pct` pass adds a sixteenth.
 - [src/backend/storage/buffer/freelist.c](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341) — the clock sweep that decrements usage counts and takes the first zero.
 - [src/include/storage/buf_internals.h](../../../../raw/postgres-17/src/include/storage/buf_internals.h#L72-L79) — `BM_MAX_USAGE_COUNT` and why it is small.
 - [src/backend/storage/buffer/bufmgr.c](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705) — `PinBuffer` raising the usage count on an unstrategised read.
-- [src/backend/utils/misc/pg_controldata.c](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L226) — `pg_control_init`, source of `max_data_alignment` and `database_block_size`.
+- [src/backend/utils/misc/pg_controldata.c](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L228) — `pg_control_init`, source of `max_data_alignment` and `database_block_size`.
 - [src/backend/access/gin/gininsert.c](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L283-L303) — `ginBuildCallback` dumping the accumulator when `maintenance_work_mem` is reached.
 - [src/include/access/gin_private.h](../../../../raw/postgres-17/src/include/access/gin_private.h#L425-L440) — `BuildAccumulator`, including the `allocatedMemory` the flush rule tests.
 - [src/backend/access/gin/ginbulk.c](../../../../raw/postgres-17/src/backend/access/gin/ginbulk.c#L120-L190) — the accumulator's `GetMemoryChunkSpace` accounting.

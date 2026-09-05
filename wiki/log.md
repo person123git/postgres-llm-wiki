@@ -6849,3 +6849,46 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   has not been re-checked claim by claim as a separate pass; `verified:` untouched.
 - `raw/` untouched: `raw/postgres-19/` has a zero-length `git status --porcelain` at `135b867a530`.
 - `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
+## [2026-09-05] review v17 | GIN wasted-space measurement plan and acceptance criteria
+
+- Reviewed the original plan on
+  [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions
+  on PostgreSQL 17 (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md#plan-review)
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`.
+  The asker approved correcting the request's capitalization, spacing, and grammar
+  before drafting; the corrected follow-up is filed under Question.
+- Added seven findings and a revised six-step plan: separate census quantities
+  from rebuild savings; distinguish marked-deleted pages from recyclable pages;
+  require completed index cleanup for metapage comparisons; treat cardinality,
+  size, and metapage checks as diagnostics; account for FSM quantization and the
+  deletion horizon; handle unsupported formats and unknown classes explicitly;
+  and define the rebuild comparison as main-fork file-length reduction.
+- Corrected contradictory current guidance in place: removed universal upper-bound
+  claims for waste plus slack and for that sum plus pending bytes; fixed the
+  reversed whole-page inequality; clarified PageIsNew, conditional FSM equality,
+  and the ungated component/payload fields in the existing SQL. The original
+  six-step prompt and all SQL code blocks are preserved.
+- Reviewed the GIN vacuum/allocation/build paths, caller and data-structure
+  context, raw-reader locks and errors, extension signatures and grants, build
+  and generated-header dependencies, parser and catalog surfaces, GUC contexts,
+  and shipped contrib tests. No database server was built or started, no new
+  benchmark result is claimed, and the earlier experiments were not rerun.
+- Updated Contents, Context Reviewed, Evidence Map, Source References, and Open
+  Questions, plus both navigation summaries and the v17 coverage manifest.
+  Agent verification is `not yet` because this review does not re-verify every
+  historical claim; the human `verified: false` field is untouched.
+- Validation: all 43 Contents entries match heading order, all 63 internal links
+  resolve, and all 422 source-citation ranges across 60 files resolve within the
+  pinned v17 checkout. All eight SQL blocks match the pre-review text byte for
+  byte; the census SHA-256 remains
+  `0caff083a317f308b159ae8dc2092e0aeca4e41a80d29e8a19d5a97f7a4a5af3`.
+  The original six-step question text and all source pins are unchanged.
+  `git diff --check` passed, and `raw/postgres-17/` remains clean.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 9 errors and 2 warnings,
+  all outside this change. Six errors are missing v18 injection-point citation
+  targets; three are unavailable manifest commits in the v14, v18, and v19
+  checkouts. The warnings report existing changes in the v12 and v14 source
+  checkouts. The two v18 pages named by lint are byte-identical to HEAD, and the
+  implicated pins were not changed. No source fetch or raw-checkout repair was
+  attempted during this v17 plan review.
