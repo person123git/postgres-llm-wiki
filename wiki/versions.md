@@ -14,6 +14,14 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-06: Pruned the Open Questions list on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#open-questions)
+  against the latest recommended SQL: 35 obsolete or unrelated entries removed,
+  56 retained. Current width, population, packing, suppression, reporting and
+  validation gaps remain; questions solely about other versions were outside
+  the v12/v17 cleanup scope. No SQL, source pin or verification field changed.
+
 - 2026-09-06: Reviewed open question 2 on
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-open-question-2-needs-two-independent-repairs)

@@ -6928,3 +6928,30 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   missing v18 injection-point citation targets; three are unavailable v14,
   v18 and v19 pins. The warnings concern pre-existing v12/v14 source changes.
   No source checkout was repaired, fetched or modified during this review.
+
+## [2026-09-06] cleanup v17 | prune superseded B-tree estimator open questions
+
+- Compared all 91 Open Questions on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#open-questions)
+  with the latest recommended SQL and its later follow-ups. Removed 35 entries
+  about superseded formulas, guards, reporting names, testing snapshots or
+  separate page-inspection and engine-behavior investigations; 56 remain.
+- Retained current partial-width and count issues, packing and fanout errors,
+  suppression losses, signed-output concerns, and current test limitations.
+  The historical open-question-2 proposal remains open and is still the second
+  bullet. Questions solely about other versions were not part of the v12/v17
+  review. Also deleted one obsolete clause claiming the recommendation avoids
+  depending on n_live_tup, while retaining that unresolved counter artifact.
+  Trimmed the obsolete one-server qualifier from the two current C/D fixture
+  coverage questions; their unresolved type/shape coverage remains.
+- This was a deletion/editing request, with no new Question text or proposal
+  drafted. The prompt-wording choice for the earlier proposal request remains
+  pending. No PostgreSQL source or historical measurement was re-verified by
+  running a server. Reviewed the v17 equal-image gate and sorted-build boundary;
+  all existing SQL blocks, other page sections and verification fields remain
+  byte-identical. Both indexes and the coverage notes record the cleanup.
+- The removal audit and pre-edit page are saved under
+  `.wiki-runtime/tmp/btree-open-cleanup/`. Pre-edit wiki lint reports 9 errors
+  and 2 warnings: missing v18 citation files, unavailable v14/v18/v19 pins and
+  existing v12/v14 checkout changes. These are outside this cleanup.
