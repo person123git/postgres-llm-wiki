@@ -6892,3 +6892,39 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   checkouts. The two v18 pages named by lint are byte-identical to HEAD, and the
   implicated pins were not changed. No source fetch or raw-checkout repair was
   attempted during this v17 plan review.
+
+## [2026-09-06] review v17 | B-tree core-SQL bloat method open question 2
+
+- Reviewed the second Open Questions bullet on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-open-question-2-needs-two-independent-repairs)
+  against unchanged v17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`.
+  The asker approved correcting the request's capitalization and grammar.
+- Separated the historical test-30 width mismatch from test-64 row-count
+  staleness. Traced the recommended SQL: the floor has no deduplication input,
+  dropping only `dedup_applies` leaves `tids = 1` when the gate is false, and
+  change B already works independently of deduplication.
+- Filed an attribute-level width-provenance integration sketch and a separate
+  count-validation policy with diagnostics, limitations and eight acceptance
+  test groups. Corrected the earlier shared-cause attribution and the Evidence
+  Map's claim that two exclusion terms cannot fire. Open question 2 remains
+  open for implementation, scoring and version-local v12 verification.
+- Reviewed ANALYZE and executor caller/data-structure boundaries, catalog count
+  writers, tuple sizing/compression, statistics visibility and publication,
+  auto-analyze thresholds, locks/error paths, timeout scopes, generated catalog
+  headers, and adjacent regression coverage. No server was built or started;
+  no old fixture result is claimed as re-verified.
+- Updated Contents, Context Reviewed, Evidence Map and Source References, both
+  indexes and the version coverage manifest. Existing SQL blocks and both
+  verification fields are unchanged; the page remains agent-unverified.
+- Validation: all 125 Contents entries match heading order, all 383 internal
+  links resolve, and all 914 source-citation ranges across 111 files resolve
+  within the v17 checkout. All 22 existing SQL blocks, the prior Question text
+  and the front matter are unchanged. The recommended SQL SHA-256 remains
+  `cb6fb5ce67af658853427f110b240891c4b31f6a3932a72d4bd5e4bc9537843d`.
+  `git diff --check` passed and `raw/postgres-17/` remains clean.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: the same 9 errors and
+  2 warnings as the pre-edit baseline, all outside this change. Six errors are
+  missing v18 injection-point citation targets; three are unavailable v14,
+  v18 and v19 pins. The warnings concern pre-existing v12/v14 source changes.
+  No source checkout was repaired, fetched or modified during this review.

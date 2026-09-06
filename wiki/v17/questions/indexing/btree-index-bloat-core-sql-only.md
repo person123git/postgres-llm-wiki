@@ -72,7 +72,7 @@ verified_by_agent: not yet
   - [How the deduplication-gate tests were run](#how-the-deduplication-gate-tests-were-run)
   - [What the engine decides, and when](#what-the-engine-decides-and-when)
   - [Change 6: name the support function, do not just count it](#change-6-name-the-support-function-do-not-just-count-it)
-  - [Why prosrc and not proname](#why-prosrc-and-not-proname)
+  - [Why `prosrc` and not `proname`](#why-prosrc-and-not-proname)
   - [What change 6 costs](#what-change-6-costs)
   - [What the mixed-key failure costs](#what-the-mixed-key-failure-costs)
   - [The earlier v17 sweep needs three conjuncts](#the-earlier-v17-sweep-needs-three-conjuncts)
@@ -125,6 +125,11 @@ verified_by_agent: not yet
   - [The suite re-scored for change E](#the-suite-re-scored-for-change-e)
   - [Change E on a 12.2 server](#change-e-on-a-122-server)
   - [How these runs were run](#how-these-runs-were-run)
+  - [Follow-up: open question 2 needs two independent repairs](#follow-up-open-question-2-needs-two-independent-repairs)
+  - [Why removing the deduplication conjunct is insufficient](#why-removing-the-deduplication-conjunct-is-insufficient)
+  - [Proposed width guard](#proposed-width-guard)
+  - [Proposed count validation](#proposed-count-validation)
+  - [Acceptance tests and the remaining version boundary](#acceptance-tests-and-the-remaining-version-boundary)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -699,6 +704,15 @@ Follow-up: in PostgreSQL 17, remove this branch from the recommended statement:
 > is gone, so it was deleted too, with a third statement text run on both servers
 > to prove that deletion changes no output.
 
+Follow-up: Follow AGENTS.md. For PostgreSQL 17, analyze open question 2 in
+‘Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+(unverified)’ and propose a solution.
+
+> Prompt note: the asker approved correcting capitalization and grammar before
+> drafting. “Open question 2” means the second bullet under Open Questions,
+> beginning “Two critical false positives on a 12 server are now measured and
+> unaddressed,” as it stood before this follow-up.
+
 ## Answer
 
 ### Verdict
@@ -741,6 +755,12 @@ A fourteenth follow-up **rebuilds that statement for readability and maintainabi
 A fifteenth follow-up adds **test 113**, a fully drained job queue — 1,000,000 rows inserted as `state = 'pending'`, a partial index `WHERE state = 'pending'`, every row then updated to `'done'` — and **the recommended statement failed it in all three states**, on an index a `REINDEX` takes from 2745 blocks to 1. Not by getting the arithmetic wrong: `expected_blocks` was already 1, and a guard written for the majors where `reltuples = 0` was ambiguous replaced the answer with `unmeasured`. [Change E](#change-e-price-a-reltuples-0-as-zero-rows) removes that guard, and a sixteenth follow-up removed the last condition on it, so a `reltuples` of 0 is now priced as an empty index on 12 through 17. The trade was measured on both servers. On **17.11 the last step buys nothing and costs one critical false positive**: three rows move over 118 indexes, two are withheld by change B anyway, and the third is a refilled queue reporting **99.3% waste on a 1.1 MB index that is entirely live**, with `status = ok` and no caveat — the same failure that got the auto-analyze trigger rejected as change E's test. On **12.2 it is a real trade**: seven rows move, the drained-queue family (`p113b`, `p113c`, `p75`, at 100.0/100.0/99.6 against measured 100.0/100.0/99.6) reports on that major for the first time, two false positives arrive with it, and a healthy dense index rebuilt while its table was empty reads 100.0% there against `unmeasured` on 17.11, because 12 has no `-1` sentinel. Every row the change adds carries `modelled_rows = 0`. See [Follow-up: the drained partial index, and change E](#follow-up-the-drained-partial-index-and-change-e).
 
 ### The current recommended statement
+
+**Open-question-2 review, 2026-09-06:** the proposed repair separates width
+confidence from row-count freshness. A deduplication condition cannot validate
+either input to the floor model. The proposal and its acceptance tests are in
+[Follow-up: open question 2 needs two independent repairs](#follow-up-open-question-2-needs-two-independent-repairs).
+It has not been incorporated into the statement or scored on a server.
 
 **Use [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes), exactly as filed.** It is the newest, most-fixed and most-portable variant on this page: it carries every correction filed here, it is the only variant whose deduplication gate agrees with the engine on all seventeen deduplication-gate tests, and it was executed on 12.2, 14.23 and 17.11 servers. It keeps the tag `wiki_btree_wasted_space_sweep_12_17` and the output contract `wasted_space_pct`, `wasted_space_pct_floor` and a signed `wasted_space`.
 
@@ -4036,7 +4056,7 @@ The interesting result is not the rebuild, which is invisible here as everywhere
 | rows carrying `never analyzed` | 0 | **17** |
 | CRITICAL FALSE POSITIVE | 0 | **5** (tests 30, 32, 64, 79, 83) |
 
-Both halves of that swing are 12-era facts rather than model error. `dedup_applies` is false for all 106 indexes on 12.2, because no B-tree opfamily there has an `amprocnum = 4` row at all, so change A's duplicates disjunct — which does most of the withholding on 17.11 — can never fire. And 12 has no `pg_stat_force_next_flush()`, so the statistics collector lags the harness: `n_mod_since_analyze` stays high enough to fire change B nineteen times, and `last_analyze` is still unset on 17 tables when they are scored. Of the five critical false positives, three (32, 79, 83) carry `never analyzed`, which [the reading rule](#the-current-recommended-statement) already tells a reader to discard; two do not. **Tests 30 and 64 read 87.6% and 93.5% on the floor with `status = ok` and an empty `caveats` string on 12.2, on indexes a `REINDEX` reproduces block for block** — the same two shapes 17.11 withholds through a term that has nothing to fire on.
+**Historical run interpretation, qualified by the [open-question-2 review](#follow-up-open-question-2-needs-two-independent-repairs).** `dedup_applies` is false for all 106 indexes on 12.2, because no B-tree opfamily there has an `amprocnum = 4` row at all, so change A's duplicates disjunct — which does most of the withholding on 17.11 — can never fire. And 12 has no `pg_stat_force_next_flush()`, so the statistics collector lags the harness: `n_mod_since_analyze` stays high enough to fire change B nineteen times, and `last_analyze` is still unset on 17 tables when they are scored. Of the five critical false positives, three (32, 79, 83) carry `never analyzed`, which [the reading rule](#the-current-recommended-statement) already tells a reader to discard; two do not. **Tests 30 and 64 read 87.6% and 93.5% on the floor with `status = ok` and an empty `caveats` string on 12.2, on indexes a `REINDEX` reproduces block for block.** The follow-up separates the width input from the count and counter inputs; it does not attribute both failures to the deduplication gate.
 
 The deduplication group on 12.2 reproduces its own [filed table](#the-deduplication-gate-tests-on-a-122-server) as well: 10 constructible fixtures, all with `all_equalimage` and `dedup_applies` false, `i_int4` at 1376 blocks against 421 on 17.11 and `i_text_det` at 1931 against 460, readings of 0.0-0.2% on nine and the same `28.8%` on `i_multi_bad`, no `DEBUG1` deduplication line ever logged, and the four refusals verbatim: **0** B-tree `pg_amproc` rows at `amprocnum = 4` while 55 exist for other access methods, `invalid function number 4, must be between 1 and 3`, `unrecognized parameter "deduplicate_items"`, and `ICU is not supported in this build`.
 
@@ -4283,7 +4303,261 @@ Four limitations, stated because each one changes how a number above should be r
 - **One fixture is not the shape its comment claims, and this run found it.** `p75`'s script deletes `hot AND k % 20 < 18` from a table whose `hot` rows are exactly the multiples of 5, and every multiple of 5 is below 18 modulo 20, so the "90% deletion" empties the subset completely. That is why `p75` carries `reltuples = 0` here and rebuilds 276 blocks to 1 rather than to 30. It is a real fixture defect, it makes `p75` a second copy of the drained-queue shape rather than a partial-deletion one, and the partial-deletion coverage is carried by `p72`, `p73`, `p74`, `p76` and `p77` instead.
 - **The fixture script needed one edit to run at all.** `CREATE INDEX np99 ON np99 (v)` fails with `relation "np99" already exists`, because an index and a table share a namespace; the index is `np99i` here, which is the name the earlier run's database also carries.
 
+### Follow-up: open question 2 needs two independent repairs
+
+**Use separate checks for the width estimates in test 30 and the subset row
+count in test 64. Deduplication eligibility cannot establish that either input
+is trustworthy.** A partial index contains only rows that
+satisfy its predicate. `ANALYZE` estimates that population separately, but writes
+per-column statistics for the index only for expression attributes. An ordinary
+indexed column therefore has no catalog width statistic for the predicate subset.
+[execIndexing.c#ExecInsertIndexTuples](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L368-L397),
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478),
+[analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975).
+
+This is a source review of PostgreSQL 17 at this page's pin and a static review of
+the [recommended SQL](#the-corrected-statement-with-all-six-changes). The second
+open question refers to the historical 12.2 readings in
+[The same suite on a 12.2 server](#the-same-suite-on-a-122-server); those readings
+were not rerun or independently verified here. In particular, the earlier
+attribution of **both** failures to disabled deduplication is not supported by
+the statement's dependencies:
+
+| Case named by the open question | Input that needs checking | Path through the filed SQL | Proposed response |
+|---|---|---|---|
+| Test 30: wider values inside the predicate | The width used for each variable-length attribute | `cols.width` → `tuple.data_size` → `page.slot` → `leaf_cap` → both estimates | Withhold a partial estimate that borrows this width from table statistics or a default. |
+| Test 64: the predicate subset has grown | The index's stored row estimate and the observed change counter | `idx.live_rows` → both estimates; independently, `stats_stale` → `suppress_row` | Refresh or measure the subset count; diagnose why the existing staleness term did not fire. |
+
+These are model dependencies, not new measurements. The underlying distinction
+is explicit in the engine: `pg_statistic.stawidth` describes attribute values,
+whereas `pg_class.reltuples` is a possibly stale relation-level estimate. A build
+writes its index tuple count; `ANALYZE` writes the sampled predicate fraction
+times the table estimate; VACUUM writes an index count only when its result is
+present and not marked estimated.
+[pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L40-L50),
+[pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66),
+[index.c#index_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L3126-L3138),
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663),
+[vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099).
+
+### Why removing the deduplication conjunct is insufficient
+
+In the [filed SQL](#the-corrected-statement-with-all-six-changes),
+`dedup_credited` is `dedup_applies AND tids > 1`. Removing only `dedup_applies`
+does **nothing** for an index whose gate is false: `kstat` and both routes into
+`gclass` already require that gate. Such an index has no `classpages` row, and
+`leaves` supplies `tids = 1` through `coalesce(cp.max_tids, 1)`. The proposed
+replacement would still be false. This is a static result from the CTEs, not a
+server-version inference.
+
+Computing a separate `groups_est < live_rows` condition would avoid that dead
+branch, but would still test duplicate estimates rather than width or freshness.
+A wide, all-distinct partial key can have the wrong width; a growing all-distinct
+subset can have a stale count. Neither requires duplicate keys. `ANALYZE`'s
+column-selection and predicate-counting paths do not consult B-tree deduplication,
+and the build's deduplication decision reads equal-image support, uniqueness and
+the index option instead.
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478),
+[analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L975),
+[nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1135-L1152).
+
+The floor's leaf count is `ceil(live_rows / leaf_cap)`. Its internal levels use
+`int_cap`, which is also derived from the modelled tuple size. Neither reads
+`groups_est`, `tids` or `dedup_applies`. A duplicates-based exclusion can hide a
+width failure in one fixture without repairing that failure class. For test 64,
+`stats_stale = tbl_mod_since_analyze > tbl_autoanalyze_threshold` already has no
+deduplication dependency. Its intended source is the table-level auto-analyze
+decision, which compares the modification counter with a threshold derived from
+the **table's** row count.
+[recommended SQL](#the-corrected-statement-with-all-six-changes),
+[autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3095).
+
+### Proposed width guard
+
+Track where the width came from **for each index attribute**. An index-level
+`has_expressions` exemption is insufficient: `ANALYZE` selects only attributes
+whose `ii_IndexAttrNumbers` entry is zero, so a mixed ordinary/expression index
+can have subset statistics for one attribute and table statistics for another.
+`BuildIndexInfo` obtains the attribute numbers, expressions and predicate from
+the index metadata; `FormIndexDatum` then fetches ordinary values or evaluates
+expressions according to those attribute numbers.
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L450-L478),
+[index.c#BuildIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2420-L2451),
+[index.c#FormIndexDatum](../../../../raw/postgres-17/src/backend/catalog/index.c#L2751-L2784).
+
+The following is an **integration sketch**, not an executed replacement statement.
+Add the fields in order to the existing CTEs, then add the final disjunct inside
+the existing partial-index group in `suppress_row`. `se` is the existing join to
+the index attribute's `pg_stats` row. A missing visible row includes both a
+table-statistics fallback and the 32-byte default. `attlen` distinguishes fixed
+length from variable length; `pg_stats` exposes the width and applies its
+privilege and row-security filters.
+[pg_attribute.h#attlen](../../../../raw/postgres-17/src/include/catalog/pg_attribute.h#L55-L59),
+[pg_type.h#typlen](../../../../raw/postgres-17/src/include/catalog/pg_type.h#L44-L57),
+[system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L197),
+[system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L273).
+
+```text
+cols SELECT list:
+    (a.attlen < 0 AND se.attname IS NULL) AS width_from_table_or_default
+
+statvis SELECT list:
+    bool_or(c.width_from_table_or_default) AS any_unconditioned_width
+
+tuple SELECT list:
+    v.any_unconditioned_width
+
+modelled.suppress_row, inside the existing l.is_partial AND (...) group:
+    OR l.any_unconditioned_width
+```
+
+This proposed flag tests the input limitation directly, including a variable-width
+**key**, and does not depend on duplication or a major-version number. It withholds
+every partial index with such a fallback, including a correctly sized index and
+one with real reclaimable space. A fresh `ANALYZE` cannot create missing subset
+width statistics for an ordinary key, so it cannot lift this structural guard.
+An expression attribute with a visible statistics row passes this new guard;
+that is not a guarantee of accurate byte modelling. Index tuple formation can
+fetch external values, attempt compression, and align the resulting tuple.
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478),
+[analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L955-L975),
+[indextuple.c#index_form_tuple_context](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L104-L163).
+
+Keep `any_unconditioned_width` visible in a diagnostic version of the report,
+before its suppression, size and limit filters. Use the proposed reason
+`partial: width lacks subset statistics`. This is a reporting-policy proposal:
+the reason identifies missing evidence, not proven bloat. Its loss of useful
+partial-index readings must be scored before promotion. It also does not close
+NULL-distribution errors on fixed-width multicolumn keys: NULL attributes are
+omitted from the physical data area, and any NULL changes the index header.
+[heaptuple.c#heap_compute_data_size](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L223-L258),
+[indextuple.c#index_form_tuple_context](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L142-L163).
+
+### Proposed count validation
+
+For test 64, first expose `idx_reltuples`, `live_rows`, `last_analyze`,
+`tbl_mod_since_analyze`, `tbl_autoanalyze_threshold`, `stats_stale` and
+`suppress_row` from the existing CTEs, before the report filters. If the observed
+counter exceeds the threshold, change B must withhold that row regardless of
+deduplication. If it does not, capture the actual counter and threshold rather
+than attribute the failure to the deduplication gate. The counter is a
+`PgStat_StatTabEntry` field for the **table**, exposed through
+`pg_stat_all_tables`; it does not count changes to an individual predicate subset.
+[recommended SQL](#the-corrected-statement-with-all-six-changes),
+[pgstat.h#PgStat_StatTabEntry](../../../../raw/postgres-17/src/include/pgstat.h#L407-L428),
+[system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L670-L698).
+
+**A zero or below-threshold counter is not a freshness certificate.** On this
+v17 pin, pending reports can be delayed, `ANALYZE` resets the counter while
+explicitly forgetting changes committed during its scan, and later reports add
+pending deltas. A small subset can also change substantially without crossing
+a threshold scaled to the entire table. Replacing that threshold with one scaled
+to the subset might improve sensitivity, but would still be a heuristic whose
+misses and unnecessary exclusions need measurement.
+[pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L665),
+[pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337),
+[pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L847-L859),
+[autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3095).
+
+The proposed operational response is to request a fresh, table-level `ANALYZE`
+without a column list and re-read the estimate, then require a measurement of the
+predicate subset when the count remains in doubt. `ANALYZE` recomputes the
+sampled subset fraction and writes the index estimate. It is still a sample,
+and it takes `ShareUpdateExclusiveLock`, which permits ordinary writers; its
+completion alone therefore proves neither an exact count nor a quiescent table.
+A failed, cancelled, skipped or inconclusive check should leave the proposed
+diagnostic state `unmeasured: partial population not validated`, with no automatic
+REINDEX recommendation. This state is a proposed consumer policy, not a new
+catalog fact or a change already made to the SQL.
+[analyze.c#analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L129-L163),
+[analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953),
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663),
+[lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L73-L80).
+
+For an automated maintenance decision that requires a stronger result, use a
+second measurement step over the actual predicate and indexed expressions, with
+a stated snapshot and concurrency policy. It must supply the subset row count
+and any missing width/NULL inputs. Predicate evaluation must match the index's
+`ExecQual` filtering, and expression evaluation must match `FormIndexDatum`.
+Measuring a heap value's size alone does not reproduce index compression or
+tuple packing. Until those inputs are validated, treat partial-index rows as
+diagnostics rather than automatic rebuild instructions. This trades detection
+coverage for avoiding an unsupported decision; it does not make the catalog
+estimate exact.
+[execIndexing.c#ExecInsertIndexTuples](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L368-L397),
+[analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L920),
+[indextuple.c#index_form_tuple_context](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L104-L163).
+
+For the catalog sweep and a first diagnostic attempt, retain a session
+`statement_timeout` of `30s` and `lock_timeout` of `2s`. Both are `PGC_USERSET`,
+so they apply at session or transaction scope without reload or restart. A
+timeout is an incomplete measurement, not a zero count. Larger probes need an
+explicit time budget based on the target table.
+[guc_tables.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631),
+[gram.y#VariableSetStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L1617-L1638).
+
+### Acceptance tests and the remaining version boundary
+
+The following are **proposed tests**, not new results. Preserve pre-filter
+diagnostics and measure rebuilt size separately so a withheld false positive
+cannot be counted as a repaired size estimate.
+
+| Test group | Required distinction |
+|---|---|
+| Test-30 shape, with duplicates and with all-distinct keys | The new width flag must catch both; a duplicates-only flag must not be credited as a general repair. |
+| The same width cases with deduplication enabled and disabled, and with a unique index | The width decision must be independent of build compression eligibility. |
+| Plain, expression-only, mixed and INCLUDE attributes | Attribute provenance must decide the new flag; an expression elsewhere in the index must not exempt a plain wide key. |
+| Uniform-width healthy control and a partial index with real rebuild savings | Record the useful readings lost to the new guard, alongside false positives removed. |
+| Test-64 shape before and after counter publication, then after ANALYZE | Capture count, counter, threshold and suppression separately; verify that change B works when its input exceeds the threshold. |
+| Growth concentrated in a small subset, below the table threshold | Demonstrate the residual count blind spot and require the second measurement step. |
+| Missing or invisible statistics, zero rows, and timeout/cancellation | Produce an explicit diagnostic outcome; do not silently certify an estimate from absence of evidence. |
+| Non-partial controls and all previously filed mandatory fixtures | Compare all numeric output columns and report both additional exclusions and true detections lost. |
+
+These cases follow the two independent source paths: `ANALYZE` selects expression
+statistics per attribute and counts rows after the predicate; the B-tree build
+separately decides whether deduplication is available. In a v17 test harness,
+request a flush in the **writer backend** and let its next report occur before
+reading the cumulative counters. `pg_stat_force_next_flush()` sets a local flag;
+calling it from an unrelated observer does not flush other backends. Clearing
+the observer's statistics snapshot only discards its cached view.
+[analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478),
+[analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L975),
+[nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1149-L1152),
+[pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L699-L707),
+[pgstatfuncs.c#pg_stat_clear_snapshot](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L1678-L1694).
+
+Adjacent shipped coverage exists: `create_index.sql` analyses ordinary partial
+and expression indexes and inspects their statistics; its expected output has
+one row for the populated expression index. `stats.sql` uses forced reports in
+its cumulative-statistics tests. Those tests do not validate this wiki's width
+guard or its alert policy. No server was built or started for this follow-up.
+[create_index.sql#concur_exprs](../../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L1169-L1189),
+[create_index.out#concur_exprs-statistics](../../../../raw/postgres-17/src/test/regress/expected/create_index.out#L2777-L2787),
+[stats.sql#forced-report](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L95-L104).
+
+Implementation belongs in the estimator and its consumer. It uses existing
+catalog fields and views; it needs no new extension or generated server field.
+For a future exact-pin test build, the catalog headers remain generated from the
+same checkout's catalog definitions through `genbki.pl`; generated `_d.h` files
+are not independent evidence. Version-12 compatibility and its counter behaviour
+must be checked against the v12 pin in version-local work before the historical
+two-server question can be closed. A deduplication-disabled v17 test is an
+important control, not a substitute for a v12 run.
+[pg_index.h#catalog-and-fields](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L21-L61),
+[pg_statistic.h#catalog-and-fields](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L21-L50),
+[Makefile#generated-catalog-headers](../../../../raw/postgres-17/src/include/catalog/Makefile#L117-L143).
+
 ## Context Reviewed
+
+- Open-question-2 follow-up, 2026-09-06: source review of the pinned v17
+  `AnlIndexData`/`IndexInfo` boundary, expression-statistics selection, predicate
+  evaluation, count writers, width and tuple formation, `pg_stats` visibility,
+  table-level cumulative counters and their publication, auto-analyze thresholds,
+  locks/error returns, timeout scopes, catalog/header generation, and adjacent
+  regression tests. The recommended SQL's CTE dependencies were traced
+  independently of the historical fixture verdicts. No server execution or v12
+  source verification was performed; the width integration sketch and count
+  validation policy remain proposals.
 
 - Pinned checkout `raw/postgres-17/` at commit `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11, `REL_17_11-7-g786db8dcf16`); repinned from `54eeefaedbee0385529f3edf321bb99e49232aaa` (17.10) on 2026-08-17. Every measured number on this page is now a 17.11 observation taken on that pin; the original 17.10 run was superseded table by table by the re-run in [Follow-up: change 6 in the statement, and every table re-measured](#follow-up-change-6-in-the-statement-and-every-table-re-measured). The two code changes in the range (`355faed5a24`, `8434c938598`) are recorded in [How the test was run](#how-the-test-was-run) and leave the B-tree read paths these methods use unchanged, which the re-run confirms.
 - nbtree build, split and deduplication: `nbtsort.c` (`_bt_blnewpage`, `_bt_pagestate`, `_bt_buildadd`, `_bt_load`, `_bt_sort_dedup_finish_pending`), `nbtdedup.c` (`_bt_dedup_pass`, `_bt_dedup_start_pending`, `_bt_dedup_save_htid`, `_bt_form_posting`, `_bt_bottomupdel_pass`), `nbtsplitloc.c` (`_bt_findsplitloc`, single-value strategy), `nbtree.h` (fillfactor constants, `BTGetDeduplicateItems`, `BTMaxItemSize`, `BTPageOpaqueData`, `P_HIKEY`), `README`.
@@ -4450,7 +4724,7 @@ Four limitations, stated because each one changes how a number above should be r
 | The 48-byte page constant is a page header, nbtree's special space, and two line pointers | [nbtsplitloc.c:157-160](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L157-L160), [bufpage.h:214](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214), [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L69), [nbtsort.c#_bt_blnewpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L625-L626), [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L907-L923) |
 | A short varlena is charged no alignment padding, which is what the `data_size` `CASE` models | [heaptuple.c:234-242](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L234-L242), [indextuple.c:162-163](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L162-L163) |
 | The rebuild costs one extra scan of the `idx` CTE and a few percent of run time | `CTE Scan on idx` node counts 5 against 6 in the two `EXPLAIN (ANALYZE)` plans, planning 7.87 against 9.17 ms and execution 36.17 against 37.01 ms at 123 indexes, 192.33 against 198.49 ms at 600 ([What the rebuild costs](#what-the-rebuild-costs)) |
-| On a 12 server two of the four partial-index exclusion terms cannot fire, and two critical false positives return | `dedup_applies` false for all 106 indexes on 12.2 against 25 partial indexes withheld by the duplicates disjunct on 17.11; tests 30 and 64 reading 87.6% and 93.5% on the floor with `status = ok` and an empty `caveats` string ([The same suite on a 12.2 server](#the-same-suite-on-a-122-server)) |
+| Historical 12.2 run reports two unsuppressed critical false positives; this is not proof that two exclusion terms depend on deduplication | Earlier reported measurements in [The same suite on a 12.2 server](#the-same-suite-on-a-122-server); the [open-question-2 review](#follow-up-open-question-2-needs-two-independent-repairs) separates the width and count paths and leaves v12 re-verification open. |
 | Removing the `reltuples = 0` guard moves three rows on 17.11 and seven on 12.2, and no others | `EXCEPT` in both directions over all 52 exposed columns, before the rebuild pass: 3 of 118 and 7 of 103, listed index by index in [The suite re-scored for change E](#the-suite-re-scored-for-change-e) and [Change E on a 12.2 server](#change-e-on-a-122-server) |
 | On 14 and later the removal adds no correct reading, because the correct ones were already reported | of the three rows that move on 17.11, two are withheld by change B under both texts and the third (`p118`) is a critical false positive; the verdict distribution goes 43/70/1/3/1/1 to 43/70/0/4/1/1 ([The suite re-scored for change E](#the-suite-re-scored-for-change-e)) |
 | On 12 and 13 it is a trade: three true detections for two false positives | the 12.2 distribution goes 54 PASS / 5 UNMEASURED / 5 critical false positives to 57 / 0 / 7, with `p113b`, `p113c` and `p75` reading 100.0/100.0/99.6 against measured 100.0/100.0/99.6 ([Change E on a 12.2 server](#change-e-on-a-122-server)) |
@@ -4458,11 +4732,17 @@ Four limitations, stated because each one changes how a number above should be r
 | A rebuild leaves the v14+ sentinel rather than a zero, which is why the same fixture reads `unmeasured` on 17.11 and 100.0% on 12.2 | [relcache.c#RelationSetNewRelfilenumber](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3945-L3954), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842); traced on 17.11 as `1e+06` after the build, `0` after `VACUUM`, `-1` after `REINDEX`, and measured on both servers as fixtures `nzb_k` and `i_trunc` ([What change E costs](#what-change-e-costs)) |
 | The `row-count sources disagree` caveat catches the non-partial members of this family and cannot catch the partial one | the caveat's own `WHEN NOT is_partial` term in [The corrected statement, with all six changes](#the-corrected-statement-with-all-six-changes); measured as `nz_k`, `nzb_k` and `i_trunc` carrying it and `p118` carrying an empty `caveats` with `status = ok` |
 | Change D moves no partial-index verdict and no percentage | the identical verdict distribution in [Follow-up: the non-partial expression index excluded, and the suite re-scored](#follow-up-the-non-partial-expression-index-excluded-and-the-suite-re-scored) (66 PASS / 0 / 0 / 8 under both texts) and eight interleaved timing pairs at 40.1-48.2 ms as filed against 38.7-47.6 ms amended |
+| Partial expression statistics describe the predicate-selected sample; ordinary attributes get no corresponding index statistics row | [analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478), [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L899-L975) |
+| The proposed width guard must track provenance per attribute, including mixed ordinary/expression indexes | [index.c#BuildIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2420-L2451), [analyze.c#do_analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L457-L478), [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L273) |
+| The floor and change B have no deduplication dependency; removing only the deduplication conjunct leaves a false-gate index at tids = 1 | Static dependency trace in [Why removing the deduplication conjunct is insufficient](#why-removing-the-deduplication-conjunct-is-insufficient), from the filed CTEs; engine build gate separately defined by [nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1135-L1152) |
+| A below-threshold table counter cannot certify a current predicate-subset count | [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3095), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L665), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337) |
+| Forcing a report is local to the backend; clearing a statistics snapshot is a separate operation | [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L699-L707), [pgstatfuncs.c#pg_stat_clear_snapshot](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L1678-L1694) |
+| Adjacent regression tests exercise expression/predicate statistics, but do not validate the proposed wiki policy | [create_index.sql#concur_exprs](../../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L1169-L1189), [create_index.out#concur_exprs-statistics](../../../../raw/postgres-17/src/test/regress/expected/create_index.out#L2777-L2787), [stats.sql#forced-report](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L95-L104) |
 
 ## Open Questions
 
 - **Identity is proven on two fixture databases, not in general.** The `EXCEPT` proof covers the shapes those fixtures build — 95 indexes on 17.11, 92 on 12.2 — all at `block_size` 8192 and `MAXALIGN` 8 on one platform. The page-geometry laterals the rebuild moved contain integer division (`bs * 30 / 100`, `bs * 10 / 100`), and every operand's type was preserved deliberately for that reason, but **no run at a block size other than 8192 was made**, so the one class of divergence that reasoning identifies is the one class the measurement does not cover. The rebuilt text has also been executed on 12.2 and 17.11 only, while the page claims 12 through 17; the 14.23 server the earlier follow-ups used was not rebuilt for this run.
-- **Two critical false positives on a 12 server are now measured and unaddressed.** Tests 30 and 64 read 87.6% and 93.5% on the floor on 12.2 with `status = ok` and an empty `caveats` string, on indexes a `REINDEX` reproduces block for block, because `dedup_applies` is false for every index on that major and change A's duplicates disjunct therefore has nothing to fire on ([The same suite on a 12.2 server](#the-same-suite-on-a-122-server)). No term was proposed for them here, and the obvious candidate — withholding any partial index whose duplicate estimate comes from table statistics regardless of whether deduplication would apply — was neither written nor scored. Whether a 13, 14, 15 or 16 server sits closer to 12 or to 17 on this axis is untested.
+- **Open question 2: proposal filed; implementation and cross-version validation remain open.** The [2026-09-06 review](#follow-up-open-question-2-needs-two-independent-repairs) separates the historical test-30 width failure from the test-64 stale-count failure. It proposes an attribute-level width-provenance exclusion and a separate count-validation path. A duplicates-only exclusion cannot validate either floor input, and the current change-B condition already operates independently of deduplication. The width sketch has not been integrated or scored, its lost true detections are unmeasured, and the historical [12.2 observations](#the-same-suite-on-a-122-server) have not been re-verified against v12 source or a v12 server in this review. Counter publication, small-subset growth below the table threshold, and a consistent second measurement step still need the [acceptance tests](#acceptance-tests-and-the-remaining-version-boundary). No result for majors 13–16 is inferred from the v17 analysis.
 - **The 12.2 partial-index run is not comparable to the 17.11 one cell for cell.** 12 has no `pg_stat_force_next_flush()`, so the fixture scripts could not flush the statistics collector before scoring, and the consequences are visible in the numbers: 17 fixtures were scored while `last_analyze` was still unset, and change B's staleness term fired 19 times against 7 on 17.11. Both effects push toward withholding, which is the safe direction, but they mean the 12.2 verdict distribution measures the harness as much as the statement.
 - **The readability claim itself is not measured.** Line counts, CTE sizes and the removal of the duplicated suppression conditions are facts; "easier to read and maintain" is a judgement, and no second reader has reviewed the rebuilt text. The one structural claim that *is* checkable — that the caveat list and the `WHERE` clause can no longer disagree — holds only for the four conditions now named as booleans; the `never analyzed`, `statistics not visible to this role` and `row-count sources disagree` caveats are still spelled once each in the final `SELECT`.
 - **The cost measurement is two databases on one machine.** 123 indexes and 600 indexes, warm cache, no concurrent load, `shared_buffers = '512MB'`, and `EXPLAIN (ANALYZE)` timing overhead included in the plan/execution split. The end-to-end spread on 17.11 (41.8-51.5 ms filed, 44.7-73.0 ms rebuilt) is wide enough that the median difference of 2.7 ms is the only figure worth quoting, and the 12.2 pairs are too few to separate the texts at all.
@@ -4740,6 +5020,19 @@ Four limitations, stated because each one changes how a number above should be r
 - [pgstat_relation.c#changed_tuples](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L560-L576)
 - [pgstat_relation.c#pgstat_relation_flush_cb-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L850-L862)
 - [nbtree.h#BTREE_METAPAGE](../../../../raw/postgres-17/src/include/access/nbtree.h#L140-L152)
+
+- [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L665)
+- [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L699-L707)
+- [pgstatfuncs.c#pg_stat_clear_snapshot](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L1678-L1694)
+- [index.c#BuildIndexInfo](../../../../raw/postgres-17/src/backend/catalog/index.c#L2420-L2451)
+- [index.c#FormIndexDatum](../../../../raw/postgres-17/src/backend/catalog/index.c#L2751-L2784)
+- [analyze.c#analyze_rel](../../../../raw/postgres-17/src/backend/commands/analyze.c#L129-L163)
+- [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L73-L80)
+- [gram.y#VariableSetStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L1617-L1638)
+- [create_index.sql#concur_exprs](../../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L1169-L1189)
+- [create_index.out#concur_exprs-statistics](../../../../raw/postgres-17/src/test/regress/expected/create_index.out#L2777-L2787)
+- [stats.sql#forced-report](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L95-L104)
+- [Makefile#generated-catalog-headers](../../../../raw/postgres-17/src/include/catalog/Makefile#L117-L143)
 
 ## Navigation
 
