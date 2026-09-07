@@ -35,6 +35,10 @@ verified_by_agent: not yet
   - [Follow-up: the output columns say wasted_space, not bloat](#follow-up-the-output-columns-say-wasted_space-not-bloat)
   - [What the rename cannot change](#what-the-rename-cannot-change)
   - [What a consumer must change](#what-a-consumer-must-change)
+  - [Follow-up: source support for the v12 and v17 open-question review](#follow-up-source-support-for-the-v12-and-v17-open-question-review)
+  - [The v12 build and statistics boundaries](#the-v12-build-and-statistics-boundaries)
+  - [The v12 publication protocol](#the-v12-publication-protocol)
+  - [V12 catalog, build and output compatibility](#v12-catalog-build-and-output-compatibility)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -63,11 +67,18 @@ Add a correction. In the SQL, do not use bloat as the output; use wasted_space.
 > follow the new names. The page title and the conceptual use of "bloat" stay as
 > filed.
 
+Follow-up (2026-09-07):
+
+analyze and propose a solution for open questions, ignore open questions not about version 12 and version 17.
+
+> Scope: continue the review of the PostgreSQL 17 question, retaining
+> the request as written and covering only PostgreSQL 12 and 17.
+
 ## Answer
 
 ### The proposal in one paragraph
 
-Compute the size the index *would* have if it were rebuilt right now, and subtract it from the size it has. Core SQL gives you the current size exactly, from the filesystem, through [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L308). It does not give you the rebuilt size, but v12's B-tree build rule is fully deterministic, so the rebuilt size is *computable* from catalog data alone: `nbtsort.c` starts a new leaf page as soon as free space drops below `BLCKSZ * (100 - fillfactor) / 100` ([nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L724-L729), [nbtsort.c#_bt_buildadd](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L856-L899)). On an exact-pin 12.2 server, that computed size matched an actual `CREATE INDEX CONCURRENTLY` rebuild **to the block on 10 of 14 fixtures** and to within 2 blocks on 3 more. Three progressively more expensive core-only methods refine or verify it: a `pg_column_size` key-width measurement, an index-only-scan buffer census that reproduces `pgstatindex`'s `avg_leaf_density` to within 0.14 points with no contrib installed, and a sibling-index rebuild that is exact by construction.
+Compute the size the index *would* have if it were rebuilt right now, and subtract it from the size it has. Core SQL gives you the current size exactly, from the filesystem, through [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L308). It does not give you the rebuilt size. Catalog data supports an approximation of v12's deterministic build, whose exact result also depends on the actual tuple widths and page separators ([indextuple.c#index_form_tuple](../../../../raw/postgres-12/src/backend/access/common/indextuple.c#L121-L133), [nbtutils.c#_bt_truncate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2116-L2164)): `nbtsort.c` checks hard fit and a soft free-space threshold of `BLCKSZ * (100 - fillfactor) / 100`, applying that soft threshold only after the minimum item count ([nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L724-L729), [nbtsort.c#_bt_buildadd](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L856-L899)). On an exact-pin 12.2 server, that computed size matched an actual `CREATE INDEX CONCURRENTLY` rebuild **to the block on 10 of 14 fixtures** and to within 2 blocks on 3 more. Three progressively more expensive core-only methods refine or verify it: a `pg_column_size` key-width measurement, an index-only-scan buffer census that reproduces `pgstatindex`'s `avg_leaf_density` to within 0.14 points with no contrib installed, and a sibling-index rebuild that is exact by construction.
 
 ### What core SQL can and cannot see
 
@@ -602,7 +613,181 @@ Unlike later majors there is no glossary here to appeal to: `doc/src/sgml/` in t
 3. **Log and `pg_stat_statements` text matching.** The tag survives into both. `log_statement` and `log_min_duration_statement` print the string as received ([postgres.c#log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047), [postgres.c#duration-statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1280-L1298)), and `pgss_store` trims only leading and trailing whitespace from the statement's slice of the source text ([pg_stat_statements.c#pgss_store](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1139-L1146)). So a grep for `wiki_btree_bloat_sweep` stops matching new traffic but not old rows: because the query ID does not move and the text is written only when the hash entry is created ([pg_stat_statements.c#entry-creation](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1169-L1231)), an existing entry keeps showing the old tag until it is evicted or `pg_stat_statements_reset()` runs.
 4. **The probe rename, which is an object name and not a label.** `wiki_wasted_space_probe` has to move in five places at once — the generated DDL's replacement string, the `CREATE INDEX CONCURRENTLY`, both `pg_relation_size` arguments and the `DROP INDEX CONCURRENTLY` — plus the leftover check. Renaming some sites and not others produces the failure Method C already warns about: an invalid leftover index that still costs write overhead, because `indisvalid` is set non-transactionally as the last step ([index.c#index_set_state_flags](../../../../raw/postgres-12/src/backend/catalog/index.c#L3314-L3330)), and a cleanup check looking for the wrong name. It also does something the label rename cannot: it moves the two utility statements' `pg_stat_statements` identity. `pgss_ProcessUtility` passes a query ID of 0 to signal a utility statement ([pg_stat_statements.c#pgss_ProcessUtility](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1054-L1062)), and `pgss_store` then keys it by a hash of the statement text ([pg_stat_statements.c#utility-hash](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1148-L1162)), so the renamed `CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY` land on new entries. Inside the two `SELECT`s the name only ever appears in a string constant — twice as a `pg_relation_size` argument, where parse analysis coerces the unknown literal to `regclass` but keeps the literal's own location "to simplify life for pg_stat_statements" ([parse_coerce.c#coerce_type](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L286-L291)), and once inside the DDL generator's replacement text — and a constant is recorded for normalization rather than jumbled ([pg_stat_statements.c#T_Const](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2534-L2543)), then replaced by a `$n` parameter symbol in the stored text ([pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L3058-L3087)), so it changes neither their query ID nor what `pg_stat_statements` displays for them.
 
+### Follow-up: source support for the v12 and v17 open-question review
+
+**Use a separate v12 statistics-publication protocol and retain independent
+width, NULL and count validation.** This section supplies the missing
+version-local source evidence for the
+[proposal review on the PostgreSQL 17 question](../../../v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-proposals-for-the-remaining-v12-and-v17-questions).
+It reviews the portable estimator's v12 boundary, not a new implementation of
+this page's Method A. Both maintained statements remain unchanged. No server
+was started and no historical fixture was rerun for this follow-up.
+
+### The v12 build and statistics boundaries
+
+The B-tree handler declares `BTNProcs` support procedures, and that constant
+is 3: comparison, sort support and in-range support. `btoptions` delegates to
+the B-tree kind of `default_reloptions`; its registered options are fillfactor
+and `vacuum_cleanup_index_scale_factor`. The sorted build passes each input
+tuple directly to `_bt_buildadd`, including duplicate keys; this path has no
+posting-list aggregation. A portable estimator must not require a fourth
+B-tree support procedure or a deduplication reloption to validate v12 inputs.
+[nbtree.c#bthandler](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L104-L114),
+[nbtree.h#BTNProcs](../../../../raw/postgres-12/src/include/access/nbtree.h#L379-L395),
+[nbtutils.c#btoptions](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2027-L2031),
+[reloptions.c#btree-fillfactor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L177-L185),
+[reloptions.c#vacuum_cleanup_index_scale_factor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L423-L430),
+[nbtsort.c#_bt_load](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1246-L1284).
+
+ANALYZE collects index-column statistics for expression positions whose
+`ii_IndexAttrNumbers` entry is zero. For a partial index it evaluates the
+predicate, counts matching sampled rows and calls `FormIndexDatum` for
+expression values. Plain keys and INCLUDE columns do not acquire independent
+predicate-subset column statistics through that expression path. A zero
+statistics target skips an attribute. This supports the proposed
+attribute-level input diagnostics for plain, expression and mixed indexes;
+deduplication eligibility cannot repair a missing or wrong-population width.
+[analyze.c#do_analyze_rel](../../../../raw/postgres-12/src/backend/commands/analyze.c#L438-L466),
+[analyze.c#compute_index_stats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L789),
+[analyze.c#subset-expression-statistics](../../../../raw/postgres-12/src/backend/commands/analyze.c#L821-L843),
+[analyze.c#examine_attribute](../../../../raw/postgres-12/src/backend/commands/analyze.c#L887-L893).
+
+There are distinct count writers. CREATE INDEX/REINDEX passes the build's
+`index_tuples` to `index_update_stats`, which writes a nonnegative count into
+`pg_class.reltuples`. Standalone ANALYZE instead writes
+`ceil(tupleFract * totalrows)` for each index; its VACUUM-ANALYZE path avoids
+overwriting VACUUM's count. `RelationSetNewRelfilenode` initializes the new
+relation's count to zero. Thus zero is not a durable certificate of current
+emptiness, and a partial-index sample can report zero when it contains no
+matching rows. The proposed full subset check must record its own observation
+instead of treating either the catalog value or a counter as proof.
+[index.c#index_build](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989),
+[index.c#index_update_stats](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2779),
+[analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629),
+[analyze.c#tupleFract](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L777),
+[analyze.c#subset-estimate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L821-L827),
+[relcache.c#RelationSetNewRelfilenode](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L3527-L3541).
+
+The proposed width probe also remains approximate. Index tuple formation
+fetches external values, tries inline compression above `TOAST_INDEX_TARGET`
+for suitable storage types, derives the NULL-dependent header and calls
+`heap_compute_data_size` before aligning the result. `pg_column_size` returns
+the size of its input datum, not an index tuple assembled through that path.
+Do not convert a sampled heap/composite width into a claim of exact index
+bytes.
+[indextuple.c#index_form_tuple](../../../../raw/postgres-12/src/backend/access/common/indextuple.c#L66-L133),
+[varlena.c#pg_column_size](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L5044-L5089).
+
+The builder tests both hard fit and the fillfactor threshold with a minimum
+item count, moves the last tuple into the next page and creates the old page's
+high key. `_bt_truncate` can discard suffix attributes or need a heap TID when
+equal keys do not separate the pages. Those transitions make a leaf/internal
+inventory the appropriate proposed way to isolate the historical 1–6-block
+duplicate-key residual. They do not prove that any particular residual came
+from one level of the tree. Catalog means omit the actual ordered tuple
+lengths and separators needed for exact simulation.
+[nbtsort.c#_bt_buildadd](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L856-L935),
+[nbtsort.c#high-key-truncation](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L947-L990),
+[nbtutils.c#_bt_truncate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2116-L2201).
+
+### The v12 publication protocol
+
+**Propose ending the fixture writer session before maintenance, followed by
+bounded observer polling that checks the intended counters.** The normal
+`pgstat_report_stat` path is rate-limited. Backend shutdown explicitly calls
+it with `force = true`, sending pending counts to the collector. However,
+`pgstat_send` retries interrupted sends and otherwise ignores send failures;
+writer exit alone is not proof that the collector received the counts.
+[pgstat.c#pgstat_report_stat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L803-L921),
+[pgstat.c#pgstat_beshutdown_hook](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3073-L3094),
+[pgstat.c#pgstat_send](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4341-L4360).
+
+Clear the observer's statistics snapshot between polling attempts or use new
+transactions. The backend caches the statistics-file snapshot until it is
+cleared; clearing discards the local view, not pending writer messages.
+The shipped `stats.sql` test uses a bounded polling loop, checks independent
+counter advances and snapshot time, and reconnects its writer before waiting.
+Adapt that pattern to known fixture DML counts, then run ANALYZE/VACUUM and
+wait for the maintenance result before scoring. Make timeout a failed harness
+precondition rather than an estimator result.
+[pgstat.c#backend_read_statsfile](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5636-L5651),
+[pgstat.c#pgstat_clear_snapshot](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5785-L5806),
+[stats.sql#wait_for_stats](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L27-L78),
+[stats.sql#writer-reconnect](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L146-L155).
+
+The collector has the same *kind of ordering concern*, established here from
+v12's own implementation: `pgstat_recv_tabstat` adds DML deltas, resetting
+live/dead counts first when a truncate flag is present;
+`pgstat_recv_analyze` assigns live/dead counts absolutely and can zero
+`changes_since_analyze`, explicitly forgetting changes committed during
+ANALYZE. A database statistics reset can also discard the table entries.
+These paths explain why a zero counter cannot certify a fresh subset count.
+They do not establish the exact message ordering of the old fixture run.
+[pgstat.c#pgstat_recv_tabstat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5966-L5994),
+[pgstat.c#pgstat_recv_analyze](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6240-L6272),
+[pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6093-L6121).
+
+**Acceptance:** trace the sender and collector receive sites for load,
+truncate/reload and DELETE followed by maintenance. Compare deliberately
+delayed publication with the barriered protocol. Store command boundaries,
+pending counts, received messages, snapshots and fixture invariants. Existing
+TRUNCATE/subtransaction tests provide adjacent engine coverage; the new
+estimator artifacts still need their own reproducible fixtures.
+[stats.sql#truncate-statistics](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L80-L136).
+
+### V12 catalog, build and output compatibility
+
+`pg_stats` exposes `inherited`; choose non-inherited rows when estimating one
+physical index. Its column-privilege and RLS filters can hide statistics, so
+absence does not distinguish “not collected” from “not visible.” This pin's
+`pg_stats_ext` exposes ndistinct, dependencies and MCV data but no `inherited`
+or expression-list field. The proposed adapter must use this view's actual
+shape and privilege conditions instead of selecting fields from another
+version's definition. Extended statistics are built only for the individual
+relation in this pin, guarded by `!inh` in ANALYZE.
+[analyze.c#BuildRelationExtStatistics](../../../../raw/postgres-12/src/backend/commands/analyze.c#L576-L584),
+[system_views.sql#pg_stats](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L189-L197),
+[system_views.sql#pg_stats-visibility](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L247-L254),
+[system_views.sql#pg_stats_ext](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L256-L291).
+
+ICU is a configure-time option backed by `USE_ICU` and an ICU dependency check.
+An unavailable ICU test build is a build-coverage gap, not evidence that this
+version lacks that provider. Build block size is configurable, and `MAXALIGN`
+uses the configured `MAXIMUM_ALIGNOF`. Proposed 4/8/16-kB and ICU fixtures must
+record their build settings and mark unavailable dependencies as skipped.
+Catalog `_d.h` files and `schemapg.h` are generated by the backend catalog
+Makefile from the pinned definitions; no new generated field or server patch
+is needed for the estimator proposals.
+[configure.in#ICU](../../../../raw/postgres-12/configure.in#L730-L738),
+[configure.in#blocksize](../../../../raw/postgres-12/configure.in#L250-L265),
+[c.h#MAXALIGN](../../../../raw/postgres-12/src/include/c.h#L673-L697),
+[Makefile#GENERATED_HEADERS](../../../../raw/postgres-12/src/backend/catalog/Makefile#L51),
+[Makefile#genbki](../../../../raw/postgres-12/src/backend/catalog/Makefile#L79-L100).
+
+For proposed signed-byte reporting, keep raw bytes as the machine interface.
+Here `pg_size_pretty(bigint)` scales with shifts and its `half_rounded` macro
+rounds toward positive infinity. Verify negative boundary strings on this
+pin itself rather than importing expected text from another version. This
+review changes neither Method A's current projection nor its existing
+clamping behavior.
+[dbsize.c#half_rounded](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L34-L35),
+[dbsize.c#pg_size_pretty](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L534-L571).
+
+Use initial session `statement_timeout = '30s'` and `lock_timeout = '2s'` for
+the proposed catalog/probe work. Both contexts are `PGC_USERSET`, so they apply
+at session/transaction scope without restart or reload. A probe that exceeds
+its budget returns an incomplete measurement; larger probes need a separately
+chosen budget.
+[guc.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2397).
+
+The v12 source gap in the cross-version Open Questions is addressed by this
+section. New fixture execution, instrumented collector attribution,
+input/probe integration, page-model accuracy and cost measurement remain open.
+
+
 ## Context Reviewed
+
+- Remaining-open-question review, 2026-09-07: reviewed the portable estimator's v12 B-tree support/build boundary, count and statistics writers, collector sender/receiver protocol, view visibility, generated catalogs, build options and signed formatting. The cited source supports the analysis and proposed acceptance tests. No new server execution or full-page re-verification was performed; existing SQL and human verification fields are unchanged.
 
 - nbtree build and split: `nbtsort.c` (`_bt_pagestate`, `_bt_blnewpage`, `_bt_buildadd`, `_bt_load`), `nbtsplitloc.c` (`_bt_findsplitloc`, `_bt_deltasortsplits`, `_bt_afternewitemoff`), `nbtinsert.c`, `nbtree.h` fillfactor and page-flag constants, `README`.
 - Page and tuple layout: `bufpage.h`, `bufpage.c` (`PageInit`, `PageGetFreeSpace`, `PageAddItemExtended`), `itemid.h`, `itup.h`, `indextuple.c` (`index_form_tuple`, `index_truncate_tuple`), `heaptuple.c` (`heap_compute_data_size`), `c.h` MAXALIGN.
@@ -653,7 +838,18 @@ Unlike later majors there is no glossary here to appeal to: `doc/src/sgml/` in t
 | The tag reaches the log and `pg_stat_statements`, whose text is written only at entry creation | [postgres.c#log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047), [postgres.c#duration-statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1280-L1298), [pg_stat_statements.c#pgss_store](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1139-L1146), [pg_stat_statements.c#entry-creation](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1169-L1231) |
 | A utility statement is keyed by a hash of its text, so the probe rename creates new entries, while a constant in a `SELECT` is normalized away | [pg_stat_statements.c#pgss_ProcessUtility](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1054-L1062), [pg_stat_statements.c#utility-hash](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1148-L1162), [pg_stat_statements.c#T_Const](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L2534-L2543), [pg_stat_statements.c#generate_normalized_query](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L3058-L3087), [parse_coerce.c#coerce_type](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L286-L291) |
 
+| V12 expression-statistics selection, disabled collection and visibility filters | [analyze.c:438](../../../../raw/postgres-12/src/backend/commands/analyze.c#L438-L466), [analyze.c:887](../../../../raw/postgres-12/src/backend/commands/analyze.c#L887-L893), [system_views.sql:247](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L247-L291) |
+| V12 sampled subset counts, reset-to-zero catalog state and build count writes | [analyze.c:771](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L789), [analyze.c:607](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [relcache.c:3527](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L3527-L3535), [index.c:2761](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2779) |
+| V12 rate-limited reports, forced exit reporting, additive/absolute receivers and polling tests | [pgstat.c:803](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L803-L921), [pgstat.c:3083](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3083-L3094), [pgstat.c:5978](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5978-L5986), [pgstat.c:6240](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6240-L6272), [stats.sql:27](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L27-L78), [stats.sql:146](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L146-L155) |
+| V12 hard/soft page limits, high-key truncation and configurable block size | [nbtsort.c:856](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L856-L976), [nbtutils.c:2116](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2116-L2201), [configure.in:250](../../../../raw/postgres-12/configure.in#L250-L265) |
+| V12 local/inherited column-statistics flag and the extended-statistics view shape | [system_views.sql:189](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L189-L197), [system_views.sql:256](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L256-L291) |
+| V12 B-tree support procedures, reloptions and ICU build option | [nbtree.h:379](../../../../raw/postgres-12/src/include/access/nbtree.h#L379-L395), [nbtutils.c:2027](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2027-L2031), [reloptions.c:179](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L179-L185), [reloptions.c:423](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L423-L430), [configure.in:730](../../../../raw/postgres-12/configure.in#L730-L738) |
+| V12 signed-size formatting and rounding | [dbsize.c:34](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L34-L35), [dbsize.c:534](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L534-L571) |
+| V12 statistics polling/TRUNCATE tests and generated catalog headers | [stats.sql:27](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L27-L78), [stats.sql:80](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L80-L136), [Makefile:79](../../../../raw/postgres-12/src/backend/catalog/Makefile#L79-L100) |
+
 ## Open Questions
+
+The [v12/v17 source follow-up](#follow-up-source-support-for-the-v12-and-v17-open-question-review) supplies source support for the portable estimator. Its new publication/probe protocols and accuracy/cost tests remain proposals; this scoped addition does not resolve the independent Method A–D measurement questions below.
 
 - **Why a cold-session descent probe reads more blocks than a warm one.** On `idx_seq` the calibration query read 6 blocks in a fresh backend and 3 in the same session after one prior execution, while `idx_part` read 2 in both. `_bt_getroot` caches metapage contents in `rd_amcache`, which explains at most one block. The remaining difference was not traced to a specific call site, so Method B is specified as "run both probes twice in one session and use the second reading".
 - **The `+1` in the density formula assumes every counted leaf carries a high key.** The rightmost leaf does not ([nbtree.h#P_HIKEY](../../../../raw/postgres-12/src/include/access/nbtree.h#L198-L219)). The error is one entry in the whole index and is inside the measured −0.03 to −0.14 point spread, but it was not isolated separately.
@@ -717,6 +913,58 @@ Unlike later majors there is no glossary here to appeal to: `doc/src/sgml/` in t
 - [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6896-L6903)
 - [varlena.c#bttextcmp](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L1924-L1937)
 - [postgres.c#log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047)
+
+- [nbtree.c#bthandler](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L104-L114)
+- [nbtree.h#BTNProcs](../../../../raw/postgres-12/src/include/access/nbtree.h#L379-L395)
+- [nbtutils.c#btoptions](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2027-L2031)
+- [reloptions.c#btree-fillfactor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L177-L185)
+- [reloptions.c#vacuum_cleanup_index_scale_factor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L423-L430)
+- [nbtsort.c#_bt_load](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L1246-L1284)
+- [analyze.c#do_analyze_rel](../../../../raw/postgres-12/src/backend/commands/analyze.c#L438-L466)
+- [analyze.c#compute_index_stats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L789)
+- [analyze.c#subset-expression-statistics](../../../../raw/postgres-12/src/backend/commands/analyze.c#L821-L843)
+- [analyze.c#examine_attribute](../../../../raw/postgres-12/src/backend/commands/analyze.c#L887-L893)
+- [index.c#index_build](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2989)
+- [index.c#index_update_stats](../../../../raw/postgres-12/src/backend/catalog/index.c#L2761-L2779)
+- [analyze.c#tupleFract](../../../../raw/postgres-12/src/backend/commands/analyze.c#L771-L777)
+- [analyze.c#subset-estimate](../../../../raw/postgres-12/src/backend/commands/analyze.c#L821-L827)
+- [relcache.c#RelationSetNewRelfilenode](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L3527-L3541)
+- [indextuple.c#index_form_tuple](../../../../raw/postgres-12/src/backend/access/common/indextuple.c#L66-L133)
+- [varlena.c#pg_column_size](../../../../raw/postgres-12/src/backend/utils/adt/varlena.c#L5044-L5089)
+- [nbtsort.c#_bt_buildadd](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L856-L935)
+- [nbtsort.c#high-key-truncation](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L947-L990)
+- [nbtutils.c#_bt_truncate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2116-L2201)
+- [pgstat.c#pgstat_report_stat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L803-L921)
+- [pgstat.c#pgstat_beshutdown_hook](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3073-L3094)
+- [pgstat.c#pgstat_send](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4341-L4360)
+- [pgstat.c#backend_read_statsfile](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5636-L5651)
+- [pgstat.c#pgstat_clear_snapshot](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5785-L5806)
+- [stats.sql#wait_for_stats](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L27-L78)
+- [stats.sql#writer-reconnect](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L146-L155)
+- [pgstat.c#pgstat_recv_tabstat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5966-L5994)
+- [pgstat.c#pgstat_recv_analyze](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6240-L6272)
+- [pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6093-L6121)
+- [stats.sql#truncate-statistics](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L80-L136)
+- [analyze.c#BuildRelationExtStatistics](../../../../raw/postgres-12/src/backend/commands/analyze.c#L576-L584)
+- [system_views.sql#pg_stats](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L189-L197)
+- [system_views.sql#pg_stats-visibility](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L247-L254)
+- [system_views.sql#pg_stats_ext](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L256-L291)
+- [configure.in#ICU](../../../../raw/postgres-12/configure.in#L730-L738)
+- [configure.in#blocksize](../../../../raw/postgres-12/configure.in#L250-L265)
+- [c.h#MAXALIGN](../../../../raw/postgres-12/src/include/c.h#L673-L697)
+- [Makefile#GENERATED_HEADERS](../../../../raw/postgres-12/src/backend/catalog/Makefile#L51)
+- [Makefile#genbki](../../../../raw/postgres-12/src/backend/catalog/Makefile#L79-L100)
+- [dbsize.c#half_rounded](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L34-L35)
+- [dbsize.c#pg_size_pretty](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L534-L571)
+- [guc.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2397)
+- [indextuple.c#index_form_tuple](../../../../raw/postgres-12/src/backend/access/common/indextuple.c#L121-L133)
+- [nbtutils.c#_bt_truncate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2116-L2164)
+- [system_views.sql:247](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L247-L291)
+- [relcache.c:3527](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L3527-L3535)
+- [pgstat.c:3083](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3083-L3094)
+- [pgstat.c:5978](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5978-L5986)
+- [nbtsort.c:856](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L856-L976)
+- [reloptions.c:179](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L179-L185)
 
 ## Navigation
 

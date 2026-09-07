@@ -6955,3 +6955,29 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `.wiki-runtime/tmp/btree-open-cleanup/`. Pre-edit wiki lint reports 9 errors
   and 2 warnings: missing v18 citation files, unavailable v14/v18/v19 pins and
   existing v12/v14 checkout changes. These are outside this cleanup.
+
+## [2026-09-07] review v17 | Remaining v12/v17 B-tree estimator questions
+
+- Filed ten source-backed proposal groups covering the 51 retained Open Questions
+  applicable to PostgreSQL 12 and 17 in
+  [the v17 question](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-proposals-for-the-remaining-v12-and-v17-questions).
+  The five other/future-major-only questions remain outside this review.
+- Added diagnostics and subset/zero validation designs, publication barriers,
+  full/tail posting pricing, separate page/pivot modelling, statistics selection,
+  an unknown-opclass policy, signed-byte output, fixture assertions and cost/alert
+  calibration, with explicit acceptance tests and an implementation order.
+- Filed the supporting [v12 source review](v12/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-source-support-for-the-v12-and-v17-open-question-review)
+  on its matching-version page. Corrected active prose claiming a zero counter
+  proves freshness and qualified the v12 catalog-only model's precision.
+- Updated Contents, question text, evidence maps, source inventories, indexes and
+  coverage notes. Existing SQL, source pins and human verification fields remain
+  unchanged. Agent verification remains `not yet`; this scoped review includes no
+  server execution and does not re-verify historical measurements.
+- Validation: all 29 pre-existing SQL blocks and both pages' front matter are
+  unchanged; the v17 recommended SQL hash matches the committed baseline.
+  All 51 in-scope questions have proposal links, the five other-major-only
+  questions are unchanged, and Contents/source ranges/cross-page anchors pass
+  scoped checks. `git diff --check` passes. `scripts/wiki_lint` retains the same
+  nine errors and two warnings: six missing v18 citation targets, unavailable
+  v14/v18/v19 pins, and v12/v14 checkout-status warnings. No new lint issue was
+  introduced; tracked source files on the v12 and v17 pins remain unchanged.
