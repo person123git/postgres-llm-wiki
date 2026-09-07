@@ -4793,7 +4793,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   ninth follow-up against unchanged pin
   `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11): change 6 is now inside
   [The corrected statement, with all six
-  changes](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-corrected-statement-with-all-six-changes),
+  changes](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-current-recommended-statement),
   the section is retitled from "five changes", and **every server-measured table on
   the page was re-run on 17.11**. Nothing on the page is a 17.10 observation any
   more.
@@ -4824,7 +4824,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   flipped to a negative `n_distinct` and lost its credit; `i_q1000` models 899 rather
   than 901 because 8 most-common values were stored instead of 11.
 - Corrected one wrong claim: [What change 6
-  costs](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-change-6-costs)
+  costs](v17/questions/indexing/btree-index-bloat-core-sql-only.md#custom-operator-classes)
   had reported the gate under-crediting an opclass that gains `ei_alias(oid)`. It
   does not — `ei_alias` is `LANGUAGE internal` with `prosrc = 'btequalimage'`, so the
   whitelist credits it and both texts report 69.3% on a true 69.4%. The cost applies
@@ -4998,7 +4998,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against
   unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). The section is
   retitled [Follow-up: ninety-one mandatory
-  tests](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-ninety-one-mandatory-tests):
+  tests](v17/questions/indexing/btree-index-bloat-core-sql-only.md#reproducible-accuracy-and-cost-coverage):
   tests 1-17 are the deduplication-gate group, tests 18-91 the partial-index group,
   one continuous numbering as the asker chose.
 - Prompt hygiene: the request ("follow agents.md, in postgresql 17 , for question:
@@ -5094,7 +5094,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 ## [2026-08-19] follow-up v17 | changes A and B applied as a WHERE exclusion, and all 74 partial-index tests re-scored
 
 - Applied both changes from [Two changes the partial-index tests
-  justify](v17/questions/indexing/btree-index-bloat-core-sql-only.md#two-changes-the-partial-index-tests-justify)
+  justify](v17/questions/indexing/btree-index-bloat-core-sql-only.md#row-counts-and-exclusions)
   to the recommended statement in [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat
   Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md), against
@@ -5343,7 +5343,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   five conditions, the accuracy and compatibility bullets, one rewritten and one new
   residual-error row), the statement text itself, a current-state note under the
   ninety-one-tests summary, a superseded-in-part note on [Why the exclusion carries
-  is_partial](v17/questions/indexing/btree-index-bloat-core-sql-only.md#why-the-exclusion-carries-is_partial),
+  is_partial](v17/questions/indexing/btree-index-bloat-core-sql-only.md#row-counts-and-exclusions),
   six new `###` sections, 6 new Contents entries, 2 Context Reviewed bullets, 6 Evidence
   Map rows, 4 rewritten or new Open Questions, and 10 Source References. All 292
   page-internal anchors were checked to resolve.
@@ -5367,7 +5367,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 ## [2026-08-20] follow-up v17 | recommended B-tree statement rebuilt for readability, and all 91 mandatory tests plus fixtures 92-112 rerun on 12.2 and 17.11
 
 - Rebuilt the SQL block in [The corrected statement, with all six
-  changes](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-corrected-statement-with-all-six-changes)
+  changes](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-current-recommended-statement)
   for readability and maintainability, against unchanged pin
   `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). It is a **pure refactor**: still
   sixteen CTEs, but `sized`/`fit`/`posting` collapse into one `page` CTE of three commented
@@ -6897,7 +6897,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 - Reviewed the second Open Questions bullet on
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
-  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-open-question-2-needs-two-independent-repairs)
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#partial-index-widths-and-zero-counts)
   against unchanged v17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`.
   The asker approved correcting the request's capitalization and grammar.
 - Separated the historical test-30 width mismatch from test-64 row-count
@@ -6960,7 +6960,7 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 
 - Filed ten source-backed proposal groups covering the 51 retained Open Questions
   applicable to PostgreSQL 12 and 17 in
-  [the v17 question](v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-proposals-for-the-remaining-v12-and-v17-questions).
+  [the v17 question](v17/questions/indexing/btree-index-bloat-core-sql-only.md#open-questions).
   The five other/future-major-only questions remain outside this review.
 - Added diagnostics and subset/zero validation designs, publication barriers,
   full/tail posting pricing, separate page/pivot modelling, statistics selection,
@@ -6981,3 +6981,34 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   nine errors and two warnings: six missing v18 citation targets, unavailable
   v14/v18/v19 pins, and v12/v14 checkout-status warnings. No new lint issue was
   introduced; tracked source files on the v12 and v17 pins remain unchanged.
+
+## [2026-09-07] cleanup v17 | Focus the B-tree estimator page on its current statement
+
+- Focused [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) on the
+  current recommended statement, reducing the page from 5,621 to 828 lines.
+  The asker approved correcting the typo in the cleanup request.
+- Removed superseded SQL variants, alternate-method comparisons, historical
+  follow-up prompts and narratives, obsolete result tables and unrelated source
+  references. Kept the original Question text, title, pin and verification fields.
+  Consolidated the current model, output, five exclusions, deduplication policy,
+  operational limits and unresolved repairs around one operational SQL block.
+- The statement's executable token sequence is unchanged. Replaced historical
+  change-number comments with stage descriptions and added timeout comment tags;
+  the existing query tag, expressions, filters and output names are preserved.
+  No PostgreSQL server was built or started and no historical measurement is
+  claimed as re-verified. Agent verification remains `not yet`.
+- Updated both index entries and the v17 coverage description. Repaired ten
+  incoming section links in the version manifest, historical log entries and
+  the v12 companion page; the v12 edit changes only a link fragment. Historical
+  log prose and unrelated coverage remain intact.
+- Validation: 23 Contents entries, 48 internal links and all incoming links
+  resolve; 162 source citations use 61 valid ranges in the pinned v17 checkout;
+  every bibliography entry is cited by the retained body. SQL-token equivalence,
+  unchanged original Question/front matter, and `git diff --check` pass.
+  Review snapshots and the validation report are under
+  `.wiki-runtime/tmp/btree-current-statement-20260907/`.
+- `scripts/wiki_lint` reports the same pre-edit nine errors and two warnings:
+  six missing v18 citation targets, three unavailable v14/v18/v19 pins, and
+  pre-existing v12/v14 checkout-status warnings. No new lint issue was introduced.
+  The v17 checkout remains clean at `786db8dcf168bd9df8f55047337525ac19118b1c`.

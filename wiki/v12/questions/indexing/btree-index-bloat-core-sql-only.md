@@ -618,7 +618,7 @@ Unlike later majors there is no glossary here to appeal to: `doc/src/sgml/` in t
 **Use a separate v12 statistics-publication protocol and retain independent
 width, NULL and count validation.** This section supplies the missing
 version-local source evidence for the
-[proposal review on the PostgreSQL 17 question](../../../v17/questions/indexing/btree-index-bloat-core-sql-only.md#follow-up-proposals-for-the-remaining-v12-and-v17-questions).
+[proposal review on the PostgreSQL 17 question](../../../v17/questions/indexing/btree-index-bloat-core-sql-only.md#open-questions).
 It reviews the portable estimator's v12 boundary, not a new implementation of
 this page's Method A. Both maintained statements remain unchanged. No server
 was started and no historical fixture was rerun for this follow-up.
