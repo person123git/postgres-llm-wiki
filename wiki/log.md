@@ -7238,3 +7238,85 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   source checkouts, which are untracked `.DS_Store` files only. No new lint issue
   was introduced. The rebuilt server was stopped and the whole build, install and
   data tree removed after the run; `raw/postgres-12/` was never written to.
+
+## [2026-09-07] review v12 | density vs fragmentation: issues listed, fixed, and the whole programme re-measured
+
+- Reviewed and corrected [B-Tree Leaf Density vs Fragmentation Impact on Index
+  Scan I/O in PostgreSQL 12
+  (unverified)](v12/questions/indexing/leaf-density-vs-fragmentation-index-scan-io.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. All 269
+  pre-existing citations resolved in range and none crossed versions, but eight
+  source claims were wrong or incomplete, six measurement rows rested on a
+  deleted sandbox with no published SQL, and the fragmentation model contradicted
+  the page's own census.
+- Rebuilt PostgreSQL 12.2 out of tree under `.wiki-runtime/tmp/ldf12/` and re-ran
+  every fixture on an isolated cluster with `shared_buffers = 512MB`,
+  `autovacuum = off` and `synchronous_commit = on`. `raw/postgres-12/` was never
+  written to.
+- Source corrections. The prefetch claim named three heap-fork `PrefetchBuffer`
+  sites; the checkout has four plus `pg_prewarm`, which prefetches any fork
+  including an index's. The 96 % duplicate fillfactor was attributed to the
+  first-pass fillfactor choice; `_bt_strategy`'s `SPLIT_SINGLE_VALUE` applies it.
+  The FSM reuse path gained the `IndexFreeSpaceMapVacuum` step that makes
+  recycled pages findable. The survey query's `relpersistence <> 't'` filter was
+  described as matching the server's rule; it is broader, and `pgstatindex`
+  accepting this session's own temporary index at 3 leaf pages and 81.99 density
+  proves it. The privilege sentence gained the direct-grant case. The
+  `AS MATERIALIZED` rationale was narrowed to the `pg_am` join, because
+  `relkind` and `relpersistence` are single-relation restrictions applied at the
+  `pg_class` scan in any plan, which both captured plans confirm. The
+  fillfactor-acts-at-build-time sentence contradicted the page's own split
+  material and was corrected. `effective_io_concurrency` was being counted as one
+  of three "real levers" while the same table says it does nothing here.
+- Measurement corrections. Density re-measured as 2736 and 4119 warm plan
+  buffers, not 2738 and 4121, split with the per-relation counters into 2735 and
+  4118 index blocks plus one visibility-map block each; the cost column named
+  "planner index scan cost" was a parallel plan total and is refiled as a
+  25980.42/31532.42 serial scan-node pair, whose 5552.00 gap is exactly
+  `1388 * 4.0`, alongside the 22188.97/27740.97 parallel totals. Backward scans
+  matched forward at 2736 and 4119. The fragmentation fixture was reseeded under
+  `setseed(0.5)`, giving 3684 leaf pages at 66.89 density and 49.84
+  `leaf_fragmentation` against a `fillfactor = 67` rebuild at 3677 and 67.02, a
+  buffer move of only 3687 to 3680 that is exactly the 7-page size difference; a
+  four-seed sweep bounds the fixture at 3684-3762 pages, 65.51-66.89 density and
+  49.76-49.89 fragmentation.
+- The census is now published SQL rather than a claim. Extracted verbatim from
+  the page it reports 3684 leaf pages, 3683 forward links, 1836 backward, **zero**
+  adjacent and a 1838.7-block mean jump on the fragmented index, against 3676,
+  0, 3663 and 1.0 on the rebuild. Because the metric read 49.84 while the
+  non-adjacent share was 1.00, the order-cost and combined models were rebuilt to
+  take the non-adjacent share as their input, with `leaf_fragmentation` stated as
+  a lower bound and a fifth column added to both matrices.
+- The dead-space table was wrong about its own middle row. Re-derived as 550,
+  1435 and 550 plan buffers, split 549 index plus 886 heap, the extra cost is the
+  heap's 885 data pages, not 20,000 fetches: `ReleaseAndReadBuffer` returns the
+  pinned buffer when the next TID is on the same block. `Heap Fetches` falls from
+  200,000 to 20,000 between the first and second scan, the first having dirtied
+  546 leaf pages marking `LP_DEAD`.
+- Resolved a discrepancy both leaf-density pages had recorded as untraceable. The
+  previously filed 2738 and 4121 are exactly the default parallel plan's buffer
+  totals; the index side is 2735 and 4118 under both plans, and the two extra
+  blocks are visibility-map pages pinned once per participating process. The matching 458.12 cost offset is narrowed, not closed: forging
+  `relallvisible = 3970` on both 4425-page heaps reproduces 22647.09 and 28199.09
+  to within 0.88, the same residual in both, which is what a heap that was not
+  fully all-visible would produce. Mirrored onto the sibling page's open question.
+- Added a `## Reproduction` section publishing every fixture, the seed, the
+  census, the counter-split recipe and the survey fixture, plus the finding that
+  `synchronous_commit = off` blocks the hint bits VACUUM needs to set the
+  visibility map, which silently turned a 2736-buffer index-only scan into 7161
+  buffers with `Heap Fetches: 1000000` until every fixture was gated on
+  `pg_class.relallvisible = relpages`.
+- `verified_by_agent` moved from `claude-opus-5-max 2026-07-29T19:54:40Z` to
+  `not yet`. The previous agent verification stood over claims this pass found
+  wrong. The human `verified: false` field is untouched and the title keeps its
+  `(unverified)` suffix.
+- Updated `wiki/index.md`, `wiki/v12/index.md` and the v12 coverage cell in
+  `wiki/versions.md`. Contents matches all 20 headings in order, all 20 internal
+  anchors and all wiki links resolve, and all 315 source-citation instances over
+  96 ranges resolve within the pinned v12 checkout.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: same pre-existing 9 errors
+  and 2 warnings as before this change, all outside v12 question pages. Six are
+  missing v18 injection-point citation targets, three are unavailable v14, v18
+  and v19 pins, and the warnings report untracked `.DS_Store` files in the v12
+  and v14 checkouts. No new lint issue was introduced. The server was stopped and
+  the whole build, install and data tree removed after the run.
