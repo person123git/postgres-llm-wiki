@@ -7063,3 +7063,81 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   missing v18 injection-point citation targets; three are unavailable v14, v18
   and v19 pins. The warnings concern pre-existing v12/v14 checkout changes.
   No source checkout was repaired, fetched or modified during this review.
+
+## [2026-09-07] review v17 | GIN wasted-space page: citations re-verified, guards implemented, acceptance cases run
+
+- Sixth pass on [Measuring Wasted and Reclaimable Bytes in a GIN Index With
+  Contrib Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md#the-guarded-census-statement)
+  against unchanged v17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`. The asker
+  approved correcting the request's capitalization, spacing, a pasted heading
+  marker and grammar, and chose the middle of three scopes: source re-verification
+  plus a rebuilt server for the revised plan's guards and acceptance cases, without
+  re-running the whole 27-fixture corpus; sandbox deleted afterwards.
+- Source side: all 422 citations the page carried (202 distinct ranges over 60
+  files) re-read against the checkout; every range in bounds and every cited claim
+  supported; no correction to a source claim was needed. The pass added 57
+  citations (479 now, 218 ranges, 64 files) for the STRICT decoder declarations
+  and the executor's null-argument skip, the decoders' special-size and flags
+  errors, `PageGetSpecialSize`, the three progress views, the `INDEX_CLEANUP`
+  paths and their messages, and the on-disk offsets the corruption cases patched.
+- Server side: 17.11 built out of tree under `.wiki-runtime/tmp/ginw3/` (port
+  55433, `--without-readline --without-zlib --without-icu`, `autovacuum = off`,
+  `fsync = off`, `shared_buffers = 256MB`, six contrib modules from the same
+  tree); `raw/postgres-17/` stayed clean throughout. The published `f1`-`f7` SQL
+  with the `f5` VACUUM sequence and the `p1` fixture reproduced the filed sizes,
+  page classes, slack bytes, `bloat_pct` values, VACUUM lines and all seven
+  `REINDEX` results byte for byte, a fourth time.
+- Filed a guarded census statement (`wiki_gin_waste_census_guarded`): STRICT-based
+  skipping of pages that fail the header check, a `{meta}`-only metapage decode,
+  `invalid` and `unknown` page classes, a `status` column with ten items, a second
+  size reading as `blocks_after_census`, progress-view checks before and after the
+  scan, and derived block-size arithmetic; the size-bracket snippet now derives
+  its divisor too. It agrees with the published statement in all 208 shared cells
+  over the eight indexes and reads the same 7,892 buffers (51.6-65.9 ms against
+  62.9-65.2 ms warm).
+- Acceptance runs: five corrupted scratch indexes (patched `ginVersion`, zeroed
+  metapage, an unknown flag bit, a wrong special-area size, two appended zero
+  blocks) — the published statement aborts on the special-size case and prints
+  ungated slack on the version-1 and zeroed-metapage cases, the guarded statement
+  reports each with a status and withholds slack; a `pg_stat_scan_tables`-only
+  role, a failed `CREATE INDEX CONCURRENTLY` leftover and both temporary-index
+  cases reproduced the refusal matrix; a held `REPEATABLE READ` snapshot kept 768
+  deleted pages unreusable through two VACUUMs and the first VACUUM after its
+  termination recycled all 768 with no new xids; two bypassed index cleanups
+  (`INDEX_CLEANUP OFF` and the reloption) left the census and metapage untouched
+  while `vacuum_count` advanced, the third VACUUM deleting 352 pages; 3 of 3
+  censuses overlapping a VACUUM and 2 of 2 overlapping a `REINDEX CONCURRENTLY`
+  were flagged, the VACUUM ones reading 0, 1,098 and 2,368 deleted pages on an
+  unchanging file; 10 of 40 censuses under an insert stream were flagged;
+  `f1_churn_gin` rebuilt to 7,880,704 bytes at 4MB against 10,117,120 at 64MB and
+  1GB; `p1_gin` at 300,000 rows rebuilt 5,545,984 -> 2,064,384.
+- Page changes: the corrected sixth prompt under Question; two new Answer
+  sections (the guarded statement and the acceptance runs); the census-statement
+  intro, the bloat-column paragraph, the size-bracket snippet, two reading rules,
+  the revised plan's status and the concurrency section updated in place; open
+  questions 17-19 rewritten and 1, 3, 6 narrowed; Contents, Context Reviewed,
+  Evidence Map and Source References refreshed. Both index entries and the v17
+  coverage note updated. Front matter, the original Question text and every
+  pre-existing SQL block other than the size bracket are unchanged.
+- Validation: 45 Contents entries match heading order, all 45 internal anchors and
+  all wiki links resolve, all 479 citation ranges resolve within the pinned
+  checkout, the guarded SQL block extracted from the page is byte-identical to the
+  tested text (SHA-256 `24c0e2dea5022223…`) and re-ran on both sandbox databases
+  with the expected statuses, the extracted size bracket returned 98 blocks on
+  the rebuilt `f5`, and `git diff --check` passed. Agent verification remains
+  `not yet`: the historical corpus and its measurements were not re-run.
+
+## [2026-09-07] cleanup v17 | removed the ginw3 GIN sandbox after filing the sixth pass
+
+- Stopped the 17.11 server and deleted `.wiki-runtime/tmp/ginw3/` (out-of-tree
+  build, install, data directory, logs, extracted SQL and CSV outputs), at the
+  asker's instruction. Every fixture, statement and result the pass relied on is
+  printed on the page; reproducing any of it means rebuilding 17.11 from
+  `raw/postgres-17/` and re-running that SQL. `raw/postgres-17/` remains clean at
+  `786db8dcf168bd9df8f55047337525ac19118b1c`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint` after the review and cleanup
+  entries: the same 9 errors and 2 warnings as before this pass, all outside it.
+  Six errors are missing v18 injection-point citation targets; three are
+  unavailable v14, v18 and v19 pins. The warnings concern pre-existing v12/v14
+  checkout changes. No checkout was repaired, fetched or modified.

@@ -14,6 +14,23 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-07: Sixth pass on [Measuring Wasted and Reclaimable Bytes in a GIN Index
+  With Contrib Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md#the-guarded-census-statement)
+  at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`: every citation
+  re-read against the checkout (479 after the pass, 218 distinct ranges over 64
+  files, all supporting their claims); 17.11 rebuilt out of tree; the published
+  fixtures reproduced byte for byte a fourth time; the revised plan's query guards
+  implemented as a guarded census statement that agrees with the published one in
+  all 208 shared cells and reads the same 7,892 buffers; and the plan's acceptance
+  cases run: five hand-corrupted index files (one of which aborts the published
+  statement outright), a restricted role, an invalid index, both temporary-index
+  cases, a held `REPEATABLE READ` snapshot, two bypassed index cleanups, a
+  concurrent VACUUM, a concurrent `REINDEX CONCURRENTLY`, an insert stream, the
+  seven rebuilds and a three-budget rebuild of `f1`. Open questions 17 through 19
+  rewritten; 1, 3 and 6 narrowed. The 27-fixture corpus was not re-run; agent
+  verification stays `not yet`; the sandbox was deleted after filing.
+
 - 2026-09-07: Reviewed all ten repair plans under Open Questions on
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#plan-review)
