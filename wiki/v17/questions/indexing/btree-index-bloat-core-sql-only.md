@@ -18,6 +18,8 @@ verified_by_agent: not yet
   - [Deduplication eligibility](#deduplication-eligibility)
   - [Row counts and exclusions](#row-counts-and-exclusions)
   - [Operational and verification limits](#operational-and-verification-limits)
+  - [Plan review](#plan-review)
+  - [Revised implementation order](#revised-implementation-order)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -37,6 +39,19 @@ verified_by_agent: not yet
 ## Question
 
 In PostgreSQL 17: test the SQL from the PostgreSQL 12 question "Measuring B-Tree Index Bloat With Core SQL Only in PostgreSQL 12 (unverified)" on PostgreSQL 17 and compare whether it measures bloat with the same accuracy as in version 12.
+
+Follow-up prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, for the question "Testing the PostgreSQL 12
+> Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified)", review all the
+> plans to fix the open questions.
+
+The original read `follow agents.md, in postgresql 17 , for question:  Testing
+the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) ,
+review all the plans to fix the open questions`: `agents.md` for AGENTS.md,
+lowercase `postgresql`, a space before two commas, a double space after the
+colon, and no sentence capitalisation or terminal period. The review is filed
+under [Plan review](#plan-review) and [Revised implementation order](#revised-implementation-order).
 
 ## Answer
 
@@ -451,6 +466,18 @@ do not validate default widths, partial-index populations or a zero row count.
 [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975),
 [system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275).
 
+The `statistics not visible to this role` test has a gap for expression
+attributes. `pg_stats` keeps a row only when `has_column_privilege` passes on the
+relation that owns the statistics row, and for an expression attribute that
+relation is the index. The statement tests the table's privileges instead. A role
+that can read the table but lacks the index owner's rights therefore receives
+`no statistics row for an index column`, and a non-partial expression index is
+suppressed without explanation. See [Plan review](#plan-review), finding 1.
+[Current SQL](#the-current-recommended-statement),
+[system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275),
+[acl.c#column_privilege_check](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L2538-L2569),
+[aclchk.c#pg_class_aclmask_ext](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L3396-L3412).
+
 The report keeps indexes larger than `1024 * 1024` bytes, excludes `suppress_row`,
 orders by the signed floor-model byte difference with NULLs first, and returns at
 most 20 rows. An absent index can therefore be below the size cutoff, suppressed,
@@ -538,6 +565,17 @@ counter is zero. Neither input is an exact current count.
 [analyze.c#index-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663),
 [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L670-L703).
 
+ANALYZE is not the only writer of an index's `reltuples`. A VACUUM that removed
+tuples counts the live heap TIDs on each leaf page, clamps the total to the heap
+count when that count is exact, and writes it through the same relation-statistics
+path. A cleanup-only scan counts index tuples instead, marks the result as an
+estimate, and the write is skipped. The statement reads only the ANALYZE
+timestamps, so it cannot tell which writer produced the value it uses.
+[nbtree.c#btvacuumpage-counting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1347-L1362),
+[nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L870-L920),
+[vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3073-L3099),
+[Current SQL](#the-current-recommended-statement).
+
 `ANALYZE` gives index attributes their own column statistics only for expressions.
 `IndexInfo` identifies expression attributes and the predicate;
 `compute_index_stats` evaluates that predicate over its sample. Plain keys and
@@ -612,12 +650,291 @@ test of this wiki's estimator.
 [btree_index.sql#deduplication-tests](../../../../raw/postgres-17/src/test/regress/sql/btree_index.sql#L186-L213),
 [index_including.sql#statistics-tests](../../../../raw/postgres-17/src/test/regress/sql/index_including.sql#L150-L158).
 
+### Plan review
+
+**Keep all ten plans. Three of them describe defects that are already
+deterministic in the current statement, and those repairs come first.** This
+review checks each plan under [Open Questions](#open-questions) against the
+pinned PostgreSQL 17 source at `786db8dcf168bd9df8f55047337525ac19118b1c`. It
+adds no execution result: no server was built or started, the recommended SQL is
+unchanged, and the historical measurements are not re-verified.
+
+| Plan | Verdict | Principal finding |
+|---|---|---|
+| 1. Input diagnostics | Keep, extend | Expression-attribute statistics are visible only to superusers, the index owner and the owner's role members; the statement tests the table's privileges, so other roles get `no statistics row` rather than `not visible`. |
+| 2. Partial-index probes | Keep, simplify | The zero check can be an `EXISTS` probe; for gated indexes a `GROUP BY` on the key reproduces the builder's grouping; VACUUM is a second writer of index `reltuples`. |
+| 3. Publication barrier | Keep, strengthen | A forced flush completes before the writer's `ReadyForQuery` outside a transaction block, so the barrier is ordered; the counter artifact has a source mechanism. |
+| 4. Posting tails | Keep | The two-size formula follows the build; posting capacity varies per group for variable-width keys. |
+| 5. Page geometry | Narrow | The leaf closed form reproduces the builder's soft limit for uniform tuples up to 896 bytes; residual errors are pivots, size variance and posting overhead. |
+| 6. Statistics selection | Upgrade to defect | An index on an inheritance parent joins two `pg_stats` rows per attribute and double-counts the width, NULL and distinct inputs. |
+| 7. Operator classes | Keep, bound | All 29 built-in B-tree support-function-4 records use the two recognized functions; pattern operator classes reject nondeterministic collations at index creation; the metapage flag is a harness oracle. |
+| 8. Signed bytes | Keep, simplify | `pg_size_pretty(numeric)` exists, and the existing `bigint` casts can raise `bigint out of range`. |
+| 9. Reproducibility | Keep, constrain | Builds must be out of tree; the SQL block hash baseline moved with the 2026-09-07 comment edit. |
+| 10. Thresholds | Keep, refine | Insert-grown density depends on the split path: fillfactor, 50:50, or 96 percent. Calibrate per insertion pattern. |
+
+1. **Input diagnostics: test the index relation's privilege for expression
+   attributes.** `pg_stats` keeps a row only when `has_column_privilege` passes
+   for the relation that owns the statistics row, and for an expression attribute
+   that relation is the index. The check tries the column ACL first, and columns
+   have no default privileges; it then falls back to the relation ACL. An index's
+   `relacl` is empty because `GRANT` refuses indexes, so the fallback builds the
+   default table ACL, which grants the owner and nobody else. A role passes only
+   as a superuser, as the owner, or through membership in the owner. The
+   statement's `stats_hidden` evaluates the table's privileges, so any other role
+   is classified `stats_row_missing`, gets `no statistics row for an index
+   column`, and loses non-partial expression indexes to `suppress_row`. The
+   diagnostic must evaluate `has_column_privilege(index, attnum, 'SELECT')` for
+   expression attributes. It should also read `attstattarget`, which is nullable
+   on this pin: NULL means the default target and zero makes ANALYZE skip the
+   attribute, which separates a disabled column from an unanalyzed one.
+   [system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275),
+   [acl.c#column_privilege_check](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L2538-L2569),
+   [acl.c#acldefault](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L813-L821),
+   [aclchk.c#pg_class_aclmask_ext](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L3396-L3412),
+   [acl.c#aclmask](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L1388-L1445),
+   [aclchk.c#grant-refuses-indexes](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L1858-L1863),
+   [pg_attribute.h#attstattarget](../../../../raw/postgres-17/src/include/catalog/pg_attribute.h#L168-L176),
+   [analyze.c#examine_attribute](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1019-L1030),
+   [Current SQL](#the-current-recommended-statement).
+
+2. **Partial-index probes: three simplifications and one missing input.** The
+   population check for a suspected empty subset can be
+   `EXISTS (SELECT 1 FROM ONLY t WHERE <predicate>)`, with the predicate text from
+   `pg_get_expr`: the executor stops at the first row, and the planner can use the
+   partial index itself when the query clauses imply its predicate. For an index
+   that passes the deduplication gate, the build groups adjacent sorted tuples by
+   binary image equality in `_bt_keep_natts_fast`, treating two NULLs as equal, so
+   a `GROUP BY` over the key expressions with the index collation counts the
+   builder's groups; leave the group probe undefined for an unrecognized operator
+   class. The probe needs no separate client: `DO` is core grammar and `initdb`
+   installs PL/pgSQL, so a generated statement can run through `EXECUTE`. The
+   missing input is the second writer of `reltuples` described under
+   [Row counts and exclusions](#row-counts-and-exclusions): a count-validation
+   policy must compare the index value against the later of the table's VACUUM and
+   ANALYZE timestamps and record which writer it assumes.
+   [pg_proc.dat#pg_get_expr](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8219-L8220),
+   [ruleutils.c#pg_get_expr_ext](../../../../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L2648-L2662),
+   [nodeSubplan.c#ExecScanSubPlan-EXISTS](../../../../raw/postgres-17/src/backend/executor/nodeSubplan.c#L293-L296),
+   [indxpath.c#check_index_predicates](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3244-L3350),
+   [nbtsort.c#_bt_load-grouping](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1314-L1316),
+   [nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4875-L4905),
+   [datum.c:271](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L271),
+   [gram.y#DoStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L9037),
+   [initdb.c#load_plpgsql](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L1974-L1977),
+   [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L870-L920),
+   [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3073-L3099),
+   [system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L670-L703).
+
+3. **Publication barrier: the flush is ordered, and the artifact has a
+   mechanism.** `pg_stat_force_next_flush()` sets a process-local flag. When a
+   backend finishes a statement outside a transaction block, it calls
+   `pgstat_report_stat(false)` before sending `ReadyForQuery`; that call absorbs
+   the flag, treats the report as forced, skips the one-second minimum interval,
+   and waits for locks instead of giving up. After the writer's forced-flush
+   statement returns in autocommit mode, its committed counts are therefore in
+   shared memory, and the harness needs no polling deadline for that step. The
+   barrier is also necessary. A transaction's inserts, updates and deletes become
+   pending deltas at commit; an unforced flush is deferred when the backend
+   flushed less than one second earlier; ANALYZE writes live and dead counts as
+   absolute values and resets the change counter directly in shared memory; and
+   the deferred flush later adds the pending deltas on top. A fixture that runs
+   DML, ANALYZE and the estimator in quick succession can therefore report
+   `n_live_tup` above the table count and a nonzero `n_mod_since_analyze` after
+   ANALYZE, depending only on flush timing. The observer needs
+   `pg_stat_clear_snapshot()` only inside a transaction block, because the
+   snapshot is discarded at transaction end. `stats_fetch_consistency` is
+   `PGC_USERSET`: session or transaction scope, no reload or restart.
+   [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L700-L708),
+   [postgres.c#idle-stats-flush](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4634-L4705),
+   [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L584-L600),
+   [pgstat.c#flush-intervals](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L117-L122),
+   [pgstat.c#publication-timing](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L665),
+   [pgstat_relation.c#AtEOXact_PgStat_Relations](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L560-L574),
+   [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337),
+   [pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L860),
+   [pgstat.c#pgstat_clear_snapshot](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L786-L800),
+   [pgstatfuncs.c#snapshot-and-flush-functions](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L1680-L1695),
+   [guc_tables.c#stats_fetch_consistency](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4966-L4974),
+   [stats.sql#forced-flush](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L101-L102).
+
+4. **Posting tails: the formula is confirmed; posting capacity is per group.**
+   The build caps a posting tuple at `MAXALIGN_DOWN(bs * 10 / 100) - sizeof(ItemIdData)`,
+   refuses another TID when `MAXALIGN(basetupsize + (nhtids + 1) * sizeof(ItemPointerData))`
+   would exceed that cap, writes a one-item group as the base tuple, and sizes a
+   longer list as `MAXALIGN(keysize + nhtids * sizeof(ItemPointerData))`. The
+   plan's `S(1) = K + I`, `S(n) = align_up(K + nT, A) + I` and `q * S(m) + S(t)`
+   follow those lines. Two additions are needed. The capacity `m` depends on the
+   base tuple size `K`, so for variable-width keys it differs per group; the
+   acceptance set must include groups whose `K` straddles a capacity boundary,
+   not only fixed-width keys. And the builder subtracts the last tuple's posting
+   overhead from its soft-limit test through `btps_lastextra`, which the statement
+   approximates by adding `tids * 6` to the usable bytes; the tail pricing must
+   pass the tail's own overhead to that term, not the full tuple's.
+   [nbtsort.c#maxpostingsize](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1304-L1305),
+   [nbtdedup.c#_bt_dedup_save_htid-cap](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L510-L513),
+   [nbtsort.c#_bt_sort_dedup_finish_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1026-L1050),
+   [nbtdedup.c#_bt_form_posting-size](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L879-L884),
+   [nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854),
+   [nbtsort.c#BTPageState](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L229-L252),
+   [Current SQL](#the-current-recommended-statement).
+
+5. **Page geometry: the leaf closed form is exact for uniform tuples, so the
+   reference implementation belongs in the harness.** A new page pre-allocates
+   the high-key line pointer, and `PageGetFreeSpace` subtracts one more line
+   pointer; with the 24-byte page header and the 16-byte opaque area that is the
+   statement's 48-byte deduction. The builder closes a page when free space plus
+   the last posting overhead drops below `bs * (100 - fillfactor) / 100`, then
+   moves the last item to the next page and turns its old slot into the high key.
+   For tuples of one aligned size `s`, the items left on each closed page are
+   `floor((bs - 48 - btps_full) / (s + 4))`, which is the statement's `leaf_cap`.
+   Applying the fit test to every aligned size shows that this identity holds up
+   to 896-byte tuples at the default block size and alignment; larger tuples can
+   lose one item per page to the hard-fit reservation of
+   `MAXALIGN(sizeof(ItemPointerData))`. Internal levels differ: the first item on
+   an internal page is an 8-byte minus-infinity tuple, pivots carry no posting
+   list and may be truncated or gain a heap TID, and the rightmost page of each
+   level is never closed by the soft limit. The plan should aim its reference
+   implementation at size variance, oversized tuples, pivot sizing and posting
+   overhead, and stop treating leaf packing of uniform tuples as unknown.
+   [nbtsort.c#_bt_blnewpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L605-L629),
+   [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L907-L923),
+   [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214),
+   [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L71),
+   [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L645-L671),
+   [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1147),
+   [nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854),
+   [nbtsort.c#page-boundary](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L874-L935),
+   [nbtsort.c#_bt_sortaddtup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L713-L735),
+   [Current SQL](#the-current-recommended-statement).
+
+6. **Statistics selection: the missing `inherited` filter is a defect, not a
+   preference.** `analyze_rel` runs the non-inherited pass and then, when the
+   table has children, the inherited pass; `update_attstats` stores each pass
+   under its own `stainherit` value, which `pg_stats` exposes as `inherited`. The
+   statement joins `pg_stats` by schema, table and attribute name only, so an
+   index on an inheritance parent receives two rows per attribute. The `cols`
+   aggregates then double `data_size`, apply each NULL fraction twice in `p_null`,
+   and multiply each key's distinct count twice into `key_groups`. Partitioned
+   parents are unaffected: their indexes are not `relkind = 'i'`, and they receive
+   only the inherited pass. The repair is `inherited = false` on both `pg_stats`
+   joins; `pg_stats_ext` carries the same column, and the `max()` in `extstat`
+   must exclude inherited objects as well. The `pg_ndistinct` key format the
+   statement parses, attribute numbers joined by a comma and a space, matches the
+   output function.
+   [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L249-L259),
+   [analyze.c#update_attstats-stainherit](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1647),
+   [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L211),
+   [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309),
+   [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L355-L385),
+   [Current SQL](#the-current-recommended-statement).
+
+7. **Operator classes: the whitelist covers every built-in family, and the
+   harness has an oracle.** `pg_amproc.dat` defines 29 B-tree support-function-4
+   records: 26 name `btequalimage` and three, for `text`, `name` and `bpchar` in
+   `text_ops` and `bpchar_ops`, name `btvarstrequalimage`. No built-in family uses
+   another function, so the unknown state can arise only from functions created
+   outside the catalog. The gate's separate determinism test is stricter than
+   the engine only for a `btequalimage` family whose column has a collation,
+   which in core means the `text_pattern_ops`, `varchar_pattern_ops` and
+   `bpchar_pattern_ops` classes; index creation rejects a nondeterministic
+   collation for exactly those classes, so no built-in case is under-credited.
+   `btvarstrequalimage` accepts the default collation unconditionally, and the
+   default locale is always deterministic on this pin. The build stores
+   `_bt_allequalimage`'s result in the metapage, and contrib `pageinspect`'s
+   `bt_metap` reads that field, so a disposable harness cluster can score
+   `dedup_applies` against `allequalimage AND NOT indisunique AND deduplicate_items`
+   per fixture. The production statement stays core-only and cannot read it.
+   [pg_amproc.dat#bpchar_ops-equalimage](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L31-L33),
+   [pg_amproc.dat#text_ops-equalimage](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L205-L212),
+   [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849),
+   [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2615),
+   [pg_locale.c#pg_locale_deterministic](../../../../raw/postgres-17/src/backend/utils/adt/pg_locale.c#L1567-L1575),
+   [nbtsort.c#_bt_leafbuild](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L557-L570),
+   [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L67-L84),
+   [nbtsort.c:1126](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1126),
+   [nbtsort.c#deduplicate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152),
+   [btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921),
+   [Current SQL](#the-current-recommended-statement).
+
+8. **Signed bytes: prefer `numeric`, and remove the existing overflow path.**
+   `pg_size_pretty` has a `numeric` overload, so the byte delta can be formatted
+   without a `bigint` cast; the `bigint` version formats a negative input from its
+   absolute value and keeps the sign. The statement's current casts of
+   `wasted_space`, `key_groups`, `modelled_rows` and `idx_reltuples` to `bigint`
+   are unguarded: a `numeric` outside the range raises `bigint out of range` and
+   aborts the whole report, and `reltuples` is a `float4` that can hold such a
+   value. The proposed additive field should be `numeric`, or share one range
+   guard with those casts. The ordering expression keeps the floor-model bytes,
+   as the plan requires.
+   [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507),
+   [dbsize.c#pg_size_pretty-sign](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L569-L600),
+   [numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549),
+   [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L55-L66),
+   [Current SQL](#the-current-recommended-statement).
+
+9. **Reproducibility: build out of tree, re-baseline the hash, and allow contrib
+   in the harness.** The checkout is read-only evidence, so a reference server
+   must be configured from a separate build directory; the pinned installation
+   documentation describes a VPATH build for `configure` and a mandatory build
+   directory for `meson setup`. The fenced SQL block on this page changed on
+   2026-09-07 when stage comments replaced change numbers, so the harness must
+   hash the block it extracts rather than the earlier `cb6fb5ce…` value; the
+   current block's SHA-256 is
+   `bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357`. Installing
+   `pageinspect` in a disposable cluster is compatible with the core-only contract
+   as long as the production statement stays unchanged, and finding 7 needs it.
+   Each fixture must also record which writer last set each index's `reltuples`
+   (finding 2) and whether the barrier (finding 3) completed, or the run scores
+   an input the estimator never saw.
+   [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432),
+   [installation.sgml#meson-setup](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L2012-L2025),
+   [catalog/Makefile#genbki](../../../../raw/postgres-17/src/include/catalog/Makefile#L132-L143),
+   [Current SQL](#the-current-recommended-statement).
+
+10. **Thresholds: calibrate per insertion pattern, because the split path sets
+    the steady-state density.** A rightmost leaf split applies the leaf
+    fillfactor and a rightmost internal split applies 70 percent; other leaf
+    splits use 50:50 unless the split-after-new-item heuristic applies; and a
+    leaf page full of one value, on the rightmost side of that value's pages,
+    uses the single-value strategy at 96 percent. An append-only index therefore
+    settles near the sorted build's density, a random-insert index below it, and
+    a duplicate-heavy index above the leaf fillfactor. A single percentage
+    threshold mixes those classes. The sweep should label each fixture with its
+    insertion pattern and report the four outcome counts per class, and the
+    prospective observation should establish a production index's class before a
+    rebuild is scheduled.
+    [nbtsplitloc.c#split-policy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L278-L335),
+    [nbtsplitloc.c#single-value-strategy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416),
+    [nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033),
+    [nbtree.h#fillfactors](../../../../raw/postgres-17/src/include/access/nbtree.h#L199-L202).
+
+### Revised implementation order
+
+1. Repair the deterministic defects in one reviewed change: the `inherited = false`
+   filters (finding 6), the index-relation privilege test for expression
+   attributes (finding 1), and `numeric` output in place of the unguarded `bigint`
+   casts (finding 8). Score them with catalog-only fixtures: an inheritance parent
+   with its own index, a non-owner role reading an expression index, and an index
+   whose `reltuples` exceeds the `bigint` range.
+2. Build the harness out of tree and adopt the ordered barrier (findings 3 and 9),
+   recording the last `reltuples` writer per index.
+3. Add the diagnostic projection and the probe generator (findings 1 and 2), with
+   the `EXISTS` zero check and the `GROUP BY` group probe for gated indexes.
+4. Change the arithmetic one step at a time: tail pricing with per-group capacity
+   (finding 4), then pivot and size-variance modelling only where the harness
+   shows a residual after the uniform-size identity holds (finding 5).
+5. Add the three-state operator-class output, scored against `bt_metap` in the
+   harness (finding 7).
+6. Run the threshold sweep by insertion pattern (finding 10) before promoting any
+   revised statement.
+
 ## Context Reviewed
 
 - PostgreSQL 17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`; the source checkout is read-only.
 - The current statement's catalog inputs, CTE dependencies, formulas, output projection, exclusions and timeout settings.
 - The sorted-build caller/callee path, page and tuple structures, expression-statistics selection, partial-index sample counts, statistics visibility/publication, and the generated catalog/function boundary cited above.
 - The adjacent regression files listed above. No database server was built or started for this editorial cleanup.
+- Plan review on 2026-09-07, same pin: privilege resolution behind the statistics views (`acl.c`, `aclchk.c`), VACUUM's index tuple counting and relation-statistics update (`nbtree.c`, `vacuumlazy.c`), cumulative-statistics flush ordering in the backend main loop and the ANALYZE writer (`postgres.c`, `pgstat.c`, `pgstat_relation.c`), the sorted build's page-transition and posting-size arithmetic (`nbtsort.c`, `nbtdedup.c`, `bufpage.c`), the inheritance passes of ANALYZE, the built-in support-function-4 inventory and the pattern-operator-class collation check (`pg_amproc.dat`, `index.c`), the metapage flag and its contrib reader, size formatting and numeric range errors, split strategies, `EXISTS` evaluation and partial-index predicate implication, `DO` and PL/pgSQL availability, and the VPATH and Meson build documentation. No server was built or started; the leaf-capacity identity in finding 5 is arithmetic applied to the cited fit test, not a measurement.
 
 ## Evidence Map
 
@@ -630,6 +947,13 @@ test of this wiki's estimator.
 | Joint statistics and access filtering | [system_views.sql#statistics-views](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L309), [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L355-L385). |
 | Partial counts, table threshold and publication limits | [analyze.c#sample-membership](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975), [autovacuum.c#analyze-threshold](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3095), [pgstat.c#publication-timing](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L665). |
 | Core-SQL contract and model-specific choices | [The current recommended statement](#the-current-recommended-statement). These expressions are the wiki's model, not a PostgreSQL engine guarantee. |
+| Statistics visibility and privilege defaults (plan review 1) | [acl.c#column_privilege_check](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L2538-L2569), [acl.c#acldefault](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L813-L821), [aclchk.c#pg_class_aclmask_ext](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L3396-L3412), [aclchk.c#grant-refuses-indexes](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L1858-L1863). |
+| Index `reltuples` writers and probe paths (plan review 2) | [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L870-L920), [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3073-L3099), [nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4875-L4905), [nodeSubplan.c#ExecScanSubPlan-EXISTS](../../../../raw/postgres-17/src/backend/executor/nodeSubplan.c#L293-L296). |
+| Flush ordering and the counter artifact (plan review 3) | [postgres.c#idle-stats-flush](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4634-L4705), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L584-L600), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337), [pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L860). |
+| Build page transitions and posting sizes (plan review 4 and 5) | [nbtsort.c#_bt_blnewpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L605-L629), [nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854), [nbtsort.c#page-boundary](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L874-L935), [nbtdedup.c#_bt_dedup_save_htid-cap](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L510-L513), [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L907-L923). |
+| Inheritance statistics rows (plan review 6) | [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L249-L259), [analyze.c#update_attstats-stainherit](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1647). |
+| Built-in equal-image inventory and the metapage flag (plan review 7) | [pg_amproc.dat#text_ops-equalimage](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L205-L212), [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849), [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L67-L84), [btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921). |
+| Output formatting, range errors and split strategies (plan review 8 and 10) | [dbsize.c#pg_size_pretty-sign](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L569-L600), [numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549), [nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033). |
 
 ## Open Questions
 
@@ -648,6 +972,15 @@ size and top-20 filters. Its effect on recovered and lost detections is unmeasur
 [analyze.c#examine_attribute](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1019-L1030),
 [system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275).
 
+Plan review, finding 1: the diagnostic must evaluate `has_column_privilege` on
+the index relation for expression attributes, because `pg_stats` filters those
+rows by the index's owner-only default ACL, and it should read the nullable
+`attstattarget` to separate a disabled column from an unanalyzed one.
+[Plan review](#plan-review),
+[acl.c#column_privilege_check](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L2538-L2569),
+[aclchk.c#pg_class_aclmask_ext](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L3396-L3412),
+[pg_attribute.h#attstattarget](../../../../raw/postgres-17/src/include/catalog/pg_attribute.h#L168-L176).
+
 ### Partial-index widths and zero counts
 
 Width provenance and count freshness need independent repairs. Removing a
@@ -663,6 +996,16 @@ implemented in the current statement.
 [analyze.c#sample-membership](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975),
 [autovacuum.c#analyze-threshold](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3095).
 
+Plan review, finding 2: the zero check can be an `EXISTS` probe that the planner
+may satisfy from the partial index; for indexes that pass the gate, a `GROUP BY`
+over the key reproduces the builder's binary-equality grouping; the probe can run
+from a `DO` block; and the count policy must account for VACUUM writing
+`reltuples` from live heap TIDs.
+[Plan review](#plan-review),
+[nodeSubplan.c#ExecScanSubPlan-EXISTS](../../../../raw/postgres-17/src/backend/executor/nodeSubplan.c#L293-L296),
+[nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4875-L4905),
+[nbtree.c#btvacuumpage-counting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1347-L1362).
+
 ### Statistics publication and test ordering
 
 The model mixes catalog estimates with cumulative table counters. Publication
@@ -675,6 +1018,15 @@ of a current subset count.
 [pgstat_relation.c#analyze-counter-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L337),
 [Current SQL](#the-current-recommended-statement).
 
+Plan review, finding 3: a `pg_stat_force_next_flush()` issued by the writer
+outside a transaction block completes before that statement's `ReadyForQuery`,
+which gives the fixture an ordered barrier; the counter artifact follows from
+ANALYZE's absolute write and a later additive flush of pending deltas.
+[Plan review](#plan-review),
+[postgres.c#idle-stats-flush](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4634-L4705),
+[pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L584-L600),
+[pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L860).
+
 ### Posting-tuple tails
 
 `classpages` rounds each estimated key group up to whole posting tuples but prices
@@ -686,6 +1038,13 @@ capacity boundary are still required.
 [Current SQL](#the-current-recommended-statement),
 [nbtdedup.c#posting-size-check](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L500-L517),
 [nbtsort.c#group-boundaries](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1310-L1349).
+
+Plan review, finding 4: the two-size formula follows the build's cap, refusal
+and sizing rules; add groups whose base tuple size changes the posting capacity,
+and pass the tail's own overhead to the page-fill term.
+[Plan review](#plan-review),
+[nbtdedup.c#_bt_dedup_save_htid-cap](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L510-L513),
+[nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854).
 
 ### Page geometry and tuple representation
 
@@ -700,6 +1059,14 @@ and statistics errors.
 [indextuple.c#index_form_tuple_context](../../../../raw/postgres-17/src/backend/access/common/indextuple.c#L94-L163),
 [heaptuple.c#heap_compute_data_size](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L215-L262).
 
+Plan review, finding 5: the leaf closed form reproduces the builder's soft limit
+for uniform tuples up to 896 bytes at the default block size and alignment. The
+remaining leaf-level gaps are size variance and tuples above that size; the
+internal-level gaps are pivot sizing and the minus-infinity first item.
+[Plan review](#plan-review),
+[nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854),
+[nbtsort.c#_bt_sortaddtup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L713-L735).
+
 ### Statistics selection and joint distributions
 
 The current joins do not select `inherited = false`, and `extstat` takes the maximum
@@ -712,6 +1079,14 @@ distinct count alone does not supply the duplicate-group frequency distribution.
 [system_views.sql#pg_stats](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L211),
 [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309).
 
+Plan review, finding 6: without `inherited = false`, an index on an inheritance
+parent receives two `pg_stats` rows per attribute, and the width, NULL and
+distinct inputs are double-counted. This is a defect in the current statement,
+not a policy choice.
+[Plan review](#plan-review),
+[analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L249-L259),
+[analyze.c#update_attstats-stainherit](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1647).
+
 ### Custom operator classes
 
 The two-function policy can decline deduplication credit that a custom support
@@ -723,6 +1098,15 @@ including internal aliases, mixed keys and custom functions returning true or fa
 [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183),
 [fmgr.c#internal-function-resolution](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240).
 
+Plan review, finding 7: all 29 built-in B-tree support-function-4 records use
+the two recognized functions, pattern operator classes reject nondeterministic
+collations at index creation, and the metapage flag read by `pageinspect` is the
+harness oracle. The unknown state applies only to functions created outside the
+catalog.
+[Plan review](#plan-review),
+[index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849),
+[btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921).
+
 ### Signed-byte output
 
 The current signed byte result is formatted text. A proposed additive numeric
@@ -731,6 +1115,12 @@ It must not silently replace the existing ordering expression, which uses the
 floor model rather than the point estimate. No such field is implemented here.
 [Current SQL](#the-current-recommended-statement),
 [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507).
+
+Plan review, finding 8: `pg_size_pretty(numeric)` removes the need for a
+`bigint` cast, and the statement's existing casts can raise `bigint out of range`.
+[Plan review](#plan-review),
+[pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507),
+[numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549).
 
 ### Reproducible accuracy and cost coverage
 
@@ -744,6 +1134,14 @@ Cross-version claims require independent evidence and runs for each claimed
 version. The historical measurements and performance comparisons are not a new
 verification of the current text on other majors or platforms.
 
+Plan review, finding 9: the reference server must be built out of tree, the
+fenced-block hash baseline is now
+`bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357`, and contrib
+may be installed in disposable clusters as an oracle.
+[Plan review](#plan-review),
+[installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432),
+[installation.sgml#meson-setup](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L2012-L2025).
+
 ### Alert thresholds and rebuild savings
 
 No universal alert threshold has been established. A sorted build and an index
@@ -756,6 +1154,12 @@ target workload. The column named `floor` needs its own calibration.
 [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L645-L671),
 [nbtsplitloc.c#split-policy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L278-L335),
 [Current SQL](#the-current-recommended-statement).
+
+Plan review, finding 10: calibrate per insertion pattern, since rightmost,
+50:50 and single-value splits settle at different densities.
+[Plan review](#plan-review),
+[nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033),
+[nbtree.h#fillfactors](../../../../raw/postgres-17/src/include/access/nbtree.h#L199-L202).
 
 ## Source References
 
@@ -820,6 +1224,62 @@ target workload. The column named `floor` needs its own calibration.
 - [nbtsort.c#_bt_buildadd](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L809-L855)
 - [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7500-L7507)
 - [nbtsplitloc.c#split-policy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L278-L335)
+- [acl.c#column_privilege_check](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L2538-L2569)
+- [aclchk.c#pg_class_aclmask_ext](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L3396-L3412)
+- [nbtree.c#btvacuumpage-counting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1347-L1362)
+- [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L870-L920)
+- [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3073-L3099)
+- [acl.c#acldefault](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L813-L821)
+- [acl.c#aclmask](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L1388-L1445)
+- [aclchk.c#grant-refuses-indexes](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L1858-L1863)
+- [pg_attribute.h#attstattarget](../../../../raw/postgres-17/src/include/catalog/pg_attribute.h#L168-L176)
+- [pg_proc.dat#pg_get_expr](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8219-L8220)
+- [ruleutils.c#pg_get_expr_ext](../../../../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L2648-L2662)
+- [nodeSubplan.c#ExecScanSubPlan-EXISTS](../../../../raw/postgres-17/src/backend/executor/nodeSubplan.c#L293-L296)
+- [indxpath.c#check_index_predicates](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3244-L3350)
+- [nbtsort.c#_bt_load-grouping](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1314-L1316)
+- [nbtutils.c#_bt_keep_natts_fast](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4875-L4905)
+- [datum.c:271](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L271)
+- [gram.y#DoStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L9037)
+- [initdb.c#load_plpgsql](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L1974-L1977)
+- [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L700-L708)
+- [postgres.c#idle-stats-flush](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4634-L4705)
+- [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L584-L600)
+- [pgstat.c#flush-intervals](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L117-L122)
+- [pgstat_relation.c#AtEOXact_PgStat_Relations](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L560-L574)
+- [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337)
+- [pgstat_relation.c#pgstat_relation_flush_cb](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L860)
+- [pgstat.c#pgstat_clear_snapshot](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L786-L800)
+- [pgstatfuncs.c#snapshot-and-flush-functions](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L1680-L1695)
+- [guc_tables.c#stats_fetch_consistency](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4966-L4974)
+- [stats.sql#forced-flush](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L101-L102)
+- [nbtsort.c#maxpostingsize](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1304-L1305)
+- [nbtdedup.c#_bt_dedup_save_htid-cap](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L510-L513)
+- [nbtdedup.c#_bt_form_posting-size](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L879-L884)
+- [nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854)
+- [nbtsort.c#_bt_blnewpage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L605-L629)
+- [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L907-L923)
+- [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214)
+- [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1147)
+- [nbtsort.c#page-boundary](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L874-L935)
+- [nbtsort.c#_bt_sortaddtup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L713-L735)
+- [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L249-L259)
+- [analyze.c#update_attstats-stainherit](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1647)
+- [pg_amproc.dat#bpchar_ops-equalimage](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L31-L33)
+- [pg_amproc.dat#text_ops-equalimage](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L205-L212)
+- [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849)
+- [pg_locale.c#pg_locale_deterministic](../../../../raw/postgres-17/src/backend/utils/adt/pg_locale.c#L1567-L1575)
+- [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L67-L84)
+- [nbtsort.c:1126](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1126)
+- [nbtsort.c#deduplicate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1151-L1152)
+- [btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921)
+- [dbsize.c#pg_size_pretty-sign](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L569-L600)
+- [numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549)
+- [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432)
+- [installation.sgml#meson-setup](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L2012-L2025)
+- [nbtsplitloc.c#single-value-strategy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416)
+- [nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033)
+- [nbtree.h#fillfactors](../../../../raw/postgres-17/src/include/access/nbtree.h#L199-L202)
 
 ## Navigation
 

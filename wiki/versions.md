@@ -14,6 +14,24 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-07: Reviewed all ten repair plans under Open Questions on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#plan-review)
+  against unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`. All ten are
+  kept. Three findings are deterministic defects in the current statement:
+  missing `inherited = false` filters double-count inputs for inheritance parents,
+  the expression-statistics visibility test uses the table's privileges while
+  `pg_stats` filters by the index's owner-only ACL, and unguarded `bigint` casts
+  can abort the report. Also filed: an ordered publication barrier from the
+  backend's idle flush, VACUUM as a second writer of index `reltuples`, an
+  `EXISTS` and `GROUP BY` probe design, confirmation of the posting-tail formula,
+  a leaf-capacity identity for uniform tuples up to 896 bytes, the complete
+  built-in equal-image inventory with the pattern-opclass collation refusal,
+  `pg_size_pretty(numeric)`, out-of-tree build and hash re-baseline requirements,
+  and per-insertion-pattern threshold calibration, with a revised implementation
+  order. Executable SQL, source pin and verification fields are unchanged; no
+  server was built or started.
+
 - 2026-09-07: Focused [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) on its current
   recommended statement. Removed superseded SQL, alternate-method comparisons,

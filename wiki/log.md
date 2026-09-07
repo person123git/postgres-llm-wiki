@@ -7012,3 +7012,54 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   six missing v18 citation targets, three unavailable v14/v18/v19 pins, and
   pre-existing v12/v14 checkout-status warnings. No new lint issue was introduced.
   The v17 checkout remains clean at `786db8dcf168bd9df8f55047337525ac19118b1c`.
+
+## [2026-09-07] review v17 | All ten B-tree estimator repair plans reviewed against source
+
+- Reviewed every repair plan under Open Questions on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#plan-review)
+  against unchanged v17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`.
+  The asker approved correcting the request's capitalization, spacing and
+  punctuation; the corrected follow-up is filed under Question.
+- Verdict: keep all ten plans. Three findings are deterministic defects in the
+  current statement and go first: the `pg_stats` joins lack `inherited = false`,
+  so an index on an inheritance parent double-counts width, NULL and distinct
+  inputs; the visibility test for expression attributes uses the table's
+  privileges while `pg_stats` filters those rows by the index's owner-only
+  default ACL, so non-owner roles get `no statistics row` and lose non-partial
+  expression indexes to suppression; and the existing `bigint` casts can raise
+  `bigint out of range`, where `pg_size_pretty(numeric)` exists.
+- Other findings: a forced statistics flush completes before the writer's
+  `ReadyForQuery` outside a transaction block, and the counter artifact follows
+  from ANALYZE's absolute write plus a later additive flush; VACUUM with bulk
+  deletion is a second writer of index `reltuples`; the zero check can be an
+  `EXISTS` probe and the group probe a `GROUP BY` for gated indexes, run from a
+  `DO` block; the posting-tail formula matches the build but capacity is per
+  group; the leaf closed form reproduces the builder's soft limit for uniform
+  tuples up to 896 bytes, narrowing the geometry plan to pivots, size variance
+  and oversized tuples; all 29 built-in B-tree support-4 records use the two
+  recognized functions and pattern opclasses reject nondeterministic collations
+  at creation, with `bt_metap` as a harness oracle; builds must be out of tree
+  and the fenced-block hash baseline is now
+  `bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357`; and
+  thresholds should be calibrated per insertion pattern because rightmost,
+  50:50 and single-value splits settle at different densities.
+- Added Plan review and Revised implementation order under Answer, corrected the
+  reading guidance for the visibility caveat and the row-count section's
+  single-writer claim in place, appended a review note to each of the ten Open
+  Questions subsections, and updated Contents, Context Reviewed, Evidence Map
+  and Source References. Updated both index entries and the v17 coverage note.
+- No server was built or started; the leaf-capacity identity is arithmetic
+  applied to the cited fit test. Existing SQL, the original Question text,
+  source pin and both verification fields are unchanged; the page remains
+  agent-unverified.
+- Validation: all 25 Contents entries match heading order, all 25 internal
+  anchors and all wiki links resolve, and all 346 source-citation ranges across
+  52 files resolve within the pinned v17 checkout. The single SQL block is
+  byte-identical to the pre-review text. `git diff --check` passed and
+  `raw/postgres-17/` remains clean.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: the same 9 errors and
+  2 warnings as the pre-edit baseline, all outside this change. Six errors are
+  missing v18 injection-point citation targets; three are unavailable v14, v18
+  and v19 pins. The warnings concern pre-existing v12/v14 checkout changes.
+  No source checkout was repaired, fetched or modified during this review.
