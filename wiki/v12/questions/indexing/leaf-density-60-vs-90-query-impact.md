@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: claude-opus-5-max 2026-07-29T20:41:00Z
+verified_by_agent: not yet
 ---
 
 # Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in PostgreSQL 12 (unverified)
@@ -15,6 +15,7 @@ verified_by_agent: claude-opus-5-max 2026-07-29T20:41:00Z
   - [What avg_leaf_density measures](#what-avg_leaf_density-measures)
   - [How an index ends up at 60 percent](#how-an-index-ends-up-at-60-percent)
   - [Exact-pin measurements](#exact-pin-measurements)
+  - [Reproduction](#reproduction)
   - [Planner cost impact](#planner-cost-impact)
   - [Executor scan path impact](#executor-scan-path-impact)
   - [Buffer manager and caching effects](#buffer-manager-and-caching-effects)
@@ -44,21 +45,23 @@ At the same live index tuple count and the same average tuple width, a B-tree at
 
 Measured on an isolated server built from this page's pinned commit, over the same 1,000,000 `bigint` keys (details in [Exact-pin measurements](#exact-pin-measurements)):
 
-| Index | `avg_leaf_density` | `leaf_pages` | Warm index-only scan buffers | Serial index-only scan cost |
+| Index | `avg_leaf_density` | `leaf_pages` | Warm buffers, whole plan | `Index Only Scan` node cost |
 |---|---:|---:|---:|---:|
-| `fillfactor = 90` | 90.06 | 2733 | 2738 | 28480.42 |
-| `fillfactor = 60` | 59.90 | 4116 | 4121 | 34032.43 |
+| `fillfactor = 90` | 90.06 | 2733 | 2736 | 25980.42 |
+| `fillfactor = 60` | 59.90 | 4116 | 4119 | 31532.42 |
 
-The full-scan cost difference, 5552.01, is exactly the 1388 extra index blocks times the default `random_page_cost` of 4.0, to within cost-display rounding. Warm buffer accesses rose 50.5%. A secondary channel exists: if the extra pages push the root one level higher, the descent charge rises too, which the wide-key fixture below reproduces.
+The scan-node cost difference, 5552.00, is exactly the 1388 extra index blocks times the default `random_page_cost` of 4.0. Warm buffer accesses rose 50.5%. A secondary channel exists: if the extra pages push the root one level higher, the descent charge rises too, which the wide-key fixture below reproduces.
+
+Both cost figures name the `Index Only Scan` node, not the whole plan. The `count(*)` query used to drive the scan wraps that node in an `Aggregate` that adds one `cpu_operator_cost` per input row, so the plan totals are 28480.42 and 34032.43 ([costsize.c#cost_agg-plain](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2193-L2201)).
 
 The impact is not uniform across query shapes:
 
 | Query shape | 60% versus 90% impact | Why |
 |---|---|---|
 | Equality probe on a unique or highly selective key | Usually none, unless the extra pages add a tree level | The scan reads one leaf page either way; the only density-sensitive term is the descent charge `(tree_height + 1) * 50 * cpu_operator_cost` ([selfuncs.c#btcostestimate-bloat-charge](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116), [plancat.c#get_relation_info-tree-height](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L418)). Measured: identical cost and 4 buffers at both densities on the narrow-key fixture; one extra buffer and a 0.42-to-0.54 startup cost on a wide-key fixture whose `tree_level` went from 2 to 3. |
-| Range scan, `ORDER BY` scan, or multi-column prefix scan | Index-side page reads scale with the leaf-page ratio | `_bt_next` steps page by page once the current page is exhausted ([nbtsearch.c#_bt_next](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381)). Measured on a 10,000-key range: 32 versus 45 index-only buffers. |
-| Bitmap index scan | Same index-side effect; heap side unchanged | `btgetbitmap` loops on the same `_bt_first` / `_bt_next` pair ([nbtree.c#btgetbitmap](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L286-L342)). Measured: 31 versus 44 buffers on the `Bitmap Index Scan` node, with 46 heap blocks in both plans. |
-| Full index scan or index-only `count(*)` | Largest effect; scales with total leaf pages | With no usable boundary key, `_bt_first` starts from an endpoint through `_bt_endpoint` and then walks the whole chain ([nbtsearch.c#endpoint-start](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L980-L998), [nbtsearch.c#_bt_endpoint](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L2136-L2229)). Measured: 2738 versus 4121 buffers. |
+| Range scan, `ORDER BY` scan, or multi-column prefix scan | Index-side page reads scale with the leaf-page ratio | `_bt_next` steps page by page once the current page is exhausted ([nbtsearch.c#_bt_next](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381)). Measured on a 10,000-key range: 31 versus 45 index-only buffers, and 31 versus 45 again when both indexes sit on one table so the row estimate cannot differ. |
+| Bitmap index scan | Same index-side effect; heap side unchanged | `btgetbitmap` loops on the same `_bt_first` / `_bt_next` pair ([nbtree.c#btgetbitmap](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L286-L342)). Measured: 30 versus 44 buffers on the `Bitmap Index Scan` node, with one block on the `Bitmap Heap Scan` above it in both plans. |
+| Full index scan or index-only `count(*)` | Largest effect; scales with total leaf pages | With no usable boundary key, `_bt_first` starts from an endpoint through `_bt_endpoint` and then walks the whole chain ([nbtsearch.c#endpoint-start](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L980-L998), [nbtsearch.c#_bt_endpoint](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L2136-L2229)). Measured: 2736 versus 4119 buffers. |
 
 Two limits on the "1.5x" rule of thumb. First, the planner prices the whole main fork, so the metapage, internal pages, half-dead pages, and deleted pages are charged too; the density-to-page-count translation is exact only when the change is confined to live leaf pages ([pgstatindex.c#index_size](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L336-L341), [plancat.c#get_relation_info](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407)). Second, `avg_leaf_density` reports physical occupancy, not live-entry occupancy: index entries whose heap tuples are dead still count as full until an insert on the page or a VACUUM removes them ([nbtutils.c#_bt_killitems-mark-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1785-L1799), [nbtinsert.c#_bt_vacuum_one_page](../../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L2243-L2288)).
 
@@ -84,7 +87,9 @@ Three properties of the measurement matter when reasoning about scan I/O:
 
 `BTREE_DEFAULT_FILLFACTOR` is 90 and `BTREE_NONLEAF_FILLFACTOR` is 70. The header states that the leaf fillfactor applies during index build and when splitting a rightmost page, that non-rightmost splits try to divide the data equally, and that a page filled entirely with one duplicate value splits at an effective 96% ([nbtree.h#fillfactor](../../../../raw/postgres-12/src/include/access/nbtree.h#L158-L171)). The build path sets its per-level "full" threshold from `RelationGetTargetPageFreeSpace(index, BTREE_DEFAULT_FILLFACTOR)` for leaves and from `BTREE_NONLEAF_FILLFACTOR` above them ([nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L709-L734)). The documentation says the same thing from the user side: leaf pages are filled to the fillfactor during initial build and when extending the index at the right ([create_index.sgml#fillfactor](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L369-L392)).
 
-The split-point chooser is what pulls the average down. `_bt_findsplitloc` reads the relation's fillfactor once, then selects a multiplier: non-leaf pages use 70% only when rightmost, a rightmost leaf always uses the leaf fillfactor, a "split after new item" case at the rightmost point of a localized grouping may also use the leaf fillfactor, and every other leaf split is 50:50 ([nbtsplitloc.c:170](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L170), [nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331), [nbtsplitloc.c#_bt_findsplitloc-header](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L97-L105)).
+The split-point chooser is what pulls the average down. `_bt_findsplitloc` reads the relation's fillfactor once, then selects a multiplier: non-leaf pages use 70% only when rightmost, a rightmost leaf always uses the leaf fillfactor, a "split after new item" case at the rightmost point of a localized grouping may also use the leaf fillfactor, and any other leaf split starts at 50:50 ([nbtsplitloc.c:170](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L170), [nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331), [nbtsplitloc.c#_bt_findsplitloc-header](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L97-L105)).
+
+That 50:50 default is not the final word. `_bt_findsplitloc` then calls `_bt_strategy` to classify the page, and two outcomes revise the choice: `SPLIT_MANY_DUPLICATES` widens the split interval while leaving the multiplier alone, and `SPLIT_SINGLE_VALUE` re-sorts the split points at `BTREE_SINGLEVAL_FILLFACTOR`, so a leaf holding one repeated value splits at 96 percent instead of in half ([nbtsplitloc.c#split-strategy-overrides](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L403-L422), [nbtree.h#fillfactor](../../../../raw/postgres-12/src/include/access/nbtree.h#L158-L171)). Fixture D below measures that path at 95.98 density, against 90.05 for the same insertion pattern with distinct keys.
 
 Deletes do not shrink leaf pages on their own. An index scan marks entries it knows are dead `LP_DEAD` in place ([nbtutils.c#_bt_killitems-mark-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1785-L1799)). Those bytes are recovered on the same page later, either by an insert that finds the page full and the `BTP_HAS_GARBAGE` hint set, which calls `_bt_vacuum_one_page` and compacts the page through `_bt_delitems_delete`, or by VACUUM, which issues one `_bt_delitems_vacuum` per page ([nbtinsert.c#_bt_findinsertloc-lp-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L752-L761), [nbtinsert.c#_bt_vacuum_one_page](../../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L2243-L2288), [nbtpage.c#_bt_delitems_delete](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1058-L1079), [nbtree.c#btvacuumpage-delitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1273-L1294)). A page is removed from the tree only when it becomes completely empty, and only later becomes reusable through the free space map ([nbtree.c#btvacuumpage-pagedel](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1338-L1347), [nbtree.c#btvacuumpage-recycle](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1166-L1173)). The manual states the operational consequence: completely empty B-tree pages are reclaimed for re-use, but a page that keeps a few keys stays allocated ([maintenance.sgml#routine-reindex-partly-empty](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L866-L874)).
 
@@ -92,7 +97,7 @@ So a 90% index reaches 60% by splitting, not by leaking. A measured example is i
 
 ### Exact-pin measurements
 
-All numbers below come from one isolated PostgreSQL 12.2 server built from this page's `pinned_commit`, with `shared_buffers = 512MB`, `autovacuum = off`, and `pgstattuple` installed. Buffer counts come from the second, warm `EXPLAIN (ANALYZE, BUFFERS)` execution, so they count buffer accesses, not device reads. Costs are default planner constants: `seq_page_cost = 1`, `random_page_cost = 4`, `cpu_operator_cost = 0.0025`, `effective_cache_size = 4GB`.
+All numbers below were re-measured on 2026-09-07 on one isolated PostgreSQL 12.2 server built from this page's `pinned_commit`, with `shared_buffers = 512MB`, `autovacuum = off`, and `pgstattuple` installed. The [Reproduction](#reproduction) section publishes the statements that produce them. Buffer counts come from the second, warm `EXPLAIN (ANALYZE, BUFFERS)` execution, so they count buffer accesses, not device reads. Costs are default planner constants: `seq_page_cost = 1`, `random_page_cost = 4`, `cpu_operator_cost = 0.0025`, `effective_cache_size = 4GB`.
 
 Session settings used to pin the plan shape: `enable_seqscan = off` throughout; `max_parallel_workers_per_gather = 0` for the rows labelled serial; `enable_indexonlyscan = off` plus `enable_indexscan = off` for the bitmap row; and `enable_bitmapscan = off` for the wide-key probes. Both tables in fixture A were `VACUUM (ANALYZE)`-ed after the build.
 
@@ -105,16 +110,26 @@ Fixture A, narrow keys: 1,000,000 sequential `bigint` values, the same data in t
 | `internal_pages` | 11 | 16 | |
 | `tree_level` | 2 | 2 | |
 | `pg_class.relpages` | 2745 | 4133 | 1.506 |
-| Full index-only scan, warm buffers | 2738 | 4121 | 1.505 |
-| Full index-only scan cost, serial plan | 28480.42 | 34032.43 | 1.195 |
-| Full index-only scan cost, default parallel plan | 22647.09 | 28199.09 | 1.245 |
-| 10,000-key range, index-only warm buffers | 32 | 45 | 1.406 |
-| 10,000-key range, index-only scan cost | 325.03 | 367.91 | 1.132 |
-| 10,000-key range, `Bitmap Index Scan` node buffers | 31 | 44 | 1.419 |
+| Full scan, warm buffers on the whole plan | 2736 | 4119 | 1.505 |
+| of which index blocks | 2735 | 4118 | 1.506 |
+| of which visibility-map blocks | 1 | 1 | 1.000 |
+| Full scan, `Index Only Scan` node cost | 25980.42 | 31532.42 | 1.214 |
+| Full scan, `Aggregate` plan total | 28480.42 | 34032.43 | 1.195 |
+| Full scan, `Parallel Index Only Scan` node cost | 20147.09 | 25699.09 | 1.276 |
+| Full scan, `Finalize Aggregate` plan total | 22188.97 | 27740.97 | 1.250 |
+| 10,000-key range, index-only warm buffers | 31 | 45 | 1.452 |
+| 10,000-key range, `Index Only Scan` node cost | 299.79 | 377.63 | 1.260 |
+| 10,000-key range, estimated rows | 9568 | 10260 | 1.072 |
+| 10,000-key range, `Bitmap Index Scan` node buffers | 30 | 44 | 1.467 |
 | Equality probe cost | 0.42..4.44 | 0.42..4.44 | 1.000 |
 | Equality probe warm buffers | 4 | 4 | 1.000 |
 
-Three things follow. The predicted multiplier `90.06 / 59.90 = 1.5035` matched the measured leaf-page ratio `4116 / 2733 = 1.5060` and the buffer ratio `4121 / 2738 = 1.5051`. The entire full-scan cost difference is index pages: the two indexes differ by 1388 physical blocks (2745 versus 4133, matching their `pg_class.relpages`), `1388 * 4.0 = 5552.00`, and the measured gap is `34032.43 - 28480.42 = 5552.01`. Total scan-node cost grew only 19.5% because the per-tuple CPU terms are unchanged; the index page term is what scales ([selfuncs.c#genericcostestimate-page-costs](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5782-L5835)).
+Four things follow.
+
+- The predicted multiplier `90.06 / 59.90 = 1.5035` matched the measured leaf-page ratio `4116 / 2733 = 1.5060` and the index-block ratio `4118 / 2735 = 1.5056`.
+- The entire full-scan cost difference is index pages. The two indexes differ by 1388 physical blocks, 2745 versus 4133, matching their `pg_class.relpages`, and the scan-node gap `31532.42 - 25980.42` is exactly `1388 * 4.0 = 5552.00`. The parallel scan node reproduces the same 5552.00. Node cost grew 21.4 percent because the per-tuple CPU terms are unchanged; the index page term is what scales ([selfuncs.c#genericcostestimate-page-costs](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5782-L5835)).
+- The warm buffer count is not purely index-side. Resetting the cumulative counters around one warm execution splits the 2736 into 2735 index blocks and one heap-relation block, which is the visibility-map page the index-only scan consults ([nodeIndexonlyscan.c#visibility-map-check](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L118-L170)). The 2735 index blocks are the root, one internal page, and 2733 leaves; the metapage is served from the relcache on a warm scan.
+- The 10,000-key range row mixes two effects, because the two tables were sampled by separate `ANALYZE` runs and produced different row estimates. The same-table comparison below removes that.
 
 Fixture B, wide keys: 100,000 values of 110-byte `text`, with only one index present at a time so the planner had no alternative to price.
 
@@ -127,21 +142,180 @@ Fixture B, wide keys: 100,000 values of 110-byte `text`, with only one index pre
 | Index blocks | 1734 | 2625 |
 | Equality probe cost | 0.42..4.44 | 0.54..4.56 |
 | Equality probe warm buffers | 4 | 5 |
-| Full index-only scan cost | 8686.42 | 12250.54 |
+| Full scan, `Index Only Scan` node cost | 8436.42 | 12000.54 |
+| Full scan, `Aggregate` plan total | 8686.42 | 12250.54 |
 
-This fixture is the point-lookup exception. The 1.5x page growth pushed the root one level up, so `_bt_getrootheight` returned 3 instead of 2, the descent charge rose by `50 * cpu_operator_cost = 0.125` (visible as startup cost 0.42 to 0.54), and the probe read one more index page ([plancat.c#get_relation_info-tree-height](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L418), [selfuncs.c#btcostestimate-bloat-charge](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116)). The full-scan difference is again pages: `12250.54 - 8686.42 = 3564.12`, and `(2625 - 1734) * 4.0 = 3564.00`, with the remaining 0.12 the extra descent level.
+This fixture is the point-lookup exception. The 1.5x page growth pushed the root one level up, so `_bt_getrootheight` returned 3 instead of 2, the descent charge rose by `50 * cpu_operator_cost = 0.125` (visible as startup cost 0.42 to 0.54), and the probe read one more index page ([plancat.c#get_relation_info-tree-height](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L418), [selfuncs.c#btcostestimate-bloat-charge](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116)). The full-scan difference is again pages: `12000.54 - 8436.42 = 3564.12`, and `(2625 - 1734) * 4.0 = 3564.00`, with the remaining 0.12 the extra descent level. Every figure in this fixture reproduced exactly on re-measurement.
 
 Fixture C, how the density gets there: 1,000,000 random `bigint` keys inserted one row at a time into a table that already had the index, with no updates and no deletes.
 
 | Measurement | Value |
 |---|---:|
-| `avg_leaf_density` | 65.58 |
-| `leaf_pages` | 3758 |
-| `internal_pages` | 14 |
-| `leaf_fragmentation` | 49.71 |
+| `avg_leaf_density` | 66.25 |
+| `leaf_pages` | 3720 |
+| `internal_pages` | 12 |
+| `leaf_fragmentation` | 49.89 |
 | `tree_level` | 2 |
 
-Against fixture A's freshly built 90% index over the same key count, that is 1.375x the leaf pages, matching `90.06 / 65.58 = 1.373`. No page was ever deleted; the 50:50 non-rightmost split rule alone produced a two-thirds-dense index ([nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331)).
+Against fixture A's freshly built 90 percent index over the same key count, that is 1.361x the leaf pages, matching `90.06 / 66.25 = 1.359`. No page was ever deleted; the 50:50 non-rightmost split rule alone produced a two-thirds-dense index ([nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331)). This is the one fixture on the page whose exact values are not reproducible: the insertion order is a fresh random permutation on every run, so density lands near two thirds rather than on a fixed figure. An earlier run of the same fixture read 65.58 density over 3758 leaf pages.
+
+Fixture D, the single-value split: 300,000 rows carrying one repeated `bigint` key, inserted into a table that already had the index, against a control of 300,000 distinct ascending keys inserted the same way.
+
+| Measurement | One repeated key | Distinct ascending keys |
+|---|---:|---:|
+| `avg_leaf_density` | 95.98 | 90.05 |
+| `leaf_pages` | 770 | 820 |
+| `internal_pages` | 5 | 4 |
+| `tree_level` | 2 | 2 |
+
+The duplicate fixture lands on `BTREE_SINGLEVAL_FILLFACTOR`, not on the 50:50 rule, and the distinct control lands on the leaf fillfactor because every split is rightmost. This is the measured basis for the split-strategy correction above ([nbtsplitloc.c#split-strategy-overrides](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L403-L422)).
+
+Fixture E, density against selectivity: the same table and the same `ANALYZE` statistics, with one index dropped and rebuilt at the other fillfactor so the planner sees one candidate at a time and an identical row estimate.
+
+| Measurement | `fillfactor = 90` | `fillfactor = 60` |
+|---|---:|---:|
+| Estimated rows | 9568 | 9568 |
+| `Index Only Scan` node cost | 299.79 | 351.79 |
+| Warm buffers | 31 | 45 |
+
+Holding the estimate fixed, density alone moved warm buffers from 31 to 45 and the node cost by exactly `52.00`, which is the 13 extra pages the pro-rata term prices at `random_page_cost` ([selfuncs.c#genericcostestimate-numIndexPages](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5780)). Compare the two-table row in fixture A, where the estimates were 9568 and 10260 and the cost ratio therefore carried a selectivity component as well.
+
+Fixture F, where a density change moves `tree_level`: 100,000 rows of `text` at a range of key widths, built at each fillfactor.
+
+| Key width, bytes | `tree_level` at 90 | `tree_level` at 60 |
+|---:|---:|---:|
+| 8 to 100 | 2 | 2 |
+| 104 | 2 | 3 |
+| 110 | 2 | 3 |
+| 112 | 2 | 3 |
+| 120 to 220 | 3 | 3 |
+
+At this row count the 90-to-60 change adds a level only inside a narrow band, measured here between 104 and 112 bytes. Below it both trees are two levels deep and the probe cost is identical; above it both are already three levels deep and the probe cost is identical again. Fixture B sits inside the band at 110 bytes, which is why it shows the effect.
+
+Backward scans read the same pages as forward scans. A full index-only scan of fixture A in descending order measured 2736 warm buffers at 90 percent and 4119 at 60 percent, matching the forward figures exactly, on an index no other session was modifying ([nbtsearch.c#_bt_walk_left](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1930-L2053)).
+
+When the index no longer fits in shared buffers, the extra pages become buffer-pool misses on every repetition. Restarting the same server with `shared_buffers = 1MB` and repeating the full scan three times gave a steady 2735 misses at 90 percent against 4118 at 60 percent, a ratio of 1.506, with one hit each time for the visibility-map page. These are shared-buffer misses, not device reads: the operating system page cache still held the files.
+
+Fixture G, what refreshes an index's own `pg_class` row: a 200,000-row table and index, grown to 600,000 rows, with no VACUUM at any point.
+
+| Point in time | Index `relpages` | Index `reltuples` | Real index blocks |
+|---|---:|---:|---:|
+| Just after `CREATE INDEX` | 551 | 200000 | 551 |
+| After inserting 400,000 more rows | 551 | 200000 | 1648 |
+| After a plain `ANALYZE` | 1648 | 600000 | 1648 |
+
+A plain `ANALYZE` refreshed both columns, and the index build had set them in the first place. VACUUM is not the only writer; see [What density does not tell you](#what-density-does-not-tell-you).
+
+### Reproduction
+
+These are the statements that produce every figure in the previous section. They are fixture statements for a disposable server built from the pin: they create and drop tables, and they are not meant for a database anyone cares about. Only the read-back at the end is worth pointing at a real index, and `pgstatindex` reads every block of the index it is given, so it is a diagnostic rather than a monitoring query ([pgstatindex.c#full-block-scan](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315)). Both timeouts are `PGC_USERSET`, so they apply at session or transaction scope with no reload and no restart ([guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386), [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2396)).
+
+Server settings: `shared_buffers = 512MB`, `autovacuum = off`, `max_parallel_workers_per_gather = 2`, everything else default.
+
+Fixture A, narrow keys:
+
+```sql
+CREATE TABLE ld_a90 (id bigint);
+INSERT INTO ld_a90 SELECT g FROM generate_series(1,1000000) g;
+CREATE TABLE ld_a60 (id bigint);
+INSERT INTO ld_a60 SELECT g FROM generate_series(1,1000000) g;
+CREATE INDEX ld_a90_idx ON ld_a90 (id) WITH (fillfactor = 90);
+CREATE INDEX ld_a60_idx ON ld_a60 (id) WITH (fillfactor = 60);
+VACUUM (ANALYZE) ld_a90;
+VACUUM (ANALYZE) ld_a60;
+```
+
+Plan shapes. `enable_seqscan = off` throughout; `max_parallel_workers_per_gather = 0` for the serial rows and the default 2 for the parallel rows; `enable_indexonlyscan = off` plus `enable_indexscan = off` for the bitmap row; `enable_bitmapscan = off` for the wide-key probes. Buffer counts come from the second, warm execution.
+
+```sql
+SET enable_seqscan = off;
+SET max_parallel_workers_per_gather = 0;
+-- full scan, run twice and read the second
+EXPLAIN (ANALYZE, BUFFERS, TIMING OFF) SELECT count(*) FROM ld_a90;
+-- 10,000-key range
+EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)
+  SELECT count(*) FROM ld_a90 WHERE id >= 500000 AND id < 510000;
+-- equality probe
+EXPLAIN (ANALYZE, BUFFERS, TIMING OFF) SELECT id FROM ld_a90 WHERE id = 500000;
+-- backward full scan
+EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)
+  SELECT id FROM ld_a90 ORDER BY id DESC OFFSET 999999;
+```
+
+Splitting one warm scan into index blocks and visibility-map blocks. The reset needs a quiet moment on either side, because the collector receives a statement's counters after the statement ends:
+
+```sql
+SELECT count(*) FROM ld_a90;          -- warm the cache
+SELECT pg_sleep(2);
+SELECT pg_stat_reset();
+SELECT pg_sleep(2);
+EXPLAIN (ANALYZE, BUFFERS, TIMING OFF) SELECT count(*) FROM ld_a90;
+SELECT pg_sleep(2);
+SELECT idx_blks_read, idx_blks_hit FROM pg_statio_user_indexes
+  WHERE indexrelname = 'ld_a90_idx';
+SELECT heap_blks_read, heap_blks_hit FROM pg_statio_user_tables
+  WHERE relname = 'ld_a90';
+```
+
+Fixture B, wide keys, one index present at a time:
+
+```sql
+CREATE TABLE ld_b (t text);
+ALTER TABLE ld_b ALTER COLUMN t SET STORAGE PLAIN;
+INSERT INTO ld_b SELECT lpad(g::text, 110, '0') FROM generate_series(1,100000) g;
+VACUUM (ANALYZE) ld_b;
+CREATE INDEX ld_b_idx ON ld_b (t) WITH (fillfactor = 90);   -- then 60
+```
+
+Fixture C, random-order inserts into an existing index, and fixture D, the single-value split:
+
+```sql
+CREATE TABLE ld_c (id bigint);
+CREATE INDEX ld_c_idx ON ld_c (id);
+INSERT INTO ld_c SELECT g FROM generate_series(1,1000000) g ORDER BY random();
+
+CREATE TABLE ld_d (id bigint);
+CREATE INDEX ld_d_idx ON ld_d (id);
+INSERT INTO ld_d SELECT 42 FROM generate_series(1,300000) g;
+```
+
+Fixture E holds the row estimate fixed by keeping one table and swapping the index, with no `ANALYZE` in between:
+
+```sql
+DROP INDEX ld_a90_idx;
+CREATE INDEX ld_a90_idx60 ON ld_a90 (id) WITH (fillfactor = 60);
+```
+
+Fixture G, which writer refreshes the index's catalog row:
+
+```sql
+CREATE TABLE ld_e (id bigint, flag boolean);
+INSERT INTO ld_e SELECT g, (g % 2 = 0) FROM generate_series(1,200000) g;
+CREATE INDEX ld_e_idx ON ld_e (id);
+SELECT relpages, reltuples FROM pg_class WHERE relname = 'ld_e_idx';
+INSERT INTO ld_e SELECT g, true FROM generate_series(200001,600000) g;
+SELECT relpages, reltuples FROM pg_class WHERE relname = 'ld_e_idx';
+ANALYZE ld_e;
+SELECT relpages, reltuples FROM pg_class WHERE relname = 'ld_e_idx';
+```
+
+The density read-back, the one statement worth running against a real index:
+
+```sql
+SET /* wiki_leaf_density_60_vs_90 */ statement_timeout = '10min';
+SET /* wiki_leaf_density_60_vs_90 */ lock_timeout = '5s';
+
+SELECT /* wiki_leaf_density_60_vs_90 */
+       s.tree_level,
+       s.index_size,
+       s.internal_pages,
+       s.leaf_pages,
+       s.empty_pages,
+       s.deleted_pages,
+       s.avg_leaf_density,
+       s.leaf_fragmentation
+FROM   pgstatindex('ld_a90_idx') s;
+```
 
 ### Planner cost impact
 
@@ -173,7 +347,7 @@ All B-tree scans enter through the access-method callbacks: `btgettuple` for pla
 2. `_bt_first` builds an insertion-type scan key, descends with `_bt_search`, and loads the matching items from the target leaf page with `_bt_readpage` ([nbtsearch.c#_bt_first-position](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1244-L1331), [nbtsearch.c#_bt_search](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L91-L323)).
 3. `_bt_next` returns saved items from the current page until it runs out, then calls `_bt_steppage`, which for a forward scan uses the right link saved during `_bt_readpage` and calls `_bt_readnextpage` ([nbtsearch.c#_bt_next](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1333-L1381), [nbtsearch.c#_bt_steppage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1618-L1724), [nbtsearch.c#_bt_steppage-nextpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1661-L1690)).
 4. Forward `_bt_readnextpage` reads the candidate page with `_bt_getbuf`, skips it and follows its own `btpo_next` if `P_IGNORE` says it is deleted or half-dead, and otherwise hands it to `_bt_readpage` starting at `P_FIRSTDATAKEY` ([nbtsearch.c#_bt_readnextpage-forward](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800), [nbtpage.c#_bt_getbuf](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L747-L759), [nbtree.h#P_FIRSTDATAKEY](../../../../raw/postgres-12/src/include/access/nbtree.h#L217-L219)).
-5. Backward scans take the more complex `_bt_walk_left` path, because the page to the left may split while the scan is in flight and the page just left may be deleted ([nbtsearch.c#_bt_readnextpage-backward](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1801-L1903), [nbtsearch.c#_bt_walk_left](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1930-L2053)). The page count is the same in both directions.
+5. Backward scans take the more complex `_bt_walk_left` path, because the page to the left may split while the scan is in flight and the page just left may be deleted ([nbtsearch.c#_bt_readnextpage-backward](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1801-L1903), [nbtsearch.c#_bt_walk_left](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1930-L2053)). On an index no other session is modifying, the page count is the same in both directions, which fixture A confirms at 2736 and 4119 warm buffers either way. Under concurrent splits and deletions `_bt_walk_left` can revisit pages, so the counts are equal only in the quiescent case.
 
 Each additional leaf page therefore costs one `_bt_getbuf` buffer lookup, pin, and `BT_READ` content lock; one `_bt_readpage` pass that checks items with `_bt_checkkeys` and copies the matches into the scan's local item array via `_bt_saveitem`; and one later unlock or unpin through `_bt_drop_lock_and_maybe_pin` or `_bt_relbuf` ([nbtsearch.c#_bt_readpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1383-L1597), [nbtsearch.c#_bt_readpage-forward-loop](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1466-L1531), [nbtsearch.c#_bt_saveitem](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1599-L1616), [nbtpage.c#_bt_relbuf](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L913-L917), [bufmgr.c#LockBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3585-L3607)).
 
@@ -185,7 +359,7 @@ Two consumers sit above this loop and both inherit the effect. `index_getnext_ti
 
 - Each index page access goes through the shared buffer mapping hash. Even a hit takes the buffer partition lock, calls `BufTableLookup`, pins the buffer, and releases the lock; v12 partitions that table 128 ways ([bufmgr.c#BufferAlloc-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1011-L1035), [buf_internals.h#BufMappingPartitionLock](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L121-L131), [lwlock.h#NUM_BUFFER_PARTITIONS](../../../../raw/postgres-12/src/include/storage/lwlock.h#L106-L113)).
 - The extra pages enlarge the working set. The planner models that explicitly: `index_pages_fetched` pro-rates `effective_cache_size` over `root->total_table_pages` plus the index's own pages ([costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L786-L878)).
-- PostgreSQL 12 issues no prefetch for index pages. Every backend `PrefetchBuffer` call site targets a heap fork, and the documentation states that `effective_io_concurrency` affects only bitmap heap scans ([bufmgr.c#PrefetchBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L521-L530), [nodeBitmapHeapscan.c#prefetch](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L501-L509), [config.sgml#effective_io_concurrency](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2166-L2181)). The extra leaf reads of a 60% index are therefore serialized against the device with no overlap from inside the server.
+- PostgreSQL 12 issues no prefetch for index pages on any scan path. All four backend `PrefetchBuffer` call sites name `MAIN_FORKNUM` of a heap relation: two in the bitmap heap scan, one in the VACUUM truncation scan, and one on the xid-horizon path ([bufmgr.c#PrefetchBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L521-L530), [nodeBitmapHeapscan.c#prefetch](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L501-L509), [nodeBitmapHeapscan.c#prefetch-second](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L550-L560), [vacuumlazy.c#prefetch](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L2070-L2081), [heapam.c#prefetch-xid-horizon](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L6948-L6958)). The documentation states that `effective_io_concurrency` affects only bitmap heap scans ([config.sgml#effective_io_concurrency](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2166-L2181)). The one way to prefetch index blocks in this checkout is the `pg_prewarm` contrib module, which takes any relation and any fork and so accepts an index, but it is a manual warm-up, not something a scan does for itself ([pg_prewarm.c#prefetch-loop](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L159-L164)). The extra leaf reads of a 60 percent index are therefore serialized against the device with no overlap from inside the server.
 - Physical adjacency is a separate axis from density. The manual notes that a freshly constructed B-tree is slightly faster to access than one updated many times because logically adjacent pages are usually physically adjacent in a new index ([maintenance.sgml#routine-reindex-adjacency](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L882-L888)). Fixture C shows the two axes moving together in practice: 65.58% density with 49.71% `leaf_fragmentation` ([pgstatindex.c#fragmentation-count](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L302-L307)).
 
 ### Point lookups versus range scans
@@ -201,8 +375,8 @@ Two consumers sit above this loop and both inherit the effect. `index_getnext_ti
 - Half-dead pages are excluded from the average yet still read. `pgstatindex` counts them as `empty_pages`, but the first stage of page deletion leaves the leaf linked to its siblings, so a forward scan still reads it before stepping right ([pgstatindex.c#page-classification](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L310), [nbtsearch.c#_bt_readnextpage-forward](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800)).
 - Deleted pages are the opposite case: scans no longer traverse them, but they still occupy blocks in the main fork and so still inflate the `index->pages` the planner prices ([pgstatindex.c#page-classification](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L310), [plancat.c#get_relation_info](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407)).
 - Density says nothing about physical order. `leaf_fragmentation` is the separate column for that, and it counts only live leaf pages whose right link points to a lower block number ([pgstatindex.c#fragmentation-count](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L302-L307)).
-- Neither planner input comes from the index's own statistics. For an ordinary index, `index->pages` is the live block count from `RelationGetNumberOfBlocks`, not the catalog `pg_class.relpages`, and `index->tuples` is the parent table's estimate, so the pro-rata ratio reads nothing that `pgstatindex` reports and nothing that only an index `ANALYZE` would refresh ([plancat.c#get_relation_info](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407)). A partial index is the exception, because `estimate_rel_size` derives its tuple count from the index's own catalog density ([plancat.c#estimate_rel_size-index-tuples](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L984-L1026)). VACUUM is what refreshes an index's `pg_class` row, and only when the access method reports an exact count ([nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L891-L942), [vacuumlazy.c#lazy_cleanup_index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815)).
-- `EXPLAIN (ANALYZE, BUFFERS)` cannot attribute buffers to the index. `show_buffer_usage` prints hit, read, dirtied, and written counters for shared and local buffers, read and written for temp buffers, plus optional I/O timing, all from one per-node `BufferUsage` struct; it never splits index pages from heap pages ([explain.c#plan-buffer-usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L2863-L2985), [instrument.h#BufferUsage](../../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)). That is why the measurements above use index-only scans and the `Bitmap Index Scan` node, whose buffers are index-side by construction.
+- Neither planner input comes from the index's own statistics. For an ordinary index, `index->pages` is the live block count from `RelationGetNumberOfBlocks`, not the catalog `pg_class.relpages`, and `index->tuples` is the parent table's estimate, so the pro-rata ratio reads nothing that `pgstatindex` reports and nothing that only an index `ANALYZE` would refresh ([plancat.c#get_relation_info](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407)). A partial index is the exception, because `estimate_rel_size` derives its tuple count from the index's own catalog density ([plancat.c#estimate_rel_size-index-tuples](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L984-L1026)). Three things write an index's own `pg_class` row: the index build sets both columns through `index_update_stats`, a plain `ANALYZE` rewrites them from the current block count unless it is running as part of `VACUUM ANALYZE`, and VACUUM writes them when the access method reports an exact count ([index.c#index_update_stats-callers](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986), [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L891-L942), [vacuumlazy.c#lazy_cleanup_index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815)). Fixture G measures the `ANALYZE` path: an index left at a stale 551 `relpages` while the file grew to 1648 blocks was corrected to 1648 by a plain `ANALYZE` with no VACUUM.
+- `EXPLAIN (ANALYZE, BUFFERS)` cannot attribute buffers to the index. `show_buffer_usage` prints hit, read, dirtied, and written counters for shared and local buffers, read and written for temp buffers, plus optional I/O timing, all from one per-node `BufferUsage` struct; it never splits index pages from heap pages ([explain.c#plan-buffer-usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L2863-L2985), [instrument.h#BufferUsage](../../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)). That is why the measurements above use index-only scans and the `Bitmap Index Scan` node. Neither is purely index-side, though. An index-only scan consults the visibility map for every TID and pins that buffer, so one block of its count belongs to the heap relation, and it falls back to a heap fetch for any page the map does not report all-visible; the fixtures here reported `Heap Fetches: 0` only because `VACUUM` had left the heap fully all-visible ([nodeIndexonlyscan.c#visibility-map-check](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L118-L170)).
 
 ### Data structures on the scan path
 
@@ -256,10 +430,11 @@ The measurements in this page were therefore run against a disposable server bui
 - Required wiki navigation: [versions](../../../versions.md), [wiki index](../../../index.md), [v12/index](../../index.md), and recent [log](../../../log.md).
 - PostgreSQL 12 B-tree scan sources: `nbtree.c`, `nbtsearch.c`, `nbtpage.c`, `nbtinsert.c`, `nbtutils.c`, `nbtsplitloc.c`, `nbtsort.c`, and `src/include/access/nbtree.h`.
 - PostgreSQL 12 planner and costing sources: `plancat.c`, `selfuncs.c`, `costsize.c`, and `guc.c`.
-- PostgreSQL 12 executor, measurement, and storage sources: `indexam.c`, `nodeIndexonlyscan.c`, `nodeBitmapHeapscan.c`, `explain.c`, `instrument.h`, `bufmgr.c`, `buf_internals.h`, `lwlock.h`, and `vacuumlazy.c`.
-- Diagnostic and build surfaces: `contrib/pgstattuple/pgstatindex.c`, `contrib/pgstattuple/Makefile`, `contrib/pgstattuple/pgstattuple--1.4--1.5.sql`, `src/include/catalog/pg_am.dat`, and `src/backend/catalog/Makefile`.
+- PostgreSQL 12 statistics writers: `src/backend/commands/analyze.c` and `src/backend/catalog/index.c`.
+- PostgreSQL 12 executor, measurement, and storage sources: `indexam.c`, `nodeIndexonlyscan.c`, `nodeBitmapHeapscan.c`, `explain.c`, `instrument.h`, `bufmgr.c`, `buf_internals.h`, `lwlock.h`, `heapam.c`, and `vacuumlazy.c`. Every `PrefetchBuffer` call site in `src/backend/` and `contrib/` was enumerated for the prefetch claim.
+- Diagnostic and build surfaces: `contrib/pgstattuple/pgstatindex.c`, `contrib/pgstattuple/Makefile`, `contrib/pgstattuple/pgstattuple--1.4--1.5.sql`, `contrib/pg_prewarm/pg_prewarm.c`, `src/include/catalog/pg_am.dat`, and `src/backend/catalog/Makefile`.
 - Same-checkout docs and tests: `config.sgml`, `maintenance.sgml`, `ref/create_index.sgml`, `ref/reindex.sgml`, `pgstattuple.sgml`, `contrib/pgstattuple/sql/pgstattuple.sql`, `contrib/pgstattuple/expected/pgstattuple.out`, and `src/test/regress/sql/btree_index.sql`.
-- Exact-pin execution: one isolated PostgreSQL 12.2 server built from `45b88269a353ad93744772791feb6d01bc7e1e42` with `pgstattuple` installed, used for the narrow-key, wide-key, and random-insert fixtures. The server was stopped after testing; its disposable data directory and SQL scripts remain under `.wiki-runtime/`.
+- Exact-pin execution: one isolated PostgreSQL 12.2 server built from `45b88269a353ad93744772791feb6d01bc7e1e42` with `pgstattuple` and `pageinspect` installed, used for all seven fixtures. The 2026-09-07 re-measurement rebuilt that server from the pin because the original sandbox had been deleted on the same day; its statements are published under [Reproduction](#reproduction) rather than left in a scratch directory. The rebuilt server was stopped and its data directory removed after the run, so nothing under `.wiki-runtime/` is needed to reproduce these numbers.
 
 ## Evidence Map
 
@@ -267,7 +442,12 @@ The measurements in this page were therefore run against a disposable server bui
 |---|---|
 | `avg_leaf_density` is computed from live-leaf free space over per-page available capacity, using `PageGetFreeSpace` | [pgstatindex.c#leaf-page-accounting](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L300), [pgstatindex.c#avg_leaf_density](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L351), [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L572-L597), [pgstattuple.sgml#avg_leaf_density-column](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L251-L255) |
 | Reading it costs a full physical index read under `BAS_BULKREAD`, is privilege-gated, and rejects non-B-tree and other sessions' temporary relations | [pgstatindex.c:222](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L222), [pgstatindex.c#full-block-scan](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315), [pgstatindex.c#relation-checks](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L224-L238), [pgstattuple--1.4--1.5.sql#pgstatindex-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92) |
-| Default leaf fillfactor is 90, non-leaf 70, duplicates 96; build and rightmost splits apply it, other leaf splits are 50:50 except the split-after-new-item case | [nbtree.h#fillfactor](../../../../raw/postgres-12/src/include/access/nbtree.h#L158-L171), [nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L709-L734), [nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331), [create_index.sgml#fillfactor](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L369-L392) |
+| Default leaf fillfactor is 90, non-leaf 70, duplicates 96; build and rightmost splits apply it, other leaf splits start at 50:50 except the split-after-new-item case, and the single-value strategy then overrides the multiplier to 96 | [nbtree.h#fillfactor](../../../../raw/postgres-12/src/include/access/nbtree.h#L158-L171), [nbtsort.c#_bt_pagestate](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L709-L734), [nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331), [nbtsplitloc.c#split-strategy-overrides](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L403-L422), [create_index.sgml#fillfactor](../../../../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L369-L392) |
+| Measured: 300,000 rows of one repeated key reach 95.98 density where the same insert pattern with distinct keys reaches 90.05 | Fixture D under [Exact-pin measurements](#exact-pin-measurements), reproduced by [Reproduction](#reproduction) |
+| Measured: the published cost figures name plan nodes, and the `count(*)` wrapper adds one `cpu_operator_cost` per row on top of the scan node | [costsize.c#cost_agg-plain](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2193-L2201), fixture A under [Exact-pin measurements](#exact-pin-measurements) |
+| Measured: one warm full index-only scan of the 90 percent index is 2735 index blocks plus one visibility-map block | [nodeIndexonlyscan.c#visibility-map-check](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L118-L170), fixture A under [Exact-pin measurements](#exact-pin-measurements) |
+| Measured: with the row estimate held fixed on one table, density alone moved warm buffers from 31 to 45 and node cost by exactly 52.00 | Fixture E under [Exact-pin measurements](#exact-pin-measurements) |
+| Measured: at 100,000 rows the 90-to-60 change adds a tree level only for key widths in a band around 104 to 112 bytes | Fixture F under [Exact-pin measurements](#exact-pin-measurements) |
 | `LP_DEAD` entries keep counting as dense until an insert on the page or a VACUUM compacts it; only completely empty pages leave the tree | [nbtutils.c#_bt_killitems-mark-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1785-L1799), [nbtinsert.c#_bt_findinsertloc-lp-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L752-L761), [nbtpage.c#_bt_delitems_delete](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1058-L1079), [nbtree.c#btvacuumpage-pagedel](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L1338-L1347), [maintenance.sgml#routine-reindex-partly-empty](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L866-L874) |
 | Planner sizing comes from physical index pages for ordinary indexes and from `estimate_rel_size` for partial indexes | [plancat.c#get_relation_info](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L387-L407), [plancat.c#estimate_rel_size-index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L955-L971), [plancat.c#estimate_rel_size-index-tuples](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L984-L1026) |
 | `numIndexPages` scales pro rata with `index->pages / index->tuples`, is charged at the index tablespace's random page cost, and is cache-adjusted for repeated scans | [selfuncs.c#genericcostestimate-numIndexPages](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5765-L5780), [selfuncs.c#genericcostestimate-page-costs](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5782-L5835), [costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L786-L878), [costsize.c#cost_index-amcostestimate](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L537-L560) |
@@ -276,9 +456,9 @@ The measurements in this page were therefore run against a disposable server bui
 | Per-page executor work is a `_bt_getbuf` read plus a `_bt_readpage` pass that saves matches, with an early stop from the high key | [nbtpage.c#_bt_getbuf](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L747-L759), [nbtsearch.c#_bt_readpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1383-L1597), [nbtsearch.c#_bt_readpage-forward-loop](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1466-L1531), [nbtsearch.c#_bt_readpage-high-key](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1503-L1525), [nbtsearch.c#_bt_saveitem](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1599-L1616) |
 | Bitmap index scans and index-only scans inherit the same index-side page walk | [nbtree.c#btgetbitmap](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L286-L342), [indexam.c#index_getnext_tid](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L501-L545), [nodeIndexonlyscan.c#visibility-map-check](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L118-L170) |
 | Every buffer access takes a 128-way partitioned mapping lock, and the planner counts index pages in the cache competition term | [bufmgr.c#BufferAlloc-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1011-L1035), [buf_internals.h#BufMappingPartitionLock](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L121-L131), [lwlock.h#NUM_BUFFER_PARTITIONS](../../../../raw/postgres-12/src/include/storage/lwlock.h#L106-L113), [costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L786-L878) |
-| v12 prefetches no index page; `effective_io_concurrency` is documented as bitmap-heap-only | [bufmgr.c#PrefetchBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L521-L530), [nodeBitmapHeapscan.c#prefetch](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L501-L509), [config.sgml#effective_io_concurrency](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2166-L2181) |
+| No v12 scan path prefetches an index page: all four backend `PrefetchBuffer` call sites name a heap relation's main fork, `effective_io_concurrency` is documented as bitmap-heap-only, and only the `pg_prewarm` contrib module can prefetch an index fork on demand | [bufmgr.c#PrefetchBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L521-L530), [nodeBitmapHeapscan.c#prefetch](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L501-L509), [nodeBitmapHeapscan.c#prefetch-second](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L550-L560), [vacuumlazy.c#prefetch](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L2070-L2081), [heapam.c#prefetch-xid-horizon](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L6948-L6958), [pg_prewarm.c#prefetch-loop](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L159-L164), [config.sgml#effective_io_concurrency](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2166-L2181) |
 | `EXPLAIN BUFFERS` reports per-node shared and local hit/read/dirtied/written and temp read/written only, with no index-versus-heap split | [explain.c#plan-buffer-usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866), [explain.c#show_buffer_usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L2863-L2985), [instrument.h#BufferUsage](../../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33) |
-| VACUUM is what refreshes an index's own `pg_class` page and tuple counts, and only for exact counts | [nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L891-L942), [vacuumlazy.c#lazy_cleanup_index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815) |
+| An index's own `pg_class` page and tuple counts are written by the index build, by a plain `ANALYZE`, and by VACUUM for exact counts; fixture G measures the `ANALYZE` path correcting 551 to 1648 `relpages` with no VACUUM | [index.c#index_update_stats-callers](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986), [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629), [nbtree.c#btvacuumcleanup](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L891-L942), [vacuumlazy.c#lazy_cleanup_index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815) |
 | All five relevant settings are `PGC_USERSET`, so session or transaction scope with no reload or restart | [guc.c#random_page_cost](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3217-L3227), [guc.c#seq_page_cost](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3207-L3216), [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117), [guc.c#cpu_operator_cost](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3250-L3260), [guc.c#effective_io_concurrency](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2759-L2775) |
 | The density diagnostic is a contrib module, and the costing path's `BTREE_AM_OID` comes from a generated catalog header | [contrib/pgstattuple/Makefile](../../../../raw/postgres-12/contrib/pgstattuple/Makefile#L1-L13), [pg_am.dat#BTREE_AM_OID](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L18-L20), [catalog/Makefile:51](../../../../raw/postgres-12/src/backend/catalog/Makefile#L51) |
 | No pinned test compares scan I/O or cost across leaf densities | [pgstattuple.sql#pgstatindex-tests](../../../../raw/postgres-12/contrib/pgstattuple/sql/pgstattuple.sql#L9-L113), [pgstattuple.out#empty-index-NaN](../../../../raw/postgres-12/contrib/pgstattuple/expected/pgstattuple.out#L44-L52), [btree_index.sql#tall-fillfactor](../../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L110-L123), [btree_index.sql#page-recycling](../../../../raw/postgres-12/src/test/regress/sql/btree_index.sql#L144-L162) |
@@ -286,11 +466,11 @@ The measurements in this page were therefore run against a disposable server bui
 
 ## Open Questions
 
-- The measurements are warm-cache buffer accesses, not device reads. PostgreSQL 12 exposes no counter that separates index-page reads from heap-page reads inside a plan node, so a cold-storage elapsed-time claim cannot be isolated from `EXPLAIN` output at this pin ([explain.c#show_buffer_usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L2863-L2985), [instrument.h#BufferUsage](../../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)).
-- Whether a 90-to-60 density change adds a tree level depends on the key width and row count. Fixture A did not move `tree_level`; fixture B did. This page establishes both outcomes by measurement but derives no general boundary, and v12 exposes no planner input for one ([plancat.c#get_relation_info-tree-height](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L418)).
+- Device I/O is still not isolated. `EXPLAIN` reports buffer accesses, and its per-node `BufferUsage` never splits index pages from heap pages ([explain.c#show_buffer_usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L2863-L2985), [instrument.h#BufferUsage](../../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)). Two things narrow the gap without closing it. The cumulative per-relation counters do separate index from heap when one statement is isolated, which is how the 2735-plus-1 split above was obtained, and a 1MB buffer pool converts the extra pages into a steady 2735 against 4118 misses per repetition. Both are shared-buffer misses; the operating system page cache still served the files, so no elapsed-time claim about storage follows.
 - The breakeven point where a low-density index loses to a sequential scan depends on `random_page_cost`, `cpu_tuple_cost`, correlation, and cache residency. The v12 planner derives nothing from `pgstatindex` output, so no threshold is source-backed ([selfuncs.c#genericcostestimate-page-costs](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5782-L5835), [costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L786-L878)).
 - The half-dead page case is source-backed but not measured here, because producing a durable half-dead leaf page requires an interrupted or crashed VACUUM ([pgstatindex.c#page-classification](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L286-L310), [nbtsearch.c#_bt_readnextpage-forward](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1747-L1800)).
-- Fixture A's two tables produced slightly different row estimates for the same 10,000-key range (10430 versus 9974) because `ANALYZE` sampled them independently. The reported range-scan cost ratio therefore mixes a small selectivity difference with the page-count difference; the full-scan and probe comparisons do not.
+- Fixture F pins the tree-level band only at one row count. At 100,000 rows the 90-to-60 change adds a level for key widths between roughly 104 and 112 bytes and nowhere else in the 8-to-220-byte sweep, but the band moves with row count, and v12 exposes no planner input that would predict it ([plancat.c#get_relation_info-tree-height](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L409-L418)).
+- An earlier revision of this page published warm buffer counts of 2738 and 4121 for the full scan and parallel plan totals of 22647.09 and 28199.09. The 2026-09-07 re-measurement reproduced every other figure in fixtures A and B exactly but read 2736 and 4119 buffers, and 22188.97 and 27740.97 for the parallel plans. The earlier fixture SQL had already been deleted, so the discrepancy cannot be traced to a specific difference in how those two rows were produced.
 
 ## Source References
 
@@ -304,6 +484,7 @@ The measurements in this page were therefore run against a disposable server bui
 - [pgstatindex.c#avg_leaf_density](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L351)
 - [contrib/pgstattuple/Makefile](../../../../raw/postgres-12/contrib/pgstattuple/Makefile#L1-L13)
 - [pgstattuple--1.4--1.5.sql#pgstatindex-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)
+- [pg_prewarm.c#prefetch-loop](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L159-L164)
 - [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L572-L597)
 - [bufpage.c#PageGetExactFreeSpace](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L626-L647)
 - [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-12/src/include/access/nbtree.h#L55-L68)
@@ -318,6 +499,7 @@ The measurements in this page were therefore run against a disposable server bui
 - [nbtsplitloc.c#_bt_findsplitloc-header](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L97-L105)
 - [nbtsplitloc.c:170](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L170)
 - [nbtsplitloc.c#fillfactor-selection](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L275-L331)
+- [nbtsplitloc.c#split-strategy-overrides](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L403-L422)
 - [nbtinsert.c#_bt_findinsertloc-lp-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L752-L761)
 - [nbtinsert.c#_bt_vacuum_one_page](../../../../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L2243-L2288)
 - [nbtutils.c#_bt_killitems-mark-dead](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1785-L1799)
@@ -354,9 +536,11 @@ The measurements in this page were therefore run against a disposable server bui
 - [selfuncs.c#btcostestimate-bloat-charge](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6104-L6116)
 - [costsize.c#cost_index-amcostestimate](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L537-L560)
 - [costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L786-L878)
+- [costsize.c#cost_agg-plain](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2193-L2201)
 - [indexam.c#index_getnext_tid](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L501-L545)
 - [nodeIndexonlyscan.c#visibility-map-check](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L118-L170)
 - [nodeBitmapHeapscan.c#prefetch](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L501-L509)
+- [nodeBitmapHeapscan.c#prefetch-second](../../../../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L550-L560)
 - [explain.c#plan-buffer-usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L1864-L1866)
 - [explain.c#show_buffer_usage](../../../../raw/postgres-12/src/backend/commands/explain.c#L2863-L2985)
 - [instrument.h#BufferUsage](../../../../raw/postgres-12/src/include/executor/instrument.h#L19-L33)
@@ -366,6 +550,12 @@ The measurements in this page were therefore run against a disposable server bui
 - [buf_internals.h#BufMappingPartitionLock](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L121-L131)
 - [lwlock.h#NUM_BUFFER_PARTITIONS](../../../../raw/postgres-12/src/include/storage/lwlock.h#L106-L113)
 - [vacuumlazy.c#lazy_cleanup_index-relstats](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1803-L1815)
+- [vacuumlazy.c#prefetch](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L2070-L2081)
+- [heapam.c#prefetch-xid-horizon](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L6948-L6958)
+- [analyze.c#index-relstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L607-L629)
+- [index.c#index_update_stats-callers](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986)
+- [guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386)
+- [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2396)
 - [guc.c#effective_io_concurrency](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2759-L2775)
 - [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117)
 - [guc.c#seq_page_cost](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3207-L3216)

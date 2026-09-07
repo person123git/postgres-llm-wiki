@@ -7141,3 +7141,100 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   Six errors are missing v18 injection-point citation targets; three are
   unavailable v14, v18 and v19 pins. The warnings concern pre-existing v12/v14
   checkout changes. No checkout was repaired, fetched or modified.
+
+## [2026-09-07] cleanup | purged .wiki-runtime to the venv toolchain alone
+
+- Removed everything under `.wiki-runtime/tmp/` at the user's request: the
+  `btree-current-statement-20260907/`, `btree-open-cleanup/` and
+  `btree-proposals/` review snapshots and their `before.md`/`before.json`,
+  `audit.json`, `validation.json` and `baseline-lint.txt` contents, plus the
+  loose `btree-proposals-map.json`, `btree-proposals-v12.md`,
+  `btree-proposals-v17.md`, `btree_open_cleanup.py`, `btree_open_validate.py`,
+  `file_btree_proposals.py`, `oq2-validation.json`, `oq2_bookkeeping.py`,
+  `oq2_validate.py`, `polish_btree_proposals.py` and
+  `validate_btree_proposals.py` generator/validator scripts. All of it predated
+  this session; none was a running server or held a data/build directory.
+- Also cleared `logs/recent_log.log`, `logs/wiki_lint.log` and
+  `cache/wiki_lint/last-run.txt`, which `ensure_runtime_dirs()`-style tooling
+  regenerates on the next run; confirmed by rerunning `scripts/wiki_lint`
+  immediately after, which recreated both files.
+- `.wiki-runtime` went from 264,510,640 to 259,671,491 bytes, reclaiming
+  **4,839,149 bytes** (4.6 MiB). What remains is the venv toolchain alone:
+  `venv/` (181,398,880 bytes), the project-local Python interpreter under
+  `python/` (48,877,035 bytes) and the `uv`/`uvx` binaries under `bin/`
+  (29,395,576 bytes) that `scripts/bootstrap_venv` installed, plus the empty
+  `cache/`, `indexes/{ctags,search,tree-sitter}`, `logs/` and `tmp/` scaffold.
+  `venv/bin/python` still reports Python 3.12.8.
+- Checked for stale sandbox pointers before deleting: no wiki page references
+  any of the removed `tmp/` paths, and the two mentions in `wiki/log.md` are
+  past-tense notes on where a prior review's snapshots were saved, not a
+  present-tense retention claim, so no page or log entry needed correcting.
+  No source citation, pin, page content or verification field changed.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: same pre-existing 9 errors
+  and 2 warnings as before this cleanup (missing v18 injection-point citation
+  targets, unavailable v14/v18/v19 pins, and existing v12/v14 checkout
+  changes), confirming the venv and tooling remain functional.
+
+## [2026-09-07] review v12 | B-tree leaf density 60 vs 90: issues found, fixed, and re-measured
+
+- Reviewed [Impact of B-Tree Leaf Density (60% vs 90%) on Index Scan Queries in
+  PostgreSQL 12 (unverified)](v12/questions/indexing/leaf-density-60-vs-90-query-impact.md)
+  against unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. All 92
+  pre-existing citations resolved in range and none crossed versions, but four
+  source claims did not match the pin and one environment claim was stale.
+- Rebuilt PostgreSQL 12.2 from the pinned checkout as a VPATH build under
+  `.wiki-runtime/tmp/ld12/` and re-ran the whole measurement programme on an
+  isolated cluster with `shared_buffers = 512MB` and `autovacuum = off`. The
+  original sandbox had been deleted on 2026-09-07, so nothing was reused.
+- Source corrections. The split-point summary claimed every non-rightmost leaf
+  split is 50:50; `_bt_strategy` then overrides that, and `SPLIT_SINGLE_VALUE`
+  re-sorts at `BTREE_SINGLEVAL_FILLFACTOR`. The statistics claim named VACUUM as
+  the writer of an index's `pg_class` row; the index build and a plain `ANALYZE`
+  write it too. The prefetch claim cited one of four heap-fork `PrefetchBuffer`
+  sites and missed the `pg_prewarm` module, which prefetches any fork including
+  an index's. The bullet calling index-only and bitmap-index buffers "index-side
+  by construction" was corrected: an index-only scan pins the visibility map and
+  falls back to heap fetches when a page is not all-visible. The backward-scan
+  page-count claim gained its quiescent-index condition.
+- Measurement corrections. The published cost figures name plan nodes, not plan
+  totals: the `count(*)` wrapper adds one `cpu_operator_cost` per row, so the
+  `Index Only Scan` nodes are 25980.42 and 31532.42 under the filed 28480.42 and
+  34032.43, and the scan-node gap is exactly `1388 * 4.0 = 5552.00`. Warm buffers
+  re-measured as 2736 and 4119, not 2738 and 4121; a counter reset around one
+  warm run splits 2736 into 2735 index blocks and one visibility-map block.
+  Default parallel plan totals re-measured as 22188.97 and 27740.97, not
+  22647.09 and 28199.09. Fixture B reproduced byte for byte including the
+  `tree_level` 2-to-3 change. Fixture C is not byte-reproducible by nature and
+  read 66.25 density over 3720 leaf pages against the filed 65.58 over 3758.
+- Added fixtures D through G and four new results: 300,000 rows of one repeated
+  key reach 95.98 density against 90.05 for distinct keys; holding the row
+  estimate fixed on one table isolates density at 31 versus 45 buffers and a
+  52.00 cost gap, closing the selectivity open question; a key-width sweep bounds
+  the `tree_level` flip to roughly 104 to 112 bytes at 100,000 rows; backward
+  scans read 2736 and 4119, matching forward; a 1MB buffer pool turns the penalty
+  into a steady 2735 versus 4118 misses per repetition; and a plain `ANALYZE`
+  corrected a stale index `relpages` from 551 to 1648 with no VACUUM.
+- Added a `## Reproduction` section publishing the fixture SQL, the session
+  settings, the plan shapes, and the counter-reset recipe, so the numbers no
+  longer rest on a deleted script. The one statement worth pointing at a real
+  index carries a `wiki_leaf_density_60_vs_90` tag and session-scoped
+  `statement_timeout` and `lock_timeout`.
+- `verified_by_agent` moved from `claude-opus-5-max 2026-07-29T20:41:00Z` to
+  `not yet`. The previous agent verification stood over claims this review found
+  wrong, and this pass corrected and re-measured rather than re-verifying every
+  historical claim on the page. The human `verified: false` field is untouched
+  and the title keeps its `(unverified)` suffix.
+- Mirrored to the sibling [B-Tree Leaf Density vs Fragmentation](v12/questions/indexing/leaf-density-vs-fragmentation-index-scan-io.md):
+  corrected the same stale sandbox-retention sentence and filed an open question
+  recording that it shares the two figures that did not reproduce. Its tables
+  were not re-run as a whole, so its numbers are left as filed and flagged.
+- Updated `wiki/index.md`, `wiki/v12/index.md` and the v12 coverage cell in
+  `wiki/versions.md`. Contents matches all 21 headings in order, and all 102
+  source citations on the page resolve within the pinned v12 checkout.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: same pre-existing 9 errors
+  and 2 warnings as before this change, all outside v12 question pages. Six are
+  missing v18 injection-point citation targets, three are unavailable v14, v18
+  and v19 pins, and the warnings report uncommitted changes in the v12 and v14
+  source checkouts, which are untracked `.DS_Store` files only. No new lint issue
+  was introduced. The rebuilt server was stopped and the whole build, install and
+  data tree removed after the run; `raw/postgres-12/` was never written to.
