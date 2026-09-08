@@ -7436,3 +7436,98 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   process left; the pre-existing `tmp/impr`, `tmp/pparev` and `tmp/pta12` directories were
   not touched. `raw/postgres-17/` is clean at `786db8dcf168bd9df8f55047337525ac19118b1c` and
   `git status --short raw/` is empty.
+
+## [2026-09-08] implement v17 | GIN census open questions 17-19, built and measured
+
+- Implemented the three named open questions on [Measuring Wasted and Reclaimable Bytes in a
+  GIN Index With Contrib Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) at the unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), and measured all of it on a real server.
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql 17, on question:
+  # Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL
+  17 (unverified) , implement the proposal fixes for open questions , run all tests.`; the asker
+  chose "correct and restate", then chose **open questions 17-19 only**, the **page's own
+  measurement programme** as the test scope (no `make check`, no second `BLCKSZ`), and **delete
+  the sandbox after filing**.
+- **Environment.** 17.11 built out of tree under `.wiki-runtime/tmp/ginw4/`
+  (`--without-readline --without-zlib --without-icu`), isolated cluster on port 55434 with
+  `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`, default `BLCKSZ`,
+  six contrib modules from the same tree, seven databases. `raw/postgres-17/` was never written
+  to. The published statements were extracted from the page's Markdown and hashed to
+  `0caff083a317f308…` (census) and `24c0e2dea5022223…` (guarded), matching the recorded
+  baselines, so every "published" result below is that exact text.
+- **17, the arithmetic.** Filed
+  [The derived-arithmetic statements](v17/questions/indexing/gin-index-wasted-space-contrib.md#the-derived-arithmetic-statements).
+  `BLCKSZ` and `MAXALIGN` come from `pg_control_init()`; the GIN special-area size is derived
+  from the alignment. The three struct sizes cannot be derived from a catalog, so they are
+  **measured**: a GIN index on an empty table has block 1 exactly as `PageInit` left it, so
+  `pd_lower` *is* `SizeOfPageHeaderData` (24) and `pagesize - special` *is*
+  `MAXALIGN(sizeof(GinPageOpaqueData))` (8); a second index over one single-key row puts one
+  line pointer on the same page, so the `pd_lower` difference *is* `sizeof(ItemIdData)` (4).
+  The FSM's 8160 then follows from the measured pair instead of the literal 28. The derived
+  census agreed with the guarded one in **240 of 240** cells and with the published one in
+  **208 of 208** shared cells, on two independently built databases, at `shared hit=7890` for
+  all three texts (warm 73.1-77.9 ms against 54.1-76.2 ms). The derived probe reproduced all
+  four published columns on eight indexes and added `malformed_pages` and `undecoded_pages`;
+  restricting the malformed test to entry-class pages was necessary because a data page's
+  `pd_lower` is a `SHORTALIGN`ed data offset, which flagged 15 / 44 / 64 / 192 healthy pages
+  when tested naively.
+- **18, the protocol.** Filed
+  [The measurement protocol](v17/questions/indexing/gin-index-wasted-space-contrib.md#the-measurement-protocol):
+  `LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE` inside the census transaction. `SHARE` is not
+  enough, because a plain `REINDEX INDEX` takes only `ShareLock` on the table, and the census
+  cannot hold its own index lock (`get_raw_page_internal` closes with `AccessShareLock`).
+  Measured: INSERT, VACUUM, ANALYZE, `REINDEX INDEX`, `REINDEX INDEX CONCURRENTLY`,
+  `VACUUM FULL`, `DROP INDEX` and `CLUSTER` all cancelled at `lock_timeout = '2s'` (2000-2020
+  ms), `SELECT count(*)` unaffected, and a `lock_timeout = 0` VACUUM waited 21,053 ms then ran.
+  The paired loop is the result: **40** unlocked censuses across one VACUUM of a 2,594-block
+  index read 0, 0, 180, 549, 845, 1098, 1456, 1838, 2177 and 2368 dead pages on an unchanging
+  file, while **20 of 20** locked censuses were identical. The one hole is measured, not
+  argued: `gin_clean_pending_list()` locks only the index at `RowExclusiveLock` and `LOCK TABLE`
+  refuses an index, so another session's flush moved the same index from `bloat_pct` **8.66**
+  (246 pending) to **82.74** (246 deleted) between two censuses in one locked transaction, with
+  neither census flagged.
+- **19, the acceptance cases.** Filed
+  [Seventh-pass acceptance runs](v17/questions/indexing/gin-index-wasted-space-contrib.md#seventh-pass-acceptance-runs).
+  The **wraparound failsafe** needed `autovacuum_freeze_max_age = 100000` (its minimum, a
+  restart) plus `vacuum_failsafe_age = 0` and 120,000 real xids, because the floor is
+  `Max(vacuum_failsafe_age, autovacuum_freeze_max_age * 1.05)`; the resulting VACUUM warned,
+  printed no per-index line, left the census at 0 deleted pages and the metapage at 480/482
+  while `vacuum_count` went 0 -> 1, and the control VACUUM then deleted **352** — the same
+  number the 2026-09-07 pass got. It is also the one bypass VACUUM's own output distinguishes
+  (`index scan bypassed by failsafe:`). **Four `-m immediate` crashes** during a 600,000-row
+  insert gave 0, 0, **2** and **6** all-zero pages; round 4's six were blocks 1307-1312, the
+  tail of the file, byte-for-byte zero, with `pg_freespace` reporting 0 free pages. **Three new
+  corruption shapes**: a self-consistent 16-byte special area on block 0 kills the published
+  statement outright (`Expected special size 8, got 16.`) and the derived one names it; a
+  `pd_lower` bumped by one is invisible to both censuses and caught only by the new
+  `malformed_pages`; and the same `pd_special` patch *without* moving `pd_upper` is refused by
+  `PageIsVerifiedExtended` before any SQL guard runs, reachable only with
+  `zero_damaged_pages = on`, which destroys data.
+- **Tests.** The core programme reproduced a **fifth** time: eight filed sizes, every page class
+  and slack byte, `bloat_pct` 64.12 / 75.30 / 48.05 / 49.80 / 95.22 / 51.34 / 54.15 and 8.66,
+  the `f5` three-VACUUM sequence with its B-tree sibling line, `REINDEX` 42.42 / 58.05 / 0.00 /
+  0.00 / 89.09 / 46.33 / 13.26 and 67.77, and the rebuilt readings 48.05 / 41.06 / 48.05 /
+  49.80 / 56.72 / 12.04 / 47.19 and 44.96. The churn sweep reproduced **digit for digit**,
+  predictions and errors included. Over 21 scored indexes the three known bound failures
+  reproduced and no new one appeared.
+- **One new open question.** The published *extended* fixture SQL does not reproduce the first
+  corpus: `f11` came out 20,668,416 against a filed 11,378,688, `k4` 6,455,296 against
+  3,874,816, `k5` 74,661,888 against 32,407,552, while `k5` matched both second-corpus figures
+  (43.43% and 50.00%) and its 1,639,711 entry tuples exactly. `k1`-`k3` cannot be rebuilt from
+  the page at all — their churn statement is not published. Filed as open question 20; every
+  bound verdict and conclusion is unaffected.
+- Page changes: the corrected seventh prompt under Question; three new Answer sections; the
+  revised plan's status, plan-review items 3, 4 and 6, the guarded statement's caveat
+  paragraph, the FSM cross-check, the entry-tuple probe and one reading rule updated in place;
+  open questions 17-19 rewritten and 20 added; Contents, Context Reviewed, Evidence Map and
+  Source References refreshed. Front matter, the original Question text and every pre-existing
+  SQL block are unchanged. Both index entries and the v17 coverage row and notes updated.
+- Validation: 569 citations over 72 files all resolve within the pinned checkout, all 48
+  Contents entries match heading order, all 107 internal anchors and all wiki links resolve,
+  the nine pre-existing SQL blocks are byte-identical to their pre-edit text (the census still
+  hashing to `0caff083a317f308…`), the two new statement blocks are byte-identical to the
+  tested files, the derived census's published seven-substitution recipe rebuilds the tested
+  text byte for byte (`8099b0e5aab2690f…`) and the rebuilt text re-ran with the same 240 cells,
+  and `git diff --check` passed. Agent verification stays `not yet`: this pass did not re-verify
+  every historical claim, and the first corpus's extended table is now known not to reproduce.
