@@ -7320,3 +7320,25 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   and v19 pins, and the warnings report untracked `.DS_Store` files in the v12
   and v14 checkouts. No new lint issue was introduced. The server was stopped and
   the whole build, install and data tree removed after the run.
+
+## [2026-09-07] cleanup | cleared .wiki-runtime's regenerated logs and lint cache
+
+- Removed `.wiki-runtime/logs/recent_log.log`, `.wiki-runtime/logs/wiki_lint.log` and
+  `.wiki-runtime/cache/wiki_lint/last-run.txt` at the user's request. `.wiki-runtime/tmp/`
+  was already empty: the two v12 rebuilds logged above (`ld12`, `ldf12`) had each stopped
+  their server and removed their own build, install and data tree at the end of their run,
+  and `ps aux` showed no postgres process still running.
+- `.wiki-runtime` went from 259,673,349 to 259,671,491 bytes, reclaiming **1,858 bytes**.
+  What remains is the same venv-toolchain baseline as the first cleanup entry above:
+  `venv/`, `python/`, `bin/`, and the empty `cache/`, `indexes/{ctags,search,tree-sitter}`,
+  `logs/` and `tmp/` scaffold.
+- Confirmed regeneration by rerunning `scripts/wiki_lint` immediately after: it recreated
+  `logs/wiki_lint.log` and `cache/wiki_lint/last-run.txt` (1,557 bytes combined), leaving
+  `.wiki-runtime` at 259,673,048 bytes. `logs/recent_log.log` regenerates only when
+  `scripts/recent_log` itself is run, so it correctly stayed absent.
+- `raw/` untouched: `git status --short raw/` shows only the pre-existing untracked
+  `raw/.DS_Store`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: same pre-existing 9 errors and 2
+  warnings as before this cleanup (missing v18 injection-point citation targets,
+  unavailable v14/v18/v19 pins, and existing v12/v14 checkout changes), confirming the
+  venv and tooling remain functional.
