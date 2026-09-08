@@ -7342,3 +7342,97 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   warnings as before this cleanup (missing v18 injection-point citation targets,
   unavailable v14/v18/v19 pins, and existing v12/v14 checkout changes), confirming the
   venv and tooling remain functional.
+
+## [2026-09-08] implement v17 | all ten B-tree estimator repair plans, built and measured
+
+- Implemented every repair plan under Open Questions on [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) at the unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), and measured the result on a real
+  server. **Prompt hygiene first**: the original read `follow agents.md, in postgresql 17, on
+  question:  Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified) , implement the proposal fixes for openquestions , run all tests`; the asker
+  chose "correct and restate", then chose **all ten plans**, **server plus the core regression
+  suite**, and **delete the sandbox after filing**.
+- **Environment.** 17.11 built out of tree under `.wiki-runtime/tmp/btree17/`
+  (`--without-readline --without-zlib --without-icu`), isolated cluster on port 55437 with
+  `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`, `--locale=C`, default `BLCKSZ`.
+  `raw/postgres-17/` was never written to. **`make check` passed 225 of 225 tests**, and the
+  `contrib/pageinspect` and `contrib/pgstattuple` checks passed. The published statement
+  extracted from the page hashed to `bffd166e…`, matching finding 9's baseline, so every `old`
+  column is that exact text.
+- **The three deterministic defects all reproduced, and all three are fixed.** An index on an
+  inheritance parent read **-550.8 %** on a freshly built index because both ANALYZE passes
+  were joined (`avg_width` 21 and 77 for the same attribute); a role holding only table
+  `SELECT` silently lost an expression index from the report (9 rows instead of 10), because
+  `pg_stats` filters expression rows by the *index's* owner-only ACL; and one index whose
+  `reltuples` was forged to `1e30` aborted the entire report with `ERROR: bigint out of
+  range`. The revised statement reads `0.0 %`, reports `statistics not visible to this role`,
+  and prints `1000000000000000000000000000000` as `numeric`.
+- **Three more defects surfaced only under measurement.** `leaf_cap` ignored the build's
+  hard-fit reservation and is one item too high in **30 of 78** measured (key width,
+  fillfactor) cells; `int_cap` ignored both the eight-byte minus-infinity first item and the
+  never-closed rightmost page of each level, costing **-33.9 %** on a 2000-byte key; and an
+  index expression's width was taken three bytes too wide because ANALYZE measures a
+  four-byte varlena header while `heap_compute_data_size` stores the converted short size,
+  costing **-22.2 %** on a freshly built `lower(txt)` index.
+- **Geometry is now exact.** Over 26 key widths x 3 fillfactors measured with `pageinspect`:
+  the closed-leaf item count `min(soft, hard)` is exact in **78 of 78** cells with no ragged
+  cell, the internal-page count is exact in **45 of 45** testable cells, and the level
+  recursion `pages(M) = 1 + ceil((M - cap - 1)/cap)` reproduces `relpages` in **78 of 78**
+  (the previous form: 53 exact, worst 5 blocks off). End to end on ten freshly built sorted
+  indexes from 8- to 2000-byte keys the revised statement reports exactly `0 bytes` **10 of
+  10**; the published one was right on 6.
+- **Posting tails.** Thirteen duplicate-group fixtures over 400,000 rows: mean absolute error
+  falls from **15.92 % to 5.73 %**, within-one-point rows from 8 to **11 of 13**, and the
+  capacity-boundary blowouts at group sizes 133 (**+98.8 %**) and 200 (**+33.1 %**) are gone.
+  `bt_page_items` confirmed 132 TIDs at an item length of 808 bytes, matching
+  `floor((MAXALIGN_DOWN(812) - 16)/6)` and `MAXALIGN(16 + 132*6)`.
+- **Equal image is now three-valued** and was scored against `bt_metap().allequalimage`:
+  exact on **8 of 10** (6 `recognized`/true, 2 `ineligible`/false) and conservative on the two
+  custom-opclass indexes, one of which the engine did deduplicate (**-214.9 %**, flagged).
+- **The publication artifact reproduced without being sought**: nine tables loaded and analyzed
+  in one session left `n_live_tup` at 400,000 on a 200,000-row table and
+  `n_mod_since_analyze` at 200,000 *after* ANALYZE. Adding `pg_stat_force_next_flush()`
+  between the load and the ANALYZE gave exact counts and a zero change counter on all nine.
+- **Probes.** A catalog-only generator emits an `EXISTS` population probe for a partial index
+  with a zero row count and a `GROUP BY` group probe for a recognized gated index, and nothing
+  for a `numeric` index. It separated a true `99.9 %` (subset really empty) from a false one
+  (`reltuples` forged to zero while 300,000 rows matched), and counted 5,000 groups against an
+  estimated 4,997. The planner satisfied the probe with `Index Only Scan using empty_open`.
+- **Calibration against `REINDEX INDEX`**, seven insertion patterns: sorted 0.0/0.0, append
+  0.0/0.0, random 25.7/25.7, wide random 23.8/23.8 (published: 18.6), duplicate-heavy
+  **-7.5/-6.7**, delete-half 49.8/49.8, update-half 33.3/33.3 (true/modelled), with densities
+  90.05, 90.05, 66.90, 69.61, 95.49, 45.17 and 60.13. Re-read after each rebuild: 0.0 on six
+  of seven. The `floor` column is now known to be unusable as a conservative bound on a
+  deduplicating index (**-245.2 %** against a true -7.5 %).
+- **Two new limits found and filed**: `index_form_tuple` compresses a wide varlena key whose
+  storage is `extended` or `main`, and no catalog records the compressed width — 60,000 rows
+  of a 900-character key stored 32-byte tuples in 367 blocks against 3,337 blocks under
+  `plain`, and the estimator read **-2625.6 %** against `-0.1 %`; the statement now warns
+  instead. Mixed key widths in one index read **-60.1 %**, and a class alternating a full
+  posting tuple with a single-TID tuple reads **-10.2 %**.
+- Page changes: the corrected third prompt under Question; the recommended statement replaced
+  (tag `wiki_btree_wasted_space_sweep_12_17` -> `wiki_btree_wasted_space_sweep_r2`, new
+  `wasted_space_bytes`, `equalimage` and `reltuples_writer` columns, seven new caveat
+  strings); new sections for widths/compression, page and posting geometry, validation probes,
+  what the ten plans changed, the measured acceptance results, the calibration, reproduction
+  and what remains unimplemented; Open Questions rewritten around the four measured residuals
+  plus untested configurations; Contents, Context Reviewed, Evidence Map and Source References
+  rebuilt. The 2026-09-07 Plan review is kept verbatim as the pre-implementation record.
+- Validation: all four fenced SQL blocks extracted from the page are byte-identical to the
+  tested text (`8acd531b…`, `bfa7721f…`, `0b03f0c9…`, `3e57a568…`) and the two runnable ones
+  execute clean straight from the page; 341 citation instances over 124 distinct ranges in 58
+  files all resolve in range and cite only `raw/postgres-17/`; 33 headings, 32 Contents
+  anchors, all resolving. Updated `wiki/index.md`, `wiki/v17/index.md` and the v17 coverage
+  cell plus a dated note in `wiki/versions.md`.
+- `verified_by_agent` stays `not yet`: this pass verified the claims it added, not every
+  older claim the page still carries. `verified:` is untouched and the title keeps its
+  `(unverified)` suffix.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**. The server was
+  stopped and `.wiki-runtime/tmp/btree17/` — build, install, data directory, logs and the
+  extracted SQL — removed after the run, taking `.wiki-runtime` from 10,069,764,387 to
+  7,432,023,451 bytes and reclaiming **2,637,740,936 bytes**. `ps aux` shows no postgres
+  process left; the pre-existing `tmp/impr`, `tmp/pparev` and `tmp/pta12` directories were
+  not touched. `raw/postgres-17/` is clean at `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `git status --short raw/` is empty.
