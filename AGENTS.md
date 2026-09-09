@@ -135,6 +135,54 @@ SELECT /* wiki_capture_plan_inputs */ ...;
 UPDATE /* wiki_backfill_user_email */ users SET ...;
 ```
 
+## MANDATORY Measurement Script
+
+Any page that reports a number produced by running PostgreSQL must publish the script that produced it. This covers timings, block and page counts, byte sizes, densities, row and tuple counts, buffer counts, WAL volumes, and any other measured value, wherever on the page the number appears.
+
+- File the script under one top-level `## Measurement Script` section, placed after `## Answer` and before `## Context Reviewed`, and list it in `## Contents`.
+- Publish the script in full, in the page, inside a fenced block. Do not link to an uncommitted file, do not summarize it, and do not leave a reader to reassemble it from prose.
+- Use Bash and SQL only. No Python, no `awk`, no `perl`, no `jq`, no external harness. A reviewer needs a compiler, a shell, and this page. The `.wiki-runtime/venv/` Python is wiki tooling, not measurement tooling.
+- One script per page. When a measurement has more than one version leg, file one script per leg in its own `###` subsection under the same `## Measurement Script` section, named for the version it runs.
+
+Reuse and maintenance:
+
+- Re-run the page's existing script instead of writing a new one. A second, parallel script for the same page is a defect.
+- Edit the filed script in place when the statement, fixtures, thresholds, or stages change, then re-run it before filing the new numbers.
+- Keep stages selectable and idempotent so a reviewer can re-run one stage without rebuilding everything: `bash <script>.sh <stage> [<stage> ...]`.
+- Record the last run on the page: date, server version and pin, and the platform facts the numbers depend on, such as `block_size`, `max_data_alignment`, OS, and architecture.
+- If the filed numbers predate the current script text, say so under `## Open Questions` and leave `verified_by_agent: not yet`.
+
+Usage information is mandatory. The section must state:
+
+| Item | What to give |
+|---|---|
+| Purpose | what the script measures, and which page claims its numbers back |
+| Invocation | the exact command, and the directory it runs from |
+| Stages | every stage name, the default order, and what each stage does |
+| Environment | every variable the script reads, with its default |
+| Prerequisites | build toolchain, configure flags, extensions, locale and encoding requirements |
+| Output | where results land, and which file or table to read first |
+| Runtime | roughly how long a full run takes, and how long a re-run from a built tree takes |
+| Cleanup | the stage or command that stops the server and deletes the sandbox |
+
+Isolation and safety, on top of `MANDATORY Environment Isolation`:
+
+- Treat `raw/postgres-NN/` as read only. Build out of tree and write every artifact under `.wiki-runtime/tmp/<name>/`.
+- Run an isolated cluster with its own data directory, its own socket directory, and a non-default port. Never measure against a cluster the user did not name.
+- Start with `set -uo pipefail`, and call `psql` with `-X -v ON_ERROR_STOP=1` so a stray `~/.psqlrc` cannot change the result and no error passes silently.
+- Follow `MANDATORY Production SQL` for the statements the script sends: the inline tag comment after the leading verb, and session-scoped `statement_timeout` and `lock_timeout`.
+- Name the context and apply scope of every GUC the script sets, per `MANDATORY GUC Changes`.
+- Mark fixture statements as disposable. They create and drop objects and are not meant for a database anyone cares about.
+- A script published inside a fenced block must not contain a literal Markdown fence. Assemble one at run time when the script has to read fenced blocks out of the page, e.g. `fence=$(printf '\140\140\140')`.
+
+Evidence boundary:
+
+- A measurement is evidence for what the built server did, not for why the engine does it. Every behavioral claim still needs a matching-version raw citation; see `MANDATORY Evidence` and `MANDATORY Citations`.
+- When a measurement disagrees with the source reading, file the disagreement under `## Open Questions` instead of dropping either side.
+- `scripts/wiki_lint` does not check for this section, its script, or its usage information. Check them by hand before filing.
+
+Migration note: existing pages that report measured numbers without a `## Measurement Script` section remain valid and need not be changed until they are next substantially revised or re-measured, at which point add the section and the script. A prose-only reproduction recipe, such as a bare `### Reproduction` list of statements, does not satisfy this rule; turn it into a runnable script at that revision.
+
 ## MANDATORY Verification Fields
 
 - `verified:` is human-only. Agents must not set, change, or remove it.
@@ -212,6 +260,7 @@ When a user asks a question, the deliverable is a single `type: question` page t
 - File the page under `wiki/vNN/questions/<category>/`, using a category from `MANDATORY Question Categories`. Never file a question directly under `wiki/vNN/questions/`.
 - Restate the user prompt verbatim under `## Question`.
 - Put the full answer, with matching-version raw citations, inline under `## Answer`.
+- Add `## Measurement Script` when the page reports a measured number; see `MANDATORY Measurement Script`.
 - Keep `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` on the same page when gaps exist.
 
 Why one document per question, not a question page plus an answer page:
@@ -322,7 +371,7 @@ After each meaningful wiki change:
 - Update `wiki/index.md` for created or substantially changed pages.
 - Update `wiki/versions.md` for supported-version lifecycle, repin, or meaningful coverage changes.
 - Update `wiki/vNN/index.md` for created or substantially changed version-local pages.
-- Append to `wiki/log.md` after scaffold changes, ingests, lint passes, filed answers, or version lifecycle events.
+- Append to `wiki/log.md` after scaffold changes, ingests, lint passes, filed answers, measurement runs, or version lifecycle events.
 - Run `scripts/wiki_lint` after every wiki-facing edit, including small edits to existing pages, indexes, version pages, log entries, citations, titles, or front matter.
 
 Log heading format:
@@ -352,10 +401,11 @@ Log heading format:
 4. Draft a claim-to-source map.
 5. Move unverified claims to `## Open Questions`.
 6. Answer with matching-version raw citations.
-7. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
-8. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
-9. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
-10. Update indexes and log.
+7. If the page reports a measured number, run the page's script and file it under `## Measurement Script`; see `MANDATORY Measurement Script`.
+8. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
+9. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
+10. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
+11. Update indexes and log.
 
 ## MANDATORY Lint
 
@@ -378,5 +428,6 @@ scripts/wiki_lint
 
 - Keep durable project tooling under `scripts/`.
 - Keep runtime state under `.wiki-runtime/`.
+- Measurement scripts are page content, not `scripts/` tooling. File them in the page that reports their numbers; see `MANDATORY Measurement Script`.
 - When changing script contents, update adjacent workflow examples, lint examples, or tests that depend on the change.
 - Keep top-level `run_*` files ignored. Do not edit, cite, or use them for wiki work unless the user explicitly names one.

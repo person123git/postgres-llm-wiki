@@ -2,6 +2,56 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-09] restructure | mandatory measurement-script section for measuring pages
+
+- Added `MANDATORY Measurement Script` to `AGENTS.md`. Any page that reports a
+  number produced by running PostgreSQL — timings, block and page counts, byte
+  sizes, densities, row and tuple counts, buffer counts, WAL volumes — must
+  publish the script that produced it under one top-level `## Measurement
+  Script` section, placed after `## Answer`, before `## Context Reviewed`, and
+  listed in `## Contents`.
+- **Prompt hygiene first**: the request read `add a mandatory rule to agents.md
+  that documents  that have objective measurements should have a section with a
+  script used for measuments, the script should be in bash and sql, the script
+  should be reused and maintained, and it should have information on how to use
+  the script.`; the asker chose "correct and proceed" (`agents.md` ->
+  `AGENTS.md`, `measuments` -> `measurements`, the doubled space). Three scoping
+  answers were taken before drafting: the script is filed **in the page, in
+  full** rather than as a `scripts/` file, the section is **top-level** rather
+  than a subsection of `## Answer`, and the trigger is **any measured number**
+  rather than only sandbox runs or only numbers under `## Answer`.
+- The rule generalizes the precedent already set by [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-two-suite-scripts-and-the-rules-they-follow),
+  whose two suite scripts are Bash and SQL only, stage-selectable, sandboxed
+  under `.wiki-runtime/tmp/`, and re-runnable during review.
+- It fixes four things: Bash and SQL only, no Python or `awk` harness, so a
+  reviewer needs a compiler, a shell and the page; one script per page, edited
+  in place and re-run rather than duplicated, with one `###` subsection per
+  version leg; an eight-row usage table (purpose, invocation, stages,
+  environment, prerequisites, output, runtime, cleanup); and isolation carried
+  over from `MANDATORY Environment Isolation` — read-only pinned checkout,
+  out-of-tree build, own data and socket directories, non-default port,
+  `set -uo pipefail`, `psql -X -v ON_ERROR_STOP=1`, plus the `MANDATORY
+  Production SQL` tag comments and timeouts and the `MANDATORY GUC Changes`
+  apply scopes.
+- The evidence boundary is explicit: a measurement is evidence for what the
+  built server did, not for why the engine does it, so every behavioral claim
+  still needs a matching-version raw citation, and a measurement that disagrees
+  with the source reading goes under `## Open Questions` rather than either side
+  being dropped.
+- Cross-references updated in `AGENTS.md`: a bullet in `MANDATORY Question
+  Documents`, `measurement runs` added to the `wiki/log.md` trigger list in
+  `MANDATORY Bookkeeping`, a new step 7 in `MANDATORY Answer And File` (old
+  steps 7-10 renumbered 8-11), and a bullet in `MANDATORY Script Changes` naming
+  measurement scripts as page content rather than `scripts/` tooling.
+- Migration note filed with the rule: existing measuring pages stay valid until
+  they are next substantially revised or re-measured. A prose-only `###
+  Reproduction` recipe does not satisfy the rule and becomes a runnable script
+  at that revision.
+- No wiki page, claim, citation, `pinned_commit`, `verified`, or
+  `verified_by_agent` value changed. `scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-09-09] answer v17 | a reader's guide to the B-tree suite scripts' output
 
 - Added [Reading the results of a
