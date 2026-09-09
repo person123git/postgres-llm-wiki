@@ -14,6 +14,18 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-09: Re-verified [Indexes Only on the Parent Versus Only on the Child
+  Tables of a Declaratively Partitioned Table in PostgreSQL 12
+  (unverified)](v12/questions/indexing/partitioned-index-parent-vs-child.md)
+  claim by claim at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`,
+  source-only. All 440 citations (201 distinct ranges, 35 files) resolve in
+  bounds inside `raw/postgres-12/` and every checked range supports its claim;
+  no defect was found and no page content changed. Structure (22 Contents
+  entries, anchors, front matter, title hint, 13 wiki links) re-checked and
+  `wiki_lint` clean. Set `verified_by_agent: claude-fable-5-medium
+  2026-09-09T16:28:07Z`; the four Open Questions remain runtime-measurement
+  items outside a source-only pass, and `verified: false` is untouched.
+
 - 2026-09-09: Corrected [Indexes Only on the Parent Versus Only on the Child
   Tables of a Declaratively Partitioned Table in PostgreSQL 12
   (unverified)](v12/questions/indexing/partitioned-index-parent-vs-child.md)

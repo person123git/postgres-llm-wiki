@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: not yet
+verified_by_agent: claude-fable-5-medium 2026-09-09T16:28:07Z
 ---
 
 # Indexes Only on the Parent Versus Only on the Child Tables of a Declaratively Partitioned Table in PostgreSQL 12 (unverified)

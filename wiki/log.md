@@ -7815,3 +7815,52 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   missing v18/v19 pins, a v14 checkout/pin mismatch, and existing v12/v14
   checkout-status warnings. No new lint issue was introduced and no source
   checkout was fetched, repaired or modified.
+
+## [2026-09-09] review v12 | re-verify parent-versus-child partitioned-index page claim by claim
+
+- Re-verified [Indexes Only on the Parent Versus Only on the Child Tables of a
+  Declaratively Partitioned Table in PostgreSQL 12
+  (unverified)](v12/questions/indexing/partitioned-index-parent-vs-child.md)
+  claim by claim at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (12.2, `REL_12_2`), source-only, without building a server.
+- **No defects found.** All 440 source citations (201 distinct ranges over 35
+  files) resolve in bounds inside `raw/postgres-12/` and each checked range
+  supports its labelled claim. Re-read verbatim: the `DefineIndex` partitioned
+  branch (relkind switch, `CONCURRENTLY`/exclusion/default-tablespace
+  rejections, `INDEX_CREATE_SKIP_BUILD`/`INDEX_CREATE_PARTITIONED` flags, the
+  `nparts != 0` `ON ONLY` invalid rule, the adopt-or-create recursion with
+  foreign-partition skip/error, the adopted-invalid-child parent invalidation,
+  and the partitioned early return before the concurrent commits); the utility
+  caller's `find_all_inheritors(relid, ShareLock)` hierarchy pre-lock;
+  `CompareIndexInfo`'s exact field set (uniqueness, AM, counts, mapped columns,
+  collations, operator families, expressions, predicate; exclusion never
+  matched; no reloptions/tablespace/opclass-OID/sort-flag comparison);
+  `plancat.c`'s invalid-then-partitioned index skips; `LockConflicts` and
+  `NLOCKENTS`; `ReindexPartitionedIndex`, both `REINDEX TABLE` skip paths, and
+  the `reindex_index` partitioned-relkind error; `AttachPartitionEnsureIndexes`
+  (partitioned-parent-index filter, `relispartition` and constraint checks, no
+  `indisvalid` test, build-if-missing) under the attach `AccessExclusiveLock`;
+  `ATExecDetachPartition` locks (default-partition AEL, child SUEL, per-index
+  AEL) and index un-parenting; `ATExecAttachPartitionIdx` locks and the
+  `validatePartitionedIndex` count-and-recurse with grandparent AELs; the
+  unique/PK partition-key rules, `transformFkeyCheckAttrs`, and the
+  `infer_arbiter_indexes` untargeted-`DO NOTHING` early return plus
+  `ExecCheckIndexConstraints` and the leaf arbiter ancestry mapping;
+  parent-targeted INSERT root-index opens versus `inheritance_planner` leaf
+  targets; the observability surfaces (`pg_indexes` `'i','I'`,
+  `pg_stat_all_indexes` relkind filter, `calculate_indexes_size`,
+  `pg_relation_filenode`, `pg_partition_tree`, `\dPi+`, `relhassubclass`);
+  `ruleutils` `ON ONLY` deparse and `dumpIndexAttach`; GUC definitions; the
+  grammar productions; catalog/struct headers, Makefile generation rules, the
+  `postgres_fdw` result-relation consumer; and the cited `indexing.out`,
+  `insert_conflict.sql`, `ddl.sgml`, and `create_index.sgml` ranges, including
+  the documentation's unqualified `ONLY`-marks-invalid sentence retained as an
+  open question.
+- Structure re-checked: all 22 Contents entries match heading order and slugs,
+  front matter shape and order correct, title carries `(unverified)` since
+  `verified: false` is human-only, and all 13 wiki links resolve.
+- Set `verified_by_agent: claude-fable-5-medium 2026-09-09T16:28:07Z`. The four
+  Open Questions are runtime measurements this source-only review cannot close
+  and remain filed as open; no answer claim depends on them. `verified: false`
+  untouched. `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors
+  and 0 warnings.
