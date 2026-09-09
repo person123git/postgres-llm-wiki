@@ -7602,3 +7602,91 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   the pre-edit baseline, all on other pages (six missing v18 injection-point citation targets,
   three unavailable v14/v18/v19 pins, two v12/v14 checkout-status warnings). No source
   checkout was modified, fetched or repaired.
+
+## [2026-09-09] review v17 | B-tree estimator re-verified claim by claim, gate scored, ICU measured
+
+- Re-verified [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#re-verified-on-a-rebuilt-server)
+  end to end at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql 17, review
+  question: Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)`; the asker chose "correct and restate", then chose a **full claim-level
+  re-verification**, a **server build with measurement**, and **repair in place**.
+- **Environment.** 17.11 built out of tree under `.wiki-runtime/tmp/btreerev/` with
+  `--with-icu --enable-debug --with-readline --with-zlib` — ICU on purpose, because every
+  earlier run was `--without-icu`. `make check` passed **225 of 225**; the `pageinspect`,
+  `pgstattuple` and `amcheck` checks passed 8, 1 and 3. Isolated cluster on port 55439,
+  `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`,
+  `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0`, default `BLCKSZ`,
+  eleven fixture databases. `raw/postgres-17/` was never written to and is clean at the pin.
+- **Citations.** All **476** source links re-read against the checkout: 68 files, 164 distinct
+  ranges, every one resolving, in-bounds and supporting its label. The 28 whose label token is
+  not literally inside the range were each read by hand (function bodies cited without the
+  declaration line, plus concept labels such as `soft-limit` and `grant-refuses-indexes`); all
+  are correct. The four SQL blocks hash to their recorded baselines and the superseded text
+  recovers from revision `f2d73b4` to `bffd166e…`.
+- **Everything measured reproduced.** 78/78 geometry cells exact (and the published leaf form
+  wrong in the same 30 cells: all 26 at `fillfactor = 100` plus aligned sizes 904, 904, 1016,
+  1216 at 90); internal item count 45/45; `relpages` 78/78 with worst 0; `0 bytes` on 10 of 10
+  fresh sorted builds against the published statement's 6, with the same `-33.9 %` at 2000
+  bytes and `+11.0 %` at 1000; the expression-width defect `-22.3 %` -> `0.0 %`; the `bigint`
+  abort at 0 rows against 10 with `1000000000000000000000000000000` printed as `numeric`;
+  the equal-image matrix agreeing with `bt_metap` on all ten; **132 TIDs at an item length of
+  808 bytes** (and 131 also at 808); posting mean absolute error **16.06 % to 5.77 %** against
+  a filed 15.92 to 5.73, within-one-point 8 -> 11 of 13; the seven-pattern calibration **digit
+  for digit** (90.05/45.17/95.49/66.90/90.05/60.13/69.61 density, true 0.0/49.8/-7.5/25.7/0.0/
+  33.3/23.8, floor `-245.2` on the duplicate-heavy one, re-read 0.8); compression 367 against
+  10,003 blocks at `avg_width` 904 both and `-2625.6 %` against `0.0 %`; and both probes
+  (`false` on a truly empty subset, `true` on a forged zero, `Index Only Scan using
+  empty_open`, group count 5,000 against a modelled 4,998).
+- **The deduplication gate is now scored against the current statement**, which no run had
+  done: 27 fixtures on two 500,000-row tables with 5,000 keys per column, oracle
+  `bt_metap().allequalimage`. 11 `recognized` (8 credited, 3 with `deduplicate_items = off`),
+  9 `ineligible`, 7 `unknown`; **zero over-credits**, agreement on all 20
+  `recognized`/`ineligible` rows, max reading 28.8 % (`i_multi_bad`, exactly the filed value),
+  min `-562.1 %`. Block counts matched the 2026-08-24 run exactly (421, 460, 459, 1931).
+  Predictions confirmed: unchanged credit decisions, `i_ei_true` at `-226.4 %`, the four
+  test-15 fixtures at 0.2 % with the new caveat. Refined: the `text` fixtures were **fixed**
+  from `+7.8 %` to `-0.2 %`; the two-column pair does *not* re-baseline without extended
+  statistics; and `i_squat` only lands in `unknown` when the impostor is schema-qualified,
+  because `FUNCTION 4 btequalimage(oid)` resolves through `pg_catalog` first.
+- **The collation branch is measured for the first time**: an ICU collation with
+  `deterministic = false` gives metapage `allequalimage` false, gate `ineligible` and
+  `DEBUG1 index "..." cannot use deduplication`; its deterministic twin gives true /
+  `recognized` / "can safely use deduplication"; `text_pattern_ops` refuses the
+  nondeterministic collation verbatim; and ICU needs a UTF8 database, since `SQL_ASCII`
+  answers `current database's encoding is not supported with this provider`.
+- **Six defects corrected in place.** The published `relpages` comparison was not
+  reproducible — 26 exact / 52 within one / worst 15, not 53 / 71 / 5 (the 53 belongs to a
+  partial variant, found by scoring six). The non-owner case drops **two** rows, not one:
+  8 of 10, because `stz_idx` has no `pg_stats` row for any role. The posting-tail table's
+  sign convention is the negation of every other table and was unlabelled. The barrier
+  artifact needs the load and the ANALYZE inside one `PGSTAT_MIN_INTERVAL` of 1000 ms: a
+  2.3 s load produced exact counts with no barrier, a 20,000-row load reproduced the doubling
+  on 9 of 9, and the barrier fixed it. "32-byte tuples" is a 32-byte datum in a 40-byte
+  tuple. And the platform question is settled: `Linux x86_64`, `max_data_alignment` 8,
+  `database_block_size` 8192.
+- **One new open question.** A duplicate-heavy multicolumn index with correlated key columns
+  and no `ndistinct` statistics object reads `-320.0 %` (`int4, int8`) and `-562.1 %`
+  (`int4, text`) with no caveat, because the model multiplies per-column distinct counts and
+  the clamp saturates; `CREATE STATISTICS ... (ndistinct)` takes the same index to `0.0 %`
+  (8.1 % under the superseded text, the 2026-08-24 figure). The platform question was
+  replaced by an unpublished-fixture-recipe question covering the three families whose
+  magnitudes could not be rebuilt (inheritance `-461.0 %`, custom opclass `-226.0 %`, and the
+  six further fresh shapes).
+- Page edits: the corrected fifth prompt and its note under Question; two lead paragraphs;
+  three new Answer sections (Re-verified on a rebuilt server, The deduplication gate scored
+  against the current statement, The collation branch measured with ICU); in-place repairs to
+  the geometry, defect, posting and barrier sections plus the fixture recipes and the harness
+  view recipe; one new and one rewritten Open Question and four updated ones; the mandatory
+  review table's gate, acceptance, regression and repository rows; items 1, 3 and 10 of "What
+  still needs to be tested"; four Contents entries; one Context Reviewed bullet; four Evidence
+  Map rows. Every fenced SQL block, the source pin and both verification fields are unchanged.
+  Agent verification stays `not yet`: tests 18-91 and fixtures 92-121 are still unscored and
+  four measured residuals remain.
+- Validation: 511 citations over 68 files all resolve and cite only `raw/postgres-17/`; all 45
+  Contents entries match heading order and slugs; every page-internal anchor and wiki link
+  resolves; `git diff --check` passes; `.wiki-runtime/venv/bin/python scripts/wiki_lint`
+  reports **0 errors and 0 warnings**, the same as the pre-edit baseline. Updated
+  `wiki/index.md`, `wiki/v17/index.md`, the v17 coverage cell and a dated note in
+  `wiki/versions.md`. The sandbox was deleted after filing.
