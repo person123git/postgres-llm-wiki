@@ -27,6 +27,10 @@ verified_by_agent: not yet
   - [Calibration by insertion pattern](#calibration-by-insertion-pattern)
   - [Reproducing the measurements](#reproducing-the-measurements)
   - [What remains unimplemented](#what-remains-unimplemented)
+  - [Mandatory test review](#mandatory-test-review)
+  - [Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement)
+  - [What still needs to be tested](#what-still-needs-to-be-tested)
+  - [How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -40,6 +44,11 @@ verified_by_agent: not yet
   - [Partial-index populations and zero counts](#partial-index-populations-and-zero-counts)
   - [Statistics publication and test ordering](#statistics-publication-and-test-ordering)
   - [Alert thresholds and rebuild savings](#alert-thresholds-and-rebuild-savings)
+  - [The mandatory suite and the current statement](#the-mandatory-suite-and-the-current-statement)
+  - [Scoring column for the partial-index contract](#scoring-column-for-the-partial-index-contract)
+  - [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement)
+  - [Integer-truncated widths across an alignment boundary](#integer-truncated-widths-across-an-alignment-boundary)
+  - [Platform of the 2026-09-08 run](#platform-of-the-2026-09-08-run)
 - [Source References](#source-references)
 - [Navigation](#navigation)
 
@@ -77,6 +86,27 @@ regression suite, and to delete the sandbox after filing. The work is filed
 under [What the ten plans changed](#what-the-ten-plans-changed),
 [Measured acceptance results](#measured-acceptance-results) and
 [Calibration by insertion pattern](#calibration-by-insertion-pattern).
+
+Fourth prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, for the question "Testing the PostgreSQL 12
+> Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified)", review all the
+> mandatory tests, and review what still needs to be tested and how.
+
+The original read `follow agents.md, in postgresql 17, for question: # Testing
+the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) ,
+review all mandatory tests and review what needs and how to be tested.`:
+`agents.md` for AGENTS.md, lowercase `postgresql`, a stray `#` before the title,
+a space before a comma, and "what needs and how to be tested" for "what still
+needs to be tested and how". The asker chose to read "the mandatory tests" as
+the whole numbered suite this page filed and later removed — tests 1-17, tests
+18-91, fixtures 92-112, test 113 and fixtures 114-121 — together with the
+2026-09-08 acceptance fixtures and the engine regression runs, and chose a
+review with a runnable protocol rather than a server run. The review is filed
+under [Mandatory test review](#mandatory-test-review),
+[Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement),
+[What still needs to be tested](#what-still-needs-to-be-tested) and
+[How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement).
 
 ## Answer
 
@@ -122,6 +152,14 @@ compressible key that the index stores compressed (`-2625.6 %`), and
 most-common-value frequencies that misstate group sizes. Only the third of those
 raises a caveat; the other three are silent, and are the reason this page is
 still `(unverified)`. See [Open Questions](#open-questions).
+
+**The page's own mandatory suite has not been scored against this statement.**
+Tests 1-17, tests 18-91 and fixtures 92-121 were last run on 2026-08-24 against
+the superseded six-change text, and the 2026-09-08 rewrite was measured on new
+fixtures only. Until that suite is re-run, the deduplication-gate and
+partial-index contracts this page once carried are expectations derived from
+the SQL, not results. The review, the expected verdicts and a runnable protocol
+are under [Mandatory test review](#mandatory-test-review).
 
 ### The current recommended statement
 
@@ -1462,6 +1500,430 @@ support function 4 is a PL/pgSQL function returning true and false.
 - Cross-version work. Every number here is 17.11 at the default block size; the
   PostgreSQL 12 comparison this page began with has not been re-run against the
   revised statement.
+- The mandatory suite. Tests 1-17, tests 18-91 and fixtures 92-121 have not
+  been re-scored against this statement; see
+  [Mandatory test review](#mandatory-test-review).
+
+### Mandatory test review
+
+**The suite this page calls mandatory has never been run against the statement
+this page now recommends.** The asker filed it in three steps: seventeen
+deduplication-gate tests on 2026-08-18, seventy-four partial-index tests on
+2026-08-19 and the drained-queue test 113 on 2026-08-24, with fixtures 92-112
+and 114-121 as the controls for changes A through E. Its contract was that a
+statement failing a mandatory test is corrected, not merely reported. Every one
+of those tests was last scored on 2026-08-24 against the six-change text whose
+SHA-256 is `bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357`.
+The 2026-09-07 cleanup removed the suite's tables from this page, and the
+2026-09-08 implementation replaced that text with
+`wiki_btree_wasted_space_sweep_r2` and measured it on new fixtures only. The
+result is a page whose headline numbers come from one fixture family and whose
+contractual tests are unscored for the current text.
+
+Two things were checked today without a server. The text between the fence
+lines of the four SQL blocks on this page hashes to the four baselines recorded
+under [Measured acceptance results](#measured-acceptance-results), so the
+statement under review is the one that was measured. And the superseded text is
+recoverable: the revision of this page before the rewrite carries one SQL block,
+and it hashes to `bffd166e…`, so a side-by-side rerun has both texts.
+`scripts/wiki_lint` reports nothing on this page.
+
+| Group | Tests | Fixtures and oracle | Last scored against | State for the current statement |
+|---|---|---|---|---|
+| Deduplication gate | 1-17 | 28 to 30 indexes on two 500,000-row tables with 5,000 keys each; the engine's `DEBUG1` verdict, `bt_metap().allequalimage` and posting tuples in `bt_page_items` | six-change text, 2026-08-20 and 2026-08-24 | not run; the 2026-09-08 equal-image matrix covers the shapes of tests 1, 3, 5, 9 (`lower` only), 10, 13 and 14 with ten indexes |
+| Partial indexes | 18-91 | 74 indexes over about 58 tables, each populated, analysed, indexed, sized, read, rebuilt with `REINDEX INDEX` and sized again; verdict on `wasted_space_pct_floor` | six-change text, 2026-08-24, as a shape rebuild of the lost original scripts | not run; the 2026-09-08 run had one partial fresh build and two population-probe fixtures |
+| Change A-D controls | 92-112 | threshold calibration 92-95, non-partial controls 96-99, variable-width `INCLUDE` 100-105, expression statistics 106-112 | six-change text, 2026-08-24 | not run |
+| Drained queue and change E | 113a-c, 114-121 | one 1,000,000-row table per state; `reltuples = 0` shapes; a 12.2 twin | six-change text, 2026-08-24 | not run |
+| Acceptance fixtures | 2026-09-08 | 78 geometry cells, 16 fresh builds, four defect fixtures read as two roles, 10 equal-image indexes, 13 posting-tail indexes, 9 barrier tables, 4 probe fixtures, 7 calibration patterns | current text | run once, on a build without ICU, on one platform |
+| Engine regression | `make check`, `contrib/pageinspect`, `contrib/pgstattuple` | temporary installation of the build | 2026-09-08 build | passed 225 of 225; validates the build, not the estimator |
+| Repository checks | `scripts/wiki_lint`, block hashes, Contents anchors | this repository | 2026-09-09 | pass; the lint run's nine errors and two warnings are all on other pages |
+
+`make check` runs the core regression tests against a temporary installation
+inside the build tree, and each contrib module's tests run from its own
+directory the same way. Those suites exercise the engine, not this wiki's
+estimator: nothing in them reads `wasted_space_pct`. The adjacent engine
+coverage they do provide is the deduplication block of `btree_index.sql`.
+[regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59),
+[regress.sgml#contrib-suites](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L171-L195),
+[installation.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L515-L522),
+[btree_index.sql#deduplication-tests](../../../../raw/postgres-17/src/test/regress/sql/btree_index.sql#L186-L213).
+
+### Expected verdicts under the current statement
+
+This section derives, from the two SQL texts, what the rerun should find. Nothing
+in it is a measurement. The current text differs from the six-change text in five
+ways that touch a mandatory test: the equal-image verdict is three-valued and the
+determinism test applies only to `btvarstrequalimage` keys; the leaf, internal
+and level arithmetic changed; posting tails are priced separately; an index
+expression's width loses three bytes; and the missing-statistics term excludes
+hidden and disabled attributes while five new caveat strings exist. Every
+exclusion term from changes A through E is carried unchanged, and `live_rows`
+is still the two-arm `CASE` that prices a `reltuples` of 0 as an empty index.
+[The current recommended statement](#the-current-recommended-statement),
+[What the ten plans changed](#what-the-ten-plans-changed).
+
+**Deduplication gate, tests 1-17.** The gate reads the same catalog facts as
+before, so the credit decision should not move on any fixture. What moves is
+the label and the caveat. The engine's rule is unchanged: an `INCLUDE` index is
+refused before any lookup, each key's support function 4 is looked up and then
+called, and the build logs one `DEBUG1` line per index except for `INCLUDE`
+indexes, which return before the message.
+[nbtutils.c#_bt_allequalimage-INCLUDE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147),
+[nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183),
+[nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180),
+[nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1150).
+
+| Tests | Fixtures | Six-change gate | Expected `equalimage` | Credit | Expected change in the reading |
+|---|---|---|---|---|---|
+| 1, 2, 3, 7, 14 | `i_int4`, `i_int8`, `i_text_det`, `i_text_icu_det`, `i_multi_ok`, `i2_ok`, `i_ei_alias` | true | `recognized` | yes | the 8.0 % on both `text` fixtures and the −320.0 % / 8.1 % two-column pair were arithmetic, and the tail pricing and geometry changed that arithmetic; re-baseline all five |
+| 4, 9 | `i_text_nondet`, `i_expr_lower_ci` | false | `ineligible` | no | none expected; the collation test now fires only because `text_ops` registers `btvarstrequalimage` |
+| 5, 6, 8, 9, 12 | `i_numeric`, `i_float4`, `i_float8`, `i_multi_bad`, `i_expr_num`, `i_ei_none` | false | `ineligible` | no | none expected; `i_multi_bad` keeps its 28.8 %, see [Integer-truncated widths across an alignment boundary](#integer-truncated-widths-across-an-alignment-boundary) |
+| 10 | `i_inc` | false | `ineligible` | no | none expected |
+| 11 | `i_dupoff`, `i_text_off`, `i2_off` | true, `dedup_applies` false | `recognized`, `dedup_applies` false | no | none expected; the column now says `recognized` on an index that is not credited |
+| 13, 15 | `i_ei_false`, `i_mixed_tf`, `i_mixed_ft`, `i2_tf`, `i2_ft` | false | `unknown` | no | readings stay near 0.2 % and gain `unrecognized equal-image support function: no credit` |
+| 14 | `i_ei_true` | false by design | `unknown` | no | the designed under-credit remains; the 2026-09-08 twin `eq_custom_t_idx` read −214.9 % |
+| 16 | `i_squat`, the replaced built-in, `i_text_det2` | false / false / true | `unknown` / `unknown` / `recognized` | no / no / yes | conservative on the first two; `i_text_det2` stays credited because `prosrc` survives a rename |
+| 17 | ten fixtures on 12.2 | every gate false | not derivable | — | the text must first be shown to execute there; see [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement) |
+
+Test 14's `i_ei_alias` is the case that separates `prosrc` from `proname`: its
+function is `LANGUAGE internal AS 'btequalimage'` in schema `public`, and the
+current gate's `proc_always` test reads exactly `lanname = 'internal'` and
+`prosrc = 'btequalimage'`, so the index is `recognized`. Test 16's `i_squat`
+has a SQL function under the built-in's name, which fails `lanname =
+'internal'` and lands in `unknown`. The engine resolves a `LANGUAGE internal`
+function by `prosrc`, which is why the alias deduplicates and the impostor
+does not.
+[fmgr.c#internal-function-resolution](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240),
+[datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L424-L438),
+[varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2615),
+[The current recommended statement](#the-current-recommended-statement).
+
+**Partial indexes, tests 18-91.** The five exclusion terms are the same
+expressions, so the 36 withheld and 38 reported rows of the last run should
+reproduce, and the eight false negatives (65, 67, 86-91) should remain, because
+they are input errors the statement cannot see. The numbers move: on a 276-block
+fixture the hard-fit reservation and the never-closed rightmost page change the
+floor by at most a page or two, and every deduplicating fixture (22, 34, 36, 37,
+40, 42, 44, 48, 51) gets a new point estimate from the tail pricing. Two
+predictions are worth writing down before the run. Test 36, one key group of
+100,000 TIDs, was exact under the old rounding and should stay exact, because
+`floor(100000 / 132)` full posting tuples plus one tail is what the build
+writes. And test 47 stays withheld, because `any_varlena_include` is unchanged.
+[nbtsort.c#_bt_sort_dedup_finish_pending](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1026-L1050),
+[nbtdedup.c#_bt_dedup_save_htid-cap](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L510-L513),
+[Page and posting geometry](#page-and-posting-geometry).
+
+**Controls 92-121.** The table lists every control whose output is expected to
+differ from the 2026-08-24 run, and the two that are expected to fail again.
+
+| Fixture | Shape | 2026-08-24 result | Expected now | Why |
+|---|---|---|---|---|
+| `x109` (109) | plain index, key column with `SET STATISTICS 0` | 64.9 %, no caveat, reported | 64.9 %, reported, with `statistics target zero on an index column` | the caveat is new; [Reading the output](#reading-the-output) does not list it, so the row is still alertable |
+| `i103` (103) | partial, wide plain key, unique values | 84.1 %, no caveat, reported | the same | nothing in the current text reads a subset's width; this is the surviving critical false positive |
+| `p118` (118) | subset measured empty, then 50,000 rows arrive | 99.3 %, `status = ok`, no caveat | 99.3 % with `zero modelled rows: validate with a population probe`; the generator emits an `EXISTS` probe that should return `true` | `live_rows = 0` now raises the caveat, and the probe was measured to catch a forged zero |
+| `p120` (120) | a 300-row sample missed a 2,000-row subset | 87.5 %, below the 1 MB filter | the same with the caveat | as above; the sample size is `300 * attstattarget` |
+| 113b, 113c, `p75` | drained subsets | 100.0, 100.0, 99.6 | the same with the caveat; the probe should return `false` | a true zero is confirmed rather than believed |
+| `nz_k` (121) | non-partial, emptied, vacuumed, reloaded | 100.0 with `row-count sources disagree` | the same plus `zero modelled rows` | both conditions hold |
+| `nzb_k`, `i_trunc` (121) | rebuilt or truncated while empty | `unmeasured: reltuples unknown` | the same | a new relfilenode writes `reltuples = -1`, and a build that counts zero rows leaves it |
+| `np97`, `x110`, `x106`, `x111` | expression index, no statistics row | withheld by change D | withheld | the term is unchanged |
+| `x108` | expression index, never-analysed table | reported with `never analyzed` | the same | unchanged |
+| 92-95, 96, 98, 99, 100-102, 104, 105, 107, 112 | change B thresholds and the C/D controls | as filed | states unchanged, numbers re-baselined | the terms are unchanged; the arithmetic is not |
+
+Fixture 118 is the one the asker adopted knowingly on 2026-08-24, and it is the
+one whose classification the current text changes most: the row still reports,
+but a reader following [Reading the output](#reading-the-output) does not
+promote a `zero modelled rows` row without the probe, and the probe answers. The
+index never grows in that fixture because an `UPDATE` whose new row fails the
+predicate skips the partial index, which is why the whole file is dead. All of
+this is prediction to confirm, not result.
+[Validation probes](#validation-probes),
+[execIndexing.c#partial-predicate-skip](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L384-L386),
+[relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3951-L3952),
+[index.c#index_update_stats-sentinel](../../../../raw/postgres-17/src/backend/catalog/index.c#L2835-L2836),
+[analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894).
+
+**The 2026-09-08 fixtures.** These are the only measurements of the current
+text, and their limits are the rerun's first targets. The build was
+`--without-icu`, so no fixture exercised a nondeterministic collation and the
+`ineligible` branch that reads `collisdeterministic` is source-derived only. The
+run was owner-only except for the four defect fixtures. It had no partial-index
+suite and no 12.2 leg, and its platform statement conflicts with this
+repository's host; see [Platform of the 2026-09-08 run](#platform-of-the-2026-09-08-run).
+[installation.sgml#--without-icu](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1209-L1216),
+[pg_locale.c#pg_locale_deterministic](../../../../raw/postgres-17/src/backend/utils/adt/pg_locale.c#L1567-L1575),
+[Measured acceptance results](#measured-acceptance-results).
+
+### What still needs to be tested
+
+In priority order. Items 1 through 4 are the mandatory contract; the rest are
+gaps this review found.
+
+1. **The numbered suite against the current text.** Tests 1-17, tests 18-91,
+   fixtures 92-112, test 113 and fixtures 114-121, rebuilt from the page
+   history and scored by the procedure below. The pass criteria are step 9 of
+   that procedure.
+2. **Attribution of every moved row.** Install the superseded text
+   (`bffd166e…`) beside the current one and run `EXCEPT` in both directions over
+   the columns both views project, on the same fixture state, before any
+   `REINDEX`. A row that moves must be explained by one of the five changes
+   named above; an unexplained move is a defect.
+3. **ICU.** Build with ICU, which `configure` enables by default, and run
+   tests 4, 9, 51 and 52 plus one fresh build under a nondeterministic
+   collation, so that the `ineligible` branch and its 0.2 % reading are
+   measured rather than derived. Pattern operator classes refuse
+   nondeterministic collations at `CREATE INDEX`, so the `text_pattern_ops`
+   refusal of test 16 belongs in the same run.
+   [installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170),
+   [installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193),
+   [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849).
+4. **The 12.2 leg of test 17.** The current text reads `pg_stats_ext.inherited`,
+   which this version's view defines. Whether the pinned 12 view defines it is
+   a version-local question this page cannot answer; the 12.2 leg therefore
+   starts by executing the exact text and recording the outcome, before any
+   fixture is built. The v12 page carries that version's build and publication
+   notes.
+   [system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
+   [The v12 publication protocol](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#the-v12-publication-protocol),
+   [V12 catalog, build and output compatibility](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#v12-catalog-build-and-output-compatibility).
+5. **Role coverage.** `stats_hidden` now decides both a caveat and whether the
+   missing-statistics term fires, and `pg_stats` filters an expression
+   attribute's row by the index's owner-only ACL. Run the expression fixtures
+   (`p48` to `p50`, `x106` to `x112`, `np97` and the four `i_expr_*` indexes) as
+   a role holding only `SELECT` on the tables, and record which rows appear and
+   with which caveat.
+   [system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275),
+   [acl.c#column_privilege_check](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L2538-L2569).
+6. **Fixture contract.** Before a fixture is scored it asserts its intended row
+   count, predicate membership, deletion fraction and duplicate groups. Two
+   known recipe defects are corrected first: `p75` drains its subset completely
+   where its comment says 90 %, and `CREATE INDEX np99 ON np99` cannot run
+   because an index and a table share a namespace. `pg_stat_force_next_flush()`
+   precedes every `ANALYZE` and `VACUUM`, which the barrier measurement on this
+   page made a rule.
+   [pgstatfuncs.c#snapshot-and-flush-functions](../../../../raw/postgres-17/src/backend/utils/adt/pgstatfuncs.c#L1680-L1695),
+   [stats.sql#forced-flush](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L101-L102),
+   [The statistics publication barrier](#the-statistics-publication-barrier).
+7. **The scoring column.** The partial-index contract scores
+   `wasted_space_pct_floor`; the calibration on this page found the floor
+   unusable as a lower bound on a deduplicating index. The rerun records both
+   columns and classifies each row twice; which column carries the verdict is
+   the asker's decision, filed under
+   [Scoring column for the partial-index contract](#scoring-column-for-the-partial-index-contract).
+8. **Untested configurations.** A `--with-blocksize=16` or `32` build, because
+   every geometry constant in the statement is derived from `block_size` and no
+   run has checked the arithmetic at another size; a parallel build, which
+   `btbuild` starts when `ii_ParallelWorkers > 0` and which still ends in
+   `_bt_leafbuild`; a `CREATE INDEX CONCURRENTLY` and a `REINDEX CONCURRENTLY`
+   build, which both reach `index_build` through `index_concurrently_build`; a
+   partitioned table, whose per-partition indexes enter the candidate set as
+   `relkind = 'i'` while the partitioned index itself is `'I'` and excluded,
+   and whose `ANALYZE` expands to the partitions; and a non-C locale.
+   `MAXIMUM_ALIGNOF` other than 8 and big-endian hardware are not available in
+   this environment and stay open.
+   [installation.sgml#--with-blocksize](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1472-L1482),
+   [nbtsort.c#btbuild-parallel](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L389-L392),
+   [nbtsort.c#_bt_leafbuild](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L535-L571),
+   [index.c#index_concurrently_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L1533-L1539),
+   [indexcmds.c#DefineIndex-concurrent-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1682),
+   [indexcmds.c#ReindexRelationConcurrently-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4009),
+   [pg_class.h#relkind](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L164-L173),
+   [vacuum.c#expand_vacuum_rel-partitions](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L963-L982),
+   [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L249-L259).
+9. **Harness typing.** The result table of the partial-index harness declared
+   `modelled_rows`, `key_groups` and `idx_reltuples` as `bigint`; the current
+   text projects them as `numeric`, and the `ovf_idx` defect fixture would then
+   fail the harness rather than the statement. Declare them `numeric` and add
+   `wasted_space_bytes`, `equalimage` and `reltuples_writer` columns.
+   [numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549).
+10. **Platform record.** Store `pg_control_init()`'s `max_data_alignment` and
+    `database_block_size` with every result row, and record
+    `pg_config --configure` and `uname -sm` in the run's log.
+    [pg_proc.dat#pg_control_init](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11997),
+    [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204).
+11. **Cost.** No timing exists for the current text. The current text adds the
+    `opc` join, the per-class `classfit` and `classsize` split, and two
+    privilege function calls per attribute over the six-change text. Time six
+    interleaved pairs against the superseded text on the rebuilt fixture
+    database and on a database of several hundred indexes, and file the
+    distributions rather than a single number.
+
+### How to run the suite against the current statement
+
+Every step below was designed against the pinned source and the harness this
+page filed on 2026-08-19 and 2026-08-24; none of it was executed for this
+review. The checkout under `raw/postgres-17/` stays read-only: the build is a
+VPATH build in a directory under `.wiki-runtime/tmp/`, which is the form the
+documentation describes.
+[installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432).
+
+**1. Build and check.** Configure with ICU, which is on by default, and with
+debugging symbols; run the core suite and the three contrib suites the oracles
+need. On a host where ICU is not on the default search path, pass `ICU_CFLAGS`
+and `ICU_LIBS` as the documentation shows.
+[installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193),
+[installation.sgml#--enable-debug](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1530-L1540),
+[regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59),
+[regress.sgml#contrib-suites](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L171-L195).
+
+```sh
+mkdir -p .wiki-runtime/tmp/btree17r/build && cd .wiki-runtime/tmp/btree17r/build
+../../../../raw/postgres-17/configure --prefix="$PWD/../install" \
+    --enable-debug --without-readline --without-zlib
+make -j8 && make check
+for m in pageinspect pgstattuple amcheck; do
+  make -C contrib/$m && make -C contrib/$m check
+done
+make install
+for m in pageinspect pgstattuple amcheck; do make -C contrib/$m install; done
+```
+
+**2. Cluster.** Initialise with `--locale=C`, then start with the settings
+below. The context column is each GUC's definition in the pinned table, and it
+decides how a later change is applied.
+[initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291).
+
+| Setting | Value | Context | Scope of a change |
+|---|---|---|---|
+| `autovacuum` | `off` | `PGC_SIGHUP` | reload; set before the first fixture so no background `ANALYZE` repairs one mid-test |
+| `fsync` | `off` | `PGC_SIGHUP` | reload |
+| `shared_buffers` | `512MB` | `PGC_POSTMASTER` | restart |
+| `maintenance_work_mem` | `256MB` | `PGC_USERSET` | session or transaction |
+| `max_parallel_maintenance_workers` | `0` for the suite, `2` for the parallel-build case | `PGC_USERSET` | session or transaction |
+| `client_min_messages` | `debug1` around `CREATE INDEX` in the gate harness | `PGC_USERSET` | session or transaction |
+| `default_statistics_target` | `1` for fixture 120 only | `PGC_USERSET` | session or transaction |
+| `statement_timeout`, `lock_timeout` | `600s` and `2s` in the harness session | `PGC_USERSET` | session or transaction |
+
+[guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453),
+[guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100),
+[guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265),
+[guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2466-L2469),
+[guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3410-L3413),
+[guc_tables.c#client_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4777-L4780),
+[guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2074),
+[guc_tables.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631).
+
+**3. Statement texts.** Extract the estimator block from this page and the
+superseded block from the page's previous revision, verify both hashes, and
+install each as a view with the harness edits this page documents: drop the
+1 MB filter, the `ORDER BY` and the `LIMIT 20`; drop `AND NOT suppress_row` and
+project `suppress_row` instead; and project the internals the scorer reads
+(`expected_blocks`, `floor_blocks`, `actual_bytes`, `live_rows`, `slot`,
+`leaf_cap`, `nmax`, `dedup_applies`, `is_partial`, `equalimage_state`,
+`stats_row_missing`, `dedup_credited`, `stats_stale`). Run both exact texts
+once as filed, filter and `LIMIT` intact, to prove they execute. The extraction
+below was run for this review and reproduced both hashes.
+
+```sh
+awk '/^```sql$/{n++; inb=1; next} /^```$/{inb=0; next} inb && n==1' \
+  wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md > est_r2.sql
+shasum -a 256 est_r2.sql   # 8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
+git show f2d73b4:wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md \
+  | awk '/^```sql$/{n++; inb=1; next} /^```$/{inb=0; next} inb && n==1' > est_old.sql
+shasum -a 256 est_old.sql  # bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
+```
+
+**4. Fixtures.** Rebuild them from the page history. The deduplication-gate
+harness is verbatim in revision `33fe5a4` of this page under "The harness,
+runnable"; the partial-index shapes are the requirement tables under "The
+seventy-four partial-index tests, and the verdict on each"; the 92-121 recipes
+are described in the change A through E sections of the same revision. Apply
+the two recipe corrections, give every fixture an assertion of its intended
+population, and call `pg_stat_force_next_flush()` before every `ANALYZE` and
+`VACUUM`. In `CREATE INDEX`, `WITH (fillfactor = ...)` precedes `WHERE`.
+[gram.y#IndexStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L8093-L8095).
+
+**5. Score.** One procedure per index, in this order: assert the population,
+record `pg_relation_size`, read both views, `REINDEX INDEX`, record the size
+again. The `res` table is the 2026-08-19 harness's with `modelled_rows`,
+`key_groups` and `idx_reltuples` as `numeric` and three added columns,
+`wasted_space_bytes numeric`, `equalimage text` and `reltuples_writer text`.
+The verdict query classifies each row on both columns, replaces the
+2026-08-19 rule's unclassified band with an explicit five-point margin, and
+adds an `alertable` column that applies this page's reading rule: a row is
+alertable only when its `caveats` string contains none of `never analyzed`,
+`row-count sources disagree`, `statistics not visible`, `zero modelled rows`
+and `wide compressible key`.
+
+```sql
+SET /* wiki_btree_mandatory_verdict_statement_timeout */ statement_timeout = '30s';
+SET /* wiki_btree_mandatory_verdict_lock_timeout */ lock_timeout = '2s';
+
+SELECT /* wiki_btree_mandatory_verdict */
+       num, idx, blocks_before, blocks_after, a.actual, wsp, wspf,
+       v.verdict_point, v.verdict_floor,
+       (caveats IS NULL OR caveats !~ '(never analyzed|row-count sources disagree|statistics not visible|zero modelled rows|wide compressible key)')
+                                                          AS alertable,
+       caveats, equalimage
+  FROM res
+  CROSS JOIN LATERAL (
+        SELECT round(100.0 * (size_before - size_after) / greatest(size_before, 1), 1) AS actual) a
+  CROSS JOIN LATERAL (
+        SELECT CASE WHEN wsp IS NULL THEN 'UNMEASURED'
+                    WHEN wsp >= 50 AND a.actual < 10 THEN 'CRITICAL FALSE POSITIVE'
+                    WHEN wsp >= 50 AND a.actual < 45 THEN 'FALSE POSITIVE'
+                    WHEN wsp >= 50 AND wsp - a.actual > 5 THEN 'FALSE POSITIVE'
+                    WHEN wsp <  45 AND a.actual >= 50 THEN 'FALSE NEGATIVE'
+                    ELSE 'PASS' END                        AS verdict_point,
+               CASE WHEN wspf IS NULL THEN 'UNMEASURED'
+                    WHEN wspf >= 50 AND a.actual < 10 THEN 'CRITICAL FALSE POSITIVE'
+                    WHEN wspf >= 50 AND a.actual < 45 THEN 'FALSE POSITIVE'
+                    WHEN wspf >= 50 AND wspf - a.actual > 5 THEN 'FALSE POSITIVE'
+                    WHEN wspf <  45 AND a.actual >= 50 THEN 'FALSE NEGATIVE'
+                    ELSE 'PASS' END                        AS verdict_floor) v
+ ORDER BY num;
+```
+
+Oracles are read beside each row and never scored: `bt_metap().allequalimage`
+against `equalimage`, the `DEBUG1` line from the build, `count(tids) > 0` over
+`bt_page_items` for posting lists, `pgstatindex` for density, and
+`bt_index_check` after any support-function mutation in test 16, because it
+raises when the metapage disagrees with the current catalog.
+[pageinspect--1.8--1.9.sql#bt_metap](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L73-L82),
+[pageinspect--1.8--1.9.sql#bt_page_items](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L109-L118),
+[btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921),
+[pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31),
+[amcheck--1.0--1.1.sql#bt_index_check](../../../../raw/postgres-17/contrib/amcheck/amcheck--1.0--1.1.sql#L12-L28),
+[verify_nbtree.c#metapage-equalimage-check](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L380-L396).
+
+**6. Attribution.** Before the first `REINDEX`, run `SELECT ... FROM est_r2
+EXCEPT SELECT ... FROM est_old` and its reverse over the columns both views
+project, and keep every returned row with the change that explains it. This is
+the same proof the 2026-08-20 and 2026-08-24 runs used, and it is what turns a
+new verdict table into a regression result.
+
+**7. Probes.** Run the generator from [Validation probes](#validation-probes)
+on the fixture database, execute each emitted statement, and record its result
+beside the row. Expected: `true` for fixtures 118 and 120, `false` for 113b,
+113c and `p75`, and a group count within the sampling error of `key_groups`
+for every recognized gated index.
+
+**8. The 12.2 leg.** Build the pinned 12 checkout the same way, execute the
+exact current text, and record the outcome as a result in its own right. Only
+if it executes, run the transformer that drops the constructs 12 lacks and score
+the constructible subset against a measured `REINDEX INDEX`.
+
+**9. Pass criteria.** The suite passes for the current text when all of the
+following hold:
+
+- Gate group: no index is credited that the metapage says was not
+  deduplicated; the only under-credit is `i_ei_true`; `equalimage` agrees with
+  `bt_metap().allequalimage` on every `recognized` and `ineligible` row; no
+  fixture reads above 30 % on either column.
+- Partial group: no critical false positive among reported rows on the chosen
+  column; the true detections (68, 74, 77 and the corrected 75) are reported
+  within five points; every withheld row names the term that withheld it.
+- Controls: 113b and 113c read 100.0; every `modelled_rows = 0` row carries
+  `zero modelled rows` and has a recorded probe result; `x109` and `i103` are
+  filed as residual false positives rather than passed silently.
+- Every `EXCEPT` row is attributed to one of the five changes.
+- Both exact texts execute as filed, and no row raises an error.
+- `make check` and the three contrib checks pass; both block hashes match;
+  `scripts/wiki_lint` reports no new issue.
+
+**10. Filing.** The measured verdicts replace the expected columns in
+[Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement),
+with the platform record from item 10 above. The sandbox lives under
+`.wiki-runtime/tmp/` and is deleted or kept as the asker directs.
 
 ## Context Reviewed
 
@@ -1470,6 +1932,7 @@ support function 4 is a PL/pgSQL function returning true and false.
 - The sorted-build caller/callee path and its page arithmetic (`nbtsort.c`, `nbtdedup.c`, `bufpage.c`, `nbtree.h`), tuple formation and varlena header handling (`indextuple.c`, `heaptuple.c`, `varatt.h`, `heaptoast.h`, `htup_details.h`), index attribute construction (`index.c`), expression-statistics selection and the two ANALYZE passes (`analyze.c`), statistics visibility and privilege resolution (`system_views.sql`, `acl.c`, `aclchk.c`), cumulative-statistics flush ordering (`postgres.c`, `pgstat.c`, `pgstat_relation.c`), split strategies (`nbtsplitloc.c`), size formatting and numeric range errors (`dbsize.c`, `numeric.c`), and the generated catalog/function boundary.
 - Plan review on 2026-09-07, same pin, retained above.
 - Implementation and measurement run on 2026-09-08, same pin: 17.11 built out of tree under `.wiki-runtime/tmp/btree17/` (`--without-readline --without-zlib --without-icu`), an isolated cluster on port 55437 with `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB` and `--locale=C`; `make check` 225 of 225 tests passed, `contrib/pageinspect` and `contrib/pgstattuple` checks passed; six fixture databases covering page geometry, fresh sorted builds, the three deterministic defects, the equal-image matrix, posting-list tails, validation probes and the insertion-pattern calibration. `pageinspect` and `pgstattuple` were installed in the disposable cluster only. The sandbox was deleted after filing, so reproducing any number means rebuilding from the pin and re-running the published SQL.
+- Mandatory test review on 2026-09-09, same pin, no server built or started: the revisions of this page before the 2026-09-07 cleanup (`33fe5a4`, `f8265ad`) and before the 2026-09-08 rewrite (`f2d73b4`) for the suite's requirement tables, harnesses and fixture recipes; the log entries of 2026-08-18, 2026-08-19, 2026-08-20, 2026-08-24 and 2026-09-08 for each run's provenance; the four fenced blocks on this page hashed against their recorded baselines, and the superseded block recovered from `f2d73b4` and hashed against `bffd166e…`; the installation and regression documentation for VPATH builds, ICU, block size, `make check` and contrib suites; the GUC contexts of every cluster setting the protocol names; and the equal-image, concurrent-build, parallel-build, partition-expansion, statistics-sample and `reltuples`-sentinel paths cited in the review.
 
 ## Evidence Map
 
@@ -1488,6 +1951,12 @@ support function 4 is a PL/pgSQL function returning true and false.
 | Output formatting, range errors and split strategies | [dbsize.c#pg_size_pretty-sign](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L569-L600), [numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549), [nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033). |
 | Harness oracles | [btreefuncs.c#GetBTPageStatistics](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L108-L194), [pageinspect--1.8--1.9.sql#bt_page_stats](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L87-L124), [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31). |
 | Core-SQL contract and model-specific choices | [The current recommended statement](#the-current-recommended-statement). These expressions are the wiki's model, not a PostgreSQL engine guarantee. |
+| Mandatory test inventory and what the engine suites cover | [regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59), [regress.sgml#contrib-suites](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L171-L195), [installation.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L515-L522). |
+| Expected deduplication-gate verdicts | [nbtutils.c#_bt_allequalimage-INCLUDE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147), [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180), [fmgr.c#internal-function-resolution](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1150). |
+| Expected control verdicts | [execIndexing.c#partial-predicate-skip](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L384-L386), [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3951-L3952), [index.c#index_update_stats-sentinel](../../../../raw/postgres-17/src/backend/catalog/index.c#L2835-L2836), [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894). |
+| Rerun protocol: build, cluster settings and oracles | [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432), [installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193), [installation.sgml#--enable-debug](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1530-L1540), [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291), [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453), [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265), [pageinspect--1.8--1.9.sql#bt_metap](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L73-L82), [pageinspect--1.8--1.9.sql#bt_page_items](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L109-L118), [amcheck--1.0--1.1.sql#bt_index_check](../../../../raw/postgres-17/contrib/amcheck/amcheck--1.0--1.1.sql#L12-L28), [verify_nbtree.c#metapage-equalimage-check](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L380-L396). |
+| Untested build paths and relation shapes | [installation.sgml#--with-blocksize](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1472-L1482), [nbtsort.c#btbuild-parallel](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L389-L392), [index.c#index_concurrently_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L1533-L1539), [indexcmds.c#ReindexRelationConcurrently-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4009), [pg_class.h#relkind](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L164-L173), [vacuum.c#expand_vacuum_rel-partitions](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L963-L982). |
+| Cross-version, width and platform open questions | [system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290), [pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L41-L50), [analyze.c#stawidth](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540), [pg_proc.dat#pg_control_init](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11997). |
 
 ## Open Questions
 
@@ -1610,6 +2079,78 @@ conservative bound on a deduplicating index (`-245.2 %` against a true `-7.5 %`)
 and no replacement lower bound has been derived.
 [Calibration by insertion pattern](#calibration-by-insertion-pattern),
 [nbtsplitloc.c#split-policy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L278-L335).
+
+### The mandatory suite and the current statement
+
+The asker's 2026-08-18 contract says a statement that fails a mandatory test is
+corrected, not reported. The current text has not been put to that suite:
+tests 1-17, tests 18-91 and fixtures 92-121 were last scored against the
+superseded six-change text on 2026-08-24, and the numbers this page leads with
+come from the 2026-09-08 fixtures alone. The expected outcomes are derived under
+[Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement)
+and the procedure is under
+[How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement);
+until it runs, two fixtures are expected to remain critical false positives on
+the report (`i103`, and `x109` unless the reading rule learns the
+`statistics target zero on an index column` caveat), and the deduplication
+verdicts of tests 13 through 16 carry a caveat they did not carry before.
+[Mandatory test review](#mandatory-test-review).
+
+### Scoring column for the partial-index contract
+
+The asker chose `wasted_space_pct_floor` as the verdict column on 2026-08-19
+because that column has no duplication term, and the first run confirmed the
+choice: nine point-estimate false positives did not reach the floor. The
+calibration on this page then measured the floor at `-245.2 %` against a true
+`-7.5 %` on a duplicate-heavy index, and the reading guidance now names
+`wasted_space_pct` with `equalimage` and `caveats`. The two rules disagree on
+any index that deduplicates. The protocol records both columns and both
+verdicts; which one carries the contract is the asker's decision, and the
+pass criteria above are written for whichever column is chosen.
+[Calibration by insertion pattern](#calibration-by-insertion-pattern),
+[Reading the output](#reading-the-output).
+
+### Cross-version execution of the revised statement
+
+The current text was written and measured on 17.11 only. Its `extstat` stage
+selects `pg_stats_ext` rows with `inherited = false`, and `inherited` is a
+column this version's view defines from `stxdinherit`. Test 17 and the
+"12 through 17" contract of the earlier statement require the text to execute
+on the pinned 12.2 server; nothing on this page shows that it does, and the v12
+companion page has not been updated for the revised text. The first result of
+the 12.2 leg is therefore the parse outcome itself, and a text that does not
+execute there fails test 17 before any fixture is built.
+[system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
+[system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309),
+[What remains unimplemented](#what-remains-unimplemented).
+
+### Integer-truncated widths across an alignment boundary
+
+`stawidth` is an `int32`, and for a variable-width column `ANALYZE` assigns it
+`total_width / nonnull_cnt`, so a column whose values average 4.9996 bytes
+records 4. On the `(int4, numeric)` fixture `i_multi_bad` the model priced a
+16-byte tuple where the build stores 24, and the reading was 28.8 % on 17.11 and
+12.2 alike, with the gate closed on both. The current text still reads
+`avg_width` for a variable-width key, so the error is expected to survive the
+rerun. A remedy would need a fractional width that no catalog holds, or a
+sampled `pg_column_size`, which is not a catalog read.
+[analyze.c#stawidth](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540),
+[pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L41-L50),
+[Page and posting geometry](#page-and-posting-geometry).
+
+### Platform of the 2026-09-08 run
+
+[Untested configurations](#untested-configurations) states that every number on
+this page comes from a build on x86-64 Linux. The repository host at review
+time is Darwin on arm64, and the run's log entry places the build under this
+repository's `.wiki-runtime/tmp/btree17/`. Both statements cannot describe the
+same run unless a second machine went unrecorded. Neither can be verified now,
+and the alignment and endianness assumptions behind the geometry constants
+depend on the answer, so the next run stores `pg_control_init()`'s
+`max_data_alignment` and `database_block_size` with its results and records
+`uname -sm` in its log.
+[pg_proc.dat#pg_control_init](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11997),
+[pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204).
 
 ## Source References
 
@@ -1737,6 +2278,44 @@ and no replacement lower bound has been derived.
 - [nbtsplitloc.c#split-policy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L278-L335)
 - [nbtsplitloc.c#single-value-strategy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L406-L416)
 - [nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033)
+- [regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59)
+- [regress.sgml#contrib-suites](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L171-L195)
+- [installation.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L515-L522)
+- [installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170)
+- [installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193)
+- [installation.sgml#--without-icu](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1209-L1216)
+- [installation.sgml#--with-blocksize](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1472-L1482)
+- [installation.sgml#--enable-debug](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1530-L1540)
+- [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291)
+- [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453)
+- [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100)
+- [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265)
+- [guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2466-L2469)
+- [guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3410-L3413)
+- [guc_tables.c#client_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4777-L4780)
+- [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2074)
+- [nbtutils.c#_bt_allequalimage-INCLUDE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147)
+- [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180)
+- [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1150)
+- [execIndexing.c#partial-predicate-skip](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L384-L386)
+- [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3951-L3952)
+- [index.c#index_update_stats-sentinel](../../../../raw/postgres-17/src/backend/catalog/index.c#L2835-L2836)
+- [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894)
+- [system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290)
+- [pageinspect--1.8--1.9.sql#bt_metap](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L73-L82)
+- [pageinspect--1.8--1.9.sql#bt_page_items](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L109-L118)
+- [amcheck--1.0--1.1.sql#bt_index_check](../../../../raw/postgres-17/contrib/amcheck/amcheck--1.0--1.1.sql#L12-L28)
+- [verify_nbtree.c#metapage-equalimage-check](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L380-L396)
+- [gram.y#IndexStmt](../../../../raw/postgres-17/src/backend/parser/gram.y#L8093-L8095)
+- [nbtsort.c#btbuild-parallel](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L389-L392)
+- [index.c#index_concurrently_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L1533-L1539)
+- [indexcmds.c#DefineIndex-concurrent-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1682)
+- [indexcmds.c#ReindexRelationConcurrently-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4009)
+- [pg_class.h#relkind](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L164-L173)
+- [vacuum.c#expand_vacuum_rel-partitions](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L963-L982)
+- [pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L41-L50)
+- [pg_proc.dat#pg_control_init](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11997)
+- [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204)
 
 ## Navigation
 

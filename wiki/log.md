@@ -7531,3 +7531,74 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   text byte for byte (`8099b0e5aab2690f…`) and the rebuilt text re-ran with the same 240 cells,
   and `git diff --check` passed. Agent verification stays `not yet`: this pass did not re-verify
   every historical claim, and the first corpus's extended table is now known not to reproduce.
+
+## [2026-09-09] review v17 | mandatory B-tree estimator tests reviewed against the current statement
+
+- Reviewed every test this page has called mandatory on [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#mandatory-test-review)
+  at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). **Prompt hygiene
+  first**: the original read `follow agents.md, in postgresql 17, for question: # Testing the
+  PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) , review all
+  mandatory tests and review what needs and how to be tested.`; the asker chose "correct and
+  restate", read "the mandatory tests" as the whole numbered suite plus the 2026-09-08
+  fixtures and the engine regression runs, and chose a **review with a runnable protocol,
+  no server run**.
+- **Finding: the mandatory suite has never been scored against the current statement.**
+  Tests 1-17 (deduplication gate, 2026-08-18), tests 18-91 (partial indexes, 2026-08-19),
+  fixtures 92-112 and test 113 with fixtures 114-121 (2026-08-24) were last run against the
+  six-change text `bffd166e…`; the 2026-09-07 cleanup removed their tables and the 2026-09-08
+  rewrite measured `wiki_btree_wasted_space_sweep_r2` on new fixtures only. The asker's
+  2026-08-18 contract — a failing mandatory test is corrected, not reported — is therefore
+  unenforced for the recommended text.
+- **Checked without a server**: the text between the fence lines of the four SQL blocks hashes
+  to the four recorded baselines (`8acd531b…`, `bfa7721f…`, `0b03f0c9…`, `3e57a568…`), the
+  superseded block is recoverable from revision `f2d73b4` and hashes to `bffd166e…`, and the
+  extraction command now published on the page reproduces both. The historical suite's
+  tables, harnesses and recipes were read from revisions `33fe5a4` and `f8265ad`.
+- **Expected verdicts, derived from the two texts**: the gate's credit decision is unchanged on
+  every fixture; tests 13, 15 and 16 land in `unknown` with the new caveat, `i_ei_alias` stays
+  `recognized` by `prosrc`, `i_ei_true` remains the designed under-credit; the partial suite's
+  36 withheld / 38 reported split should reproduce because every A-E term is carried verbatim,
+  while the numbers move with the geometry and tail pricing; `x109` (64.9 %) gains
+  `statistics target zero on an index column` but the reading rule does not list it, and
+  `i103` (84.1 %) is untouched — both are expected to remain critical false positives;
+  fixture 118 (99.3 %) now carries `zero modelled rows` and the probe generator should catch
+  it; `i_multi_bad`'s 28.8 % is integer `stawidth` truncation across an alignment boundary
+  and is expected to survive.
+- **Eleven gaps filed, in priority order**: the suite itself; `EXCEPT` attribution of every
+  moved row against `bffd166e…`; ICU (the 2026-09-08 build was `--without-icu`, so tests 4, 9,
+  51, 52 and the `collisdeterministic` branch are unmeasured under the current text); the 12.2
+  leg, where the text reads `pg_stats_ext.inherited` and this page cannot say whether the 12
+  view defines it; role coverage for `stats_hidden`; fixture-contract fixes (`p75` drains 100 %,
+  `np99` name clash, barrier before every ANALYZE/VACUUM); the floor-versus-point scoring
+  column, which the calibration made contradictory; block size, parallel, `CONCURRENTLY` and
+  partitioned builds; harness `bigint` typing; a platform record via `pg_control_init()`; and
+  cost, for which no figure exists.
+- **Protocol filed** in ten steps: VPATH build with ICU and `--enable-debug`, `make check` and
+  the `pageinspect`/`pgstattuple`/`amcheck` checks; cluster settings with each GUC's context
+  and change scope; hash-verified extraction of both texts and the documented view edits;
+  fixture rebuild from the page history with assertions; a scoring query that classifies each
+  row on both columns, replaces the unclassified band with a five-point margin and adds an
+  `alertable` column from the reading rule; oracles (`bt_metap`, `DEBUG1`, `bt_page_items`,
+  `pgstatindex`, `bt_index_check`); `EXCEPT` attribution before any `REINDEX`; probes; the
+  12.2 parse outcome as a result in its own right; and explicit pass criteria.
+- **Five open questions added**: the unscored suite; the scoring column; cross-version
+  execution of the revised text; integer-truncated widths across an alignment boundary; and
+  the platform of the 2026-09-08 run, whose page text says x86-64 Linux while this
+  repository's host is Darwin arm64 and the log places the build under `.wiki-runtime/tmp/`.
+- Page edits: the corrected fourth prompt and its note under Question; one lead paragraph and
+  one "What remains unimplemented" bullet; four new Answer sections (Mandatory test review,
+  Expected verdicts under the current statement, What still needs to be tested, How to run
+  the suite against the current statement); five Open Questions subsections; nine Contents
+  entries; one Context Reviewed bullet; six Evidence Map rows; 38 Source References. Existing
+  SQL blocks, the source pin and both verification fields are unchanged; the page remains
+  agent-unverified. Updated `wiki/index.md`, `wiki/v17/index.md` and the v17 coverage cell
+  plus a dated note in `wiki/versions.md`.
+- Validation: all Contents entries match the heading order and slugs, every page-internal
+  anchor and wiki link resolves, every new citation range resolves inside `raw/postgres-17/`
+  and no other checkout is cited; `git diff --check` passes; `raw/postgres-17/` is clean at the
+  pin. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: the same 9 errors and 2 warnings as
+  the pre-edit baseline, all on other pages (six missing v18 injection-point citation targets,
+  three unavailable v14/v18/v19 pins, two v12/v14 checkout-status warnings). No source
+  checkout was modified, fetched or repaired.
