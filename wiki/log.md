@@ -2,6 +2,89 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-09] review v17 | measurement-script section of the B-tree estimator audited and restructured
+
+- Reviewed the measurement-script section of [Testing the PostgreSQL 12 Core-SQL
+  B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#measurement-script-section-review)
+  at the unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql 17,
+  for question: Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17 (unverified) , review the measurement script section`; the asker
+  chose "correct and restate", then chose a **read-only audit** with no server
+  run, a **restructure to comply** with `MANDATORY Measurement Script`, and
+  **repair in place**.
+- **The structural finding is that the rule added earlier the same day cites
+  this page as its precedent, and this page did not satisfy it.** The two suite
+  scripts were `###` subsections of `## Answer`; the rule requires one top-level
+  `## Measurement Script` section between `## Answer` and `## Context Reviewed`,
+  listed in `## Contents`. That section now exists and holds the usage
+  information, the protocol, both scripts, the reading guide, the last-run record
+  and the review. No subsection heading was renamed, so every existing internal
+  and cross-page link (including the two from `wiki/versions.md`) still resolves,
+  and the four fenced `sql` blocks stayed in place, which is what keeps the
+  scripts' positional extraction valid.
+- **The mandatory usage information is now filed in full**, all eight items for
+  both legs: purpose, invocation, a per-stage table naming what each stage does
+  and which stages it needs first (16 stages for the 17 leg, 9 for the 12 leg,
+  plus `stop` and `clean`), every environment variable with its default (10
+  across the two legs), prerequisites (toolchain, ICU/readline/zlib, both pinned
+  checkouts, `git` with `f2d73b4` reachable, `sha256sum`, free ports, the three
+  contrib modules, `--locale=C` plus UTF8 for ICU), output with a read-first file
+  per leg, runtime, and cleanup including the 12 leg's deliberate partial clean.
+- **Thirteen defects repaired in place.** The material ones: step 3 of the
+  protocol published an `awk` extraction and `shasum -a 256`, which the
+  Bash-and-SQL-only rule forbids (and `shasum` is Perl), replaced by the scripts'
+  own `md_block` plus `sha256sum`; the 17 script's header omitted the `cost`
+  stage its dispatcher carries; the same header advertised a `KEEP` variable
+  nothing reads; `s()`, `t()`, the probe generator and both `stage_cost`
+  invocations ran `psql` without `ON_ERROR_STOP`, which is what makes a failed
+  statement in a `-f` script exit non-zero at all
+  (`mainloop.c:376`, `mainloop.c#L587-L594`, `psql-ref.sgml` Exit Status), so a
+  timing could be recorded for a statement that errored; `stage_clean` ran
+  `rm -rf "$SANDBOX"` on an environment value with no containment check, now
+  guarded by `inside_tmp` in both legs; nothing checked that `$PAGE` or the
+  pinned checkout exists; `stage_probes` declared `local line kind sql` while
+  reading into `name`; `stage_attribution` ended in a dead `grep -c`;
+  `listen_addresses`, `port` and `logging_collector` were written without a
+  context or apply scope named (three `PGC_POSTMASTER` rows added, so restart);
+  no fixture block was marked disposable although the `suite` stage drops the
+  whole `public` schema and the acceptance stage drops and recreates a login
+  role; and `md_block sql N`'s positional dependency on this page's fenced-block
+  order was undocumented, with `out/hashes.txt` as its only guard.
+- **Verified before and after, read-only**: all four `sql` baselines re-derived
+  from the page with the scripts' own `md_block` logic in pure Bash
+  (`8acd531b…`, `bfa7721f…`, `0b03f0c9…`, `3e57a568…`) plus the superseded text
+  from `git show f2d73b4:` (`bffd166e…`); `bash -n` clean on both scripts before
+  (1,793 and 474 lines) and after (1,843 and 507); the section's 37 citations all
+  resolving in bounds inside `raw/postgres-17/`, with the 7 whose label token is
+  not literally in range read by hand; the new containment guard tested against
+  nine paths, allowing only strict descendants of `.wiki-runtime/tmp/` and
+  refusing `/`, `$HOME`, the repository root, the `tmp` directory itself and a
+  `tmpx` lookalike. No server was built or started and both pinned checkouts
+  stayed clean at their pins.
+- **Four script-scope open questions filed**: the repaired scripts have not been
+  re-run, so every filed number predates the current script text; fixture DDL is
+  marked disposable rather than tagged, which is a reading of the rule rather
+  than the rule's words; the 12 leg's cluster settings have no citable apply
+  scope on a v17 page; and the 12 leg's runtime was never recorded.
+- Page edits: the eighth prompt and its correction note under `## Question`; one
+  Answer lead paragraph; the new `## Measurement Script` section with
+  `### How to use the suite scripts` and
+  `### Measurement-script section review`; in-place repairs to both scripts, the
+  protocol's steps 1, 3 and 10, the rules table (nine rules to eleven) and the
+  cluster-settings table; a last-run record with both pins; nine Contents
+  entries; one Context Reviewed bullet; two Evidence Map rows; eight new Source
+  References. The four SQL blocks, the pin and both verification fields are
+  unchanged; `verified_by_agent` stays `not yet` because the repaired scripts
+  were not re-run.
+- Validation: 597 citations over 71 files all resolve, are in bounds and cite
+  only `raw/postgres-17/`; all 58 `## Contents` entries match the heading order
+  and every page-internal anchor resolves;
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors and 0
+  warnings**. Updated `wiki/index.md`, `wiki/v17/index.md`, the v17 coverage cell
+  and a dated note in `wiki/versions.md`.
+
 ## [2026-09-09] restructure | mandatory measurement-script section for measuring pages
 
 - Added `MANDATORY Measurement Script` to `AGENTS.md`. Any page that reports a

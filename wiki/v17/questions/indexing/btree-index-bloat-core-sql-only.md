@@ -33,12 +33,15 @@ verified_by_agent: not yet
   - [Mandatory test review](#mandatory-test-review)
   - [Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement)
   - [What still needs to be tested](#what-still-needs-to-be-tested)
+- [Measurement Script](#measurement-script)
+  - [How to use the suite scripts](#how-to-use-the-suite-scripts)
   - [How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement)
   - [The two suite scripts, and the rules they follow](#the-two-suite-scripts-and-the-rules-they-follow)
   - [The PostgreSQL 17 suite script](#the-postgresql-17-suite-script)
   - [The PostgreSQL 12 leg script](#the-postgresql-12-leg-script)
   - [Reading the results of a run](#reading-the-results-of-a-run)
   - [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
+  - [Measurement-script section review](#measurement-script-section-review)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -59,6 +62,10 @@ verified_by_agent: not yet
   - [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement)
   - [Integer-truncated widths across an alignment boundary](#integer-truncated-widths-across-an-alignment-boundary)
   - [Fixture recipes that do not reproduce](#fixture-recipes-that-do-not-reproduce)
+  - [The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run)
+  - [Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged)
+  - [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
+  - [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime)
 - [Source References](#source-references)
 - [Navigation](#navigation)
 
@@ -170,6 +177,26 @@ capitalisation, and `also` placed mid-sentence. The asker chose a reader's
 guide rather than a per-stage reference with example output. It is filed under
 [Reading the results of a run](#reading-the-results-of-a-run).
 
+Eighth prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, for the question "Testing the PostgreSQL 12
+> Core-SQL B-Tree Bloat Method on PostgreSQL 17", review the measurement script
+> section.
+
+The original read `follow agents.md, in postgresql 17,  for question: Testing
+the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) ,
+review the measurement script section`: `agents.md` for AGENTS.md, lowercase
+`postgresql`, a double space after the first comma, `for question:` without an
+article, a space before the comma after the title, the `(unverified)` title
+hint treated as part of the title, and no sentence capitalisation or terminal
+period. The asker chose a **read-only audit** with no server run, a
+**restructure of the page to comply** with `MANDATORY Measurement Script`, and
+**repair in place** for what the audit found. The review is filed under
+[Measurement Script](#measurement-script): the usage information under
+[How to use the suite scripts](#how-to-use-the-suite-scripts) and the findings
+under
+[Measurement-script section review](#measurement-script-section-review).
+
 ## Answer
 
 **All ten repair plans are now implemented, and the revised statement is exact
@@ -247,6 +274,23 @@ that one filter line makes it run, and the transformed text then scores 19
 fixtures there — every one `ineligible`, nothing credited, and two `reltuples`
 shapes that read 99.9 % on 12.2 where 17.11 reports `unmeasured`.
 [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement).
+
+**The two scripts now sit in a top-level [Measurement Script](#measurement-script)
+section with the usage information the rule requires, and a read-only audit of
+that section fixed thirteen defects in it.** The audit changed no measured
+number and started no server; it re-derived all five SHA-256 baselines from this
+page in pure Bash, parsed both scripts, and re-read the 37 source citations in
+the section. The material findings: an `awk` and `shasum` recipe that the
+Bash-and-SQL-only rule forbids and the scripts had already replaced, a `cost`
+stage missing from the 17 script's own stage list, a `KEEP` variable documented
+but never read, three cluster settings written without their apply scopes named,
+`psql` calls whose errors could not raise the exit status, an unguarded
+`rm -rf` on an environment variable, and fixture blocks that were never marked
+disposable. Because the scripts were repaired and not re-run, every number this
+page reports predates its current script text.
+[Measurement-script section review](#measurement-script-section-review),
+[startup.c#single-query-action](../../../../raw/postgres-17/src/bin/psql/startup.c#L377-L386),
+[mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594).
 
 ### The current recommended statement
 
@@ -2067,11 +2111,165 @@ gaps this review found.
     database and on a database of several hundred indexes, and file the
     distributions rather than a single number.
 
+## Measurement Script
+
+Two scripts produce the numbers this page reports, one per version leg:
+`btree_bloat_suite_v17.sh` for 17.11 and `btree_bloat_suite_v12.sh` for the
+12.2 cross-version leg. Both are filed in full below, in Bash and SQL only, and
+both were run end to end on 2026-09-09.
+
+- The 17 leg backs
+  [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
+  in full, and re-measures every family the earlier runs reported: page
+  geometry, fresh sorted builds, the deduplication gate, the acceptance
+  fixtures, the insertion-pattern calibration, the 112-fixture numbered suite,
+  the `EXCEPT` attribution, the validation probes and the cost comparison.
+- The 12 leg backs the cross-version half of the same section and
+  [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement).
+- The numbers in
+  [Measured acceptance results](#measured-acceptance-results),
+  [Calibration by insertion pattern](#calibration-by-insertion-pattern),
+  [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server),
+  [The deduplication gate, scored against the current statement](#the-deduplication-gate-scored-against-the-current-statement)
+  and [The collation branch, measured with ICU](#the-collation-branch-measured-with-icu)
+  were measured on 2026-09-08 and 2026-09-09 by the predecessor harnesses these
+  two scripts replace. The scripts cover the same families and reproduced those
+  figures on 2026-09-09; a re-measurement of any of them re-runs these scripts
+  rather than rebuilding a harness.
+
+### How to use the suite scripts
+
+| Item | The 17 leg, `btree_bloat_suite_v17.sh` | The 12 leg, `btree_bloat_suite_v12.sh` |
+|---|---|---|
+| Purpose | measures the current estimator on a 17.11 server built from this page's pin: page geometry, fresh builds, the deduplication gate, the acceptance fixtures, the calibration patterns, the 112 numbered fixtures, attribution, probes, the scoring pass against a measured `REINDEX INDEX`, and statement cost | answers whether the exact filed text executes on the pinned 12.2 checkout, records the refusal verbatim, then transforms, fixtures and scores the constructible subset |
+| Invocation | `bash btree_bloat_suite_v17.sh [stage ...]`, run from the repository root | `bash btree_bloat_suite_v12.sh [stage ...]`, run from the repository root |
+| Stages | 16 stages plus `stop` and `clean`; see [the 17 leg's stages](#the-17-legs-stages) | 9 stages plus `stop` and `clean`; see [the 12 leg's stages](#the-12-legs-stages) |
+| Environment | 7 variables, all with defaults; see [what the scripts read from the environment](#what-the-scripts-read-from-the-environment) | 7 variables, all with defaults; same table |
+| Prerequisites | see [Prerequisites](#prerequisites) | the same, plus `-DTRUE=1 -DFALSE=0` in `EXTRA_CFLAGS` on a host whose ICU headers no longer define those macros |
+| Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt` |
+| Runtime | about eleven minutes for a full run on the host recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), most of it the build and the four regression suites; about ninety seconds for `suite attribution probes score criteria` from a built tree | not recorded on the 2026-09-09 run; the cost is dominated by the 12.2 build and its `make check`. See [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime) |
+| Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server and deletes `$SANDBOX`; `stop` stops it and keeps everything | `bash btree_bloat_suite_v12.sh clean` stops the 12 server and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
+
+Save the two fenced blocks below as `btree_bloat_suite_v17.sh` and
+`btree_bloat_suite_v12.sh`, then run them from the repository root, because
+`WIKI_ROOT` defaults to `$PWD` and both scripts resolve this page, both pinned
+checkouts and the sandbox beneath it. The 17 leg also runs `git show` inside the
+repository to recover the superseded statement text.
+
+```sh
+bash btree_bloat_suite_v17.sh                       # every stage, in order
+bash btree_bloat_suite_v17.sh suite score criteria  # selected stages
+bash btree_bloat_suite_v12.sh exact                 # just the 12.2 parse result
+bash btree_bloat_suite_v17.sh clean                 # stop and delete the sandbox
+```
+
+#### The 17 leg's stages
+
+Every stage is idempotent and re-runnable on its own once the stages it needs
+have run. The default order is the order of this table.
+
+| Stage | What it does | Needs first |
+|---|---|---|
+| `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists | nothing |
+| `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt` | `build` |
+| `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the five UTF8 databases `geo`, `cal`, `gate`, `acc` and `suite` | `build` |
+| `texts` | extracts the four `sql` blocks of this page and the superseded text from `OLD_REV`, checks all five SHA-256 baselines, runs both exact texts as filed, and installs the two harness views in all five databases | `cluster` |
+| `geometry` | the 78 (key width, fillfactor) cells, scored against `pageinspect` | `texts` |
+| `calibration` | the seven insertion patterns, each scored against its own `REINDEX INDEX` | `texts` |
+| `gate` | the deduplication-gate fixtures, with `bt_metap().allequalimage` and the build's `DEBUG1` verdicts as oracles | `texts` |
+| `acceptance` | fresh sorted builds, the deterministic defects read as two roles, in-index compression, posting tails, the probe fixtures and the statistics barrier | `texts` |
+| `suite` | resets the `suite` schema, reinstalls both views, and builds the 112 numbered fixtures with their population assertions; it plans and scores nothing | `texts` |
+| `attribution` | `EXCEPT` in both directions between the two texts, taken before any rebuild | `suite` |
+| `probes` | runs the probe generator on `suite` and `acc` and executes every statement it emits, still before any rebuild | `suite` |
+| `score` | `CALL score_all()`: per fixture assert the population, read both views, `REINDEX INDEX`, re-read the size; then writes `out/verdicts.txt` | `suite` |
+| `cost` | six interleaved timings of the two exact texts, and the size of the database they ran against | `texts` |
+| `criteria` | the six pass-criteria blocks into `out/criteria.txt` | `check`, `texts`, `gate`, `attribution`, `score` |
+| `report` | lists what landed in `out/` | nothing |
+| `stop` | stops the server with `pg_ctl -m immediate` | `cluster` |
+| `clean` | `stop`, then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/` | nothing |
+
+#### The 12 leg's stages
+
+| Stage | What it does | Needs first |
+|---|---|---|
+| `build` | 12.2 out of tree under `$SANDBOX/build12` with `CFLAGS="$EXTRA_CFLAGS"`, plus the same three contrib modules | nothing |
+| `check` | the 12.2 core and contrib suites into `out/checks12.txt` | `build` |
+| `cluster` | `initdb --locale=C --encoding=UTF8`, the same cluster settings without `log_min_messages`, started on `PORT12`, and the `leg12` database | `build` |
+| `exact` | extracts `sql` block 1, checks its hash, runs the text **unmodified**, and records `exact_text=executes` or `exact_text=refused` plus the first error lines in `out/v12_facts.txt` | `cluster` |
+| `transform` | applies one recorded edit per refused construct, re-runs, writes `transform_edits`, and installs the harness view; it dies rather than guess when a construct is still refused | `exact` |
+| `facts` | records `server_version_num`, block size, alignment, whether `pg_stat_force_next_flush()` exists, the `pg_stats_ext` columns, the registered B-tree support-function numbers, and whether `WITH (deduplicate_items = off)` is accepted | `cluster` |
+| `fixtures` | builds the constructible subset, one writer session per step, polling `pg_stat_all_tables` for publication instead of forcing a flush | `transform` |
+| `score` | the same measured-`REINDEX INDEX` scoring, into `out/verdicts12.txt` | `fixtures` |
+| `report` | prints `out/v12_facts.txt` | `facts` |
+| `stop` | stops the 12 server | `cluster` |
+| `clean` | `stop`, then deletes this leg's four directories after the same containment check | nothing |
+
+#### What the scripts read from the environment
+
+| Variable | Default | Read by | Meaning |
+|---|---|---|---|
+| `WIKI_ROOT` | `$PWD` | both | the repository root; everything else is resolved beneath it |
+| `PAGE` | `$WIKI_ROOT/wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md` | both | the page the `sql` blocks are extracted from |
+| `SANDBOX` | `$WIKI_ROOT/.wiki-runtime/tmp/btree-suite` | both | build, install, data, socket, SQL and output directories; the only tree either script writes |
+| `JOBS` | `4` | both | `make -j` parallelism |
+| `SRC` | `$WIKI_ROOT/raw/postgres-17` | 17 leg | the pinned 17 checkout, read only |
+| `PORT` | `55437` | 17 leg | the 17 cluster's port |
+| `OLD_REV` | `f2d73b4` | 17 leg | the revision of this page holding the superseded statement |
+| `SRC12` | `$WIKI_ROOT/raw/postgres-12` | 12 leg | the pinned 12 checkout, read only |
+| `PORT12` | `55412` | 12 leg | the 12 cluster's port |
+| `EXTRA_CFLAGS` | `-O2 -g -DTRUE=1 -DFALSE=0` | 12 leg | `CFLAGS` for the 12.2 build; the two macro definitions are only needed against ICU 68 or newer |
+
+Both scripts export `PGPORT`, `PGHOST` and `PGDATABASE` for their own `psql`
+calls; those are written, not read, so a value in the caller's environment is
+overridden rather than honoured.
+
+#### Prerequisites
+
+- A C toolchain and `make`. The recorded run used gcc 13.3.0 on `Linux x86_64`.
+  Both legs build their own server; no installed PostgreSQL is used or needed.
+- Development headers for ICU, readline and zlib, because both legs configure
+  `--with-icu --with-readline --with-zlib` and the gate's nondeterministic
+  collation cases need ICU. On a host where ICU is off the default search path,
+  pass `ICU_CFLAGS` and `ICU_LIBS` to `configure`.
+  [installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193),
+  [installation.sgml#--enable-debug](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L1530-L1540).
+- The two pinned checkouts, at `raw/postgres-17` and `raw/postgres-12`. Both
+  stay read-only: each build is a VPATH build under `.wiki-runtime/tmp/`.
+  [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432).
+- `git`, with `OLD_REV` (`f2d73b4`) reachable, since the 17 leg recovers the
+  superseded statement with `git show`.
+- `sha256sum`, and a Bash new enough for arrays and `${var:-default}`. Nothing
+  else: no Python, no `awk`, no `perl`, no `jq`.
+- Free TCP ports 55437 and 55412, or `PORT`/`PORT12` set to free ones. Both
+  clusters listen on a Unix socket inside the sandbox and set
+  `listen_addresses = ''`, so the port is reserved but never bound on TCP.
+- `pageinspect`, `pgstattuple` and `amcheck`, built and installed from the same
+  tree as the server, into the disposable cluster only. The gate reads
+  `bt_metap()` and `bt_page_items()`, the acceptance stage reads `pgstatindex`.
+  [pageinspect--1.8--1.9.sql#bt_metap](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L73-L82),
+  [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31).
+- `initdb --locale=C`, which the geometry and gate fixtures assume, and UTF8
+  databases, which ICU requires: a `SQL_ASCII` database answers
+  `current database's encoding is not supported with this provider`.
+  [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291),
+  [installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170).
+- Disk for two source builds, two clusters and the fixtures. The 2026-09-09 run
+  left 325 B-tree indexes over 85,017 blocks in the 17 leg's `suite` database
+  alone.
+
+Every statement either script sends is disposable. The fixtures create and drop
+tables, indexes, operator classes, collations, a login role and, in the `suite`
+database, the whole `public` schema; the `clean` stages delete the cluster.
+Never point `PORT`, `PORT12` or `PGHOST` at a cluster anyone cares about.
+
 ### How to run the suite against the current statement
 
 Every step below was designed against the pinned source and the harness this
-page filed on 2026-08-19 and 2026-08-24; none of it was executed for this
-review. The checkout under `raw/postgres-17/` stays read-only: the build is a
+page filed on 2026-08-19 and 2026-08-24. The two scripts filed under
+[The PostgreSQL 17 suite script](#the-postgresql-17-suite-script) and
+[The PostgreSQL 12 leg script](#the-postgresql-12-leg-script) implement this
+protocol, and both were executed on 2026-09-09; run them rather than these steps
+by hand. The checkout under `raw/postgres-17/` stays read-only: the build is a
 VPATH build in a directory under `.wiki-runtime/tmp/`, which is the form the
 documentation describes.
 [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432).
@@ -2131,15 +2329,23 @@ project `suppress_row` instead; and project the internals the scorer reads
 `leaf_cap`, `nmax`, `dedup_applies`, `is_partial`, `equalimage_state`,
 `stats_row_missing`, `dedup_credited`, `stats_stale`). Run both exact texts
 once as filed, filter and `LIMIT` intact, to prove they execute. The extraction
-below was run for this review and reproduced both hashes.
+below reproduced both hashes on 2026-09-09, and again during the
+[Measurement-script section review](#measurement-script-section-review).
+
+Extraction is Bash only, using the same `md_block` helper the scripts define, so
+no `awk` and no `shasum` — the first is forbidden by `MANDATORY Measurement
+Script` and the second is a Perl program. `sha256sum` from coreutils is the
+digest tool both scripts use.
 
 ```sh
-awk '/^```sql$/{n++; inb=1; next} /^```$/{inb=0; next} inb && n==1' \
-  wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md > est_r2.sql
-shasum -a 256 est_r2.sql   # 8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
-git show f2d73b4:wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md \
-  | awk '/^```sql$/{n++; inb=1; next} /^```$/{inb=0; next} inb && n==1' > est_old.sql
-shasum -a 256 est_old.sql  # bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
+# Paste the md_block function from the 17 leg script below into the shell first;
+# stage_texts does exactly this, for all four blocks at once.
+page=wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md
+md_block sql 1 "$page" > est_r2.sql
+sha256sum est_r2.sql   # 8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
+git show "f2d73b4:$page" > old_page.md
+md_block sql 1 old_page.md > est_old.sql
+sha256sum est_old.sql  # bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
 ```
 
 **4. Fixtures.** Rebuild them from the page history. The deduplication-gate
@@ -2242,8 +2448,10 @@ following hold:
 
 **10. Filing.** The measured verdicts replace the expected columns in
 [Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement),
-with the platform record from item 10 above. The sandbox lives under
-`.wiki-runtime/tmp/` and is deleted or kept as the asker directs.
+with the platform record item 2 writes to `out/platform.txt`: `uname -sm`,
+`max_data_alignment` and `database_block_size`, the three facts every geometry
+constant assumes. The sandbox lives under `.wiki-runtime/tmp/` and is deleted or
+kept as the asker directs.
 
 ### The two suite scripts, and the rules they follow
 
@@ -2260,7 +2468,8 @@ leg, against the pinned 12 checkout. They are Bash and SQL only: no Python, no
 `awk`, no external harness, so a reviewer needs a compiler, a shell and this
 page.
 
-Nine rules hold in both scripts.
+Eleven rules hold in both scripts. The last two were added by the
+[Measurement-script section review](#measurement-script-section-review).
 
 | Rule | How the scripts keep it |
 |---|---|
@@ -2273,10 +2482,21 @@ Nine rules hold in both scripts.
 | Every fixture asserts its own population | the `plan` table carries a counting query and the intended row count, and `verdicts.contract_ok` is false when they disagree |
 | Oracles are read beside each row and never scored | `bt_metap().allequalimage` for the gate, the build's `DEBUG1` line, and posting lists in `bt_page_items`. [btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921), [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180), [pageinspect--1.8--1.9.sql#bt_page_items](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L109-L118) |
 | Stages are selectable and idempotent | `bash btree_bloat_suite_v17.sh gate score` runs two stages; a second run reuses the build and the cluster, and the suite stage resets its schema and reinstalls both views before rebuilding its fixtures |
+| No `psql` error passes without a non-zero status | every helper carries `-X -v ON_ERROR_STOP=1`. `-X` keeps a stray `~/.psqlrc` out of the result; `ON_ERROR_STOP` is what makes a failed statement inside a `-f` script exit non-zero at all, because `MainLoop` only sets a failure status when `die_on_error` is set from it. [mainloop.c:376](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L376), [mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594), [psql-ref.sgml#Exit-Status](../../../../raw/postgres-17/doc/src/sgml/ref/psql-ref.sgml#L627-L636) |
+| Nothing outside the sandbox is deleted | both `clean` stages check that the directory they are about to remove is inside `$WIKI_ROOT/.wiki-runtime/tmp/` and refuse otherwise, so a stray `SANDBOX` cannot turn `rm -rf` loose |
 
 Neither script contains a Markdown fence: `md_block` assembles the three
 backticks from `printf '\140'`, so each script can live inside the fenced block
 that publishes it and still extract blocks from this page.
+
+**The order of this page's fenced `sql` blocks is load-bearing.** `md_block sql
+N` counts fenced `sql` blocks from the top of the file, so blocks 1 to 4 are the
+estimator, the probe generator, the geometry harness and the calibration
+harness, in that order. Inserting a new `sql` block above any of them silently
+repoints the scripts at the wrong text. The five SHA-256 baselines are the
+guard: `out/hashes.txt` shows `DIFFER` and every number below it is about a
+different statement. When this page gains SQL, put the block after the
+calibration harness, or re-baseline deliberately.
 
 The stages, in default order:
 
@@ -2295,6 +2515,9 @@ to that setting would need.
 |---|---|---|---|
 | `autovacuum` | `off` | `PGC_SIGHUP` | reload. [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453) |
 | `fsync` | `off` | `PGC_SIGHUP` | reload. [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100) |
+| `listen_addresses` | `''`, so the cluster is reachable only through the sandbox socket | `PGC_POSTMASTER` | restart. [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4437-L4441) |
+| `port` | `PORT`, default `55437`, and `PORT12`, default `55412` | `PGC_POSTMASTER` | restart. [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2394-L2397) |
+| `logging_collector` | `off`, so `pg_ctl -l` keeps every line in one file the run can grep | `PGC_POSTMASTER` | restart. [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1641-L1644) |
 | `shared_buffers` | `512MB` | `PGC_POSTMASTER` | restart. [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265) |
 | `maintenance_work_mem` | `256MB` | `PGC_USERSET` | session or transaction. [guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2466-L2469) |
 | `max_parallel_maintenance_workers` | `0` | `PGC_USERSET` | session or transaction. [guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3410-L3413) |
@@ -2303,6 +2526,14 @@ to that setting would need.
 | `client_min_messages` | `debug1` around the gate builds | `PGC_USERSET` | session or transaction. [guc_tables.c#client_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4777-L4780) |
 | `default_statistics_target` | `1` for fixture 120 only | `PGC_USERSET` | session or transaction. [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2074) |
 | `statement_timeout`, `lock_timeout` | `600s`/`900s` and `2s` in the harness sessions | `PGC_USERSET` | session or transaction. [guc_tables.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631) |
+
+Every context and scope above is the PostgreSQL 17 definition, read from the
+pinned 17 checkout. The 12 leg writes the same setting names except
+`log_min_messages`, all of them into `postgresql.conf` before its first start,
+so the run itself never needs an apply scope there; the scopes those settings
+have on 12.2 are not stated on this page, because a v17 page may not cite a v12
+checkout. See
+[The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here).
 
 `initdb --locale=C` fixes the collation the geometry and gate fixtures assume,
 and the ICU cases need a UTF8 database, which is why every database is created
@@ -2341,9 +2572,9 @@ tree, `suite attribution probes score criteria` is about ninety seconds.
 #   bash btree_bloat_suite_v17.sh clean           # stop and delete the sandbox
 #
 # Stages: build check cluster texts geometry calibration gate acceptance
-#         suite attribution probes score criteria report stop clean
+#         suite attribution probes score cost criteria report stop clean
 #
-# Environment: WIKI_ROOT PAGE SRC SANDBOX PORT JOBS OLD_REV KEEP
+# Environment: WIKI_ROOT PAGE SRC SANDBOX PORT JOBS OLD_REV
 set -uo pipefail
 
 WIKI_ROOT="${WIKI_ROOT:-$PWD}"
@@ -2369,11 +2600,13 @@ say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
 die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 
-# psql helpers. -X ignores ~/.psqlrc, ON_ERROR_STOP makes any error fatal.
+# psql helpers.  -X ignores ~/.psqlrc; ON_ERROR_STOP is on every helper, because
+# without it a failed statement inside a -f script leaves the exit status 0.
 q()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }        # command
 f()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -f "$2"; }        # file
-s()  { "$BIN/psql" -X -At -q -d "$1" -c "$2"; }                       # scalar
-t()  { "$BIN/psql" -X -q -P pager=off -d "$1" -c "$2"; }              # table
+s()  { "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }    # scalar
+t()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off \
+                   -d "$1" -c "$2"; }                                 # table
 
 # md_block <fence-language> <n> <file>: print the nth fenced block, bash only.
 # The fence is assembled from printf '\140' so that this script contains no
@@ -2421,6 +2654,7 @@ INTERNALS_R2='       itupsz, any_stats_disabled, any_compressible, equalimage_st
 stage_build() {
   say "build 17.11 out of tree from $SRC"
   [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
+  [ -x "$SRC/configure" ] || die "no pinned checkout at $SRC; set SRC or run from the repository root"
   mkdir -p "$BUILD" "$OUT" "$SQLD"
   ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" --enable-debug \
       --with-icu --with-readline --with-zlib > configure.log 2>&1 ) \
@@ -2477,14 +2711,16 @@ logging_collector = off
 CONF
   fi
   "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w start > /dev/null || die "server start failed"
-  note "$(s postgres 'select version()')"
-  s postgres "select 'max_data_alignment=' || max_data_alignment ||
+  note "$(s postgres 'select /* wiki_btree_suite_version */ version()')"
+  s postgres "select /* wiki_btree_suite_platform */
+                     'max_data_alignment=' || max_data_alignment ||
               ' database_block_size=' || database_block_size from pg_control_init()" \
     | tee "$OUT/platform.txt" >&2
   printf 'uname: %s\n' "$(uname -sm)" >> "$OUT/platform.txt"
   local db
   for db in geo cal gate acc suite; do
-    s postgres "select 1 from pg_database where datname='$db'" | grep -q 1 \
+    s postgres "select /* wiki_btree_suite_database_exists */ 1
+                  from pg_database where datname='$db'" | grep -q 1 \
       || "$BIN/createdb" -T template0 -E UTF8 --locale=C "$db"
   done
 }
@@ -2492,6 +2728,7 @@ CONF
 # ---------------------------------------------------------------- texts ------
 stage_texts() {
   say "statement texts, hashes and harness views"
+  [ -f "$PAGE" ] || die "no page at $PAGE; set PAGE or run from the repository root"
   md_block sql 1 "$PAGE" > "$SQLD/est_r2.sql"
   md_block sql 2 "$PAGE" > "$SQLD/probegen.sql"
   md_block sql 3 "$PAGE" > "$SQLD/geometry.sql"
@@ -2533,6 +2770,8 @@ $INTERNALS_R2" > "$SQLD/view_r2.sql"
 # ---------------------------------------------------------------- geometry ---
 stage_geometry() {
   say "page geometry against pageinspect, 78 cells"
+  # Disposable fixtures: this stage creates and drops relations in the geo
+  # database of the sandbox cluster.  Never point it at a real cluster.
   q geo 'CREATE EXTENSION IF NOT EXISTS pageinspect'
   q geo 'DROP TABLE IF EXISTS geo_result'
   f geo "$SQLD/geometry.sql" || die "geometry harness failed"
@@ -2544,7 +2783,8 @@ stage_geometry() {
                               OR int_max_items <= int_pred_cap)   AS int_within_cap,
            count(*) FILTER (WHERE relpages = leaf_pages + int_pages + 1) AS relpages_exact
          FROM geo_result" > "$OUT/geometry.txt" 2>&1
-  t geo "SELECT keylen, fillfactor, itupsz, leaf_pages, int_pages, relpages,
+  t geo "SELECT /* wiki_btree_geometry_cells */
+                keylen, fillfactor, itupsz, leaf_pages, int_pages, relpages,
                 mode_items, pred_cap, min_items, max_items
            FROM geo_result ORDER BY fillfactor, keylen" >> "$OUT/geometry.txt" 2>&1
   head -12 "$OUT/geometry.txt" >&2
@@ -2553,6 +2793,7 @@ stage_geometry() {
 # ------------------------------------------------------------- calibration ---
 stage_calibration() {
   say "calibration by insertion pattern, scored against REINDEX INDEX"
+  # Disposable fixtures: the cal schema is dropped and rebuilt on every run.
   q cal 'DROP SCHEMA IF EXISTS cal CASCADE'
   f cal "$SQLD/calibration.sql" || die "calibration fixtures failed"
   f cal /dev/stdin <<'SQL'
@@ -2576,7 +2817,8 @@ BEGIN
   END LOOP;
 END $cal$;
 SQL
-  t cal 'SELECT pattern, size_before/8192 AS blocks_before, size_after/8192 AS blocks_after,
+  t cal 'SELECT /* wiki_btree_calibration_report */
+                pattern, size_before/8192 AS blocks_before, size_after/8192 AS blocks_after,
                 actual, wsp, wspf, tids, equalimage, caveats
            FROM cal_res ORDER BY pattern' > "$OUT/calibration.txt" 2>&1
   cat "$OUT/calibration.txt" >&2
@@ -2587,6 +2829,9 @@ stage_gate() {
   say "deduplication gate, tests 1-17, 28 fixtures on two 500,000-row tables"
   q gate 'CREATE EXTENSION IF NOT EXISTS pageinspect'
   q gate 'CREATE EXTENSION IF NOT EXISTS amcheck'
+  # Disposable fixtures: the block below drops and recreates tables, operator
+  # classes, collations and a public.btequalimage impostor in the gate database
+  # of the sandbox cluster.  It is not meant for a database anyone cares about.
   PGOPTIONS='-c client_min_messages=debug1' \
     "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d gate -f /dev/stdin \
     > "$OUT/gate_build.log" 2>&1 <<'SQL'
@@ -2710,10 +2955,12 @@ SELECT e.indexname, e.equalimage, e.wasted_space_pct AS wsp,
  WHERE e.schemaname = 'public'
  ORDER BY e.indexname;
 SQL
-  t gate "SELECT indexname, blocks, equalimage, metapage, dedup_applies AS credited,
+  t gate "SELECT /* wiki_btree_gate_rows */
+                 indexname, blocks, equalimage, metapage, dedup_applies AS credited,
                  posting_written, wsp, wspf, tids_per_tuple, caveats
             FROM gate_res ORDER BY indexname" > "$OUT/gate.txt" 2>&1
-  t gate "SELECT count(*) AS fixtures,
+  t gate "SELECT /* wiki_btree_gate_counters */
+                 count(*) AS fixtures,
                  count(*) FILTER (WHERE dedup_applies AND NOT metapage) AS over_credit,
                  count(*) FILTER (WHERE equalimage = 'recognized' AND NOT metapage) AS recognized_wrong,
                  count(*) FILTER (WHERE equalimage = 'ineligible' AND metapage)     AS ineligible_wrong,
@@ -2732,6 +2979,9 @@ stage_acceptance() {
   say "acceptance fixtures: fresh builds, defects, compression, posting tails, probes, barrier"
   q acc 'CREATE EXTENSION IF NOT EXISTS pageinspect'
   q acc 'CREATE EXTENSION IF NOT EXISTS pgstattuple'
+  # Disposable fixtures: the block below drops and recreates tables, forges two
+  # pg_class rows and drops and recreates the wiki_reader login role in the
+  # sandbox cluster.  It is not meant for a database anyone cares about.
   f acc /dev/stdin <<'SQL'
 SET client_min_messages = warning;
 DROP TABLE IF EXISTS fresh_res, tail_res, cmp_res, bar_res CASCADE;
@@ -2898,17 +3148,23 @@ SELECT CASE WHEN relname = 'bar_a' THEN 'no barrier' ELSE 'barrier' END,
 SQL
   [ $? -eq 0 ] || die "acceptance fixtures failed"
 
-  t acc 'SELECT * FROM fresh_res ORDER BY keylen'  > "$OUT/acceptance.txt" 2>&1
-  t acc 'SELECT * FROM tail_res ORDER BY rows_per_group' >> "$OUT/acceptance.txt" 2>&1
-  t acc 'SELECT * FROM cmp_res ORDER BY storage'   >> "$OUT/acceptance.txt" 2>&1
-  t acc 'SELECT * FROM bar_res ORDER BY leg'       >> "$OUT/acceptance.txt" 2>&1
-  t acc "SELECT indexname, actual_bytes/8192 AS blocks, status, wasted_space_pct AS wsp,
+  t acc 'SELECT /* wiki_btree_fresh_builds */ * FROM fresh_res ORDER BY keylen' \
+    > "$OUT/acceptance.txt" 2>&1
+  t acc 'SELECT /* wiki_btree_posting_tails */ * FROM tail_res ORDER BY rows_per_group' \
+    >> "$OUT/acceptance.txt" 2>&1
+  t acc 'SELECT /* wiki_btree_compression */ * FROM cmp_res ORDER BY storage' \
+    >> "$OUT/acceptance.txt" 2>&1
+  t acc 'SELECT /* wiki_btree_stats_barrier */ * FROM bar_res ORDER BY leg' \
+    >> "$OUT/acceptance.txt" 2>&1
+  t acc "SELECT /* wiki_btree_defect_fixtures */
+                indexname, actual_bytes/8192 AS blocks, status, wasted_space_pct AS wsp,
                 wasted_space_pct_floor AS wspf, caveats
            FROM est_r2 WHERE indexname IN ('inh_i','expr_i','ovf_idx','st0_i')
           ORDER BY indexname" >> "$OUT/acceptance.txt" 2>&1
 
   say "the three deterministic defects, current text against the superseded one"
-  t acc "SELECT e.indexname, e.actual_bytes/8192 AS blocks,
+  t acc "SELECT /* wiki_btree_defects_side_by_side */
+                e.indexname, e.actual_bytes/8192 AS blocks,
                 o.wasted_space_pct AS old_wsp, e.wasted_space_pct AS r2_wsp,
                 e.caveats
            FROM est_r2 e JOIN est_old o USING (indexname)
@@ -2938,10 +3194,14 @@ stage_suite() {
 -- scored later so that the EXCEPT attribution and the probes both run before
 -- the first REINDEX.  pg_stat_force_next_flush() precedes every ANALYZE and
 -- every VACUUM, and WITH (fillfactor = ...) precedes WHERE in CREATE INDEX.
-SET client_min_messages = warning;
-SET statement_timeout = '900s';
-SET lock_timeout = '2s';
-SET maintenance_work_mem = '256MB';
+--
+-- Disposable fixtures.  Everything below creates, forges and drops objects in
+-- the suite database of the sandbox cluster, whose public schema stage_suite
+-- has just dropped.  It is not meant for a database anyone cares about.
+SET /* wiki_btree_suite_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btree_suite_statement_timeout */ statement_timeout = '900s';
+SET /* wiki_btree_suite_lock_timeout */ lock_timeout = '2s';
+SET /* wiki_btree_suite_maintenance_work_mem */ maintenance_work_mem = '256MB';
 
 
 CREATE TABLE plan(num int, leg text DEFAULT '', req text, idx text,
@@ -3980,7 +4240,7 @@ stage_attribution() {
   say "attribution: EXCEPT in both directions, before any REINDEX"
   f suite /dev/stdin > "$OUT/attribution.txt" 2>&1 <<'SQL'
 \pset pager off
-SELECT 'r2 minus old' AS direction, * FROM (
+SELECT /* wiki_btree_attribution_r2_minus_old */ 'r2 minus old' AS direction, * FROM (
   SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
          key_groups, modelled_rows, idx_reltuples, suppress_row
     FROM est_r2
@@ -3988,7 +4248,7 @@ SELECT 'r2 minus old' AS direction, * FROM (
   SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
          key_groups, modelled_rows, idx_reltuples, suppress_row
     FROM est_old) d ORDER BY indexname;
-SELECT 'old minus r2' AS direction, * FROM (
+SELECT /* wiki_btree_attribution_old_minus_r2 */ 'old minus r2' AS direction, * FROM (
   SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
          key_groups, modelled_rows, idx_reltuples, suppress_row
     FROM est_old
@@ -3997,7 +4257,6 @@ SELECT 'old minus r2' AS direction, * FROM (
          key_groups, modelled_rows, idx_reltuples, suppress_row
     FROM est_r2) d ORDER BY indexname;
 SQL
-  grep -c '^ [a-z]' "$OUT/attribution.txt" > /dev/null
   tail -20 "$OUT/attribution.txt" >&2
 }
 
@@ -4006,9 +4265,10 @@ stage_probes() {
   say "validation probes, generated and executed, before any REINDEX"
   local db
   for db in suite acc; do
-    "$BIN/psql" -X -At -q -d "$db" -f "$SQLD/probegen.sql" > "$OUT/probes_gen_$db.txt" 2>&1
+    "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$db" -f "$SQLD/probegen.sql" \
+      > "$OUT/probes_gen_$db.txt" 2>&1
     : > "$OUT/probes_$db.txt"
-    local line kind sql
+    local name kind sql
     while IFS='|' read -r name kind sql; do
       [ -n "${sql:-}" ] || continue
       printf '%s|%s|%s\n' "$name" "$kind" "$(s "$db" "$sql" | tr '\n' ' ')" >> "$OUT/probes_$db.txt"
@@ -4022,15 +4282,17 @@ stage_probes() {
 stage_score() {
   say "score: assert population, read both texts, REINDEX INDEX, re-read the size"
   f suite /dev/stdin <<'SQL'
-SET statement_timeout = '600s';
-SET lock_timeout = '2s';
-CALL score_all();
+SET /* wiki_btree_score_statement_timeout */ statement_timeout = '600s';
+SET /* wiki_btree_score_lock_timeout */ lock_timeout = '2s';
+CALL /* wiki_btree_score_all */ score_all();
 SQL
   [ $? -eq 0 ] || die "scoring failed"
-  t suite "SELECT * FROM verdicts" > "$OUT/verdicts.txt" 2>&1
-  t suite "SELECT verdict_floor, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
+  t suite "SELECT /* wiki_btree_verdict_rows */ * FROM verdicts" > "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btree_verdict_floor_counts */
+                  verdict_floor, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
     >> "$OUT/verdicts.txt" 2>&1
-  t suite "SELECT verdict_point, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
+  t suite "SELECT /* wiki_btree_verdict_point_counts */
+                  verdict_point, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
     >> "$OUT/verdicts.txt" 2>&1
   tail -20 "$OUT/verdicts.txt" >&2
 }
@@ -4042,13 +4304,16 @@ stage_cost() {
   local i
   for i in 1 2 3 4 5 6; do
     printf 'pair %s r2  %s\n' "$i" \
-      "$("$BIN/psql" -X -q -d suite -c '\timing on' -f "$SQLD/est_r2.sql" 2>&1 \
+      "$("$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d suite \
+           -c '\timing on' -f "$SQLD/est_r2.sql" 2>&1 \
          | grep -E '^Time:' | tail -1)" >> "$OUT/cost.txt"
     printf 'pair %s old %s\n' "$i" \
-      "$("$BIN/psql" -X -q -d suite -c '\timing on' -f "$SQLD/est_old.sql" 2>&1 \
+      "$("$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d suite \
+           -c '\timing on' -f "$SQLD/est_old.sql" 2>&1 \
          | grep -E '^Time:' | tail -1)" >> "$OUT/cost.txt"
   done
-  s suite "select count(*) || ' B-tree indexes over ' ||
+  s suite "select /* wiki_btree_cost_database_size */
+                  count(*) || ' B-tree indexes over ' ||
            sum(pg_relation_size(c.oid)) / 8192 || ' blocks'
              from pg_class c join pg_am a on a.oid = c.relam
             where a.amname = 'btree' and c.relkind = 'i'" >> "$OUT/cost.txt"
@@ -4059,7 +4324,8 @@ stage_cost() {
 stage_criteria() {
   say "pass criteria"
   { printf '1. gate group\n'
-    t gate "SELECT count(*) FILTER (WHERE dedup_applies AND NOT metapage) AS over_credit,
+    t gate "SELECT /* wiki_btree_criteria_gate */
+                   count(*) FILTER (WHERE dedup_applies AND NOT metapage) AS over_credit,
                    count(*) FILTER (WHERE equalimage = 'recognized' AND NOT metapage)
                           + count(*) FILTER (WHERE equalimage = 'ineligible' AND metapage)
                                                                           AS metapage_disagreements,
@@ -4067,7 +4333,8 @@ stage_criteria() {
                    max(greatest(wsp, wspf))                                    AS worst_reading
               FROM gate_res"
     printf '2. partial group and controls\n'
-    t suite "SELECT count(*) FILTER (WHERE reported AND verdict_floor = 'CRITICAL FALSE POSITIVE') AS crit_fp_floor,
+    t suite "SELECT /* wiki_btree_criteria_partial */
+                    count(*) FILTER (WHERE reported AND verdict_floor = 'CRITICAL FALSE POSITIVE') AS crit_fp_floor,
                     count(*) FILTER (WHERE reported AND verdict_point = 'CRITICAL FALSE POSITIVE') AS crit_fp_point,
                     count(*) FILTER (WHERE verdict_floor = 'FALSE NEGATIVE')   AS false_negatives,
                     count(*) FILTER (WHERE NOT reported)                       AS withheld,
@@ -4075,7 +4342,8 @@ stage_criteria() {
                     count(*) FILTER (WHERE NOT contract_ok)                    AS contract_failures
                FROM verdicts"
     printf '3. drained subsets and zero rows\n'
-    t suite "SELECT num, leg, idx, wsp, wspf, actual, modelled_rows, caveats
+    t suite "SELECT /* wiki_btree_criteria_zero_rows */
+                    num, leg, idx, wsp, wspf, actual, modelled_rows, caveats
                FROM verdicts WHERE modelled_rows = 0 OR num IN (113, 118, 120) ORDER BY num, leg"
     printf '4. attribution\n'
     grep -c '^ ' "$OUT/attribution.txt" 2>/dev/null | xargs printf '   EXCEPT output lines: %s\n'
@@ -4095,7 +4363,20 @@ stage_report() {
 }
 
 stage_stop()  { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "server stopped"; }
-stage_clean() { stage_stop; rm -rf "$SANDBOX"; say "sandbox deleted"; }
+
+# Containment check before any rm -rf: SANDBOX comes from the environment, so
+# refuse to delete anything outside this repository's .wiki-runtime/tmp tree.
+inside_tmp() {
+  case ${1%/} in
+    "$WIKI_ROOT/.wiki-runtime/tmp"/?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+stage_clean() {
+  stage_stop
+  inside_tmp "$SANDBOX" || die "refusing to delete $SANDBOX outside $WIKI_ROOT/.wiki-runtime/tmp/"
+  rm -rf "$SANDBOX"; say "sandbox deleted"
+}
 
 main() {
   local stages=("$@")
@@ -4175,10 +4456,12 @@ say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
 die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 
-q() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }   # writer session
-s() { "$BIN/psql" -X -At -q -d "$DB" -c "$1"; }                  # scalar
-t() { "$BIN/psql" -X -q -P pager=off -d "$DB" -c "$1"; }         # table
-fl() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -f "$1"; }  # file
+# -X ignores ~/.psqlrc; ON_ERROR_STOP is on every helper, because without it a
+# failed statement inside a -f script leaves the exit status 0.
+q() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }          # writer
+s() { "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }      # scalar
+t() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" -c "$1"; }  # table
+fl() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -f "$1"; }         # file
 
 # The fence is assembled from printf '\140' so that this script contains no
 # literal Markdown fence and can therefore live inside one.
@@ -4236,6 +4519,7 @@ vacuumed() { wait_for "(SELECT last_vacuum IS NOT NULL FROM pg_stat_all_tables W
 stage_build() {
   say "build 12.2 out of tree from $SRC12"
   [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
+  [ -x "$SRC12/configure" ] || die "no pinned checkout at $SRC12; set SRC12 or run from the repository root"
   mkdir -p "$BUILD" "$OUT" "$SQLD"
   ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" --enable-debug \
       --with-icu --with-readline --with-zlib CFLAGS="$EXTRA_CFLAGS" \
@@ -4288,15 +4572,17 @@ CONF
     fi
     "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server12.log" -w start > /dev/null || die "start failed"
   fi
-  s "select 1 from pg_database where datname='$DB'" | grep -q 1 \
+  s "select /* wiki_btree_leg12_database_exists */ 1
+       from pg_database where datname='$DB'" | grep -q 1 \
     || "$BIN/createdb" -T template0 -E UTF8 --locale=C "$DB"
-  note "$(s 'select version()')"
+  note "$(s 'select /* wiki_btree_leg12_version */ version()')"
 }
 
 # ---------------------------------------------------------------- exact ------
 # The first result of this leg is the parse outcome of the unmodified text.
 stage_exact() {
   say "the exact current text, unmodified, on 12.2"
+  [ -f "$PAGE" ] || die "no page at $PAGE; set PAGE or run from the repository root"
   md_block sql 1 "$PAGE" > "$SQLD/est_r2.sql"
   local got; got=$(sha256sum < "$SQLD/est_r2.sql" | cut -d' ' -f1)
   [ "$got" = "$BASE1" ] && note "text hash matches the baseline" \
@@ -4348,21 +4634,26 @@ stage_transform() {
 # ---------------------------------------------------------------- facts ------
 stage_facts() {
   say "version-local facts this leg depends on, measured not assumed"
-  { printf 'server_version_num=%s\n' "$(s "SELECT current_setting('server_version_num')")"
+  { printf 'server_version_num=%s\n' \
+      "$(s "SELECT /* wiki_btree_leg12_server_version */ current_setting('server_version_num')")"
     printf 'block_size=%s max_data_alignment=%s\n' \
-      "$(s "SELECT current_setting('block_size')")" \
-      "$(s 'SELECT max_data_alignment FROM pg_control_init()')"
+      "$(s "SELECT /* wiki_btree_leg12_block_size */ current_setting('block_size')")" \
+      "$(s 'SELECT /* wiki_btree_leg12_alignment */ max_data_alignment FROM pg_control_init()')"
     printf 'has_force_next_flush=%s\n' \
-      "$(s "SELECT (to_regprocedure('pg_stat_force_next_flush()') IS NOT NULL)::text")"
+      "$(s "SELECT /* wiki_btree_leg12_has_flush */
+                   (to_regprocedure('pg_stat_force_next_flush()') IS NOT NULL)::text")"
     printf 'pg_stats_ext_columns=%s\n' \
-      "$(s "SELECT string_agg(attname, ',' ORDER BY attnum) FROM pg_attribute
+      "$(s "SELECT /* wiki_btree_leg12_stats_ext_columns */
+                   string_agg(attname, ',' ORDER BY attnum) FROM pg_attribute
              WHERE attrelid = 'pg_stats_ext'::regclass AND attnum > 0")"
     printf 'btree_support_procs=%s\n' \
-      "$(s "SELECT string_agg(DISTINCT amprocnum::text, ',' ORDER BY amprocnum::text)
+      "$(s "SELECT /* wiki_btree_leg12_support_procs */
+                   string_agg(DISTINCT amprocnum::text, ',' ORDER BY amprocnum::text)
               FROM pg_amproc ap JOIN pg_opfamily f ON f.oid = ap.amprocfamily
               JOIN pg_am a ON a.oid = f.opfmethod WHERE a.amname = 'btree'")"
   } >> "$OUT/v12_facts.txt"
   # Whether the reloption exists is answered by trying it, not by asserting it.
+  # Disposable fixture: dedup_probe is created and dropped in the sandbox.
   q "DROP TABLE IF EXISTS dedup_probe" > /dev/null 2>&1
   q "CREATE TABLE dedup_probe(k int)" > /dev/null 2>&1
   if q "CREATE INDEX dedup_probe_i ON dedup_probe (k) WITH (deduplicate_items = off)" \
@@ -4378,8 +4669,10 @@ stage_facts() {
 # ---------------------------------------------------------------- fixtures ---
 stage_fixtures() {
   say "the constructible fixture subset, one writer session per step"
+  # Disposable fixtures: every statement from here to the end of the stage
+  # creates or drops objects in the leg12 database of the sandbox cluster.
   fl /dev/stdin <<'SQL'
-SET client_min_messages = warning;
+SET /* wiki_btree_leg12_client_min_messages */ client_min_messages = warning;
 DROP VIEW IF EXISTS verdicts12;
 DROP TABLE IF EXISTS res12, plan12 CASCADE;
 CREATE TABLE plan12(num int, req text, idx text, rowsql text, want_rows bigint,
@@ -4570,24 +4863,45 @@ SQL
 stage_score() {
   say "score the 12.2 subset against a measured REINDEX INDEX"
   fl /dev/stdin <<'SQL'
-SET statement_timeout = '600s';
-SET lock_timeout = '2s';
-CALL score_all();
+SET /* wiki_btree_leg12_statement_timeout */ statement_timeout = '600s';
+SET /* wiki_btree_leg12_lock_timeout */ lock_timeout = '2s';
+CALL /* wiki_btree_leg12_score_all */ score_all();
 SQL
   [ $? -eq 0 ] || die "scoring failed"
-  t "SELECT num, idx, blocks_before, blocks_after, actual, wsp, wspf,
+  t "SELECT /* wiki_btree_leg12_verdict_rows */
+            num, idx, blocks_before, blocks_after, actual, wsp, wspf,
             verdict_floor, reported, contract_ok, equalimage, dedup_applies,
             status, caveats FROM verdicts12 ORDER BY num" > "$OUT/verdicts12.txt" 2>&1
-  t "SELECT verdict_floor, count(*) FROM verdicts12 GROUP BY 1 ORDER BY 2 DESC" \
+  t "SELECT /* wiki_btree_leg12_verdict_counts */
+            verdict_floor, count(*) FROM verdicts12 GROUP BY 1 ORDER BY 2 DESC" \
     >> "$OUT/verdicts12.txt" 2>&1
-  t "SELECT equalimage, count(*), bool_or(dedup_applies) AS any_credited
+  t "SELECT /* wiki_btree_leg12_gate_summary */
+            equalimage, count(*), bool_or(dedup_applies) AS any_credited
        FROM verdicts12 GROUP BY 1" >> "$OUT/verdicts12.txt" 2>&1
   cat "$OUT/verdicts12.txt" >&2
 }
 
 stage_report() { say "12.2 leg written to $OUT"; cat "$OUT/v12_facts.txt" >&2; }
 stage_stop()   { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "12.2 server stopped"; }
-stage_clean()  { stage_stop; rm -rf "$BUILD" "$INST" "$DATA" "$SOCK"; say "12.2 sandbox deleted"; }
+
+# Containment check before any rm -rf, as in the 17 leg.  This stage removes
+# only this leg's four directories: out/ and sql/ belong to the 17 leg, whose
+# own clean stage deletes the whole sandbox.
+inside_tmp() {
+  case ${1%/} in
+    "$WIKI_ROOT/.wiki-runtime/tmp"/?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+stage_clean() {
+  stage_stop
+  local d
+  for d in "$BUILD" "$INST" "$DATA" "$SOCK"; do
+    inside_tmp "$d" || die "refusing to delete $d outside $WIKI_ROOT/.wiki-runtime/tmp/"
+  done
+  rm -rf "$BUILD" "$INST" "$DATA" "$SOCK"
+  say "12.2 build, install, data and socket directories deleted; out/ and sql/ kept"
+}
 
 main() {
   local stages=("$@")
@@ -4706,11 +5020,21 @@ difference on a fresh build is the point of that fixture, not a null result.
 | The 12 leg refuses a construct the transformer does not handle | `stage_transform` stops and says so. Add the refused construct as one more documented edit; the count in `v12_facts.txt` is the honest measure of how far the text is from portable |
 
 The next section is this reading applied to one run.
+
 ### What the two scripts measured on 2026-09-09
 
+This is the last-run record. **Date** 2026-09-09; **pin**
+`786db8dcf168bd9df8f55047337525ac19118b1c` for the 17 leg and
+`45b88269a353ad93744772791feb6d01bc7e1e42` for the 12 leg; **servers** 17.11 and
+12.2 built from those two checkouts; **platform** `Linux x86_64`,
+`max_data_alignment` 8, `database_block_size` 8192, gcc 13.3.0. The numbers
+below were produced by the script text as it stood that day, before the
+[Measurement-script section review](#measurement-script-section-review) repaired
+it; see
+[The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run).
+
 Everything below is output from the two scripts as filed above, on the host
-recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server):
-`Linux x86_64`, `max_data_alignment` 8, `database_block_size` 8192, gcc 13.3.0.
+recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server).
 17.11 was configured `--enable-debug --with-icu --with-readline --with-zlib`
 and its suites passed **All 225** core tests plus 8, 1 and 3 for `pageinspect`,
 `pgstattuple` and `amcheck`. The five text hashes all matched their baselines,
@@ -4799,6 +5123,75 @@ The 12.2 build needed `-DTRUE=1 -DFALSE=0` in `CFLAGS` on this host, because
 its ICU headers no longer define those macros; the script carries that in
 `EXTRA_CFLAGS` with a comment, and a host with older ICU headers can empty it.
 
+### Measurement-script section review
+
+**This section was audited against `MANDATORY Measurement Script` on 2026-09-09,
+read-only, with no server started. Nothing measured changed; thirteen defects in
+the section were repaired in place, and the biggest one was structural: the two
+scripts were filed as subsections of `## Answer`, where the rule requires one
+top-level `## Measurement Script` section between `## Answer` and
+`## Context Reviewed`, listed in `## Contents`.** The scripts themselves were
+already Bash and SQL only, stage-selectable, sandboxed and hash-checked, which
+is why the rule cites this page as its precedent; what the audit found was
+paperwork drift, three unnamed GUCs, and four places where an error or a stray
+variable could pass without being caught.
+
+What the audit verified before changing anything:
+
+| Check | Result |
+|---|---|
+| The four `sql` baselines, re-derived from this page with the scripts' own `md_block` logic in pure Bash | `8acd531b…`, `bfa7721f…`, `0b03f0c9…`, `3e57a568…`, all four matching `BASE1`-`BASE4` |
+| The superseded text, recovered with `git show f2d73b4:` and hashed | `bffd166e…`, matching `BASEOLD` |
+| Both script bodies, parsed | `bash -n` clean on the 1,793-line and 474-line texts as filed, and again on the 1,843-line and 507-line texts after the repairs below |
+| Stage lists against the dispatchers | the 17 leg's `main` and `case` both carry 16 stages plus `stop` and `clean`; the 12 leg's carry 9 plus the same two |
+| Source citations inside the section | 37 citations, every one resolving, in bounds, and inside `raw/postgres-17/`; the 7 whose label token is not literally in range were read by hand and each supports its label |
+| Both pinned checkouts | clean at `786db8dcf16` and `45b88269a35`, never written to |
+| Isolation | `set -uo pipefail` in both, every artifact under `.wiki-runtime/tmp/`, out-of-tree VPATH builds, own socket directory, ports 55437 and 55412, `listen_addresses = ''` |
+
+The thirteen repairs:
+
+| # | Defect | Repair |
+|---|---|---|
+| 1 | The scripts sat under `## Answer`; the rule requires a top-level `## Measurement Script` section after `## Answer` and before `## Context Reviewed`, listed in `## Contents` | the section exists, with the scripts, the protocol, the reading guide, the last-run record and this review under it. The subsection headings did not change, so every existing link into them still resolves |
+| 2 | No usage information: no per-stage description, no environment defaults, no prerequisites, no read-first pointer for the 12 leg, no runtime for it | [How to use the suite scripts](#how-to-use-the-suite-scripts) states all eight items the rule names, with a stage table per leg, a variable-and-default table, and a prerequisites list |
+| 3 | Step 3 of the protocol published an `awk` extraction and `shasum -a 256`. `MANDATORY Measurement Script` forbids `awk` and `perl`, and `shasum` is a Perl program | the recipe is now the scripts' own `md_block` plus `sha256sum`, which is what `stage_texts` has always run |
+| 4 | The 17 script's header comment omitted the `cost` stage that its dispatcher, its `case` and the stage table all carry | `cost` added to the comment |
+| 5 | The same comment advertised a `KEEP` variable the script never reads | removed from the comment; nothing read it, so nothing else changed |
+| 6 | `s()` and `t()` ran `psql` without `ON_ERROR_STOP`, and `stage_cost` ran a two-action `psql -c '\timing on' -f file`. Without it a failed statement in a `-f` script leaves the status 0, so a timing could be recorded for a statement that errored | every helper in both scripts now carries `-X -v ON_ERROR_STOP=1`, including the two `stage_cost` invocations and the probe generator. [mainloop.c:376](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L376), [mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594), [startup.c#single-query-action](../../../../raw/postgres-17/src/bin/psql/startup.c#L377-L386), [psql-ref.sgml#Exit-Status](../../../../raw/postgres-17/doc/src/sgml/ref/psql-ref.sgml#L627-L636) |
+| 7 | `stage_clean` ran `rm -rf "$SANDBOX"` on a value taken from the environment, with no containment check | both `clean` stages call `inside_tmp`, which accepts only a path strictly inside `$WIKI_ROOT/.wiki-runtime/tmp/` and refuses the `tmp` directory itself, the repository root and lookalikes such as `tmpx` |
+| 8 | Nothing checked that `$PAGE` and the pinned checkout exist. With `set -u` but no `-e`, a missing page produced empty SQL files and a confusing failure three stages later | `stage_build`/`stage_texts` and the 12 leg's `stage_build`/`stage_exact` die with the variable to set |
+| 9 | `stage_probes` declared `local line kind sql` but read into `name`, leaving `name` a global and `line` unused | the declaration is now `local name kind sql` |
+| 10 | `stage_attribution` ended with `grep -c '^ [a-z]' ... > /dev/null`, whose result went nowhere | removed; `stage_criteria` already counts that file |
+| 11 | The cluster settings table named nine settings, but the scripts also write `listen_addresses`, `port` and `logging_collector`, and `MANDATORY GUC Changes` wants a context and apply scope for every setting a script sets | three rows added, all `PGC_POSTMASTER`, so restart. [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4437-L4441), [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2394-L2397), [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1641-L1644) |
+| 12 | The rule wants fixture statements marked disposable; no fixture block said so, while the `suite` stage drops the whole `public` schema and the acceptance stage drops and recreates a login role | every fixture block now opens with a disposability banner naming the database it writes, and the usage section says the same in one paragraph |
+| 13 | `md_block sql N` indexes this page's `sql` blocks positionally, and nothing said so; a new `sql` block above the calibration harness would silently repoint both scripts | the rules table now carries that constraint and names `out/hashes.txt` as the guard |
+
+Three findings were left as they are, deliberately:
+
+- **Fixture DDL carries no statement tag.** `MANDATORY Production SQL` asks for
+  an inline tag after the leading verb, and `MANDATORY Measurement Script`
+  applies it to "the statements the script sends". The audit added 47 tags to
+  the statements whose output this page publishes — every reporting query, both
+  timeout `SET` pairs, the two `CALL score_all()` invocations and the
+  version/platform probes — and left about 740 fixture `CREATE`, `INSERT`,
+  `ANALYZE` and `DROP` lines untagged, on the reading that the same rule treats
+  fixtures separately by asking that they be marked disposable instead.
+  See [Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged).
+- **The 12 leg's cluster settings have no apply scope on this page**, because a
+  v17 page may not cite a v12 checkout.
+  See [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here).
+- **The 12 leg's runtime was never recorded.**
+  See [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime).
+
+Every repair above is either a comment, a documentation table, or a fail-closed
+guard on a path that previously had none; none of them changes a statement, a
+fixture, a threshold or a stage. Even so, the scripts were **not** re-run, so
+the figures under
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
+predate the script text now filed, and
+`verified_by_agent` stays `not yet`.
+See [The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run).
+
 ## Context Reviewed
 
 - PostgreSQL 17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`; the source checkout is read-only and was never written to.
@@ -4808,6 +5201,8 @@ its ICU headers no longer define those macros; the script carries that in
 - Implementation and measurement run on 2026-09-08, same pin: 17.11 built out of tree under `.wiki-runtime/tmp/btree17/` (`--without-readline --without-zlib --without-icu`), an isolated cluster on port 55437 with `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB` and `--locale=C`; `make check` 225 of 225 tests passed, `contrib/pageinspect` and `contrib/pgstattuple` checks passed; six fixture databases covering page geometry, fresh sorted builds, the three deterministic defects, the equal-image matrix, posting-list tails, validation probes and the insertion-pattern calibration. `pageinspect` and `pgstattuple` were installed in the disposable cluster only. The sandbox was deleted after filing, so reproducing any number means rebuilding from the pin and re-running the published SQL.
 - Mandatory test review on 2026-09-09, same pin, no server built or started: the revisions of this page before the 2026-09-07 cleanup (`33fe5a4`, `f8265ad`) and before the 2026-09-08 rewrite (`f2d73b4`) for the suite's requirement tables, harnesses and fixture recipes; the log entries of 2026-08-18, 2026-08-19, 2026-08-20, 2026-08-24 and 2026-09-08 for each run's provenance; the four fenced blocks on this page hashed against their recorded baselines, and the superseded block recovered from `f2d73b4` and hashed against `bffd166e…`; the installation and regression documentation for VPATH builds, ICU, block size, `make check` and contrib suites; the GUC contexts of every cluster setting the protocol names; and the equal-image, concurrent-build, parallel-build, partition-expansion, statistics-sample and `reltuples`-sentinel paths cited in the review.
 - Full re-verification on 2026-09-09, same pin: every source citation on this page re-read against `raw/postgres-17/` (476 links over 68 files, 164 distinct ranges, all resolving and all supporting their labels), every `## Contents` entry and page-internal anchor re-checked, and every measured claim re-run on a second isolated server. 17.11 was built out of tree under `.wiki-runtime/tmp/btreerev/` with `--with-icu --enable-debug --with-readline --with-zlib`; `make check` passed 225 of 225 and the `pageinspect`, `pgstattuple` and `amcheck` checks passed 8, 1 and 3; the cluster ran `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0` at the default `BLCKSZ`, with eleven fixture databases covering page geometry, fresh sorted builds, the three deterministic defects read as two roles, the equal-image matrix, posting tails, the statistics barrier, the probes, in-index compression, the 27-fixture deduplication gate and the ICU collation cases. Both statement texts were extracted and hashed before use. `raw/postgres-17/` was never written to and stayed clean at the pin; the build and cluster were deleted after filing, leaving only the fixture scripts under `.wiki-runtime/tmp/btree-rev-harness/`.
+
+- Measurement-script section review on 2026-09-09, same pin, read-only with no server built or started: `AGENTS.md`'s `MANDATORY Measurement Script`, `MANDATORY Production SQL`, `MANDATORY GUC Changes`, `MANDATORY Table of Contents` and `MANDATORY Citations` rules against this section as filed; both script bodies re-extracted from this page with their own `md_block` logic and parsed with `bash -n` (1,793 and 474 lines); the four `sql` blocks and the superseded text from revision `f2d73b4` re-hashed against all five baselines; the 37 source citations inside the section re-read against `raw/postgres-17/`, including the seven whose label token is not literally inside the range; `psql`'s exit-status handling for `-c` and `-f` actions (`startup.c`, `mainloop.c`, `psql-ref.sgml`); the GUC definitions of `listen_addresses`, `port` and `logging_collector`; and the containment guard tested against nine paths, including `/`, `$HOME`, the repository root, the `tmp` directory itself and a `tmpx` lookalike. Both pinned checkouts were clean at their pins throughout, and no sandbox, cluster or build was created.
 
 - Suite-script run on 2026-09-09, same pin, both legs built and executed: 17.11 out of tree under `.wiki-runtime/tmp/btree-suite/build17` (`--enable-debug --with-icu --with-readline --with-zlib`), `make check` All 225 tests plus 8, 1 and 3 for `pageinspect`, `pgstattuple` and `amcheck`; a cluster at `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0`, default `BLCKSZ`, with five UTF8 databases for geometry, calibration, the deduplication gate, the acceptance fixtures and the 112-fixture numbered suite. 12.2 was built out of tree from this repository's pinned 12 checkout the same way, needing `-DTRUE=1 -DFALSE=0` for this host's ICU headers, and passed All 192 core tests plus 5, 1 and 2. Both checkouts stayed read-only and clean at their pins; the two scripts, their SQL and their output live under `.wiki-runtime/tmp/btree-suite/`, which is git-ignored. The estimator, probe-generator, geometry and calibration blocks were re-extracted from this page after the edit that added the two script blocks, and all four still hash to their baselines, together with the superseded text from revision `f2d73b4`.
 
@@ -4839,7 +5234,8 @@ its ICU headers no longer define those macros; the script carries that in
 | The measured nondeterministic-collation branch | [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2615), [pg_locale.c#pg_locale_deterministic](../../../../raw/postgres-17/src/backend/utils/adt/pg_locale.c#L1567-L1575), [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849), [installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170). |
 | Multicolumn key groups and the extended-statistics escape | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L355-L385), [The current recommended statement](#the-current-recommended-statement). |
 | What the scoring pass rebuilds, and under which lock | [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829), [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597). |
-| Cluster settings the scripts write, and their apply scopes | [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453), [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100), [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265), [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877), [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4426-L4430), [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291). |
+| Cluster settings the scripts write, and their apply scopes | [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453), [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100), [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265), [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877), [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4426-L4430), [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4437-L4441), [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2394-L2397), [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1641-L1644), [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291). |
+| Why every `psql` helper carries `ON_ERROR_STOP`, and what a `-c` action returns without it | [mainloop.c:376](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L376), [mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594), [startup.c#single-query-action](../../../../raw/postgres-17/src/bin/psql/startup.c#L377-L386), [psql-ref.sgml#Exit-Status](../../../../raw/postgres-17/doc/src/sgml/ref/psql-ref.sgml#L627-L636). |
 
 ## Open Questions
 
@@ -4849,6 +5245,12 @@ the 2026-09-09 re-verification, each with the number that measured it. The
 [Multicolumn key groups without extended statistics](#multicolumn-key-groups-without-extended-statistics)
 and replaced the platform question with
 [Fixture recipes that do not reproduce](#fixture-recipes-that-do-not-reproduce).
+The measurement-script review of the same day added the last four, which are
+about the scripts rather than about the estimator:
+[The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run),
+[Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged),
+[The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
+and [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime).
 
 ### Mixed key widths in one index
 
@@ -5152,6 +5554,62 @@ matches this page's "x86-64 Linux" statement. See
 [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204),
 [analyze.c#stawidth](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540).
 
+### The repaired scripts have not been re-run
+
+The 2026-09-09 measurement-script review edited both scripts in place and did
+not re-run them, because the asker scoped it to a read-only audit. Every edit is
+a comment, a documentation change, an added `-v ON_ERROR_STOP=1`, a precondition
+check or a containment guard, and both scripts still parse and still reproduce
+all five SHA-256 baselines from this page; but `MANDATORY Measurement Script`
+asks that a script be re-run after it is edited, so the figures under
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
+predate the text now filed. What a re-run would settle: whether adding
+`ON_ERROR_STOP` to `s()` and `t()` turns any silently-empty output into a
+failed stage — that is, whether any reporting query on the 2026-09-09 run was
+erroring unnoticed. Nothing else in the diff can change a number.
+[Measurement-script section review](#measurement-script-section-review).
+
+### Fixture statements are marked disposable, not tagged
+
+`MANDATORY Production SQL` asks for an inline `/* wiki_... */` tag after the
+leading verb, and `MANDATORY Measurement Script` extends it to "the statements
+the script sends"; the same rule separately asks that fixture statements be
+marked disposable. The review took those as two requirements for two kinds of
+statement: the statements whose output this page publishes now carry 47 tags,
+31 in the 17 leg and 16 in the 12 leg, and the remaining statements — about 740
+fixture `CREATE`, `INSERT`, `ANALYZE`, `VACUUM`, `UPDATE` and `DROP` lines,
+almost all of them in the 17 leg's numbered-suite block — carry disposability
+banners instead. That reading is not stated in the rule, and the alternative —
+tagging every fixture statement — was not adopted, because it is a
+seven-hundred-line diff to scripts this pass could not re-run. If the strict
+reading is intended, the tagging pass and a full re-run belong together.
+
+### The 12 leg's settings have no citable apply scope here
+
+The 12 leg writes `listen_addresses`, `unix_socket_directories`, `port`,
+`autovacuum`, `fsync`, `shared_buffers`, `maintenance_work_mem` and
+`max_parallel_maintenance_workers` into its cluster's `postgresql.conf`, and
+sets `client_min_messages`, `statement_timeout` and `lock_timeout` per session.
+`MANDATORY GUC Changes` wants each one's context and apply scope from the
+same-version definition, but `MANDATORY Citations` forbids a v17 page from
+citing the pinned 12 checkout at all, and this page has no validated 12.2
+`pg_settings` capture. The run itself is unaffected, because every file-level
+setting is in place before the first start, but a reader who changes one of them
+on a 12.2 server has to look up its scope elsewhere. The clean fix is a
+`pg_settings` capture on the 12 leg, added to `stage_facts` and re-run, or the
+same table on a v12 page.
+
+### The 12 leg's unrecorded runtime
+
+`MANDATORY Measurement Script` asks for the runtime of a full run and of a
+re-run from a built tree. The 17 leg has both, measured on the recorded host:
+about eleven minutes and about ninety seconds. The 12 leg has neither: the
+2026-09-09 run did not time it, and this read-only review could not, since
+timing it means building 12.2. What is known is the shape of the cost — a full
+source build and `make check` dominate, and the fixture and scoring stages
+handle 19 fixtures against the 17 leg's 112 — but no number is filed, so none is
+claimed.
+
 ## Source References
 
 - [nbtsort.c#_bt_buildadd](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L784-L855)
@@ -5320,6 +5778,13 @@ matches this page's "x86-64 Linux" statement. See
 - [pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L41-L50)
 - [pg_proc.dat#pg_control_init](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11997)
 - [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204)
+- [startup.c#single-query-action](../../../../raw/postgres-17/src/bin/psql/startup.c#L377-L386)
+- [mainloop.c:376](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L376)
+- [mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594)
+- [psql-ref.sgml#Exit-Status](../../../../raw/postgres-17/doc/src/sgml/ref/psql-ref.sgml#L627-L636)
+- [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4437-L4441)
+- [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2394-L2397)
+- [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1641-L1644)
 
 ## Navigation
 
