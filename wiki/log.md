@@ -7690,3 +7690,78 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   reports **0 errors and 0 warnings**, the same as the pre-edit baseline. Updated
   `wiki/index.md`, `wiki/v17/index.md`, the v17 coverage cell and a dated note in
   `wiki/versions.md`. The sandbox was deleted after filing.
+
+## [2026-09-09] answer v12 | parent-cascade versus per-partition indexes on a declaratively partitioned table
+
+- Filed [Indexes Only on the Parent Versus Only on the Child Tables of a
+  Declaratively Partitioned Table in PostgreSQL 12
+  (unverified)](v12/questions/indexing/partitioned-index-parent-vs-child.md) at the
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2, `REL_12_2`).
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql 12,
+  question: what are the pros and cons of having on a declarative partitioning
+  indexes only on the parent table versus only on the child tables.`; the asker
+  chose "correct and restate", scoped the page to `CREATE INDEX ON parent` versus
+  per-partition `CREATE INDEX` (not the literal `ON ONLY` case, not legacy
+  inheritance), and chose a **source-only analysis with no server run**.
+- **Headline finding: the comparison is not symmetric.** An index "only on the
+  parent" is not a physical object. `DefineIndex` adds `INDEX_CREATE_SKIP_BUILD`
+  and `INDEX_CREATE_PARTITIONED` "because those don't have storage", then recurses
+  over `RelationGetPartitionDesc` and either adopts a matching partition index or
+  builds one. Both designs therefore end with exactly one real index per
+  partition, `plancat.c` skips `RELKIND_PARTITIONED_INDEX` outright ("Ignore
+  partitioned indexes, since they are not usable for queries"), and pruning never
+  consults indexes at all. Plan shape, pruning and write-path maintenance are
+  identical; everything that differs is DDL, locking and operations.
+- **Parent-cascade cons, all cited**: `CONCURRENTLY` refused before any other
+  check; `ShareLock` on the parent *and every partition*, opened with the same
+  `lockmode` and closed with `NoLock` under "keep lock till commit", so DML is
+  blocked hierarchy-wide (reads are not) for one all-or-nothing transaction — the
+  only `CommitTransactionCommand` calls in `DefineIndex` sit on the concurrent
+  path the partitioned case can never reach; `REINDEX` unimplemented for both the
+  partitioned index (`ReindexPartitionedIndex`) and the partitioned table
+  (`reindex_relation` and the concurrent path both warn and skip); the
+  `DEPENDENCY_PARTITION_PRI` row makes a child index undroppable
+  (`cannot drop index ... because index ... requires it`) with **no
+  `ALTER INDEX ... DETACH PARTITION` anywhere in the v12 grammar**; no
+  per-partition variation, because `CompareIndexInfo` requires the same AM, key
+  list, opclasses, collations, expressions and predicate; a mismatched
+  `ATTACH PARTITION` builds the index right there under `AccessExclusiveLock`; and
+  exclusion constraints plus a default-tablespace `TABLESPACE` clause are rejected.
+- **Parent-cascade pros**: every future or attached partition is indexed
+  (`DefineRelation` clones, `AttachPartitionEnsureIndexes` enforces); one enforced
+  definition; one cascading `DROP INDEX`; `pg_partition_tree()` accepts a
+  partitioned index, which is what `\dPi+` uses for a summed "Total size"; and the
+  three capabilities nothing else supplies — parent-level `UNIQUE`/`PRIMARY KEY`
+  (all partition key columns required, expression keys refused,
+  `ADD CONSTRAINT ... USING INDEX` unsupported), being an FK target through
+  `transformFkeyCheckAttrs`, and `INSERT ... ON CONFLICT` through
+  `infer_arbiter_indexes` mapped down by `get_partition_ancestors`.
+- **Also documented**: the `ON ONLY` + per-partition `CONCURRENTLY` +
+  `ALTER INDEX ... ATTACH PARTITION` hybrid from `ddl.sgml`, with two v12 traps
+  (an invalid parent index still forces an index onto every new
+  `CREATE TABLE ... PARTITION OF` and every `ATTACH PARTITION`, because
+  `RelationGetIndexList` only filters `!indislive`); the full attach/detach lock
+  table including the grandparent `AccessExclusiveLock` that
+  `validatePartitionedIndex` takes when recursing; the one asymmetry on the write
+  path (`ExecInitModifyTable` plus the relkind-blind `ExecOpenIndices` open and
+  `RowExclusiveLock` the root's partitioned indexes once per statement); why
+  restore costs the same either way (`pg_get_indexdef` emits `ON ONLY` and
+  `dumpIndexAttach` emits one attach per child, so children are always built
+  independently); the observability split (`pg_indexes` includes the parent,
+  `pg_stat_all_indexes` excludes partitioned tables, `pg_indexes_size` never
+  aggregates partitions, `relhasindex` is the parent-side signal); and
+  `max_locks_per_transaction` as the one materially different GUC, `PGC_POSTMASTER`
+  so **restart**.
+- Nine rows of regression evidence from `indexing.out`, plus an explicit statement
+  of what the suite does not contain: no plan, timing or lock-wait comparison
+  between the designs and no isolation spec for a concurrent writer during a
+  cascading build.
+- Validation: 230 source citations over 22 files and 132 distinct ranges, every
+  one resolving, in bounds and inside `raw/postgres-12/`; all 21 Contents entries
+  match heading order and slugs; every page-internal anchor and wiki link
+  resolves; `.wiki-runtime/venv/bin/python scripts/wiki_lint` clean. Updated
+  `wiki/index.md`, `wiki/v12/index.md`, the v12 coverage cell and a dated note in
+  `wiki/versions.md`. Four open questions remain (the unmeasured hierarchy-wide
+  write block, `pg_relation_size` on a storage-less index, the unquantified
+  per-statement root-index open, and the cross-version history of `REINDEX` and
+  `DETACH` support), so `verified_by_agent` stays `not yet`.
