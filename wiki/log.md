@@ -2,6 +2,121 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-09] answer v17 | a reader's guide to the B-tree suite scripts' output
+
+- Added [Reading the results of a
+  run](v17/questions/indexing/btree-index-bloat-core-sql-only.md#reading-the-results-of-a-run)
+  to [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) at
+  the unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`.
+  **Prompt hygiene first**: the original read `add to section also information
+  on how to understand the results of the script execution.`; the asker chose
+  "correct and restate", and chose **reader's-guide depth** over a per-stage
+  reference with example output.
+- The section answers five questions in order: where the output goes (a fifteen-row map of the files under `out/`, and the result tables
+  each stage leaves in its database, with `criteria.txt` named as the one file to open first); how to
+  read one scored row, with `actual` named as the truth column and `wsp`/`wspf`
+  scored against it, then `reported`, `withheld_by`, `alertable` and
+  `contract_ok`; the five verdicts with their exact thresholds and what each
+  says about the estimator; what a clean run looks like, as a nine-row
+  checklist of concrete values; and what to do when something goes wrong, as a
+  symptom-to-file table that separates a harness fault (`contract_ok` false, a
+  caveat on a fresh fixture, a missing view) from an estimator defect.
+- The key reading it makes explicit: a verdict is only as interesting as
+  `reported` and `alertable` make it, so a withheld critical false positive
+  costs a reader nothing while the same verdict on a reported, alertable row is
+  a defect the statement owes a fix for. Three outcomes are named as
+  non-failures: a withheld row, a negative percentage, and a zero difference on
+  a fresh build.
+- No measurement, no server run, no SQL change and no pin change. Six citations
+  support the behavioural claims (`pg_relation_size`, `ReindexIndex`,
+  `reindex_index`, the `reltuples` sentinel pair, and the two flush paths).
+  Validation: 561 citations resolve in bounds, all page-internal anchors
+  resolve, the 51 Contents entries match the heading order,
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors and 0
+  warnings**. `wiki/index.md`, `wiki/v17/index.md` and a dated note in
+  `wiki/versions.md` updated; both verification fields unchanged.
+
+## [2026-09-09] answer v17 | two reusable suite scripts for the B-tree estimator, both legs run
+
+- Added four sections to [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method
+  on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-two-suite-scripts-and-the-rules-they-follow)
+  at the unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql 17,
+  for question:  Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17 (unverified) , add to the question a section with two scripts
+  for version 17 and version 12 with all the tests so it can be reused during
+  reviews and improvements of the statement. use bash and sql only.`; the asker
+  chose "correct and restate", then chose to **build and run both legs**, to
+  cover **every test family the page names**, and to keep the scripts **in the
+  page** rather than in a second file.
+- **The deliverable is two Bash-and-SQL scripts, filed in full.**
+  `btree_bloat_suite_v17.sh` (build, check, cluster, texts, geometry,
+  calibration, gate, acceptance, suite, attribution, probes, score, cost,
+  criteria, report) and `btree_bloat_suite_v12.sh` (build, check, cluster,
+  exact, transform, facts, fixtures, score, report). No Python, no `awk`: block
+  extraction, the three harness edits and the 12 leg's statistics polling are
+  all pure Bash. Neither script contains a Markdown fence — `md_block` builds
+  the three backticks from `printf '\140'` — so each can live inside the block
+  that publishes it and still extract the four SQL blocks from this page. That
+  was verified after the edit: all five SHA-256 baselines, including the
+  superseded text from revision `f2d73b4`, still match.
+- **Both legs were built and run.** 17.11 out of tree with
+  `--enable-debug --with-icu --with-readline --with-zlib`: `make check` All 225
+  tests, plus 8, 1 and 3 for `pageinspect`, `pgstattuple` and `amcheck`. 12.2
+  from the pinned 12 checkout, needing `-DTRUE=1 -DFALSE=0` for this host's ICU
+  headers: All 192, plus 5, 1 and 2. Platform `Linux x86_64`,
+  `max_data_alignment` 8, `database_block_size` 8192.
+- **Reproduced**: 78 of 78 geometry cells on both the closed-form leaf capacity
+  and whole-index `relpages`; `0 bytes` on 10 of 10 fresh sorted builds against
+  the superseded text's 6 (`-0.7`, `-3.4`, `+11.0`, `-33.9` at 400, 800, 1000,
+  2000 bytes); a 28-fixture deduplication gate with **0 over-credits**, metapage
+  agreement on all 12 `recognized` and 9 `ineligible` rows, 2 conservative
+  under-credits and a worst reading of 28.8 %; posting-tail mean absolute error
+  **11.38 % to 0.38 %** and within-one-point 8 to 11 of 13; compression 367
+  against 10,003 blocks; the barrier artifact 0/200,000 against 200,000/400,000;
+  and the seven-pattern calibration including the floor's `-245.2 %` against a
+  true `-7.5 %`.
+- **New: the partial-index half of the mandatory suite is scored against the
+  current statement for the first time.** 112 numbered fixtures, each asserting
+  its own population and scored against a measured `REINDEX INDEX`: 59 reported,
+  53 withheld with **every withheld row naming the term that withheld it** (34
+  change A, 10 B, 5 C, 4 D), **0 contract failures**, and on the floor 80 PASS /
+  20 critical false positives / 7 false negatives / 3 false positives / 2
+  unmeasured. Among reported rows six are critical false positives and **three
+  survive the page's own reading rule**: a forged stale partial `reltuples` at
+  94.2 %, `i103` at 84.1 % and `x109` at 62.5 %, all against a measured 0.0.
+  Twelve true detections all pass. The `EXCEPT` attribution returns 26 rows in
+  each direction over 114 indexes — 23 a moved number, 3 a new caveat string —
+  and cost is 61.5-67.4 ms against the superseded text's 52.5-56.1 ms.
+- **The cross-version open question is answered, and the answer is no.** The
+  exact current text is refused on the pinned 12 server with
+  `ERROR: column se.inherited does not exist` at the `extstat` stage, which is a
+  failed test 17 before any fixture exists. One transformer edit makes it run,
+  and 19 fixtures then score there: every gate verdict `ineligible` with nothing
+  credited, identical fresh-build block counts (254/258/353), the same 84.1 %
+  wide-key critical false positive, and `nzb_k`/`i_trunc` at 99.9 % where 17.11
+  reports `unmeasured: reltuples unknown`. Everything version-local on that leg
+  is discovered at run time, not assumed.
+- Page edits: the sixth prompt and its note under Question; two new lead
+  paragraphs; four new Answer sections; rewrites of the cross-version, mandatory-suite,
+  scoring-column and partial-population Open Questions; one new Open Question
+  (a fixture whose verdict flips with the 300-row ANALYZE sample); an updated
+  "What remains unimplemented"; five Contents entries; one Context Reviewed
+  bullet; two Evidence Map rows; four new Source References. The four SQL
+  blocks, the pin and both verification fields are unchanged. Agent verification
+  stays `not yet`: three reported critical false positives remain unfixed and
+  the 12 leg covers 19 fixtures rather than 112.
+- Validation: 554 citations over 68 files all resolve, are in bounds and cite
+  only the matching checkout; all 54 page-internal anchors resolve; the Contents
+  order matches the heading order exactly;
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors and 0
+  warnings**. Updated `wiki/index.md`, `wiki/v17/index.md`, the v17 coverage
+  cell and a dated note in `wiki/versions.md`. Both source checkouts are
+  untouched and clean at their pins; the sandbox stays under the git-ignored
+  `.wiki-runtime/tmp/btree-suite/`.
+
 ## [2026-09-03] answer v17 | bottom-up index deletion and B-tree deduplication, source and history only
 
 - Filed [How Bottom-Up Index Deletion and B-Tree Deduplication Work in PostgreSQL 17

@@ -34,6 +34,11 @@ verified_by_agent: not yet
   - [Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement)
   - [What still needs to be tested](#what-still-needs-to-be-tested)
   - [How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement)
+  - [The two suite scripts, and the rules they follow](#the-two-suite-scripts-and-the-rules-they-follow)
+  - [The PostgreSQL 17 suite script](#the-postgresql-17-suite-script)
+  - [The PostgreSQL 12 leg script](#the-postgresql-12-leg-script)
+  - [Reading the results of a run](#reading-the-results-of-a-run)
+  - [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -46,6 +51,7 @@ verified_by_agent: not yet
   - [Untested configurations](#untested-configurations)
   - [Multicolumn key groups without extended statistics](#multicolumn-key-groups-without-extended-statistics)
   - [Partial-index populations and zero counts](#partial-index-populations-and-zero-counts)
+  - [Fixture verdicts that depend on the ANALYZE sample](#fixture-verdicts-that-depend-on-the-analyze-sample)
   - [Statistics publication and test ordering](#statistics-publication-and-test-ordering)
   - [Alert thresholds and rebuild savings](#alert-thresholds-and-rebuild-savings)
   - [The mandatory suite and the current statement](#the-mandatory-suite-and-the-current-statement)
@@ -129,6 +135,41 @@ place. The results are filed under
 [The deduplication gate, scored against the current statement](#the-deduplication-gate-scored-against-the-current-statement)
 and [The collation branch, measured with ICU](#the-collation-branch-measured-with-icu).
 
+Sixth prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, for the question "Testing the PostgreSQL 12
+> Core-SQL B-Tree Bloat Method on PostgreSQL 17", add a section with two
+> scripts, one for version 17 and one for version 12, holding all the tests, so
+> that the section can be reused during reviews and improvements of the
+> statement. Use Bash and SQL only.
+
+The original read `follow agents.md, in postgresql 17,  for question: Testing
+the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) ,
+add to the question a section with two scripts for version 17 and version 12
+with all the tests so it can be reused during reviews and improvements of the
+statement. use bash and sql only.`: `agents.md` for AGENTS.md, lowercase
+`postgresql`, a double space after the first comma, `for question:` without an
+article, a space before a comma, the `(unverified)` title hint treated as part
+of the title, an unclear "it" for the section, and `bash and sql` for Bash and
+SQL. The asker chose to build and run both legs, to cover every test family the
+page names, and to keep the scripts in this page rather than in a second file.
+The work is filed under
+[The two suite scripts, and the rules they follow](#the-two-suite-scripts-and-the-rules-they-follow),
+[The PostgreSQL 17 suite script](#the-postgresql-17-suite-script),
+[The PostgreSQL 12 leg script](#the-postgresql-12-leg-script) and
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
+
+Seventh prompt, corrected and restated with the asker's agreement:
+
+> Also add to the section information on how to understand the results of
+> running the scripts.
+
+The original read `add to section also information on how to understand the
+results of the script execution.`: no article before `section`, no sentence
+capitalisation, and `also` placed mid-sentence. The asker chose a reader's
+guide rather than a per-stage reference with example output. It is filed under
+[Reading the results of a run](#reading-the-results-of-a-run).
+
 ## Answer
 
 **All ten repair plans are now implemented, and the revised statement is exact
@@ -187,13 +228,25 @@ never stated.
 [The deduplication gate, scored against the current statement](#the-deduplication-gate-scored-against-the-current-statement),
 [The collation branch, measured with ICU](#the-collation-branch-measured-with-icu).
 
-**The partial-index half of the mandatory suite is still unscored against this
-statement.** Tests 18-91 and fixtures 92-121 were last run on 2026-08-24 against
-the superseded six-change text, and the 2026-09-08 rewrite was measured on new
-fixtures only, so the partial-index contract this page carries remains an
-expectation derived from the SQL rather than a result. The review, the expected
-verdicts and a runnable protocol are under
-[Mandatory test review](#mandatory-test-review).
+**The whole suite is now two runnable scripts, and both legs have been run.**
+[The PostgreSQL 17 suite script](#the-postgresql-17-suite-script) and
+[The PostgreSQL 12 leg script](#the-postgresql-12-leg-script) are Bash and SQL
+only, extract the statement texts from this page, and reproduce every family
+above plus the partial-index half of the mandatory suite that had never been
+scored against this text. On 112 numbered fixtures the current text reports 59
+rows and withholds 53, every withheld row naming the term that withheld it, and
+**three reported critical false positives survive this page's own reading rule**:
+a forged stale partial `reltuples`, the wide-key partial index `i103` at 84.1 %,
+and the zero-statistics-target index `x109` at 62.5 %.
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
+
+**The cross-version question is answered, and the answer is no.** The exact
+current text does not execute on the pinned 12 checkout: it is refused with
+`ERROR: column se.inherited does not exist`, at the `extstat` stage. Deleting
+that one filter line makes it run, and the transformed text then scores 19
+fixtures there — every one `ineligible`, nothing credited, and two `reltuples`
+shapes that read 99.9 % on 12.2 where 17.11 reports `unmeasured`.
+[Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement).
 
 ### The current recommended statement
 
@@ -1742,13 +1795,17 @@ effect under test.
   largest remaining error, `-60.1 %` on the measured fixture.
 - Any reading of the compressed stored width of a wide key. The statement can
   only warn.
-- Cross-version work. Every number here is 17.11 at the default block size; the
-  PostgreSQL 12 comparison this page began with has not been re-run against the
-  revised statement.
-- The partial-index half of the mandatory suite. Tests 1-17 were scored against
-  this statement on 2026-09-09, but tests 18-91 and fixtures 92-121 have not;
-  see [Mandatory test review](#mandatory-test-review) and
-  [The deduplication gate, scored against the current statement](#the-deduplication-gate-scored-against-the-current-statement).
+- A block size other than 8192. Every number here is 17.11 at the default block
+  size. The cross-version gap is closed:
+  [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
+  records the 12.2 leg, including the one construct that stops the text from
+  executing there.
+- Row-count fidelity of the reconstructed fixtures. Tests 18-91 and fixtures
+  92-121 have now been scored against this statement, but from shapes rebuilt
+  out of the published requirement tables rather than the original scripts, so
+  a cell whose value depends on the exact population differs; test 36 is the
+  clearest case. See
+  [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
 - A group count for a multicolumn key with correlated columns. Without a
   `CREATE STATISTICS ... (ndistinct)` object the model multiplies per-column
   distinct counts, which cost `-320.0 %` and `-562.1 %` on two measured fresh
@@ -2188,6 +2245,2560 @@ following hold:
 with the platform record from item 10 above. The sandbox lives under
 `.wiki-runtime/tmp/` and is deleted or kept as the asker directs.
 
+### The two suite scripts, and the rules they follow
+
+**Both scripts are filed in full below, and both were run end to end on
+2026-09-09 before this section was written.** They turn
+[How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement)
+into two files. `btree_bloat_suite_v17.sh` builds 17.11 out of tree from the
+pin, runs the engine suites, and then runs every test family this page names —
+page geometry, insertion-pattern calibration, the deduplication gate, the
+acceptance fixtures, the numbered suite of 112 partial-index and control
+fixtures, the `EXCEPT` attribution, the validation probes, the scoring pass and
+the cost comparison. `btree_bloat_suite_v12.sh` runs step 8, the cross-version
+leg, against the pinned 12 checkout. They are Bash and SQL only: no Python, no
+`awk`, no external harness, so a reviewer needs a compiler, a shell and this
+page.
+
+Nine rules hold in both scripts.
+
+| Rule | How the scripts keep it |
+|---|---|
+| The pinned checkout stays read only | every artifact goes under `SANDBOX`, default `.wiki-runtime/tmp/btree-suite`, and the build is the VPATH form the documentation describes. [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432) |
+| The statement under test is never retyped | `md_block` extracts a fenced block from this Markdown file in pure Bash, and `git show` recovers the superseded text from revision `f2d73b4`; all five SHA-256 baselines are checked before use |
+| The exact filed text runs first | both texts execute with the 1 MB filter, the `ORDER BY` and the `LIMIT 20` intact, before any harness view exists |
+| Only the three documented edits are applied | `harness_view` drops the two `SET` lines, projects the internals the scorer reads, and drops the filter, the order and the limit. Nothing else is rewritten. [The current recommended statement](#the-current-recommended-statement) |
+| Statistics are published before they are read | `pg_stat_force_next_flush()` precedes every `ANALYZE` and `VACUUM` on the 17 leg, and no fixture is read inside the transaction that built it. [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L700-L708), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337) |
+| Attribution and probes run before the first rebuild | the fixture stage only builds and plans; `EXCEPT` and the probe generator run next; the scoring pass is the first thing that rebuilds an index. [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829), [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597) |
+| Every fixture asserts its own population | the `plan` table carries a counting query and the intended row count, and `verdicts.contract_ok` is false when they disagree |
+| Oracles are read beside each row and never scored | `bt_metap().allequalimage` for the gate, the build's `DEBUG1` line, and posting lists in `bt_page_items`. [btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921), [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180), [pageinspect--1.8--1.9.sql#bt_page_items](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L109-L118) |
+| Stages are selectable and idempotent | `bash btree_bloat_suite_v17.sh gate score` runs two stages; a second run reuses the build and the cluster, and the suite stage resets its schema and reinstalls both views before rebuilding its fixtures |
+
+Neither script contains a Markdown fence: `md_block` assembles the three
+backticks from `printf '\140'`, so each script can live inside the fenced block
+that publishes it and still extract blocks from this page.
+
+The stages, in default order:
+
+| Script | Stages |
+|---|---|
+| `btree_bloat_suite_v17.sh` | `build check cluster texts geometry calibration gate acceptance suite attribution probes score cost criteria report`, plus `stop` and `clean` |
+| `btree_bloat_suite_v12.sh` | `build check cluster exact transform facts fixtures score report`, plus `stop` and `clean` |
+
+The cluster the 17 script writes uses the settings
+[How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement)
+prescribes. They are written into `postgresql.conf` before the first start, so
+each is in effect from startup; the apply scope below is what a *later* change
+to that setting would need.
+
+| Setting | Value | Context | Scope of a later change |
+|---|---|---|---|
+| `autovacuum` | `off` | `PGC_SIGHUP` | reload. [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453) |
+| `fsync` | `off` | `PGC_SIGHUP` | reload. [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100) |
+| `shared_buffers` | `512MB` | `PGC_POSTMASTER` | restart. [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265) |
+| `maintenance_work_mem` | `256MB` | `PGC_USERSET` | session or transaction. [guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2466-L2469) |
+| `max_parallel_maintenance_workers` | `0` | `PGC_USERSET` | session or transaction. [guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3410-L3413) |
+| `log_min_messages` | `debug1` | `PGC_SUSET` | session, and only for a superuser or a role granted `SET` on it. [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877) |
+| `unix_socket_directories` | the sandbox socket directory | `PGC_POSTMASTER` | restart. [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4426-L4430) |
+| `client_min_messages` | `debug1` around the gate builds | `PGC_USERSET` | session or transaction. [guc_tables.c#client_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4777-L4780) |
+| `default_statistics_target` | `1` for fixture 120 only | `PGC_USERSET` | session or transaction. [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2074) |
+| `statement_timeout`, `lock_timeout` | `600s`/`900s` and `2s` in the harness sessions | `PGC_USERSET` | session or transaction. [guc_tables.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2631) |
+
+`initdb --locale=C` fixes the collation the geometry and gate fixtures assume,
+and the ICU cases need a UTF8 database, which is why every database is created
+`TEMPLATE template0 ENCODING 'UTF8'`.
+[initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291),
+[installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170).
+
+### The PostgreSQL 17 suite script
+
+Run it from the repository root. `bash btree_bloat_suite_v17.sh` runs every
+stage; `bash btree_bloat_suite_v17.sh clean` stops the server and deletes the
+sandbox. The whole run took about eleven minutes on the host recorded under
+[Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), of which
+the build and the four regression suites are most of the time; from a built
+tree, `suite attribution probes score criteria` is about ninety seconds.
+
+```bash
+#!/usr/bin/env bash
+#
+# btree_bloat_suite_v17.sh - the whole test suite of the PostgreSQL 17 wiki page
+# "Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17",
+# in bash and SQL only.
+#
+# It builds 17.11 out of tree from the pinned checkout, runs the engine
+# regression suites, starts an isolated cluster, installs the page's estimator
+# and the superseded text as views, builds every fixture family the page names,
+# scores each one against a measured REINDEX INDEX, attributes every moved row,
+# runs the validation probes and prints the pass criteria.
+#
+# The pinned checkout is read only: everything this script writes lives under
+# $SANDBOX (default .wiki-runtime/tmp/btree-suite).
+#
+# Usage, from the repository root:
+#   bash btree_bloat_suite_v17.sh                 # all stages
+#   bash btree_bloat_suite_v17.sh build check     # selected stages
+#   bash btree_bloat_suite_v17.sh clean           # stop and delete the sandbox
+#
+# Stages: build check cluster texts geometry calibration gate acceptance
+#         suite attribution probes score criteria report stop clean
+#
+# Environment: WIKI_ROOT PAGE SRC SANDBOX PORT JOBS OLD_REV KEEP
+set -uo pipefail
+
+WIKI_ROOT="${WIKI_ROOT:-$PWD}"
+PAGE="${PAGE:-$WIKI_ROOT/wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md}"
+SRC="${SRC:-$WIKI_ROOT/raw/postgres-17}"
+SANDBOX="${SANDBOX:-$WIKI_ROOT/.wiki-runtime/tmp/btree-suite}"
+PORT="${PORT:-55437}"
+JOBS="${JOBS:-4}"
+OLD_REV="${OLD_REV:-f2d73b4}"          # revision holding the superseded text
+
+BUILD="$SANDBOX/build17"; INST="$SANDBOX/install17"; DATA="$SANDBOX/data17"
+OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"; SOCK="$SANDBOX/sock"; BIN="$INST/bin"
+export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
+
+# SHA-256 baselines of the four fenced SQL blocks of the page, in page order.
+BASE1=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd  # estimator
+BASE2=bfa7721f5edae40fd883b5bc0f0776e499716c48cfdbe10d191e95b9f8a3bb0d  # probes
+BASE3=0b03f0c918a669b5402d1e630046bf2f1b9fc71453f54ef7119942d13a43c7ec  # geometry
+BASE4=3e57a5687d15c0725ab5cd1c2cea09b0a18a549ac649b82eee5246d1b75b8777  # calibration
+BASEOLD=bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
+
+say()  { printf '\n== %s\n' "$*" >&2; }
+note() { printf '   %s\n' "$*" >&2; }
+die()  { printf '!! %s\n' "$*" >&2; exit 1; }
+
+# psql helpers. -X ignores ~/.psqlrc, ON_ERROR_STOP makes any error fatal.
+q()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }        # command
+f()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -f "$2"; }        # file
+s()  { "$BIN/psql" -X -At -q -d "$1" -c "$2"; }                       # scalar
+t()  { "$BIN/psql" -X -q -P pager=off -d "$1" -c "$2"; }              # table
+
+# md_block <fence-language> <n> <file>: print the nth fenced block, bash only.
+# The fence is assembled from printf '\140' so that this script contains no
+# literal Markdown fence and can therefore live inside one.
+md_block() {
+  local lang=$1 want=$2 file=$3 n=0 inb=0 line tick fence
+  tick=$(printf '\140'); fence="$tick$tick$tick"
+  while IFS= read -r line; do
+    if [ "$inb" = 1 ]; then
+      if [ "$line" = "$fence" ]; then inb=0; [ "$n" = "$want" ] && return 0; continue; fi
+      [ "$n" = "$want" ] && printf '%s\n' "$line"
+    elif [ "$line" = "$fence$lang" ]; then
+      n=$((n + 1)); inb=1
+    fi
+  done < "$file"
+}
+
+# harness_view <sql-file> <view> <extra projection>: the three documented edits.
+# Drop the two SET lines, project the internals the scorer reads, and drop the
+# 1 MB filter, the suppress_row filter, the ORDER BY and the LIMIT.
+harness_view() {
+  local file=$1 view=$2 extra=$3 line
+  printf 'DROP VIEW IF EXISTS %s;\nCREATE VIEW %s AS\n' "$view" "$view"
+  while IFS= read -r line; do
+    case $line in
+      "SET /* wiki_btree_wasted_space"*)     continue ;;
+      "       server_version_num")           printf '       server_version_num,\n%s\n' "$extra"; continue ;;
+      " WHERE actual_bytes > 1024 * 1024"*)  continue ;;
+      " ORDER BY (actual_bytes"*)            continue ;;
+      " LIMIT 20;")                          printf ';\n'; continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < "$file"
+}
+
+# Internals both texts define, and the four the current text adds.
+INTERNALS='       expected_blocks, floor_blocks, actual_bytes, live_rows, slot,
+       leaf_cap, int_cap, nmax, leaf_pages, tids, dedup_applies, is_partial,
+       has_expressions, stats_row_missing, dedup_credited, stats_stale,
+       suppress_row, ext_used, any_no_stats, any_stats_hidden,
+       any_varlena_include'
+INTERNALS_R2='       itupsz, any_stats_disabled, any_compressible, equalimage_state'
+
+# ---------------------------------------------------------------- build ------
+stage_build() {
+  say "build 17.11 out of tree from $SRC"
+  [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
+  mkdir -p "$BUILD" "$OUT" "$SQLD"
+  ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" --enable-debug \
+      --with-icu --with-readline --with-zlib > configure.log 2>&1 ) \
+    || die "configure failed, see $BUILD/configure.log"
+  ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
+    || die "make failed, see $BUILD/make.log"
+  local m
+  for m in pageinspect pgstattuple amcheck; do
+    ( cd "$BUILD" && make -C "contrib/$m" -j"$JOBS" >> install.log 2>&1 \
+        && make -C "contrib/$m" install >> install.log 2>&1 ) || die "contrib/$m failed"
+  done
+  note "$("$BIN/postgres" --version)"
+}
+
+# ---------------------------------------------------------------- check ------
+stage_check() {
+  say "engine regression suites"
+  : > "$OUT/checks.txt"
+  ( cd "$BUILD" && make check > check_core.log 2>&1 )
+  printf 'core=%s %s\n' "$?" \
+    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_core.log" | tail -1)" \
+    >> "$OUT/checks.txt"
+  local m
+  for m in pageinspect pgstattuple amcheck; do
+    ( cd "$BUILD" && make -C "contrib/$m" check > "check_$m.log" 2>&1 )
+    printf '%s=%s %s\n' "$m" "$?" \
+      "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_$m.log" | tail -1)" \
+      >> "$OUT/checks.txt"
+  done
+  cat "$OUT/checks.txt" >&2
+}
+
+# ---------------------------------------------------------------- cluster ----
+stage_cluster() {
+  say "isolated cluster on port $PORT"
+  if [ -s "$DATA/postmaster.pid" ] && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    note "already running"; return 0
+  fi
+  if [ ! -d "$DATA" ]; then
+    mkdir -p "$SOCK"
+    "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 > "$OUT/initdb.log" 2>&1 \
+      || die "initdb failed"
+    cat >> "$DATA/postgresql.conf" <<CONF
+listen_addresses = ''
+unix_socket_directories = '$SOCK'
+port = $PORT
+autovacuum = off
+fsync = off
+shared_buffers = '512MB'
+maintenance_work_mem = '256MB'
+max_parallel_maintenance_workers = 0
+log_min_messages = debug1
+logging_collector = off
+CONF
+  fi
+  "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w start > /dev/null || die "server start failed"
+  note "$(s postgres 'select version()')"
+  s postgres "select 'max_data_alignment=' || max_data_alignment ||
+              ' database_block_size=' || database_block_size from pg_control_init()" \
+    | tee "$OUT/platform.txt" >&2
+  printf 'uname: %s\n' "$(uname -sm)" >> "$OUT/platform.txt"
+  local db
+  for db in geo cal gate acc suite; do
+    s postgres "select 1 from pg_database where datname='$db'" | grep -q 1 \
+      || "$BIN/createdb" -T template0 -E UTF8 --locale=C "$db"
+  done
+}
+
+# ---------------------------------------------------------------- texts ------
+stage_texts() {
+  say "statement texts, hashes and harness views"
+  md_block sql 1 "$PAGE" > "$SQLD/est_r2.sql"
+  md_block sql 2 "$PAGE" > "$SQLD/probegen.sql"
+  md_block sql 3 "$PAGE" > "$SQLD/geometry.sql"
+  md_block sql 4 "$PAGE" > "$SQLD/calibration.sql"
+  ( cd "$WIKI_ROOT" && git show "$OLD_REV:wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md" ) \
+    > "$SQLD/old_page.md" 2>/dev/null || die "cannot read revision $OLD_REV"
+  md_block sql 1 "$SQLD/old_page.md" > "$SQLD/est_old.sql"
+
+  : > "$OUT/hashes.txt"
+  local n f base got
+  n=0
+  for f in est_r2 probegen geometry calibration est_old; do
+    n=$((n + 1))
+    case $n in 1) base=$BASE1;; 2) base=$BASE2;; 3) base=$BASE3;; 4) base=$BASE4;; 5) base=$BASEOLD;; esac
+    got=$(sha256sum < "$SQLD/$f.sql" | cut -d' ' -f1)
+    if [ "$got" = "$base" ]; then printf '%-12s match  %s\n' "$f" "$got" >> "$OUT/hashes.txt"
+    else printf '%-12s DIFFER %s (baseline %s)\n' "$f" "$got" "$base" >> "$OUT/hashes.txt"; fi
+  done
+  cat "$OUT/hashes.txt" >&2
+
+  # Both exact texts must execute as filed, filter and LIMIT intact.
+  local db
+  for db in suite acc; do
+    f "$db" "$SQLD/est_r2.sql" > "$OUT/exact_r2_$db.txt" 2>&1 \
+      && note "exact current text runs on $db" || die "exact current text failed on $db"
+  done
+  f suite "$SQLD/est_old.sql" > "$OUT/exact_old_suite.txt" 2>&1 \
+    && note "exact superseded text runs on suite" || note "exact superseded text FAILED on suite"
+
+  harness_view "$SQLD/est_r2.sql"  est_r2  "$INTERNALS,
+$INTERNALS_R2" > "$SQLD/view_r2.sql"
+  harness_view "$SQLD/est_old.sql" est_old "$INTERNALS" > "$SQLD/view_old.sql"
+  for db in geo cal gate acc suite; do
+    f "$db" "$SQLD/view_r2.sql"  || die "est_r2 view failed on $db"
+    f "$db" "$SQLD/view_old.sql" || die "est_old view failed on $db"
+  done
+}
+
+# ---------------------------------------------------------------- geometry ---
+stage_geometry() {
+  say "page geometry against pageinspect, 78 cells"
+  q geo 'CREATE EXTENSION IF NOT EXISTS pageinspect'
+  q geo 'DROP TABLE IF EXISTS geo_result'
+  f geo "$SQLD/geometry.sql" || die "geometry harness failed"
+  t geo "SELECT /* wiki_btree_geometry_score */
+           count(*) AS cells,
+           count(*) FILTER (WHERE mode_items = pred_cap)          AS leaf_exact,
+           count(*) FILTER (WHERE mode_items = least(pred_soft, pred_hard) + 1) AS leaf_one_high,
+           count(*) FILTER (WHERE int_max_items IS NULL
+                              OR int_max_items <= int_pred_cap)   AS int_within_cap,
+           count(*) FILTER (WHERE relpages = leaf_pages + int_pages + 1) AS relpages_exact
+         FROM geo_result" > "$OUT/geometry.txt" 2>&1
+  t geo "SELECT keylen, fillfactor, itupsz, leaf_pages, int_pages, relpages,
+                mode_items, pred_cap, min_items, max_items
+           FROM geo_result ORDER BY fillfactor, keylen" >> "$OUT/geometry.txt" 2>&1
+  head -12 "$OUT/geometry.txt" >&2
+}
+
+# ------------------------------------------------------------- calibration ---
+stage_calibration() {
+  say "calibration by insertion pattern, scored against REINDEX INDEX"
+  q cal 'DROP SCHEMA IF EXISTS cal CASCADE'
+  f cal "$SQLD/calibration.sql" || die "calibration fixtures failed"
+  f cal /dev/stdin <<'SQL'
+DROP TABLE IF EXISTS cal_res;
+CREATE TABLE cal_res(pattern text, idx text, size_before bigint, size_after bigint,
+                     actual numeric, wsp numeric, wspf numeric, tids numeric,
+                     equalimage text, caveats text);
+DO $cal$
+DECLARE r record; sb bigint; sa bigint; e record;
+BEGIN
+  FOR r IN SELECT c.relname AS idx FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'cal' AND c.relkind = 'i' ORDER BY c.relname LOOP
+    sb := pg_relation_size(('cal.' || quote_ident(r.idx))::regclass);
+    SELECT * INTO e FROM est_r2 WHERE indexname = r.idx;
+    EXECUTE format('REINDEX INDEX cal.%I', r.idx);
+    sa := pg_relation_size(('cal.' || quote_ident(r.idx))::regclass);
+    INSERT INTO cal_res VALUES (r.idx, r.idx, sb, sa,
+      round(100.0 * (sb - sa) / greatest(sb, 1), 1),
+      e.wasted_space_pct, e.wasted_space_pct_floor, e.tids_per_tuple,
+      e.equalimage, e.caveats);
+  END LOOP;
+END $cal$;
+SQL
+  t cal 'SELECT pattern, size_before/8192 AS blocks_before, size_after/8192 AS blocks_after,
+                actual, wsp, wspf, tids, equalimage, caveats
+           FROM cal_res ORDER BY pattern' > "$OUT/calibration.txt" 2>&1
+  cat "$OUT/calibration.txt" >&2
+}
+
+# ---------------------------------------------------------------- gate -------
+stage_gate() {
+  say "deduplication gate, tests 1-17, 28 fixtures on two 500,000-row tables"
+  q gate 'CREATE EXTENSION IF NOT EXISTS pageinspect'
+  q gate 'CREATE EXTENSION IF NOT EXISTS amcheck'
+  PGOPTIONS='-c client_min_messages=debug1' \
+    "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d gate -f /dev/stdin \
+    > "$OUT/gate_build.log" 2>&1 <<'SQL'
+DROP TABLE IF EXISTS t CASCADE;
+DROP TABLE IF EXISTS t2 CASCADE;
+DROP OPERATOR CLASS IF EXISTS int4_ei_true USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS int4_ei_false USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS int4_ei_none USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS int4_ei_alias USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS int8_ei_true USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS int8_ei_false USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS text_squat USING btree CASCADE;
+DROP OPERATOR CLASS IF EXISTS text_renamed USING btree CASCADE;
+
+CREATE COLLATION IF NOT EXISTS ci   (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+CREATE COLLATION IF NOT EXISTS cdet (provider = icu, locale = 'und');
+
+CREATE OR REPLACE FUNCTION ei_true(oid)  RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT true $$;
+CREATE OR REPLACE FUNCTION ei_false(oid) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT false $$;
+CREATE OR REPLACE FUNCTION ei_alias(oid) RETURNS bool LANGUAGE internal IMMUTABLE AS 'btequalimage';
+-- test 16, the impostor: a SQL function wearing the built-in's name.  It must
+-- be schema-qualified in the operator class or pg_catalog wins the lookup.
+CREATE OR REPLACE FUNCTION public.btequalimage(oid) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT true $$;
+-- test 16, the rename: prosrc still names the built-in, so the gate credits it.
+CREATE OR REPLACE FUNCTION ei_renamed(oid) RETURNS bool LANGUAGE internal IMMUTABLE AS 'btvarstrequalimage';
+
+CREATE OPERATOR CLASS int4_ei_true FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4), FUNCTION 4 ei_true(oid);
+CREATE OPERATOR CLASS int4_ei_false FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4), FUNCTION 4 ei_false(oid);
+CREATE OPERATOR CLASS int4_ei_none FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4);
+CREATE OPERATOR CLASS int4_ei_alias FOR TYPE int4 USING btree AS
+  OPERATOR 1 <(int4,int4), OPERATOR 2 <=(int4,int4), OPERATOR 3 =(int4,int4),
+  OPERATOR 4 >=(int4,int4), OPERATOR 5 >(int4,int4),
+  FUNCTION 1 btint4cmp(int4,int4), FUNCTION 4 ei_alias(oid);
+CREATE OPERATOR CLASS int8_ei_true FOR TYPE int8 USING btree AS
+  OPERATOR 1 <(int8,int8), OPERATOR 2 <=(int8,int8), OPERATOR 3 =(int8,int8),
+  OPERATOR 4 >=(int8,int8), OPERATOR 5 >(int8,int8),
+  FUNCTION 1 btint8cmp(int8,int8), FUNCTION 4 ei_true(oid);
+CREATE OPERATOR CLASS int8_ei_false FOR TYPE int8 USING btree AS
+  OPERATOR 1 <(int8,int8), OPERATOR 2 <=(int8,int8), OPERATOR 3 =(int8,int8),
+  OPERATOR 4 >=(int8,int8), OPERATOR 5 >(int8,int8),
+  FUNCTION 1 btint8cmp(int8,int8), FUNCTION 4 ei_false(oid);
+CREATE OPERATOR CLASS text_squat FOR TYPE text USING btree AS
+  OPERATOR 1 <(text,text), OPERATOR 2 <=(text,text), OPERATOR 3 =(text,text),
+  OPERATOR 4 >=(text,text), OPERATOR 5 >(text,text),
+  FUNCTION 1 bttextcmp(text,text), FUNCTION 4 public.btequalimage(oid);
+CREATE OPERATOR CLASS text_renamed FOR TYPE text USING btree AS
+  OPERATOR 1 <(text,text), OPERATOR 2 <=(text,text), OPERATOR 3 =(text,text),
+  OPERATOR 4 >=(text,text), OPERATOR 5 >(text,text),
+  FUNCTION 1 bttextcmp(text,text), FUNCTION 4 ei_renamed(oid);
+
+CREATE TABLE t AS
+SELECT i::int4 AS u, (i % 5000)::int4 AS a, (i % 5000)::int8 AS b,
+       'key' || lpad((i % 5000)::text, 8, '0') AS s, ((i % 5000)::numeric) AS n,
+       (i % 5000)::float4 AS f4, (i % 5000)::float8 AS f8, (i % 7)::int4 AS d
+  FROM generate_series(1, 500000) i;
+CREATE TABLE t2 AS
+SELECT i::int4 AS u, (i % 5000)::int4 AS a, (i % 5000)::int8 AS b,
+       'key' || lpad((i % 5000)::text, 8, '0') AS s
+  FROM generate_series(1, 500000) i;
+
+SET client_min_messages = debug1;          -- logs the engine's own verdict
+CREATE INDEX i_int4          ON t (a);                                   -- 1
+CREATE INDEX i_int8          ON t (b);                                   -- 2
+CREATE INDEX i_text_det      ON t (s);                                   -- 3
+CREATE INDEX i_text_det2     ON t (s text_renamed);                      -- 16
+CREATE INDEX i_text_icu_det  ON t (s COLLATE cdet);                      -- 3
+CREATE INDEX i_text_nondet   ON t (s COLLATE ci);                        -- 4
+CREATE INDEX i_numeric       ON t (n);                                   -- 5
+CREATE INDEX i_float4        ON t (f4);                                  -- 6
+CREATE INDEX i_float8        ON t (f8);                                  -- 6
+CREATE INDEX i_multi_ok      ON t (a, b);                                -- 7
+CREATE INDEX i_multi_bad     ON t (a, n);                                -- 8
+CREATE INDEX i_expr_lower_ci ON t ((lower(s)) COLLATE ci);               -- 9
+CREATE INDEX i_expr_num      ON t ((a::numeric));                        -- 9
+CREATE INDEX i_inc           ON t (a) INCLUDE (d);                       -- 10
+CREATE INDEX i_dupoff        ON t (a) WITH (deduplicate_items = off);    -- 11
+CREATE INDEX i_text_off      ON t (s) WITH (deduplicate_items = off);    -- 11
+CREATE INDEX i_ei_none       ON t (a int4_ei_none);                      -- 12
+CREATE INDEX i_ei_false      ON t (a int4_ei_false);                     -- 13
+CREATE INDEX i_ei_true       ON t (a int4_ei_true);                      -- 14
+CREATE INDEX i_ei_alias      ON t (a int4_ei_alias);                     -- 14
+CREATE INDEX i_mixed_tf      ON t (a int4_ei_true, b int8_ei_false);     -- 15
+CREATE INDEX i_mixed_ft      ON t (a int4_ei_false, b int8_ei_true);     -- 15
+CREATE INDEX i_squat         ON t (s text_squat);                        -- 16
+CREATE UNIQUE INDEX i_uniq   ON t (u);
+CREATE INDEX i2_ok           ON t2 (a, b);                               -- 7
+CREATE INDEX i2_off          ON t2 (s) WITH (deduplicate_items = off);   -- 11
+CREATE INDEX i2_tf           ON t2 (a int4_ei_true, b int8_ei_false);    -- 15
+CREATE INDEX i2_ft           ON t2 (a int4_ei_false, b int8_ei_true);    -- 15
+RESET client_min_messages;
+SELECT pg_stat_force_next_flush();
+ANALYZE t, t2;
+SELECT pg_stat_force_next_flush();
+SQL
+  [ $? -eq 0 ] || { tail -20 "$OUT/gate_build.log" >&2; die "gate fixtures failed"; }
+
+  # test 4 and the pattern-opclass refusal, measured rather than derived
+  q gate "CREATE INDEX i_pattern_nondet ON t (s COLLATE ci text_pattern_ops)" \
+    > "$OUT/gate_pattern.txt" 2>&1 && note "text_pattern_ops accepted (unexpected)" \
+    || note "text_pattern_ops refused: $(tail -1 "$OUT/gate_pattern.txt")"
+
+  f gate /dev/stdin <<'SQL'
+DROP TABLE IF EXISTS gate_res;
+CREATE TABLE gate_res AS
+SELECT e.indexname, e.equalimage, e.wasted_space_pct AS wsp,
+       e.wasted_space_pct_floor AS wspf, e.dedup_applies, e.tids_per_tuple,
+       e.actual_bytes / 8192 AS blocks, e.caveats,
+       (bt_metap(e.indexname)).allequalimage AS metapage,
+       EXISTS (SELECT 1 FROM bt_page_items(e.indexname, 1) bi WHERE bi.tids IS NOT NULL)
+                                                              AS posting_written
+  FROM est_r2 e
+ WHERE e.schemaname = 'public'
+ ORDER BY e.indexname;
+SQL
+  t gate "SELECT indexname, blocks, equalimage, metapage, dedup_applies AS credited,
+                 posting_written, wsp, wspf, tids_per_tuple, caveats
+            FROM gate_res ORDER BY indexname" > "$OUT/gate.txt" 2>&1
+  t gate "SELECT count(*) AS fixtures,
+                 count(*) FILTER (WHERE dedup_applies AND NOT metapage) AS over_credit,
+                 count(*) FILTER (WHERE equalimage = 'recognized' AND NOT metapage) AS recognized_wrong,
+                 count(*) FILTER (WHERE equalimage = 'ineligible' AND metapage)     AS ineligible_wrong,
+                 count(*) FILTER (WHERE equalimage = 'unknown' AND metapage)        AS under_credit,
+                 max(greatest(wsp, wspf)) AS worst_reading
+            FROM gate_res" >> "$OUT/gate.txt" 2>&1
+  grep -c 'can safely use deduplication' "$OUT/gate_build.log" \
+    | xargs printf 'DEBUG1 can safely use deduplication: %s\n' >> "$OUT/gate.txt"
+  grep -c 'cannot use deduplication' "$OUT/gate_build.log" \
+    | xargs printf 'DEBUG1 cannot use deduplication:      %s\n' >> "$OUT/gate.txt"
+  tail -14 "$OUT/gate.txt" >&2
+}
+
+# ------------------------------------------------------------- acceptance ----
+stage_acceptance() {
+  say "acceptance fixtures: fresh builds, defects, compression, posting tails, probes, barrier"
+  q acc 'CREATE EXTENSION IF NOT EXISTS pageinspect'
+  q acc 'CREATE EXTENSION IF NOT EXISTS pgstattuple'
+  f acc /dev/stdin <<'SQL'
+SET client_min_messages = warning;
+DROP TABLE IF EXISTS fresh_res, tail_res, cmp_res, bar_res CASCADE;
+
+-- 1. ten fresh sorted builds, key widths 8 to 2000, PLAIN storage.  The
+--    fixtures are built here and read in the next command, because a reading
+--    taken inside the building transaction sees the table's statistics as they
+--    were before its own ANALYZE.
+DROP TABLE IF EXISTS fresh_plan;
+CREATE TABLE fresh_plan(keylen int, rows_loaded int, idx text);
+DO $fresh$
+DECLARE l int; n int;
+BEGIN
+  FOREACH l IN ARRAY ARRAY[8,16,32,64,100,200,400,800,1000,2000] LOOP
+    n := ((8144 - 819) / (((12 + l + 7) / 8) * 8 + 4)) * 250;
+    EXECUTE format('DROP TABLE IF EXISTS fr%s', l);
+    EXECUTE format('CREATE TABLE fr%s(k text)', l);
+    EXECUTE format('ALTER TABLE fr%s ALTER COLUMN k SET STORAGE PLAIN', l);
+    EXECUTE format('INSERT INTO fr%s SELECT lpad(i::text, %s, ''0'') FROM generate_series(1, %s) i', l, l, n);
+    EXECUTE format('ANALYZE fr%s', l);
+    EXECUTE format('CREATE INDEX fr_i%s ON fr%s (k)', l, l);
+    INSERT INTO fresh_plan VALUES (l, n, 'fr_i' || l);
+  END LOOP;
+END $fresh$;
+SELECT pg_stat_force_next_flush();
+CREATE TABLE fresh_res AS
+SELECT p.keylen, p.rows_loaded, e.actual_bytes / 8192 AS blocks,
+       e.wasted_space_pct AS wsp, e.wasted_space_pct_floor AS wspf,
+       e.wasted_space_bytes AS wasted_bytes, o.wasted_space_pct AS old_wsp,
+       e.caveats
+  FROM fresh_plan p
+  JOIN est_r2  e ON e.indexname = p.idx
+  JOIN est_old o ON o.indexname = p.idx
+ ORDER BY p.keylen;
+
+-- 2. the three deterministic defects.
+--    a. an inheritance parent: two pg_stats rows per attribute.
+DROP TABLE IF EXISTS inh_c, inh_p CASCADE;
+CREATE TABLE inh_p(s text);
+CREATE TABLE inh_c(LIKE inh_p) INHERITS (inh_p);
+INSERT INTO inh_p SELECT lpad(i::text, 20, '0') FROM generate_series(1, 200000) i;
+INSERT INTO inh_c SELECT lpad(i::text, 76, '0') FROM generate_series(1, 200000) i;
+CREATE INDEX inh_i ON ONLY inh_p (s);
+SELECT pg_stat_force_next_flush();
+ANALYZE inh_p;                    -- writes both the inherited and own passes
+SELECT pg_stat_force_next_flush();
+
+--    b. an expression index whose statistics only the owner can read.
+DROP TABLE IF EXISTS expr_t CASCADE;
+CREATE TABLE expr_t(txt text);
+INSERT INTO expr_t SELECT lpad(i::text, 20, 'a') FROM generate_series(1, 200000) i;
+CREATE INDEX expr_i ON expr_t (lower(txt));
+SELECT pg_stat_force_next_flush();
+ANALYZE expr_t;
+SELECT pg_stat_force_next_flush();
+DO $role$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wiki_reader') THEN
+    EXECUTE 'DROP OWNED BY wiki_reader';       -- also drops privileges granted
+    EXECUTE 'DROP ROLE wiki_reader';
+  END IF;
+END $role$;
+CREATE ROLE wiki_reader LOGIN;
+GRANT USAGE ON SCHEMA public TO wiki_reader;
+GRANT SELECT ON expr_t TO wiki_reader;
+
+--    c. an index whose reltuples is past the bigint range.
+DROP TABLE IF EXISTS ovf_t CASCADE;
+CREATE TABLE ovf_t(k int);
+INSERT INTO ovf_t SELECT i FROM generate_series(1, 200000) i;
+CREATE INDEX ovf_idx ON ovf_t (k);
+SELECT pg_stat_force_next_flush();
+ANALYZE ovf_t;
+SELECT pg_stat_force_next_flush();
+UPDATE pg_class SET reltuples = 1e30 WHERE relname = 'ovf_idx';
+
+--    d. statistics target zero on an index column.
+DROP TABLE IF EXISTS st0_t CASCADE;
+CREATE TABLE st0_t(k text);
+INSERT INTO st0_t SELECT lpad(i::text, 20, '0') FROM generate_series(1, 200000) i;
+ALTER TABLE st0_t ALTER COLUMN k SET STATISTICS 0;
+CREATE INDEX st0_i ON st0_t (k);
+SELECT pg_stat_force_next_flush();
+ANALYZE st0_t;
+SELECT pg_stat_force_next_flush();
+
+-- 3. in-index compression of a wide key: the same 900-byte values, two storages.
+CREATE TABLE cmp_res(storage text, avg_width int, blocks int, wsp numeric, caveats text);
+DROP TABLE IF EXISTS cmp_x, cmp_p CASCADE;
+CREATE TABLE cmp_x(k text);                       -- extended: index compresses
+CREATE TABLE cmp_p(k text);                       -- plain: it cannot
+ALTER TABLE cmp_p ALTER COLUMN k SET STORAGE PLAIN;
+INSERT INTO cmp_x SELECT lpad(i::text, 900, 'x') FROM generate_series(1, 60000) i;
+INSERT INTO cmp_p SELECT lpad(i::text, 900, 'x') FROM generate_series(1, 60000) i;
+SELECT pg_stat_force_next_flush();
+ANALYZE cmp_x, cmp_p;
+SELECT pg_stat_force_next_flush();
+CREATE INDEX cmp_x_i ON cmp_x (k);
+CREATE INDEX cmp_p_i ON cmp_p (k);
+INSERT INTO cmp_res
+SELECT CASE WHEN e.indexname = 'cmp_x_i' THEN 'extended' ELSE 'plain' END,
+       (SELECT avg_width FROM pg_stats WHERE tablename = e.tablename AND attname = 'k'),
+       e.actual_bytes / 8192, e.wasted_space_pct, e.caveats
+  FROM est_r2 e WHERE e.indexname IN ('cmp_x_i', 'cmp_p_i');
+
+-- 4. posting tails: thirteen duplicate classes with different tail sizes.
+DROP TABLE IF EXISTS tail_plan;
+CREATE TABLE tail_plan(rows_per_group int, idx text);
+DO $tail$
+DECLARE g int;
+BEGIN
+  FOREACH g IN ARRAY ARRAY[1,2,3,5,8,13,32,66,131,132,133,264,400] LOOP
+    EXECUTE format('DROP TABLE IF EXISTS pt%s', g);
+    EXECUTE format('CREATE TABLE pt%s AS SELECT (i / %s)::int AS k FROM generate_series(1, 400000) i', g, g);
+    EXECUTE format('ANALYZE pt%s', g);
+    EXECUTE format('CREATE INDEX pt_i%s ON pt%s (k)', g, g);
+    INSERT INTO tail_plan VALUES (g, 'pt_i' || g);
+  END LOOP;
+END $tail$;
+SELECT pg_stat_force_next_flush();
+CREATE TABLE tail_res AS
+SELECT p.rows_per_group, e.actual_bytes / 8192 AS blocks,
+       e.wasted_space_pct AS wsp, e.wasted_space_pct_floor AS wspf,
+       o.wasted_space_pct AS old_wsp, e.tids_per_tuple AS tids
+  FROM tail_plan p
+  JOIN est_r2  e ON e.indexname = p.idx
+  JOIN est_old o ON o.indexname = p.idx
+ ORDER BY p.rows_per_group;
+
+-- 5. probe fixtures: an empty subset, a forged zero, and 5,000 real groups.
+DROP TABLE IF EXISTS pr_empty, pr_forged, pr_groups, pr_num CASCADE;
+CREATE TABLE pr_empty(k int, open bool);
+INSERT INTO pr_empty SELECT i, false FROM generate_series(1, 300000) i;
+CREATE INDEX empty_open ON pr_empty (k) WHERE open;
+CREATE TABLE pr_forged(k int, open bool);
+INSERT INTO pr_forged SELECT i, true FROM generate_series(1, 300000) i;
+CREATE INDEX forged_open ON pr_forged (k) WHERE open;
+CREATE TABLE pr_groups(k int);
+INSERT INTO pr_groups SELECT (i % 5000)::int FROM generate_series(1, 300000) i;
+CREATE INDEX groups_k ON pr_groups (k);
+CREATE TABLE pr_num(n numeric);
+INSERT INTO pr_num SELECT (i % 5000)::numeric FROM generate_series(1, 300000) i;
+CREATE INDEX num_n ON pr_num (n);
+SELECT pg_stat_force_next_flush();
+ANALYZE pr_empty, pr_forged, pr_groups, pr_num;
+SELECT pg_stat_force_next_flush();
+UPDATE pg_class SET reltuples = 0 WHERE relname = 'forged_open';
+
+-- 6. the statistics publication barrier: the same load, with and without it.
+CREATE TABLE bar_res(leg text, n_mod_since_analyze bigint, n_live_tup bigint);
+DROP TABLE IF EXISTS bar_a, bar_b CASCADE;
+CREATE TABLE bar_a(k int);
+INSERT INTO bar_a SELECT i FROM generate_series(1, 200000) i;
+ANALYZE bar_a;                                  -- no flush first
+CREATE TABLE bar_b(k int);
+INSERT INTO bar_b SELECT i FROM generate_series(1, 200000) i;
+SELECT pg_stat_force_next_flush();              -- the barrier
+ANALYZE bar_b;
+SELECT pg_stat_force_next_flush();
+INSERT INTO bar_res
+SELECT CASE WHEN relname = 'bar_a' THEN 'no barrier' ELSE 'barrier' END,
+       n_mod_since_analyze, n_live_tup
+  FROM pg_stat_all_tables WHERE relname IN ('bar_a', 'bar_b');
+SQL
+  [ $? -eq 0 ] || die "acceptance fixtures failed"
+
+  t acc 'SELECT * FROM fresh_res ORDER BY keylen'  > "$OUT/acceptance.txt" 2>&1
+  t acc 'SELECT * FROM tail_res ORDER BY rows_per_group' >> "$OUT/acceptance.txt" 2>&1
+  t acc 'SELECT * FROM cmp_res ORDER BY storage'   >> "$OUT/acceptance.txt" 2>&1
+  t acc 'SELECT * FROM bar_res ORDER BY leg'       >> "$OUT/acceptance.txt" 2>&1
+  t acc "SELECT indexname, actual_bytes/8192 AS blocks, status, wasted_space_pct AS wsp,
+                wasted_space_pct_floor AS wspf, caveats
+           FROM est_r2 WHERE indexname IN ('inh_i','expr_i','ovf_idx','st0_i')
+          ORDER BY indexname" >> "$OUT/acceptance.txt" 2>&1
+
+  say "the three deterministic defects, current text against the superseded one"
+  t acc "SELECT e.indexname, e.actual_bytes/8192 AS blocks,
+                o.wasted_space_pct AS old_wsp, e.wasted_space_pct AS r2_wsp,
+                e.caveats
+           FROM est_r2 e JOIN est_old o USING (indexname)
+          WHERE e.indexname IN ('inh_i','expr_i','st0_i') ORDER BY 1" \
+    > "$OUT/defects.txt" 2>&1
+  { printf '\n-- superseded text over the whole database (bigint range defect)\n'
+    f acc "$SQLD/est_old.sql" 2>&1
+    printf '\n-- current text over the whole database, exact as filed\n'
+    f acc "$SQLD/est_r2.sql" 2>&1
+    printf '\n-- current text as a role holding only SELECT on the tables\n'
+    ( export PGUSER=wiki_reader; f acc "$SQLD/est_r2.sql" 2>&1 )
+  } >> "$OUT/defects.txt" 2>&1
+  tail -6 "$OUT/acceptance.txt" >&2
+  head -8 "$OUT/defects.txt" >&2
+}
+
+# ---------------------------------------------------------------- suite ------
+stage_suite() {
+  say "the numbered suite: 74 partial-index fixtures and controls 92-121"
+  # A clean schema makes the stage idempotent; the views go back in first.
+  q suite 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public'
+  f suite "$SQLD/view_r2.sql"  || die "est_r2 view failed"
+  f suite "$SQLD/view_old.sql" || die "est_old view failed"
+  cat > "$SQLD/fixtures_suite.sql" <<'FIXTURES'
+-- The numbered suite: tests 18-91 (partial indexes) and controls 92-121.
+-- One fixture per requirement, built in the prescribed order, planned here and
+-- scored later so that the EXCEPT attribution and the probes both run before
+-- the first REINDEX.  pg_stat_force_next_flush() precedes every ANALYZE and
+-- every VACUUM, and WITH (fillfactor = ...) precedes WHERE in CREATE INDEX.
+SET client_min_messages = warning;
+SET statement_timeout = '900s';
+SET lock_timeout = '2s';
+SET maintenance_work_mem = '256MB';
+
+
+CREATE TABLE plan(num int, leg text DEFAULT '', req text, idx text,
+                  rowsql text, want_rows bigint, note text,
+                  PRIMARY KEY (num, leg));
+
+CREATE TABLE res(num int, leg text, req text, idx text,
+                 size_before bigint, size_after bigint,
+                 blocks_before int, blocks_after int,
+                 status text, wsp numeric, wspf numeric, wasted_bytes numeric,
+                 caveats text, equalimage text, reltuples_writer text,
+                 modelled_rows numeric, key_groups numeric, tids numeric,
+                 idx_reltuples numeric, exp_blocks numeric, floor_blocks numeric,
+                 slot numeric, leaf_cap numeric, nmax numeric,
+                 dedup_applies bool, is_partial bool, has_expressions bool,
+                 suppress_row bool, stats_row_missing bool, dedup_credited bool,
+                 stats_stale bool, any_varlena_include bool,
+                 old_wsp numeric, old_wspf numeric,
+                 true_rows bigint, want_rows bigint, note text,
+                 PRIMARY KEY (num, leg));
+
+CREATE OR REPLACE FUNCTION plan_add(n int, r text, i text, q text DEFAULT NULL,
+                                    w bigint DEFAULT NULL, lg text DEFAULT '',
+                                    nt text DEFAULT NULL)
+RETURNS void LANGUAGE sql AS
+$$ INSERT INTO plan(num, leg, req, idx, rowsql, want_rows, note)
+   VALUES (n, lg, r, i, q, w, nt) $$;
+
+CREATE OR REPLACE PROCEDURE score_all() LANGUAGE plpgsql AS $sc$
+DECLARE p record; e record; sb bigint; sa bigint; tr bigint;
+        ow numeric; owf numeric;
+BEGIN
+  FOR p IN SELECT * FROM plan ORDER BY num, leg LOOP
+    tr := NULL; ow := NULL; owf := NULL;
+    IF p.rowsql IS NOT NULL THEN EXECUTE p.rowsql INTO tr; END IF;
+    sb := pg_relation_size(p.idx::regclass);
+    SELECT * INTO e FROM est_r2 WHERE indexname = p.idx;
+    IF NOT FOUND THEN RAISE EXCEPTION 'estimator returned no row for %', p.idx; END IF;
+    BEGIN
+      SELECT o.wasted_space_pct, o.wasted_space_pct_floor INTO ow, owf
+        FROM est_old o WHERE o.indexname = p.idx;
+    EXCEPTION WHEN OTHERS THEN ow := NULL; owf := NULL;
+    END;
+    EXECUTE format('REINDEX INDEX %I', p.idx);
+    sa := pg_relation_size(p.idx::regclass);
+    INSERT INTO res VALUES (p.num, p.leg, p.req, p.idx, sb, sa, sb / 8192, sa / 8192,
+      e.status, e.wasted_space_pct, e.wasted_space_pct_floor, e.wasted_space_bytes,
+      e.caveats, e.equalimage, e.reltuples_writer, e.modelled_rows, e.key_groups,
+      e.tids_per_tuple, e.idx_reltuples, e.expected_blocks, e.floor_blocks,
+      e.slot, e.leaf_cap, e.nmax, e.dedup_applies, e.is_partial, e.has_expressions,
+      e.suppress_row, e.stats_row_missing, e.dedup_credited, e.stats_stale,
+      e.any_varlena_include, ow, owf, tr, p.want_rows, p.note);
+  END LOOP;
+END $sc$;
+
+CREATE VIEW verdicts AS
+SELECT r.num, r.leg, r.idx, r.req, r.blocks_before, r.blocks_after, a.actual,
+       r.wsp, r.wspf, r.old_wsp, r.old_wspf, v.verdict_point, v.verdict_floor,
+       (r.caveats IS NULL OR r.caveats !~
+        '(never analyzed|row-count sources disagree|statistics not visible|zero modelled rows|wide compressible key)')
+                                                          AS alertable,
+       NOT r.suppress_row                                 AS reported,
+       CASE WHEN NOT r.suppress_row                             THEN NULL
+            WHEN r.is_partial AND r.stats_row_missing           THEN 'A: no statistics row'
+            WHEN r.is_partial AND r.dedup_credited              THEN 'A: duplicates from table statistics'
+            WHEN r.is_partial AND r.stats_stale                 THEN 'B: changed since ANALYZE'
+            WHEN r.is_partial AND r.any_varlena_include         THEN 'C: variable-width INCLUDE'
+            WHEN r.has_expressions AND r.stats_row_missing      THEN 'D: expression, no statistics row'
+            ELSE 'unexplained' END                        AS withheld_by,
+       (r.want_rows IS NULL OR r.true_rows = r.want_rows) AS contract_ok,
+       r.true_rows, r.want_rows, r.modelled_rows, r.idx_reltuples, r.status,
+       r.caveats, r.equalimage, r.tids, r.note
+  FROM res r
+  CROSS JOIN LATERAL (
+        SELECT round(100.0 * (r.size_before - r.size_after)
+                     / greatest(r.size_before, 1), 1) AS actual) a
+  CROSS JOIN LATERAL (
+        SELECT CASE WHEN r.wsp IS NULL                       THEN 'UNMEASURED'
+                    WHEN r.wsp >= 50 AND a.actual < 10       THEN 'CRITICAL FALSE POSITIVE'
+                    WHEN r.wsp >= 50 AND a.actual < 45       THEN 'FALSE POSITIVE'
+                    WHEN r.wsp >= 50 AND r.wsp - a.actual > 5 THEN 'FALSE POSITIVE'
+                    WHEN r.wsp <  45 AND a.actual >= 50      THEN 'FALSE NEGATIVE'
+                    ELSE 'PASS' END                          AS verdict_point,
+               CASE WHEN r.wspf IS NULL                      THEN 'UNMEASURED'
+                    WHEN r.wspf >= 50 AND a.actual < 10      THEN 'CRITICAL FALSE POSITIVE'
+                    WHEN r.wspf >= 50 AND a.actual < 45      THEN 'FALSE POSITIVE'
+                    WHEN r.wspf >= 50 AND r.wspf - a.actual > 5 THEN 'FALSE POSITIVE'
+                    WHEN r.wspf <  45 AND a.actual >= 50     THEN 'FALSE NEGATIVE'
+                    ELSE 'PASS' END                          AS verdict_floor) v;
+
+-- ============================================================ 18-21 =========
+-- Predicate selectivity.  One 1,000,000-row table, distinct bigint keys.
+CREATE TABLE pt1 AS
+SELECT i::bigint AS k, (i % 100)::int AS sel FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pt1; SELECT pg_stat_force_next_flush();
+CREATE INDEX p18 ON pt1 (k) WHERE sel < 20;
+CREATE INDEX p19 ON pt1 (k) WHERE sel < 1;
+CREATE INDEX p20 ON pt1 (k) WHERE sel < 10;
+CREATE INDEX p21 ON pt1 (k) WHERE sel < 80;
+SELECT plan_add(18, 'baseline, subset distribution = table (20%)', 'p18',
+                'SELECT count(*) FROM pt1 WHERE sel < 20', 200000);
+SELECT plan_add(19, 'very selective, ~1%', 'p19',
+                'SELECT count(*) FROM pt1 WHERE sel < 1', 10000);
+SELECT plan_add(20, 'moderately selective, ~10%', 'p20',
+                'SELECT count(*) FROM pt1 WHERE sel < 10', 100000);
+SELECT plan_add(21, 'large subset, ~80%', 'p21',
+                'SELECT count(*) FROM pt1 WHERE sel < 80', 800000);
+
+-- ============================================================ 22-33 =========
+CREATE TABLE pd22 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd22; SELECT pg_stat_force_next_flush();
+CREATE INDEX p22 ON pd22 (k) WHERE hot;
+SELECT plan_add(22, 'highly duplicated subset, unique outside', 'p22',
+                'SELECT count(*) FROM pd22 WHERE hot', 100000);
+
+CREATE TABLE pd23 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN i::int ELSE ((i / 5) % 100)::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd23; SELECT pg_stat_force_next_flush();
+CREATE INDEX p23 ON pd23 (k) WHERE hot;
+SELECT plan_add(23, 'highly unique subset, duplicated outside', 'p23',
+                'SELECT count(*) FROM pd23 WHERE hot', 100000);
+
+CREATE TABLE pd24 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 50000)::int ELSE (i % 3)::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd24; SELECT pg_stat_force_next_flush();
+CREATE INDEX p24 ON pd24 (k) WHERE hot;
+SELECT plan_add(24, 'n_distinct radically different in the subset', 'p24',
+                'SELECT count(*) FROM pd24 WHERE hot', 100000);
+
+CREATE TABLE pd25 AS SELECT (i % 100 = 0) AS hot,
+       CASE WHEN i % 100 = 0 THEN ((i / 100) % 997)::int ELSE (i % 5)::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd25; SELECT pg_stat_force_next_flush();
+CREATE INDEX p25 ON pd25 (k) WHERE hot;
+SELECT plan_add(25, 'MCV distribution differs inside the subset', 'p25',
+                'SELECT count(*) FROM pd25 WHERE hot', 5000);
+
+CREATE TABLE pd26 AS SELECT (i % 50 = 0) AS hot,
+       CASE WHEN i % 50 = 0 THEN (1000000 + i)::int ELSE (i % 3)::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd26; SELECT pg_stat_force_next_flush();
+CREATE INDEX p26 ON pd26 (k) WHERE hot;
+SELECT plan_add(26, 'table-wide MCVs absent inside the subset', 'p26',
+                'SELECT count(*) FROM pd26 WHERE hot', 10000);
+
+CREATE TABLE pd27 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 AND i % 100 <> 0 THEN NULL ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd27; SELECT pg_stat_force_next_flush();
+CREATE INDEX p27 ON pd27 (k) WHERE hot;
+SELECT plan_add(27, 'NULL-heavy subset, non-NULL outside', 'p27',
+                'SELECT count(*) FROM pd27 WHERE hot', 100000);
+
+CREATE TABLE pd28 AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN i::bigint ELSE NULL END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd28; SELECT pg_stat_force_next_flush();
+CREATE INDEX p28 ON pd28 (k) WHERE hot;
+SELECT plan_add(28, 'NULL-free subset, NULL-heavy table (bigint)', 'p28',
+                'SELECT count(*) FROM pd28 WHERE hot', 25000);
+
+CREATE TABLE pd29 AS
+SELECT CASE WHEN i % 5 = 0 THEN NULL ELSE lpad(i::text, 20, '0') END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd29; SELECT pg_stat_force_next_flush();
+CREATE INDEX p29 ON pd29 (s) WHERE s IS NULL;
+SELECT plan_add(29, 'all-NULL partial index, WHERE s IS NULL', 'p29',
+                'SELECT count(*) FROM pd29 WHERE s IS NULL', 100000);
+
+CREATE TABLE pd30 AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad((i % 9)::text, 12, 'n') END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd30; SELECT pg_stat_force_next_flush();
+CREATE INDEX p30 ON pd30 (s) WHERE hot;
+SELECT plan_add(30, 'subset values wider than outside (13 against 204 bytes)', 'p30',
+                'SELECT count(*) FROM pd30 WHERE hot', 25000);
+
+CREATE TABLE pd31 AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN lpad((i % 9)::text, 12, 'n')
+            ELSE repeat('W', 190) || lpad(i::text, 10, '0') END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd31; SELECT pg_stat_force_next_flush();
+CREATE INDEX p31 ON pd31 (s) WHERE hot;
+SELECT plan_add(31, 'subset values narrower than outside', 'p31',
+                'SELECT count(*) FROM pd31 WHERE hot', 25000);
+
+-- 32 is the page's published recipe, verbatim.
+CREATE TABLE pw32 AS
+SELECT (i % 50 = 0) AS hot,
+       CASE WHEN i % 50 = 0 THEN repeat('W', 390) || lpad(i::text, 10, '0')
+            ELSE repeat('n', 18) || (i % 9)::text END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pw32; SELECT pg_stat_force_next_flush();
+CREATE INDEX p32 ON pw32 (s) WHERE hot;
+SELECT plan_add(32, 'extreme width mismatch (27 against 404 bytes)', 'p32',
+                'SELECT count(*) FROM pw32 WHERE hot', 10000);
+
+CREATE TABLE pd33 AS SELECT (i % 5 = 0) AS hot,
+       lpad(i::text, 10 + (i % 40), 'x') AS s FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd33; SELECT pg_stat_force_next_flush();
+CREATE INDEX p33 ON pd33 (s) WHERE hot;
+SELECT plan_add(33, 'variable-width values, same range inside and out', 'p33',
+                'SELECT count(*) FROM pd33 WHERE hot', 100000);
+
+-- ============================================================ 34-39 =========
+CREATE TABLE pd34 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd34; SELECT pg_stat_force_next_flush();
+CREATE INDEX p34 ON pd34 (k) WHERE hot;
+SELECT plan_add(34, 'dedup-heavy subset, 1000 rows per key', 'p34',
+                'SELECT count(*) FROM pd34 WHERE hot', 100000);
+
+CREATE TABLE pd35 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN i::int ELSE (i % 3)::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd35; SELECT pg_stat_force_next_flush();
+CREATE INDEX p35 ON pd35 (k) WHERE hot;
+SELECT plan_add(35, 'duplicate-heavy table, unique subset', 'p35',
+                'SELECT count(*) FROM pd35 WHERE hot', 100000);
+
+CREATE TABLE pd36 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN 42 ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd36; SELECT pg_stat_force_next_flush();
+CREATE INDEX p36 ON pd36 (k) WHERE hot;
+SELECT plan_add(36, 'one key group, 100,000 TIDs against a 132 cap', 'p36',
+                'SELECT count(*) FROM pd36 WHERE hot', 100000);
+
+CREATE TABLE pd37 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN NULL ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd37; SELECT pg_stat_force_next_flush();
+CREATE INDEX p37 ON pd37 (k) WHERE hot;
+SELECT plan_add(37, 'NULL deduplication, every subset key NULL', 'p37',
+                'SELECT count(*) FROM pd37 WHERE hot', 100000);
+
+CREATE TABLE pd38 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd38; SELECT pg_stat_force_next_flush();
+CREATE INDEX p38 ON pd38 (k) WITH (deduplicate_items = off) WHERE hot;
+SELECT plan_add(38, 'deduplicate_items = off', 'p38',
+                'SELECT count(*) FROM pd38 WHERE hot', 100000);
+
+CREATE TABLE pd39 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd39; SELECT pg_stat_force_next_flush();
+CREATE UNIQUE INDEX p39 ON pd39 (k) WHERE hot;
+SELECT plan_add(39, 'partial UNIQUE index', 'p39',
+                'SELECT count(*) FROM pd39 WHERE hot', 100000);
+
+-- ============================================================ 40-47 =========
+CREATE TABLE pd40 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE (i % 100)::int END AS a,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE (i % 97)::int  END AS b
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd40; SELECT pg_stat_force_next_flush();
+CREATE INDEX p40 ON pd40 (a, b) WHERE hot;
+SELECT plan_add(40, 'two-column key correlated only in the subset', 'p40',
+                'SELECT count(*) FROM pd40 WHERE hot', 100000);
+
+CREATE TABLE pd41 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE (i % 100)::int END AS a,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 97)::int  ELSE (i % 100)::int END AS b
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd41; SELECT pg_stat_force_next_flush();
+CREATE INDEX p41 ON pd41 (a, b) WHERE hot;
+SELECT plan_add(41, 'two-column key independent only in the subset', 'p41',
+                'SELECT count(*) FROM pd41 WHERE hot', 100000);
+
+CREATE TABLE pd42 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 50)::int ELSE i::int END AS a,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 50)::int ELSE i::int END AS b
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd42; SELECT pg_stat_force_next_flush();
+CREATE INDEX p42 ON pd42 (a, b) WHERE hot;
+SELECT plan_add(42, 'multi-column duplicate keys in the subset', 'p42',
+                'SELECT count(*) FROM pd42 WHERE hot', 100000);
+
+CREATE TABLE pd43 AS SELECT (i % 5 = 0) AS hot, i::int AS a, (i * 2)::int AS b
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd43; SELECT pg_stat_force_next_flush();
+CREATE INDEX p43 ON pd43 (a, b) WHERE hot;
+SELECT plan_add(43, 'multi-column unique keys in the subset', 'p43',
+                'SELECT count(*) FROM pd43 WHERE hot', 100000);
+
+-- 44: the same correlated shape with and without a CREATE STATISTICS object.
+--     Two tables, because one ANALYZE would repair both legs at once.
+CREATE TABLE pd44a AS SELECT (i % 5 = 0) AS hot,
+       ((i / 5) % 100)::int AS a, ((i / 5) % 100)::int AS b
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd44a; SELECT pg_stat_force_next_flush();
+CREATE INDEX p44a ON pd44a (a, b) WHERE hot;
+SELECT plan_add(44, 'multicolumn key, no ndistinct object', 'p44a',
+                'SELECT count(*) FROM pd44a WHERE hot', 100000);
+CREATE TABLE pd44b AS SELECT (i % 5 = 0) AS hot,
+       ((i / 5) % 100)::int AS a, ((i / 5) % 100)::int AS b
+  FROM generate_series(1, 500000) i;
+CREATE STATISTICS pd44b_nd (ndistinct) ON a, b FROM pd44b;
+SELECT pg_stat_force_next_flush(); ANALYZE pd44b; SELECT pg_stat_force_next_flush();
+CREATE INDEX p44b ON pd44b (a, b) WHERE hot;
+SELECT plan_add(44, 'multicolumn key, with CREATE STATISTICS (ndistinct)', 'p44b',
+                'SELECT count(*) FROM pd44b WHERE hot', 100000, 'ndistinct');
+
+CREATE TABLE pd45 AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE (i % 100)::int END AS a,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 97)::int  ELSE (i % 100)::int END AS b
+  FROM generate_series(1, 500000) i;
+CREATE STATISTICS pd45_nd (ndistinct) ON a, b FROM pd45;
+SELECT pg_stat_force_next_flush(); ANALYZE pd45; SELECT pg_stat_force_next_flush();
+CREATE INDEX p45 ON pd45 (a, b) WHERE hot;
+SELECT plan_add(45, 'extended statistics wrong for the subset', 'p45',
+                'SELECT count(*) FROM pd45 WHERE hot', 100000);
+
+CREATE TABLE pd46 AS SELECT (i % 5 = 0) AS hot, i::int AS k, (i % 7)::int AS pay
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pd46; SELECT pg_stat_force_next_flush();
+CREATE INDEX p46 ON pd46 (k) INCLUDE (pay) WHERE hot;
+SELECT plan_add(46, 'partial index with INCLUDE columns', 'p46',
+                'SELECT count(*) FROM pd46 WHERE hot', 100000);
+
+CREATE TABLE pi47 AS SELECT (i % 20 = 0) AS hot, i::int AS k,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad((i % 9)::text, 12, 'n') END AS payload
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pi47; SELECT pg_stat_force_next_flush();
+CREATE INDEX p47 ON pi47 (k) INCLUDE (payload) WHERE hot;
+SELECT plan_add(47, 'wide INCLUDE values inside the subset', 'p47',
+                'SELECT count(*) FROM pi47 WHERE hot', 25000);
+
+-- ============================================================ 48-55 =========
+-- Expression legs come in twins: the '' leg has no statistics row for the
+-- expression, the 'after analyze' leg has one.
+CREATE TABLE pe48 AS SELECT (i % 5 = 0) AS active,
+       CASE WHEN i % 5 = 0 THEN 'NAME' || lpad(((i / 5) % 20)::text, 6, '0')
+            ELSE 'name' || lpad((i % 100)::text, 6, '0') END AS name
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pe48; SELECT pg_stat_force_next_flush();
+CREATE INDEX p48 ON pe48 (lower(name)) WHERE active;
+SELECT plan_add(48, 'partial expression index, lower(name) WHERE active', 'p48',
+                'SELECT count(*) FROM pe48 WHERE active', 100000);
+CREATE TABLE pe48b AS SELECT (i % 5 = 0) AS active,
+       CASE WHEN i % 5 = 0 THEN 'NAME' || lpad(((i / 5) % 20)::text, 6, '0')
+            ELSE 'name' || lpad((i % 100)::text, 6, '0') END AS name
+  FROM generate_series(1, 500000) i;
+CREATE INDEX p48b ON pe48b (lower(name)) WHERE active;
+SELECT pg_stat_force_next_flush(); ANALYZE pe48b; SELECT pg_stat_force_next_flush();
+SELECT plan_add(48, 'the same after one ANALYZE with the index in place', 'p48b',
+                'SELECT count(*) FROM pe48b WHERE active', 100000, 'after analyze');
+
+CREATE TABLE pe49 AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad((i % 9)::text, 12, 'n') END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pe49; SELECT pg_stat_force_next_flush();
+CREATE INDEX p49 ON pe49 (upper(s)) WHERE hot;
+SELECT plan_add(49, 'expression width mismatch in the subset', 'p49',
+                'SELECT count(*) FROM pe49 WHERE hot', 25000);
+CREATE TABLE pe49b AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad((i % 9)::text, 12, 'n') END AS s
+  FROM generate_series(1, 500000) i;
+CREATE INDEX p49b ON pe49b (upper(s)) WHERE hot;
+SELECT pg_stat_force_next_flush(); ANALYZE pe49b; SELECT pg_stat_force_next_flush();
+SELECT plan_add(49, 'the same after one ANALYZE with the index in place', 'p49b',
+                'SELECT count(*) FROM pe49b WHERE hot', 25000, 'after analyze');
+
+CREATE TABLE pe50 AS SELECT (i % 5 = 0) AS hot, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pe50; SELECT pg_stat_force_next_flush();
+CREATE INDEX p50 ON pe50 (upper(s)) WHERE hot;   -- real width 101, fallback 32
+SELECT plan_add(50, 'missing expression statistics, 32-byte fallback', 'p50',
+                'SELECT count(*) FROM pe50 WHERE hot', 100000);
+CREATE TABLE pe50b AS SELECT (i % 5 = 0) AS hot, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+CREATE INDEX p50b ON pe50b (upper(s)) WHERE hot;
+SELECT pg_stat_force_next_flush(); ANALYZE pe50b; SELECT pg_stat_force_next_flush();
+SELECT plan_add(50, 'the same after one ANALYZE with the index in place', 'p50b',
+                'SELECT count(*) FROM pe50b WHERE hot', 100000, 'after analyze');
+
+CREATE COLLATION suite_det    (provider = icu, locale = 'und');
+CREATE COLLATION suite_nondet (provider = icu, locale = 'und-u-ks-level2',
+                               deterministic = false);
+CREATE TABLE pc51 AS SELECT (i % 5 = 0) AS hot,
+       'key' || lpad(((i / 5) % 100)::text, 8, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc51; SELECT pg_stat_force_next_flush();
+CREATE INDEX p51 ON pc51 (s COLLATE suite_det) WHERE hot;
+CREATE INDEX p52 ON pc51 (s COLLATE suite_nondet) WHERE hot;
+SELECT plan_add(51, 'deterministic ICU collation', 'p51',
+                'SELECT count(*) FROM pc51 WHERE hot', 100000);
+SELECT plan_add(52, 'nondeterministic ICU collation', 'p52',
+                'SELECT count(*) FROM pc51 WHERE hot', 100000);
+
+CREATE TABLE pf AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pf; SELECT pg_stat_force_next_flush();
+CREATE INDEX p53 ON pf (k) WHERE hot;
+CREATE INDEX p54 ON pf (k) WITH (fillfactor = 100) WHERE hot;
+CREATE INDEX p55 ON pf (k) WITH (fillfactor = 70)  WHERE hot;
+SELECT plan_add(53, 'default fillfactor 90', 'p53', 'SELECT count(*) FROM pf WHERE hot', 100000);
+SELECT plan_add(54, 'fillfactor = 100',      'p54', 'SELECT count(*) FROM pf WHERE hot', 100000);
+SELECT plan_add(55, 'fillfactor = 70',       'p55', 'SELECT count(*) FROM pf WHERE hot', 100000);
+
+-- ============================================================ 56-63 =========
+CREATE TABLE ps AS
+SELECT (i % 5 = 0) AS flag,
+       CASE WHEN i % 5 = 0 THEN 'OPEN' ELSE 'CLOSED' END AS status,
+       timestamptz '2020-01-01' + (i * interval '1 minute') AS created,
+       CASE WHEN i % 5 = 0 THEN NULL ELSE i::int END AS nk,
+       i::int AS k, (i % 1000)::int AS k2
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE ps; SELECT pg_stat_force_next_flush();
+CREATE INDEX p56 ON ps (k) WHERE flag;
+CREATE INDEX p57 ON ps (k) WHERE status = 'OPEN';
+CREATE INDEX p58 ON ps (k) WHERE created >= timestamptz '2020-09-01';
+CREATE INDEX p59 ON ps (k) WHERE nk IS NULL;
+CREATE INDEX p60 ON ps (k) WHERE nk IS NOT NULL;
+CREATE INDEX p61 ON ps (k) WHERE flag AND status = 'OPEN';
+CREATE INDEX p62 ON ps (k) WHERE k < 100000;
+CREATE INDEX p63 ON ps (k2) WHERE k >= 400000;
+SELECT plan_add(56, 'boolean predicate, WHERE flag', 'p56', 'SELECT count(*) FROM ps WHERE flag', 100000);
+SELECT plan_add(57, 'equality predicate, status = ''OPEN''', 'p57', 'SELECT count(*) FROM ps WHERE status = ''OPEN''', 100000);
+SELECT plan_add(58, 'range predicate, created >= ...', 'p58', 'SELECT count(*) FROM ps WHERE created >= timestamptz ''2020-09-01''', NULL);
+SELECT plan_add(59, 'IS NULL predicate on a non-key column', 'p59', 'SELECT count(*) FROM ps WHERE nk IS NULL', 100000);
+SELECT plan_add(60, 'IS NOT NULL predicate', 'p60', 'SELECT count(*) FROM ps WHERE nk IS NOT NULL', 400000);
+SELECT plan_add(61, 'multi-column predicate', 'p61', 'SELECT count(*) FROM ps WHERE flag AND status = ''OPEN''', 100000);
+SELECT plan_add(62, 'predicate correlated with the indexed value', 'p62', 'SELECT count(*) FROM ps WHERE k < 100000', 99999);
+SELECT plan_add(63, 'predicate negatively correlated with the value', 'p63', 'SELECT count(*) FROM ps WHERE k >= 400000', 100001);
+
+-- ============================================================ 64-69 =========
+-- 64: stale statistics after inserts into the subset.
+CREATE TABLE pc64 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc64; SELECT pg_stat_force_next_flush();
+CREATE INDEX p64 ON pc64 (k) WHERE hot;
+INSERT INTO pc64 SELECT true, 500000 + i FROM generate_series(1, 200000) i;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(64, 'stale statistics after inserts into the subset', 'p64',
+                'SELECT count(*) FROM pc64 WHERE hot', 300000);
+
+-- 65: stale statistics after deletes, no VACUUM.
+CREATE TABLE pc65 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc65; SELECT pg_stat_force_next_flush();
+CREATE INDEX p65 ON pc65 (k) WHERE hot;
+DELETE FROM pc65 WHERE hot AND k % 50 <> 0;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(65, 'stale statistics after deletes, no VACUUM', 'p65',
+                'SELECT count(*) FROM pc65 WHERE hot', 10000);
+
+-- 66: rows entering the index (false -> true).
+CREATE TABLE pc66 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc66; SELECT pg_stat_force_next_flush();
+CREATE INDEX p66 ON pc66 (k) WHERE hot;
+UPDATE pc66 SET hot = true WHERE NOT hot AND k % 5 = 1;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(66, 'rows entering the index (false -> true)', 'p66',
+                'SELECT count(*) FROM pc66 WHERE hot', 200000);
+
+-- 67: rows leaving the index (true -> false).
+CREATE TABLE pc67 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc67; SELECT pg_stat_force_next_flush();
+CREATE INDEX p67 ON pc67 (k) WHERE hot;
+UPDATE pc67 SET hot = false WHERE hot AND k % 50 <> 0;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(67, 'rows leaving the index (true -> false)', 'p67',
+                'SELECT count(*) FROM pc67 WHERE hot', 10000);
+
+-- 68: heavy predicate churn, then VACUUM + ANALYZE.
+CREATE TABLE pc68 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc68; SELECT pg_stat_force_next_flush();
+CREATE INDEX p68 ON pc68 (k) WHERE hot;
+UPDATE pc68 SET hot = true  WHERE k % 3 = 0;
+UPDATE pc68 SET hot = false WHERE k % 3 = 0;
+UPDATE pc68 SET hot = true  WHERE k % 3 = 1;
+UPDATE pc68 SET hot = false WHERE k % 3 = 1;
+UPDATE pc68 SET hot = (k % 10 = 0);
+SELECT pg_stat_force_next_flush();
+VACUUM pc68;
+SELECT pg_stat_force_next_flush(); ANALYZE pc68; SELECT pg_stat_force_next_flush();
+SELECT plan_add(68, 'heavy predicate churn, then VACUUM + ANALYZE', 'p68',
+                'SELECT count(*) FROM pc68 WHERE hot', 50000);
+
+-- 69: stale reltuples, VACUUM but no ANALYZE.
+CREATE TABLE pc69 AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pc69; SELECT pg_stat_force_next_flush();
+CREATE INDEX p69 ON pc69 (k) WHERE hot;
+DELETE FROM pc69 WHERE hot AND k % 50 <> 0;
+SELECT pg_stat_force_next_flush();
+VACUUM pc69;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(69, 'stale reltuples, VACUUM but no ANALYZE', 'p69',
+                'SELECT count(*) FROM pc69 WHERE hot', 10000);
+
+-- ============================================================ 70-77 =========
+CREATE TABLE pb AS SELECT (i % 5 = 0) AS hot, i::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb; SELECT pg_stat_force_next_flush();
+CREATE INDEX p70 ON pb (k) WHERE hot;
+SELECT plan_add(70, 'freshly created partial index', 'p70',
+                'SELECT count(*) FROM pb WHERE hot', 100000);
+CREATE INDEX p71 ON pb (k) WHERE hot;
+REINDEX INDEX p71;
+SELECT plan_add(71, 'freshly REINDEXed partial index', 'p71',
+                'SELECT count(*) FROM pb WHERE hot', 100000);
+
+CREATE TABLE pb72 AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb72; SELECT pg_stat_force_next_flush();
+CREATE INDEX p72 ON pb72 (k) WHERE hot;
+DELETE FROM pb72 WHERE hot AND (k / 5) % 4 = 0;
+SELECT pg_stat_force_next_flush(); VACUUM pb72;
+SELECT pg_stat_force_next_flush(); ANALYZE pb72; SELECT pg_stat_force_next_flush();
+SELECT plan_add(72, '25% of the subset deleted', 'p72', 'SELECT count(*) FROM pb72 WHERE hot', 75000);
+
+CREATE TABLE pb73 AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb73; SELECT pg_stat_force_next_flush();
+CREATE INDEX p73 ON pb73 (k) WHERE hot;
+DELETE FROM pb73 WHERE hot AND (k / 5) % 2 = 0;
+SELECT pg_stat_force_next_flush(); VACUUM pb73;
+SELECT pg_stat_force_next_flush(); ANALYZE pb73; SELECT pg_stat_force_next_flush();
+SELECT plan_add(73, '50% of the subset deleted', 'p73', 'SELECT count(*) FROM pb73 WHERE hot', 50000);
+
+CREATE TABLE pb74 AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb74; SELECT pg_stat_force_next_flush();
+CREATE INDEX p74 ON pb74 (k) WHERE hot;
+DELETE FROM pb74 WHERE hot AND (k / 5) % 4 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM pb74;
+SELECT pg_stat_force_next_flush(); ANALYZE pb74; SELECT pg_stat_force_next_flush();
+SELECT plan_add(74, '75% of the subset deleted', 'p74', 'SELECT count(*) FROM pb74 WHERE hot', 25000);
+
+-- 75 is the corrected recipe: 90% of the subset, not the whole of it.
+CREATE TABLE pb75 AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb75; SELECT pg_stat_force_next_flush();
+CREATE INDEX p75 ON pb75 (k) WHERE hot;
+DELETE FROM pb75 WHERE hot AND (k / 5) % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM pb75;
+SELECT pg_stat_force_next_flush(); ANALYZE pb75; SELECT pg_stat_force_next_flush();
+SELECT plan_add(75, '90% of the subset deleted (corrected recipe)', 'p75',
+                'SELECT count(*) FROM pb75 WHERE hot', 10000);
+
+CREATE TABLE pb76 AS SELECT (i % 5 = 0) AS hot, i::int AS k, 'x'::text AS pad
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb76; SELECT pg_stat_force_next_flush();
+CREATE INDEX p76 ON pb76 (k) WHERE hot;
+UPDATE pb76 SET k = k + 1000000 WHERE hot;
+SELECT pg_stat_force_next_flush(); VACUUM pb76;
+SELECT pg_stat_force_next_flush(); ANALYZE pb76; SELECT pg_stat_force_next_flush();
+SELECT plan_add(76, 'bloated through indexed-key UPDATEs', 'p76',
+                'SELECT count(*) FROM pb76 WHERE hot', 100000);
+
+CREATE TABLE pb77 AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE pb77; SELECT pg_stat_force_next_flush();
+CREATE INDEX p77 ON pb77 (k) WHERE hot;
+DELETE FROM pb77 WHERE hot AND k < 475000;          -- contiguous 95%
+SELECT pg_stat_force_next_flush(); VACUUM pb77;
+SELECT pg_stat_force_next_flush(); ANALYZE pb77; SELECT pg_stat_force_next_flush();
+SELECT plan_add(77, 'many empty and deleted B-tree pages', 'p77',
+                'SELECT count(*) FROM pb77 WHERE hot', 5001);
+
+-- ============================================================ 78-85 =========
+-- Critical-false-positive constructions.  Every index is freshly built.
+CREATE TABLE f78t AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 290) || lpad(i::text, 10, '0')
+            ELSE lpad((i % 9)::text, 12, 'n') END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f78t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f78 ON f78t (s) WHERE hot;
+SELECT plan_add(78, 'predicate-conditioned width mismatch', 'f78',
+                'SELECT count(*) FROM f78t WHERE hot', 25000);
+
+CREATE TABLE f79t AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN repeat('t', 300) || lpad(i::text, 4, '0')
+            ELSE NULL END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f79t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f79 ON f79t (s) WHERE hot;
+SELECT plan_add(79, 'predicate-conditioned NULL mismatch', 'f79',
+                'SELECT count(*) FROM f79t WHERE hot', 25000);
+
+CREATE TABLE f80t AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN i::int ELSE (i % 3)::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f80t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f80 ON f80t (k) WHERE hot;
+SELECT plan_add(80, 'predicate-conditioned n_distinct mismatch', 'f80',
+                'SELECT count(*) FROM f80t WHERE hot', 100000);
+
+CREATE TABLE f81t AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 20)::int ELSE 7 END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f81t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f81 ON f81t (k) WHERE hot;
+SELECT plan_add(81, 'predicate-conditioned MCV mismatch', 'f81',
+                'SELECT count(*) FROM f81t WHERE hot', 100000);
+
+CREATE TABLE f82t AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE (i % 100)::int END AS a,
+       CASE WHEN i % 5 = 0 THEN ((i / 5) % 100)::int ELSE (i % 89)::int  END AS b
+  FROM generate_series(1, 500000) i;
+CREATE STATISTICS f82_nd (ndistinct) ON a, b FROM f82t;
+SELECT pg_stat_force_next_flush(); ANALYZE f82t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f82 ON f82t (a, b) WHERE hot;
+SELECT plan_add(82, 'predicate-conditioned multi-column correlation', 'f82',
+                'SELECT count(*) FROM f82t WHERE hot', 100000);
+
+CREATE TABLE f83t AS SELECT (i % 5 = 0) AS hot, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f83t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f83 ON f83t (md5(s), lower(s)) WHERE hot;    -- no statistics row
+SELECT plan_add(83, 'missing index/expression statistics', 'f83',
+                'SELECT count(*) FROM f83t WHERE hot', 100000);
+
+CREATE TABLE f84t AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f84t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f84 ON f84t (k) WHERE hot;
+UPDATE pg_class SET reltuples = 5000 WHERE relname = 'f84';   -- stale partial count
+SELECT plan_add(84, 'stale partial-index reltuples', 'f84',
+                'SELECT count(*) FROM f84t WHERE hot', 100000);
+
+CREATE TABLE f85t AS SELECT (i % 5 = 0) AS hot, lpad(i::text, 8, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f85t; SELECT pg_stat_force_next_flush();
+UPDATE f85t SET s = repeat('W', 200) || s WHERE hot;   -- table statistics now stale
+SELECT pg_stat_force_next_flush(); VACUUM f85t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f85 ON f85t (s) WHERE hot;
+SELECT plan_add(85, 'stale table statistics', 'f85',
+                'SELECT count(*) FROM f85t WHERE hot', 100000);
+
+-- ============================================================ 86-91 =========
+-- Critical-false-negative constructions: genuinely bloated, VACUUMed, ANALYZEd.
+CREATE TABLE f86t AS SELECT (i % 5 = 0) AS hot, ((i / 5) % 100)::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f86t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f86 ON f86t (k) WHERE hot;
+DELETE FROM f86t WHERE hot AND k >= 25;
+SELECT pg_stat_force_next_flush(); VACUUM f86t;
+SELECT pg_stat_force_next_flush(); ANALYZE f86t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(86, 'duplicate concentration inside the subset', 'f86',
+                'SELECT count(*) FROM f86t WHERE hot', 25000);
+
+CREATE TABLE f87t AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN NULL ELSE i::int END AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f87t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f87 ON f87t (k) WHERE hot;
+DELETE FROM f87t WHERE hot AND k IS NOT NULL;
+SELECT pg_stat_force_next_flush(); VACUUM f87t;
+SELECT pg_stat_force_next_flush(); ANALYZE f87t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(87, 'NULL concentration inside the subset', 'f87',
+                'SELECT count(*) FROM f87t WHERE hot', 25000);
+
+CREATE TABLE f88t AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN lpad((i % 9)::text, 9, '0')
+            ELSE repeat('W', 390) || lpad(i::text, 10, '0') END AS s
+  FROM generate_series(1, 200000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f88t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f88 ON f88t (s) WHERE hot;
+DELETE FROM f88t WHERE hot AND s > lpad('4', 9, '0');
+SELECT pg_stat_force_next_flush(); VACUUM f88t;
+SELECT pg_stat_force_next_flush(); ANALYZE f88t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(88, 'subset narrower than table statistics', 'f88', NULL, NULL);
+
+CREATE TABLE f89t AS SELECT (i % 5 = 0) AS hot,
+       ((i / 5) % 100)::int AS a, ((i / 5) % 100)::int AS b
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f89t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f89 ON f89t (a, b) WHERE hot;
+DELETE FROM f89t WHERE hot AND a >= 25;
+SELECT pg_stat_force_next_flush(); VACUUM f89t;
+SELECT pg_stat_force_next_flush(); ANALYZE f89t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(89, 'conditional multi-column correlation', 'f89',
+                'SELECT count(*) FROM f89t WHERE hot', 25000);
+
+CREATE TABLE f90t AS SELECT (i % 5 = 0) AS hot, ((i / 5) % 1000)::int AS k
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f90t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f90 ON f90t (k) WHERE hot;
+DELETE FROM f90t WHERE hot AND k >= 250;
+SELECT pg_stat_force_next_flush(); VACUUM f90t;
+SELECT pg_stat_force_next_flush(); ANALYZE f90t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(90, 'real deduplication stronger than predicted', 'f90',
+                'SELECT count(*) FROM f90t WHERE hot', 25000);
+
+CREATE TABLE f91t AS SELECT (i % 5 = 0) AS hot,
+       CASE WHEN i % 5 = 0 THEN lpad((i % 9)::text, 9, '0')
+            ELSE repeat('W', 390) || lpad(i::text, 10, '0') END AS s,
+       i::int AS ord
+  FROM generate_series(1, 200000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE f91t; SELECT pg_stat_force_next_flush();
+CREATE INDEX f91 ON f91t (s) WHERE hot;
+DELETE FROM f91t WHERE hot AND ord < 190000;         -- contiguous 95%
+SELECT pg_stat_force_next_flush(); VACUUM f91t;
+SELECT pg_stat_force_next_flush(); ANALYZE f91t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(91, 'many deleted pages plus an over-predicting model', 'f91',
+                'SELECT count(*) FROM f91t WHERE hot', 2001);
+
+-- ============================================================ 92-95 =========
+-- Change B threshold calibration: a genuinely reclaimable partial index,
+-- disturbed by a known number of row changes, with and without reloptions.
+CREATE TABLE b92t AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE b92t; SELECT pg_stat_force_next_flush();
+CREATE INDEX b92 ON b92t (k) WHERE hot;
+DELETE FROM b92t WHERE hot AND (k / 5) % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM b92t;
+SELECT pg_stat_force_next_flush(); ANALYZE b92t; SELECT pg_stat_force_next_flush();
+UPDATE b92t SET k = k WHERE k % 500 = 0;              -- 1,000 rows changed
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(92, '1,000 rows updated under the GUC threshold', 'b92',
+                'SELECT count(*) FROM b92t WHERE hot', 10000);
+
+CREATE TABLE b93t AS SELECT (i % 5 = 0) AS hot, i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE b93t; SELECT pg_stat_force_next_flush();
+CREATE INDEX b93 ON b93t (k) WHERE hot;
+DELETE FROM b93t WHERE hot AND (k / 5) % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM b93t;
+SELECT pg_stat_force_next_flush(); ANALYZE b93t; SELECT pg_stat_force_next_flush();
+UPDATE b93t SET k = k WHERE k % 2 = 0;                -- above the trigger
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(93, 'rows updated above the GUC threshold', 'b93',
+                'SELECT count(*) FROM b93t WHERE hot', 10000);
+
+CREATE TABLE b94t (hot bool, k int)
+  WITH (autovacuum_analyze_threshold = 100, autovacuum_analyze_scale_factor = 0);
+INSERT INTO b94t SELECT (i % 5 = 0), i FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE b94t; SELECT pg_stat_force_next_flush();
+CREATE INDEX b94 ON b94t (k) WHERE hot;
+DELETE FROM b94t WHERE hot AND (k / 5) % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM b94t;
+SELECT pg_stat_force_next_flush(); ANALYZE b94t; SELECT pg_stat_force_next_flush();
+UPDATE b94t SET k = k WHERE k % 500 = 0;              -- 1,000 > the reloption
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(94, '1,000 rows updated, table reloption threshold 100', 'b94',
+                'SELECT count(*) FROM b94t WHERE hot', 10000);
+
+CREATE TABLE b95t (hot bool, k int)
+  WITH (autovacuum_analyze_threshold = 200000, autovacuum_analyze_scale_factor = 1);
+INSERT INTO b95t SELECT (i % 5 = 0), i FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE b95t; SELECT pg_stat_force_next_flush();
+CREATE INDEX b95 ON b95t (k) WHERE hot;
+DELETE FROM b95t WHERE hot AND (k / 5) % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM b95t;
+SELECT pg_stat_force_next_flush(); ANALYZE b95t; SELECT pg_stat_force_next_flush();
+UPDATE b95t SET k = k WHERE k % 2 = 0;                -- below the reloption
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(95, 'many rows updated, table reloption threshold 200,000', 'b95',
+                'SELECT count(*) FROM b95t WHERE hot', 10000);
+
+-- ============================================================ 96-99 =========
+-- Non-partial controls: the partial-only exclusions must not reach them.
+CREATE TABLE np AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE np; SELECT pg_stat_force_next_flush();
+CREATE INDEX np96 ON np (k);
+CREATE INDEX np97 ON np (upper(s));                   -- no statistics row
+SELECT plan_add(96, 'plain index, fresh statistics', 'np96', 'SELECT count(*) FROM np', 500000);
+SELECT plan_add(97, 'expression index, no statistics row', 'np97', 'SELECT count(*) FROM np', 500000);
+
+CREATE TABLE np98t AS SELECT i::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE np98t; SELECT pg_stat_force_next_flush();
+CREATE INDEX np98 ON np98t (k);
+INSERT INTO np98t SELECT 500000 + i FROM generate_series(1, 300000) i;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(98, 'plain index, stale row counts after 300,000 inserts', 'np98',
+                'SELECT count(*) FROM np98t', 800000);
+
+-- 99: the corrected recipe.  An index and a table cannot share a name, so the
+-- table is np99t and the index np99.
+CREATE TABLE np99t AS SELECT (i % 1000)::int AS k FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE np99t; SELECT pg_stat_force_next_flush();
+CREATE INDEX np99 ON np99t (k);
+DELETE FROM np99t WHERE k >= 60;
+SELECT pg_stat_force_next_flush(); VACUUM np99t;
+SELECT pg_stat_force_next_flush(); ANALYZE np99t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(99, 'duplicate-heavy index, genuinely reclaimable', 'np99',
+                'SELECT count(*) FROM np99t', 30000);
+
+-- =========================================================== 100-105 ========
+-- The variable-width INCLUDE family.
+CREATE TABLE i100t AS SELECT (i % 5 = 0) AS hot, i::int AS k, lpad(i::text, 60, '0') AS pay
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE i100t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i100 ON i100t (k) INCLUDE (pay) WHERE hot;
+DELETE FROM i100t WHERE hot AND (k / 5) % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM i100t;
+SELECT pg_stat_force_next_flush(); ANALYZE i100t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(100, 'partial + INCLUDE (text), 90% of the subset deleted', 'i100',
+                'SELECT count(*) FROM i100t WHERE hot', 10000);
+
+CREATE TABLE i101t AS SELECT (i % 5 = 0) AS hot, i::int AS k, lpad(i::text, 60, '0') AS pay
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE i101t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i101 ON i101t (k) INCLUDE (pay) WHERE hot;
+SELECT plan_add(101, 'partial + INCLUDE (text), same width inside and outside', 'i101',
+                'SELECT count(*) FROM i101t WHERE hot', 100000);
+
+CREATE TABLE i102t AS SELECT i::int AS k, lpad(i::text, 60, '0') AS pay
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE i102t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i102 ON i102t (k) INCLUDE (pay);
+SELECT plan_add(102, 'non-partial + wide INCLUDE (text), freshly built', 'i102',
+                'SELECT count(*) FROM i102t', 500000);
+
+CREATE TABLE i103t AS SELECT (i % 20 = 0) AS hot,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad(i::text, 12, 'n') END AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE i103t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i103 ON i103t (s) WHERE hot;
+SELECT plan_add(103, 'partial + wide key column, unique values, no caveat', 'i103',
+                'SELECT count(*) FROM i103t WHERE hot', 25000);
+
+CREATE TABLE i104t AS SELECT (i % 20 = 0) AS hot, i::int AS k,
+       CASE WHEN i % 20 = 0 THEN lpad((i % 9)::text, 12, 'n')
+            ELSE repeat('W', 190) || lpad(i::text, 10, '0') END AS pay
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE i104t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i104 ON i104t (k) INCLUDE (pay) WHERE hot;
+SELECT plan_add(104, 'partial + INCLUDE (text) narrower inside the subset', 'i104',
+                'SELECT count(*) FROM i104t WHERE hot', 25000);
+
+CREATE TABLE i105t AS SELECT (i % 20 = 0) AS hot, i::int AS k, (i % 7)::int AS n,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad((i % 9)::text, 12, 'n') END AS pay
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE i105t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i105 ON i105t (k) INCLUDE (n, pay) WHERE hot;
+SELECT plan_add(105, 'partial + INCLUDE (int, text), mixed non-key widths', 'i105',
+                'SELECT count(*) FROM i105t WHERE hot', 25000);
+
+-- =========================================================== 106-112 ========
+-- The expression-statistics family.
+CREATE TABLE x106t AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE x106t; SELECT pg_stat_force_next_flush();
+CREATE INDEX x106 ON x106t (upper(s));
+DELETE FROM x106t WHERE k % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM x106t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(106, 'expression index, no statistics row, 90% deleted', 'x106',
+                'SELECT count(*) FROM x106t', 50000);
+
+CREATE TABLE x107t AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE x107t; SELECT pg_stat_force_next_flush();
+CREATE INDEX x107 ON x107t (upper(s));
+DELETE FROM x107t WHERE k % 10 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM x107t;
+SELECT pg_stat_force_next_flush(); ANALYZE x107t; SELECT pg_stat_force_next_flush();
+SELECT plan_add(107, 'the same, with one ANALYZE after the build', 'x107',
+                'SELECT count(*) FROM x107t', 50000);
+
+CREATE TABLE x108t AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+CREATE INDEX x108 ON x108t (upper(s));                -- table never analysed
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(108, 'expression index on a never-analysed table', 'x108',
+                'SELECT count(*) FROM x108t', 500000);
+
+CREATE TABLE x109t AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+ALTER TABLE x109t ALTER COLUMN s SET STATISTICS 0;
+SELECT pg_stat_force_next_flush(); ANALYZE x109t; SELECT pg_stat_force_next_flush();
+CREATE INDEX x109 ON x109t (s);
+SELECT plan_add(109, 'plain index, key column with SET STATISTICS 0', 'x109',
+                'SELECT count(*) FROM x109t', 500000);
+
+CREATE TABLE x110t AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE x110t; SELECT pg_stat_force_next_flush();
+CREATE INDEX x110 ON x110t (k, upper(s));             -- mixed key, no stats row
+SELECT plan_add(110, 'mixed key (k, upper(s)), no statistics row', 'x110',
+                'SELECT count(*) FROM x110t', 500000);
+
+CREATE TABLE x111t AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE x111t; SELECT pg_stat_force_next_flush();
+CREATE INDEX x111 ON x111t (left(s, 3));              -- narrow expression
+SELECT plan_add(111, 'narrow expression left(s, 3), no statistics row', 'x111',
+                'SELECT count(*) FROM x111t', 500000);
+
+CREATE TABLE x112t AS SELECT (i % 5 = 0) AS hot, i::int AS k, lpad(i::text, 100, '0') AS s
+  FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE x112t; SELECT pg_stat_force_next_flush();
+CREATE INDEX x112 ON x112t (upper(s)) WHERE hot;      -- partial expression
+SELECT plan_add(112, 'partial expression index, no statistics row', 'x112',
+                'SELECT count(*) FROM x112t WHERE hot', 100000);
+
+-- =========================================================== 113-121 ========
+-- The drained queue in three states.
+CREATE TABLE q113a AS SELECT i::int AS id, 'pending'::text AS state
+  FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE q113a; SELECT pg_stat_force_next_flush();
+CREATE INDEX p113a ON q113a (id) WHERE state = 'pending';
+UPDATE q113a SET state = 'done';
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(113, 'drained queue, nothing run', 'p113a',
+                'SELECT count(*) FROM q113a WHERE state = ''pending''', 0, 'a');
+
+CREATE TABLE q113b AS SELECT i::int AS id, 'pending'::text AS state
+  FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE q113b; SELECT pg_stat_force_next_flush();
+CREATE INDEX p113b ON q113b (id) WHERE state = 'pending';
+UPDATE q113b SET state = 'done';
+SELECT pg_stat_force_next_flush(); VACUUM q113b;
+SELECT pg_stat_force_next_flush(); ANALYZE q113b; SELECT pg_stat_force_next_flush();
+SELECT plan_add(113, 'drained queue, VACUUM + ANALYZE', 'p113b',
+                'SELECT count(*) FROM q113b WHERE state = ''pending''', 0, 'b');
+
+CREATE TABLE q113c AS SELECT i::int AS id, 'pending'::text AS state
+  FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE q113c; SELECT pg_stat_force_next_flush();
+CREATE INDEX p113c ON q113c (id) WHERE state = 'pending';
+UPDATE q113c SET state = 'done';
+SELECT pg_stat_force_next_flush(); ANALYZE q113c; SELECT pg_stat_force_next_flush();
+SELECT plan_add(113, 'drained queue, ANALYZE only', 'p113c',
+                'SELECT count(*) FROM q113c WHERE state = ''pending''', 0, 'c');
+
+-- 114: a genuine, fully repaired detection on the same queue shape.
+CREATE TABLE q114 AS SELECT i::int AS id, 'pending'::text AS state
+  FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE q114; SELECT pg_stat_force_next_flush();
+CREATE INDEX p114 ON q114 (id) WHERE state = 'pending';
+UPDATE q114 SET state = 'done' WHERE id % 100 <> 0;
+SELECT pg_stat_force_next_flush(); VACUUM q114;
+SELECT pg_stat_force_next_flush(); ANALYZE q114; SELECT pg_stat_force_next_flush();
+SELECT plan_add(114, 'queue drained to 1%, VACUUM + ANALYZE', 'p114',
+                'SELECT count(*) FROM q114 WHERE state = ''pending''', 10000);
+
+-- 115: index built on an analysed empty table, then loaded.
+CREATE TABLE q115(id int, state text);
+SELECT pg_stat_force_next_flush(); ANALYZE q115; SELECT pg_stat_force_next_flush();
+CREATE INDEX p115 ON q115 (id) WHERE state = 'pending';
+INSERT INTO q115 SELECT i, 'pending' FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(115, 'index built on an analysed empty table, then loaded', 'p115',
+                'SELECT count(*) FROM q115 WHERE state = ''pending''', 1000000);
+
+-- 116: a subset that is genuinely empty and was measured empty.
+CREATE TABLE q116 AS SELECT i::int AS id, 'done'::text AS state
+  FROM generate_series(1, 1000000) i;
+CREATE INDEX p116 ON q116 (id) WHERE state = 'pending';
+SELECT pg_stat_force_next_flush(); ANALYZE q116; SELECT pg_stat_force_next_flush();
+SELECT plan_add(116, 'subset empty from the start and measured empty', 'p116',
+                'SELECT count(*) FROM q116 WHERE state = ''pending''', 0);
+
+-- 117: drained, then VACUUM only.
+CREATE TABLE q117 AS SELECT i::int AS id, 'pending'::text AS state
+  FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE q117; SELECT pg_stat_force_next_flush();
+CREATE INDEX p117 ON q117 (id) WHERE state = 'pending';
+UPDATE q117 SET state = 'done';
+SELECT pg_stat_force_next_flush(); VACUUM q117; SELECT pg_stat_force_next_flush();
+SELECT plan_add(117, 'drained, then VACUUM only', 'p117',
+                'SELECT count(*) FROM q117 WHERE state = ''pending''', 0);
+
+-- 118: the subset was empty at the last ANALYZE, then 50,000 rows arrived.
+CREATE TABLE q118 AS SELECT i::int AS id, 'done'::text AS state
+  FROM generate_series(1, 1000000) i;
+CREATE INDEX p118 ON q118 (id) WHERE state = 'pending';
+SELECT pg_stat_force_next_flush(); ANALYZE q118; SELECT pg_stat_force_next_flush();
+INSERT INTO q118 SELECT 1000000 + i, 'pending' FROM generate_series(1, 50000) i;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(118, 'subset measured empty, then 50,000 rows arrive', 'p118',
+                'SELECT count(*) FROM q118 WHERE state = ''pending''', 50000);
+
+-- 119: fixture 118 after one ANALYZE.
+CREATE TABLE q119 AS SELECT i::int AS id, 'done'::text AS state
+  FROM generate_series(1, 1000000) i;
+CREATE INDEX p119 ON q119 (id) WHERE state = 'pending';
+SELECT pg_stat_force_next_flush(); ANALYZE q119; SELECT pg_stat_force_next_flush();
+INSERT INTO q119 SELECT 1000000 + i, 'pending' FROM generate_series(1, 50000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE q119; SELECT pg_stat_force_next_flush();
+SELECT plan_add(119, 'fixture 118 after one ANALYZE', 'p119',
+                'SELECT count(*) FROM q119 WHERE state = ''pending''', 50000);
+
+-- 120: the ANALYZE sample missed the subset entirely.
+CREATE TABLE q120 AS SELECT i::int AS id,
+       CASE WHEN i <= 2000 THEN 'pending' ELSE 'done' END::text AS state
+  FROM generate_series(1, 1000000) i;
+CREATE INDEX p120 ON q120 (id) WHERE state = 'pending';
+SET default_statistics_target = 1;
+SELECT pg_stat_force_next_flush(); ANALYZE q120; SELECT pg_stat_force_next_flush();
+RESET default_statistics_target;
+SELECT plan_add(120, 'a 300-row sample missed a 2,000-row subset', 'p120',
+                'SELECT count(*) FROM q120 WHERE state = ''pending''', 2000);
+
+-- 121: a stale zero on non-partial indexes, three recipes.
+CREATE TABLE nz AS SELECT i::int AS k FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE nz; SELECT pg_stat_force_next_flush();
+CREATE INDEX nz_k ON nz (k);
+DELETE FROM nz;
+SELECT pg_stat_force_next_flush(); VACUUM nz; SELECT pg_stat_force_next_flush();
+INSERT INTO nz SELECT i FROM generate_series(1, 500000) i;   -- no ANALYZE
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(121, 'emptied, vacuumed, reloaded without ANALYZE', 'nz_k',
+                'SELECT count(*) FROM nz', 500000, 'nz_k');
+
+CREATE TABLE nzb AS SELECT i::int AS k FROM generate_series(1, 1000000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE nzb; SELECT pg_stat_force_next_flush();
+CREATE INDEX nzb_k ON nzb (k);
+DELETE FROM nzb;
+SELECT pg_stat_force_next_flush(); VACUUM nzb; SELECT pg_stat_force_next_flush();
+REINDEX INDEX nzb_k;                                   -- rebuilt while empty
+INSERT INTO nzb SELECT i FROM generate_series(1, 500000) i;
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(121, 'the same, plus a REINDEX while the table is empty', 'nzb_k',
+                'SELECT count(*) FROM nzb', 500000, 'nzb_k');
+
+CREATE TABLE trunc_t AS SELECT i::int AS k FROM generate_series(1, 300000) i;
+SELECT pg_stat_force_next_flush(); ANALYZE trunc_t; SELECT pg_stat_force_next_flush();
+CREATE INDEX i_trunc ON trunc_t (k);
+TRUNCATE trunc_t;
+INSERT INTO trunc_t SELECT i FROM generate_series(1, 300000) i;  -- no ANALYZE
+SELECT pg_stat_force_next_flush();
+SELECT plan_add(121, 'TRUNCATE then reload without ANALYZE', 'i_trunc',
+                'SELECT count(*) FROM trunc_t', 300000, 'i_trunc');
+
+SELECT count(*) AS planned_fixtures FROM plan;
+FIXTURES
+  f suite "$SQLD/fixtures_suite.sql" || die "suite fixtures failed"
+  note "$(s suite 'SELECT count(*) || '\'' planned fixtures'\'' FROM plan')"
+}
+
+# ------------------------------------------------------------ attribution ----
+stage_attribution() {
+  say "attribution: EXCEPT in both directions, before any REINDEX"
+  f suite /dev/stdin > "$OUT/attribution.txt" 2>&1 <<'SQL'
+\pset pager off
+SELECT 'r2 minus old' AS direction, * FROM (
+  SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
+         key_groups, modelled_rows, idx_reltuples, suppress_row
+    FROM est_r2
+  EXCEPT
+  SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
+         key_groups, modelled_rows, idx_reltuples, suppress_row
+    FROM est_old) d ORDER BY indexname;
+SELECT 'old minus r2' AS direction, * FROM (
+  SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
+         key_groups, modelled_rows, idx_reltuples, suppress_row
+    FROM est_old
+  EXCEPT
+  SELECT indexname, status, wasted_space_pct, wasted_space_pct_floor, caveats,
+         key_groups, modelled_rows, idx_reltuples, suppress_row
+    FROM est_r2) d ORDER BY indexname;
+SQL
+  grep -c '^ [a-z]' "$OUT/attribution.txt" > /dev/null
+  tail -20 "$OUT/attribution.txt" >&2
+}
+
+# ---------------------------------------------------------------- probes -----
+stage_probes() {
+  say "validation probes, generated and executed, before any REINDEX"
+  local db
+  for db in suite acc; do
+    "$BIN/psql" -X -At -q -d "$db" -f "$SQLD/probegen.sql" > "$OUT/probes_gen_$db.txt" 2>&1
+    : > "$OUT/probes_$db.txt"
+    local line kind sql
+    while IFS='|' read -r name kind sql; do
+      [ -n "${sql:-}" ] || continue
+      printf '%s|%s|%s\n' "$name" "$kind" "$(s "$db" "$sql" | tr '\n' ' ')" >> "$OUT/probes_$db.txt"
+    done < "$OUT/probes_gen_$db.txt"
+    note "$db: $(wc -l < "$OUT/probes_$db.txt") probes executed"
+  done
+  cat "$OUT/probes_suite.txt" "$OUT/probes_acc.txt" >&2
+}
+
+# ---------------------------------------------------------------- score ------
+stage_score() {
+  say "score: assert population, read both texts, REINDEX INDEX, re-read the size"
+  f suite /dev/stdin <<'SQL'
+SET statement_timeout = '600s';
+SET lock_timeout = '2s';
+CALL score_all();
+SQL
+  [ $? -eq 0 ] || die "scoring failed"
+  t suite "SELECT * FROM verdicts" > "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT verdict_floor, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
+    >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT verdict_point, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
+    >> "$OUT/verdicts.txt" 2>&1
+  tail -20 "$OUT/verdicts.txt" >&2
+}
+
+# ---------------------------------------------------------------- cost -------
+stage_cost() {
+  say "cost: six interleaved pairs of the two exact texts"
+  : > "$OUT/cost.txt"
+  local i
+  for i in 1 2 3 4 5 6; do
+    printf 'pair %s r2  %s\n' "$i" \
+      "$("$BIN/psql" -X -q -d suite -c '\timing on' -f "$SQLD/est_r2.sql" 2>&1 \
+         | grep -E '^Time:' | tail -1)" >> "$OUT/cost.txt"
+    printf 'pair %s old %s\n' "$i" \
+      "$("$BIN/psql" -X -q -d suite -c '\timing on' -f "$SQLD/est_old.sql" 2>&1 \
+         | grep -E '^Time:' | tail -1)" >> "$OUT/cost.txt"
+  done
+  s suite "select count(*) || ' B-tree indexes over ' ||
+           sum(pg_relation_size(c.oid)) / 8192 || ' blocks'
+             from pg_class c join pg_am a on a.oid = c.relam
+            where a.amname = 'btree' and c.relkind = 'i'" >> "$OUT/cost.txt"
+  cat "$OUT/cost.txt" >&2
+}
+
+# ---------------------------------------------------------------- criteria ---
+stage_criteria() {
+  say "pass criteria"
+  { printf '1. gate group\n'
+    t gate "SELECT count(*) FILTER (WHERE dedup_applies AND NOT metapage) AS over_credit,
+                   count(*) FILTER (WHERE equalimage = 'recognized' AND NOT metapage)
+                          + count(*) FILTER (WHERE equalimage = 'ineligible' AND metapage)
+                                                                          AS metapage_disagreements,
+                   count(*) FILTER (WHERE equalimage = 'unknown' AND metapage) AS under_credits,
+                   max(greatest(wsp, wspf))                                    AS worst_reading
+              FROM gate_res"
+    printf '2. partial group and controls\n'
+    t suite "SELECT count(*) FILTER (WHERE reported AND verdict_floor = 'CRITICAL FALSE POSITIVE') AS crit_fp_floor,
+                    count(*) FILTER (WHERE reported AND verdict_point = 'CRITICAL FALSE POSITIVE') AS crit_fp_point,
+                    count(*) FILTER (WHERE verdict_floor = 'FALSE NEGATIVE')   AS false_negatives,
+                    count(*) FILTER (WHERE NOT reported)                       AS withheld,
+                    count(*) FILTER (WHERE NOT reported AND withheld_by IS NULL) AS withheld_unexplained,
+                    count(*) FILTER (WHERE NOT contract_ok)                    AS contract_failures
+               FROM verdicts"
+    printf '3. drained subsets and zero rows\n'
+    t suite "SELECT num, leg, idx, wsp, wspf, actual, modelled_rows, caveats
+               FROM verdicts WHERE modelled_rows = 0 OR num IN (113, 118, 120) ORDER BY num, leg"
+    printf '4. attribution\n'
+    grep -c '^ ' "$OUT/attribution.txt" 2>/dev/null | xargs printf '   EXCEPT output lines: %s\n'
+    printf '5. exact texts\n'
+    ls -l "$OUT"/exact_*.txt | while read -r l; do printf '   %s\n' "$l"; done
+    printf '6. engine and repository checks\n'
+    cat "$OUT/checks.txt" 2>/dev/null
+    cat "$OUT/hashes.txt" 2>/dev/null
+  } > "$OUT/criteria.txt" 2>&1
+  cat "$OUT/criteria.txt" >&2
+}
+
+# ---------------------------------------------------------------- report -----
+stage_report() {
+  say "report written to $OUT"
+  ls -1 "$OUT" >&2
+}
+
+stage_stop()  { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "server stopped"; }
+stage_clean() { stage_stop; rm -rf "$SANDBOX"; say "sandbox deleted"; }
+
+main() {
+  local stages=("$@")
+  [ ${#stages[@]} -eq 0 ] && stages=(build check cluster texts geometry calibration \
+                                     gate acceptance suite attribution probes score \
+                                     cost criteria report)
+  local st
+  for st in "${stages[@]}"; do
+    case $st in
+      build|check|cluster|texts|geometry|calibration|gate|acceptance|suite|\
+      attribution|probes|score|cost|criteria|report|stop|clean) "stage_$st" ;;
+      *) die "unknown stage: $st" ;;
+    esac
+  done
+}
+
+main "$@"
+```
+
+### The PostgreSQL 12 leg script
+
+This is step 8, and its first result is the parse outcome of the unmodified
+text, recorded before any fixture exists. Nothing in the script assumes what
+PostgreSQL 12 does: the server-version number, the block size and alignment,
+whether `pg_stat_force_next_flush()` exists, which columns `pg_stats_ext`
+exposes, which B-tree support-function numbers are registered and whether the
+`deduplicate_items` reloption is accepted are all discovered at run time and
+written to `out/v12_facts.txt`. Because the flush function is not available
+there, the leg publishes counters the way the shipped 12 statistics test does:
+the writing backend exits and the observer polls in fresh sessions until the
+counter it is waiting for appears, with a timeout treated as a failed
+precondition rather than as a result.
+
+```bash
+#!/usr/bin/env bash
+#
+# btree_bloat_suite_v12.sh - the 12.2 leg of the same suite, in bash and SQL
+# only.  It is step 8 of the page's protocol: build the pinned 12 checkout,
+# execute the exact current statement text, record the outcome as a result in
+# its own right, and only then transform, fixture and score.
+#
+# Nothing here assumes what PostgreSQL 12 does.  Every version-local fact the
+# leg depends on is discovered at run time and written to $OUT/v12_facts.txt:
+# whether the exact text parses, which construct rejects it, whether
+# pg_stat_force_next_flush() exists, and whether a B-tree operator class
+# offers a support function 4.  The pinned checkouts stay read only.
+#
+# Usage, from the repository root:
+#   bash btree_bloat_suite_v12.sh                  # all stages
+#   bash btree_bloat_suite_v12.sh exact            # just the parse result
+#
+# Stages: build check cluster exact transform facts fixtures score report
+#         stop clean
+#
+# Environment: WIKI_ROOT PAGE SRC12 SANDBOX PORT12 JOBS EXTRA_CFLAGS
+set -uo pipefail
+
+WIKI_ROOT="${WIKI_ROOT:-$PWD}"
+PAGE="${PAGE:-$WIKI_ROOT/wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md}"
+SRC12="${SRC12:-$WIKI_ROOT/raw/postgres-12}"
+SANDBOX="${SANDBOX:-$WIKI_ROOT/.wiki-runtime/tmp/btree-suite}"
+PORT12="${PORT12:-55412}"
+JOBS="${JOBS:-4}"
+# ICU dropped the TRUE/FALSE macros in ICU 68; a 12.2 tree configured
+# --with-icu against a newer ICU needs them back.  Empty this variable on a
+# host whose ICU still defines them, or drop --with-icu instead.
+EXTRA_CFLAGS="${EXTRA_CFLAGS:--O2 -g -DTRUE=1 -DFALSE=0}"
+
+BUILD="$SANDBOX/build12"; INST="$SANDBOX/install12"; DATA="$SANDBOX/data12"
+OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"; SOCK="$SANDBOX/sock12"; BIN="$INST/bin"
+DB=leg12
+export PGPORT="$PORT12" PGHOST="$SOCK" PGDATABASE=postgres
+
+BASE1=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
+
+say()  { printf '\n== %s\n' "$*" >&2; }
+note() { printf '   %s\n' "$*" >&2; }
+die()  { printf '!! %s\n' "$*" >&2; exit 1; }
+
+q() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }   # writer session
+s() { "$BIN/psql" -X -At -q -d "$DB" -c "$1"; }                  # scalar
+t() { "$BIN/psql" -X -q -P pager=off -d "$DB" -c "$1"; }         # table
+fl() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -f "$1"; }  # file
+
+# The fence is assembled from printf '\140' so that this script contains no
+# literal Markdown fence and can therefore live inside one.
+md_block() {
+  local lang=$1 want=$2 file=$3 n=0 inb=0 line tick fence
+  tick=$(printf '\140'); fence="$tick$tick$tick"
+  while IFS= read -r line; do
+    if [ "$inb" = 1 ]; then
+      if [ "$line" = "$fence" ]; then inb=0; [ "$n" = "$want" ] && return 0; continue; fi
+      [ "$n" = "$want" ] && printf '%s\n' "$line"
+    elif [ "$line" = "$fence$lang" ]; then
+      n=$((n + 1)); inb=1
+    fi
+  done < "$file"
+}
+
+harness_view() {
+  local file=$1 view=$2 extra=$3 line
+  printf 'DROP VIEW IF EXISTS %s;\nCREATE VIEW %s AS\n' "$view" "$view"
+  while IFS= read -r line; do
+    case $line in
+      "SET /* wiki_btree_wasted_space"*)     continue ;;
+      "       server_version_num")           printf '       server_version_num,\n%s\n' "$extra"; continue ;;
+      " WHERE actual_bytes > 1024 * 1024"*)  continue ;;
+      " ORDER BY (actual_bytes"*)            continue ;;
+      " LIMIT 20;")                          printf ';\n'; continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < "$file"
+}
+
+INTERNALS='       expected_blocks, floor_blocks, actual_bytes, live_rows, slot,
+       leaf_cap, nmax, leaf_pages, tids, dedup_applies, is_partial,
+       has_expressions, stats_row_missing, dedup_credited, stats_stale,
+       suppress_row, ext_used, equalimage_state'
+
+# There is no pg_stat_force_next_flush() before PostgreSQL 15, so this leg
+# publishes counters the way the shipped 12 statistics test does: the writing
+# backend exits, and the observer polls in fresh sessions until the counter it
+# is waiting for appears.  A timeout is a failed precondition, not a result.
+wait_for() {                       # wait_for <sql returning boolean> <label>
+  local i
+  for i in $(seq 1 120); do
+    [ "$(s "SELECT ($1)::text")" = "true" ] && return 0
+    sleep 0.5
+  done
+  printf '!! statistics did not publish within 60s: %s\n' "$2" >&2
+  return 1
+}
+loaded()   { wait_for "(SELECT n_live_tup FROM pg_stat_all_tables WHERE relname = '$1') >= $2" "$1 loaded"; }
+analyzed() { wait_for "(SELECT last_analyze IS NOT NULL FROM pg_stat_all_tables WHERE relname = '$1')" "$1 analyzed"; }
+vacuumed() { wait_for "(SELECT last_vacuum IS NOT NULL FROM pg_stat_all_tables WHERE relname = '$1')" "$1 vacuumed"; }
+
+# ---------------------------------------------------------------- build ------
+stage_build() {
+  say "build 12.2 out of tree from $SRC12"
+  [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
+  mkdir -p "$BUILD" "$OUT" "$SQLD"
+  ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" --enable-debug \
+      --with-icu --with-readline --with-zlib CFLAGS="$EXTRA_CFLAGS" \
+      > configure.log 2>&1 ) || die "configure failed, see $BUILD/configure.log"
+  ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
+    || { grep -m3 'error:' "$BUILD/make.log" >&2; die "make failed"; }
+  local m
+  for m in pageinspect pgstattuple amcheck; do
+    ( cd "$BUILD" && make -C "contrib/$m" -j"$JOBS" >> install.log 2>&1 \
+        && make -C "contrib/$m" install >> install.log 2>&1 ) || die "contrib/$m failed"
+  done
+  note "$("$BIN/postgres" --version)"
+}
+
+stage_check() {
+  say "engine regression suites, 12.2"
+  : > "$OUT/checks12.txt"
+  ( cd "$BUILD" && make check > check_core.log 2>&1 )
+  printf 'core=%s %s\n' "$?" \
+    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_core.log" | tail -1)" \
+    >> "$OUT/checks12.txt"
+  local m
+  for m in pageinspect pgstattuple amcheck; do
+    ( cd "$BUILD" && make -C "contrib/$m" check > "check_$m.log" 2>&1 )
+    printf '%s=%s %s\n' "$m" "$?" \
+      "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_$m.log" | tail -1)" \
+      >> "$OUT/checks12.txt"
+  done
+  cat "$OUT/checks12.txt" >&2
+}
+
+stage_cluster() {
+  say "isolated 12.2 cluster on port $PORT12"
+  if "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then note "already running"
+  else
+    if [ ! -d "$DATA" ]; then
+      mkdir -p "$SOCK"
+      "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 > "$OUT/initdb12.log" 2>&1 \
+        || die "initdb failed"
+      cat >> "$DATA/postgresql.conf" <<CONF
+listen_addresses = ''
+unix_socket_directories = '$SOCK'
+port = $PORT12
+autovacuum = off
+fsync = off
+shared_buffers = '512MB'
+maintenance_work_mem = '256MB'
+max_parallel_maintenance_workers = 0
+CONF
+    fi
+    "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server12.log" -w start > /dev/null || die "start failed"
+  fi
+  s "select 1 from pg_database where datname='$DB'" | grep -q 1 \
+    || "$BIN/createdb" -T template0 -E UTF8 --locale=C "$DB"
+  note "$(s 'select version()')"
+}
+
+# ---------------------------------------------------------------- exact ------
+# The first result of this leg is the parse outcome of the unmodified text.
+stage_exact() {
+  say "the exact current text, unmodified, on 12.2"
+  md_block sql 1 "$PAGE" > "$SQLD/est_r2.sql"
+  local got; got=$(sha256sum < "$SQLD/est_r2.sql" | cut -d' ' -f1)
+  [ "$got" = "$BASE1" ] && note "text hash matches the baseline" \
+                        || note "text hash DIFFERS from the baseline: $got"
+  if "$BIN/psql" -X -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/est_r2.sql" \
+       > "$OUT/v12_exact.txt" 2>&1; then
+    printf 'exact_text=executes\n' > "$OUT/v12_facts.txt"
+    note "the exact text EXECUTES on 12.2"
+  else
+    printf 'exact_text=refused\n' > "$OUT/v12_facts.txt"
+    grep -E 'ERROR|LINE' "$OUT/v12_exact.txt" | head -4 | while read -r l; do
+      printf 'exact_error=%s\n' "$l" >> "$OUT/v12_facts.txt"; done
+    note "the exact text is REFUSED: $(grep -m1 ERROR "$OUT/v12_exact.txt")"
+  fi
+}
+
+# ------------------------------------------------------------- transform -----
+# One documented edit per construct the server refuses, applied line by line so
+# the diff against the filed text is auditable.  Each edit is recorded.
+stage_transform() {
+  say "transformer: drop the constructs this server refuses"
+  local line dropped=0
+  : > "$SQLD/est_v12.sql"
+  while IFS= read -r line; do
+    case $line in
+      # pg_stats_ext exposes no inherited column on this server: the extstat
+      # CTE's non-inherited filter is the only reference, and dropping it
+      # widens that CTE to whatever rows the view does expose.
+      "                          AND se.inherited = false")
+        dropped=$((dropped + 1))
+        printf -- '-- dropped: %s\n' "$line" >> "$SQLD/est_v12.sql"; continue ;;
+    esac
+    printf '%s\n' "$line" >> "$SQLD/est_v12.sql"
+  done < "$SQLD/est_r2.sql"
+  printf 'transform_edits=%s\n' "$dropped" >> "$OUT/v12_facts.txt"
+  if "$BIN/psql" -X -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/est_v12.sql" \
+       > "$OUT/v12_transformed.txt" 2>&1; then
+    printf 'transformed_text=executes\n' >> "$OUT/v12_facts.txt"
+    note "the transformed text executes after $dropped edit(s)"
+  else
+    printf 'transformed_text=refused\n' >> "$OUT/v12_facts.txt"
+    grep -m1 ERROR "$OUT/v12_transformed.txt" >&2
+    die "the transformer is incomplete; add the next refused construct"
+  fi
+  harness_view "$SQLD/est_v12.sql" est12 "$INTERNALS" > "$SQLD/view_v12.sql"
+  fl "$SQLD/view_v12.sql" || die "harness view failed"
+}
+
+# ---------------------------------------------------------------- facts ------
+stage_facts() {
+  say "version-local facts this leg depends on, measured not assumed"
+  { printf 'server_version_num=%s\n' "$(s "SELECT current_setting('server_version_num')")"
+    printf 'block_size=%s max_data_alignment=%s\n' \
+      "$(s "SELECT current_setting('block_size')")" \
+      "$(s 'SELECT max_data_alignment FROM pg_control_init()')"
+    printf 'has_force_next_flush=%s\n' \
+      "$(s "SELECT (to_regprocedure('pg_stat_force_next_flush()') IS NOT NULL)::text")"
+    printf 'pg_stats_ext_columns=%s\n' \
+      "$(s "SELECT string_agg(attname, ',' ORDER BY attnum) FROM pg_attribute
+             WHERE attrelid = 'pg_stats_ext'::regclass AND attnum > 0")"
+    printf 'btree_support_procs=%s\n' \
+      "$(s "SELECT string_agg(DISTINCT amprocnum::text, ',' ORDER BY amprocnum::text)
+              FROM pg_amproc ap JOIN pg_opfamily f ON f.oid = ap.amprocfamily
+              JOIN pg_am a ON a.oid = f.opfmethod WHERE a.amname = 'btree'")"
+  } >> "$OUT/v12_facts.txt"
+  # Whether the reloption exists is answered by trying it, not by asserting it.
+  q "DROP TABLE IF EXISTS dedup_probe" > /dev/null 2>&1
+  q "CREATE TABLE dedup_probe(k int)" > /dev/null 2>&1
+  if q "CREATE INDEX dedup_probe_i ON dedup_probe (k) WITH (deduplicate_items = off)" \
+       > /dev/null 2>&1; then
+    printf 'deduplicate_items_reloption=accepted\n' >> "$OUT/v12_facts.txt"
+  else
+    printf 'deduplicate_items_reloption=rejected\n' >> "$OUT/v12_facts.txt"
+  fi
+  q "DROP TABLE IF EXISTS dedup_probe" > /dev/null 2>&1
+  cat "$OUT/v12_facts.txt" >&2
+}
+
+# ---------------------------------------------------------------- fixtures ---
+stage_fixtures() {
+  say "the constructible fixture subset, one writer session per step"
+  fl /dev/stdin <<'SQL'
+SET client_min_messages = warning;
+DROP VIEW IF EXISTS verdicts12;
+DROP TABLE IF EXISTS res12, plan12 CASCADE;
+CREATE TABLE plan12(num int, req text, idx text, rowsql text, want_rows bigint,
+                    PRIMARY KEY (num));
+CREATE TABLE res12(num int, req text, idx text, size_before bigint, size_after bigint,
+                   blocks_before int, blocks_after int, status text,
+                   wsp numeric, wspf numeric, caveats text, equalimage text,
+                   modelled_rows numeric, key_groups numeric, tids numeric,
+                   idx_reltuples numeric, dedup_applies bool, is_partial bool,
+                   suppress_row bool, true_rows bigint, want_rows bigint,
+                   PRIMARY KEY (num));
+CREATE OR REPLACE FUNCTION plan_add(n int, r text, i text, q text DEFAULT NULL,
+                                    w bigint DEFAULT NULL) RETURNS void
+LANGUAGE sql AS $$ INSERT INTO plan12 VALUES (n, r, i, q, w) $$;
+CREATE OR REPLACE PROCEDURE score_all() LANGUAGE plpgsql AS $sc$
+DECLARE p record; e record; sb bigint; sa bigint; tr bigint;
+BEGIN
+  FOR p IN SELECT * FROM plan12 ORDER BY num LOOP
+    tr := NULL;
+    IF p.rowsql IS NOT NULL THEN EXECUTE p.rowsql INTO tr; END IF;
+    sb := pg_relation_size(p.idx::regclass);
+    SELECT * INTO e FROM est12 WHERE indexname = p.idx;
+    IF NOT FOUND THEN RAISE EXCEPTION 'estimator returned no row for %', p.idx; END IF;
+    EXECUTE format('REINDEX INDEX %I', p.idx);
+    sa := pg_relation_size(p.idx::regclass);
+    INSERT INTO res12 VALUES (p.num, p.req, p.idx, sb, sa, sb / 8192, sa / 8192,
+      e.status, e.wasted_space_pct, e.wasted_space_pct_floor, e.caveats,
+      e.equalimage, e.modelled_rows, e.key_groups, e.tids_per_tuple,
+      e.idx_reltuples, e.dedup_applies, e.is_partial, e.suppress_row,
+      tr, p.want_rows);
+  END LOOP;
+END $sc$;
+CREATE VIEW verdicts12 AS
+SELECT r.num, r.idx, r.req, r.blocks_before, r.blocks_after, a.actual,
+       r.wsp, r.wspf,
+       CASE WHEN r.wspf IS NULL                          THEN 'UNMEASURED'
+            WHEN r.wspf >= 50 AND a.actual < 10          THEN 'CRITICAL FALSE POSITIVE'
+            WHEN r.wspf >= 50 AND a.actual < 45          THEN 'FALSE POSITIVE'
+            WHEN r.wspf >= 50 AND r.wspf - a.actual > 5  THEN 'FALSE POSITIVE'
+            WHEN r.wspf <  45 AND a.actual >= 50         THEN 'FALSE NEGATIVE'
+            ELSE 'PASS' END                              AS verdict_floor,
+       NOT r.suppress_row AS reported,
+       (r.want_rows IS NULL OR r.true_rows = r.want_rows) AS contract_ok,
+       r.equalimage, r.dedup_applies, r.modelled_rows, r.idx_reltuples,
+       r.status, r.caveats
+  FROM res12 r
+  CROSS JOIN LATERAL (
+        SELECT round(100.0 * (r.size_before - r.size_after)
+                     / greatest(r.size_before, 1), 1) AS actual) a;
+SQL
+
+  # -- 1-3: fresh sorted builds at three key widths -------------------------
+  local l n
+  for l in 8 100 1000; do
+    n=$(( ((8144 - 819) / ((((12 + l + 7) / 8) * 8) + 4)) * 250 ))
+    q "DROP TABLE IF EXISTS fr$l CASCADE"
+    q "CREATE TABLE fr$l(k text); ALTER TABLE fr$l ALTER COLUMN k SET STORAGE PLAIN"
+    q "INSERT INTO fr$l SELECT lpad(i::text, $l, '0') FROM generate_series(1, $n) i"
+    loaded "fr$l" "$n"; q "ANALYZE fr$l"; analyzed "fr$l"
+    q "CREATE INDEX fr_i$l ON fr$l (k)"
+    q "SELECT plan_add(${l}, 'fresh sorted build, ${l}-byte key', 'fr_i$l',
+                       'SELECT count(*) FROM fr$l', $n)"
+  done
+
+  # -- 1001: duplicate-heavy index, the deduplication difference ------------
+  q "DROP TABLE IF EXISTS dup CASCADE"
+  q "CREATE TABLE dup AS SELECT (i % 1000)::int AS k FROM generate_series(1, 500000) i"
+  loaded dup 500000; q "ANALYZE dup"; analyzed dup
+  q "CREATE INDEX dup_k ON dup (k)"
+  q "SELECT plan_add(1001, 'duplicate-heavy index, 500 rows per key', 'dup_k',
+                     'SELECT count(*) FROM dup', 500000)"
+
+  # -- 1002-1005: the partial family ----------------------------------------
+  local f
+  for f in 1002 1003 1004; do
+    q "DROP TABLE IF EXISTS pb$f CASCADE"
+    q "CREATE TABLE pb$f AS SELECT (i % 5 = 0) AS hot, i::int AS k
+         FROM generate_series(1, 500000) i"
+    loaded "pb$f" 500000; q "ANALYZE pb$f"; analyzed "pb$f"
+    q "CREATE INDEX p$f ON pb$f (k) WHERE hot"
+  done
+  q "SELECT plan_add(1002, 'freshly built partial index', 'p1002',
+                     'SELECT count(*) FROM pb1002 WHERE hot', 100000)"
+  q "DELETE FROM pb1003 WHERE hot AND (k / 5) % 2 = 0"
+  q "VACUUM pb1003"; vacuumed pb1003; q "ANALYZE pb1003"
+  q "SELECT plan_add(1003, '50% of the subset deleted', 'p1003',
+                     'SELECT count(*) FROM pb1003 WHERE hot', 50000)"
+  q "DELETE FROM pb1004 WHERE hot AND (k / 5) % 10 <> 0"
+  q "VACUUM pb1004"; vacuumed pb1004; q "ANALYZE pb1004"
+  q "SELECT plan_add(1004, '90% of the subset deleted', 'p1004',
+                     'SELECT count(*) FROM pb1004 WHERE hot', 10000)"
+
+  q "DROP TABLE IF EXISTS q1005 CASCADE"
+  q "CREATE TABLE q1005 AS SELECT i::int AS id, 'pending'::text AS state
+       FROM generate_series(1, 1000000) i"
+  loaded q1005 1000000; q "ANALYZE q1005"; analyzed q1005
+  q "CREATE INDEX p1005 ON q1005 (id) WHERE state = 'pending'"
+  q "UPDATE q1005 SET state = 'done'"
+  q "VACUUM q1005"; vacuumed q1005; q "ANALYZE q1005"
+  q "SELECT plan_add(1005, 'drained queue, VACUUM + ANALYZE', 'p1005',
+                     'SELECT count(*) FROM q1005 WHERE state = ''pending''', 0)"
+
+  # -- 1006-1007: wide keys and a wide INCLUDE column ------------------------
+  q "DROP TABLE IF EXISTS wide CASCADE"
+  q "CREATE TABLE wide AS SELECT (i % 20 = 0) AS hot, i::int AS k,
+       CASE WHEN i % 20 = 0 THEN repeat('W', 190) || lpad(i::text, 10, '0')
+            ELSE lpad(i::text, 12, 'n') END AS s
+       FROM generate_series(1, 500000) i"
+  loaded wide 500000; q "ANALYZE wide"; analyzed wide
+  q "CREATE INDEX w_key ON wide (s) WHERE hot"
+  q "CREATE INDEX w_inc ON wide (k) INCLUDE (s) WHERE hot"
+  q "SELECT plan_add(1006, 'partial index on a wide key inside the subset', 'w_key',
+                     'SELECT count(*) FROM wide WHERE hot', 25000)"
+  q "SELECT plan_add(1007, 'partial index with a wide INCLUDE column', 'w_inc',
+                     'SELECT count(*) FROM wide WHERE hot', 25000)"
+
+  # -- 1008-1009: expression indexes with and without statistics -------------
+  q "DROP TABLE IF EXISTS ex CASCADE"
+  q "CREATE TABLE ex AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+       FROM generate_series(1, 500000) i"
+  loaded ex 500000; q "ANALYZE ex"; analyzed ex
+  q "CREATE INDEX ex_nostats ON ex (upper(s))"
+  q "SELECT plan_add(1008, 'expression index, no statistics row', 'ex_nostats',
+                     'SELECT count(*) FROM ex', 500000)"
+  q "DROP TABLE IF EXISTS ex2 CASCADE"
+  q "CREATE TABLE ex2 AS SELECT i::int AS k, lpad(i::text, 100, '0') AS s
+       FROM generate_series(1, 500000) i"
+  loaded ex2 500000
+  q "CREATE INDEX ex_stats ON ex2 (upper(s))"
+  q "ANALYZE ex2"; analyzed ex2
+  q "SELECT plan_add(1009, 'expression index, analysed after the build', 'ex_stats',
+                     'SELECT count(*) FROM ex2', 500000)"
+
+  # -- 1010-1012: the reltuples-zero family ----------------------------------
+  q "DROP TABLE IF EXISTS nz CASCADE"
+  q "CREATE TABLE nz AS SELECT i::int AS k FROM generate_series(1, 1000000) i"
+  loaded nz 1000000; q "ANALYZE nz"; analyzed nz
+  q "CREATE INDEX nz_k ON nz (k)"
+  q "DELETE FROM nz"; q "VACUUM nz"; vacuumed nz
+  q "INSERT INTO nz SELECT i FROM generate_series(1, 500000) i"
+  q "SELECT plan_add(1010, 'emptied, vacuumed, reloaded without ANALYZE', 'nz_k',
+                     'SELECT count(*) FROM nz', 500000)"
+  q "DROP TABLE IF EXISTS nzb CASCADE"
+  q "CREATE TABLE nzb AS SELECT i::int AS k FROM generate_series(1, 1000000) i"
+  loaded nzb 1000000; q "ANALYZE nzb"; analyzed nzb
+  q "CREATE INDEX nzb_k ON nzb (k)"
+  q "DELETE FROM nzb"; q "VACUUM nzb"; vacuumed nzb
+  q "REINDEX INDEX nzb_k"
+  q "INSERT INTO nzb SELECT i FROM generate_series(1, 500000) i"
+  q "SELECT plan_add(1011, 'the same, plus a REINDEX while empty', 'nzb_k',
+                     'SELECT count(*) FROM nzb', 500000)"
+  q "DROP TABLE IF EXISTS trunc_t CASCADE"
+  q "CREATE TABLE trunc_t AS SELECT i::int AS k FROM generate_series(1, 300000) i"
+  loaded trunc_t 300000; q "ANALYZE trunc_t"; analyzed trunc_t
+  q "CREATE INDEX i_trunc ON trunc_t (k)"
+  q "TRUNCATE trunc_t"
+  q "INSERT INTO trunc_t SELECT i FROM generate_series(1, 300000) i"
+  q "SELECT plan_add(1012, 'TRUNCATE then reload without ANALYZE', 'i_trunc',
+                     'SELECT count(*) FROM trunc_t', 300000)"
+
+  # -- 1013-1016: the equal-image gate, three types and a nondeterministic
+  #    collation.  What the gate answers here is a result, not an assumption.
+  q "DROP TABLE IF EXISTS gate CASCADE"
+  q "DROP COLLATION IF EXISTS nd12"
+  q "CREATE COLLATION nd12 (provider = icu, locale = 'und-u-ks-level2',
+                            deterministic = false)" \
+    || note "nondeterministic ICU collation refused on this build"
+  q "CREATE TABLE gate AS
+       SELECT (i % 5000)::int AS a, (i % 5000)::numeric AS n,
+              'key' || lpad((i % 5000)::text, 8, '0') AS s
+         FROM generate_series(1, 500000) i"
+  loaded gate 500000; q "ANALYZE gate"; analyzed gate
+  q "CREATE INDEX g_int4 ON gate (a)"
+  q "CREATE INDEX g_num  ON gate (n)"
+  q "CREATE INDEX g_text ON gate (s)"
+  q "CREATE INDEX g_nd   ON gate (s COLLATE nd12)" \
+    || note "index on a nondeterministic collation refused"
+  q "SELECT plan_add(1013, 'int4 key, gate verdict', 'g_int4', 'SELECT count(*) FROM gate', 500000)"
+  q "SELECT plan_add(1014, 'numeric key, gate verdict', 'g_num', 'SELECT count(*) FROM gate', 500000)"
+  q "SELECT plan_add(1015, 'text key, gate verdict', 'g_text', 'SELECT count(*) FROM gate', 500000)"
+  s "SELECT 1 FROM pg_class WHERE relname = 'g_nd'" | grep -q 1 && \
+    q "SELECT plan_add(1016, 'nondeterministic collation, gate verdict', 'g_nd',
+                       'SELECT count(*) FROM gate', 500000)"
+  note "$(s 'SELECT count(*) || '\'' fixtures planned'\'' FROM plan12')"
+}
+
+# ---------------------------------------------------------------- score ------
+stage_score() {
+  say "score the 12.2 subset against a measured REINDEX INDEX"
+  fl /dev/stdin <<'SQL'
+SET statement_timeout = '600s';
+SET lock_timeout = '2s';
+CALL score_all();
+SQL
+  [ $? -eq 0 ] || die "scoring failed"
+  t "SELECT num, idx, blocks_before, blocks_after, actual, wsp, wspf,
+            verdict_floor, reported, contract_ok, equalimage, dedup_applies,
+            status, caveats FROM verdicts12 ORDER BY num" > "$OUT/verdicts12.txt" 2>&1
+  t "SELECT verdict_floor, count(*) FROM verdicts12 GROUP BY 1 ORDER BY 2 DESC" \
+    >> "$OUT/verdicts12.txt" 2>&1
+  t "SELECT equalimage, count(*), bool_or(dedup_applies) AS any_credited
+       FROM verdicts12 GROUP BY 1" >> "$OUT/verdicts12.txt" 2>&1
+  cat "$OUT/verdicts12.txt" >&2
+}
+
+stage_report() { say "12.2 leg written to $OUT"; cat "$OUT/v12_facts.txt" >&2; }
+stage_stop()   { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "12.2 server stopped"; }
+stage_clean()  { stage_stop; rm -rf "$BUILD" "$INST" "$DATA" "$SOCK"; say "12.2 sandbox deleted"; }
+
+main() {
+  local stages=("$@")
+  [ ${#stages[@]} -eq 0 ] && stages=(build check cluster exact transform facts \
+                                     fixtures score report)
+  local st
+  for st in "${stages[@]}"; do
+    case $st in
+      build|check|cluster|exact|transform|facts|fixtures|score|report|stop|clean)
+        "stage_$st" ;;
+      *) die "unknown stage: $st" ;;
+    esac
+  done
+}
+
+main "$@"
+```
+
+### Reading the results of a run
+
+**Open `out/criteria.txt` first: it is the whole verdict on one screen, and
+every other file exists to explain one of its numbers.** A run writes its output
+under `$SANDBOX/out`, one or more files per stage, and leaves its result tables
+in the databases so they can be queried directly.
+
+| File | Holds |
+|---|---|
+| `criteria.txt` | the six pass-criteria blocks: the gate counters, the partial-group counters, every row whose modelled row count is zero, the size of the `EXCEPT` output, the exact-text runs, and the build and hash checks |
+| `hashes.txt` | the five text hashes against their baselines. A `DIFFER` line means the page changed and every number below it is about a different statement |
+| `checks.txt`, `checks12.txt` | `make check` and the three contrib suites, per leg |
+| `platform.txt` | `uname -sm`, `max_data_alignment` and `database_block_size`, which every geometry constant assumes |
+| `geometry.txt` | the 78-cell scorecard, then one row per (key width, fillfactor) cell |
+| `gate.txt` | one row per gate fixture with `equalimage`, the metapage, whether credit was given and whether posting lists were written, then the counters and the two `DEBUG1` tallies |
+| `acceptance.txt` | the fresh-build, posting-tail, compression and barrier tables, then the four defect fixtures |
+| `defects.txt` | the current text beside the superseded one on the three deterministic defects, then the whole database read as the owner and as a role holding only `SELECT` |
+| `calibration.txt` | the seven insertion patterns, each scored against its own `REINDEX INDEX` |
+| `verdicts.txt` | every scored fixture of the numbered suite, then the verdict counts on both columns |
+| `attribution.txt` | the `EXCEPT` output in both directions, taken before the first rebuild |
+| `probes_gen_*.txt`, `probes_*.txt` | the probe statements the generator emitted, and the answer each returned |
+| `cost.txt` | six interleaved timings of the two exact texts, and the size of the database they ran against |
+| `v12_facts.txt`, `v12_exact.txt`, `verdicts12.txt` | the 12 leg: the discovered facts, the verbatim parse outcome, and the scored subset |
+| `server.log`, `server12.log`, `gate_build.log` | server output, including the build's own `DEBUG1` deduplication verdicts |
+
+The tables stay queryable after the run: `verdicts` and `res` in `suite`,
+`gate_res` in `gate`, `geo_result` in `geo`, `cal_res` in `cal`, `fresh_res`,
+`tail_res`, `cmp_res` and `bar_res` in `acc`, and `verdicts12` in the 12 leg's
+database.
+
+#### One scored row, column by column
+
+Every fixture of the numbered suite produces one `verdicts` row. Read it in
+this order.
+
+| Column | What it is |
+|---|---|
+| `blocks_before`, `blocks_after` | the index's size in blocks before and after the scoring pass rebuilt it. `pg_relation_size` measures the main fork only. [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L371) |
+| `actual` | **the truth column**: `100 * (before - after) / before`, the reclaim a real `REINDEX INDEX` produced. Everything else is scored against it. [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829), [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597) |
+| `wsp`, `wspf` | what the statement said: the point estimate and the floor, read *before* the rebuild. [Reading the output](#reading-the-output) |
+| `old_wsp`, `old_wspf` | the same two numbers from the superseded text, for side-by-side comparison |
+| `reported` | false when an exclusion term withheld the row, so the report a reader runs would never show it |
+| `withheld_by` | which term did it: `A` for a missing statistics row or duplicates taken from table statistics, `B` for a table changed since its `ANALYZE`, `C` for a variable-width `INCLUDE`, `D` for a non-partial expression index with no statistics row. `unexplained` means the row is withheld by a term this harness does not know about, which is a defect in one of the two |
+| `alertable` | whether this page's own reading rule would let the row become a rebuild decision: true unless `caveats` contains `never analyzed`, `row-count sources disagree`, `statistics not visible`, `zero modelled rows` or `wide compressible key` |
+| `contract_ok` | whether the fixture built what it intended. False is a **harness** fault, not an estimator result: the row's numbers describe a different fixture from the one the requirement names |
+| `verdict_point`, `verdict_floor` | the classification below, computed once per column |
+| `caveats`, `equalimage`, `modelled_rows`, `idx_reltuples`, `tids` | the statement's own explanation of the reading |
+
+#### The five verdicts
+
+Both verdict columns use the same rule, one on `wsp` and one on `wspf`:
+
+| Verdict | Condition | What it means |
+|---|---|---|
+| `PASS` | none of the below | the estimate and the measured reclaim agree closely enough to act on |
+| `CRITICAL FALSE POSITIVE` | estimate >= 50 and `actual` < 10 | the statement called for a rebuild that would have reclaimed nothing. This is the failure that matters operationally |
+| `FALSE POSITIVE` | estimate >= 50 and `actual` < 45, or estimate exceeds `actual` by more than 5 points | the statement over-stated a real saving |
+| `FALSE NEGATIVE` | estimate < 45 and `actual` >= 50 | the statement hid a rebuild worth doing |
+| `UNMEASURED` | the estimate is NULL | the statement declined to model the index, which for these fixtures means a `reltuples` sentinel of -1 after a rebuild or a `TRUNCATE`. [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3951-L3952), [index.c#index_update_stats-sentinel](../../../../raw/postgres-17/src/backend/catalog/index.c#L2835-L2836) |
+
+A verdict is only as interesting as `reported` and `alertable` make it. A
+critical false positive that is withheld costs a reader nothing; the same
+verdict on a row that is both reported and alertable is a defect the statement
+owes a fix for. That three-way reading — verdict, `reported`, `alertable` — is
+the one this page scores itself on.
+
+#### What a clean run looks like
+
+| Check | Clean value |
+|---|---|
+| `hashes.txt` | five `match` lines |
+| `checks.txt` | four `=0` lines, `All 225` on the core suite |
+| Exact texts | three files under `out/exact_*`, none containing `ERROR` |
+| Geometry | `leaf_exact` and `relpages_exact` both equal `cells` |
+| Gate | `over_credit` 0, `metapage_disagreements` 0, `worst_reading` under 30 |
+| Numbered suite | `withheld_unexplained` 0, `contract_failures` 0 |
+| Probes | one line per emitted probe, and `false` on every subset the fixture drained, `true` on every subset it refilled |
+| Attribution | every `EXCEPT` row explainable by one of the five documented changes; an unexplained row is a regression |
+| 12 leg | `transformed_text=executes`, and `transform_edits` no larger than the page documents |
+
+Three things that look like failures and are not. A **withheld** row is the
+exclusion terms working, not a miss. A **negative** percentage is
+over-prediction — the model expects the rebuild to be *larger* than the file,
+which is conservative and never triggers an alert. And a **zero** `blocks_after`
+difference on a fresh build is the point of that fixture, not a null result.
+
+#### When something goes wrong
+
+| Symptom | Where to look, and what it means |
+|---|---|
+| A stage dies with `!!` | the message names the stage. `configure`/`make` failures land in `build17/configure.log` and `build17/make.log`; a server that will not start lands in `out/server.log` |
+| `DIFFER` in `hashes.txt` | the page's SQL changed since the baselines were recorded. Re-baseline deliberately; do not compare the run against older numbers |
+| `estimator returned no row for X` | the scoring procedure could not find the index in the harness view. The view was not installed, or the fixture did not create the index |
+| `contract_ok` false | the fixture, not the statement. Fix the recipe or the intended count before reading its verdict |
+| `withheld_by = unexplained` | the statement withheld a row for a reason the harness cannot name — either a new exclusion term or a stale harness |
+| A verdict that moves between runs | check `modelled_rows` first. Fixture 120 is known to flip with the `ANALYZE` sample; see [Fixture verdicts that depend on the ANALYZE sample](#fixture-verdicts-that-depend-on-the-analyze-sample) |
+| Caveats appearing on fresh fixtures | a statistics-publication ordering fault, not an estimator one: a reading taken inside the transaction that built the fixture sees the table's statistics as they were before its own `ANALYZE`. [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L700-L708), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337) |
+| The 12 leg refuses a construct the transformer does not handle | `stage_transform` stops and says so. Add the refused construct as one more documented edit; the count in `v12_facts.txt` is the honest measure of how far the text is from portable |
+
+The next section is this reading applied to one run.
+### What the two scripts measured on 2026-09-09
+
+Everything below is output from the two scripts as filed above, on the host
+recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server):
+`Linux x86_64`, `max_data_alignment` 8, `database_block_size` 8192, gcc 13.3.0.
+17.11 was configured `--enable-debug --with-icu --with-readline --with-zlib`
+and its suites passed **All 225** core tests plus 8, 1 and 3 for `pageinspect`,
+`pgstattuple` and `amcheck`. The five text hashes all matched their baselines,
+and both exact texts executed as filed.
+[regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59),
+[regress.sgml#contrib-suites](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L171-L195).
+
+| Family | Result |
+|---|---|
+| Page geometry, 78 cells | items per closed leaf page equal the closed form in **78 of 78**; the whole-index `relpages` equals the model in **78 of 78**; no internal level exceeds the modelled fanout |
+| Fresh sorted builds, 10 key widths | the current text reports **0 bytes on 10 of 10**; the superseded text is right on 6, and reads `-0.7`, `-3.4`, `+11.0` and `-33.9` percent at 400, 800, 1000 and 2000 bytes |
+| Deduplication gate, 28 fixtures | **0 over-credits**; `equalimage` agrees with `bt_metap().allequalimage` on all 12 `recognized` and 9 `ineligible` rows; 2 under-credits (`i_ei_true`, `i_squat`), both conservative; worst reading 28.8 % (`i_multi_bad`) |
+| Posting tails, 13 classes | mean absolute error **11.38 % -> 0.38 %**; within one point **8 -> 11 of 13** |
+| In-index compression | 367 blocks against 10,003 for the same 60,000 900-byte values, `avg_width` 904 in both; `-2625.6 %` with the caveat against `0.0 %` |
+| Statistics barrier | with the barrier, `n_mod_since_analyze` 0 and `n_live_tup` 200,000; without it, 200,000 and 400,000 |
+| Calibration, 7 patterns | sorted 0.0/0.0, append 0.0/0.0, random 25.7 against a measured 25.7, duplicate-heavy `-6.7` against `-7.5` with the floor at `-245.2`, wide random 23.8/23.8, delete churn 49.8/49.8, update churn 33.3/33.3 |
+| Numbered suite, 112 fixtures | 59 reported, 53 withheld, and **every withheld row names the term that withheld it** — 34 change A, 10 change B, 5 change C, 4 change D; **0 contract failures** |
+| Attribution | 26 rows differ in each direction over 114 indexes: 23 are a moved number and 3 are a caveat string the current text adds |
+| Probes | 73 emitted and executed; the five population probes answer `false` for `p113b`, `p113c` and `p117` and `true` for `p115` and `p118`; the group probe counts 5,000 against a modelled 4,996 |
+| Cost | six interleaved pairs over 325 B-tree indexes and 85,017 blocks: 61.5-67.4 ms for the current text against 52.5-56.1 ms for the superseded one |
+
+**The gate group scores the same way it did on the 27-fixture run.** The 28th
+fixture is the unique index `i_uniq`, which the metapage marks equal-image and
+the statement leaves uncredited, exactly as the three `deduplicate_items = off`
+fixtures are. The two under-credits are the designed `i_ei_true` and the
+impostor `i_squat`; both are indexes the engine did deduplicate and the model
+priced without credit.
+[nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183),
+[nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L67-L84).
+
+**The partial-index half of the suite has now been scored against the current
+text.** On the floor column the 112 fixtures come out 80 PASS, 20 critical
+false positives, 7 false negatives, 3 false positives and 2 unmeasured; on the
+point estimate 76, 26, 5, 3 and 2. Most of those failures are withheld rather
+than reported, which is what the exclusion terms are for. Among the 59 rows the
+report would actually show:
+
+| Group | Rows |
+|---|---|
+| Critical false positives | 6: `f84` 94.2, `i103` 84.1, `x108` 62.5, `x109` 62.5, `p118` 99.3, `p120` 87.5, every one against a measured 0.0 |
+| ... of those, alertable under this page's reading rule | **3**: `f84`, `i103`, `x109`. `x108` carries `never analyzed`, and `p118` and `p120` carry `zero modelled rows`, all of which [Reading the output](#reading-the-output) tells a reader not to promote |
+| True detections | 12, every one a PASS: 68 (87.4 against 87.4), 74 (73.6/74.3), 75 (88.8/89.1), 76 (50.3/49.9), 77 (94.2/94.2), 92 (89.1/89.1), 95 (89.1/89.1), 99 (81.3/93.6), 107 (90.0/90.0), 113b and 113c (100.0/100.0), 114 (98.9/98.9) |
+| False negatives | 1 reported (`f91`, `-254.1` against a measured 89.2); the other six are withheld |
+| Unmeasured | 2, both change-E shapes: `nzb_k` and `i_trunc`, whose rebuilt-or-truncated indexes carry the `reltuples` sentinel. [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3951-L3952), [index.c#index_update_stats-sentinel](../../../../raw/postgres-17/src/backend/catalog/index.c#L2835-L2836) |
+
+Five predictions of
+[Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement)
+are confirmed and two are corrected:
+
+| Prediction | Outcome |
+|---|---|
+| `i103` stays a reported critical false positive | confirmed at **84.1 %**, the 2026-08-24 figure to the decimal |
+| `x109` reports with the new `statistics target zero on an index column` caveat | confirmed; it is one of the three EXCEPT rows that differ by caveat alone |
+| fixture 118 reports 99.3 % with `zero modelled rows`, and the probe catches it | confirmed on both counts: 99.3 % against a measured 0.0, and the emitted `EXISTS` probe returns `true` |
+| 113b and 113c read 100.0 | confirmed, against a measured 100.0 |
+| test 36's one key group of 100,000 TIDs stays exact | **not reproduced**: this reconstruction reads `-217.2 %`, because its table-wide `n_distinct` describes the 400,000 rows outside the predicate rather than the one value inside it. The mechanism the original fixture demonstrated is unchanged; the fixture is not the same fixture |
+| every withheld row names its term | confirmed, 53 of 53 |
+| `p120` reads 87.5 % | **confirmed but nondeterministic**: three runs of the same script read 87.5, `-50.0` and 87.5, because a `default_statistics_target` of 1 samples 300 rows and either misses the 2,000-row subset or does not. [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894) |
+
+**The 12.2 leg answers the cross-version question, and the answer is no.** The
+exact current text does not execute on the pinned 12 checkout. It is refused
+with `ERROR: column se.inherited does not exist`, pointing at the `extstat`
+stage, because this version's `pg_stats_ext` view defines `inherited` from
+`stxdinherit` and the server the leg ran against exposes no such column.
+[system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
+[system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309).
+
+One transformer edit — deleting that one filter line — makes the text run
+there. What the leg then recorded, all of it measured rather than assumed:
+
+| Recorded | Value |
+|---|---|
+| `server_version_num`, block size, alignment | 120002, 8192, 8 |
+| Engine suites of that build | All 192 core tests, plus 5, 1 and 2 for the three contrib modules |
+| `pg_stat_force_next_flush()` | absent, so the leg polls instead |
+| `pg_stats_ext` columns | thirteen, none of them `inherited` |
+| B-tree support-function numbers registered | 1, 2, 3 |
+| `WITH (deduplicate_items = off)` | rejected |
+| Gate verdict on all 19 fixtures | `ineligible`, and nothing credited |
+| Fresh sorted builds at 8, 100 and 1000 bytes | 254, 258 and 353 blocks, the same block counts as 17.11, each read as 0.0 % |
+| Partial family | 50 % deleted 49.6 against a measured 49.6; 90 % deleted 89.9 against 89.1; drained queue 100.0 against 100.0 |
+| The wide-key partial index | 84.1 % against a measured 0.0, the same critical false positive `i103` is on 17.11 |
+| `nzb_k` and `i_trunc` | 99.9 % each, where 17.11 reports `unmeasured: reltuples unknown` for the same two recipes |
+
+The 12.2 build needed `-DTRUE=1 -DFALSE=0` in `CFLAGS` on this host, because
+its ICU headers no longer define those macros; the script carries that in
+`EXTRA_CFLAGS` with a comment, and a host with older ICU headers can empty it.
+
 ## Context Reviewed
 
 - PostgreSQL 17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`; the source checkout is read-only and was never written to.
@@ -2197,6 +4808,8 @@ with the platform record from item 10 above. The sandbox lives under
 - Implementation and measurement run on 2026-09-08, same pin: 17.11 built out of tree under `.wiki-runtime/tmp/btree17/` (`--without-readline --without-zlib --without-icu`), an isolated cluster on port 55437 with `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB` and `--locale=C`; `make check` 225 of 225 tests passed, `contrib/pageinspect` and `contrib/pgstattuple` checks passed; six fixture databases covering page geometry, fresh sorted builds, the three deterministic defects, the equal-image matrix, posting-list tails, validation probes and the insertion-pattern calibration. `pageinspect` and `pgstattuple` were installed in the disposable cluster only. The sandbox was deleted after filing, so reproducing any number means rebuilding from the pin and re-running the published SQL.
 - Mandatory test review on 2026-09-09, same pin, no server built or started: the revisions of this page before the 2026-09-07 cleanup (`33fe5a4`, `f8265ad`) and before the 2026-09-08 rewrite (`f2d73b4`) for the suite's requirement tables, harnesses and fixture recipes; the log entries of 2026-08-18, 2026-08-19, 2026-08-20, 2026-08-24 and 2026-09-08 for each run's provenance; the four fenced blocks on this page hashed against their recorded baselines, and the superseded block recovered from `f2d73b4` and hashed against `bffd166e…`; the installation and regression documentation for VPATH builds, ICU, block size, `make check` and contrib suites; the GUC contexts of every cluster setting the protocol names; and the equal-image, concurrent-build, parallel-build, partition-expansion, statistics-sample and `reltuples`-sentinel paths cited in the review.
 - Full re-verification on 2026-09-09, same pin: every source citation on this page re-read against `raw/postgres-17/` (476 links over 68 files, 164 distinct ranges, all resolving and all supporting their labels), every `## Contents` entry and page-internal anchor re-checked, and every measured claim re-run on a second isolated server. 17.11 was built out of tree under `.wiki-runtime/tmp/btreerev/` with `--with-icu --enable-debug --with-readline --with-zlib`; `make check` passed 225 of 225 and the `pageinspect`, `pgstattuple` and `amcheck` checks passed 8, 1 and 3; the cluster ran `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0` at the default `BLCKSZ`, with eleven fixture databases covering page geometry, fresh sorted builds, the three deterministic defects read as two roles, the equal-image matrix, posting tails, the statistics barrier, the probes, in-index compression, the 27-fixture deduplication gate and the ICU collation cases. Both statement texts were extracted and hashed before use. `raw/postgres-17/` was never written to and stayed clean at the pin; the build and cluster were deleted after filing, leaving only the fixture scripts under `.wiki-runtime/tmp/btree-rev-harness/`.
+
+- Suite-script run on 2026-09-09, same pin, both legs built and executed: 17.11 out of tree under `.wiki-runtime/tmp/btree-suite/build17` (`--enable-debug --with-icu --with-readline --with-zlib`), `make check` All 225 tests plus 8, 1 and 3 for `pageinspect`, `pgstattuple` and `amcheck`; a cluster at `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0`, default `BLCKSZ`, with five UTF8 databases for geometry, calibration, the deduplication gate, the acceptance fixtures and the 112-fixture numbered suite. 12.2 was built out of tree from this repository's pinned 12 checkout the same way, needing `-DTRUE=1 -DFALSE=0` for this host's ICU headers, and passed All 192 core tests plus 5, 1 and 2. Both checkouts stayed read-only and clean at their pins; the two scripts, their SQL and their output live under `.wiki-runtime/tmp/btree-suite/`, which is git-ignored. The estimator, probe-generator, geometry and calibration blocks were re-extracted from this page after the edit that added the two script blocks, and all four still hash to their baselines, together with the superseded text from revision `f2d73b4`.
 
 ## Evidence Map
 
@@ -2225,6 +4838,8 @@ with the platform record from item 10 above. The sandbox lives under
 | Gate scoring oracle and the internal-function resolution the impostor case turns on | [btreefuncs.c#bt_metap-allequalimage](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L916-L921), [nbtpage.c#_bt_initmetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L67-L84), [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180), [fmgr.c#internal-function-resolution](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240). |
 | The measured nondeterministic-collation branch | [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2615), [pg_locale.c#pg_locale_deterministic](../../../../raw/postgres-17/src/backend/utils/adt/pg_locale.c#L1567-L1575), [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849), [installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170). |
 | Multicolumn key groups and the extended-statistics escape | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L355-L385), [The current recommended statement](#the-current-recommended-statement). |
+| What the scoring pass rebuilds, and under which lock | [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829), [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597). |
+| Cluster settings the scripts write, and their apply scopes | [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453), [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100), [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265), [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877), [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4426-L4430), [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291). |
 
 ## Open Questions
 
@@ -2374,6 +4989,34 @@ invisible. Neither gap is closed.
 [analyze.c#sample-membership](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975),
 [autovacuum.c#analyze-threshold](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3095).
 
+The 2026-09-09 run measured what the probe does and does not reach. It answered
+correctly on all five zero-count partial indexes it was emitted for — `false`
+for the two drained queues and the VACUUM-only drain, `true` for the refilled
+subset and for the index built on an analysed empty table — but it was not
+emitted for fixture 120 at all, because the generator carries the same
+`pg_relation_size(c.oid) > 1024 * 1024` filter as the report and that index is
+eight blocks. A subset small enough to be missed by the ANALYZE sample is also
+small enough to fall under the probe generator's own size filter, so the reading
+most in need of validation is the one least likely to get a probe.
+[Validation probes](#validation-probes),
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
+
+### Fixture verdicts that depend on the ANALYZE sample
+
+Fixture 120 does not give the same answer twice. Three runs of the same script
+against freshly created databases read 87.5 %, `-50.0 %` and 87.5 % on it,
+because the fixture sets `default_statistics_target` to 1, which samples 300
+rows, and whether those 300 rows include any of the 2,000 rows in a 1,000,000-row
+table decides whether the index's modelled row count is 0 or a few thousand.
+Both outcomes are legitimate readings of the same physical index, and the
+verdict flips between `CRITICAL FALSE POSITIVE` and `PASS` with them. The suite
+therefore has at least one cell that cannot be compared run to run, and the
+honest fix is either to seed the sample, to score the fixture over repetitions,
+or to state its verdict as a distribution. No other fixture was observed to
+flip, but nothing in the harness proves that none can.
+[analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894),
+[guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2074).
+
 ### Statistics publication and test ordering
 
 The barrier is now used by every fixture, and the artifact it prevents is
@@ -2404,19 +5047,25 @@ and no replacement lower bound has been derived.
 ### The mandatory suite and the current statement
 
 The asker's 2026-08-18 contract says a statement that fails a mandatory test is
-corrected, not reported. Half the suite has now been put to the current text:
-tests 1-17 were scored on 2026-09-09 and passed, with two under-credits rather
-than the one the pass criteria allowed. Tests 18-91 and fixtures 92-121 were
-last scored against the superseded six-change text on 2026-08-24, so the
-partial-index contract remains unenforced for the current text. The expected
-outcomes are derived under
-[Expected verdicts under the current statement](#expected-verdicts-under-the-current-statement)
-and the procedure is under
-[How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement);
-until it runs, two fixtures are expected to remain critical false positives on
-the report (`i103`, and `x109` unless the reading rule learns the
-`statistics target zero on an index column` caveat), and the deduplication
-verdicts of tests 13 through 16 carry a caveat they did not carry before.
+corrected, not reported. The whole suite has now been put to the current text —
+tests 1-17 on 2026-09-09, and tests 18-91 with fixtures 92-121 by the script
+under [The PostgreSQL 17 suite script](#the-postgresql-17-suite-script) — so
+what is open is no longer coverage but three failures the run leaves standing
+and one it cannot judge:
+
+- `i103` at 84.1 % and `x109` at 62.5 %, both reported, both alertable, both
+  against a measured 0.0. They were predicted, they reproduced, and neither has
+  a fix in the statement.
+- `f84`, a partial index whose `reltuples` was forged stale, at 94.2 % with an
+  empty `caveats` string. The statement cannot see a catalog count that lies.
+- Whether that is a pass depends on the scoring column, which is still the
+  asker's decision under
+  [Scoring column for the partial-index contract](#scoring-column-for-the-partial-index-contract).
+
+The contract's remedy — correct the statement, do not merely report — is
+therefore still owed on the first two, and this page has no candidate change
+that removes them without hiding correct readings.
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09),
 [Mandatory test review](#mandatory-test-review).
 
 ### Scoring column for the partial-index contract
@@ -2429,23 +5078,40 @@ calibration on this page then measured the floor at `-245.2 %` against a true
 `wasted_space_pct` with `equalimage` and `caveats`. The two rules disagree on
 any index that deduplicates. The protocol records both columns and both
 verdicts; which one carries the contract is the asker's decision, and the
-pass criteria above are written for whichever column is chosen.
+pass criteria above are written for whichever column is chosen. The 2026-09-09
+run measured the cost of the choice on the numbered suite: on the floor the
+112 fixtures come out 80 PASS / 20 critical false positives / 7 false
+negatives, on the point estimate 76 / 26 / 5, and the sharpest single case is
+control 99, a duplicate-heavy non-partial index whose point estimate of 93.6 %
+is exact against a measured 93.6 % while its floor reads 81.3 %.
 [Calibration by insertion pattern](#calibration-by-insertion-pattern),
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09),
 [Reading the output](#reading-the-output).
 
 ### Cross-version execution of the revised statement
 
-The current text was written and measured on 17.11 only. Its `extstat` stage
-selects `pg_stats_ext` rows with `inherited = false`, and `inherited` is a
-column this version's view defines from `stxdinherit`. Test 17 and the
-"12 through 17" contract of the earlier statement require the text to execute
-on the pinned 12.2 server; nothing on this page shows that it does, and the v12
-companion page has not been updated for the revised text. The first result of
-the 12.2 leg is therefore the parse outcome itself, and a text that does not
-execute there fails test 17 before any fixture is built.
+**Answered on 2026-09-09: the text does not execute there, and one edit makes
+it.** The `extstat` stage selects `pg_stats_ext` rows with `inherited = false`,
+and `inherited` is a column this version's view defines from `stxdinherit`; the
+pinned 12 server refuses the statement with
+`ERROR: column se.inherited does not exist` before any fixture is built, which
+is a failed test 17 and the end of the earlier statement's "12 through 17"
+claim for this text. Deleting that one filter line is enough to make it run,
+and the leg then scores 19 fixtures.
 [system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
 [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309),
-[What remains unimplemented](#what-remains-unimplemented).
+[The PostgreSQL 12 leg script](#the-postgresql-12-leg-script),
+[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
+
+Three things stay open. The transformer *widens* the `extstat` CTE rather than
+preserving its meaning — dropping the filter admits whatever rows that server's
+view exposes, and no fixture on the 12 leg carries an extended-statistics object
+to show what the widened CTE then reads. The 12 leg scores 19 fixtures, not the
+112 the 17 leg scores, so the partial-index contract is enforced on one major
+only. And the v12 companion page still documents its own Method A, not this
+text, so a reader who follows the cross-version link finds a different
+statement.
+[The v12 publication protocol](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#the-v12-publication-protocol).
 
 ### Integer-truncated widths across an alignment boundary
 
@@ -2645,6 +5311,10 @@ matches this page's "x86-64 Linux" statement. See
 - [index.c#index_concurrently_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L1533-L1539)
 - [indexcmds.c#DefineIndex-concurrent-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L1682)
 - [indexcmds.c#ReindexRelationConcurrently-build](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4009)
+- [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829)
+- [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597)
+- [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877)
+- [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4426-L4430)
 - [pg_class.h#relkind](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L164-L173)
 - [vacuum.c#expand_vacuum_rel-partitions](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L963-L982)
 - [pg_statistic.h#stawidth](../../../../raw/postgres-17/src/include/catalog/pg_statistic.h#L41-L50)
