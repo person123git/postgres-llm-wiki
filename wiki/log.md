@@ -7765,3 +7765,53 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   write block, `pg_relation_size` on a storage-less index, the unquantified
   per-statement root-index open, and the cross-version history of `REINDEX` and
   `DETACH` support), so `verified_by_agent` stays `not yet`.
+
+## [2026-09-09] review v12 | correct parent-versus-child partitioned-index claims
+
+- Applied the source-review findings to [Indexes Only on the Parent Versus Only
+  on the Child Tables of a Declaratively Partitioned Table in PostgreSQL 12
+  (unverified)](v12/questions/indexing/partitioned-index-parent-vs-child.md)
+  at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. The user approved
+  correcting the review prompt, then requested fixes, a commit and a push.
+  This entry supersedes the original filing summary's overbroad claims.
+- Corrected targeted versus untargeted `ON CONFLICT`: the parent needs a suitable
+  arbiter for an explicit target, but untargeted `DO NOTHING` returns an empty
+  inference list and checks the routed leaf's eligible indexes. Independent
+  leaf indexes support that form; the adjacent regression fixture is identified
+  as having an existing parent unique index, not as a no-parent-index reproduction.
+- Replaced "no per-partition variation" with the actual `CompareIndexInfo`
+  rules: uniqueness, AM, mapped columns, counts, collations, operator families,
+  expressions and predicate. The matcher does not compare exact opclass OIDs,
+  sort flags, storage options or tablespaces. Qualified direct drops by owning
+  PK/UNIQUE constraints and retained attached-leaf REINDEX support.
+- Completed DETACH's table locks: child `ShareUpdateExclusiveLock` and default
+  partition `AccessExclusiveLock`, in addition to the parent and attached-index
+  locks. Added the utility caller's pre-locking of the entire CREATE INDEX
+  hierarchy before recursive builds, and removed the claim that CONCURRENTLY
+  rejection precedes all other checks.
+- Separated parent-targeted INSERT index opens from ordinary UPDATE's leaf
+  modification targets and from planning-time root-index opens. Replaced
+  blanket plan/execution equivalence with the narrower leaf-scan and physical
+  tuple-maintenance comparison. No elapsed-time equivalence is claimed.
+- Added the invalid-leaf table-attachment edge case: the matching path can adopt
+  an invalid index without invalidating an already-valid parent, unlike the
+  cascade's explicit validity handling. Recorded the missing runtime fixture
+  and the documentation's omitted empty-parent ONLY exception under Open Questions.
+- Added catalog/planner/executor structures, caller/callee and reverse-include
+  context, catalog/parser generation rules, utility-hook/event-trigger/AM
+  boundaries and the adjacent postgres_fdw result-relation consumer. Qualified
+  restore-cost, rollout-transaction, relhasindex and psql-size claims.
+- Updated both index summaries, the v12 coverage cell and its dated correction
+  note. The original Question, SQL block, pin and both verification fields are
+  unchanged. Agent verification remains `not yet`; this was a source-only
+  correction pass, not a server run or a new claim-by-claim verification stamp.
+- Validation: all 440 source citations, 201 distinct ranges over 35 files,
+  resolve in bounds within `raw/postgres-12/`; all 22 Contents entries and
+  internal anchors match; all 13 wiki links resolve. Question/SQL/front-matter
+  preservation and `git diff --check` pass. Tracked v12 source is unchanged;
+  its two pre-existing untracked `.DS_Store` files were left alone.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports the same pre-edit
+  nine errors and two warnings: six missing v18 citation-target errors,
+  missing v18/v19 pins, a v14 checkout/pin mismatch, and existing v12/v14
+  checkout-status warnings. No new lint issue was introduced and no source
+  checkout was fetched, repaired or modified.
