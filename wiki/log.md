@@ -2,6 +2,108 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-10] review v17 | portable extended-statistics filter fixes the B-tree estimator's cross-version refusal
+
+- Fixed the failed cross-version execution test on [Testing the PostgreSQL 12
+  Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-portable-extended-statistics-filter)
+  at the unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), and
+  measured the fix on both servers the 2026-09-09 suite run left in place.
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql
+  17,  review question: Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method
+  on PostgreSQL 17 (unverified) , propose a fix for :  Not a pass — PostgreSQL
+  12.2 / The cross-version execution test fails outright / The exact filed
+  statement is refused on the pinned 12.2 server:`; the asker chose "correct and
+  restate", then chose the single-portable-text fix over a documented 12-only
+  variant, and chose to implement it with a targeted re-run rather than only
+  propose it.
+- **The defect.** The `extstat` CTE selected `pg_stats_ext` rows with
+  `AND se.inherited = false`. That column exists on this version, where the view
+  projects `sd.stxdinherit AS inherited`, and does not exist on the pinned 12.2
+  server, which reports thirteen `pg_stats_ext` columns and none of that name.
+  A column reference is resolved when the statement is parsed, so
+  `current_setting('server_version_num')`, a `CASE` or an unreached `OR` cannot
+  help: the server refuses the statement before it reads a row.
+- **The fix, one line.** The filter is now
+  `AND coalesce((row_to_json(se) ->> 'inherited')::boolean, false) = false`.
+  Where the column exists this is the same predicate — `row_to_json` emits one
+  key per non-dropped attribute named by `attname`, a boolean is written as bare
+  `true`/`false`, and `boolin` parses those spellings back. Where the column is
+  absent, `json_object_field_text` returns SQL NULL rather than raising, and the
+  `coalesce` admits the row, which is correct because such a server records only
+  the plain `ANALYZE` pass. Reading `pg_statistic_ext_data` directly was
+  rejected: `REVOKE ALL ON pg_statistic_ext_data FROM public` makes the view the
+  only portable access path for an unprivileged reader.
+- **Measured on 12.2**: `exact_text=executes` where the 2026-09-09 run recorded
+  `exact_text=refused`, and the transformer now reports `transform_edits=0`. The
+  previous text, rebuilt from the filed one by undoing exactly this edit,
+  reproduces its filed SHA-256 `8acd531b…` and is **still refused there** with
+  `ERROR: column se.inherited does not exist` at `LINE 116`, which is what makes
+  the one-line diff auditable rather than asserted.
+- **Measured on 17.11**: the edit is inert. `EXCEPT` in both directions over
+  every column both texts project returns 0 and 0 in all six fixture databases —
+  `geo` 0 rows, `cal` 7, `gate` 28, `acc` 33, `suite` 114, `xstat` 4, 186 in
+  total, 7 of them fed by the changed CTE. Cost is inside the noise: six
+  interleaved pairs on `suite` mean 95.3 ms for the filed text against 91.6 ms
+  for the previous one, with overlapping ranges and the single fastest of the
+  twelve runs belonging to the filed text.
+- **The widening open question is closed with numbers, not dropped.** A new
+  `extstat` stage in each script builds four fixtures carrying whole-key
+  `ndistinct` objects — three inheritance parents and one childless control —
+  and scores three texts against a measured `REINDEX INDEX`. The filed and
+  previous texts agree on 4 of 4; the old delete-the-line transformer differs on
+  every parent and no control, reading 2.3, 60.1 and `-33.7` against measured
+  reclaims of 0.0, 59.7 and 0.0. Its error is always in the under-reporting
+  direction, because `max(e.nd)` can only raise the distinct estimate, and its
+  size depends on shape rather than on the size of the `key_groups` error: a
+  175x wrong group count (20 against 3,498) moves the reading 1.5 points where a
+  posting list's TID payload dominates, while a high-cardinality child (20
+  against 28,610) moves it 34.5 points by crossing the boundary at which the
+  model stops crediting deduplication. The inherited estimate is
+  sample-dependent (3,500 / 3,481 / 3,498 across three runs), so that error is
+  not reproducible to the decimal; the filed text's 0.8 is. On 12.2 the widened
+  and filed texts agree exactly, `filed_minus_wide` and `wide_minus_filed` both
+  0 over 25 rows, because that server writes one row per statistics object.
+- Script changes, both legs edited in place and re-extracted from the page:
+  a new `extstat` stage each (17 stages and 10 stages now), `BASE1` re-baselined
+  to `646df923…`, a new `BASEPRE` holding the previous text's hash, a sixth
+  database `xstat`, an idempotent `cluster` stage that no longer returns before
+  its `createdb` loop when a cluster is already running, and a 12-leg
+  transformer comment recording that its one rule is now a regression guard.
+  Both bodies parse with `bash -n` (2,004 and 648 lines) and all four `sql`
+  baselines plus the superseded text still match.
+- Re-run scope, stated on the page: the 17 leg's `cluster texts extstat` and the
+  12 leg's `exact transform facts fixtures score extstat report`. The 12 leg's
+  19 numbered fixtures re-scored to the same verdict counts (13 PASS, 5 critical
+  false positives, 1 false positive, all 19 `ineligible`), with two
+  sample-dependent drifts under half a point (49.6 -> 49.3 and 89.9 -> 89.5).
+  The 17 leg's geometry, calibration, gate, acceptance, suite, attribution,
+  probes, score, cost and criteria stages were **not** re-run; the equivalence
+  result is evidence the edit cannot have moved their numbers, not a
+  re-validation of them.
+- Page edits: the ninth prompt with its correction note; the rewritten
+  cross-version paragraph of the Answer lead; a new
+  [The portable extended-statistics filter](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-portable-extended-statistics-filter)
+  section with five subsections (why a column name cannot work in one text, why
+  the replacement is exact, what the old transformer cost, what it costs to run,
+  what the fix does not change); a new last-run record
+  [What the 2026-09-10 targeted re-run measured](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-2026-09-10-targeted-re-run-measured);
+  in-place updates to the `extstat` model row, the two-`pg_stats`-join paragraph,
+  requirement row 6, test-review item 4, the stage tables, the runtime row and
+  the output-file map; two Open Questions rewritten and renamed and one
+  narrowed; three new Evidence Map rows; one Context Reviewed bullet; 18 new
+  Source References; two Contents entries.
+- Validation: 654 citation occurrences over 190 distinct ranges, every one
+  resolving in bounds and inside `raw/postgres-17/`; all 68 page-internal
+  anchors resolve against the page's 81 headings; the 60 `##`/`###` headings
+  match the `## Contents` list one for one in order;
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors and 0
+  warnings**. Both pinned checkouts stayed read-only and clean at their pins,
+  and the sandbox under `.wiki-runtime/tmp/btree-suite/` was left in place.
+  Updated `wiki/index.md`, `wiki/v17/index.md` and the v17 coverage cell plus a
+  dated note in `wiki/versions.md`. Agent verification stays `not yet`: the
+  page's larger suite has still not been re-run under the repaired scripts.
+
 ## [2026-09-09] review v17 | measurement-script section of the B-tree estimator audited and restructured
 
 - Reviewed the measurement-script section of [Testing the PostgreSQL 12 Core-SQL

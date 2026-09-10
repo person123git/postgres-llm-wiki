@@ -28,6 +28,7 @@ verified_by_agent: not yet
   - [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server)
   - [The deduplication gate, scored against the current statement](#the-deduplication-gate-scored-against-the-current-statement)
   - [The collation branch, measured with ICU](#the-collation-branch-measured-with-icu)
+  - [The portable extended-statistics filter](#the-portable-extended-statistics-filter)
   - [Reproducing the measurements](#reproducing-the-measurements)
   - [What remains unimplemented](#what-remains-unimplemented)
   - [Mandatory test review](#mandatory-test-review)
@@ -41,6 +42,7 @@ verified_by_agent: not yet
   - [The PostgreSQL 12 leg script](#the-postgresql-12-leg-script)
   - [Reading the results of a run](#reading-the-results-of-a-run)
   - [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
+  - [What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured)
   - [Measurement-script section review](#measurement-script-section-review)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
@@ -62,10 +64,10 @@ verified_by_agent: not yet
   - [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement)
   - [Integer-truncated widths across an alignment boundary](#integer-truncated-widths-across-an-alignment-boundary)
   - [Fixture recipes that do not reproduce](#fixture-recipes-that-do-not-reproduce)
-  - [The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run)
+  - [The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part)
   - [Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged)
   - [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
-  - [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime)
+  - [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree)
 - [Source References](#source-references)
 - [Navigation](#navigation)
 
@@ -197,6 +199,31 @@ period. The asker chose a **read-only audit** with no server run, a
 under
 [Measurement-script section review](#measurement-script-section-review).
 
+Ninth prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, review the question "Testing the
+> PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17", and propose a
+> fix for the failed cross-version execution test: the exact filed statement is
+> refused on the pinned 12.2 server with
+> `ERROR: column se.inherited does not exist` at
+> `LINE 116: AND se.inherited = false`.
+
+The original read `follow agents.md, in postgresql 17,  review question: Testing
+the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified) ,
+propose a fix for :  Not a pass — PostgreSQL 12.2 / The cross-version execution
+test fails outright / The exact filed statement is refused on the pinned 12.2
+server:`: `agents.md` for AGENTS.md, lowercase `postgresql`, a double space
+after the first comma and after `for :`, a space before the comma after the
+title and before that colon, `review question:` without an article, the
+`(unverified)` title hint treated as part of the title, the quoted review
+pasted as three fragments, and no sentence capitalisation or terminal period.
+The asker chose the single-portable-text fix over keeping the filed text beside
+a documented 12-only variant, and chose to implement it and re-run the affected
+stages rather than only propose it. The work is filed under
+[The portable extended-statistics filter](#the-portable-extended-statistics-filter)
+and
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
+
 ## Answer
 
 **All ten repair plans are now implemented, and the revised statement is exact
@@ -267,13 +294,20 @@ a forged stale partial `reltuples`, the wide-key partial index `i103` at 84.1 %,
 and the zero-statistics-target index `x109` at 62.5 %.
 [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
 
-**The cross-version question is answered, and the answer is no.** The exact
-current text does not execute on the pinned 12 checkout: it is refused with
-`ERROR: column se.inherited does not exist`, at the `extstat` stage. Deleting
-that one filter line makes it run, and the transformed text then scores 19
-fixtures there — every one `ineligible`, nothing credited, and two `reltuples`
-shapes that read 99.9 % on 12.2 where 17.11 reports `unmeasured`.
-[Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement).
+**The cross-version question was answered no on 2026-09-09, and the fix filed
+on 2026-09-10 makes it yes.** The text filed until then was refused by the
+pinned 12 server with `ERROR: column se.inherited does not exist`, because that
+`extstat` filter names a `pg_stats_ext` column the server does not have. The
+filed text now reads the same flag through `row_to_json(se) ->> 'inherited'`,
+which parses whether or not the column exists, and **the exact filed text is
+now accepted unmodified on 12.2, with the 12 leg's transformer reporting
+`transform_edits=0`**. On 17.11 the change is inert: `EXCEPT` in both
+directions over every column both texts project returns 0 rows on all six
+fixture databases, 186 rows in total.
+[The portable extended-statistics filter](#the-portable-extended-statistics-filter),
+[system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
+[pg_proc.dat#row_to_json](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8975-L8977),
+[jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895).
 
 **The two scripts now sit in a top-level [Measurement Script](#measurement-script)
 section with the usage information the rule requires, and a read-only audit of
@@ -427,12 +461,17 @@ keyatts AS (
 ),
 extstat AS (
     -- Use the maximum visible non-inherited whole-key distinct estimate.
+    -- The inherited flag is read through row_to_json() instead of being named
+    -- as a column, so one text also parses where pg_stats_ext has no inherited
+    -- column: there the key is absent, ->> returns NULL, and the coalesce
+    -- admits the row, which is the only ANALYZE pass such a server records.
     SELECT k.idxoid, max(e.nd) AS ext_ndistinct
       FROM keyatts k
       JOIN idx i           ON i.idxoid = k.idxoid
       JOIN pg_stats_ext se ON se.schemaname = i.schemaname
                           AND se.tablename = i.tablename
-                          AND se.inherited = false
+                          AND coalesce((row_to_json(se) ->> 'inherited')::boolean,
+                                       false) = false
       CROSS JOIN LATERAL (
             SELECT ((se.n_distinct::text)::json ->> k.ext_key)::numeric AS nd) e
      WHERE k.nkeys > 1 AND k.min_attnum > 0 AND e.nd > 0
@@ -853,7 +892,7 @@ the engine input or build rule each stage approximates.
 |---|---|---|
 | `env`, `idx` | Read server constants, valid physical B-tree indexes, reloptions, main/FSM sizes, row-count inputs and both maintenance timestamps. | [pg_index.h#pg_index](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L26-L62), [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L55-L66), [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L371). |
 | `opc`, `gate` | Resolve each key opclass's support function 4 and collation, then decide `recognized` / `ineligible` / `unknown`. | [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5139-L5183), [pg_amproc.dat#text_ops-equalimage](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L205-L212). |
-| `keyatts`, `extstat` | Look for a whole-key distinct-count entry from the non-inherited pass; use the maximum matching visible estimate. | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L355-L385). |
+| `keyatts`, `extstat` | Look for a whole-key distinct-count entry from the non-inherited pass, identified through `row_to_json(se) ->> 'inherited'` rather than by naming the column; use the maximum matching visible estimate. | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [mvdistinct.c#pg_ndistinct_out](../../../../raw/postgres-17/src/backend/statistics/mvdistinct.c#L355-L385), [The portable extended-statistics filter](#the-portable-extended-statistics-filter). |
 | `cols`, `statvis`, `tuple` | Prefer index-expression statistics from the non-inherited pass, otherwise table-column statistics, then defaults; correct an expression's varlena header; classify hidden, disabled and compressible attributes; estimate tuple width and key groups. | [analyze.c#expression-attributes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L448-L478), [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L249-L259), [heaptuple.c#heap_compute_data_size](../../../../raw/postgres-17/src/backend/access/common/heaptuple.c#L215-L262). |
 | `page` | Approximate tuple slots, leaf and internal capacity under both the fillfactor limit and the hard-fit reservation, and the build's posting-list size cap. | [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L645-L671), [nbtsort.c#soft-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L853-L854), [nbtsort.c#posting-size-limit](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1284-L1308). |
 | `kstat`, `gclass`, `classfit`, `classsize`, `classpages` | Split eligible single-key rows into NULL, most-common-value and remaining classes; use one class for multicolumn keys; price whole posting tuples and one tail per group separately; convert to pages with the class's mean size and mean posting credit. | [nbtsort.c#group-boundaries](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1310-L1349), [nbtdedup.c#_bt_dedup_save_htid-cap](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L510-L513), [nbtdedup.c#_bt_form_posting-size](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L879-L884). |
@@ -948,7 +987,12 @@ raises `wide compressible key: stored width may be over-stated` instead. Two
 [index.c#ConstructTupleDescriptor-attstorage](../../../../raw/postgres-17/src/backend/catalog/index.c#L353-L360),
 [Open Questions](#in-index-compression-of-wide-keys).
 
-Both `pg_stats` joins and the `pg_stats_ext` join select `inherited = false`.
+Both `pg_stats` joins and the `pg_stats_ext` join keep to the non-inherited
+pass. The `pg_stats` joins say `inherited = false`; the `pg_stats_ext` join
+reads the same flag as `coalesce((row_to_json(se) ->> 'inherited')::boolean,
+false) = false`, so that one text parses on a server whose view has no such
+column, and there admits the single pass it does record. See
+[The portable extended-statistics filter](#the-portable-extended-statistics-filter).
 `analyze_rel` runs the non-inherited pass and then, when the table has children,
 the inherited pass, and `update_attstats` stores each under its own `stainherit`
 value. Without the filter an index on an inheritance parent receives two rows per
@@ -1290,7 +1334,7 @@ and the split strategies
 | 3 | `pg_stat_force_next_flush()` barrier before and after every fixture ANALYZE | implemented in the harness |
 | 4 | Whole posting tuples and one tail per group priced separately, with fractional-TID interpolation and a class-mean page capacity | implemented |
 | 5 | Hard-fit reservation in `leaf_cap`; minus-infinity first item in `int_cap`; the never-closed rightmost page in the level recursion | implemented |
-| 6 | `inherited = false` on both `pg_stats` joins and on `pg_stats_ext` | implemented |
+| 6 | `inherited = false` on both `pg_stats` joins and on `pg_stats_ext` | implemented; since 2026-09-10 the `pg_stats_ext` half reads the flag through `row_to_json()` so one text runs on both majors |
 | 7 | Three-state `equalimage` column; determinism tested only for `btvarstrequalimage`; scored against `bt_metap` | implemented |
 | 8 | `pg_size_pretty(numeric)`, `numeric` projections, new `wasted_space_bytes`; no `bigint` cast anywhere | implemented |
 | 9 | Out-of-tree VPATH build; block hashes re-baselined; core regression suite run | implemented |
@@ -1666,6 +1710,155 @@ So the gate's determinism test tracks the engine on both sides, and the
 [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180),
 [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849).
 
+### The portable extended-statistics filter
+
+**One line changed, and the statement now runs unmodified on both majors.** The
+`extstat` CTE used to name a column:
+
+```text
+AND se.inherited = false
+```
+
+It now reads the same flag out of the row instead:
+
+```text
+AND coalesce((row_to_json(se) ->> 'inherited')::boolean,
+             false) = false
+```
+
+Nothing else about the statement moved, and the page proves that rather than
+asserting it: the `extstat` stage rebuilds the previous text from the filed one
+by undoing exactly this edit, and the reconstruction hashes to
+`8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd`, the SHA-256
+the previous text was filed under.
+[The PostgreSQL 17 suite script](#the-postgresql-17-suite-script).
+
+#### Why naming the column cannot work in one text
+
+A column reference is resolved when the statement is parsed, so no runtime
+guard can protect it. `current_setting('server_version_num')`, a `CASE`, or an
+`OR` that is never reached all fail the same way: the server rejects the
+statement before it evaluates anything. The refusal this page recorded on
+2026-09-09 arrives with no row read and no fixture built.
+
+On this version the column exists, and `pg_stats_ext` derives it from the data
+row's own key:
+
+| Piece | Where |
+|---|---|
+| `sd.stxdinherit AS inherited` in the view | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [system_views.sql:290](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290) |
+| the catalog column, and its place in the data row's unique key | [pg_statistic_ext_data.h:35](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L35), [pg_statistic_ext_data.h:57](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L57) |
+| `ANALYZE` runs the plain pass, then a second pass when the table has children | [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L246-L259) |
+| each pass builds extended statistics under its own `inh` flag, stored as `stxdinherit` | [analyze.c#BuildRelationExtStatistics-call](../../../../raw/postgres-17/src/backend/commands/analyze.c#L604-L606), [extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L111-L114), [extended_stats.c#statext_store](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L790-L791) |
+
+Reading the base catalogs instead is not an option for this statement: an
+unprivileged reader may query `pg_statistic_ext` but not
+`pg_statistic_ext_data`, which the view exists to mediate.
+[system_views.sql#pg_statistic_ext_data-revoke](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L382-L383).
+
+#### Why the replacement is exact where the column exists
+
+`row_to_json` takes a `record` and emits one JSON key per non-dropped
+attribute, named by `attname`; a boolean attribute is written as bare `true` or
+`false`. `->>` is `json_object_field_text`, which returns `NULL` — not an error
+— when the key is absent, and `'true'`/`'false'` cast back to boolean because
+`boolin` accepts exactly those spellings.
+
+| Step | Evidence |
+|---|---|
+| `row_to_json(record)` returns `json`, volatility stable | [pg_proc.dat#row_to_json](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8975-L8977) |
+| one key per attribute, `attisdropped` skipped, key from `NameStr(att->attname)` | [json.c#composite_to_json](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L546-L579) |
+| a boolean datum is written as `true` or `false` | [json.c#datum_to_json-bool](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L212-L221) |
+| `->>` on `json` is `json_object_field_text` | [pg_operator.dat#json-arrow-text](../../../../raw/postgres-17/src/include/catalog/pg_operator.dat#L3160-L3162), [pg_proc.dat#json_object_field_text](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L9078-L9081) |
+| a missing key yields SQL NULL | [jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895) |
+| `'true'` and `'false'` parse to boolean | [bool.c#parse_bool_with_len](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L36-L58), [bool.c#boolin](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L126-L150) |
+
+So where the column exists the predicate is the same predicate, and where it
+does not the `coalesce` admits the row — which is the correct reading on a
+server that records one `ANALYZE` pass, because that pass is the plain one. The
+first half of that sentence is measured below; the second half is measured on
+the 12 leg, whose server reports thirteen `pg_stats_ext` columns and none named
+`inherited`.
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
+
+#### What the old transformer cost, measured
+
+The 12 leg used to make the text run by deleting the filter line. That widened
+the CTE instead of preserving it, which this page carried as an open question
+until now. The `extstat` stage settles it by scoring three texts — the filed
+one, the previous one, and the widened one — on four fixtures in one database,
+against a measured `REINDEX INDEX`.
+
+The mechanism first. Because `extstat` takes `max(e.nd)`, admitting the
+inherited row can only raise the whole-key distinct estimate, so the widened
+text can only over-state the number of key groups, under-state deduplication,
+and therefore under-report bloat. The two passes the fixtures store, whole-key
+`n_distinct` from each:
+
+| Fixture | Own pass | Inherited pass |
+|---|---|---|
+| `xpar`, low-cardinality child | 20 | 3,498 |
+| `xpar2`, the same with 60 % of the parent deleted and vacuumed | 8 | 1,404 |
+| `xpar3`, high-cardinality child | 20 | 28,610 |
+| `xflat`, no children | 20 | none written |
+
+The parent's own index contains only the parent's own rows, so the own pass is
+the correct input in every row of that table. Scored:
+
+| Fixture | Measured `REINDEX` | Filed text | Previous text | Widened text | `key_groups`, filed vs widened |
+|---|---|---|---|---|---|
+| `xpar_ab` | 0.0 | 0.8 | 0.8 | **2.3** | 20 vs 3,498 |
+| `xpar2_ab` | 59.7 | 59.7 | 59.7 | **60.1** | 8 vs 1,404 |
+| `xpar3_ab` | 0.0 | 0.8 | 0.8 | **-33.7** | 20 vs 28,610 |
+| `xflat_ab` | 0.0 | 0.8 | 0.8 | 0.8 | 20 vs 20 |
+
+Three findings, and the third is the reason this section reports a range rather
+than a headline:
+
+1. **The filed text and the previous text agree on every row of every fixture**,
+   here and in the equivalence run below.
+2. **The widened text differs on every inheritance parent and on none of the
+   controls**, always in the under-reporting direction.
+3. **The size of that error depends on the shape, not on the size of the
+   `key_groups` error.** A 175x wrong group count moves the reading by 1.5
+   points on `xpar_ab`, because a posting list's TID payload dominates the
+   index either way; the same fixture with a high-cardinality child moves it
+   34.5 points, because there the widened estimate crosses the boundary at
+   which the model stops crediting deduplication at all and prices singleton
+   tuples. The inherited estimate is also sample-dependent — three runs of the
+   same `xpar` fixture read 3,500, 3,481 and 3,498 — so the widened text's
+   error is not reproducible to the decimal, while the filed text's 0.8 is.
+   [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894).
+
+The `wspf` floor column reads `-219.8` on all three fresh fixtures under all
+three texts. That is the known floor behaviour on a deduplicating index, not
+an effect of this change; see
+[Scoring column for the partial-index contract](#scoring-column-for-the-partial-index-contract).
+
+#### What it costs to run
+
+`row_to_json(se)` serialises a whole `pg_stats_ext` row, including the
+`most_common_vals` arrays the view's lateral already builds, once per candidate
+join. Six interleaved runs of the two exact texts on the `suite` database, 325
+B-tree indexes and three extended-statistics objects, measured a mean of
+95.3 ms for the filed text against 91.6 ms for the previous one, with the
+ranges overlapping (75.4-111.0 against 84.9-100.0) and the single fastest run
+of the twelve belonging to the filed text. On this database the difference is
+inside the noise; a database with many large `pg_mcv_list` objects would be the
+place to re-measure it.
+[system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L301-L307).
+
+#### What the fix does not change
+
+The two `pg_stats` joins still name `inherited` directly, and deliberately:
+`pg_stats` projects it from `pg_statistic.stainherit` on this version, the 12
+leg executes those joins as filed, and the refusal was only ever raised against
+`pg_stats_ext`. Changing them would add cost and risk for nothing measured. The
+statement tag also stays `wiki_btree_wasted_space_sweep_r2`, because the model
+is unchanged and the two texts are measurably identical here; what identifies
+the new text is its SHA-256 baseline, `646df923…`, which both scripts check.
+[system_views.sql#pg_stats-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L194).
+
 ### Reproducing the measurements
 
 Build 17.11 out of tree from the pinned checkout, which must stay read-only, and
@@ -2037,13 +2230,17 @@ gaps this review found.
    [installation.sgml#ICU-default](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L170),
    [installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193),
    [index.c#pattern-ops-collation-check](../../../../raw/postgres-17/src/backend/catalog/index.c#L826-L849).
-4. **The 12.2 leg of test 17.** The current text reads `pg_stats_ext.inherited`,
-   which this version's view defines. Whether the pinned 12 view defines it is
-   a version-local question this page cannot answer; the 12.2 leg therefore
-   starts by executing the exact text and recording the outcome, before any
-   fixture is built. The v12 page carries that version's build and publication
-   notes.
+4. **The 12.2 leg of test 17.** Done, twice over. The text filed until
+   2026-09-10 named `pg_stats_ext.inherited`, and the 12.2 server refused it;
+   the filed text now reads that flag through `row_to_json()` and **executes
+   there unmodified**, with the 12 leg's transformer reporting zero edits. The
+   leg still starts by executing the exact text and recording the outcome
+   before any fixture is built, and its `extstat` stage now also re-runs the
+   refused text to keep the refusal reproducible. The v12 page carries that
+   version's build and publication notes.
    [system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
+   [The portable extended-statistics filter](#the-portable-extended-statistics-filter),
+   [What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured),
    [The v12 publication protocol](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#the-v12-publication-protocol),
    [V12 catalog, build and output compatibility](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#v12-catalog-build-and-output-compatibility).
 5. **Role coverage.** `stats_hidden` now decides both a caveat and whether the
@@ -2143,11 +2340,11 @@ both were run end to end on 2026-09-09.
 |---|---|---|
 | Purpose | measures the current estimator on a 17.11 server built from this page's pin: page geometry, fresh builds, the deduplication gate, the acceptance fixtures, the calibration patterns, the 112 numbered fixtures, attribution, probes, the scoring pass against a measured `REINDEX INDEX`, and statement cost | answers whether the exact filed text executes on the pinned 12.2 checkout, records the refusal verbatim, then transforms, fixtures and scores the constructible subset |
 | Invocation | `bash btree_bloat_suite_v17.sh [stage ...]`, run from the repository root | `bash btree_bloat_suite_v12.sh [stage ...]`, run from the repository root |
-| Stages | 16 stages plus `stop` and `clean`; see [the 17 leg's stages](#the-17-legs-stages) | 9 stages plus `stop` and `clean`; see [the 12 leg's stages](#the-12-legs-stages) |
+| Stages | 17 stages plus `stop` and `clean`; see [the 17 leg's stages](#the-17-legs-stages) | 10 stages plus `stop` and `clean`; see [the 12 leg's stages](#the-12-legs-stages) |
 | Environment | 7 variables, all with defaults; see [what the scripts read from the environment](#what-the-scripts-read-from-the-environment) | 7 variables, all with defaults; same table |
 | Prerequisites | see [Prerequisites](#prerequisites) | the same, plus `-DTRUE=1 -DFALSE=0` in `EXTRA_CFLAGS` on a host whose ICU headers no longer define those macros |
 | Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt` |
-| Runtime | about eleven minutes for a full run on the host recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), most of it the build and the four regression suites; about ninety seconds for `suite attribution probes score criteria` from a built tree | not recorded on the 2026-09-09 run; the cost is dominated by the 12.2 build and its `make check`. See [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime) |
+| Runtime | about eleven minutes for a full run on the host recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), most of it the build and the four regression suites; about ninety seconds for `suite attribution probes score criteria` from a built tree, and 7.4 s for `extstat` | the full run is unmeasured and dominated by the 12.2 build and its `make check`; from a built tree and a running cluster, 0.3 s for `exact transform facts` and 52.7 s for `fixtures score extstat report`. See [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree) |
 | Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server and deletes `$SANDBOX`; `stop` stops it and keeps everything | `bash btree_bloat_suite_v12.sh clean` stops the 12 server and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
 
 Save the two fenced blocks below as `btree_bloat_suite_v17.sh` and
@@ -2172,8 +2369,9 @@ have run. The default order is the order of this table.
 |---|---|---|
 | `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists | nothing |
 | `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt` | `build` |
-| `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the five UTF8 databases `geo`, `cal`, `gate`, `acc` and `suite` | `build` |
-| `texts` | extracts the four `sql` blocks of this page and the superseded text from `OLD_REV`, checks all five SHA-256 baselines, runs both exact texts as filed, and installs the two harness views in all five databases | `cluster` |
+| `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the six UTF8 databases `geo`, `cal`, `gate`, `acc`, `suite` and `xstat` | `build` |
+| `texts` | extracts the four `sql` blocks of this page and the superseded text from `OLD_REV`, checks all five SHA-256 baselines, runs both exact texts as filed, and installs the two harness views in five databases | `cluster` |
+| `extstat` | rebuilds the two texts the portable `extstat` filter replaced — `est_pre`, which must hash to `BASEPRE`, and `est_wide` — runs both, then compares all three over every database and scores them on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat.txt` | `texts` |
 | `geometry` | the 78 (key width, fillfactor) cells, scored against `pageinspect` | `texts` |
 | `calibration` | the seven insertion patterns, each scored against its own `REINDEX INDEX` | `texts` |
 | `gate` | the deduplication-gate fixtures, with `bt_metap().allequalimage` and the build's `DEBUG1` verdicts as oracles | `texts` |
@@ -2200,6 +2398,7 @@ have run. The default order is the order of this table.
 | `facts` | records `server_version_num`, block size, alignment, whether `pg_stat_force_next_flush()` exists, the `pg_stats_ext` columns, the registered B-tree support-function numbers, and whether `WITH (deduplicate_items = off)` is accepted | `cluster` |
 | `fixtures` | builds the constructible subset, one writer session per step, polling `pg_stat_all_tables` for publication instead of forcing a flush | `transform` |
 | `score` | the same measured-`REINDEX INDEX` scoring, into `out/verdicts12.txt` | `fixtures` |
+| `extstat` | rebuilds the text filed before the portable `extstat` filter, checks it against `BASEPRE`, records that this server still refuses it, then scores the filed text against the widened one on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat12.txt` | `transform` |
 | `report` | prints `out/v12_facts.txt` | `facts` |
 | `stop` | stops the 12 server | `cluster` |
 | `clean` | `stop`, then deletes this leg's four directories after the same containment check | nothing |
@@ -2571,8 +2770,9 @@ tree, `suite attribution probes score criteria` is about ninety seconds.
 #   bash btree_bloat_suite_v17.sh build check     # selected stages
 #   bash btree_bloat_suite_v17.sh clean           # stop and delete the sandbox
 #
-# Stages: build check cluster texts geometry calibration gate acceptance
-#         suite attribution probes score cost criteria report stop clean
+# Stages: build check cluster texts extstat geometry calibration gate
+#         acceptance suite attribution probes score cost criteria report
+#         stop clean
 #
 # Environment: WIKI_ROOT PAGE SRC SANDBOX PORT JOBS OLD_REV
 set -uo pipefail
@@ -2590,11 +2790,14 @@ OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"; SOCK="$SANDBOX/sock"; BIN="$INST/bin"
 export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
 
 # SHA-256 baselines of the four fenced SQL blocks of the page, in page order.
-BASE1=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd  # estimator
+BASE1=646df923635182809f1a139e2f7f9367e94b6e0eaf79ed66fc37697a82d5d706  # estimator
 BASE2=bfa7721f5edae40fd883b5bc0f0776e499716c48cfdbe10d191e95b9f8a3bb0d  # probes
 BASE3=0b03f0c918a669b5402d1e630046bf2f1b9fc71453f54ef7119942d13a43c7ec  # geometry
 BASE4=3e57a5687d15c0725ab5cd1c2cea09b0a18a549ac649b82eee5246d1b75b8777  # calibration
 BASEOLD=bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
+# The estimator text as filed before the portable extstat filter of 2026-09-10.
+# The extstat stage rebuilds it from the current text and must reproduce this.
+BASEPRE=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -2690,14 +2893,16 @@ stage_check() {
 # ---------------------------------------------------------------- cluster ----
 stage_cluster() {
   say "isolated cluster on port $PORT"
+  # Returning early here would skip the database loop below, so a cluster left
+  # running by an earlier run would never gain a database a new stage needs.
   if [ -s "$DATA/postmaster.pid" ] && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
-    note "already running"; return 0
-  fi
-  if [ ! -d "$DATA" ]; then
-    mkdir -p "$SOCK"
-    "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 > "$OUT/initdb.log" 2>&1 \
-      || die "initdb failed"
-    cat >> "$DATA/postgresql.conf" <<CONF
+    note "already running"
+  else
+    if [ ! -d "$DATA" ]; then
+      mkdir -p "$SOCK"
+      "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 > "$OUT/initdb.log" 2>&1 \
+        || die "initdb failed"
+      cat >> "$DATA/postgresql.conf" <<CONF
 listen_addresses = ''
 unix_socket_directories = '$SOCK'
 port = $PORT
@@ -2709,8 +2914,10 @@ max_parallel_maintenance_workers = 0
 log_min_messages = debug1
 logging_collector = off
 CONF
+    fi
+    "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w start > /dev/null \
+      || die "server start failed"
   fi
-  "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w start > /dev/null || die "server start failed"
   note "$(s postgres 'select /* wiki_btree_suite_version */ version()')"
   s postgres "select /* wiki_btree_suite_platform */
                      'max_data_alignment=' || max_data_alignment ||
@@ -2718,7 +2925,7 @@ CONF
     | tee "$OUT/platform.txt" >&2
   printf 'uname: %s\n' "$(uname -sm)" >> "$OUT/platform.txt"
   local db
-  for db in geo cal gate acc suite; do
+  for db in geo cal gate acc suite xstat; do
     s postgres "select /* wiki_btree_suite_database_exists */ 1
                   from pg_database where datname='$db'" | grep -q 1 \
       || "$BIN/createdb" -T template0 -E UTF8 --locale=C "$db"
@@ -2765,6 +2972,191 @@ $INTERNALS_R2" > "$SQLD/view_r2.sql"
     f "$db" "$SQLD/view_r2.sql"  || die "est_r2 view failed on $db"
     f "$db" "$SQLD/view_old.sql" || die "est_old view failed on $db"
   done
+}
+
+# ---------------------------------------------------------------- extstat ----
+# The portable inherited filter of the extstat CTE, against the two readings it
+# replaces.  Both are rebuilt from the filed text, one edit apart:
+#   est_pre   the flag named as a column, AND se.inherited = false, which is
+#             the text filed before 2026-09-10 and must hash to BASEPRE
+#   est_wide  est_pre with that line deleted, which is what the 12 leg's
+#             transformer produced before this change
+# Pass: est_r2 equals est_pre row for row in every database, and est_wide
+# differs on the inheritance parent, whose own ANALYZE pass is the only one
+# describing the rows the parent's own index actually contains.
+stage_extstat() {
+  say "extstat: the portable inherited filter against the two readings it replaces"
+  [ -s "$SQLD/est_r2.sql" ] || die "no $SQLD/est_r2.sql; run the texts stage first"
+  local line got
+  : > "$SQLD/est_pre.sql"
+  while IFS= read -r line; do
+    case $line in
+      "    -- The inherited flag is read through row_to_json()"*) continue ;;
+      "    -- as a column, so one text also parses where"*)       continue ;;
+      "    -- column: there the key is absent"*)                  continue ;;
+      "    -- admits the row, which is the only ANALYZE pass"*)   continue ;;
+      "                          AND coalesce((row_to_json(se)"*)
+        printf '                          AND se.inherited = false\n' \
+          >> "$SQLD/est_pre.sql"; continue ;;
+      "                                       false) = false")    continue ;;
+    esac
+    printf '%s\n' "$line" >> "$SQLD/est_pre.sql"
+  done < "$SQLD/est_r2.sql"
+  got=$(sha256sum < "$SQLD/est_pre.sql" | cut -d' ' -f1)
+  : > "$SQLD/est_wide.sql"
+  while IFS= read -r line; do
+    [ "$line" = "                          AND se.inherited = false" ] && continue
+    printf '%s\n' "$line" >> "$SQLD/est_wide.sql"
+  done < "$SQLD/est_pre.sql"
+  { printf 'est_pre  %s %s\n' \
+      "$([ "$got" = "$BASEPRE" ] && printf match || printf DIFFER)" "$got"
+    printf 'est_wide        %s\n' "$(sha256sum < "$SQLD/est_wide.sql" | cut -d' ' -f1)"
+  } > "$OUT/extstat.txt"
+  [ "$got" = "$BASEPRE" ] || note "est_pre does not match BASEPRE; the reconstruction is stale"
+
+  # Both reconstructions must execute as filed on a server that has the column.
+  f xstat "$SQLD/est_pre.sql"  > "$OUT/extstat_pre.txt"  2>&1 \
+    || die "the reconstructed previous text does not execute here"
+  f xstat "$SQLD/est_wide.sql" > "$OUT/extstat_wide.txt" 2>&1 \
+    || die "the widened text does not execute here"
+  harness_view "$SQLD/est_pre.sql"  est_pre  "$INTERNALS,
+$INTERNALS_R2" > "$SQLD/view_pre.sql"
+  harness_view "$SQLD/est_wide.sql" est_wide "$INTERNALS,
+$INTERNALS_R2" > "$SQLD/view_wide.sql"
+  local db
+  for db in geo cal gate acc suite xstat; do
+    f "$db" "$SQLD/view_r2.sql"   || die "est_r2 view failed on $db"
+    f "$db" "$SQLD/view_pre.sql"  || die "est_pre view failed on $db"
+    f "$db" "$SQLD/view_wide.sql" || die "est_wide view failed on $db"
+  done
+
+  # Disposable fixtures: the block below drops and creates tables, statistics
+  # objects and indexes in the xstat database of the sandbox cluster.  It is
+  # not meant for a database anyone cares about.
+  f xstat /dev/stdin <<'SQL'
+SET /* wiki_btree_extstat_client_min_messages */ client_min_messages = warning;
+DROP TABLE IF EXISTS xchi, xpar, xchi2, xpar2, xchi3, xpar3, xflat,
+                     xstat_res CASCADE;
+
+-- A. an inheritance parent carrying a whole-key ndistinct object.  ANALYZE
+--    writes one pg_statistic_ext_data row per pass, and a legacy inheritance
+--    parent's index holds only the parent's own rows, so the own pass is the
+--    correct input and the inherited pass describes rows it does not contain.
+CREATE TABLE xpar(a int, b int, c int);
+CREATE TABLE xchi(a int, b int, c int) INHERITS (xpar);
+CREATE STATISTICS xpar_nd (ndistinct) ON a, b FROM xpar;
+INSERT INTO xpar SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i;
+INSERT INTO xchi SELECT i % 500, i % 700, i FROM generate_series(1, 300000) i;
+CREATE INDEX xpar_ab ON xpar (a, b);
+ANALYZE xpar;
+SELECT pg_stat_force_next_flush();
+
+-- B. the same shape with 60 % of the parent's rows deleted and vacuumed, so a
+--    real 60 % of the index is reclaimable and every text can be scored
+--    against a measured REINDEX INDEX rather than against a fresh build.
+CREATE TABLE xpar2(a int, b int, c int);
+CREATE TABLE xchi2(a int, b int, c int) INHERITS (xpar2);
+CREATE STATISTICS xpar2_nd (ndistinct) ON a, b FROM xpar2;
+INSERT INTO xpar2 SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i;
+INSERT INTO xchi2 SELECT i % 500, i % 700, i FROM generate_series(1, 300000) i;
+CREATE INDEX xpar2_ab ON xpar2 (a, b);
+DELETE FROM xpar2 WHERE c % 5 < 3;
+VACUUM xpar2;
+ANALYZE xpar2;
+SELECT pg_stat_force_next_flush();
+
+-- D. the same parent with a high-cardinality child, which is the shape that
+--    makes the difference large.  The inherited pass then estimates about one
+--    distinct pair per row, so a text reading it credits no deduplication at
+--    all and prices singleton tuples instead of posting ones.
+CREATE TABLE xpar3(a int, b int, c int);
+CREATE TABLE xchi3(a int, b int, c int) INHERITS (xpar3);
+CREATE STATISTICS xpar3_nd (ndistinct) ON a, b FROM xpar3;
+INSERT INTO xpar3 SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i;
+INSERT INTO xchi3 SELECT i, i, i FROM generate_series(1, 300000) i;
+CREATE INDEX xpar3_ab ON xpar3 (a, b);
+ANALYZE xpar3;
+SELECT pg_stat_force_next_flush();
+
+-- C. control: the same object on a table with no children, so ANALYZE writes
+--    one pass and all three texts must agree.
+CREATE TABLE xflat(a int, b int, c int);
+CREATE STATISTICS xflat_nd (ndistinct) ON a, b FROM xflat;
+INSERT INTO xflat SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i;
+CREATE INDEX xflat_ab ON xflat (a, b);
+ANALYZE xflat;
+SELECT pg_stat_force_next_flush();
+
+CREATE TABLE xstat_res(idx text, txt text, blocks int, wsp numeric,
+                       wspf numeric, key_groups numeric, ext_used bool,
+                       caveats text, actual numeric);
+DO $x$
+DECLARE ix text; v text; e record; sb bigint; sa bigint;
+BEGIN
+  FOREACH ix IN ARRAY ARRAY['xpar_ab','xpar2_ab','xpar3_ab','xflat_ab'] LOOP
+    sb := pg_relation_size(ix::regclass);
+    FOREACH v IN ARRAY ARRAY['est_r2','est_pre','est_wide'] LOOP
+      EXECUTE format('SELECT wasted_space_pct AS wsp,
+                             wasted_space_pct_floor AS wspf,
+                             key_groups, ext_used, caveats
+                        FROM %I WHERE indexname = %L', v, ix) INTO e;
+      INSERT INTO xstat_res(idx, txt, blocks, wsp, wspf, key_groups,
+                            ext_used, caveats)
+        VALUES (ix, v, sb / 8192, e.wsp, e.wspf, e.key_groups, e.ext_used,
+                e.caveats);
+    END LOOP;
+  END LOOP;
+  FOREACH ix IN ARRAY ARRAY['xpar_ab','xpar2_ab','xpar3_ab','xflat_ab'] LOOP
+    sb := pg_relation_size(ix::regclass);
+    EXECUTE format('REINDEX INDEX %I', ix);
+    sa := pg_relation_size(ix::regclass);
+    UPDATE xstat_res SET actual = round(100.0 * (sb - sa) / greatest(sb, 1), 1)
+     WHERE idx = ix;
+  END LOOP;
+END $x$;
+SQL
+
+  # 1. equivalence: the filed text against the text it replaced, every column
+  #    both views project, in every database the suite builds.  ext_used
+  #    counts the rows the extstat CTE actually fed, because a database with
+  #    no extended-statistics object cannot tell the two texts apart.
+  printf 'equivalence, est_r2 against est_pre\n' >> "$OUT/extstat.txt"
+  for db in geo cal gate acc suite xstat; do
+    printf '%-6s r2_minus_pre=%s pre_minus_r2=%s rows=%s ext_used=%s\n' "$db" \
+      "$(s "$db" 'SELECT /* wiki_btree_extstat_r2_minus_pre */ count(*)
+                    FROM (SELECT * FROM est_r2 EXCEPT SELECT * FROM est_pre) d')" \
+      "$(s "$db" 'SELECT /* wiki_btree_extstat_pre_minus_r2 */ count(*)
+                    FROM (SELECT * FROM est_pre EXCEPT SELECT * FROM est_r2) d')" \
+      "$(s "$db" 'SELECT /* wiki_btree_extstat_row_count */ count(*) FROM est_r2')" \
+      "$(s "$db" 'SELECT /* wiki_btree_extstat_ext_used */ count(*)
+                    FROM est_r2 WHERE ext_used')" \
+      >> "$OUT/extstat.txt"
+  done
+  # 2. the two ANALYZE passes the fixture stores, and what each says.
+  t xstat "SELECT /* wiki_btree_extstat_passes */
+                  tablename, statistics_name, inherited,
+                  ((n_distinct::text)::json ->> '1, 2')::numeric AS nd_whole_key
+             FROM pg_stats_ext WHERE schemaname = 'public'
+            ORDER BY tablename, inherited" >> "$OUT/extstat.txt" 2>&1
+  # 3. the three texts scored against a measured REINDEX INDEX.
+  t xstat "SELECT /* wiki_btree_extstat_scored */
+                  idx, txt, blocks, actual, wsp, wspf, key_groups, ext_used
+             FROM xstat_res ORDER BY idx, txt" >> "$OUT/extstat.txt" 2>&1
+  # 4. cost: row_to_json() serialises a whole pg_stats_ext row per candidate
+  #    join, so the two texts are timed interleaved on the largest database.
+  printf 'cost, six interleaved pairs on suite\n' >> "$OUT/extstat.txt"
+  local i
+  for i in 1 2 3 4 5 6; do
+    printf 'pair %s r2  %s\n' "$i" \
+      "$("$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d suite \
+           -c '\timing on' -f "$SQLD/est_r2.sql" 2>&1 \
+         | grep -E '^Time:' | tail -1)" >> "$OUT/extstat.txt"
+    printf 'pair %s pre %s\n' "$i" \
+      "$("$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d suite \
+           -c '\timing on' -f "$SQLD/est_pre.sql" 2>&1 \
+         | grep -E '^Time:' | tail -1)" >> "$OUT/extstat.txt"
+  done
+  cat "$OUT/extstat.txt" >&2
 }
 
 # ---------------------------------------------------------------- geometry ---
@@ -4380,13 +4772,13 @@ stage_clean() {
 
 main() {
   local stages=("$@")
-  [ ${#stages[@]} -eq 0 ] && stages=(build check cluster texts geometry calibration \
-                                     gate acceptance suite attribution probes score \
-                                     cost criteria report)
+  [ ${#stages[@]} -eq 0 ] && stages=(build check cluster texts extstat geometry \
+                                     calibration gate acceptance suite attribution \
+                                     probes score cost criteria report)
   local st
   for st in "${stages[@]}"; do
     case $st in
-      build|check|cluster|texts|geometry|calibration|gate|acceptance|suite|\
+      build|check|cluster|texts|extstat|geometry|calibration|gate|acceptance|suite|\
       attribution|probes|score|cost|criteria|report|stop|clean) "stage_$st" ;;
       *) die "unknown stage: $st" ;;
     esac
@@ -4428,8 +4820,8 @@ precondition rather than as a result.
 #   bash btree_bloat_suite_v12.sh                  # all stages
 #   bash btree_bloat_suite_v12.sh exact            # just the parse result
 #
-# Stages: build check cluster exact transform facts fixtures score report
-#         stop clean
+# Stages: build check cluster exact transform facts fixtures score extstat
+#         report stop clean
 #
 # Environment: WIKI_ROOT PAGE SRC12 SANDBOX PORT12 JOBS EXTRA_CFLAGS
 set -uo pipefail
@@ -4450,7 +4842,11 @@ OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"; SOCK="$SANDBOX/sock12"; BIN="$INST/bin"
 DB=leg12
 export PGPORT="$PORT12" PGHOST="$SOCK" PGDATABASE=postgres
 
-BASE1=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
+BASE1=646df923635182809f1a139e2f7f9367e94b6e0eaf79ed66fc37697a82d5d706
+# The estimator text as filed before the portable extstat filter of 2026-09-10.
+# The extstat stage rebuilds it from the current text, must reproduce this
+# hash, and must find this server refusing it.
+BASEPRE=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -4602,15 +4998,21 @@ stage_exact() {
 # ------------------------------------------------------------- transform -----
 # One documented edit per construct the server refuses, applied line by line so
 # the diff against the filed text is auditable.  Each edit is recorded.
+#
+# Since 2026-09-10 the filed text reads pg_stats_ext.inherited through
+# row_to_json() instead of naming it, so this stage has nothing left to edit
+# and transform_edits comes back 0.  The rule below is kept as a regression
+# guard: if a future revision names the column again, this leg records the
+# edit rather than failing, and the extstat stage measures what it costs.
 stage_transform() {
   say "transformer: drop the constructs this server refuses"
   local line dropped=0
   : > "$SQLD/est_v12.sql"
   while IFS= read -r line; do
     case $line in
-      # pg_stats_ext exposes no inherited column on this server: the extstat
-      # CTE's non-inherited filter is the only reference, and dropping it
-      # widens that CTE to whatever rows the view does expose.
+      # A server whose pg_stats_ext exposes no inherited column refuses this
+      # reference.  Dropping the line widens the extstat CTE to whatever rows
+      # the view does expose, which is why the filed text no longer names it.
       "                          AND se.inherited = false")
         dropped=$((dropped + 1))
         printf -- '-- dropped: %s\n' "$line" >> "$SQLD/est_v12.sql"; continue ;;
@@ -4881,6 +5283,147 @@ SQL
   cat "$OUT/verdicts12.txt" >&2
 }
 
+# --------------------------------------------------------------- extstat -----
+# What the portable inherited filter buys on this server, and what naming the
+# column still costs here.  Two texts are rebuilt from the filed one:
+#   est_pre   AND se.inherited = false, the text filed before 2026-09-10; it
+#             must hash to BASEPRE and this server must refuse it
+#   est_wide  est_pre with that line deleted, the old transformer output; here
+#             it should agree with the filed text, because this server records
+#             one ANALYZE pass and the filter it lost had nothing to remove
+stage_extstat() {
+  say "extstat: the portable filter, the text it replaced, and the widened one"
+  [ -s "$SQLD/est_r2.sql" ] || die "no $SQLD/est_r2.sql; run the exact stage first"
+  local line got
+  : > "$SQLD/est_pre.sql"
+  while IFS= read -r line; do
+    case $line in
+      "    -- The inherited flag is read through row_to_json()"*) continue ;;
+      "    -- as a column, so one text also parses where"*)       continue ;;
+      "    -- column: there the key is absent"*)                  continue ;;
+      "    -- admits the row, which is the only ANALYZE pass"*)   continue ;;
+      "                          AND coalesce((row_to_json(se)"*)
+        printf '                          AND se.inherited = false\n' \
+          >> "$SQLD/est_pre.sql"; continue ;;
+      "                                       false) = false")    continue ;;
+    esac
+    printf '%s\n' "$line" >> "$SQLD/est_pre.sql"
+  done < "$SQLD/est_r2.sql"
+  got=$(sha256sum < "$SQLD/est_pre.sql" | cut -d' ' -f1)
+  [ "$got" = "$BASEPRE" ] && note "est_pre matches BASEPRE" \
+                          || note "est_pre DIFFERS from BASEPRE: $got"
+  : > "$SQLD/est_wide.sql"
+  while IFS= read -r line; do
+    [ "$line" = "                          AND se.inherited = false" ] && continue
+    printf '%s\n' "$line" >> "$SQLD/est_wide.sql"
+  done < "$SQLD/est_pre.sql"
+
+  { printf 'extstat_pre_hash=%s\n' "$got"
+    if "$BIN/psql" -X -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/est_pre.sql" \
+         > "$OUT/v12_pre.txt" 2>&1; then
+      printf 'pre_text=executes\n'
+    else
+      printf 'pre_text=refused\n'
+      grep -E 'ERROR|LINE' "$OUT/v12_pre.txt" | head -2 \
+        | while read -r line; do printf 'pre_error=%s\n' "$line"; done
+    fi
+    if "$BIN/psql" -X -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/est_wide.sql" \
+         > "$OUT/v12_wide.txt" 2>&1; then
+      printf 'wide_text=executes\n'
+    else
+      printf 'wide_text=refused\n'
+    fi
+  } >> "$OUT/v12_facts.txt"
+  harness_view "$SQLD/est_wide.sql" est_wide12 "$INTERNALS" > "$SQLD/view_wide12.sql"
+  fl "$SQLD/view_wide12.sql" || die "widened harness view failed"
+
+  # Disposable fixtures: the statements below drop and create tables,
+  # statistics objects and indexes in the leg12 database of the sandbox
+  # cluster.  They are not meant for a database anyone cares about.
+  q "DROP TABLE IF EXISTS xchi, xpar, x2chi, x2par, x3chi, x3par, xflat,
+                          xstat_res CASCADE"
+  local p
+  for p in x x2; do
+    q "CREATE TABLE ${p}par(a int, b int, c int)"
+    q "CREATE TABLE ${p}chi(a int, b int, c int) INHERITS (${p}par)"
+    q "CREATE STATISTICS ${p}par_nd (ndistinct) ON a, b FROM ${p}par"
+    q "INSERT INTO ${p}par SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i"
+    q "INSERT INTO ${p}chi SELECT i % 500, i % 700, i FROM generate_series(1, 300000) i"
+    q "CREATE INDEX ${p}par_ab ON ${p}par (a, b)"
+    loaded "${p}par" 300000
+  done
+  q "DELETE FROM x2par WHERE c % 5 < 3"
+  q "VACUUM x2par"; vacuumed x2par
+  q "ANALYZE xpar";  analyzed xpar
+  q "ANALYZE x2par"; analyzed x2par
+  # The high-cardinality child: the shape whose inherited pass, on a server
+  # that has one, moves the reading furthest.
+  q "CREATE TABLE x3par(a int, b int, c int)"
+  q "CREATE TABLE x3chi(a int, b int, c int) INHERITS (x3par)"
+  q "CREATE STATISTICS x3par_nd (ndistinct) ON a, b FROM x3par"
+  q "INSERT INTO x3par SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i"
+  q "INSERT INTO x3chi SELECT i, i, i FROM generate_series(1, 300000) i"
+  q "CREATE INDEX x3par_ab ON x3par (a, b)"
+  loaded x3par 300000; q "ANALYZE x3par"; analyzed x3par
+  q "CREATE TABLE xflat(a int, b int, c int)"
+  q "CREATE STATISTICS xflat_nd (ndistinct) ON a, b FROM xflat"
+  q "INSERT INTO xflat SELECT i % 10, i % 20, i FROM generate_series(1, 300000) i"
+  q "CREATE INDEX xflat_ab ON xflat (a, b)"
+  loaded xflat 300000; q "ANALYZE xflat"; analyzed xflat
+
+  fl /dev/stdin <<'SQL'
+CREATE TABLE xstat_res(idx text, txt text, blocks int, wsp numeric,
+                       wspf numeric, key_groups numeric, ext_used bool,
+                       caveats text, actual numeric);
+DO $x$
+DECLARE ix text; v text; e record; sb bigint; sa bigint;
+BEGIN
+  FOREACH ix IN ARRAY ARRAY['xpar_ab','x2par_ab','x3par_ab','xflat_ab'] LOOP
+    sb := pg_relation_size(ix::regclass);
+    FOREACH v IN ARRAY ARRAY['est12','est_wide12'] LOOP
+      EXECUTE format('SELECT wasted_space_pct AS wsp,
+                             wasted_space_pct_floor AS wspf,
+                             key_groups, ext_used, caveats
+                        FROM %I WHERE indexname = %L', v, ix) INTO e;
+      INSERT INTO xstat_res(idx, txt, blocks, wsp, wspf, key_groups,
+                            ext_used, caveats)
+        VALUES (ix, v, sb / 8192, e.wsp, e.wspf, e.key_groups, e.ext_used,
+                e.caveats);
+    END LOOP;
+  END LOOP;
+  FOREACH ix IN ARRAY ARRAY['xpar_ab','x2par_ab','x3par_ab','xflat_ab'] LOOP
+    sb := pg_relation_size(ix::regclass);
+    EXECUTE format('REINDEX INDEX %I', ix);
+    sa := pg_relation_size(ix::regclass);
+    UPDATE xstat_res SET actual = round(100.0 * (sb - sa) / greatest(sb, 1), 1)
+     WHERE idx = ix;
+  END LOOP;
+END $x$;
+SQL
+
+  { printf 'rows_per_statistics_object\n'
+    t "SELECT /* wiki_btree_leg12_extstat_passes */
+              tablename, statistics_name, count(*) AS view_rows,
+              max(((n_distinct::text)::json ->> '1, 2')::numeric) AS nd_whole_key
+         FROM pg_stats_ext WHERE schemaname = 'public'
+        GROUP BY 1, 2 ORDER BY 1"
+    printf 'scored against a measured REINDEX INDEX\n'
+    t "SELECT /* wiki_btree_leg12_extstat_scored */
+              idx, txt, blocks, actual, wsp, wspf, key_groups, ext_used
+         FROM xstat_res ORDER BY idx, txt"
+    printf 'filed against widened, every projected column\n'
+    t "SELECT /* wiki_btree_leg12_extstat_equivalence */
+              (SELECT count(*) FROM (SELECT * FROM est12
+                                     EXCEPT SELECT * FROM est_wide12) d)
+                AS filed_minus_wide,
+              (SELECT count(*) FROM (SELECT * FROM est_wide12
+                                     EXCEPT SELECT * FROM est12) d)
+                AS wide_minus_filed,
+              (SELECT count(*) FROM est12) AS rows_read"
+  } > "$OUT/extstat12.txt" 2>&1
+  cat "$OUT/extstat12.txt" >&2
+}
+
 stage_report() { say "12.2 leg written to $OUT"; cat "$OUT/v12_facts.txt" >&2; }
 stage_stop()   { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "12.2 server stopped"; }
 
@@ -4906,11 +5449,11 @@ stage_clean() {
 main() {
   local stages=("$@")
   [ ${#stages[@]} -eq 0 ] && stages=(build check cluster exact transform facts \
-                                     fixtures score report)
+                                     fixtures score extstat report)
   local st
   for st in "${stages[@]}"; do
     case $st in
-      build|check|cluster|exact|transform|facts|fixtures|score|report|stop|clean)
+      build|check|cluster|exact|transform|facts|fixtures|score|extstat|report|stop|clean)
         "stage_$st" ;;
       *) die "unknown stage: $st" ;;
     esac
@@ -5019,11 +5562,21 @@ difference on a fresh build is the point of that fixture, not a null result.
 | Caveats appearing on fresh fixtures | a statistics-publication ordering fault, not an estimator one: a reading taken inside the transaction that built the fixture sees the table's statistics as they were before its own `ANALYZE`. [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L700-L708), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337) |
 | The 12 leg refuses a construct the transformer does not handle | `stage_transform` stops and says so. Add the refused construct as one more documented edit; the count in `v12_facts.txt` is the honest measure of how far the text is from portable |
 
+Two files the table above does not cover, both written by the `extstat` stages:
+`out/extstat.txt` holds the 17 leg's text hashes, the per-database equivalence
+counts, the two `ANALYZE` passes of each fixture, the three-text scorecard and
+the timing pairs; `out/extstat12.txt` holds the 12 leg's rows per statistics
+object, its two-text scorecard and its equivalence count. `out/v12_facts.txt`
+gains `pre_text=` and `wide_text=` lines from the same stage.
+
 The next section is this reading applied to one run.
 
 ### What the two scripts measured on 2026-09-09
 
-This is the last-run record. **Date** 2026-09-09; **pin**
+This is the previous run's record, superseded as the last-run record by
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured);
+its cross-version finding is the one the 2026-09-10 fix reverses. **Date**
+2026-09-09; **pin**
 `786db8dcf168bd9df8f55047337525ac19118b1c` for the 17 leg and
 `45b88269a353ad93744772791feb6d01bc7e1e42` for the 12 leg; **servers** 17.11 and
 12.2 built from those two checkouts; **platform** `Linux x86_64`,
@@ -5031,7 +5584,7 @@ This is the last-run record. **Date** 2026-09-09; **pin**
 below were produced by the script text as it stood that day, before the
 [Measurement-script section review](#measurement-script-section-review) repaired
 it; see
-[The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run).
+[The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part).
 
 Everything below is output from the two scripts as filed above, on the host
 recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server).
@@ -5123,6 +5676,76 @@ The 12.2 build needed `-DTRUE=1 -DFALSE=0` in `CFLAGS` on this host, because
 its ICU headers no longer define those macros; the script carries that in
 `EXTRA_CFLAGS` with a comment, and a host with older ICU headers can empty it.
 
+### What the 2026-09-10 targeted re-run measured
+
+**This is the last-run record.** **Date** 2026-09-10; **pin**
+`786db8dcf168bd9df8f55047337525ac19118b1c` for the 17 leg and
+`45b88269a353ad93744772791feb6d01bc7e1e42` for the 12 leg; **servers** the same
+17.11 and 12.2 clusters the 2026-09-09 run built and left running under
+`.wiki-runtime/tmp/btree-suite/`, on ports 55437 and 55412; **platform**
+`Linux x86_64`, `max_data_alignment` 8, `database_block_size` 8192, gcc 13.3.0,
+default `BLCKSZ`, `--locale=C`, UTF8 databases. Neither server was rebuilt and
+neither regression suite was re-run, so `out/checks.txt` and
+`out/checks12.txt` still hold the 2026-09-09 results.
+
+**Scope: the stages the statement change can reach, not the whole suite.** The
+17 leg ran `cluster texts extstat`; the 12 leg ran
+`exact transform facts fixtures score extstat report`. The 17 leg's
+`geometry`, `calibration`, `gate`, `acceptance`, `suite`, `attribution`,
+`probes`, `score`, `cost` and `criteria` stages were **not** re-run, on the
+argument the `extstat` stage measures directly: the two texts return identical
+rows in every database those stages populate. That is evidence the edit is
+inert, not a re-validation of the numbers themselves, which still date from
+2026-09-09.
+
+Runtimes on this host, from a built tree and a running cluster: 0.3 s for the
+12 leg's `exact transform facts`, 52.7 s for its
+`fixtures score extstat report`, and 7.4 s for the 17 leg's `extstat`.
+
+The 17 leg:
+
+| Check | Result |
+|---|---|
+| `hashes.txt` | five `match` lines, `est_r2` now `646df923…` |
+| Exact filed text | runs on `suite` and `acc`; the superseded text still runs on `suite` |
+| `est_pre` rebuilt from the filed text | `8acd531b…`, matching `BASEPRE` — the previous text, byte for byte |
+| `est_wide`, the old transformer's output | `615d1674…` |
+| Equivalence, `EXCEPT` both ways over every projected column | `0` and `0` in all six databases: `geo` 0 rows, `cal` 7, `gate` 28, `acc` 33, `suite` 114, `xstat` 4 |
+| Of those 186 rows, how many the `extstat` CTE actually fed | 7: three in `suite`, four in `xstat`. The other five databases hold no extended-statistics object, so they test the parse and the join, not the filter |
+| Three texts scored on four fixtures | filed = previous on 4 of 4; widened differs on all three inheritance parents and on none of the controls. [The portable extended-statistics filter](#the-portable-extended-statistics-filter) |
+| Cost, six interleaved pairs on `suite` | filed 89.211, 106.909, 75.400, 94.072, 111.028, 95.151 ms (mean 95.3); previous 85.216, 98.689, 99.962, 84.907, 86.859, 93.872 ms (mean 91.6) |
+
+The 12 leg, and this is the result the fix was filed for:
+
+| Check | 2026-09-09 | 2026-09-10 |
+|---|---|---|
+| The exact filed text, unmodified | `exact_text=refused` | **`exact_text=executes`** |
+| Transformer edits needed | 1 | **0**, `transformed_text=executes` |
+| The previous text, rebuilt and re-run | not tested | `pre_text=refused`, `ERROR: column se.inherited does not exist` at `LINE 116: AND se.inherited = false`, from a text hashing to `BASEPRE` |
+| The widened text | executes | `wide_text=executes` |
+| `pg_stats_ext` columns | thirteen, none `inherited` | unchanged: `schemaname, tablename, statistics_schemaname, statistics_name, statistics_owner, attnames, kinds, n_distinct, dependencies, most_common_vals, most_common_val_nulls, most_common_freqs, most_common_base_freqs` |
+| `server_version_num`, block size, alignment | 120002, 8192, 8 | unchanged |
+| `pg_stat_force_next_flush()`, support procs, `deduplicate_items` | absent; 1,2,3; rejected | unchanged |
+| Rows per statistics object on the four new fixtures | not tested | one each, whole-key `n_distinct` 20, 8, 20, 20 — one pass, so nothing for a filter to remove |
+| Filed against widened, `EXCEPT` both ways | not tested | `0` and `0` over 25 rows, and identical readings on all four fixtures |
+| The 19 numbered fixtures | 13 PASS, 5 critical false positives, 1 false positive | **the same counts**, all 19 `ineligible` with nothing credited |
+
+Two 12-leg numbers moved, both by less than half a point and both
+sample-dependent: the 50 %-deleted partial index reads 49.3 against a measured
+49.6 where it read 49.6 on 2026-09-09, and the 90 %-deleted one reads 89.5
+against a measured 89.1 where it read 89.9. The fresh sorted builds are
+unchanged at 254, 258 and 353 blocks and 0.0 %; the drained queue is unchanged
+at 100.0 against 100.0; `w_key` is unchanged at 84.1 against a measured 0.0;
+`nzb_k` and `i_trunc` are unchanged at 99.9.
+
+The four new fixtures read 827 blocks each on 12.2 against 258 on 17.11 for the
+same rows and the same keys, and the 12 leg credits no deduplication anywhere,
+which is consistent with its `equalimage` verdict of `ineligible` on all 19
+numbered fixtures and its refusal of `WITH (deduplicate_items = off)`. Those
+are measurements of that server; this page cites only the 17 checkout, so the
+engine reason belongs on the v12 page.
+[The v12 publication protocol](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#the-v12-publication-protocol).
+
 ### Measurement-script section review
 
 **This section was audited against `MANDATORY Measurement Script` on 2026-09-09,
@@ -5181,7 +5804,7 @@ Three findings were left as they are, deliberately:
   v17 page may not cite a v12 checkout.
   See [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here).
 - **The 12 leg's runtime was never recorded.**
-  See [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime).
+  See [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree).
 
 Every repair above is either a comment, a documentation table, or a fail-closed
 guard on a path that previously had none; none of them changes a statement, a
@@ -5190,7 +5813,7 @@ the figures under
 [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
 predate the script text now filed, and
 `verified_by_agent` stays `not yet`.
-See [The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run).
+See [The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part).
 
 ## Context Reviewed
 
@@ -5205,6 +5828,8 @@ See [The repaired scripts have not been re-run](#the-repaired-scripts-have-not-b
 - Measurement-script section review on 2026-09-09, same pin, read-only with no server built or started: `AGENTS.md`'s `MANDATORY Measurement Script`, `MANDATORY Production SQL`, `MANDATORY GUC Changes`, `MANDATORY Table of Contents` and `MANDATORY Citations` rules against this section as filed; both script bodies re-extracted from this page with their own `md_block` logic and parsed with `bash -n` (1,793 and 474 lines); the four `sql` blocks and the superseded text from revision `f2d73b4` re-hashed against all five baselines; the 37 source citations inside the section re-read against `raw/postgres-17/`, including the seven whose label token is not literally inside the range; `psql`'s exit-status handling for `-c` and `-f` actions (`startup.c`, `mainloop.c`, `psql-ref.sgml`); the GUC definitions of `listen_addresses`, `port` and `logging_collector`; and the containment guard tested against nine paths, including `/`, `$HOME`, the repository root, the `tmp` directory itself and a `tmpx` lookalike. Both pinned checkouts were clean at their pins throughout, and no sandbox, cluster or build was created.
 
 - Suite-script run on 2026-09-09, same pin, both legs built and executed: 17.11 out of tree under `.wiki-runtime/tmp/btree-suite/build17` (`--enable-debug --with-icu --with-readline --with-zlib`), `make check` All 225 tests plus 8, 1 and 3 for `pageinspect`, `pgstattuple` and `amcheck`; a cluster at `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0`, default `BLCKSZ`, with five UTF8 databases for geometry, calibration, the deduplication gate, the acceptance fixtures and the 112-fixture numbered suite. 12.2 was built out of tree from this repository's pinned 12 checkout the same way, needing `-DTRUE=1 -DFALSE=0` for this host's ICU headers, and passed All 192 core tests plus 5, 1 and 2. Both checkouts stayed read-only and clean at their pins; the two scripts, their SQL and their output live under `.wiki-runtime/tmp/btree-suite/`, which is git-ignored. The estimator, probe-generator, geometry and calibration blocks were re-extracted from this page after the edit that added the two script blocks, and all four still hash to their baselines, together with the superseded text from revision `f2d73b4`.
+
+- Portable extended-statistics filter, filed and measured on 2026-09-10, same pin: the `pg_stats_ext` and `pg_stats` view definitions and the `pg_statistic_ext_data` grant boundary (`system_views.sql`); the `stxdinherit` catalog column and its place in the data row's unique key (`pg_statistic_ext_data.h`); the two `ANALYZE` passes and the `inh` flag each one stores (`analyze.c`, `extended_stats.c`); and the whole `row_to_json` -> `->>` -> `boolean` chain, including what a missing key returns (`pg_proc.dat`, `pg_operator.dat`, `json.c`, `jsonfuncs.c`, `bool.c`). Both scripts were edited in place — one new `extstat` stage each, a new `BASEPRE` baseline, `BASE1` re-baselined to `646df923…`, an idempotent `cluster` stage, and a sixth database `xstat` — re-extracted from this page, parsed with `bash -n` (2,004 and 648 lines), and run against the 17.11 and 12.2 clusters the 2026-09-09 run left in place under `.wiki-runtime/tmp/btree-suite/`: the 17 leg's `cluster texts extstat` and the 12 leg's `exact transform facts fixtures score extstat report`. Neither server was rebuilt, neither regression suite was re-run, both checkouts stayed read-only at their pins, and the sandbox was left in place for the next pass. The reconstruction of the previous statement text reproduced its filed SHA-256 exactly, which is what makes the one-line diff auditable.
 
 ## Evidence Map
 
@@ -5236,6 +5861,9 @@ See [The repaired scripts have not been re-run](#the-repaired-scripts-have-not-b
 | What the scoring pass rebuilds, and under which lock | [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829), [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597). |
 | Cluster settings the scripts write, and their apply scopes | [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1450-L1453), [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1097-L1100), [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2265), [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877), [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4426-L4430), [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4437-L4441), [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2394-L2397), [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1641-L1644), [initdb.sgml#--locale](../../../../raw/postgres-17/doc/src/sgml/ref/initdb.sgml#L281-L291). |
 | Why every `psql` helper carries `ON_ERROR_STOP`, and what a `-c` action returns without it | [mainloop.c:376](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L376), [mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594), [startup.c#single-query-action](../../../../raw/postgres-17/src/bin/psql/startup.c#L377-L386), [psql-ref.sgml#Exit-Status](../../../../raw/postgres-17/doc/src/sgml/ref/psql-ref.sgml#L627-L636). |
+| Where the `inherited` flag of `pg_stats_ext` comes from, and which `ANALYZE` pass writes it | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [system_views.sql:290](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290), [pg_statistic_ext_data.h:35](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L35), [pg_statistic_ext_data.h:57](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L57), [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L246-L259), [analyze.c#BuildRelationExtStatistics-call](../../../../raw/postgres-17/src/backend/commands/analyze.c#L604-L606), [extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L111-L114), [extended_stats.c#statext_store](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L790-L791). |
+| Why reading that flag through `row_to_json()` is the same predicate where the column exists, and a no-op where it does not | [pg_proc.dat#row_to_json](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8975-L8977), [json.c#composite_to_json](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L546-L579), [json.c#datum_to_json-bool](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L212-L221), [pg_operator.dat#json-arrow-text](../../../../raw/postgres-17/src/include/catalog/pg_operator.dat#L3160-L3162), [pg_proc.dat#json_object_field_text](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L9078-L9081), [jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895), [bool.c#parse_bool_with_len](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L36-L58), [bool.c#boolin](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L126-L150). |
+| Why the base catalogs are not an alternative access path, and what the view's lateral costs to serialise | [system_views.sql#pg_statistic_ext_data-revoke](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L382-L383), [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L301-L307), [system_views.sql#pg_stats-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L194). |
 
 ## Open Questions
 
@@ -5247,10 +5875,17 @@ and replaced the platform question with
 [Fixture recipes that do not reproduce](#fixture-recipes-that-do-not-reproduce).
 The measurement-script review of the same day added the last four, which are
 about the scripts rather than about the estimator:
-[The repaired scripts have not been re-run](#the-repaired-scripts-have-not-been-re-run),
+[The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part),
 [Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged),
 [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
-and [The 12 leg's unrecorded runtime](#the-12-legs-unrecorded-runtime).
+and [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree).
+
+The 2026-09-10 pass closed the parse half of
+[Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement)
+and the whole of the widening question that used to sit beside it, narrowed the
+two script questions above to what is still untested, and left every estimator
+limitation below untouched: none of them is about which `ANALYZE` pass the
+`extstat` CTE reads.
 
 ### Mixed key widths in one index
 
@@ -5492,27 +6127,37 @@ is exact against a measured 93.6 % while its floor reads 81.3 %.
 
 ### Cross-version execution of the revised statement
 
-**Answered on 2026-09-09: the text does not execute there, and one edit makes
-it.** The `extstat` stage selects `pg_stats_ext` rows with `inherited = false`,
-and `inherited` is a column this version's view defines from `stxdinherit`; the
-pinned 12 server refuses the statement with
-`ERROR: column se.inherited does not exist` before any fixture is built, which
-is a failed test 17 and the end of the earlier statement's "12 through 17"
-claim for this text. Deleting that one filter line is enough to make it run,
-and the leg then scores 19 fixtures.
+**Fixed on 2026-09-10, and the fix is measured on both servers.** The text
+filed until then selected `pg_stats_ext` rows with `inherited = false`, naming a
+column this version's view defines from `stxdinherit` and the pinned 12 server
+does not have; it was refused with
+`ERROR: column se.inherited does not exist` before any fixture was built. The
+`extstat` CTE now reads that flag with
+`coalesce((row_to_json(se) ->> 'inherited')::boolean, false) = false`, and the
+exact filed text is accepted unmodified on both majors: `transform_edits=0` on
+the 12 leg, and `EXCEPT` in both directions over 186 rows in six databases on
+the 17 leg.
+[The portable extended-statistics filter](#the-portable-extended-statistics-filter),
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured),
 [system_views.sql#pg_stats_ext-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290),
-[system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309),
-[The PostgreSQL 12 leg script](#the-postgresql-12-leg-script),
-[What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09).
+[system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309).
 
-Three things stay open. The transformer *widens* the `extstat` CTE rather than
-preserving its meaning — dropping the filter admits whatever rows that server's
-view exposes, and no fixture on the 12 leg carries an extended-statistics object
-to show what the widened CTE then reads. The 12 leg scores 19 fixtures, not the
-112 the 17 leg scores, so the partial-index contract is enforced on one major
-only. And the v12 companion page still documents its own Method A, not this
-text, so a reader who follows the cross-version link finds a different
-statement.
+The old transformer's widening is also settled rather than dropped: four
+fixtures now carry extended-statistics objects, three of them on inheritance
+parents, and the widened text reads 2.3, 60.1 and -33.7 where the filed text
+reads 0.8, 59.7 and 0.8 against measured reclaims of 0.0, 59.7 and 0.0. On the
+12 server the widened text and the filed text agree exactly, because that
+server records one pass per statistics object.
+
+Three things stay open, none of them the parse. **The 12 leg still scores 19
+fixtures against the 17 leg's 112**, so the partial-index contract is enforced
+on one major only, and the four new extended-statistics fixtures are outside
+that contract. **The v12 companion page still documents its own Method A**, not
+this text, so a reader following the cross-version link finds a different
+statement. And **only two majors are tested**: nothing here says what the
+`row_to_json` read does on 13, 14, 15 or 16, where the column arrived at some
+release this page may not cite; the construct is designed to be indifferent to
+that, but indifference is not a measurement.
 [The v12 publication protocol](../../../v12/questions/indexing/btree-index-bloat-core-sql-only.md#the-v12-publication-protocol).
 
 ### Integer-truncated widths across an alignment boundary
@@ -5554,20 +6199,29 @@ matches this page's "x86-64 Linux" statement. See
 [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204),
 [analyze.c#stawidth](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540).
 
-### The repaired scripts have not been re-run
+### The repaired scripts have been re-run only in part
 
 The 2026-09-09 measurement-script review edited both scripts in place and did
-not re-run them, because the asker scoped it to a read-only audit. Every edit is
-a comment, a documentation change, an added `-v ON_ERROR_STOP=1`, a precondition
-check or a containment guard, and both scripts still parse and still reproduce
-all five SHA-256 baselines from this page; but `MANDATORY Measurement Script`
-asks that a script be re-run after it is edited, so the figures under
+not re-run them. The 2026-09-10 pass re-ran them under the repairs, but only
+the stages the statement change can reach: the 12 leg's
+`exact transform facts fixtures score extstat report` and the 17 leg's
+`cluster texts extstat`. Those stages now carry the repaired helpers, including
+`ON_ERROR_STOP` on every `psql` call, and the 12 leg's whole scored subset came
+back with the same verdict counts, which answers the review's own question for
+that leg: nothing was erroring unnoticed there.
+
+Still not re-run since the repairs: the 17 leg's `build`, `check`, `geometry`,
+`calibration`, `gate`, `acceptance`, `suite`, `attribution`, `probes`, `score`,
+`cost` and `criteria` stages, and the 12 leg's `build` and `check`. So the
+figures under
 [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
-predate the text now filed. What a re-run would settle: whether adding
-`ON_ERROR_STOP` to `s()` and `t()` turns any silently-empty output into a
-failed stage — that is, whether any reporting query on the 2026-09-09 run was
-erroring unnoticed. Nothing else in the diff can change a number.
-[Measurement-script section review](#measurement-script-section-review).
+that come from those stages — the 78 geometry cells, the seven calibration
+patterns, the 27-fixture gate, the acceptance tables and the 112 numbered
+fixtures — still predate the script text now filed. The 2026-09-10 equivalence
+run is evidence that the statement edit cannot have moved them; it is not
+evidence that the repaired script text reproduces them.
+[Measurement-script section review](#measurement-script-section-review),
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
 
 ### Fixture statements are marked disposable, not tagged
 
@@ -5599,16 +6253,19 @@ on a 12.2 server has to look up its scope elsewhere. The clean fix is a
 `pg_settings` capture on the 12 leg, added to `stage_facts` and re-run, or the
 same table on a v12 page.
 
-### The 12 leg's unrecorded runtime
+### The 12 leg's runtime is recorded only from a built tree
 
 `MANDATORY Measurement Script` asks for the runtime of a full run and of a
 re-run from a built tree. The 17 leg has both, measured on the recorded host:
-about eleven minutes and about ninety seconds. The 12 leg has neither: the
-2026-09-09 run did not time it, and this read-only review could not, since
-timing it means building 12.2. What is known is the shape of the cost — a full
-source build and `make check` dominate, and the fixture and scoring stages
-handle 19 fixtures against the 17 leg's 112 — but no number is filed, so none is
-claimed.
+about eleven minutes and about ninety seconds. The 12 leg now has the second
+half, measured on 2026-09-10 against the already-built tree and the running
+cluster: 0.3 s for `exact transform facts` and 52.7 s for
+`fixtures score extstat report`. Its full-run figure is still unmeasured,
+because that means building 12.2 and running `make check` again, which the
+2026-09-10 pass deliberately did not do. What is known about the missing part is
+its shape — the source build and `make check` dominate it — but no number is
+filed, so none is claimed.
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
 
 ## Source References
 
@@ -5785,6 +6442,21 @@ claimed.
 - [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4437-L4441)
 - [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2394-L2397)
 - [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1641-L1644)
+- [system_views.sql#pg_stats-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L194)
+- [system_views.sql#pg_statistic_ext_data-revoke](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L382-L383)
+- [pg_statistic_ext_data.h:35](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L35)
+- [pg_statistic_ext_data.h:57](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L57)
+- [analyze.c#BuildRelationExtStatistics-call](../../../../raw/postgres-17/src/backend/commands/analyze.c#L604-L606)
+- [extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L111-L114)
+- [extended_stats.c#statext_store](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L790-L791)
+- [pg_proc.dat#row_to_json](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8975-L8977)
+- [pg_proc.dat#json_object_field_text](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L9078-L9081)
+- [pg_operator.dat#json-arrow-text](../../../../raw/postgres-17/src/include/catalog/pg_operator.dat#L3160-L3162)
+- [json.c#composite_to_json](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L546-L579)
+- [json.c#datum_to_json-bool](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L212-L221)
+- [jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895)
+- [bool.c#parse_bool_with_len](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L36-L58)
+- [bool.c#boolin](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L126-L150)
 
 ## Navigation
 
