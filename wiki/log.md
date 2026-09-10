@@ -2,6 +2,97 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-10] review v12 | physical index statistics page: full citation re-read plus a published measurement script
+
+- Reviewed [Physical Index Statistics, Tuple Counts, and Bytes per Tuple in
+  PostgreSQL 12
+  (unverified)](v12/questions/indexing/physical-index-statistics-tuple-counts-and-bytes.md#what-an-isolated-122-server-measured)
+  end to end at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`
+  (12.2, `REL_12_STABLE`). **Prompt hygiene first**: the original read `follow
+  agents.md, in postgresql 12,  review question: Physical Index Statistics,
+  Tuple Counts, and Bytes per Tuple in PostgreSQL 12 (unverified)`; the asker
+  chose "correct and restate" (`agents.md` -> `AGENTS.md`, `postgresql` ->
+  `PostgreSQL`, and the doubled space removed), and then chose **source review
+  plus building a 12.2 server** over a source-only or structure-only pass.
+- **Source verdict: no claim needed correction.** All 354 source citations on
+  the page (228 distinct line ranges over 91 files) were re-read against the
+  pinned checkout; every one resolves, sits in bounds, targets only
+  `raw/postgres-12/`, and supports its labelled claim. That covers the
+  `pg_class`/`pg_index`/`pg_statistic` writers, `index_update_stats`, the
+  `ANALYZE` and `VACUUM` relstats paths, `vac_estimate_reltuples`,
+  `plancat.c`'s index sizing and metapage kluge, `dbsize.c`, the FSM and
+  index-FSM layers, generic page/tuple/line-pointer layout, all seven access
+  methods' metapages, page opaque structures, tuple formats, build callbacks
+  and VACUUM paths, the `pgstattuple`/`pageinspect`/`pg_freespacemap` C and SQL
+  surfaces, catalog headers and generation rules, and the cited regression,
+  isolation and documentation ranges.
+- **The page had no `## Measurement Script` section**, and it now reports
+  numbers, so one was written, published in full inside the page, and run. It
+  is Bash and SQL only, 800 lines, sixteen selectable stages, and ships an
+  eight-item usage table, a per-stage dependency table, the apply scope of all
+  eight cluster settings, a disposable-fixture warning and a last-run record.
+  The published text is byte-identical to the file that produced the numbers;
+  re-extracting it from the page and running it reproduces the SHA-256 of both
+  fenced SQL blocks it executes (`08367525…` and `7352c45b…`).
+- **Three script defects were repaired before the numbers were trusted**: a
+  multi-statement `psql -c` wrapped `VACUUM` in an implicit transaction, so
+  four stages silently lost their vacuums (timeouts now travel through
+  `PGOPTIONS`, one statement per call); a `${var/$1/...}` substitution left a
+  literal `$1` in the snapshot INSERT, so the whole `reltuples` matrix came
+  back empty; and a `pd_lower`-based GiST page census could not tell a deleted
+  page from a two-item leaf page, so it was rewritten to read `F_LEAF` and
+  `F_DELETED` out of the raw page trailer with `get_byte()`.
+- **Measured on an isolated 12.2 build** (`make check` 192 of 192,
+  `pageinspect` 5 of 5, `pgstattuple` 1 of 1, `bloom` 1 of 1): a per-writer
+  `reltuples` matrix across all seven access methods, in which **one BRIN index
+  reads 14, 100000 and 13** after build, `ANALYZE` and `VACUUM` and keeps 13
+  through `VACUUM ANALYZE`; hash reads 80000 at build and then accepts the
+  100000-row estimate; GIN reads 300000 extracted keys; an empty-heap BRIN
+  reads 1 then 0 while its one physical summary item stays put;
+  `btm_last_cleanup_num_heap_tuples` moves -1 -> 74961 against the same index's
+  own `reltuples` of 75000; `hashm_ntuples` is 60000 against `reltuples` 75000;
+  a GIN pending list counts 50 heap tuples for 150 keys and the following
+  `VACUUM` writes no index `reltuples` at all because its heap scan skipped
+  pages; item payloads are 16, 24 and 16 bytes including MAXALIGN padding while
+  54 high keys are excluded; `main_bytes / reltuples` swings 90.28 -> 22.57 on
+  a byte-identical file; and a reclaimed index page reads back from the FSM as
+  8,160 against BRIN's 7,936.
+- **Both GiST `pgstattuple` defects are now quantified.** A five-row
+  single-page index reports 0 items, because the dispatcher starts at
+  `GIST_ROOT_BLKNO + 1`. A vacuumed 2,242-page index reports 10042 items
+  against 10,000 live rows, and the census explains the 42 exactly: 21 pages
+  carry both `F_LEAF` and `F_DELETED`, and `GistPageSetDeleted()` leaves
+  `pd_lower = 32`, which `PageGetMaxOffsetNumber()` reads as two line pointers.
+  Those pages neither shrank the file nor reached the FSM.
+- Also filed: the full dispatch matrix with exact refusals (Bloom is refused as
+  `unknown index`; `pg_relpages` refuses a partitioned index with a different
+  message than `pgstattuple`), the privilege matrix before and after `GRANT
+  pg_stat_scan_tables`, `brin_page_items()` returning two rows per item, the
+  Bloom width arithmetic predicting 198 pages and measuring 198, and both of
+  the page's own SQL blocks executing as filed.
+- Six open questions were added and two sharpened: the GiST deleted-page count
+  is not run-stable (15 and 21 across runs, though the doubling relationship
+  held every time), GiST deleted pages had not reached the FSM after two
+  vacuums, every number comes from one platform at `block_size = 8192` and
+  `max_data_alignment = 8`, and the partial index's `ANALYZE` estimates move
+  between runs (10237 and 9867 against 10,000). The stale process note in
+  `## Context Reviewed`, which said `pgstattuple` could not be executed, was
+  rewritten.
+- Bookkeeping: `wiki/index.md`, `wiki/v12/index.md`, the v12 coverage cell and
+  a dated note in `wiki/versions.md`, and this entry. `verified_by_agent` set
+  to `Claude-Opus-5-Max 2026-09-10T19:35:00Z`; `verified:` untouched, so the
+  title keeps its `(unverified)` suffix. Contents, headings and anchors
+  re-checked mechanically (24 headings, 24 entries, in order).
+- Teardown: the server was stopped by the published script's own `stop` stage
+  with `pg_ctl -m fast -w stop`, and `clean` deleted
+  `.wiki-runtime/tmp/physidx-measure/`; no `postmaster.pid`, no matching
+  `postgres` process and a free port 55432 were confirmed afterwards. The
+  review helpers (citation report, splice/extract/TOC checkers, run logs) are
+  retained under `.wiki-runtime/tmp/physidx-review/`.
+- `raw/postgres-12/` is untouched: `git status --porcelain` is empty at
+  `45b88269a35`. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors,
+  0 warnings.
+
 ## [2026-09-10] review v17 | pgstatindex bloat page re-measured from a published script
 
 - Reviewed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on
