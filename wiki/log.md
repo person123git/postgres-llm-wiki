@@ -2,6 +2,157 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-10] repair v17 | six B-tree suite script defects repaired, nothing re-run
+
+- Repaired, in the filed script text of [Testing the PostgreSQL 12 Core-SQL
+  B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-server-error-check-repaired),
+  the six defects the same day's review found in commit `641e966`, at
+  unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). **Prompt hygiene
+  first**: the original read `repair but don't rerun anything.`; the asker
+  chose "correct and restate". **Nothing was re-run**, at the asker's
+  instruction: no server was built or started, so every filed number still
+  comes from the commit's script text, which the page now says under
+  [What the server-error check review left open](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-server-error-check-review-left-open);
+  `verified_by_agent` stays `not yet`.
+- **The repairs.** `keep_build_logs` copies whichever build diagnostics exist
+  inside every failure branch of both `build` stages and once more on
+  success, with each `die` naming the copy in `out/`; the 12 leg's `report`
+  rewrites its `server_errors` block instead of appending one and dies
+  without a facts file; each allowed error is now a (message, statement
+  fragment) pair, matched through the `%m [%p]` prefix that every line of one
+  log record shares and the tab-indented `STATEMENT:` continuation lines,
+  with a `seen` count per pair and a reason line for an allowed message whose
+  statement does not match or that has no `STATEMENT:` line (`CREATE INDEX
+  i_pattern_nondet` and the superseded tag `wiki_btree_wasted_space_sweep_12_17`
+  on 17.11; `CREATE INDEX dedup_probe_i` and the estimator tag
+  `wiki_btree_wasted_space_sweep_r2` on 12.2); `cluster` writes
+  `server.log.mark` / `server12.log.mark` before it starts the server and the
+  check reads only the lines after the mark, so `stop cluster` clears a stray
+  error while a bare `criteria` or `report` re-run still fails; the
+  `gate_pattern.txt` header follows its branch; and the reading guide calls
+  `verdicts12` a view. Seven `elog.c` citations back the pairing
+  (`EmitErrorReport`'s per-report timestamp reset, `get_formatted_log_time`,
+  the `%p` and `%m` cases of `log_line_prefix`, the record layout in
+  `send_message_to_server_log`, `append_with_tabs`).
+- **Verification without a server.** Both scripts re-extracted with
+  `md_block` (2,186 and 805 lines), `bash -n` clean, a `diff` against the
+  commit's text showing six and four hunks, all of them the repairs; the
+  final page's two `bash` blocks byte-identical to that extraction. The check
+  function, cut out of each script and sourced into a shell, was exercised
+  nine times against the review run's saved logs: both pairs `seen 1` and the
+  stray error counted on each leg; a mark at the restart reading five lines
+  and still counting the stray error; a mark at the stray line, written with
+  surrounding spaces, reading 0; the overflow's statement rewritten to carry
+  the current text's tag counted with `its statement does not contain ...`;
+  an allowed message without a `STATEMENT:` line, at the end and mid-file,
+  counted with `no STATEMENT line follows it`; a missing log read as 0; and
+  the `report` loop reducing the saved three-block facts file to one block.
+- Page edits: the twelfth prompt under Question; the new subsection
+  [The server-error check, repaired](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-server-error-check-repaired)
+  with the repairs, the source reading behind the pairing and the nine
+  exercises; a pointer at the top of the review section; the open question
+  rewritten to record that the filed numbers predate the script text; the
+  Open Questions intro; both scripts' `build`, `cluster`, `criteria` and
+  `report` rows in the stage tables, a `*.mark` row in the file map, the
+  pass-criteria row and the reading guide; the review section's stray-command
+  block relabelled `sh` so the page still holds exactly two `bash` blocks;
+  Contents, Context Reviewed, Evidence Map and Source References updated.
+- **Teardown.** Nothing was started. `pgrep -fl postgres` is empty and
+  `.wiki-runtime/tmp/` holds only `btree-suite-scripts/`, now with a
+  `repaired/` copy of both extracted scripts beside the review run's logs.
+- Validation: the six new citations resolve in bounds inside
+  `raw/postgres-17/`; the three page-internal anchors the new text links
+  resolve; the 64 Contents entries match the `##`/`###` headings in order;
+  `git diff --check` passes. `.wiki-runtime/venv/bin/python scripts/wiki_lint`
+  reports the same 9 errors and 2 warnings as this host's baseline, all on
+  other pages or other checkouts; nothing on this page. Updated
+  `wiki/index.md`, `wiki/v17/index.md` and the v17 coverage cell of
+  `wiki/versions.md`.
+
+## [2026-09-10] review v17 | B-tree suite server-error check reviewed, both legs re-run under commit 641e966
+
+- Reviewed the script changes of commit `641e966` ("let the B-tree suite
+  scripts tell a deliberate error from a real one") on [Testing the
+  PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-server-error-check-reviewed)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). **Prompt hygiene
+  first**: the original read `follow agents.md, in postgresql 17, for
+  question: # Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17 (unverified), review the last changes to the script`; the
+  asker chose "correct and restate" and **review only**, so no script text
+  changed.
+- **The commit does what it says, proven by running it.** Six runs under the
+  filed text on Darwin arm64 (Apple clang 21, ICU 78 through
+  `ICU_CFLAGS`/`ICU_LIBS`, `JOBS=8`): both legs end to end from an empty
+  sandbox, exit 0 in **2 min 31 s** and **1 min 51 s**, block 7 of
+  `criteria.txt` reading `allowed=2 unexpected_server_errors=0` on 17.11 and
+  the same line closing `v12_facts.txt` on 12.2, each server log holding
+  exactly the two deliberate errors with their `STATEMENT:` lines, and the
+  build and check logs copied into `out/` (with a `12` suffix on the 12 leg);
+  `stop cluster criteria` and `stop cluster report`, still 0 unexpected; then
+  one stray ad-hoc statement per leg (`SELECT 1 FROM no_such_relation` on
+  17.11, `SELECT 1/0` on 12.2), after which `criteria` and `report` each named
+  the line, counted 1 and exited 1, and a further `criteria` failed again on
+  the same line. Everything else reproduced the earlier Darwin record:
+  `make check` All 225 plus 8, 1, 3 and All 192 plus 5, 1, 2; five hashes
+  `match`; geometry 78/78; calibration digit for digit; gate 0 over-credits,
+  0 metapage disagreements, 2 under-credits, worst 28.8 %; floor 80/20/7/3/2
+  and point 76/26/5/3/2 with fixture 120 at 87.5 %; 53 withheld, 0
+  unexplained, 0 contract failures; 12 leg `exact_text=executes`,
+  `transform_edits=0`, 13 PASS / 5 / 1, all `ineligible`. The `EXCEPT`
+  attribution returned 30 rows per direction, a fourth value beside 26, 33
+  and 31.
+- **Six defects filed as proposed repairs, none moving a number.** Both
+  `build` stages `die` before the new log-copy line, so a failed build still
+  leaves nothing in `out/`, which is the case the commit says it fixes; the
+  12 leg's `report` appends a `server_errors` block on every run, three
+  blocks after the tests with two stale zeros above the live 1; the
+  allow-list matches message text, not a count, so a second overflow would
+  pass; a stray error fails every later checking run of that sandbox because
+  `pg_ctl` starts the postmaster with `>>`; the `gate_pattern.txt` header is
+  written in both branches; and `verdicts12` is a view, not a table. Two
+  limits recorded from source with 16 new citations (`elog.c`, `postgres.c`,
+  `pl_exec.c`, `guc_tables.c`, `pg_ctl.c`, `backend_startup.c`, `initdb.c`):
+  `errfinish` rethrows an `ERROR` and only the top-level handler emits it,
+  so the suite's own `EXCEPTION WHEN OTHERS` in `score_all` hides errors
+  from the check; and the level token and message are translated, so the
+  pattern assumes the English `lc_messages` that `initdb --locale=C` writes.
+  The commit's "every logged error carries the statement that raised it"
+  holds under `check_log_of_query`'s three conditions, not unconditionally.
+  One paperwork drift older than the commit was fixed: the usage table said
+  17 stages for the 17 leg; the dispatcher has 16 plus `stop` and `clean`.
+- Page edits: the eleventh prompt under Question; the new subsection
+  [The server-error check, reviewed](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-server-error-check-reviewed),
+  now the last-run record, with the previous record's marker updated to
+  point at it; the new open question
+  [What the server-error check review left open](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-server-error-check-review-left-open)
+  with the six proposed repairs; the Open Questions intro, Contents, Context
+  Reviewed, Evidence Map (two rows) and Source References updated. The
+  source pin and both verification fields are unchanged; `verified_by_agent`
+  stays `not yet` because this pass measured the scripts rather than
+  re-reading every claim.
+- **Teardown.** The 12 leg's `clean` and then the 17 leg's `clean`, after
+  `out/` was copied out: `pg_ctl -m fast -w stop`, `database system is shut
+  down` in both logs, no `postmaster.pid`, no postgres process on either data
+  directory, empty socket directories, then the 8.4 GB sandbox deleted.
+  Afterwards `pgrep -fl postgres` is empty and `.wiki-runtime/tmp/` holds
+  only `btree-suite-scripts/` (3.3 MB: the two extracted scripts, six run
+  logs and the run's `out/` as `out-2026-09-10-review/`, kept as generated
+  artifacts).
+- Validation: the 16 new citations resolve in bounds inside
+  `raw/postgres-17/`; the five page-internal anchors the new text links
+  resolve; the 63 Contents entries match the `##`/`###` headings in order;
+  `git diff --check` passes. `.wiki-runtime/venv/bin/python scripts/wiki_lint`
+  reports the same 9 errors and 2 warnings as this host's pre-edit baseline,
+  all on other pages or other checkouts (six v18 injection-point citation
+  targets, the v19 and v18 pins absent from this host's checkouts, the v14
+  checkout on another commit, and uncommitted changes in v14 and v12);
+  nothing on this page. Updated `wiki/index.md`, `wiki/v17/index.md` and the
+  v17 coverage cell of `wiki/versions.md`.
+
 ## [2026-09-10] review v17 | B-tree estimator suite re-run end to end on Darwin arm64, stop stages repaired
 
 - Reviewed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on

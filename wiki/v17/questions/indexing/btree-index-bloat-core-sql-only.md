@@ -46,6 +46,8 @@ verified_by_agent: not yet
   - [Measurement-script section review](#measurement-script-section-review)
   - [The stop stage, repaired](#the-stop-stage-repaired)
   - [What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64)
+  - [The server-error check, reviewed](#the-server-error-check-reviewed)
+  - [The server-error check, repaired](#the-server-error-check-repaired)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -69,6 +71,7 @@ verified_by_agent: not yet
   - [Attribution row counts differ between hosts](#attribution-row-counts-differ-between-hosts)
   - [Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged)
   - [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
+  - [What the server-error check review left open](#what-the-server-error-check-review-left-open)
 - [Source References](#source-references)
 - [Navigation](#navigation)
 
@@ -242,6 +245,35 @@ repaired script text, build and check the 12 leg so that its full runtime is
 measured, and **repair in place**. The work is filed under
 [The stop stage, repaired](#the-stop-stage-repaired) and
 [What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
+
+Eleventh prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, for the question "Testing the
+> PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17", review the
+> last changes to the script.
+
+The original read `follow agents.md, in postgresql 17, for  question: #
+Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+(unverified), review the last changes to the script`: `agents.md` for
+AGENTS.md, lowercase `postgresql`, a double space after `for`, `for
+question:` without an article, a stray `#` before the title, the
+`(unverified)` title hint treated as part of the title, and no sentence
+capitalisation. The asker chose **review only**: file the findings and the
+proposed repairs, and leave the script text unchanged. The work is filed
+under [The server-error check, reviewed](#the-server-error-check-reviewed)
+and
+[What the server-error check review left open](#what-the-server-error-check-review-left-open).
+
+Twelfth prompt, corrected and restated with the asker's agreement:
+
+> Repair the defects, but do not re-run anything.
+
+The original read `repair but don't rerun anything.`: no sentence
+capitalisation, `rerun` for re-run, and the object of `repair` left implicit.
+The work is filed under
+[The server-error check, repaired](#the-server-error-check-repaired), and the
+gap it leaves, filed numbers that predate the script text, under
+[What the server-error check review left open](#what-the-server-error-check-review-left-open).
 
 ## Answer
 
@@ -2376,7 +2408,7 @@ arm64.
 |---|---|---|
 | Purpose | measures the current estimator on a 17.11 server built from this page's pin: page geometry, fresh builds, the deduplication gate, the acceptance fixtures, the calibration patterns, the 112 numbered fixtures, attribution, probes, the scoring pass against a measured `REINDEX INDEX`, and statement cost | answers whether the exact filed text executes on the pinned 12.2 checkout, records the refusal verbatim, then transforms, fixtures and scores the constructible subset |
 | Invocation | `bash btree_bloat_suite_v17.sh [stage ...]`, run from the repository root | `bash btree_bloat_suite_v12.sh [stage ...]`, run from the repository root |
-| Stages | 17 stages plus `stop` and `clean`; see [the 17 leg's stages](#the-17-legs-stages) | 10 stages plus `stop` and `clean`; see [the 12 leg's stages](#the-12-legs-stages) |
+| Stages | 16 stages plus `stop` and `clean`; see [the 17 leg's stages](#the-17-legs-stages) | 10 stages plus `stop` and `clean`; see [the 12 leg's stages](#the-12-legs-stages) |
 | Environment | 7 variables, all with defaults; see [what the scripts read from the environment](#what-the-scripts-read-from-the-environment) | 7 variables, all with defaults; same table |
 | Prerequisites | see [Prerequisites](#prerequisites) | the same, plus `-DTRUE=1 -DFALSE=0` in `EXTRA_CFLAGS` on a host whose ICU headers no longer define those macros |
 | Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables. The build and check diagnostics are copied there too, so they survive the build tree | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt`; this leg's copies carry a `12` in the name |
@@ -2403,9 +2435,9 @@ have run. The default order is the order of this table.
 
 | Stage | What it does | Needs first |
 |---|---|---|
-| `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists. It then copies `configure.log`, `make.log` and `install.log` into `out/`, because `clean` deletes the build tree | nothing |
+| `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists. It copies `configure.log`, `make.log` and `install.log` into `out/` after every step, on the failure path too, because `clean` deletes the build tree; until the 2026-09-10 repair the copy ran only after a successful build | nothing |
 | `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt`, then copies every `check_*.log` into `out/` and any `regression.diffs` as `out/diffs_*.txt`; before 2026-09-10 a failed suite left only its one-line summary once the sandbox was gone | `build` |
-| `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the six UTF8 databases `geo`, `cal`, `gate`, `acc`, `suite` and `xstat` | `build` |
+| `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, writes the current line count of `out/server.log` to `out/server.log.mark` (the point from which the server-error check reads), starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the six UTF8 databases `geo`, `cal`, `gate`, `acc`, `suite` and `xstat` | `build` |
 | `texts` | extracts the four `sql` blocks of this page and the superseded text from `OLD_REV`, checks all five SHA-256 baselines, runs both exact texts as filed, and installs the two harness views in five databases | `cluster` |
 | `geometry` | the 78 (key width, fillfactor) cells, scored against `pageinspect` | `texts` |
 | `calibration` | the seven insertion patterns, each scored against its own `REINDEX INDEX` | `texts` |
@@ -2417,7 +2449,7 @@ have run. The default order is the order of this table.
 | `probes` | runs the probe generator on `suite` and `acc` and executes every statement it emits, still before any rebuild | `suite` |
 | `score` | `CALL score_all()`: per fixture assert the population, read both views, `REINDEX INDEX`, re-read the size; then writes `out/verdicts.txt` | `suite` |
 | `cost` | six interleaved timings of the two exact texts, and the size of the database they ran against | `texts` |
-| `criteria` | the six pass-criteria blocks into `out/criteria.txt`, then block 7, which matches every `ERROR`, `FATAL` and `PANIC` line in `out/server.log` against the two errors this suite provokes on purpose and dies on anything left over | `check`, `texts`, `gate`, `attribution`, `score` |
+| `criteria` | the six pass-criteria blocks into `out/criteria.txt`, then block 7, which reads every `ERROR`, `FATAL` and `PANIC` line of `out/server.log` after the mark, allows the two errors this suite provokes on purpose only when the `STATEMENT:` line of the same log record carries the statement that provokes them, prints how often each pair was seen, and dies on anything left over | `check`, `texts`, `gate`, `attribution`, `score` |
 | `report` | lists what landed in `out/` | nothing |
 | `stop` | stops the server with `pg_ctl -m fast -w stop`, so the checkpointer writes a shutdown checkpoint and the next start needs no recovery, then confirms the teardown: no `postmaster.pid`, no postgres process on the data directory, an empty socket directory. It dies rather than report a stop that did not happen. Until 2026-09-10 it used `-m immediate`, which skips the checkpoint and forces crash recovery on restart | `cluster` |
 | `clean` | `stop`, then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`; because `stop` dies on a failed teardown, `clean` never deletes a live cluster | nothing |
@@ -2426,16 +2458,16 @@ have run. The default order is the order of this table.
 
 | Stage | What it does | Needs first |
 |---|---|---|
-| `build` | 12.2 out of tree under `$SANDBOX/build12` with `CFLAGS="$EXTRA_CFLAGS"`, plus the same three contrib modules, then copies its `configure.log`, `make.log` and `install.log` into `out/` as `configure12.log`, `make12.log` and `install12.log` | nothing |
+| `build` | 12.2 out of tree under `$SANDBOX/build12` with `CFLAGS="$EXTRA_CFLAGS"`, plus the same three contrib modules; copies `configure.log`, `make.log` and `install.log` into `out/` as `configure12.log`, `make12.log` and `install12.log` after every step, on the failure path too | nothing |
 | `check` | the 12.2 core and contrib suites into `out/checks12.txt`, then copies each `check_*.log` into `out/` as `check12_*.log` and any `regression.diffs` as `diffs12_*.txt` | `build` |
-| `cluster` | `initdb --locale=C --encoding=UTF8`, the same cluster settings without `log_min_messages`, started on `PORT12`, and the `leg12` database | `build` |
+| `cluster` | `initdb --locale=C --encoding=UTF8`, the same cluster settings without `log_min_messages`, the mark `out/server12.log.mark` written the same way, started on `PORT12`, and the `leg12` database | `build` |
 | `exact` | extracts `sql` block 1, checks its hash, runs the text **unmodified**, and records `exact_text=executes` or `exact_text=refused` plus the first error lines in `out/v12_facts.txt` | `cluster` |
 | `transform` | applies one recorded edit per refused construct, re-runs, writes `transform_edits`, and installs the harness view; it dies rather than guess when a construct is still refused | `exact` |
 | `facts` | records `server_version_num`, block size, alignment, whether `pg_stat_force_next_flush()` exists, the `pg_stats_ext` columns, the registered B-tree support-function numbers, and whether `WITH (deduplicate_items = off)` is accepted | `cluster` |
 | `fixtures` | builds the constructible subset, one writer session per step, polling `pg_stat_all_tables` for publication instead of forcing a flush | `transform` |
 | `score` | the same measured-`REINDEX INDEX` scoring, into `out/verdicts12.txt` | `fixtures` |
 | `extstat` | rebuilds the text filed before the portable `extstat` filter, checks it against `BASEPRE`, records that this server still refuses it, then scores the filed text against the widened one on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat12.txt` | `transform` |
-| `report` | appends the same server-error check to `out/v12_facts.txt` — the two errors this leg provokes on purpose are allowed, anything left over kills the run — and prints the file | `facts` |
+| `report` | rewrites the `server_errors` block at the end of `out/v12_facts.txt`, dropping the one an earlier run appended, with the same paired check against `out/server12.log` after its mark; the two errors this leg provokes on purpose are allowed from their own statements, anything left over kills the run; then prints the file | `facts` |
 | `stop` | stops the 12 server with `pg_ctl -m fast -w stop` and confirms the same three teardown facts, dying on any of them; `-m immediate` until 2026-09-10 | `cluster` |
 | `clean` | `stop`, then deletes this leg's four directories after the same containment check | nothing |
 
@@ -2908,6 +2940,17 @@ INTERNALS='       expected_blocks, floor_blocks, actual_bytes, live_rows, slot,
 INTERNALS_R2='       itupsz, any_stats_disabled, any_compressible, equalimage_state'
 
 # ---------------------------------------------------------------- build ------
+# clean deletes $BUILD, and $OUT is what a reviewer copies out, so the build
+# diagnostics are copied into $OUT after every step, on the failure path too.
+# Until the 2026-09-10 repair the copy sat after the last die and so never
+# ran for the failed build it was meant to preserve.
+keep_build_logs() {
+  local l
+  for l in configure make install; do
+    [ -f "$BUILD/$l.log" ] && cp "$BUILD/$l.log" "$OUT/$l.log"
+  done
+  return 0
+}
 stage_build() {
   say "build 17.11 out of tree from $SRC"
   [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
@@ -2915,18 +2958,16 @@ stage_build() {
   mkdir -p "$BUILD" "$OUT" "$SQLD"
   ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" --enable-debug \
       --with-icu --with-readline --with-zlib > configure.log 2>&1 ) \
-    || die "configure failed, see $BUILD/configure.log"
+    || { keep_build_logs; die "configure failed, see $OUT/configure.log"; }
   ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
-    || die "make failed, see $BUILD/make.log"
+    || { keep_build_logs; die "make failed, see $OUT/make.log"; }
   local m
   for m in pageinspect pgstattuple amcheck; do
     ( cd "$BUILD" && make -C "contrib/$m" -j"$JOBS" >> install.log 2>&1 \
-        && make -C "contrib/$m" install >> install.log 2>&1 ) || die "contrib/$m failed"
+        && make -C "contrib/$m" install >> install.log 2>&1 ) \
+      || { keep_build_logs; die "contrib/$m failed, see $OUT/install.log"; }
   done
-  # clean deletes $BUILD, and $OUT is what a reviewer copies out, so keep the
-  # build diagnostics in $OUT.  Without this a failed build leaves nothing to
-  # read once the sandbox is gone.
-  cp "$BUILD/configure.log" "$BUILD/make.log" "$BUILD/install.log" "$OUT/" 2>/dev/null
+  keep_build_logs
   note "$("$BIN/postgres" --version)"
 }
 
@@ -2981,6 +3022,10 @@ log_min_messages = debug1
 logging_collector = off
 CONF
     fi
+    # The server-error check reads the log from this mark, so a sandbox with a
+    # stray error recovers with stop cluster; the earlier lines stay in the log.
+    { [ -f "$OUT/server.log" ] && wc -l < "$OUT/server.log" || printf '0\n'; } \
+      | tr -d ' ' > "$OUT/server.log.mark"
     "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w start > /dev/null \
       || die "server start failed"
   fi
@@ -3400,12 +3445,18 @@ SQL
 
   # test 4 and the pattern-opclass refusal, measured rather than derived.  The
   # refusal is the expected outcome, so the file says so above the error text;
-  # a bare ERROR line at the top of a result file reads like a failure.
-  q gate "CREATE INDEX i_pattern_nondet ON t (s COLLATE ci text_pattern_ops)" \
-    > "$OUT/gate_pattern.txt" 2>&1 && note "text_pattern_ops accepted (unexpected)" \
-    || note "text_pattern_ops refused as expected: $(tail -1 "$OUT/gate_pattern.txt")"
-  { printf 'expected: test 4, text_pattern_ops refuses a nondeterministic collation\n'
-    cat "$OUT/gate_pattern.txt"; } > "$OUT/gate_pattern.tmp" \
+  # a bare ERROR line at the top of a result file reads like a failure, and an
+  # acceptance would be the surprise, so each branch writes its own header.
+  local hdr
+  if q gate "CREATE INDEX i_pattern_nondet ON t (s COLLATE ci text_pattern_ops)" \
+       > "$OUT/gate_pattern.txt" 2>&1; then
+    note "text_pattern_ops accepted (unexpected)"
+    hdr='UNEXPECTED: test 4 expected text_pattern_ops to refuse a nondeterministic collation, and it was accepted'
+  else
+    note "text_pattern_ops refused as expected: $(tail -1 "$OUT/gate_pattern.txt")"
+    hdr='expected: test 4, text_pattern_ops refuses a nondeterministic collation'
+  fi
+  { printf '%s\n' "$hdr"; cat "$OUT/gate_pattern.txt"; } > "$OUT/gate_pattern.tmp" \
     && mv "$OUT/gate_pattern.tmp" "$OUT/gate_pattern.txt"
 
   f gate /dev/stdin <<'SQL'
@@ -4787,29 +4838,85 @@ stage_cost() {
 }
 
 # ------------------------------------------------- expected server errors ---
-# Every server-side error this suite provokes is deliberate: the gate's
-# nondeterministic-collation refusal, and the superseded text's bigint
-# overflow on the ovf fixture.  Anything else in the log is a real failure, so
-# match the log against this list and count what is left over.  Each logged
-# error carries the statement that raised it, because log_min_error_statement
-# defaults to error, so a leftover can be read back to its statement.
+# Every server-side error this suite provokes is deliberate, and each one is
+# raised by a statement this script can name: the gate's text_pattern_ops
+# refusal of a nondeterministic collation, and the superseded text's bigint
+# overflow on the ovf fixture.  An allowed error is therefore a pair, the
+# message and a fragment of the statement that raised it, so that the same
+# message from another statement, say an overflow raised by the current text,
+# is not allowed.  Every line of one error record carries the same "%m [%p]"
+# prefix, because EmitErrorReport() captures the timestamp once per record,
+# and the STATEMENT line is the record's last line, its continuation lines
+# indented by a tab; that is what the pairing reads.  Only the lines after
+# the mark that cluster writes when it starts the server are read, so a
+# sandbox with a stray error recovers with "stop cluster"; the earlier lines
+# stay in the log.  Anything else counted is a real failure.
 EXPECTED_ERRORS=(
   'nondeterministic collations are not supported for operator class "text_pattern_ops"'
   'bigint out of range'
 )
+EXPECTED_STATEMENTS=(
+  'CREATE INDEX i_pattern_nondet'
+  'wiki_btree_wasted_space_sweep_12_17'
+)
 UNEXPECTED_ERRORS=0
-check_server_errors() {
-  local log=$1 line e known
+settle_pending() {                 # only from check_server_errors, on its locals
+  case $stmt in
+    *"${EXPECTED_STATEMENTS[$pending]}"*) seen[$pending]=$((seen[$pending] + 1)) ;;
+    *) UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+       printf '   unexpected: %s\n      its statement does not contain "%s"\n' \
+              "$pend_line" "${EXPECTED_STATEMENTS[$pending]}" ;;
+  esac
+  pending=-1; collecting=0; stmt=''
+}
+check_server_errors() {            # check_server_errors <server log> <mark file>
+  local log=$1 markf=$2 mark=0 n=0 line i tab
+  local pending=-1 pend_line='' pend_prefix='' stmt='' collecting=0
+  local -a seen
   UNEXPECTED_ERRORS=0
   [ -f "$log" ] || { printf '   no %s to read\n' "$log"; return 0; }
+  [ -f "$markf" ] && mark=$(tr -d ' \n' < "$markf")
+  tab=$(printf '\t')
+  for i in "${!EXPECTED_ERRORS[@]}"; do seen[i]=0; done
   while IFS= read -r line; do
-    known=1
-    for e in "${EXPECTED_ERRORS[@]}"; do
-      case $line in *"$e"*) known=0; break ;; esac
-    done
-    [ $known -eq 0 ] || { UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
-                          printf '   unexpected: %s\n' "$line"; }
-  done < <(grep -E '(ERROR|FATAL|PANIC):' "$log")
+    n=$((n + 1)); [ "$n" -le "$mark" ] && continue
+    if [ "$collecting" = 1 ]; then
+      case $line in
+        "$tab"*) stmt="$stmt"$'\n'"$line"; continue ;;   # the statement goes on
+      esac
+      settle_pending                                     # it ended on the line before
+    fi
+    case $line in
+      *' ERROR:  '*|*' FATAL:  '*|*' PANIC:  '*)
+        if [ "$pending" -ge 0 ]; then                    # never got its STATEMENT line
+          UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+          printf '   unexpected: %s\n      no STATEMENT line follows it\n' "$pend_line"
+          pending=-1
+        fi
+        for i in "${!EXPECTED_ERRORS[@]}"; do
+          case $line in *"${EXPECTED_ERRORS[i]}"*) pending=$i; break ;; esac
+        done
+        if [ "$pending" -ge 0 ]; then
+          pend_line=$line
+          pend_prefix=${line%% ERROR:  *}; pend_prefix=${pend_prefix%% FATAL:  *}
+          pend_prefix=${pend_prefix%% PANIC:  *}
+        else
+          UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1)); printf '   unexpected: %s\n' "$line"
+        fi ;;
+      "$pend_prefix STATEMENT:  "*)
+        [ "$pending" -ge 0 ] && { stmt=${line#"$pend_prefix STATEMENT:  "}; collecting=1; } ;;
+    esac
+  done < "$log"
+  if [ "$collecting" = 1 ]; then settle_pending
+  elif [ "$pending" -ge 0 ]; then
+    UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+    printf '   unexpected: %s\n      no STATEMENT line follows it\n' "$pend_line"
+  fi
+  for i in "${!EXPECTED_ERRORS[@]}"; do
+    printf '   allowed %s: "%s" from a statement containing "%s": seen %s\n' \
+           "$((i + 1))" "${EXPECTED_ERRORS[i]}" "${EXPECTED_STATEMENTS[i]}" "${seen[i]}"
+  done
+  printf '   lines read: %s after mark %s\n' "$((n - mark))" "$mark"
   printf '   allowed=%s unexpected_server_errors=%s\n' \
          "${#EXPECTED_ERRORS[@]}" "$UNEXPECTED_ERRORS"
 }
@@ -4848,7 +4955,7 @@ stage_criteria() {
     cat "$OUT/hashes.txt" 2>/dev/null
   } > "$OUT/criteria.txt" 2>&1
   { printf '7. server errors\n'
-    check_server_errors "$OUT/server.log"; } >> "$OUT/criteria.txt" 2>&1
+    check_server_errors "$OUT/server.log" "$OUT/server.log.mark"; } >> "$OUT/criteria.txt" 2>&1
   cat "$OUT/criteria.txt" >&2
   [ "$UNEXPECTED_ERRORS" -eq 0 ] \
     || die "$UNEXPECTED_ERRORS unexpected server error(s); see block 7 of $OUT/criteria.txt"
@@ -5041,6 +5148,16 @@ analyzed() { wait_for "(SELECT last_analyze IS NOT NULL FROM pg_stat_all_tables 
 vacuumed() { wait_for "(SELECT last_vacuum IS NOT NULL FROM pg_stat_all_tables WHERE relname = '$1')" "$1 vacuumed"; }
 
 # ---------------------------------------------------------------- build ------
+# clean deletes $BUILD, so this leg's build diagnostics are copied into $OUT
+# after every step, on the failure path too; the 17 leg owns the shared out/,
+# hence the 12 suffix on every copied name.
+keep_build_logs() {
+  local l
+  for l in configure make install; do
+    [ -f "$BUILD/$l.log" ] && cp "$BUILD/$l.log" "$OUT/${l}12.log"
+  done
+  return 0
+}
 stage_build() {
   say "build 12.2 out of tree from $SRC12"
   [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
@@ -5048,20 +5165,18 @@ stage_build() {
   mkdir -p "$BUILD" "$OUT" "$SQLD"
   ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" --enable-debug \
       --with-icu --with-readline --with-zlib CFLAGS="$EXTRA_CFLAGS" \
-      > configure.log 2>&1 ) || die "configure failed, see $BUILD/configure.log"
+      > configure.log 2>&1 ) \
+    || { keep_build_logs; die "configure failed, see $OUT/configure12.log"; }
   ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
-    || { grep -m3 'error:' "$BUILD/make.log" >&2; die "make failed"; }
+    || { keep_build_logs; grep -m3 'error:' "$BUILD/make.log" >&2
+         die "make failed, see $OUT/make12.log"; }
   local m
   for m in pageinspect pgstattuple amcheck; do
     ( cd "$BUILD" && make -C "contrib/$m" -j"$JOBS" >> install.log 2>&1 \
-        && make -C "contrib/$m" install >> install.log 2>&1 ) || die "contrib/$m failed"
+        && make -C "contrib/$m" install >> install.log 2>&1 ) \
+      || { keep_build_logs; die "contrib/$m failed, see $OUT/install12.log"; }
   done
-  # clean deletes $BUILD, so keep this leg's build diagnostics in $OUT.  The
-  # 17 leg owns the shared out/, hence the 12 suffix on every copied name.
-  local l
-  for l in configure make install; do
-    cp "$BUILD/$l.log" "$OUT/${l}12.log" 2>/dev/null
-  done
+  keep_build_logs
   note "$("$BIN/postgres" --version)"
 }
 
@@ -5111,6 +5226,9 @@ maintenance_work_mem = '256MB'
 max_parallel_maintenance_workers = 0
 CONF
     fi
+    # The mark the server-error check reads from, as in the 17 leg.
+    { [ -f "$OUT/server12.log" ] && wc -l < "$OUT/server12.log" || printf '0\n'; } \
+      | tr -d ' ' > "$OUT/server12.log.mark"
     "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server12.log" -w start > /dev/null || die "start failed"
   fi
   # The helpers connect to $DB, which does not exist yet on a fresh cluster, so
@@ -5573,34 +5691,99 @@ SQL
   cat "$OUT/extstat12.txt" >&2
 }
 
-# Both errors this leg provokes are deliberate: the reloption probe that
-# discovers deduplicate_items is unknown here, and the pre-fix text kept to
-# prove the refusal the filed text removed.  Anything else fails the run.
+# Both errors this leg provokes are deliberate and each has a statement this
+# script can name: the reloption probe that discovers deduplicate_items is
+# unknown here, and the pre-fix text kept to prove the refusal the filed text
+# removed.  The pairing, the mark and the record layout are the 17 leg's; see
+# its comment.  The second fragment is the tag every estimator text on the
+# page carries, so this message is allowed from any of them, including the
+# current text should a revision name the column again, which the exact and
+# transform stages record as a result rather than a failure; from any other
+# statement it is counted.
 EXPECTED_ERRORS=(
   'unrecognized parameter "deduplicate_items"'
   'column se.inherited does not exist'
 )
+EXPECTED_STATEMENTS=(
+  'CREATE INDEX dedup_probe_i'
+  'wiki_btree_wasted_space_sweep_r2'
+)
 UNEXPECTED_ERRORS=0
-check_server_errors() {
-  local log=$1 line e known
+settle_pending() {                 # only from check_server_errors, on its locals
+  case $stmt in
+    *"${EXPECTED_STATEMENTS[$pending]}"*) seen[$pending]=$((seen[$pending] + 1)) ;;
+    *) UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+       printf '   unexpected: %s\n      its statement does not contain "%s"\n' \
+              "$pend_line" "${EXPECTED_STATEMENTS[$pending]}" ;;
+  esac
+  pending=-1; collecting=0; stmt=''
+}
+check_server_errors() {            # check_server_errors <server log> <mark file>
+  local log=$1 markf=$2 mark=0 n=0 line i tab
+  local pending=-1 pend_line='' pend_prefix='' stmt='' collecting=0
+  local -a seen
   UNEXPECTED_ERRORS=0
   [ -f "$log" ] || { printf '   no %s to read\n' "$log"; return 0; }
+  [ -f "$markf" ] && mark=$(tr -d ' \n' < "$markf")
+  tab=$(printf '\t')
+  for i in "${!EXPECTED_ERRORS[@]}"; do seen[i]=0; done
   while IFS= read -r line; do
-    known=1
-    for e in "${EXPECTED_ERRORS[@]}"; do
-      case $line in *"$e"*) known=0; break ;; esac
-    done
-    [ $known -eq 0 ] || { UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
-                          printf '   unexpected: %s\n' "$line"; }
-  done < <(grep -E '(ERROR|FATAL|PANIC):' "$log")
+    n=$((n + 1)); [ "$n" -le "$mark" ] && continue
+    if [ "$collecting" = 1 ]; then
+      case $line in
+        "$tab"*) stmt="$stmt"$'\n'"$line"; continue ;;   # the statement goes on
+      esac
+      settle_pending                                     # it ended on the line before
+    fi
+    case $line in
+      *' ERROR:  '*|*' FATAL:  '*|*' PANIC:  '*)
+        if [ "$pending" -ge 0 ]; then                    # never got its STATEMENT line
+          UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+          printf '   unexpected: %s\n      no STATEMENT line follows it\n' "$pend_line"
+          pending=-1
+        fi
+        for i in "${!EXPECTED_ERRORS[@]}"; do
+          case $line in *"${EXPECTED_ERRORS[i]}"*) pending=$i; break ;; esac
+        done
+        if [ "$pending" -ge 0 ]; then
+          pend_line=$line
+          pend_prefix=${line%% ERROR:  *}; pend_prefix=${pend_prefix%% FATAL:  *}
+          pend_prefix=${pend_prefix%% PANIC:  *}
+        else
+          UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1)); printf '   unexpected: %s\n' "$line"
+        fi ;;
+      "$pend_prefix STATEMENT:  "*)
+        [ "$pending" -ge 0 ] && { stmt=${line#"$pend_prefix STATEMENT:  "}; collecting=1; } ;;
+    esac
+  done < "$log"
+  if [ "$collecting" = 1 ]; then settle_pending
+  elif [ "$pending" -ge 0 ]; then
+    UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+    printf '   unexpected: %s\n      no STATEMENT line follows it\n' "$pend_line"
+  fi
+  for i in "${!EXPECTED_ERRORS[@]}"; do
+    printf '   allowed %s: "%s" from a statement containing "%s": seen %s\n' \
+           "$((i + 1))" "${EXPECTED_ERRORS[i]}" "${EXPECTED_STATEMENTS[i]}" "${seen[i]}"
+  done
+  printf '   lines read: %s after mark %s\n' "$((n - mark))" "$mark"
   printf '   allowed=%s unexpected_server_errors=%s\n' \
          "${#EXPECTED_ERRORS[@]}" "$UNEXPECTED_ERRORS"
 }
 
 stage_report() {
   say "12.2 leg written to $OUT"
+  [ -f "$OUT/v12_facts.txt" ] || die "no $OUT/v12_facts.txt; run the exact stage first"
+  # Idempotent: drop the block an earlier report appended before appending this
+  # one, so the file never carries a stale count above a live one.
+  local line
+  : > "$OUT/v12_facts.tmp"
+  while IFS= read -r line; do
+    [ "$line" = "server_errors" ] && break
+    printf '%s\n' "$line" >> "$OUT/v12_facts.tmp"
+  done < "$OUT/v12_facts.txt"
+  mv "$OUT/v12_facts.tmp" "$OUT/v12_facts.txt"
   { printf 'server_errors\n'
-    check_server_errors "$OUT/server12.log"; } >> "$OUT/v12_facts.txt" 2>&1
+    check_server_errors "$OUT/server12.log" "$OUT/server12.log.mark"; } >> "$OUT/v12_facts.txt" 2>&1
   cat "$OUT/v12_facts.txt" >&2
   [ "$UNEXPECTED_ERRORS" -eq 0 ] \
     || die "$UNEXPECTED_ERRORS unexpected server error(s); see the end of $OUT/v12_facts.txt"
@@ -5688,11 +5871,13 @@ in the databases so they can be queried directly.
 | `cost.txt` | six interleaved timings of the two exact texts, and the size of the database they ran against |
 | `v12_facts.txt`, `v12_exact.txt`, `verdicts12.txt` | the 12 leg: the discovered facts, the verbatim parse outcome, and the scored subset |
 | `server.log`, `server12.log`, `gate_build.log` | server output, including the build's own `DEBUG1` deduplication verdicts |
+| `server.log.mark`, `server12.log.mark` | the line count of the matching log when `cluster` last started that server; the server-error check reads only the lines after it |
 
-The tables stay queryable after the run, and each one keys its rows
-differently, which is worth knowing before writing a `WHERE` clause:
+The tables, and the 12 leg's `verdicts12` view, stay queryable after the run,
+and each one keys its rows differently, which is worth knowing before writing
+a `WHERE` clause:
 
-| Table | Database | Keyed by |
+| Table or view | Database | Keyed by |
 |---|---|---|
 | `verdicts`, `res` | `suite` | `num`, `leg`, `idx` |
 | `gate_res` | `gate` | `indexname` |
@@ -5753,7 +5938,7 @@ the one this page scores itself on.
 | Probes | one line per emitted probe, and `false` on every subset the fixture drained, `true` on every subset it refilled |
 | Attribution | every `EXCEPT` row explainable by one of the five documented changes; an unexplained row is a regression |
 | 12 leg | `transformed_text=executes`, and `transform_edits` no larger than the page documents |
-| Server errors | block 7 of `criteria.txt` reads `unexpected_server_errors=0`, and the same line closes `v12_facts.txt` on the 12 leg. Each leg allows exactly the errors it provokes on purpose — two on 17.11, two on 12.2 — and dies on anything else, so a stray error can no longer hide among them |
+| Server errors | block 7 of `criteria.txt` reads `unexpected_server_errors=0`, and the same line closes `v12_facts.txt` on the 12 leg; on a full run each of the two allowed pairs reads `seen 1`. Each leg allows exactly the errors it provokes on purpose, each only from the statement that provokes it, and dies on anything else, so a stray error can no longer hide among them. The check reads the log from the mark `cluster` wrote when it started the server, so a stray error is cleared by `stop cluster`, not by a bare re-run of `criteria` or `report` |
 
 Three things that look like failures and are not. A **withheld** row is the
 exclusion terms working, not a miss. A **negative** percentage is
@@ -6121,7 +6306,7 @@ as the targeted re-run did.
 
 ### What the 2026-09-10 full re-run measured on Darwin arm64
 
-**This is the last-run record. Both scripts were run end to end, twice, from
+**This was the last-run record until the run under the current script text, recorded under [The server-error check, reviewed](#the-server-error-check-reviewed), which reproduced every count below. Both scripts were run end to end, twice, from
 an empty sandbox, on a second platform, under the repaired script text, and
 every verdict count of the 2026-09-09 Linux run reproduced.** The first pair
 of runs carried the `stop` repair alone; the second pair, whose numbers are
@@ -6218,6 +6403,253 @@ between any two runs, on either platform.
 [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894),
 [analyze.c#compute_scalar_stats-width](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2420-L2426).
 
+### The server-error check, reviewed
+
+*The six defects below were repaired later the same day, without a re-run;
+see [The server-error check, repaired](#the-server-error-check-repaired).*
+
+**The last commit to the scripts, `641e966` of 2026-09-10 ("let the B-tree
+suite scripts tell a deliberate error from a real one"), does what it says,
+and both legs were re-run end to end under its text on this host to prove
+it: block 7 of `criteria.txt` reads `allowed=2 unexpected_server_errors=0`
+on 17.11, the same line closes `v12_facts.txt` on 12.2, a clean stop and
+restart adds nothing the check counts, and one stray ad-hoc statement per
+leg makes the checking stage name the offending line and exit 1. Six defects
+survive the review, none of which moves a measured number: both `build`
+stages die before the new copy line, so a failed build still leaves nothing
+in `out/`; the 12 leg's `report` appends a fresh `server_errors` block on
+every run, so its facts file can carry a stale `unexpected_server_errors=0`
+above a live `=1`; the allow-list matches message text, not a count or a
+statement, so an overflow raised by the current text would pass as the
+superseded text's; a stray error, once logged, fails every later `criteria`
+run of that sandbox; `gate_pattern.txt` gets its `expected:` header whether
+or not the refusal happened; and the reading guide calls `verdicts12` a
+table when the script creates a view.** The asker chose review only, so the
+script text is unchanged and the repairs are filed under
+[What the server-error check review left open](#what-the-server-error-check-review-left-open).
+This section is the last-run record for the script text as filed; the
+family-by-family table under
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64)
+stands, and this run reproduced every count in it.
+
+#### What the commit changed, hunk by hunk
+
+| Hunk | What it does | Verdict |
+|---|---|---|
+| `EXPECTED_ERRORS` and `check_server_errors`, once per leg | reads every line of the leg's server log that carries `ERROR:`, `FATAL:` or `PANIC:`, allows a line containing one of two message texts, counts and prints the rest, and sets `UNEXPECTED_ERRORS` | works as claimed on the six runs below; its limits are under [What the check can and cannot see](#what-the-check-can-and-cannot-see) |
+| block 7 of `stage_criteria`; the 12 leg's `stage_report` | append the check's output to `criteria.txt` or `v12_facts.txt`, then `die` when the count is not zero | works; the 17 leg rewrites `criteria.txt` from scratch on every run, the 12 leg appends to a file it did not create, which is defect 2 |
+| `cp` of `configure.log`, `make.log`, `install.log` at the end of both `stage_build` | keeps the build diagnostics in `out/` | runs only on the success path: `configure`, `make`, `make install` and each contrib build call `die` on failure, and `die` exits before the copy, which is defect 1. The commit's stated purpose, "a failed build leaves nothing to read once the sandbox is gone", is therefore not met |
+| `cp` of `check_*.log` and any `regression.diffs` at the end of both `stage_check` | keeps the regression diagnostics in `out/` | works for a failed suite too, because `stage_check` records `$?` and continues rather than dying; this run copied four logs per leg and no `diffs*` file, since no suite failed |
+| `expected:` header prepended to `gate_pattern.txt` | says that the refusal is the test's expected outcome | the header is written after both branches of the `&&` and `\|\|`, so it would also head a file recording an unexpected acceptance, which is defect 5 |
+| `pre_text_note=` in the 12 leg's `extstat` | says that `pre_text=refused` is expected | written in the refused branch only; correct |
+| the nine-row key-column table in the reading guide | names each result table's database and key columns | every column checked against the `CREATE` statements in the scripts: `verdicts` and `res` carry `num`, `leg`, `idx`; `gate_res` `indexname`; `geo_result` `keylen`, `fillfactor`; `cal_res` `pattern`; `fresh_res` `keylen`; `tail_res` `rows_per_group`; `cmp_res` `storage`; `bar_res` `leg`; `verdicts12` `num`, `idx`. `verdicts12` is created with `CREATE VIEW`, so "the tables stay queryable" is one word off, which is defect 6 |
+| the Cleanup and Output rows, both stage tables, the file map, the pass-criteria row | documentation of the above | consistent with the script text. The usage table's `Stages` cell, older than this commit, said 17 stages for the 17 leg; the dispatcher carries 16 plus `stop` and `clean`, and the cell is corrected in this pass |
+
+#### What the check can and cannot see
+
+Read from the 17 source, each point names what the allow-list quietly
+depends on.
+
+1. **Only errors that reached the top of the backend are in the log.**
+   `errfinish` hands an `ERROR` to the current handler without emitting it,
+   "printing it and popping the stack is the responsibility of the handler";
+   the backend's `sigsetjmp` handler in `PostgresMain` is the one that calls
+   `EmitErrorReport()`. A PL/pgSQL `EXCEPTION` block is a handler too: it
+   copies the error and calls `FlushErrorState()`, so nothing is written.
+   `FATAL` and `PANIC` are emitted at once. The suite's own `score_all` wraps
+   its read of the superseded view in `BEGIN ... EXCEPTION WHEN OTHERS`, so
+   an overflow there would never reach `server.log`; the one `bigint out of
+   range` the log holds comes from the acceptance stage's whole-database run
+   of the superseded text, which is not caught. The check is a check of the
+   log, not of every statement the suite sent.
+   [elog.c#errfinish-rethrow](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L515-L546),
+   [postgres.c#PostgresMain-error-handler](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4446-L4485),
+   [pl_exec.c#exec_stmt_block-catch](../../../../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1829-L1839).
+2. **A logged error carries its statement under three conditions, not
+   always.** The `STATEMENT:` line is written when the level is at or above
+   `log_min_error_statement`, whose default is `ERROR`, when the error was
+   not raised with `errhidestmt()`, and when a `debug_query_string` exists.
+   A `FATAL` raised while a connection is being set up has no statement, so
+   the commit's "every logged error carries the statement that raised it"
+   holds for the errors this suite provokes, not for every line the pattern
+   matches. Both stray errors below carried theirs.
+   [elog.c#check_log_of_query](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2727-L2743),
+   [elog.c#STATEMENT-line](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3276-L3284),
+   [elog.c#errhidestmt](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L1406-L1420),
+   [guc_tables.c#log_min_error_statement](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4884-L4891).
+3. **The level token and the message are both translated.** `error_severity`
+   returns strings marked for translation, the log writer applies `_()` to
+   the result, and `errmsg` runs its format through `dgettext`. The pattern
+   `(ERROR|FATAL|PANIC):` and both allow-lists therefore assume an English
+   `lc_messages`. The cluster stages guarantee it: `initdb --locale=C`
+   defaults `lc_messages` to the locale and writes it into
+   `postgresql.conf`. On any other `lc_messages` the pattern would match
+   nothing and the check would pass with nothing counted.
+   [elog.c#error_severity](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3667-L3705),
+   [elog.c:3194](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3194),
+   [elog.c#EVALUATE_MESSAGE](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L989-L1018),
+   [initdb.c#lc_messages-default](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L2424-L2425),
+   [initdb.c#lc_messages-conf](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L1292-L1293),
+   [guc_tables.c#log_line_prefix](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4095-L4101).
+4. **The log is append-only for the life of the sandbox.** `pg_ctl` starts
+   the postmaster with `>> "<logfile>"`, so every `cluster` stage appends to
+   the same `server.log`, and a stray error stays counted until the sandbox
+   is recreated; measured below as the third `criteria` run.
+   [pg_ctl.c#start_postmaster-command](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L489-L494).
+5. **A clean stop and restart adds nothing the pattern matches.**
+   `pg_ctl -w start` waits by reading the status line of `postmaster.pid`,
+   not by connecting, so the `FATAL: the database system is starting up`
+   that a client receives during startup is never provoked; and `-m fast`
+   sends `FATAL: terminating connection due to administrator command` only
+   to sessions that are open at that moment, of which the suite leaves none.
+   A reviewer's own `psql` left open across `stop` would add one such line
+   to the next count.
+   [pg_ctl.c#wait_for_postmaster_start](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L592-L699),
+   [backend_startup.c#CAC_STARTUP](../../../../raw/postgres-17/src/backend/tcop/backend_startup.c#L265-L278),
+   [postgres.c#administrator-command-FATAL](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L3315-L3318).
+6. **The `DEBUG:` echo is not counted.** The 17 leg logs at
+   `log_min_messages = debug1`; after the full run `server.log` held 3,882
+   lines, 1,994 of them `DEBUG:`, and the stray error below was echoed by
+   one `DEBUG:` line with the same text. The pattern keys on the level
+   token, so the error was counted once.
+   [guc_tables.c#log_min_messages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4873-L4877).
+
+#### The six runs
+
+**Date** 2026-09-10. **Pins** `786db8dcf168bd9df8f55047337525ac19118b1c` for
+the 17 leg and `45b88269a353ad93744772791feb6d01bc7e1e42` for the 12 leg,
+both checkouts clean and never written to. **Script text** the two `bash`
+blocks of this page as of commit `641e966`, re-extracted with `md_block`,
+parsed with `bash -n` (2,111 and 729 lines) and run from the repository root
+with `JOBS=8`. **Platform** `uname -sm` `Darwin arm64`; the banners read
+`PostgreSQL 17.11 on aarch64-apple-darwin25.6.0, compiled by Apple clang
+version 21.0.0 (clang-2100.3.34.2), 64-bit` and `PostgreSQL 12.2 on
+arm-apple-darwin25.6.0`, same compiler; ICU 78.3 through `ICU_CFLAGS` and
+`ICU_LIBS`; GNU bash 5.3.15; `sha256sum` from `/sbin`; `pg_control_init()`
+`max_data_alignment` **8**, `database_block_size` **8192**. The two stray
+statements are the only statements this pass sent outside the scripts, each
+with an absolute socket path because `psql -h` treats a relative one as a
+host name:
+
+```sh
+S="$PWD/.wiki-runtime/tmp/btree-suite"
+"$S/install17/bin/psql" -X -h "$S/sock"   -p 55437 -d suite -c "SELECT /* wiki_review_stray_error */ 1 FROM no_such_relation"
+"$S/install12/bin/psql" -X -h "$S/sock12" -p 55412 -d leg12 -c "SELECT /* wiki_review_stray_error */ 1/0"
+```
+
+| Run | Leg | Stages | Result |
+|---|---|---|---|
+| full, from an empty sandbox | 17 | default order | exit 0 in **2 min 31 s** (`2:30.73 total`); block 7 `allowed=2 unexpected_server_errors=0`; `server.log` holds exactly two counted lines, one `nondeterministic collations are not supported for operator class "text_pattern_ops"` and one `bigint out of range`, each followed by its `STATEMENT:` line; `gate_pattern.txt` opens with the `expected:` header |
+| full, into the same sandbox | 12 | default order | exit 0 in **1 min 51 s** (`1:51.06 total`); `v12_facts.txt` ends `allowed=2 unexpected_server_errors=0`; `server12.log` holds exactly two counted lines, one `unrecognized parameter "deduplicate_items"` and one `column se.inherited does not exist at character 5806`; `pre_text_note=` present; `configure12.log`, `make12.log`, `install12.log` and four `check12_*.log` in `out/` |
+| restart | 17 | `stop cluster criteria` | exit 0; teardown confirmed, then `database system is ready to accept connections`; block 7 still `unexpected_server_errors=0`, the two counted lines unchanged |
+| restart | 12 | `stop cluster report` | exit 0; `unexpected_server_errors=0`; `v12_facts.txt` now holds two `server_errors` blocks |
+| stray error | 17 | the first statement above, then `criteria`, then `criteria` again | `psql` exit 1; `criteria` exit 1 with `unexpected: 2026-09-10 10:52:05.436 EDT [20547] ERROR:  relation "no_such_relation" does not exist at character 45`, `allowed=2 unexpected_server_errors=1`, and `!! 1 unexpected server error(s); see block 7 of .../out/criteria.txt`; the second `criteria` exits 1 again on the same line |
+| stray error | 12 | the second statement above, then `report` | `report` exit 1 with `unexpected: 2026-09-10 10:54:11.166 EDT [37737] ERROR:  division by zero` and `unexpected_server_errors=1`; `v12_facts.txt` now holds three `server_errors` blocks, the first two still reading `unexpected_server_errors=0` above the third |
+
+Everything else reproduced the Darwin record above: `make check` **All 225**
+plus 8, 1 and 3 on 17.11 and **All 192** plus 5, 1 and 2 on 12.2; the five
+text hashes `match`; geometry 78 of 78 leaf-exact and 78 of 78 `relpages`;
+calibration digit for digit; gate 0 over-credits, 0 metapage disagreements,
+2 under-credits, worst 28.8 %; the three deterministic defects at `inh_i`
+`-417.8 %` -> `0.0 %`, `expr_i` `0.0`, `st0_i` `-22.3`; the numbered suite at
+floor **80 / 20 / 7 / 3 / 2** and point **76 / 26 / 5 / 3 / 2**, which are
+the Linux counts, with fixture 120 at 87.5 % as in the first Darwin run and
+the six reported critical false positives that value implies; 53 withheld,
+0 unexplained, 0 contract failures; the 12 leg's exact text executing with
+`transform_edits=0`, its facts unchanged, and 13 PASS / 5 / 1 over 19
+fixtures, all `ineligible`. The `EXCEPT` attribution returned **30** rows in
+each direction, a fourth value beside the filed 26, 33 and 31; see
+[Attribution row counts differ between hosts](#attribution-row-counts-differ-between-hosts).
+
+**Teardown.** The 12 leg's `clean` and then the 17 leg's `clean` ran after
+`out/` was copied out: each stopped its server with `pg_ctl -m fast -w
+stop`, found `database system is shut down` in its log, confirmed no
+`postmaster.pid`, no postgres process on its data directory and an empty
+socket directory, and only then deleted; the 8.4 GB sandbox is gone,
+`pgrep -fl postgres` is empty, and `.wiki-runtime/tmp/` holds only
+`btree-suite-scripts/` (3.3 MB: the two extracted scripts, the six run logs
+and this run's `out/` as `out-2026-09-10-review/`, kept as generated
+artifacts).
+
+**Bookkeeping.** The commit recorded its own Linux run in the commit message
+only, at the asker's instruction, so until this pass the filed last-run
+record described the earlier script text; `MANDATORY Measurement Script`
+asks that the last run be recorded on the page and `MANDATORY Bookkeeping`
+that a measurement run be logged. This run, under the current text, closes
+that gap; `verified_by_agent` stays `not yet` because this pass measured the
+scripts rather than re-reading every claim on the page.
+
+### The server-error check, repaired
+
+**The six defects found above were repaired in the filed script text on
+2026-09-10, and, at the asker's instruction, nothing was re-run: no server
+was built or started, so every number on this page still comes from the
+script text of commit `641e966`, and that gap is recorded under
+[What the server-error check review left open](#what-the-server-error-check-review-left-open).**
+What stood in for a run: both scripts were re-extracted from this page with
+`md_block` and parsed with `bash -n` (2,186 and 805 lines); a `diff` against
+the extraction of the commit's text shows six hunks in the 17 leg and four in
+the 12 leg, all of them the repairs below and nothing else; and the repaired
+check function, sourced as a shell function, was exercised against the server
+logs the review run left under
+`.wiki-runtime/tmp/btree-suite-scripts/out-2026-09-10-review/`, which hold
+both deliberate errors of each leg, both stray errors and a restart.
+
+#### The six repairs
+
+| # | Defect | Repair |
+|---|---|---|
+| 1 | build logs copied only on success | both `stage_build` now call `keep_build_logs`, which copies whichever of `configure.log`, `make.log` and `install.log` exist, inside every failure branch before `die` and once more on success; each `die` message now names the copy in `out/` |
+| 2 | `report` appended a block per run | the 12 leg's `stage_report` dies if `v12_facts.txt` is missing, rewrites the file up to the first `server_errors` line, then appends the check's block, so the file carries exactly one |
+| 3 | allow-list by message only | each allowed error is a pair, `EXPECTED_ERRORS[i]` and `EXPECTED_STATEMENTS[i]`, a fragment the raising statement must contain. The check pairs an `ERROR`, `FATAL` or `PANIC` line with the `STATEMENT:` line carrying the same `%m [%p]` prefix, collects the tab-indented continuation lines, and allows the error only when the collected statement contains the fragment; an allowed message whose statement does not, or that has no `STATEMENT:` line, is counted and says why. Block 7 also prints how often each pair was seen. The pairs are `CREATE INDEX i_pattern_nondet` and the superseded text's tag `wiki_btree_wasted_space_sweep_12_17` on 17.11, a tag the current text does not carry; and `CREATE INDEX dedup_probe_i` and the estimator tag `wiki_btree_wasted_space_sweep_r2` on 12.2, which every estimator text on this page carries, so that message is allowed from any of them, including a current text that named the column again, which the leg's `exact` and `transform` stages record as a result rather than a failure, and from nothing else |
+| 4 | a stray error failed every later checking run | `cluster` writes the log's line count to `server.log.mark` (`server12.log.mark`) just before it starts the server, and the check reads only the lines after the mark, so `stop cluster` clears a stray error while the earlier lines stay in the log; a bare re-run of `criteria` or `report` still fails, and block 7 prints how many lines it read after which mark |
+| 5 | unconditional `gate_pattern.txt` header | the header follows the branch: `expected: ...` on the refusal, `UNEXPECTED: ...` on an acceptance |
+| 6 | `verdicts12` called a table | the reading guide says "tables, and the 12 leg's `verdicts12` view", and the key-column table is headed "Table or view" |
+
+Why the pairing can rely on the prefix and on the tab, read from the 17
+source: `EmitErrorReport` resets `saved_timeval_set` and `formatted_log_time`
+once per report; `get_formatted_log_time` takes the clock only while
+`saved_timeval_set` is false and otherwise returns the cached string;
+`log_line_prefix` writes that string for `%m` and `MyProcPid` for `%p`, so
+every line of one record, the `STATEMENT:` line included, carries the same
+prefix. `send_message_to_server_log` writes the prefix, the severity and the
+message first and the statement last, and `append_with_tabs` inserts a tab
+after every newline of the statement text, which is why a continuation line
+starts with a tab and the next record's line does not.
+[elog.c#EmitErrorReport-timestamp-reset](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L1687-L1702),
+[elog.c#get_formatted_log_time](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2654-L2686),
+[elog.c#log_line_prefix-%p](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2954-L2958),
+[elog.c#log_line_prefix-%m](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2989-L2998),
+[elog.c#send_message_to_server_log-prefix](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3186-L3194),
+[elog.c#STATEMENT-line](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3276-L3284),
+[elog.c#append_with_tabs](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3719-L3729).
+
+#### What the saved logs showed
+
+The function and its two arrays were cut out of each re-extracted script and
+sourced into a shell; no `psql`, no server. The saved 17 log holds 3,914
+lines, the 12 log 480.
+
+| Exercise | Input | Result |
+|---|---|---|
+| 1 | the 17 log, no mark | `seen 1` for both pairs, the stray `no_such_relation` error counted, `unexpected_server_errors=1` |
+| 2 | the 17 log, mark at the restart (line 3,909) | five lines read, both pairs `seen 0`, the stray error still counted, 1 |
+| 3 | the 17 log, mark at the stray error (3,913, written with surrounding spaces) | one line read, nothing counted, 0 |
+| 4 | the 17 log with the overflow's statement rewritten to carry the current text's tag | the overflow counted with `its statement does not contain "wiki_btree_wasted_space_sweep_12_17"`, pair 2 `seen 0`, 2 in all with the stray error |
+| 5 | the 17 log plus an allowed message with no `STATEMENT:` line, once at the end and once at the start followed by a `LOG` line | each counted with `no STATEMENT line follows it`, 2 in all with the stray error |
+| 6 | the 12 log, no mark | `seen 1` for both pairs, `division by zero` counted, 1 |
+| 7 | the 12 log, mark at the stray error (479) | one line read, 0 |
+| 8 | a missing log | `no ... to read`, 0 |
+| 9 | the saved `v12_facts.txt` with three `server_errors` blocks, through the `report` stage's rewrite loop | one block, 17 lines |
+
+What a run under the repaired text still has to show, and this page cannot
+until one happens: block 7 reading `seen 1` for both pairs and
+`unexpected_server_errors=0` on both legs, the two mark files present, a
+failed build leaving its logs in `out/`, and every count under
+[The server-error check, reviewed](#the-server-error-check-reviewed)
+unchanged, since none of the repairs touches a statement, a fixture, a
+threshold or a stage order.
+
 ## Context Reviewed
 
 - PostgreSQL 17 pin `786db8dcf168bd9df8f55047337525ac19118b1c`; the source checkout is read-only and was never written to.
@@ -6235,6 +6667,10 @@ between any two runs, on either platform.
 - Full re-run of both suite scripts on 2026-09-10, same pins, on a second platform: the postmaster's fast and immediate shutdown paths, the checkpointer's shutdown checkpoint, the recovery decision at the next start, `pg_ctl`'s `stop`, `status` and `start` command construction, lock-file and socket-file removal (`postmaster.c`, `checkpointer.c`, `xlog.c`, `xlogrecovery.c`, `pg_ctl.c`, `miscinit.c`, `pqcomm.c`, `pg_ctl-ref.sgml`), and the installation notes on ICU flags and macOS System Integrity Protection. Both `stop` stages were rewritten from `pg_ctl -m immediate` to `-m fast -w` with a confirmed teardown, the 12 leg's database-existence check was pointed at `postgres`, and the 17 leg's `extstat` stage was moved after `suite`; both scripts were re-extracted from this page with their own `md_block` logic, parsed with `bash -n` (2,062 and 681 lines), and diffed against the previous extraction so that only those hunks changed. Each leg was then built from scratch and run end to end twice under `.wiki-runtime/tmp/btree-suite/` on Darwin arm64 (macOS 26.6.2, Apple clang 21.0.0, ICU 78.3 via `ICU_CFLAGS`/`ICU_LIBS`, `JOBS=8`): `make check` All 225 plus 8, 1 and 3 on 17.11 and All 192 plus 5, 1 and 2 on 12.2, all five text hashes matching, and every verdict count of the Linux run reproduced. Both servers were stopped by the repaired `stop` stages, the 8.4 GB sandbox was deleted, and both checkouts stayed read-only and clean at their pins; 1.8 MB of script copies, run logs and output text remains under `.wiki-runtime/tmp/btree-suite-scripts/`.
 
 - Portable extended-statistics filter, filed and measured on 2026-09-10, same pin: the `pg_stats_ext` and `pg_stats` view definitions and the `pg_statistic_ext_data` grant boundary (`system_views.sql`); the `stxdinherit` catalog column and its place in the data row's unique key (`pg_statistic_ext_data.h`); the two `ANALYZE` passes and the `inh` flag each one stores (`analyze.c`, `extended_stats.c`); and the whole `row_to_json` -> `->>` -> `boolean` chain, including what a missing key returns (`pg_proc.dat`, `pg_operator.dat`, `json.c`, `jsonfuncs.c`, `bool.c`). Both scripts were edited in place — one new `extstat` stage each, a new `BASEPRE` baseline, `BASE1` re-baselined to `646df923…`, an idempotent `cluster` stage, and a sixth database `xstat` — re-extracted from this page, parsed with `bash -n` (2,036 and 658 lines; this entry first recorded 2,004 and 648, corrected on 2026-09-10 by re-extracting both blocks), and run against the 17.11 and 12.2 clusters the 2026-09-09 run left in place under `.wiki-runtime/tmp/btree-suite/`: the 17 leg's `cluster texts extstat` and the 12 leg's `exact transform facts fixtures score extstat report`. Neither server was rebuilt, neither regression suite was re-run, both checkouts stayed read-only at their pins, and the sandbox was left in place for that pass, then stopped and deleted on 2026-09-10. The reconstruction of the previous statement text reproduced its filed SHA-256 exactly, which is what makes the one-line diff auditable.
+
+- Script-change review on 2026-09-10, same pins, both legs built and run end to end under the script text of commit `641e966`: the error-emission path and what a logged line carries (`elog.c`: `errfinish`, `EmitErrorReport`, `check_log_of_query`, `errhidestmt`, `error_severity`, the `STATEMENT:` writer and the `EVALUATE_MESSAGE` translation macro), the backend's top-level `sigsetjmp` handler (`postgres.c`), the PL/pgSQL exception catch (`pl_exec.c`), the `log_min_error_statement`, `log_line_prefix` and `log_min_messages` definitions (`guc_tables.c`), `pg_ctl`'s log redirection and its start wait on the `postmaster.pid` status line (`pg_ctl.c`), the startup-time connection refusal (`backend_startup.c`), the administrator-command `FATAL` (`postgres.c`) and `initdb`'s `lc_messages` default and write (`initdb.c`); the commit's diff hunk by hunk against the scripts as filed, the nine result tables' `CREATE` statements against the new key-column table, and the stage dispatcher against the usage table; the two scripts re-extracted with `md_block`, parsed with `bash -n` and run six times, two full runs, two restart runs and two stray-error runs, then both `clean` stages.
+
+- Script repairs on 2026-09-10, same pins, no server built or started: the per-report timestamp capture and the `%m`/`%p` prefix, and the record layout that writes the `STATEMENT:` line last and indents its continuation lines with a tab (`elog.c`: `EmitErrorReport`, `get_formatted_log_time`, `log_line_prefix`, `send_message_to_server_log`, `append_with_tabs`); the six repaired hunks of both scripts, re-extracted with `md_block`, parsed with `bash -n` and diffed against the commit's text; the repaired check function exercised nine times against the saved logs of the review run.
 
 ## Evidence Map
 
@@ -6270,6 +6706,9 @@ between any two runs, on either platform.
 | Where the `inherited` flag of `pg_stats_ext` comes from, and which `ANALYZE` pass writes it | [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L277-L309), [system_views.sql:290](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L290), [pg_statistic_ext_data.h:35](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L35), [pg_statistic_ext_data.h:57](../../../../raw/postgres-17/src/include/catalog/pg_statistic_ext_data.h#L57), [analyze.c#analyze_rel-passes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L246-L259), [analyze.c#BuildRelationExtStatistics-call](../../../../raw/postgres-17/src/backend/commands/analyze.c#L604-L606), [extended_stats.c#BuildRelationExtStatistics](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L111-L114), [extended_stats.c#statext_store](../../../../raw/postgres-17/src/backend/statistics/extended_stats.c#L790-L791). |
 | Why reading that flag through `row_to_json()` is the same predicate where the column exists, and a no-op where it does not | [pg_proc.dat#row_to_json](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8975-L8977), [json.c#composite_to_json](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L546-L579), [json.c#datum_to_json-bool](../../../../raw/postgres-17/src/backend/utils/adt/json.c#L212-L221), [pg_operator.dat#json-arrow-text](../../../../raw/postgres-17/src/include/catalog/pg_operator.dat#L3160-L3162), [pg_proc.dat#json_object_field_text](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L9078-L9081), [jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895), [bool.c#parse_bool_with_len](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L36-L58), [bool.c#boolin](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L126-L150). |
 | Why the base catalogs are not an alternative access path, and what the view's lateral costs to serialise | [system_views.sql#pg_statistic_ext_data-revoke](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L382-L383), [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L301-L307), [system_views.sql#pg_stats-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L194). |
+| What the server-error check reads, and why only errors that reached the top of the backend are in the log | [elog.c#errfinish-rethrow](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L515-L546), [postgres.c#PostgresMain-error-handler](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4446-L4485), [pl_exec.c#exec_stmt_block-catch](../../../../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1829-L1839), [elog.c#error_severity](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3667-L3705), [elog.c:3194](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3194), [elog.c#EVALUATE_MESSAGE](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L989-L1018), [initdb.c#lc_messages-default](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L2424-L2425), [initdb.c#lc_messages-conf](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L1292-L1293). |
+| When a logged error carries its statement, and why a clean restart adds nothing the check counts | [elog.c#check_log_of_query](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2727-L2743), [elog.c#STATEMENT-line](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3276-L3284), [elog.c#errhidestmt](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L1406-L1420), [guc_tables.c#log_min_error_statement](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4884-L4891), [guc_tables.c#log_line_prefix](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4095-L4101), [pg_ctl.c#start_postmaster-command](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L489-L494), [pg_ctl.c#wait_for_postmaster_start](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L592-L699), [backend_startup.c#CAC_STARTUP](../../../../raw/postgres-17/src/backend/tcop/backend_startup.c#L265-L278), [postgres.c#administrator-command-FATAL](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L3315-L3318). |
+| Why the repaired check can pair an error with its statement by log prefix, and read the statement's continuation lines | [elog.c#EmitErrorReport-timestamp-reset](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L1687-L1702), [elog.c#get_formatted_log_time](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2654-L2686), [elog.c#log_line_prefix-%p](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2954-L2958), [elog.c#log_line_prefix-%m](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2989-L2998), [elog.c#send_message_to_server_log-prefix](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3186-L3194), [elog.c#append_with_tabs](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3719-L3729), [elog.c#STATEMENT-line](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3276-L3284). |
 
 ## Open Questions
 
@@ -6295,6 +6734,15 @@ and the whole of the widening question that used to sit beside it, narrowed the
 two script questions above to what is still untested, and left every estimator
 limitation below untouched: none of them is about which `ANALYZE` pass the
 `extstat` CTE reads.
+
+The script-change review later on 2026-09-10 added
+[What the server-error check review left open](#what-the-server-error-check-review-left-open),
+six defects of the server-error check and the build-log copies of commit
+`641e966`; they were repaired in the script text the same day without a
+re-run, so that question now records that the filed numbers predate the
+script text. The review's own run, under the commit's text, reproduced every
+verdict count above and added a fourth attribution row count, 30 per
+direction.
 
 ### Mixed key widths in one index
 
@@ -6671,6 +7119,25 @@ on a 12.2 server has to look up its scope elsewhere. The clean fix is a
 `pg_settings` capture on the 12 leg, added to `stage_facts` and re-run, or the
 same table on a v12 page.
 
+### What the server-error check review left open
+
+**The six repairs are in the filed script text, and the filed numbers predate
+it.** Every number on this page comes from runs of the script text of commit
+`641e966`; the repairs of the same day, listed under
+[The server-error check, repaired](#the-server-error-check-repaired), have
+been parsed, diffed and exercised against saved logs but not run, at the
+asker's instruction. `MANDATORY Measurement Script` asks that a page whose
+numbers predate its script text say so here and keep `verified_by_agent` at
+`not yet`, which this page does. None of the repairs touches a statement, a
+fixture, a threshold or a stage order, so the next full run is expected to
+reproduce every count above; what it has to show that is new is listed at
+the end of that section, and this question closes when it does.
+
+Two limits stay as recorded: the check sees only errors that reached the
+top-level handler, so an error the suite's own `EXCEPTION` blocks swallow is
+invisible to it; and it assumes an English `lc_messages`, which the
+`initdb --locale=C` of both cluster stages guarantees.
+
 ## Source References
 
 - [nbtsort.c#_bt_buildadd](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L784-L855)
@@ -6878,6 +7345,28 @@ same table on a v12 page.
 - [pg_ctl.c#pgdata_opt](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L2278)
 - [pqcomm.c#RemoveSocketFiles](../../../../raw/postgres-17/src/backend/libpq/pqcomm.c#L846-L861)
 - [installation.sgml#SIP](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L3611-L3618)
+- [elog.c#errfinish-rethrow](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L515-L546)
+- [postgres.c#PostgresMain-error-handler](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4446-L4485)
+- [pl_exec.c#exec_stmt_block-catch](../../../../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1829-L1839)
+- [elog.c#check_log_of_query](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2727-L2743)
+- [elog.c#STATEMENT-line](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3276-L3284)
+- [elog.c#errhidestmt](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L1406-L1420)
+- [elog.c#error_severity](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3667-L3705)
+- [elog.c:3194](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3194)
+- [elog.c#EVALUATE_MESSAGE](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L989-L1018)
+- [guc_tables.c#log_min_error_statement](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4884-L4891)
+- [guc_tables.c#log_line_prefix](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4095-L4101)
+- [pg_ctl.c#wait_for_postmaster_start](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L592-L699)
+- [backend_startup.c#CAC_STARTUP](../../../../raw/postgres-17/src/backend/tcop/backend_startup.c#L265-L278)
+- [postgres.c#administrator-command-FATAL](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L3315-L3318)
+- [initdb.c#lc_messages-default](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L2424-L2425)
+- [initdb.c#lc_messages-conf](../../../../raw/postgres-17/src/bin/initdb/initdb.c#L1292-L1293)
+- [elog.c#EmitErrorReport-timestamp-reset](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L1687-L1702)
+- [elog.c#get_formatted_log_time](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2654-L2686)
+- [elog.c#log_line_prefix-%p](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2954-L2958)
+- [elog.c#log_line_prefix-%m](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L2989-L2998)
+- [elog.c#send_message_to_server_log-prefix](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3186-L3194)
+- [elog.c#append_with_tabs](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L3719-L3729)
 
 ## Navigation
 
