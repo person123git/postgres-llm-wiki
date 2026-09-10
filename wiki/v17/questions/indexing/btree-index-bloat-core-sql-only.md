@@ -2379,9 +2379,9 @@ arm64.
 | Stages | 17 stages plus `stop` and `clean`; see [the 17 leg's stages](#the-17-legs-stages) | 10 stages plus `stop` and `clean`; see [the 12 leg's stages](#the-12-legs-stages) |
 | Environment | 7 variables, all with defaults; see [what the scripts read from the environment](#what-the-scripts-read-from-the-environment) | 7 variables, all with defaults; same table |
 | Prerequisites | see [Prerequisites](#prerequisites) | the same, plus `-DTRUE=1 -DFALSE=0` in `EXTRA_CFLAGS` on a host whose ICU headers no longer define those macros |
-| Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt` |
+| Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables. The build and check diagnostics are copied there too, so they survive the build tree | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt`; this leg's copies carry a `12` in the name |
 | Runtime | about eleven minutes for a full run on the Linux host recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), most of it the build and the four regression suites, and about ninety seconds for `suite attribution probes score criteria` from a built tree; on the Darwin arm64 host recorded under [What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64), 2 min 26 s for the full run and 65 s for those five stages from a built tree | 1 min 52 s for the full run on the Darwin host, most of it the 12.2 build and its `make check`; from a built tree and a running cluster, 0.3 s for `exact transform facts` and 52.7 s for `fixtures score extstat report` on the Linux host |
-| Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server cleanly with `pg_ctl -m fast -w stop`, confirms the teardown (no `postmaster.pid`, no postgres process on the data directory, an empty socket directory) and only then deletes `$SANDBOX`; `stop` does the first two and keeps everything | `bash btree_bloat_suite_v12.sh clean` stops the 12 server the same way and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
+| Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server cleanly with `pg_ctl -m fast -w stop`, confirms the teardown (no `postmaster.pid`, no postgres process on the data directory, an empty socket directory) and only then deletes `$SANDBOX`; `stop` does the first two and keeps everything. **`out/` is inside `$SANDBOX`, so copy it out before `clean`** — nothing else preserves a run's results | `bash btree_bloat_suite_v12.sh clean` stops the 12 server the same way and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
 
 Save the two fenced blocks below as `btree_bloat_suite_v17.sh` and
 `btree_bloat_suite_v12.sh`, then run them from the repository root, because
@@ -2403,8 +2403,8 @@ have run. The default order is the order of this table.
 
 | Stage | What it does | Needs first |
 |---|---|---|
-| `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists | nothing |
-| `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt` | `build` |
+| `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists. It then copies `configure.log`, `make.log` and `install.log` into `out/`, because `clean` deletes the build tree | nothing |
+| `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt`, then copies every `check_*.log` into `out/` and any `regression.diffs` as `out/diffs_*.txt`; before 2026-09-10 a failed suite left only its one-line summary once the sandbox was gone | `build` |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the six UTF8 databases `geo`, `cal`, `gate`, `acc`, `suite` and `xstat` | `build` |
 | `texts` | extracts the four `sql` blocks of this page and the superseded text from `OLD_REV`, checks all five SHA-256 baselines, runs both exact texts as filed, and installs the two harness views in five databases | `cluster` |
 | `geometry` | the 78 (key width, fillfactor) cells, scored against `pageinspect` | `texts` |
@@ -2417,7 +2417,7 @@ have run. The default order is the order of this table.
 | `probes` | runs the probe generator on `suite` and `acc` and executes every statement it emits, still before any rebuild | `suite` |
 | `score` | `CALL score_all()`: per fixture assert the population, read both views, `REINDEX INDEX`, re-read the size; then writes `out/verdicts.txt` | `suite` |
 | `cost` | six interleaved timings of the two exact texts, and the size of the database they ran against | `texts` |
-| `criteria` | the six pass-criteria blocks into `out/criteria.txt` | `check`, `texts`, `gate`, `attribution`, `score` |
+| `criteria` | the six pass-criteria blocks into `out/criteria.txt`, then block 7, which matches every `ERROR`, `FATAL` and `PANIC` line in `out/server.log` against the two errors this suite provokes on purpose and dies on anything left over | `check`, `texts`, `gate`, `attribution`, `score` |
 | `report` | lists what landed in `out/` | nothing |
 | `stop` | stops the server with `pg_ctl -m fast -w stop`, so the checkpointer writes a shutdown checkpoint and the next start needs no recovery, then confirms the teardown: no `postmaster.pid`, no postgres process on the data directory, an empty socket directory. It dies rather than report a stop that did not happen. Until 2026-09-10 it used `-m immediate`, which skips the checkpoint and forces crash recovery on restart | `cluster` |
 | `clean` | `stop`, then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`; because `stop` dies on a failed teardown, `clean` never deletes a live cluster | nothing |
@@ -2426,8 +2426,8 @@ have run. The default order is the order of this table.
 
 | Stage | What it does | Needs first |
 |---|---|---|
-| `build` | 12.2 out of tree under `$SANDBOX/build12` with `CFLAGS="$EXTRA_CFLAGS"`, plus the same three contrib modules | nothing |
-| `check` | the 12.2 core and contrib suites into `out/checks12.txt` | `build` |
+| `build` | 12.2 out of tree under `$SANDBOX/build12` with `CFLAGS="$EXTRA_CFLAGS"`, plus the same three contrib modules, then copies its `configure.log`, `make.log` and `install.log` into `out/` as `configure12.log`, `make12.log` and `install12.log` | nothing |
+| `check` | the 12.2 core and contrib suites into `out/checks12.txt`, then copies each `check_*.log` into `out/` as `check12_*.log` and any `regression.diffs` as `diffs12_*.txt` | `build` |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, the same cluster settings without `log_min_messages`, started on `PORT12`, and the `leg12` database | `build` |
 | `exact` | extracts `sql` block 1, checks its hash, runs the text **unmodified**, and records `exact_text=executes` or `exact_text=refused` plus the first error lines in `out/v12_facts.txt` | `cluster` |
 | `transform` | applies one recorded edit per refused construct, re-runs, writes `transform_edits`, and installs the harness view; it dies rather than guess when a construct is still refused | `exact` |
@@ -2435,7 +2435,7 @@ have run. The default order is the order of this table.
 | `fixtures` | builds the constructible subset, one writer session per step, polling `pg_stat_all_tables` for publication instead of forcing a flush | `transform` |
 | `score` | the same measured-`REINDEX INDEX` scoring, into `out/verdicts12.txt` | `fixtures` |
 | `extstat` | rebuilds the text filed before the portable `extstat` filter, checks it against `BASEPRE`, records that this server still refuses it, then scores the filed text against the widened one on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat12.txt` | `transform` |
-| `report` | prints `out/v12_facts.txt` | `facts` |
+| `report` | appends the same server-error check to `out/v12_facts.txt` — the two errors this leg provokes on purpose are allowed, anything left over kills the run — and prints the file | `facts` |
 | `stop` | stops the 12 server with `pg_ctl -m fast -w stop` and confirms the same three teardown facts, dying on any of them; `-m immediate` until 2026-09-10 | `cluster` |
 | `clean` | `stop`, then deletes this leg's four directories after the same containment check | nothing |
 
@@ -2923,6 +2923,10 @@ stage_build() {
     ( cd "$BUILD" && make -C "contrib/$m" -j"$JOBS" >> install.log 2>&1 \
         && make -C "contrib/$m" install >> install.log 2>&1 ) || die "contrib/$m failed"
   done
+  # clean deletes $BUILD, and $OUT is what a reviewer copies out, so keep the
+  # build diagnostics in $OUT.  Without this a failed build leaves nothing to
+  # read once the sandbox is gone.
+  cp "$BUILD/configure.log" "$BUILD/make.log" "$BUILD/install.log" "$OUT/" 2>/dev/null
   note "$("$BIN/postgres" --version)"
 }
 
@@ -2940,6 +2944,14 @@ stage_check() {
     printf '%s=%s %s\n' "$m" "$?" \
       "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_$m.log" | tail -1)" \
       >> "$OUT/checks.txt"
+  done
+  # A one-line summary cannot diagnose a failure, and the logs and diffs live
+  # in $BUILD, which clean deletes.  Copy both where they survive.
+  cp "$BUILD"/check_*.log "$OUT/" 2>/dev/null
+  local d
+  for d in "$BUILD/src/test/regress" "$BUILD"/contrib/*; do
+    [ -f "$d/regression.diffs" ] \
+      && cp "$d/regression.diffs" "$OUT/diffs_$(basename "$d").txt"
   done
   cat "$OUT/checks.txt" >&2
 }
@@ -3386,10 +3398,15 @@ SELECT pg_stat_force_next_flush();
 SQL
   [ $? -eq 0 ] || { tail -20 "$OUT/gate_build.log" >&2; die "gate fixtures failed"; }
 
-  # test 4 and the pattern-opclass refusal, measured rather than derived
+  # test 4 and the pattern-opclass refusal, measured rather than derived.  The
+  # refusal is the expected outcome, so the file says so above the error text;
+  # a bare ERROR line at the top of a result file reads like a failure.
   q gate "CREATE INDEX i_pattern_nondet ON t (s COLLATE ci text_pattern_ops)" \
     > "$OUT/gate_pattern.txt" 2>&1 && note "text_pattern_ops accepted (unexpected)" \
-    || note "text_pattern_ops refused: $(tail -1 "$OUT/gate_pattern.txt")"
+    || note "text_pattern_ops refused as expected: $(tail -1 "$OUT/gate_pattern.txt")"
+  { printf 'expected: test 4, text_pattern_ops refuses a nondeterministic collation\n'
+    cat "$OUT/gate_pattern.txt"; } > "$OUT/gate_pattern.tmp" \
+    && mv "$OUT/gate_pattern.tmp" "$OUT/gate_pattern.txt"
 
   f gate /dev/stdin <<'SQL'
 DROP TABLE IF EXISTS gate_res;
@@ -4769,6 +4786,34 @@ stage_cost() {
   cat "$OUT/cost.txt" >&2
 }
 
+# ------------------------------------------------- expected server errors ---
+# Every server-side error this suite provokes is deliberate: the gate's
+# nondeterministic-collation refusal, and the superseded text's bigint
+# overflow on the ovf fixture.  Anything else in the log is a real failure, so
+# match the log against this list and count what is left over.  Each logged
+# error carries the statement that raised it, because log_min_error_statement
+# defaults to error, so a leftover can be read back to its statement.
+EXPECTED_ERRORS=(
+  'nondeterministic collations are not supported for operator class "text_pattern_ops"'
+  'bigint out of range'
+)
+UNEXPECTED_ERRORS=0
+check_server_errors() {
+  local log=$1 line e known
+  UNEXPECTED_ERRORS=0
+  [ -f "$log" ] || { printf '   no %s to read\n' "$log"; return 0; }
+  while IFS= read -r line; do
+    known=1
+    for e in "${EXPECTED_ERRORS[@]}"; do
+      case $line in *"$e"*) known=0; break ;; esac
+    done
+    [ $known -eq 0 ] || { UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+                          printf '   unexpected: %s\n' "$line"; }
+  done < <(grep -E '(ERROR|FATAL|PANIC):' "$log")
+  printf '   allowed=%s unexpected_server_errors=%s\n' \
+         "${#EXPECTED_ERRORS[@]}" "$UNEXPECTED_ERRORS"
+}
+
 # ---------------------------------------------------------------- criteria ---
 stage_criteria() {
   say "pass criteria"
@@ -4802,7 +4847,11 @@ stage_criteria() {
     cat "$OUT/checks.txt" 2>/dev/null
     cat "$OUT/hashes.txt" 2>/dev/null
   } > "$OUT/criteria.txt" 2>&1
+  { printf '7. server errors\n'
+    check_server_errors "$OUT/server.log"; } >> "$OUT/criteria.txt" 2>&1
   cat "$OUT/criteria.txt" >&2
+  [ "$UNEXPECTED_ERRORS" -eq 0 ] \
+    || die "$UNEXPECTED_ERRORS unexpected server error(s); see block 7 of $OUT/criteria.txt"
 }
 
 # ---------------------------------------------------------------- report -----
@@ -5007,6 +5056,12 @@ stage_build() {
     ( cd "$BUILD" && make -C "contrib/$m" -j"$JOBS" >> install.log 2>&1 \
         && make -C "contrib/$m" install >> install.log 2>&1 ) || die "contrib/$m failed"
   done
+  # clean deletes $BUILD, so keep this leg's build diagnostics in $OUT.  The
+  # 17 leg owns the shared out/, hence the 12 suffix on every copied name.
+  local l
+  for l in configure make install; do
+    cp "$BUILD/$l.log" "$OUT/${l}12.log" 2>/dev/null
+  done
   note "$("$BIN/postgres" --version)"
 }
 
@@ -5023,6 +5078,16 @@ stage_check() {
     printf '%s=%s %s\n' "$m" "$?" \
       "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_$m.log" | tail -1)" \
       >> "$OUT/checks12.txt"
+  done
+  # Same reason as the build stage: a one-line summary cannot diagnose a
+  # failure, and the logs and diffs go with $BUILD.
+  local l d
+  for l in core pageinspect pgstattuple amcheck; do
+    cp "$BUILD/check_$l.log" "$OUT/check12_$l.log" 2>/dev/null
+  done
+  for d in "$BUILD/src/test/regress" "$BUILD"/contrib/*; do
+    [ -f "$d/regression.diffs" ] \
+      && cp "$d/regression.diffs" "$OUT/diffs12_$(basename "$d").txt"
   done
   cat "$OUT/checks12.txt" >&2
 }
@@ -5407,6 +5472,7 @@ stage_extstat() {
       printf 'pre_text=executes\n'
     else
       printf 'pre_text=refused\n'
+      printf 'pre_text_note=expected: the pre-fix text is kept to prove the refusal the filed text removed\n'
       grep -E 'ERROR|LINE' "$OUT/v12_pre.txt" | head -2 \
         | while read -r line; do printf 'pre_error=%s\n' "$line"; done
     fi
@@ -5507,7 +5573,38 @@ SQL
   cat "$OUT/extstat12.txt" >&2
 }
 
-stage_report() { say "12.2 leg written to $OUT"; cat "$OUT/v12_facts.txt" >&2; }
+# Both errors this leg provokes are deliberate: the reloption probe that
+# discovers deduplicate_items is unknown here, and the pre-fix text kept to
+# prove the refusal the filed text removed.  Anything else fails the run.
+EXPECTED_ERRORS=(
+  'unrecognized parameter "deduplicate_items"'
+  'column se.inherited does not exist'
+)
+UNEXPECTED_ERRORS=0
+check_server_errors() {
+  local log=$1 line e known
+  UNEXPECTED_ERRORS=0
+  [ -f "$log" ] || { printf '   no %s to read\n' "$log"; return 0; }
+  while IFS= read -r line; do
+    known=1
+    for e in "${EXPECTED_ERRORS[@]}"; do
+      case $line in *"$e"*) known=0; break ;; esac
+    done
+    [ $known -eq 0 ] || { UNEXPECTED_ERRORS=$((UNEXPECTED_ERRORS + 1))
+                          printf '   unexpected: %s\n' "$line"; }
+  done < <(grep -E '(ERROR|FATAL|PANIC):' "$log")
+  printf '   allowed=%s unexpected_server_errors=%s\n' \
+         "${#EXPECTED_ERRORS[@]}" "$UNEXPECTED_ERRORS"
+}
+
+stage_report() {
+  say "12.2 leg written to $OUT"
+  { printf 'server_errors\n'
+    check_server_errors "$OUT/server12.log"; } >> "$OUT/v12_facts.txt" 2>&1
+  cat "$OUT/v12_facts.txt" >&2
+  [ "$UNEXPECTED_ERRORS" -eq 0 ] \
+    || die "$UNEXPECTED_ERRORS unexpected server error(s); see the end of $OUT/v12_facts.txt"
+}
 
 # Clean stop, confirmed, as in the 17 leg: -m fast rather than the -m immediate
 # this stage used until 2026-09-10, then no postmaster.pid, no postgres process
@@ -5575,9 +5672,10 @@ in the databases so they can be queried directly.
 
 | File | Holds |
 |---|---|
-| `criteria.txt` | the six pass-criteria blocks: the gate counters, the partial-group counters, every row whose modelled row count is zero, the size of the `EXCEPT` output, the exact-text runs, and the build and hash checks |
+| `criteria.txt` | seven blocks: the gate counters, the partial-group counters, every row whose modelled row count is zero, the size of the `EXCEPT` output, the exact-text runs, the build and hash checks, and the server-error check |
 | `hashes.txt` | the five text hashes against their baselines. A `DIFFER` line means the page changed and every number below it is about a different statement |
 | `checks.txt`, `checks12.txt` | `make check` and the three contrib suites, per leg |
+| `configure*.log`, `make*.log`, `install*.log`, `check*_*.log`, `diffs*_*.txt` | the build and regression diagnostics, copied out of the build tree so they outlive it. A `12` in the name marks the 12 leg. `diffs*` exist only when a suite failed |
 | `platform.txt` | `uname -sm`, `max_data_alignment` and `database_block_size`, which every geometry constant assumes |
 | `geometry.txt` | the 78-cell scorecard, then one row per (key width, fillfactor) cell |
 | `gate.txt` | one row per gate fixture with `equalimage`, the metapage, whether credit was given and whether posting lists were written, then the counters and the two `DEBUG1` tallies |
@@ -5591,10 +5689,20 @@ in the databases so they can be queried directly.
 | `v12_facts.txt`, `v12_exact.txt`, `verdicts12.txt` | the 12 leg: the discovered facts, the verbatim parse outcome, and the scored subset |
 | `server.log`, `server12.log`, `gate_build.log` | server output, including the build's own `DEBUG1` deduplication verdicts |
 
-The tables stay queryable after the run: `verdicts` and `res` in `suite`,
-`gate_res` in `gate`, `geo_result` in `geo`, `cal_res` in `cal`, `fresh_res`,
-`tail_res`, `cmp_res` and `bar_res` in `acc`, and `verdicts12` in the 12 leg's
-database.
+The tables stay queryable after the run, and each one keys its rows
+differently, which is worth knowing before writing a `WHERE` clause:
+
+| Table | Database | Keyed by |
+|---|---|---|
+| `verdicts`, `res` | `suite` | `num`, `leg`, `idx` |
+| `gate_res` | `gate` | `indexname` |
+| `geo_result` | `geo` | `keylen`, `fillfactor` |
+| `cal_res` | `cal` | `pattern` |
+| `fresh_res` | `acc` | `keylen` |
+| `tail_res` | `acc` | `rows_per_group` |
+| `cmp_res` | `acc` | `storage` |
+| `bar_res` | `acc` | `leg` |
+| `verdicts12` | `leg12` | `num`, `idx` |
 
 #### One scored row, column by column
 
@@ -5645,6 +5753,7 @@ the one this page scores itself on.
 | Probes | one line per emitted probe, and `false` on every subset the fixture drained, `true` on every subset it refilled |
 | Attribution | every `EXCEPT` row explainable by one of the five documented changes; an unexplained row is a regression |
 | 12 leg | `transformed_text=executes`, and `transform_edits` no larger than the page documents |
+| Server errors | block 7 of `criteria.txt` reads `unexpected_server_errors=0`, and the same line closes `v12_facts.txt` on the 12 leg. Each leg allows exactly the errors it provokes on purpose — two on 17.11, two on 12.2 — and dies on anything else, so a stray error can no longer hide among them |
 
 Three things that look like failures and are not. A **withheld** row is the
 exclusion terms working, not a miss. A **negative** percentage is
@@ -5670,7 +5779,9 @@ Two files the table above does not cover, both written by the `extstat` stages:
 counts, the two `ANALYZE` passes of each fixture, the three-text scorecard and
 the timing pairs; `out/extstat12.txt` holds the 12 leg's rows per statistics
 object, its two-text scorecard and its equivalence count. `out/v12_facts.txt`
-gains `pre_text=` and `wide_text=` lines from the same stage.
+gains `pre_text=`, `pre_text_note=` and `wide_text=` lines from the same stage;
+the note is there because `pre_text=refused` is the expected result and reads
+like a failure without it.
 
 The next section is this reading applied to one run.
 
