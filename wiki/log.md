@@ -2,6 +2,81 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-10] review v17 | pgstatindex bloat page re-measured from a published script
+
+- Reviewed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on
+  PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md#re-measured-from-a-published-script)
+  end to end at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c`
+  (17.11) and `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+  **Prompt hygiene first**: the original read `follow agents.md, in postgresql
+  17,  review question: B-Tree Bloat and Wasted Space From pgstatindex Alone,
+  on PostgreSQL 12 and 17 (unverified)`; the asker chose "correct and
+  restate", then chose a **source re-read plus a rebuild and re-measurement**,
+  **repair in place**, and **adding the mandatory measurement script and
+  running it**.
+- **The page had no `## Measurement Script` section and its sandbox was gone.**
+  `.wiki-runtime/tmp/pgsi/` no longer existed, so the fixture DDL behind every
+  filed number was unrecoverable. Two leg scripts were written, published in
+  full and run: `bloat_pgstatindex_v17.sh` and `bloat_pgstatindex_v12.sh`,
+  Bash and SQL only, 13 stages each plus `stop` and `clean`, extracting the
+  statement from the page and checking its SHA-256 before running it. The
+  section carries the eight-item usage table, a per-stage table with the one
+  ordering constraint that matters, the environment table, prerequisites, the
+  apply scope of all nine cluster settings, and a last-run record. Both blocks
+  were verified byte-identical to the scripts that ran, and both were
+  re-extracted from the filed page text and run again.
+- **Environment.** Linux x86_64, `block_size` 8192, `max_data_alignment` 8,
+  `--locale=C --encoding=UTF8`, ports 55417 and 55412, `autovacuum = off`,
+  `fsync = off`, `shared_buffers = 512MB`. 17.11 configured `--enable-debug
+  --with-icu --with-readline --with-zlib` passed **225 of 225** core tests plus
+  `contrib/pgstattuple`; 12.2 the same without ICU passed **192 of 192** plus
+  `contrib/pgstattuple`. 86 s per leg for the nine measuring stages.
+- **The reconstruction lands close.** The filed text still **executes
+  unmodified on 12.2** (28 rows against 29 on 17.11, 14 columns); the
+  invalid-index row returns `4|2|6758400|290|4|820|0|0|90.05|0`, digit for
+  digit including `root_block_no`; implied `max_avail` is 8151.6 and 8152.1
+  from densities 0.29 and 0.05 on both servers; the head-deleted fixture is
+  22,487,040 bytes with 1,918 dead pages on both; ten refusal messages and
+  three privilege outcomes match verbatim; `NaN > 20` is true for `float8` and
+  `numeric`; the worst post-`REINDEX` residual is 44.6 % / 7,309 bytes; and
+  eighteen accuracy rows match to the tenth of a point, including `+1.8` on
+  the same 456 kB `t_toast_pkey`, `−90.1` on `i_novac`, `−69.3` on
+  `i_dedup_off` and `−2.8` on `i_ff10_del90`. 25 of the 28 shared report rows
+  are byte-identical across the two servers.
+- **Three claims corrected in place.** `BTPageOpaqueData` has **five** fields,
+  not four (`btpo_cycleid` is a `BTCycleId`, itself a `uint16`). The
+  invalid-index refusal separates **these two minors**, not the two majors:
+  `13503eb5905` says in this checkout's own history that it was back-patched
+  to all supported versions. And a committed concurrent `DROP INDEX` usually
+  costs **one row, not the report**: the size prefilter's `pg_relation_size`
+  opens with `try_relation_open` and returns NULL by design, measured at 24
+  rows against 25 on 17.11 and 23 against 24 on 12.2 with no error, while the
+  abort path — real in the source, `relation_open` in
+  `pgstatindexbyid_v1_5` — did not reproduce in a ten-delay sweep on either
+  server. One citation was tightened: upstream's expected output covers
+  `pgstattuple` on a partitioned index and `pgstatindex` on a partitioned
+  table, not `pgstatindex` on a partitioned index.
+- **Two measured additions.** A fourth shape the estimate gets wrong: an index
+  whose single leaf page holds nothing reads `0.0` against an actual `50.0`.
+  And scoring catalog indexes measures the harness, because the scoring pass
+  rewrites `pg_class` while it runs — on 12.2 that produced the run's two
+  largest over-estimates, `+20.0` and `+14.3`, on `pg_class` indexes.
+- Validation: **150** source citations, 63 distinct ranges over 23 files, all
+  resolving, in bounds and inside `raw/postgres-17/`; 37 headings, 63
+  page-internal anchors and 14 wiki links all resolving; the `## Contents`
+  block regenerated; both published scripts parse when extracted from the
+  page. `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors and
+  0 warnings. Six open questions were added and one updated, the largest being
+  that most figures on the page predate the script now filed for them, so
+  `verified_by_agent` stays `not yet` and `verified:` is untouched.
+- Teardown: both clusters stopped by the scripts' own `clean` stages with
+  `pg_ctl -m fast -w stop`, and `.wiki-runtime/tmp/pgsi/` deleted. Confirmed
+  afterwards: no `postgres` process, no `postmaster.pid` anywhere under
+  `.wiki-runtime/`, ports 55417 and 55412 free, and 48 GB of disk back. The
+  pre-existing `.wiki-runtime/tmp/btree-suite-scripts/` from an earlier
+  session was left alone. Neither pinned checkout was written to.
+
 ## [2026-09-10] repair v17 | six B-tree suite script defects repaired, nothing re-run
 
 - Repaired, in the filed script text of [Testing the PostgreSQL 12 Core-SQL

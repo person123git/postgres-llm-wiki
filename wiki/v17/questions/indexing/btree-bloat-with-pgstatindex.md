@@ -30,13 +30,18 @@ verified_by_agent: not yet
   - [Privileges](#privileges)
   - [Locking, timeouts, and the concurrent-drop race](#locking-timeouts-and-the-concurrent-drop-race)
   - [Everything the two servers agreed on](#everything-the-two-servers-agreed-on)
+  - [Re-measured from a published script](#re-measured-from-a-published-script)
   - [How this was measured](#how-this-was-measured)
+- [Measurement Script](#measurement-script)
+  - [How to use the two leg scripts](#how-to-use-the-two-leg-scripts)
+  - [The PostgreSQL 17 leg script](#the-postgresql-17-leg-script)
+  - [The PostgreSQL 12 leg script](#the-postgresql-12-leg-script)
+  - [The last run](#the-last-run)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
 - [Source References](#source-references)
 - [Navigation](#navigation)
-
 ## Question
 
 In PostgreSQL 17: provide SQL that uses `pgstatindex` only, for B-tree indexes,
@@ -87,6 +92,24 @@ fillfactor.
 > columns are renamed `wasted_vs_fillfactor` and `wasted_ff_pct` so the baseline
 > is in the name and no old output is silently reinterpreted; and both retained
 > servers were restarted and both texts run on each.
+
+Review: following AGENTS.md, review this question page for PostgreSQL 17.
+
+> Prompt note: filed as an approved corrected restatement of `follow agents.md,
+> in postgresql 17,  review question: B-Tree Bloat and Wasted Space From
+> pgstatindex Alone, on PostgreSQL 12 and 17 (unverified)`, per the
+> repository's prompt-hygiene rule; the original had `agents.md` for AGENTS.md,
+> lowercase `postgresql`, a double space after the comma, and no finite verb.
+> Four scoping answers are recorded with it: re-read every citation against the
+> pinned checkout **and** rebuild both servers and re-measure; repair whatever
+> the review finds, in place; and add the mandatory `## Measurement Script`
+> section with a runnable script, then run it. What the review found is
+> [Re-measured from a published script](#re-measured-from-a-published-script),
+> the corrections carried in
+> [Locking, timeouts, and the concurrent-drop race](#locking-timeouts-and-the-concurrent-drop-race),
+> [The one behavioural difference between 12 and 17](#the-one-behavioural-difference-between-12-and-17)
+> and [Why the two page-layout constants are safe](#why-the-two-page-layout-constants-are-safe),
+> and the new [Measurement Script](#measurement-script) section.
 
 ## Answer
 
@@ -572,11 +595,11 @@ raised call aborts the whole statement. Each was reproduced on both servers:
 | Filter | What happens without it |
 |---|---|
 | `a.amname = 'btree'` | `ERROR: relation "s_hash" is not a btree index` — reproduced for hash, GIN, GiST, SP-GiST and BRIN ([pgstatindex.c#IS_BTREE](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L224-L228)) |
-| `c.relkind = 'i'` | A partitioned index is `'I'` and fails the same `IS_INDEX` test: `ERROR: relation "i_part" is not a btree index` ([pg_class.h#RELKIND_PARTITIONED_INDEX](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L165-L173), [pgstattuple.out#partitioned](../../../../raw/postgres-17/contrib/pgstattuple/expected/pgstattuple.out#L155-L171)) |
+| `c.relkind = 'i'` | A partitioned index is `'I'`, so `IS_INDEX` is false and the call fails the same test a non-B-tree index fails: `ERROR: relation "i_part" is not a btree index`, reproduced on both servers. Upstream's expected output covers the neighbours rather than this exact call — `pgstattuple` on a partitioned index, `pgstatindex` on a partitioned table ([pg_class.h#RELKIND_PARTITIONED_INDEX](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L165-L173), [pgstatindex.c:70](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L70), [pgstattuple.out#partitioned](../../../../raw/postgres-17/contrib/pgstattuple/expected/pgstattuple.out#L155-L171)) |
 | `indisvalid AND indisready AND indislive` | On 17.11, `ERROR: index "i_invalid" is not valid`. On 12.2 the same index returns a row. See the next section ([pgstatindex.c#indisvalid](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L240-L250), [pg_index.h#indisvalid](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L42-L45)) |
 | `NOT pg_is_other_temp_schema(...)` | `ERROR: cannot access temporary tables of other sessions`. Measured: one other session holding a 4.4 MB temp index moved the candidate count from 27 to 28 on 17.11 and 26 to 27 on 12.2, and the statement still returned every row with that session open ([pgstatindex.c#RELATION_IS_OTHER_TEMP](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L230-L238), [rel.h#RELATION_IS_OTHER_TEMP](../../../../raw/postgres-17/src/include/utils/rel.h#L652-L669)) |
 | `relpersistence <> 'u' OR NOT pg_is_in_recovery()` | Untested belt and braces. The planner refuses unlogged relations during recovery ([plancat.c#recovery](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L149-L153)) but a function call never goes through that path, and `pgstatindex_impl` has no such guard, so on a standby it would read whatever is in the file. On a primary, unlogged indexes are read normally and one is in the fixture output |
-| `pg_relation_size(c.oid) >= min_index_bytes` | Not a correctness filter, a cost filter. It is the only place a non-`pgstatindex` measurement appears, and it is a `stat()`-level answer, not a page read. Replace it with `c.relpages` for a strictly-catalog prefilter, at the price of trusting a stale number |
+| `pg_relation_size(c.oid) >= min_index_bytes` | Not a correctness filter, a cost filter. It is the only place a non-`pgstatindex` measurement appears, and it is a `stat()`-level answer, not a page read. It does open the relation, with `try_relation_open`, which returns NULL rather than raising when the index has gone — so it doubles as a shield against a concurrent drop, measured in [Locking, timeouts, and the concurrent-drop race](#locking-timeouts-and-the-concurrent-drop-race) ([dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L371)). Replace it with `c.relpages` for a strictly-catalog prefilter, at the price of trusting a stale number and losing that shield |
 
 The index is passed by OID, not by name (`pgstatindex(c.idx_oid::regclass)`). That
 is deliberate: see [Privileges](#privileges).
@@ -586,8 +609,11 @@ claims — so the candidate list is fixed before the first page is read.
 
 ### The one behavioural difference between 12 and 17
 
-**An invalid index is the only shape where the two majors disagree**, and it is
-the reason the `indisvalid` filter is not optional.
+**An invalid index is the only shape where the two pinned servers disagree**,
+and it is the reason the `indisvalid` filter is not optional. Read it as a
+difference between 12.2 and 17.11, not between the majors: the commit that
+added the check says it was back-patched, so a late-enough 12 minor refuses an
+invalid index too. See below.
 
 On the 17.11 server, `pgstatindex` on an index with `indisvalid = false` fails:
 
@@ -609,6 +635,15 @@ lead to `ERRCODE_DATA_CORRUPTED` and that an `indisready && !indisvalid` index
 gives confusing results because its size can be too low for a valid index of the
 table
 ([pgstatindex.c#indisvalid](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L240-L250)).
+
+**The measured difference is between these two minors, not between the two
+majors.** The same commit message, in this checkout's own history, ends
+"Back-patch to v11 (all supported versions)", and 12 was supported in October
+2023. So the pinned 12.2 of February 2020 predates the check and returns a row,
+while a 12 minor from the back-patch onwards raises the same error 17.11 does.
+Which minor that is cannot be read from this page's evidence base; see
+[Open Questions](#open-questions).
+
 Filtering the index out is right on both majors: on 17 it prevents an abort, and
 on 12 it prevents a half-built `CREATE INDEX CONCURRENTLY` leftover from being
 reported as a healthy index. Failed concurrent builds are exactly how such indexes
@@ -668,9 +703,11 @@ which the model does not use.
 ([pgstatindex.c#max_avail](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L308-L314)).
 The 24 is `SizeOfPageHeaderData`
 ([bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L211-L214));
-the 16 is `MAXALIGN(sizeof(BTPageOpaqueData))`, whose four fields are two
-`BlockNumber`, one `uint32` and two `uint16`
-([nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L71)).
+the 16 is `MAXALIGN(sizeof(BTPageOpaqueData))`, whose five fields are two
+`BlockNumber`, one `uint32` and two `uint16` — `btpo_flags`, and
+`btpo_cycleid`, which is declared as a `BTCycleId`
+([nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L71),
+[nbtree.h:29](../../../../raw/postgres-17/src/include/access/nbtree.h#L29)).
 The same subtraction appears in core as
 `BLCKSZ - SizeOfPageHeaderData - sizeof(BTPageOpaqueData)`
 ([nbtree.h#MaxTIDsPerBTreePage](../../../../raw/postgres-17/src/include/access/nbtree.h#L185-L187)).
@@ -899,19 +936,46 @@ at 2000.9 ms on 17.11 and 2001.0 ms on 12.2:
 ERROR:  canceling statement due to lock timeout
 ```
 
-The unfixable hole is a drop that commits while the statement is running. The
-candidate list is a snapshot of the catalog; `relation_open` is not. An index
-dropped three seconds into a running report killed the whole statement on both
-servers:
+A drop that commits while the statement is running has two outcomes, and which
+one you get depends on where the statement is when the drop commits.
+
+**Where `cand` is still running, the row is dropped and the report survives.**
+`cand` sizes each candidate with `pg_relation_size`, which opens the relation
+with `try_relation_open` and returns NULL when it has gone, on purpose: the
+comment above it says returning NULL "for already-dropped tables" beats
+throwing "and abort the whole query"
+([dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L371)).
+`NULL >= min_index_bytes` is NULL, not true, so the candidate silently
+disappears. Measured on both servers, with a second session holding
+`BEGIN; DROP INDEX bl.i_uniq;` for three seconds: the report waited for the
+lock, then returned normally, one row shorter — 24 rows against 25 on 17.11 and
+23 against 24 on 12.2, with no error.
+
+**Where the drop commits after `cand` has sized that index and before
+`pgstatindex` opens it, the whole statement aborts.** `pgstatindexbyid_v1_5`
+uses `relation_open`, which raises rather than returning NULL
+([pgstatindex.c#pgstatindexbyid_v1_5](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L204-L213)):
 
 ```text
 ERROR:  could not open relation with OID 16897
 ```
 
-Nothing in a single statement can survive that: one failed index loses the whole
-report. On a database with heavy DDL, run the report against a candidate list that
-excludes tables under migration, or drive `pgstatindex` from a loop that catches
-the error per index and keeps going.
+That window is the gap between the size check and the per-row call, and on this
+fixture suite it is small: the whole report runs in about 80 ms warm, `cand`
+finishes inside the first 5 ms of it, and the target index is read last. The
+2026-09-10 re-run swept the drop across ten delays from 5 ms to 120 ms on each
+server, always against the index `cand` materializes last, and **never landed in
+it**: below about 70 ms the drop was taken before `cand` finished and the row
+vanished silently, and above it the report had already finished. The error above
+is the one the original run recorded, and the source says it is reachable; this
+page no longer claims a reproduction of it. See
+[Open Questions](#open-questions).
+
+So the operational advice is weaker than "unfixable", but it is the same advice:
+one failed index still loses the whole report when the timing is unlucky. On a
+database with heavy DDL, run the report against a candidate list that excludes
+tables under migration, or drive `pgstatindex` from a loop that catches the
+error per index and keeps going.
 
 ### Everything the two servers agreed on
 
@@ -926,9 +990,144 @@ under-estimates, the same implied leaf capacity, and the same fresh-build
 densities at four fillfactors. The count is 24 under the fillfactor-relative text
 and was 24 under both earlier texts, with the same three exceptions each time.
 
+### Re-measured from a published script
+
+On 2026-09-10 this page was reviewed and the whole measurement was run again
+from scratch, from the two scripts now filed under
+[Measurement Script](#measurement-script). Both servers were rebuilt from the
+two pins in an empty sandbox, the fixture suite was rebuilt from published DDL,
+and the filed statement was extracted from this page and hash-checked before it
+ran. The earlier runs used a fixture suite that was never published and whose
+sandbox no longer exists, so this is a reconstruction, not a replay; see
+[Open Questions](#open-questions).
+
+**Environment.** Linux x86_64, `block_size` 8192, `max_data_alignment` 8,
+`initdb --locale=C --encoding=UTF8`, isolated clusters on ports 55417 and
+55412, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`. 17.11 was
+configured `--enable-debug --with-icu --with-readline --with-zlib` and passed
+**All 225 core tests** plus `contrib/pgstattuple`; 12.2 the same without
+`--with-icu`, **All 192** plus `contrib/pgstattuple`. The fixture database
+came to 1828 MB with 39 indexes in schema `bl` on 17.11, and 1801 MB with 38 on
+12.2 — the difference is the 17-only `deduplicate_items` fixture. A full leg
+takes about 86 seconds from a built tree.
+
+**The statement itself is unchanged and still runs on both.** The `sql` block
+hashes to `9d2e3a2c73c8…`, 126 lines and 6,154 bytes, and executed **unmodified**
+on 12.2, returning 28 rows against 29 on 17.11, 14 columns on each. The two
+superseded texts recover from history at `f5b995d3c5d5…` (122 lines, 5,839
+bytes) and `da4f4277b24e…` (125 lines, 6,002 bytes), which confirms all three
+text sizes the follow-up sections quote, and a diff of them confirms both edit
+tables: five edits for `alert_pct`, four for the fillfactor rebase, and nothing
+else moved either time.
+
+**What reproduced exactly, on both servers.**
+
+| Claim | Filed | 2026-09-10 |
+|---|---|---|
+| `i_delhead` after VACUUM | 22,487,040 bytes, 1,918 dead pages | identical on both servers |
+| `i_delhead` reading | 821 leaf, 89.94 density, 69.9 / 69.9 | identical |
+| Implied `max_avail` from two known pages | 8151.6 and 8152.1, from 0.29 % and 0.05 % | identical on both servers |
+| `index_size` equals `pg_relation_size` | 218 of 218, 212 of 212 | 201 of 201 and 195 of 195 |
+| `NaN > 20` for `float8` and `numeric` | true, true | true, true |
+| The invalid index on 12.2 | `4 \| 2 \| 6758400 \| 290 \| 4 \| 820 \| 0 \| 0 \| 90.05 \| 0` | the same row, digit for digit |
+| The invalid index on 17.11 | `ERROR: index "i_invalid" is not valid` | same |
+| Refusals: hash, GIN, GiST, SP-GiST, BRIN, partitioned index, table, view, sequence, stale OID | ten messages | ten identical messages, both servers |
+| Another session's temp index | refused, report unaffected | `ERROR: cannot access temporary tables of other sessions`, candidates 201 against 202 unfiltered, report unaffected |
+| `lock_timeout` cancels the wait | 2000.9 / 2001.0 ms | 2006.1 / 2005.5 ms, same message |
+| Privileges: member by name, member by OID, non-member | three outcomes | three identical outcomes, both servers |
+| Plan shape | 4 `CTE Scan` nodes | 4 on both |
+| Worst post-`REINDEX` residual | 44.6 %, 7,309 bytes | 44.6 %, 7,309 bytes, on six one-leaf-page indexes including `c_one_idx` |
+| Deduplication sizes, `i_dup` / `i_dup_ins` | 21 MB / 20 MB on 12.2, 6800 kB / 6368 kB on 17.11 | identical |
+
+**The accuracy table, re-scored.** Every fixture, `est_reclaimable_pct` against
+a measured `REINDEX INDEX`, both servers:
+
+| Index | 12.2 est / actual | 17.11 est / actual | density | dead pages |
+|---|---|---|---|---|
+| `i_ff10_del90` | 87.1 / 90.0 | 87.1 / 90.0 | 1.23 | 0 |
+| `i_del90` | 89.7 / 89.9 | 89.7 / 89.9 | 9.27 | 0 |
+| `i_partial` | 89.7 / 89.9 | 89.7 / 89.9 | 9.27 | 0 |
+| `i_novac` | −0.1 / 89.9 | −0.1 / 89.9 | 90.06 | 0 |
+| `i_ff50_del90` | 89.3 / 89.8 | 89.3 / 89.8 | 5.25 | 0 |
+| `i_ff50_delhead` | 89.7 / 89.8 | 89.7 / 89.8 | 49.36 | 894 |
+| `i_ff100_del90` | 89.5 / 89.5 | 89.5 / 89.5 | 10.25 | 0 |
+| `i_uniq` | 87.1 / 87.4 | 87.1 / 87.4 | 11.52 | 0 |
+| `t_part_1_id_idx`, `t_part_2_id_idx` | 85.3 / 85.6 | 85.3 / 85.6 | 13.11 | 0 |
+| `i_unlogged` | 83.0 / 83.2 | 83.0 / 83.2 | 15.26 | 0 |
+| `i_text_del` | 79.3 / 80.0 | 79.3 / 80.0 | 18.55 | 0 |
+| `i_expr` | 79.7 / 79.9 | 79.7 / 79.9 | 18.25 | 0 |
+| `i_incl` | 74.7 / 74.9 | 74.7 / 74.9 | 22.74 | 0 |
+| `i_wide` | 65.0 / 70.0 | 65.0 / 70.0 | 31.53 | 12 |
+| `i_delhead` | 69.9 / 69.9 | 69.9 / 69.9 | 89.94 | 1918 |
+| `i_dedup_off` | not constructible | −0.3 / 69.1 | 90.16 | 0 |
+| `i_multi` | 66.4 / 66.6 | 66.4 / 66.6 | 30.17 | 0 |
+| `t_toast_pkey` | 64.9 / 63.2 | 64.9 / 63.2 | 30.02 | 0 |
+| `c_zero_idx` | 0.0 / 50.0 | 0.0 / 50.0 | 0.05 | 0 |
+| `i_churn` | 49.9 / 50.0 | 49.9 / 50.0 | 90.06 | 2741 |
+| `i_del50` | 49.7 / 49.9 | 49.7 / 49.9 | 45.18 | 0 |
+| `i_frag` | 44.0 / 44.3 | 44.0 / 44.3 | 50.34 | 0 |
+| `i_ff100` | 0.1 / 0.0 | 0.1 / 0.0 | 99.86 | 0 |
+| `i_text`, `c_one_idx`, `t_empty_pkey` | 0.0 / 0.0 | 0.0 / 0.0 | 89.99, 0.29, NaN | 0 |
+| `i_dup` | −0.3 / 0.0 | 0.0 / 0.0 | 89.91 | 0 |
+| `i_fresh` | −0.1 / 0.0 | −0.1 / 0.0 | 90.06 | 0 |
+| `i_ff50` | −0.2 / 0.0 | −0.2 / 0.0 | 49.85 | 0 |
+| `i_ff10` | −0.5 / 0.0 | −0.5 / 0.0 | 9.62 | 0 |
+| `i_dup_ins` | −6.6 / −6.4 | −6.7 / −6.8 | 95.94 | 0 |
+
+Eighteen of these rows match the filed table to the tenth of a point, including
+every one the filed page called out: the `+1.7` over-estimate lands on the same
+456 kB `t_toast_pkey` at `+1.8`, `i_novac` misses by `−90.1` against a filed
+`−90.0`, `i_dedup_off` by `−69.3` against `−69.4`, `i_wide` by `−5.0` against
+`−5.1`, and `i_ff10_del90` reads `87.1` against an actual `90.0`, the `−2.8`
+the fillfactor section reports.
+
+**Four things the re-run changes.**
+
+1. **The concurrent-drop abort did not reproduce**, and the reason is in the
+   source. See
+   [Locking, timeouts, and the concurrent-drop race](#locking-timeouts-and-the-concurrent-drop-race).
+2. **A fourth shape the estimate gets wrong.** `c_zero_idx`, an index whose
+   single leaf page holds nothing, reports `0.0` against an actual `50.0`: the
+   rebuild takes it from two pages to one, and a model that rounds a nearly
+   empty leaf up to one page plus a metapage cannot see that. It is the
+   small-index rounding limit of
+   [The three shapes it gets wrong](#the-three-shapes-it-gets-wrong), on the
+   reclaim column rather than the waste column.
+3. **The scored population has to be stated, because three different ones
+   appear on this page.** This run pins it: 201 indexes on 17.11 and 195 on
+   12.2, being every candidate the harness view returns with
+   `min_index_bytes` at 0. Of those, 32 and 31 are fixtures in schema `bl`,
+   and the rest are catalog and TOAST indexes; 89 and 85 have no leaf pages
+   and score `0.0` against an actual `0.0`. Split that way, the fixtures are
+   26 of 32 and 26 of 31 within one point, 27 of each within two, worst
+   over-estimate `+1.8` and worst under-estimate `−90.1` on both.
+4. **Scoring catalog indexes measures the harness, not the estimator.** The
+   scoring pass issues one `REINDEX INDEX` per index, and every one of those
+   writes to `pg_class`, so a catalog index can grow between the snapshot and
+   its own rebuild. On 12.2 that produced the run's two largest over-estimates,
+   `+20.0` on a 40 kB `pg_class_oid_index` and `+14.3` on
+   `pg_class_relname_nsp_index`; on 17.11 no catalog index over-estimated at
+   all. Any "largest over-estimate" figure that includes catalogs is partly a
+   statement about the measurement order.
+
+**Cross-server agreement.** Of the 28 rows both reports produced, **25 are
+identical character for character**. The three that differ are the two
+duplicate-key indexes, which is deduplication, and one TOAST index whose name
+embeds an OID. `i_churn` now agrees too, because the published churn fixture
+updates every row rather than half of them and is deterministic.
+
+**Cost.** 68 plan lines on 17.11 and 65 on 12.2, 4 `CTE Scan` nodes on each,
+`EXPLAIN (ANALYZE, BUFFERS)` execution of 140.5 ms and 135.6 ms, the
+`pgstatindex` function scan reading 13,216 hit + 98,197 read on 17.11 and
+comparable on 12.2. Six interleaved end-to-end runs of the filed text and the
+superseded text spanned 140.9–153.8 ms against 143.9–151.7 ms on 17.11 and
+135.0–150.5 ms against 133.5–142.1 ms on 12.2 — the same overlapping ranges the
+follow-up sections report.
+
 ### How this was measured
 
-Two isolated servers on one host, each initialised for this run:
+The original run, on 2026-09-08 and 2026-09-09, used two isolated servers on
+one host, each initialised for it:
 
 - **12.2**, `server_version_num` 120002, built from this repo's v12 pin
   `45b88269a353ad93744772791feb6d01bc7e1e42`, with `contrib/pgstattuple` compiled
@@ -940,8 +1139,11 @@ Two isolated servers on one host, each initialised for this run:
 Both at `block_size` 8192, `autovacuum = off`, `fsync = off`, one shared fixture
 script of 24 index shapes plus one 17-only deduplication fixture, `REINDEX INDEX`
 as ground truth, and `pgstatindex` as the only measurement tool — no
-`pageinspect`, no `pgstattuple()`, no `amcheck`. The sandbox is retained at
-`.wiki-runtime/tmp/pgsi/`.
+`pageinspect`, no `pgstattuple()`, no `amcheck`. That fixture script was never
+published and its sandbox no longer exists; the reconstruction that replaces it
+is in [Measurement Script](#measurement-script), and the difference between the
+two is under [Open Questions](#open-questions). Nothing is retained: the
+scripts create `.wiki-runtime/tmp/pgsi/` and their `clean` stages delete it.
 
 The follow-up that removed `alert_pct` restarted those same two clusters and
 re-ran both fixture scripts first, because the scoring pass that produced the
@@ -967,6 +1169,1927 @@ generating one view per text over the `final` stage with `min_index_bytes` set t
 0, so all 214 and 220 indexes in each database are compared and not only those
 over a megabyte. The post-`REINDEX` residual pass is destructive and ran last, in
 the order the earlier passes need: report, comparison, timing, then rebuild.
+
+## Measurement Script
+
+Two scripts produce every number this page takes from a running server, one per
+version leg: `bloat_pgstatindex_v17.sh` for 17.11 and `bloat_pgstatindex_v12.sh`
+for 12.2. Both are filed in full below, in Bash and SQL only, and both ran end
+to end on 2026-09-10 on Linux x86_64 from an empty sandbox. What that run
+measured is [Re-measured from a published script](#re-measured-from-a-published-script).
+
+The sections written before 2026-09-10 report numbers from a harness that was
+never published and whose sandbox has since been deleted. These scripts replace
+it and cover the same families; where a figure moved, the re-run section says
+so, and the unpublished fixture recipe is [an open question](#open-questions).
+
+### How to use the two leg scripts
+
+| Item | The 17 leg, `bloat_pgstatindex_v17.sh` | The 12 leg, `bloat_pgstatindex_v12.sh` |
+|---|---|---|
+| Purpose | builds 17.11 from this page's pin, runs its regression suites, builds the fixture suite, executes this page's `sql` block exactly as filed, and measures every family the page reports: refusals, `NaN`, the implied leaf capacity, fresh-build densities, privileges, the lock and drop races, statement cost, and the scoring pass against a measured `REINDEX INDEX` | the same on 12.2 from the v12 pin, and it answers the one question the 17 leg cannot: whether the exact filed text executes unmodified on the oldest major this page claims. The one fixture it cannot build is the `deduplicate_items` index, and it records that |
+| Invocation | `bash bloat_pgstatindex_v17.sh [stage ...]`, run from the repository root | `bash bloat_pgstatindex_v12.sh [stage ...]`, run from the repository root |
+| Stages | 13 stages plus `stop` and `clean`; see [the stages](#the-stages-both-legs). With no argument every stage runs, in the table's order | the same 13, with the same meanings |
+| Environment | 8 variables, all with defaults; see [what the scripts read](#what-the-scripts-read-from-the-environment) | the same 8, two of them named for this leg |
+| Prerequisites | a C toolchain, ICU, readline and zlib headers, `git`, `sha256sum`, and the pinned checkout at `raw/postgres-17`; see [Prerequisites](#prerequisites) | the same without ICU: this leg does not pass `--with-icu`, because no fixture here needs a collation provider and ICU is opt-in on that major |
+| Output | under `$SANDBOX/out`; **read `summary`'s output or `exact17.txt` first**, then `scores17.txt` for the accuracy table and `residual17.txt` for the post-rebuild residual. Build and check logs are copied there so they survive `clean` | the same directory, with `12` in every name: `exact12.txt`, `scores12.txt`, `residual12.txt` |
+| Runtime | **86 seconds** for `fixtures report facts cost priv score residual race summary` from a built tree, measured. A full run adds the build and `make check`, which dominate it and were not separately timed on the recorded host | **86 seconds** for the same nine stages from a built tree, measured; the same caveat on a full run |
+| Cleanup | `bash bloat_pgstatindex_v17.sh clean` stops the server with `pg_ctl -m fast -w stop`, confirms the teardown — no `postmaster.pid`, no postgres process on the data directory, an empty socket directory — and only then deletes `$SANDBOX`, after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`. `stop` does the first two and keeps everything. **`out/` is inside `$SANDBOX`, so copy it out first** | `clean` stops the 12 server the same way and deletes only this leg's `build12`, `install12`, `data12`, `sock12` and `sql12`, because the 17 leg owns the shared `out/`. Run the 17 leg's `clean` last to remove the sandbox |
+
+Save the two fenced blocks below under those names and run them from the
+repository root: `WIKI_ROOT` defaults to `$PWD`, and everything else — this
+page, both pinned checkouts and the sandbox — is resolved beneath it.
+
+```sh
+bash bloat_pgstatindex_v17.sh                     # every stage, in order
+bash bloat_pgstatindex_v17.sh score residual      # selected stages
+bash bloat_pgstatindex_v12.sh report              # just the 12.2 execution result
+bash bloat_pgstatindex_v17.sh clean               # stop and delete the sandbox
+```
+
+#### The stages, both legs
+
+Every stage is idempotent and re-runnable on its own once the stages it needs
+have run. The default order is the order of this table, and that order matters
+in one place: `score` rebuilds every index in the database, so `report`,
+`facts`, `cost` and `priv` have to precede it, and `residual` and `race` follow
+it.
+
+| Stage | What it does | Needs first |
+|---|---|---|
+| `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `contrib/pgstattuple`; skips everything when the binary already exists. Copies `configure.log`, `make.log` and `install.log` into `out/` on the failure path too, because `clean` deletes the build tree | nothing |
+| `check` | `make check` plus the `pgstattuple` check, one result line each into `out/checks17.txt`, then copies every `check_*.log` and any `regression.diffs` into `out/` | `build` |
+| `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, creates the database and `CREATE EXTENSION pgstattuple`, and records `uname -sm`, the version, `block_size` and `max_data_alignment` into `out/platform17.txt` | `build` |
+| `texts` | extracts `sql` block 1 from this page, checks its SHA-256 against `BASE_SQL`, generates the harness view from it with exactly two edits, both printed, and recovers the superseded text from `OLD_REV` and checks it against `BASE_PREV` | `cluster` |
+| `fixtures` | drops and rebuilds schema `bl`: 24 index shapes, the four fillfactor fixtures, two known-content pages, the shapes `pgstatindex` refuses, an index the catalog says is not valid, and — only where the server accepts the reloption — the `deduplicate_items = off` fixture | `cluster` |
+| `report` | runs the filed text **as filed**, both `SET` lines included, and records whether it executed, how many rows and columns it returned and how many bytes | `texts`, `fixtures` |
+| `facts` | the version-local facts: candidate count, `index_size` against `pg_relation_size`, the two `NaN` comparisons, ten refusals, the invalid index, fresh-build density at four fillfactors, the implied `max_avail` from two known-content pages, the post-VACUUM size of the head-deleted index, and another session's temp index | `texts`, `fixtures` |
+| `cost` | `EXPLAIN (ANALYZE, BUFFERS)` of the filed text, then six interleaved end-to-end runs of the filed and superseded texts | `texts` |
+| `priv` | creates two login roles, grants `pg_stat_scan_tables` to one, and reads the index three ways: the whole statement, by name, and by OID | `texts`, `fixtures` |
+| `score` | snapshots the harness view into `bl_before`, generates and runs one `REINDEX INDEX` per index, snapshots the sizes into `bl_after`, and writes `out/scores17.txt`: one row per fixture plus totals for three populations — all, schema `bl`, and catalog/TOAST. **Destructive**: it rebuilds every index in the database | `texts`, `fixtures` |
+| `residual` | re-reads the harness view over exactly the population `score` scored and writes the post-`REINDEX` residual of `wasted_vs_fillfactor`, the ratio between the two percentage columns, and the coincide and clamp counts | `score` |
+| `race` | the `lock_timeout` cancellation, then the two concurrent-drop timings: a drop that commits while `cand` runs, and a sweep of ten delays aimed at the window between `cand` and the per-index call | `texts`, `fixtures` |
+| `summary` | prints what landed in `out/` and the small result files | nothing |
+| `stop` | stops the server with `pg_ctl -m fast -w stop`, so the checkpointer writes a shutdown checkpoint and the next start needs no recovery, then confirms no `postmaster.pid`, no postgres process on the data directory and an empty socket directory. It dies rather than report a stop that did not happen | `cluster` |
+| `clean` | `stop`, then deletes the sandbox after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`; because `stop` dies on a failed teardown, `clean` never deletes a live cluster | nothing |
+
+#### What the scripts read from the environment
+
+| Variable | Default | Read by | Meaning |
+|---|---|---|---|
+| `WIKI_ROOT` | `$PWD` | both | the repository root; everything else is resolved beneath it |
+| `PAGE` | `$WIKI_ROOT/wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md` | both | the page the `sql` block is extracted from |
+| `SANDBOX` | `$WIKI_ROOT/.wiki-runtime/tmp/pgsi` | both | build, install, data, socket, SQL and output directories; the only tree either script writes |
+| `JOBS` | `4` | both | `make -j` parallelism |
+| `ROWS` | `1000000` | both | the base fixture size. The fillfactor fixtures use `ROWS / 5` and the wide-key fixture `ROWS / 10` |
+| `OLD_REV` | `cbbbd16` | both | the revision of this page holding the superseded statement text |
+| `SRC` / `SRC12` | `$WIKI_ROOT/raw/postgres-17` / `-12` | 17 leg / 12 leg | the pinned checkout, read only |
+| `PORT` / `PORT12` | `55417` / `55412` | 17 leg / 12 leg | the cluster's port |
+
+Both scripts export `PGPORT`, `PGHOST` and `PGDATABASE` for their own `psql`
+calls, so a value in the caller's environment is overridden rather than
+honoured.
+
+The cluster settings each `cluster` stage writes, with the apply scope each one
+needs. All of them are written to `postgresql.conf` before the first start, so
+every one is in force from the first connection, and none of them is changed
+again while the cluster is up:
+
+| Setting | Value | Context | Apply scope |
+|---|---|---|---|
+| `listen_addresses` | `''` | `PGC_POSTMASTER` | restart ([guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4436-L4445)) |
+| `port` | `55417` / `55412` | `PGC_POSTMASTER` | restart ([guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2393-L2401)) |
+| `unix_socket_directories` | inside the sandbox | `PGC_POSTMASTER` | restart ([guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4425-L4434)) |
+| `shared_buffers` | `512MB` | `PGC_POSTMASTER` | restart ([guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2261-L2270)) |
+| `logging_collector` | `off` | `PGC_POSTMASTER` | restart ([guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1640-L1648)) |
+| `fsync` | `off` | `PGC_SIGHUP` | reload ([guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1096-L1107)) |
+| `autovacuum` | `off` | `PGC_SIGHUP` | reload ([guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1449-L1457)) |
+| `maintenance_work_mem` | `256MB` | `PGC_USERSET` | session or transaction ([guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2465-L2474)) |
+| `max_parallel_maintenance_workers` | `0` | `PGC_USERSET` | session or transaction ([guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3409-L3417)) |
+
+`autovacuum` is off so that no background vacuum changes a fixture between the
+report and the scoring pass; `fsync` is off because the cluster is disposable.
+Both scripts also set `statement_timeout` and `lock_timeout` per session, both
+`PGC_USERSET`
+([guc_tables.c#statement_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620),
+[guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631)).
+These contexts are read from the v17 GUC table, which is this page's version;
+the 12.2 contexts are not citable here, and that is
+[an open question](#open-questions).
+
+#### Prerequisites
+
+- A C toolchain and `make`. Both legs build their own server; no installed
+  PostgreSQL is used or needed.
+- Development headers for ICU, readline and zlib for the 17 leg; readline and
+  zlib alone for the 12 leg.
+- The two pinned checkouts, at `raw/postgres-17` and `raw/postgres-12`. Both
+  stay read-only: each build is a VPATH build in a directory under
+  `.wiki-runtime/tmp/`, which is the form the documentation describes
+  ([installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L425-L436)).
+- `git`, with `OLD_REV` reachable, since `texts` recovers the superseded
+  statement with `git show`.
+- `sha256sum`, and a Bash new enough for arrays and `${var:-default}`. Nothing
+  else: no Python, no `awk`, no `perl`, no `jq`.
+- Free TCP ports 55417 and 55412, or `PORT`/`PORT12` set to free ones. Both
+  clusters set `listen_addresses = ''` and listen on a Unix socket inside the
+  sandbox, so the port is reserved but never bound on TCP.
+- `contrib/pgstattuple`, built and installed from the same tree as the server,
+  into the disposable cluster only.
+- Disk for two source builds, two clusters and the fixtures: the recorded run
+  left a 1828 MB and a 1801 MB database, and `score` briefly doubles the
+  largest index it rebuilds.
+
+**Every statement either script sends is disposable.** The fixture stage drops
+and rebuilds a whole schema, writes `indisvalid = false` into `pg_index` by
+hand, creates and drops two login roles, drops and recreates indexes during the
+race stage, and rebuilds every index in the database during the scoring pass.
+Never point `SANDBOX`, `PORT`, `PORT12` or `PGHOST` at a cluster anyone cares
+about.
+
+### The PostgreSQL 17 leg script
+
+```sh
+#!/usr/bin/env bash
+#
+# bloat_pgstatindex_v17.sh - the PostgreSQL 17 leg of the measurement behind
+# "B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and
+# 17".  Bash and SQL only: build the pinned 17 checkout out of tree, run its
+# regression suites, start an isolated cluster, build the published fixture
+# suite, run this page's statement exactly as filed, and score every estimate
+# against a measured REINDEX INDEX.
+#
+# The pinned checkout is read only.  Everything this script writes lives under
+# $SANDBOX, and `clean` deletes it.
+#
+# Usage, from the repository root:
+#   bash bloat_pgstatindex_v17.sh                 # every stage, in order
+#   bash bloat_pgstatindex_v17.sh score residual  # selected stages
+#   bash bloat_pgstatindex_v17.sh clean           # stop and delete the sandbox
+#
+# Stages: build check cluster texts fixtures report facts score residual cost
+#         priv race summary stop clean
+#
+# Environment: WIKI_ROOT PAGE SRC SANDBOX PORT JOBS ROWS OLD_REV
+set -uo pipefail
+
+WIKI_ROOT="${WIKI_ROOT:-$PWD}"
+PAGE="${PAGE:-$WIKI_ROOT/wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md}"
+SRC="${SRC:-$WIKI_ROOT/raw/postgres-17}"
+SANDBOX="${SANDBOX:-$WIKI_ROOT/.wiki-runtime/tmp/pgsi}"
+PORT="${PORT:-55417}"
+JOBS="${JOBS:-4}"
+ROWS="${ROWS:-1000000}"
+OLD_REV="${OLD_REV:-cbbbd16}"
+
+BUILD="$SANDBOX/build17"; INST="$SANDBOX/install17"; DATA="$SANDBOX/data17"
+OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"; SOCK="$SANDBOX/sock17"; BIN="$INST/bin"
+DB=bloat17
+export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
+
+# SHA-256 of the sql blocks this page files.  BASE_SQL is the filed statement;
+# BASE_PREV is the text filed before wasted space was rebased on the
+# fillfactor, recovered from OLD_REV for the cost comparison.
+BASE_SQL=9d2e3a2c73c81f3efb848b61f4bf307365ce0da56d780baee08fa9a9606f6c91
+BASE_PREV=f5b995d3c5d51dddd1378e4e1ac31f9ad180cec0cc811a803186b86a1fb721e9
+
+say()  { printf '\n== %s\n' "$*" >&2; }
+note() { printf '   %s\n' "$*" >&2; }
+die()  { printf '!! %s\n' "$*" >&2; exit 1; }
+
+# -X ignores ~/.psqlrc; ON_ERROR_STOP is on every helper, because without it a
+# failed statement inside a -f script leaves the exit status 0.
+q()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }
+s()  { "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }
+t()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" -c "$1"; }
+fl() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -f "$1"; }
+# err() runs a statement that is expected to fail and prints the message only.
+err() { "$BIN/psql" -X -At -q -d "$DB" -c "$1" 2>&1 | grep -E '^(ERROR|FATAL)' | head -1; }
+
+# The fence is assembled at run time so that this script contains no literal
+# Markdown fence and can therefore live inside one.
+md_block() {
+  local lang=$1 want=$2 file=$3 n=0 inb=0 line tick fence
+  tick=$(printf '\140'); fence="$tick$tick$tick"
+  while IFS= read -r line; do
+    if [ "$inb" = 1 ]; then
+      if [ "$line" = "$fence" ]; then inb=0; [ "$n" = "$want" ] && return 0; continue; fi
+      [ "$n" = "$want" ] && printf '%s\n' "$line"
+    elif [ "$line" = "$fence$lang" ]; then
+      n=$((n + 1)); inb=1
+    fi
+  done < "$file"
+}
+
+# ---------------------------------------------------------------- build ------
+stage_build() {
+  say "build 17 out of tree from $SRC"
+  [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
+  [ -x "$SRC/configure" ] || die "no pinned checkout at $SRC; set SRC or run from the repository root"
+  mkdir -p "$BUILD" "$OUT" "$SQLD"
+  ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" --enable-debug \
+      --with-icu --with-readline --with-zlib > configure.log 2>&1 ) \
+    || { cp "$BUILD/configure.log" "$OUT/configure17.log" 2>/dev/null; die "configure failed, see $OUT/configure17.log"; }
+  ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
+    || { cp "$BUILD"/*.log "$OUT/" 2>/dev/null; grep -m3 'error:' "$BUILD/make.log" >&2; die "make failed"; }
+  ( cd "$BUILD" && make -C contrib/pgstattuple -j"$JOBS" >> install.log 2>&1 \
+      && make -C contrib/pgstattuple install >> install.log 2>&1 ) || die "contrib/pgstattuple failed"
+  local l
+  for l in configure make install; do cp "$BUILD/$l.log" "$OUT/${l}17.log" 2>/dev/null; done
+  note "$("$BIN/postgres" --version)"
+}
+
+stage_check() {
+  say "regression suites, 17"
+  mkdir -p "$OUT"
+  : > "$OUT/checks17.txt"
+  ( cd "$BUILD" && make check > check_core.log 2>&1 )
+  printf 'core=%s %s\n' "$?" \
+    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_core.log" | tail -1)" \
+    >> "$OUT/checks17.txt"
+  ( cd "$BUILD" && make -C contrib/pgstattuple check > check_pgstattuple.log 2>&1 )
+  printf 'pgstattuple=%s %s\n' "$?" \
+    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_pgstattuple.log" | tail -1)" \
+    >> "$OUT/checks17.txt"
+  local l d
+  for l in "$BUILD"/check_*.log; do [ -f "$l" ] && cp "$l" "$OUT/17_$(basename "$l")"; done
+  for d in "$BUILD"/src/test/regress/regression.diffs "$BUILD"/contrib/pgstattuple/regression.diffs; do
+    [ -f "$d" ] && cp "$d" "$OUT/diffs17_$(basename "$(dirname "$d")").txt"
+  done
+  cat "$OUT/checks17.txt" >&2
+}
+
+# -------------------------------------------------------------- cluster ------
+# Cluster settings and their apply scope, all written to postgresql.conf before
+# the first start, so every one of them is in force from the first connection:
+#   listen_addresses, port, unix_socket_directories, shared_buffers,
+#   logging_collector  -> PGC_POSTMASTER, restart
+#   fsync, autovacuum                                   -> PGC_SIGHUP, reload
+#   maintenance_work_mem, max_parallel_maintenance_workers -> PGC_USERSET,
+#                                                          session scope
+# autovacuum is off so that no background vacuum changes a fixture between the
+# report and the scoring pass.
+stage_cluster() {
+  say "isolated 17 cluster on port $PORT"
+  mkdir -p "$OUT" "$SQLD" "$SOCK"
+  if [ ! -f "$DATA/PG_VERSION" ]; then
+    "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 > "$OUT/initdb17.log" 2>&1 \
+      || die "initdb failed, see $OUT/initdb17.log"
+    cat >> "$DATA/postgresql.conf" <<CONF
+listen_addresses = ''
+port = $PORT
+unix_socket_directories = '$SOCK'
+shared_buffers = 512MB
+maintenance_work_mem = 256MB
+max_parallel_maintenance_workers = 0
+autovacuum = off
+fsync = off
+logging_collector = off
+CONF
+  fi
+  if ! "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server17.log" -w start > /dev/null 2>&1 \
+      || die "server did not start, see $OUT/server17.log"
+  fi
+  "$BIN/psql" -X -At -q -d postgres -c "SELECT 1" > /dev/null 2>&1 || die "cannot connect"
+  "$BIN/psql" -X -At -q -d postgres -c \
+    "SELECT count(*) FROM pg_database WHERE datname = '$DB'" | grep -q '^1$' \
+    || "$BIN/createdb" "$DB" || die "createdb failed"
+  q "CREATE EXTENSION IF NOT EXISTS pgstattuple;" > /dev/null || die "pgstattuple not installed"
+  {
+    printf 'uname=%s\n' "$(uname -sm)"
+    printf 'server_version_num=%s\n' "$(s 'SHOW server_version_num')"
+    printf 'server_version=%s\n' "$(s 'SHOW server_version')"
+    printf 'block_size=%s\n' "$(s 'SHOW block_size')"
+    printf 'max_data_alignment=%s\n' "$("$BIN/pg_controldata" -D "$DATA" | grep -i 'maximum data alignment' | tr -s ' ' | cut -d' ' -f4)"
+    printf 'pgstattuple=%s\n' "$(s "SELECT extversion FROM pg_extension WHERE extname = 'pgstattuple'")"
+  } > "$OUT/platform17.txt"
+  cat "$OUT/platform17.txt" >&2
+}
+
+# ---------------------------------------------------------------- texts -----
+# Two texts come out of the page and one out of git history:
+#   report.sql   the filed statement, byte for byte, hash-checked
+#   view.sql     the same text as a view over the internal `final` stage, with
+#                exactly two edits, both printed: the two SET lines dropped and
+#                min_index_bytes set to 0 so sub-megabyte indexes are scored
+#   prev.sql     the text filed before wasted space was rebased on the
+#                fillfactor, recovered from OLD_REV for the cost comparison
+gen_view() {                       # gen_view <view> < text
+  local view=$1 line tail=0
+  printf 'DROP VIEW IF EXISTS %s CASCADE;\nCREATE VIEW %s AS\n' "$view" "$view"
+  while IFS= read -r line; do
+    case $line in
+      "SET statement_timeout"*|"SET lock_timeout"*)
+        printf '   harness edit: dropped %s\n' "$line" >&2; continue ;;
+      *"AS min_index_bytes"*)
+        printf '   harness edit: %s -> 0\n' "$(printf '%s' "$line" | tr -s ' ')" >&2
+        printf '           0::bigint AS min_index_bytes  -- harness: score every index\n'
+        continue ;;
+      "SELECT /* wiki_btree_bloat_pgstatindex_12_17 */") tail=1; continue ;;
+    esac
+    [ "$tail" = 1 ] && continue
+    printf '%s\n' "$line"
+  done
+  printf 'SELECT f.* FROM final f;\n'
+}
+
+stage_texts() {
+  say "extract the statement from $PAGE"
+  mkdir -p "$SQLD" "$OUT"
+  [ -f "$PAGE" ] || die "no page at $PAGE; set PAGE or run from the repository root"
+  md_block sql 1 "$PAGE" > "$SQLD/report.sql"
+  local got
+  got=$(sha256sum < "$SQLD/report.sql" | cut -d' ' -f1)
+  [ "$got" = "$BASE_SQL" ] || die "sql block 1 hashes $got, expected $BASE_SQL"
+  note "filed text: $(wc -l < "$SQLD/report.sql") lines, $(wc -c < "$SQLD/report.sql") bytes, sha256 ${got:0:12}"
+  gen_view bloat_final < "$SQLD/report.sql" > "$SQLD/view.sql"
+  # The statement alone, without the two SET lines, for EXPLAIN.
+  grep -v '^SET ' "$SQLD/report.sql" > "$SQLD/bare.sql"
+  if git -C "$WIKI_ROOT" cat-file -e "$OLD_REV:wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md" 2>/dev/null; then
+    git -C "$WIKI_ROOT" show "$OLD_REV:wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md" > "$SQLD/page_prev.md"
+    md_block sql 1 "$SQLD/page_prev.md" > "$SQLD/prev.sql"
+    got=$(sha256sum < "$SQLD/prev.sql" | cut -d' ' -f1)
+    [ "$got" = "$BASE_PREV" ] || die "superseded text hashes $got, expected $BASE_PREV"
+    grep -v '^SET ' "$SQLD/prev.sql" > "$SQLD/prev_bare.sql"
+    note "superseded text: $(wc -l < "$SQLD/prev.sql") lines, $(wc -c < "$SQLD/prev.sql") bytes, sha256 ${got:0:12}"
+  else
+    note "no revision $OLD_REV in this repository; the cost comparison will be skipped"
+  fi
+}
+
+# ------------------------------------------------------------- fixtures -----
+# Every statement in this stage is DISPOSABLE.  It drops and rebuilds schema
+# bl in a throwaway database and is not meant for a database anyone cares
+# about.  The two session GUCs it sets are PGC_USERSET: session scope, no
+# reload and no restart.
+stage_fixtures() {
+  say "build the fixture suite in $DB (rows=$ROWS)"
+  cat > "$SQLD/fixtures.sql" <<'SQL'
+-- DISPOSABLE fixture suite for the pgstatindex bloat report.
+-- Every object lives in schema bl of a throwaway database.
+SET statement_timeout = '30min';   -- PGC_USERSET, session scope
+SET lock_timeout      = '30s';     -- PGC_USERSET, session scope
+SET client_min_messages = warning;
+
+DROP SCHEMA IF EXISTS bl CASCADE;
+CREATE SCHEMA bl;
+
+-- 1. scattered deletes at five fractions, all vacuumed afterwards ----------
+CREATE TABLE bl.t_del90 (id int);
+INSERT INTO bl.t_del90 SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_del90 ON bl.t_del90 (id);
+DELETE FROM bl.t_del90 WHERE id % 10 <> 0;
+VACUUM bl.t_del90;
+
+CREATE TABLE bl.t_del50 (id int);
+INSERT INTO bl.t_del50 SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_del50 ON bl.t_del50 (id);
+DELETE FROM bl.t_del50 WHERE id % 2 <> 0;
+VACUUM bl.t_del50;
+
+-- 2. the same shape, deliberately not vacuumed -----------------------------
+CREATE TABLE bl.t_novac (id int);
+INSERT INTO bl.t_novac SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_novac ON bl.t_novac (id);
+DELETE FROM bl.t_novac WHERE id % 10 <> 0;
+
+-- 3. a contiguous head deleted: whole pages empty out ----------------------
+CREATE TABLE bl.t_delhead (id int);
+INSERT INTO bl.t_delhead SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_delhead ON bl.t_delhead (id);
+DELETE FROM bl.t_delhead WHERE id <= (:rows * 7) / 10;
+VACUUM bl.t_delhead;
+
+-- 4. partial, unique, expression, INCLUDE, multicolumn, text, wide ---------
+CREATE TABLE bl.t_partial (id int, flag boolean);
+INSERT INTO bl.t_partial SELECT g, true FROM generate_series(1, :rows) g;
+CREATE INDEX i_partial ON bl.t_partial (id) WHERE flag;
+DELETE FROM bl.t_partial WHERE flag AND id % 10 <> 0;
+VACUUM bl.t_partial;
+
+CREATE TABLE bl.t_uniq (id int);
+INSERT INTO bl.t_uniq SELECT g FROM generate_series(1, :rows) g;
+CREATE UNIQUE INDEX i_uniq ON bl.t_uniq (id);
+DELETE FROM bl.t_uniq WHERE id % 8 <> 0;
+VACUUM bl.t_uniq;
+
+CREATE TABLE bl.t_expr (id int);
+INSERT INTO bl.t_expr SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_expr ON bl.t_expr ((id * 2));
+DELETE FROM bl.t_expr WHERE id % 5 <> 0;
+VACUUM bl.t_expr;
+
+CREATE TABLE bl.t_incl (id int, v int);
+INSERT INTO bl.t_incl SELECT g, g FROM generate_series(1, :rows) g;
+CREATE INDEX i_incl ON bl.t_incl (id) INCLUDE (v);
+DELETE FROM bl.t_incl WHERE id % 4 <> 0;
+VACUUM bl.t_incl;
+
+CREATE TABLE bl.t_multi (a int, b int, c int);
+INSERT INTO bl.t_multi SELECT g, g, g FROM generate_series(1, :rows) g;
+CREATE INDEX i_multi ON bl.t_multi (a, b, c);
+DELETE FROM bl.t_multi WHERE a % 3 <> 0;
+VACUUM bl.t_multi;
+
+CREATE TABLE bl.t_text_del (id int, v text);
+INSERT INTO bl.t_text_del SELECT g, md5(g::text) FROM generate_series(1, :rows) g;
+CREATE INDEX i_text_del ON bl.t_text_del (v);
+DELETE FROM bl.t_text_del WHERE id % 5 <> 0;
+VACUUM bl.t_text_del;
+
+CREATE TABLE bl.t_wide (id int, v text);
+INSERT INTO bl.t_wide SELECT g, rpad(md5(g::text), 400, 'w') FROM generate_series(1, :wide_rows) g;
+CREATE INDEX i_wide ON bl.t_wide (v);
+DELETE FROM bl.t_wide WHERE id % 10 >= 3;
+VACUUM bl.t_wide;
+
+-- 5. unlogged, partitioned, TOAST-owning, empty ----------------------------
+CREATE UNLOGGED TABLE bl.t_unlogged (id int);
+INSERT INTO bl.t_unlogged SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_unlogged ON bl.t_unlogged (id);
+DELETE FROM bl.t_unlogged WHERE id % 6 <> 0;
+VACUUM bl.t_unlogged;
+
+CREATE TABLE bl.t_part (id int) PARTITION BY RANGE (id);
+CREATE TABLE bl.t_part_1 PARTITION OF bl.t_part FOR VALUES FROM (1) TO (500001);
+CREATE TABLE bl.t_part_2 PARTITION OF bl.t_part FOR VALUES FROM (500001) TO (1000001);
+INSERT INTO bl.t_part SELECT g FROM generate_series(1, 1000000) g;
+CREATE INDEX i_part ON bl.t_part (id);
+DELETE FROM bl.t_part WHERE id % 7 <> 0;
+VACUUM bl.t_part_1;
+VACUUM bl.t_part_2;
+
+CREATE TABLE bl.t_toast (id int PRIMARY KEY, v text);
+ALTER TABLE bl.t_toast ALTER COLUMN v SET STORAGE EXTERNAL;
+INSERT INTO bl.t_toast SELECT g, rpad(md5(g::text), 4000, 'p') FROM generate_series(1, 20000) g;
+DELETE FROM bl.t_toast WHERE id % 3 <> 0;
+VACUUM bl.t_toast;
+
+CREATE TABLE bl.t_empty (id int PRIMARY KEY);
+
+-- 6. churn and reverse-order inserts ---------------------------------------
+CREATE TABLE bl.t_churn (id int);
+INSERT INTO bl.t_churn SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_churn ON bl.t_churn (id);
+UPDATE bl.t_churn SET id = id + :rows;
+VACUUM bl.t_churn;
+
+CREATE TABLE bl.t_frag (id int);
+CREATE INDEX i_frag ON bl.t_frag (id);
+INSERT INTO bl.t_frag SELECT g FROM generate_series(:rows, 1, -1) g;
+
+-- 7. fresh builds at four fillfactors, plus a fresh text index -------------
+CREATE TABLE bl.t_fresh (id int);
+INSERT INTO bl.t_fresh SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_fresh  ON bl.t_fresh (id);
+CREATE INDEX i_ff100  ON bl.t_fresh (id) WITH (fillfactor = 100);
+CREATE INDEX i_ff50   ON bl.t_fresh (id) WITH (fillfactor = 50);
+CREATE INDEX i_ff10   ON bl.t_fresh (id) WITH (fillfactor = 10);
+
+CREATE TABLE bl.t_text (v text);
+INSERT INTO bl.t_text SELECT md5(g::text) FROM generate_series(1, :rows) g;
+CREATE INDEX i_text ON bl.t_text (v);
+
+-- 8. duplicates: built by CREATE INDEX, and built by inserts ---------------
+CREATE TABLE bl.t_dup (v int);
+INSERT INTO bl.t_dup SELECT g % 10 FROM generate_series(1, :rows) g;
+CREATE INDEX i_dup ON bl.t_dup (v);
+
+CREATE TABLE bl.t_dup_ins (v int);
+CREATE INDEX i_dup_ins ON bl.t_dup_ins (v);
+INSERT INTO bl.t_dup_ins SELECT g % 10 FROM generate_series(1, :rows) g;
+
+-- 9. deduplication turned off at build time, then turned back on.
+-- The reloption does not exist before PostgreSQL 13, so this fixture is
+-- built only where the server accepts it; the 12 leg records its absence.
+DO $dd$
+BEGIN
+  IF current_setting('server_version_num')::int >= 130000 THEN
+    EXECUTE 'CREATE TABLE bl.t_dedup (v int)';
+    EXECUTE 'INSERT INTO bl.t_dedup SELECT g % 10 FROM generate_series(1, ' ||
+            current_setting('bl.rows') || ') g';
+    EXECUTE 'CREATE INDEX i_dedup_off ON bl.t_dedup (v) WITH (deduplicate_items = off)';
+    EXECUTE 'ALTER INDEX bl.i_dedup_off SET (deduplicate_items = on)';
+  END IF;
+END
+$dd$;
+
+-- 10. the four fillfactor fixtures: built at a stated fillfactor, then nine
+-- tenths of the rows deleted and the table vacuumed ------------------------
+CREATE TABLE bl.t_ffdel (id int);
+INSERT INTO bl.t_ffdel SELECT g FROM generate_series(1, :ff_rows) g;
+CREATE INDEX i_ff100_del90 ON bl.t_ffdel (id) WITH (fillfactor = 100);
+CREATE INDEX i_ff50_del90  ON bl.t_ffdel (id) WITH (fillfactor = 50);
+CREATE INDEX i_ff10_del90  ON bl.t_ffdel (id) WITH (fillfactor = 10);
+DELETE FROM bl.t_ffdel WHERE id % 10 <> 0;
+VACUUM bl.t_ffdel;
+
+CREATE TABLE bl.t_ffhead (id int);
+INSERT INTO bl.t_ffhead SELECT g FROM generate_series(1, :ff_rows) g;
+CREATE INDEX i_ff50_delhead ON bl.t_ffhead (id) WITH (fillfactor = 50);
+DELETE FROM bl.t_ffhead WHERE id <= (:ff_rows * 9) / 10;
+VACUUM bl.t_ffhead;
+
+-- 11. two known-content pages, for the implied leaf capacity ---------------
+CREATE TABLE bl.c_one (id int);
+INSERT INTO bl.c_one VALUES (1);
+CREATE INDEX c_one_idx ON bl.c_one (id);
+
+CREATE TABLE bl.c_zero (id int);
+INSERT INTO bl.c_zero VALUES (1);
+CREATE INDEX c_zero_idx ON bl.c_zero (id);
+DELETE FROM bl.c_zero;
+VACUUM bl.c_zero;
+
+-- 12. shapes pgstatindex refuses -------------------------------------------
+CREATE TABLE bl.s_other (id int, v text, g_point point, r int4range);
+INSERT INTO bl.s_other SELECT g, md5(g::text), point(g, g), int4range(g, g + 10)
+  FROM generate_series(1, 20000) g;
+CREATE INDEX s_hash   ON bl.s_other USING hash   (id);
+CREATE INDEX s_gin    ON bl.s_other USING gin    (to_tsvector('simple', v));
+CREATE INDEX s_gist   ON bl.s_other USING gist   (g_point);
+CREATE INDEX s_spgist ON bl.s_other USING spgist (g_point);
+CREATE INDEX s_brin   ON bl.s_other USING brin   (id);
+CREATE VIEW  bl.s_view AS SELECT 1 AS one;
+CREATE SEQUENCE bl.s_seq;
+
+-- 13. an index the catalog says is not valid.  Only a disposable cluster
+-- may have its catalog written to by hand like this.
+CREATE TABLE bl.t_invalid (id int);
+INSERT INTO bl.t_invalid SELECT g FROM generate_series(1, 300000) g;
+CREATE INDEX i_invalid ON bl.t_invalid (id);
+UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'bl.i_invalid'::regclass;
+SQL
+  local ffrows=$((ROWS / 5)) widerows=$((ROWS / 10))
+  # psql does not substitute :variables inside a dollar-quoted body, so the
+  # version-guarded fixture reads its row count from a database-level GUC.
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" \
+    -c "ALTER DATABASE $DB SET bl.rows = '$ROWS'" > /dev/null || die "cannot set bl.rows"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" \
+    -v rows="$ROWS" -v ff_rows="$ffrows" -v wide_rows="$widerows" \
+    -f "$SQLD/fixtures.sql" || die "fixtures failed"
+  note "indexes in bl: $(s "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'bl' AND c.relkind IN ('i','I')")"
+  note "database size: $(s "SELECT pg_size_pretty(pg_database_size(current_database()))")"
+}
+
+# --------------------------------------------------------------- report -----
+# Runs the filed text exactly as filed, including its two SET lines.
+stage_report() {
+  say "run the filed statement"
+  [ -f "$SQLD/report.sql" ] || die "run the texts stage first"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -P footer=off -A -F '|' -d "$DB" \
+    -f "$SQLD/report.sql" > "$OUT/report17.txt" 2> "$OUT/report17.err"
+  local rc=$?
+  if [ "$rc" != 0 ]; then
+    printf 'exact_text=refused\n' > "$OUT/exact17.txt"
+    head -5 "$OUT/report17.err" >> "$OUT/exact17.txt"
+    cat "$OUT/exact17.txt" >&2
+    die "the filed text did not run; see $OUT/report17.err"
+  fi
+  printf 'exact_text=executes\n' > "$OUT/exact17.txt"
+  # footer=off leaves one header line and one line per row.
+  local rows cols
+  rows=$(grep -c '^' "$OUT/report17.txt")
+  rows=$((rows - 1))
+  cols=$(head -1 "$OUT/report17.txt" | tr '|' '\n' | grep -c '^')
+  {
+    printf 'report_rows=%s\n' "$rows"
+    printf 'report_columns=%s\n' "$cols"
+    printf 'report_bytes=%s\n' "$(wc -c < "$OUT/report17.txt")"
+  } >> "$OUT/exact17.txt"
+  cat "$OUT/exact17.txt" >&2
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" \
+    -f "$SQLD/report.sql" > "$OUT/report17_pretty.txt" 2>&1
+}
+
+# ---------------------------------------------------------------- facts -----
+stage_facts() {
+  say "version-local facts, refusals and page arithmetic"
+  fl "$SQLD/view.sql" > /dev/null || die "harness view failed"
+  : > "$OUT/facts17.txt"
+  local f="$OUT/facts17.txt"
+  {
+    printf 'server_version_num=%s\n' "$(s 'SHOW server_version_num')"
+    printf 'block_size=%s\n' "$(s 'SHOW block_size')"
+    printf 'candidates=%s\n' "$(s 'SELECT count(*) FROM bloat_final')"
+    printf 'index_size_equals_relation_size=%s of %s\n' \
+      "$(s 'SELECT count(*) FROM bloat_final f WHERE f.index_size = pg_relation_size(f.idx_oid)')" \
+      "$(s 'SELECT count(*) FROM bloat_final')"
+    printf 'nan_density_indexes=%s\n' "$(s 'SELECT count(*) FROM bloat_final WHERE leaf_pages = 0')"
+    printf 'nan_float8_gt_20=%s\n' "$(s "SELECT ('NaN'::float8 > 20)::text")"
+    printf 'nan_numeric_gt_20=%s\n' "$(s "SELECT ('NaN'::numeric > 20)::text")"
+    printf 'dedup_fixture_present=%s\n' "$(s "SELECT (to_regclass('bl.i_dedup_off') IS NOT NULL)::text")"
+  } >> "$f"
+
+  # Every refusal the cand filters exist for.
+  {
+    printf 'err_hash=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_hash'::regclass)")"
+    printf 'err_gin=%s\n'       "$(err "SELECT * FROM pgstatindex('bl.s_gin'::regclass)")"
+    printf 'err_gist=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_gist'::regclass)")"
+    printf 'err_spgist=%s\n'    "$(err "SELECT * FROM pgstatindex('bl.s_spgist'::regclass)")"
+    printf 'err_brin=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_brin'::regclass)")"
+    printf 'err_partitioned=%s\n' "$(err "SELECT * FROM pgstatindex('bl.i_part'::regclass)")"
+    printf 'err_table=%s\n'     "$(err "SELECT * FROM pgstatindex('bl.t_del90'::regclass)")"
+    printf 'err_view=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_view'::regclass)")"
+    printf 'err_sequence=%s\n'  "$(err "SELECT * FROM pgstatindex('bl.s_seq'::regclass)")"
+    printf 'err_stale_oid=%s\n' "$(err "SELECT * FROM pgstatindex(2147483647::oid::regclass)")"
+  } >> "$f"
+
+  # The invalid index: an error on 17, a row on 12.
+  local inv
+  inv=$(err "SELECT * FROM pgstatindex('bl.i_invalid'::regclass)")
+  if [ -n "$inv" ]; then
+    printf 'invalid_index=refused %s\n' "$inv" >> "$f"
+  else
+    printf 'invalid_index=row %s\n' \
+      "$(s "SELECT version || '|' || tree_level || '|' || index_size || '|' || root_block_no || '|' || internal_pages || '|' || leaf_pages || '|' || empty_pages || '|' || deleted_pages || '|' || avg_leaf_density || '|' || leaf_fragmentation FROM pgstatindex('bl.i_invalid'::regclass)")" >> "$f"
+  fi
+
+  # Fresh-build density at four fillfactors, and the reported estimate.
+  printf 'fresh_builds fillfactor|target_density|avg_leaf_density|est_reclaimable_pct\n' >> "$f"
+  s "SELECT f.fillfactor || '|' || round(100 * f.target_density, 2) || '|' ||
+            round(f.avg_leaf_density::numeric, 2) || '|' ||
+            round(100 * (f.index_size - f.est_rebuilt_bytes) / f.index_size, 1)
+       FROM bloat_final f
+      WHERE f.index_name IN ('i_ff100', 'i_fresh', 'i_ff50', 'i_ff10')
+      ORDER BY f.fillfactor DESC" >> "$f"
+
+  # Leaf capacity implied by two pages of known contents.  A root leaf page
+  # holding one int4 entry leaves 8192 - 16 special - 24 header - 16 tuple
+  # - 4 line pointer = 8128 free; an empty leaf page leaves 8148.
+  printf 'implied_max_avail one_tuple|empty_leaf\n' >> "$f"
+  s "SELECT round(8128 / (1 - one.d / 100)::numeric, 1) || '|' ||
+            round(8148 / (1 - zero.d / 100)::numeric, 1)
+       FROM (SELECT avg_leaf_density::numeric AS d FROM pgstatindex('bl.c_one_idx'::regclass)) one,
+            (SELECT avg_leaf_density::numeric AS d FROM pgstatindex('bl.c_zero_idx'::regclass)) zero" >> "$f"
+  printf 'known_page_densities one|zero\n' >> "$f"
+  s "SELECT (SELECT round(avg_leaf_density::numeric, 2) FROM pgstatindex('bl.c_one_idx'::regclass)) || '|' ||
+            (SELECT round(avg_leaf_density::numeric, 2) FROM pgstatindex('bl.c_zero_idx'::regclass))" >> "$f"
+
+  # VACUUM does not give index pages back; REINDEX does.
+  printf 'delhead_after_vacuum=%s dead_pages=%s\n' \
+    "$(s "SELECT index_size FROM pgstatindex('bl.i_delhead'::regclass)")" \
+    "$(s "SELECT empty_pages + deleted_pages FROM pgstatindex('bl.i_delhead'::regclass)")" >> "$f"
+
+  # Another session's temp index, with and without the filter.  Each -c is
+  # its own transaction, so the temp relation is committed and visible to
+  # this session while the sleeping one still owns it; a single multi-
+  # statement -c would keep the catalog rows uncommitted and invisible.
+  "$BIN/psql" -X -q -d "$DB" \
+    -c "CREATE TEMP TABLE tmp_other(id int)" \
+    -c "INSERT INTO tmp_other SELECT g FROM generate_series(1, 300000) g" \
+    -c "CREATE INDEX tmp_other_idx ON tmp_other(id)" \
+    -c "SELECT pg_sleep(25)" > /dev/null 2>&1 &
+  local other=$!
+  sleep 8
+  {
+    printf 'other_temp_candidates_filtered=%s\n' "$(s 'SELECT count(*) FROM bloat_final')"
+    printf 'other_temp_candidates_unfiltered=%s\n' \
+      "$(s "SELECT count(*) FROM pg_class c JOIN pg_index x ON x.indexrelid = c.oid
+              JOIN pg_am a ON a.oid = c.relam
+             WHERE a.amname = 'btree' AND c.relkind = 'i'
+               AND x.indisvalid AND x.indisready AND x.indislive")"
+    printf 'other_temp_index_size=%s\n' \
+      "$(s "SELECT coalesce(pg_size_pretty(max(pg_relation_size(c.oid))), 'none')
+              FROM pg_class c WHERE c.relname = 'tmp_other_idx' AND c.relkind = 'i'")"
+    printf 'other_temp_error=%s\n' \
+      "$(err "SELECT * FROM pgstatindex((SELECT c.oid FROM pg_class c WHERE c.relname = 'tmp_other_idx' AND c.relkind = 'i' LIMIT 1)::regclass)")"
+    printf 'report_rows_with_other_session=%s\n' \
+      "$(( $("$BIN/psql" -X -q -A -F '|' -P footer=off -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/report.sql" 2>/dev/null | grep -c '^') - 1 ))"
+  } >> "$f"
+  wait "$other" 2>/dev/null
+  cat "$f" >&2
+}
+
+# ---------------------------------------------------------------- score -----
+# Ground truth is pg_relation_size before and after REINDEX INDEX, over every
+# index the harness view can see.  This stage is destructive: it rebuilds
+# every index in the database, so it must run after report, facts and cost.
+stage_score() {
+  say "score every estimate against a measured REINDEX INDEX"
+  fl "$SQLD/view.sql" > /dev/null || die "harness view failed"
+  q "DROP VIEW IF EXISTS bl_scored;
+     DROP TABLE IF EXISTS bl_before, bl_after, bl_residual;
+     CREATE TABLE bl_before AS
+       SELECT /* wiki_pgsi_score_before */
+              f.idx_oid, f.schema_name, f.index_name, f.index_size,
+              f.est_rebuilt_bytes, f.wasted_vs_fillfactor, f.avg_leaf_density,
+              f.leaf_pages, f.dead_pages, f.fillfactor, f.target_density,
+              f.leaf_bytes, f.live_leaf_bytes, f.dead_bytes,
+              pg_relation_size(f.idx_oid) AS before_bytes
+         FROM bloat_final f;" > /dev/null || die "bl_before failed"
+  note "indexes to score: $(s 'SELECT count(*) FROM bl_before')"
+  s "SELECT 'REINDEX INDEX ' || idx_oid::regclass || ';' FROM bl_before ORDER BY idx_oid" \
+    > "$SQLD/reindex.sql"
+  fl "$SQLD/reindex.sql" > /dev/null || die "REINDEX pass failed"
+  q "CREATE TABLE bl_after AS
+       SELECT /* wiki_pgsi_score_after */
+              b.idx_oid, pg_relation_size(b.idx_oid) AS after_bytes
+         FROM bl_before b;
+     CREATE VIEW bl_scored AS
+       SELECT b.*, a.after_bytes,
+              100 * (b.index_size - b.est_rebuilt_bytes) / b.index_size AS est_pct,
+              100 * (b.before_bytes - a.after_bytes)::numeric / b.before_bytes AS actual_pct,
+              100 * (b.index_size - b.est_rebuilt_bytes) / b.index_size
+              - 100 * (b.before_bytes - a.after_bytes)::numeric / b.before_bytes AS delta
+         FROM bl_before b JOIN bl_after a USING (idx_oid);" > /dev/null \
+    || die "post-reindex pass failed"
+
+  {
+    printf 'index|size|est_pct|actual_pct|delta|density|dead\n'
+    s "SELECT index_name || '|' || index_size || '|' || round(est_pct, 1) || '|' ||
+              round(actual_pct, 1) || '|' || round(delta, 1) || '|' ||
+              coalesce(round(avg_leaf_density::numeric, 2)::text, 'NaN') || '|' || dead_pages
+         FROM bl_scored WHERE schema_name = 'bl' ORDER BY actual_pct DESC, index_name"
+    # Three populations, because the scoring pass rewrites pg_class while it
+    # runs: a catalog index can grow between the snapshot and its own
+    # REINDEX, which is a property of the harness and not of the estimator.
+    printf '\n-- totals, by population\n'
+    s "SELECT 'all: scored=' || count(*) ||
+              ' within_1.0=' || count(*) FILTER (WHERE abs(delta) <= 1.0) ||
+              ' within_2.0=' || count(*) FILTER (WHERE abs(delta) <= 2.0) ||
+              ' max_over=' || round(max(delta), 1) || ' max_under=' || round(min(delta), 1)
+         FROM bl_scored
+        UNION ALL
+       SELECT 'fixtures (schema bl): scored=' || count(*) ||
+              ' within_1.0=' || count(*) FILTER (WHERE abs(delta) <= 1.0) ||
+              ' within_2.0=' || count(*) FILTER (WHERE abs(delta) <= 2.0) ||
+              ' max_over=' || round(max(delta), 1) || ' max_under=' || round(min(delta), 1)
+         FROM bl_scored WHERE schema_name = 'bl'
+        UNION ALL
+       SELECT 'catalog and TOAST: scored=' || count(*) ||
+              ' within_1.0=' || count(*) FILTER (WHERE abs(delta) <= 1.0) ||
+              ' max_over=' || round(max(delta), 1)
+         FROM bl_scored WHERE schema_name <> 'bl'
+        UNION ALL
+       SELECT 'no leaf pages: ' || count(*) || ', all at est ' ||
+              round(max(abs(est_pct)), 1) || ' and actual ' || round(max(abs(actual_pct)), 1)
+         FROM bl_scored WHERE leaf_pages = 0"
+    printf -- '-- the five largest over-estimates\n'
+    s "SELECT schema_name || '.' || index_name || ' ' || pg_size_pretty(index_size) ||
+              ' +' || round(delta, 1)
+         FROM bl_scored ORDER BY delta DESC LIMIT 5"
+    printf -- '-- the three largest under-estimates\n'
+    s "SELECT schema_name || '.' || index_name || ' ' || pg_size_pretty(index_size) ||
+              ' ' || round(delta, 1)
+         FROM bl_scored ORDER BY delta LIMIT 3"
+  } > "$OUT/scores17.txt"
+  tail -16 "$OUT/scores17.txt" >&2
+}
+
+# ------------------------------------------------------------- residual -----
+# A rebuilt index must report no waste at its own fillfactor.  Reads the
+# tables the score stage left behind.
+stage_residual() {
+  say "post-REINDEX residual of wasted_vs_fillfactor"
+  s "SELECT 1 FROM bl_before LIMIT 1" > /dev/null 2>&1 || die "run the score stage first"
+  # Read the same population the score stage scored, not whatever the view
+  # sees now: creating bl_before itself adds a TOAST index to the database.
+  q "DROP TABLE IF EXISTS bl_residual;
+     CREATE TABLE bl_residual AS
+       SELECT /* wiki_pgsi_score_residual */
+              f.idx_oid, f.wasted_vs_fillfactor AS residual_bytes, f.index_size,
+              f.avg_leaf_density, f.leaf_pages
+         FROM bloat_final f
+        WHERE f.idx_oid IN (SELECT idx_oid FROM bl_before);" > /dev/null \
+    || die "residual pass failed"
+  {
+    printf -- '-- post-REINDEX residual, over the population the score stage scored\n'
+    s "SELECT 'scored=' || count(*) ||
+              ' exactly_zero=' || count(*) FILTER (WHERE residual_bytes = 0) ||
+              ' at_or_below_0.1pct=' || count(*) FILTER (WHERE 100 * residual_bytes / index_size <= 0.1) ||
+              ' worst_pct=' || round(max(100 * residual_bytes / index_size), 1)
+         FROM bl_residual"
+    printf -- '-- worst residual, and the worst among indexes the report prints\n'
+    s "SELECT r.idx_oid::regclass || ' ' || round(100 * r.residual_bytes / r.index_size, 1) ||
+              '% ' || r.residual_bytes || ' bytes, leaf_pages ' || r.leaf_pages ||
+              ', density ' || coalesce(round(r.avg_leaf_density::numeric, 2)::text, 'NaN')
+         FROM bl_residual r ORDER BY 100 * r.residual_bytes / r.index_size DESC LIMIT 3"
+    s "SELECT 'worst at or above 1 MB: ' || r.idx_oid::regclass || ' ' ||
+              round(100 * r.residual_bytes / r.index_size, 1) || '% ' || r.residual_bytes || ' bytes'
+         FROM bl_residual r WHERE r.index_size >= 1024 * 1024
+        ORDER BY 100 * r.residual_bytes / r.index_size DESC LIMIT 1"
+    printf -- '-- how many one-leaf-page indexes carry the worst residual\n'
+    s "SELECT 'at_44.6pct=' || count(*) || ', all with leaf_pages ' || max(leaf_pages)
+         FROM bl_residual WHERE round(100 * residual_bytes / index_size, 1) = 44.6"
+    printf -- '-- the ratio between the two percentage columns, before the rebuild\n'
+    s "SELECT b.index_name || ' ' ||
+              round(b.wasted_vs_fillfactor / (b.index_size - b.est_rebuilt_bytes), 4) ||
+              ' dead_pages ' || b.dead_pages
+         FROM bl_before b
+        WHERE b.index_size - b.est_rebuilt_bytes > 1024 * 1024
+        ORDER BY 1"
+    printf -- '-- indexes where the two definitions coincide: fillfactor 100, or no leaf pages\n'
+    s "SELECT 'coincide=' || count(*) FILTER (WHERE target_density = 1 OR leaf_pages = 0) ||
+              ' of ' || count(*) || ' (fillfactor 100: ' ||
+              count(*) FILTER (WHERE target_density = 1) || ', no leaf pages: ' ||
+              count(*) FILTER (WHERE leaf_pages = 0) || ')'
+         FROM bl_before"
+    printf -- '-- clamped rows: leaves denser than their own target, so the leaf term is 0\n'
+    s "SELECT 'clamped=' || count(*) FILTER (WHERE leaf_pages > 0
+                AND round(leaf_bytes * target_density) <= live_leaf_bytes) ||
+              ' of ' || count(*) FILTER (WHERE leaf_pages > 0) || ' with leaf pages'
+         FROM bl_before"
+  } > "$OUT/residual17.txt"
+  cat "$OUT/residual17.txt" >&2
+}
+
+# ----------------------------------------------------------------- cost -----
+stage_cost() {
+  say "what the statement costs to run"
+  : > "$OUT/cost17.txt"
+  local f="$OUT/cost17.txt"
+  printf 'EXPLAIN (ANALYZE, BUFFERS) of the filed text\n' >> "$f"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" \
+    -c "SET statement_timeout = '15min'; SET lock_timeout = '5s';" \
+    -c "EXPLAIN (ANALYZE, BUFFERS) $(cat "$SQLD/bare.sql")" >> "$f" 2>&1
+  printf 'plan_lines=%s\n' "$(grep -c '^' "$f")" >> "$f"
+  printf 'cte_scans=%s\n' "$(grep -c 'CTE Scan' "$f")" >> "$f"
+  local i a b
+  printf 'six interleaved end-to-end runs, filed text then superseded text (ms)\n' >> "$f"
+  for i in 1 2 3 4 5 6; do
+    a=$(date +%s%N)
+    "$BIN/psql" -X -q -o /dev/null -d "$DB" -f "$SQLD/report.sql" > /dev/null 2>&1
+    b=$(date +%s%N)
+    printf 'filed=%s.%s ' $(( (b - a) / 1000000 )) $(( ((b - a) / 100000) % 10 )) >> "$f"
+    if [ -f "$SQLD/prev_bare.sql" ]; then
+      a=$(date +%s%N)
+      "$BIN/psql" -X -q -o /dev/null -d "$DB" -f "$SQLD/prev.sql" > /dev/null 2>&1
+      b=$(date +%s%N)
+      printf 'prev=%s.%s' $(( (b - a) / 1000000 )) $(( ((b - a) / 100000) % 10 )) >> "$f"
+    fi
+    printf '\n' >> "$f"
+  done
+  printf 'database_size=%s\n' "$(s 'SELECT pg_size_pretty(pg_database_size(current_database()))')" >> "$f"
+  grep -E 'Execution Time|plan_lines|cte_scans|filed=|Buffers: shared' "$f" | head -20 >&2
+}
+
+# ----------------------------------------------------------------- priv -----
+stage_priv() {
+  say "who may run it"
+  : > "$OUT/priv17.txt"
+  local f="$OUT/priv17.txt"
+  q "DROP ROLE IF EXISTS mon; DROP ROLE IF EXISTS nomon;
+     CREATE ROLE mon LOGIN; CREATE ROLE nomon LOGIN;
+     GRANT pg_stat_scan_tables TO mon;" > /dev/null 2>&1 || die "role setup failed"
+  # The statement passes an OID column cast to regclass, which resolves no
+  # name.  Writing 'bl.i_del90'::regclass in a test would resolve one, so the
+  # OID is read here, as a number, and substituted.
+  local oid
+  oid=$(s "SELECT 'bl.i_del90'::regclass::oid")
+  {
+    printf 'index_oid=%s\n' "$oid"
+    printf 'mon_schema_usage=%s\n' \
+      "$(s "SELECT has_schema_privilege('mon', 'bl', 'USAGE')::text")"
+    printf 'mon_rows_from_statement=%s\n' \
+      "$("$BIN/psql" -X -At -q -U mon -d "$DB" -f "$SQLD/report.sql" 2>&1 | grep -c '|')"
+    printf 'mon_by_name=%s\n' \
+      "$("$BIN/psql" -X -At -q -U mon -d "$DB" -c "SELECT * FROM pgstatindex('bl.i_del90')" 2>&1 | grep -E '^(ERROR|FATAL)' | head -1)"
+    printf 'mon_by_oid_leaf_pages=%s\n' \
+      "$("$BIN/psql" -X -At -q -U mon -d "$DB" -c "SELECT leaf_pages FROM pgstatindex($oid::regclass)" 2>&1 | head -1)"
+    printf 'nomon_by_oid=%s\n' \
+      "$("$BIN/psql" -X -At -q -U nomon -d "$DB" -c "SELECT leaf_pages FROM pgstatindex($oid::regclass)" 2>&1 | head -1)"
+  } >> "$f"
+  q "DROP ROLE IF EXISTS mon; DROP ROLE IF EXISTS nomon;" > /dev/null
+  cat "$f" >&2
+}
+
+# ----------------------------------------------------------------- race -----
+# Two shapes of interference, both driven from a second session:
+#   lock_timeout   an uncommitted DROP INDEX holds AccessExclusiveLock and the
+#                  call is cancelled at the timeout
+#   committed drop the same drop commits while the report waits, so
+#                  relation_open finds nothing behind the lock
+stage_race() {
+  say "locking and the concurrent-drop race"
+  : > "$OUT/race17.txt"
+  local f="$OUT/race17.txt" a b msg
+  "$BIN/psql" -X -q -d "$DB" -c \
+    "BEGIN; DROP INDEX bl.i_del50; SELECT pg_sleep(8); ROLLBACK;" > /dev/null 2>&1 &
+  local holder=$!
+  sleep 2
+  a=$(date +%s%N)
+  msg=$(err "SET lock_timeout = '2s'; SELECT * FROM pgstatindex('bl.i_del50'::regclass)")
+  b=$(date +%s%N)
+  printf 'lock_timeout_error=%s\n' "$msg" >> "$f"
+  printf 'lock_timeout_ms=%s.%s\n' $(( (b - a) / 1000000 )) $(( ((b - a) / 100000) % 10 )) >> "$f"
+  wait "$holder" 2>/dev/null
+
+  # Case 1: the drop commits while cand is still being materialized.  cand
+  # sizes each candidate with pg_relation_size, which opens the relation with
+  # try_relation_open and returns NULL when it has gone, so the row is
+  # filtered out and the report survives, one row shorter.
+  local before after
+  before=$(( $("$BIN/psql" -X -q -A -F '|' -P footer=off -d "$DB" -f "$SQLD/report.sql" 2>/dev/null | grep -c '^') - 1 ))
+  "$BIN/psql" -X -q -d "$DB" -c \
+    "BEGIN; DROP INDEX bl.i_uniq; SELECT pg_sleep(3); COMMIT;" > /dev/null 2>&1 &
+  local dropper=$!
+  sleep 1
+  a=$(date +%s%N)
+  # psql prefixes an error from -f with "psql:<file>:<line>: ", so the match
+  # cannot be anchored at the start of the line; the prefix is then cut.
+  "$BIN/psql" -X -q -A -F '|' -P footer=off -d "$DB" -f "$SQLD/report.sql" \
+    > "$OUT/race_during.txt" 2>&1
+  b=$(date +%s%N)
+  wait "$dropper" 2>/dev/null
+  msg=$(grep -E '(ERROR|FATAL):' "$OUT/race_during.txt" | head -1 | sed 's/^psql:[^ ]* //')
+  after=$(( $(grep -c '^' "$OUT/race_during.txt") - 1 ))
+  printf 'drop_during_cand_error=%s\n' "${msg:-none}" >> "$f"
+  printf 'drop_during_cand_rows=%s (was %s)\n' "$after" "$before" >> "$f"
+  printf 'drop_during_cand_ms=%s\n' $(( (b - a) / 1000000 )) >> "$f"
+  q "CREATE UNIQUE INDEX IF NOT EXISTS i_uniq ON bl.t_uniq (id);" > /dev/null 2>&1
+
+  # Case 2: the drop lands after cand has sized that index and released its
+  # lock, but before pgstatindex opens it.  That window is short, so the
+  # delay is swept until the abort appears.
+  # The target is the fixture index cand materializes last, so the window
+  # between its size check and its pgstatindex call is the whole loop rather
+  # than a few milliseconds.  The dropping session connects first and holds
+  # the delay inside the server, as pg_sleep in the same command, so psql's
+  # start-up cost is out of the critical path.
+  local target defn d attempts=0 hit=
+  target=$(s "SELECT index_name FROM (SELECT index_name, row_number() OVER () AS rn
+                                        FROM bloat_final
+                                       WHERE schema_name = 'bl'
+                                         AND index_size >= 1024 * 1024) q
+               ORDER BY rn DESC LIMIT 1")
+  defn=$(s "SELECT pg_get_indexdef('bl.$target'::regclass)")
+  # The reachable window is (end of cand, pgstatindex on the target).  On a
+  # warm cache the whole report is under 100 ms, so that window sits inside
+  # psql's own start-up skew; the sweep is recorded whether or not it lands.
+  printf 'drop_after_cand_target=%s\n' "$target" >> "$f"
+  for d in 0.005 0.02 0.04 0.06 0.07 0.075 0.08 0.09 0.10 0.12; do
+    a=$(date +%s%N)
+    "$BIN/psql" -X -q -d "$DB" \
+      -c "SELECT pg_sleep($d)" \
+      -c "BEGIN; DROP INDEX bl.$target; SELECT pg_sleep(2); COMMIT;" > /dev/null 2>&1 &
+    local dp=$!
+    "$BIN/psql" -X -q -d "$DB" -f "$SQLD/report.sql" > "$OUT/race_after.txt" 2>&1
+    b=$(date +%s%N)
+    wait "$dp" 2>/dev/null
+    attempts=$((attempts + 1))
+    msg=$(grep -E '(ERROR|FATAL):' "$OUT/race_after.txt" | head -1 | sed 's/^psql:[^ ]* //')
+    q "$defn" > /dev/null 2>&1
+    case $msg in
+      *"could not open relation"*)
+        hit="$msg after $(( (b - a) / 1000000 )) ms, drop taken ${d}s in"; break ;;
+    esac
+  done
+  printf 'drop_after_cand_error=%s\n' "${hit:-not reproduced in $attempts attempts}" >> "$f"
+  printf 'drop_after_cand_attempts=%s\n' "$attempts" >> "$f"
+  q "CREATE UNIQUE INDEX IF NOT EXISTS i_uniq ON bl.t_uniq (id);" > /dev/null 2>&1
+  cat "$f" >&2
+}
+
+# -------------------------------------------------------------- summary -----
+stage_summary() {
+  say "what landed in $OUT"
+  ls -la "$OUT" >&2
+  local x
+  for x in platform17 exact17 facts17 cost17 priv17 race17; do
+    [ -f "$OUT/$x.txt" ] && { printf '\n---- %s\n' "$x" >&2; cat "$OUT/$x.txt" >&2; }
+  done
+  [ -f "$OUT/scores17.txt" ] && { printf '\n---- scores17 (tail)\n' >&2; tail -14 "$OUT/scores17.txt" >&2; }
+  [ -f "$OUT/residual17.txt" ] && { printf '\n---- residual17\n' >&2; cat "$OUT/residual17.txt" >&2; }
+}
+
+# ---------------------------------------------------------------- stop -------
+stage_stop() {
+  say "stop the 17 cluster"
+  [ -d "$DATA" ] || { note "no data directory"; return 0; }
+  if "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 || die "pg_ctl stop failed"
+  fi
+  [ -f "$DATA/postmaster.pid" ] && die "postmaster.pid still present in $DATA"
+  pgrep -f "postgres.*-D $DATA" > /dev/null 2>&1 && die "a postgres process still runs on $DATA"
+  [ -n "$(ls -A "$SOCK" 2>/dev/null)" ] && die "socket directory $SOCK is not empty"
+  note "stopped: no postmaster.pid, no process, empty socket directory"
+}
+
+stage_clean() {
+  stage_stop || exit 1
+  case "$SANDBOX" in
+    "$WIKI_ROOT"/.wiki-runtime/tmp/?*) ;;
+    *) die "refusing to delete $SANDBOX: not under $WIKI_ROOT/.wiki-runtime/tmp/" ;;
+  esac
+  say "delete $SANDBOX"
+  rm -rf "$SANDBOX"
+}
+
+# ------------------------------------------------------------ dispatcher -----
+STAGES_DEFAULT="build check cluster texts fixtures report facts cost priv score residual race summary"
+run_stage() {
+  case "$1" in
+    build|check|cluster|texts|fixtures|report|facts|score|residual|cost|priv|race|summary|stop|clean)
+      "stage_$1" ;;
+    *) die "unknown stage: $1" ;;
+  esac
+}
+main() {
+  local st
+  if [ "$#" -eq 0 ]; then set -- $STAGES_DEFAULT; fi
+  for st in "$@"; do run_stage "$st" || die "stage $st failed"; done
+  say "done: $*"
+}
+main "$@"
+```
+
+### The PostgreSQL 12 leg script
+
+```sh
+#!/usr/bin/env bash
+#
+# bloat_pgstatindex_v12.sh - the PostgreSQL 12 leg of the measurement behind
+# "B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and
+# 17".  It answers one question the 17 leg cannot: does the exact filed text
+# run unmodified on the oldest major it claims, and does it report the same
+# numbers there?
+#
+# Nothing here assumes what PostgreSQL 12 does.  The statement is executed as
+# filed, byte for byte, and the outcome is recorded as a result in its own
+# right.  The pinned checkout is read only; everything this script writes
+# lives under $SANDBOX.
+#
+# Usage, from the repository root:
+#   bash bloat_pgstatindex_v12.sh                 # every stage, in order
+#   bash bloat_pgstatindex_v12.sh exact           # just the parse result
+#   bash bloat_pgstatindex_v12.sh clean           # stop and delete this leg
+#
+# Stages: build check cluster texts fixtures report facts score residual cost
+#         priv race summary stop clean
+#
+# Environment: WIKI_ROOT PAGE SRC12 SANDBOX PORT12 JOBS ROWS
+set -uo pipefail
+
+WIKI_ROOT="${WIKI_ROOT:-$PWD}"
+PAGE="${PAGE:-$WIKI_ROOT/wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md}"
+SRC12="${SRC12:-$WIKI_ROOT/raw/postgres-12}"
+SANDBOX="${SANDBOX:-$WIKI_ROOT/.wiki-runtime/tmp/pgsi}"
+PORT12="${PORT12:-55412}"
+JOBS="${JOBS:-4}"
+ROWS="${ROWS:-1000000}"
+OLD_REV="${OLD_REV:-cbbbd16}"
+
+BUILD="$SANDBOX/build12"; INST="$SANDBOX/install12"; DATA="$SANDBOX/data12"
+OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql12"; SOCK="$SANDBOX/sock12"; BIN="$INST/bin"
+DB=bloat12
+export PGPORT="$PORT12" PGHOST="$SOCK" PGDATABASE=postgres
+
+BASE_SQL=9d2e3a2c73c81f3efb848b61f4bf307365ce0da56d780baee08fa9a9606f6c91
+BASE_PREV=f5b995d3c5d51dddd1378e4e1ac31f9ad180cec0cc811a803186b86a1fb721e9
+
+say()  { printf '\n== %s\n' "$*" >&2; }
+note() { printf '   %s\n' "$*" >&2; }
+die()  { printf '!! %s\n' "$*" >&2; exit 1; }
+
+q()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }
+s()  { "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$DB" -c "$1"; }
+t()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" -c "$1"; }
+fl() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -f "$1"; }
+err() { "$BIN/psql" -X -At -q -d "$DB" -c "$1" 2>&1 | grep -E '^(ERROR|FATAL)' | head -1; }
+
+md_block() {
+  local lang=$1 want=$2 file=$3 n=0 inb=0 line tick fence
+  tick=$(printf '\140'); fence="$tick$tick$tick"
+  while IFS= read -r line; do
+    if [ "$inb" = 1 ]; then
+      if [ "$line" = "$fence" ]; then inb=0; [ "$n" = "$want" ] && return 0; continue; fi
+      [ "$n" = "$want" ] && printf '%s\n' "$line"
+    elif [ "$line" = "$fence$lang" ]; then
+      n=$((n + 1)); inb=1
+    fi
+  done < "$file"
+}
+
+# ---------------------------------------------------------------- build ------
+# 12.2 is configured without ICU: this page's fixtures need no collation
+# provider, and --with-icu is opt-in on this major, so leaving it off avoids
+# the TRUE/FALSE macros ICU 68 removed.
+stage_build() {
+  say "build 12.2 out of tree from $SRC12"
+  [ -x "$BIN/postgres" ] && { note "already built, skipping"; return 0; }
+  [ -x "$SRC12/configure" ] || die "no pinned checkout at $SRC12; set SRC12 or run from the repository root"
+  mkdir -p "$BUILD" "$OUT" "$SQLD"
+  ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" --enable-debug \
+      --with-readline --with-zlib > configure.log 2>&1 ) \
+    || { cp "$BUILD/configure.log" "$OUT/configure12.log" 2>/dev/null; die "configure failed, see $OUT/configure12.log"; }
+  ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
+    || { cp "$BUILD"/*.log "$OUT/" 2>/dev/null; grep -m3 'error:' "$BUILD/make.log" >&2; die "make failed"; }
+  ( cd "$BUILD" && make -C contrib/pgstattuple -j"$JOBS" >> install.log 2>&1 \
+      && make -C contrib/pgstattuple install >> install.log 2>&1 ) || die "contrib/pgstattuple failed"
+  local l
+  for l in configure make install; do cp "$BUILD/$l.log" "$OUT/${l}12.log" 2>/dev/null; done
+  note "$("$BIN/postgres" --version)"
+}
+
+stage_check() {
+  say "regression suites, 12.2"
+  mkdir -p "$OUT"
+  : > "$OUT/checks12.txt"
+  ( cd "$BUILD" && make check > check_core.log 2>&1 )
+  printf 'core=%s %s\n' "$?" \
+    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_core.log" | tail -1)" \
+    >> "$OUT/checks12.txt"
+  ( cd "$BUILD" && make -C contrib/pgstattuple check > check_pgstattuple.log 2>&1 )
+  printf 'pgstattuple=%s %s\n' "$?" \
+    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$BUILD/check_pgstattuple.log" | tail -1)" \
+    >> "$OUT/checks12.txt"
+  local l d
+  for l in "$BUILD"/check_*.log; do [ -f "$l" ] && cp "$l" "$OUT/12_$(basename "$l")"; done
+  for d in "$BUILD"/src/test/regress/regression.diffs "$BUILD"/contrib/pgstattuple/regression.diffs; do
+    [ -f "$d" ] && cp "$d" "$OUT/diffs12_$(basename "$(dirname "$d")").txt"
+  done
+  cat "$OUT/checks12.txt" >&2
+}
+
+# -------------------------------------------------------------- cluster ------
+# Same settings as the 17 leg.  Their apply scopes are read from the v17 GUC
+# table on the page, which is a v17 page; the 12 contexts are not cited there.
+stage_cluster() {
+  say "isolated 12.2 cluster on port $PORT12"
+  mkdir -p "$OUT" "$SQLD" "$SOCK"
+  if [ ! -f "$DATA/PG_VERSION" ]; then
+    "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 > "$OUT/initdb12.log" 2>&1 \
+      || die "initdb failed, see $OUT/initdb12.log"
+    cat >> "$DATA/postgresql.conf" <<CONF
+listen_addresses = ''
+port = $PORT12
+unix_socket_directories = '$SOCK'
+shared_buffers = 512MB
+maintenance_work_mem = 256MB
+max_parallel_maintenance_workers = 0
+autovacuum = off
+fsync = off
+logging_collector = off
+CONF
+  fi
+  if ! "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server12.log" -w start > /dev/null 2>&1 \
+      || die "server did not start, see $OUT/server12.log"
+  fi
+  "$BIN/psql" -X -At -q -d postgres -c "SELECT 1" > /dev/null 2>&1 || die "cannot connect"
+  "$BIN/psql" -X -At -q -d postgres -c \
+    "SELECT count(*) FROM pg_database WHERE datname = '$DB'" | grep -q '^1$' \
+    || "$BIN/createdb" "$DB" || die "createdb failed"
+  q "CREATE EXTENSION IF NOT EXISTS pgstattuple;" > /dev/null || die "pgstattuple not installed"
+  {
+    printf 'uname=%s\n' "$(uname -sm)"
+    printf 'server_version_num=%s\n' "$(s 'SHOW server_version_num')"
+    printf 'server_version=%s\n' "$(s 'SHOW server_version')"
+    printf 'block_size=%s\n' "$(s 'SHOW block_size')"
+    printf 'max_data_alignment=%s\n' "$("$BIN/pg_controldata" -D "$DATA" | grep -i 'maximum data alignment' | tr -s ' ' | cut -d' ' -f4)"
+    printf 'pgstattuple=%s\n' "$(s "SELECT extversion FROM pg_extension WHERE extname = 'pgstattuple'")"
+  } > "$OUT/platform12.txt"
+  cat "$OUT/platform12.txt" >&2
+}
+
+# ---------------------------------------------------------------- texts -----
+# Two texts come out of the page and one out of git history:
+#   report.sql   the filed statement, byte for byte, hash-checked
+#   view.sql     the same text as a view over the internal `final` stage, with
+#                exactly two edits, both printed: the two SET lines dropped and
+#                min_index_bytes set to 0 so sub-megabyte indexes are scored
+#   prev.sql     the text filed before wasted space was rebased on the
+#                fillfactor, recovered from OLD_REV for the cost comparison
+gen_view() {                       # gen_view <view> < text
+  local view=$1 line tail=0
+  printf 'DROP VIEW IF EXISTS %s CASCADE;\nCREATE VIEW %s AS\n' "$view" "$view"
+  while IFS= read -r line; do
+    case $line in
+      "SET statement_timeout"*|"SET lock_timeout"*)
+        printf '   harness edit: dropped %s\n' "$line" >&2; continue ;;
+      *"AS min_index_bytes"*)
+        printf '   harness edit: %s -> 0\n' "$(printf '%s' "$line" | tr -s ' ')" >&2
+        printf '           0::bigint AS min_index_bytes  -- harness: score every index\n'
+        continue ;;
+      "SELECT /* wiki_btree_bloat_pgstatindex_12_17 */") tail=1; continue ;;
+    esac
+    [ "$tail" = 1 ] && continue
+    printf '%s\n' "$line"
+  done
+  printf 'SELECT f.* FROM final f;\n'
+}
+
+stage_texts() {
+  say "extract the statement from $PAGE"
+  mkdir -p "$SQLD" "$OUT"
+  [ -f "$PAGE" ] || die "no page at $PAGE; set PAGE or run from the repository root"
+  md_block sql 1 "$PAGE" > "$SQLD/report.sql"
+  local got
+  got=$(sha256sum < "$SQLD/report.sql" | cut -d' ' -f1)
+  [ "$got" = "$BASE_SQL" ] || die "sql block 1 hashes $got, expected $BASE_SQL"
+  note "filed text: $(wc -l < "$SQLD/report.sql") lines, $(wc -c < "$SQLD/report.sql") bytes, sha256 ${got:0:12}"
+  gen_view bloat_final < "$SQLD/report.sql" > "$SQLD/view.sql"
+  # The statement alone, without the two SET lines, for EXPLAIN.
+  grep -v '^SET ' "$SQLD/report.sql" > "$SQLD/bare.sql"
+  if git -C "$WIKI_ROOT" cat-file -e "$OLD_REV:wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md" 2>/dev/null; then
+    git -C "$WIKI_ROOT" show "$OLD_REV:wiki/v17/questions/indexing/btree-bloat-with-pgstatindex.md" > "$SQLD/page_prev.md"
+    md_block sql 1 "$SQLD/page_prev.md" > "$SQLD/prev.sql"
+    got=$(sha256sum < "$SQLD/prev.sql" | cut -d' ' -f1)
+    [ "$got" = "$BASE_PREV" ] || die "superseded text hashes $got, expected $BASE_PREV"
+    grep -v '^SET ' "$SQLD/prev.sql" > "$SQLD/prev_bare.sql"
+    note "superseded text: $(wc -l < "$SQLD/prev.sql") lines, $(wc -c < "$SQLD/prev.sql") bytes, sha256 ${got:0:12}"
+  else
+    note "no revision $OLD_REV in this repository; the cost comparison will be skipped"
+  fi
+}
+
+# ------------------------------------------------------------- fixtures -----
+# Every statement in this stage is DISPOSABLE.  It drops and rebuilds schema
+# bl in a throwaway database and is not meant for a database anyone cares
+# about.  The two session GUCs it sets are PGC_USERSET: session scope, no
+# reload and no restart.
+stage_fixtures() {
+  say "build the fixture suite in $DB (rows=$ROWS)"
+  cat > "$SQLD/fixtures.sql" <<'SQL'
+-- DISPOSABLE fixture suite for the pgstatindex bloat report.
+-- Every object lives in schema bl of a throwaway database.
+SET statement_timeout = '30min';   -- PGC_USERSET, session scope
+SET lock_timeout      = '30s';     -- PGC_USERSET, session scope
+SET client_min_messages = warning;
+
+DROP SCHEMA IF EXISTS bl CASCADE;
+CREATE SCHEMA bl;
+
+-- 1. scattered deletes at five fractions, all vacuumed afterwards ----------
+CREATE TABLE bl.t_del90 (id int);
+INSERT INTO bl.t_del90 SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_del90 ON bl.t_del90 (id);
+DELETE FROM bl.t_del90 WHERE id % 10 <> 0;
+VACUUM bl.t_del90;
+
+CREATE TABLE bl.t_del50 (id int);
+INSERT INTO bl.t_del50 SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_del50 ON bl.t_del50 (id);
+DELETE FROM bl.t_del50 WHERE id % 2 <> 0;
+VACUUM bl.t_del50;
+
+-- 2. the same shape, deliberately not vacuumed -----------------------------
+CREATE TABLE bl.t_novac (id int);
+INSERT INTO bl.t_novac SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_novac ON bl.t_novac (id);
+DELETE FROM bl.t_novac WHERE id % 10 <> 0;
+
+-- 3. a contiguous head deleted: whole pages empty out ----------------------
+CREATE TABLE bl.t_delhead (id int);
+INSERT INTO bl.t_delhead SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_delhead ON bl.t_delhead (id);
+DELETE FROM bl.t_delhead WHERE id <= (:rows * 7) / 10;
+VACUUM bl.t_delhead;
+
+-- 4. partial, unique, expression, INCLUDE, multicolumn, text, wide ---------
+CREATE TABLE bl.t_partial (id int, flag boolean);
+INSERT INTO bl.t_partial SELECT g, true FROM generate_series(1, :rows) g;
+CREATE INDEX i_partial ON bl.t_partial (id) WHERE flag;
+DELETE FROM bl.t_partial WHERE flag AND id % 10 <> 0;
+VACUUM bl.t_partial;
+
+CREATE TABLE bl.t_uniq (id int);
+INSERT INTO bl.t_uniq SELECT g FROM generate_series(1, :rows) g;
+CREATE UNIQUE INDEX i_uniq ON bl.t_uniq (id);
+DELETE FROM bl.t_uniq WHERE id % 8 <> 0;
+VACUUM bl.t_uniq;
+
+CREATE TABLE bl.t_expr (id int);
+INSERT INTO bl.t_expr SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_expr ON bl.t_expr ((id * 2));
+DELETE FROM bl.t_expr WHERE id % 5 <> 0;
+VACUUM bl.t_expr;
+
+CREATE TABLE bl.t_incl (id int, v int);
+INSERT INTO bl.t_incl SELECT g, g FROM generate_series(1, :rows) g;
+CREATE INDEX i_incl ON bl.t_incl (id) INCLUDE (v);
+DELETE FROM bl.t_incl WHERE id % 4 <> 0;
+VACUUM bl.t_incl;
+
+CREATE TABLE bl.t_multi (a int, b int, c int);
+INSERT INTO bl.t_multi SELECT g, g, g FROM generate_series(1, :rows) g;
+CREATE INDEX i_multi ON bl.t_multi (a, b, c);
+DELETE FROM bl.t_multi WHERE a % 3 <> 0;
+VACUUM bl.t_multi;
+
+CREATE TABLE bl.t_text_del (id int, v text);
+INSERT INTO bl.t_text_del SELECT g, md5(g::text) FROM generate_series(1, :rows) g;
+CREATE INDEX i_text_del ON bl.t_text_del (v);
+DELETE FROM bl.t_text_del WHERE id % 5 <> 0;
+VACUUM bl.t_text_del;
+
+CREATE TABLE bl.t_wide (id int, v text);
+INSERT INTO bl.t_wide SELECT g, rpad(md5(g::text), 400, 'w') FROM generate_series(1, :wide_rows) g;
+CREATE INDEX i_wide ON bl.t_wide (v);
+DELETE FROM bl.t_wide WHERE id % 10 >= 3;
+VACUUM bl.t_wide;
+
+-- 5. unlogged, partitioned, TOAST-owning, empty ----------------------------
+CREATE UNLOGGED TABLE bl.t_unlogged (id int);
+INSERT INTO bl.t_unlogged SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_unlogged ON bl.t_unlogged (id);
+DELETE FROM bl.t_unlogged WHERE id % 6 <> 0;
+VACUUM bl.t_unlogged;
+
+CREATE TABLE bl.t_part (id int) PARTITION BY RANGE (id);
+CREATE TABLE bl.t_part_1 PARTITION OF bl.t_part FOR VALUES FROM (1) TO (500001);
+CREATE TABLE bl.t_part_2 PARTITION OF bl.t_part FOR VALUES FROM (500001) TO (1000001);
+INSERT INTO bl.t_part SELECT g FROM generate_series(1, 1000000) g;
+CREATE INDEX i_part ON bl.t_part (id);
+DELETE FROM bl.t_part WHERE id % 7 <> 0;
+VACUUM bl.t_part_1;
+VACUUM bl.t_part_2;
+
+CREATE TABLE bl.t_toast (id int PRIMARY KEY, v text);
+ALTER TABLE bl.t_toast ALTER COLUMN v SET STORAGE EXTERNAL;
+INSERT INTO bl.t_toast SELECT g, rpad(md5(g::text), 4000, 'p') FROM generate_series(1, 20000) g;
+DELETE FROM bl.t_toast WHERE id % 3 <> 0;
+VACUUM bl.t_toast;
+
+CREATE TABLE bl.t_empty (id int PRIMARY KEY);
+
+-- 6. churn and reverse-order inserts ---------------------------------------
+CREATE TABLE bl.t_churn (id int);
+INSERT INTO bl.t_churn SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_churn ON bl.t_churn (id);
+UPDATE bl.t_churn SET id = id + :rows;
+VACUUM bl.t_churn;
+
+CREATE TABLE bl.t_frag (id int);
+CREATE INDEX i_frag ON bl.t_frag (id);
+INSERT INTO bl.t_frag SELECT g FROM generate_series(:rows, 1, -1) g;
+
+-- 7. fresh builds at four fillfactors, plus a fresh text index -------------
+CREATE TABLE bl.t_fresh (id int);
+INSERT INTO bl.t_fresh SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_fresh  ON bl.t_fresh (id);
+CREATE INDEX i_ff100  ON bl.t_fresh (id) WITH (fillfactor = 100);
+CREATE INDEX i_ff50   ON bl.t_fresh (id) WITH (fillfactor = 50);
+CREATE INDEX i_ff10   ON bl.t_fresh (id) WITH (fillfactor = 10);
+
+CREATE TABLE bl.t_text (v text);
+INSERT INTO bl.t_text SELECT md5(g::text) FROM generate_series(1, :rows) g;
+CREATE INDEX i_text ON bl.t_text (v);
+
+-- 8. duplicates: built by CREATE INDEX, and built by inserts ---------------
+CREATE TABLE bl.t_dup (v int);
+INSERT INTO bl.t_dup SELECT g % 10 FROM generate_series(1, :rows) g;
+CREATE INDEX i_dup ON bl.t_dup (v);
+
+CREATE TABLE bl.t_dup_ins (v int);
+CREATE INDEX i_dup_ins ON bl.t_dup_ins (v);
+INSERT INTO bl.t_dup_ins SELECT g % 10 FROM generate_series(1, :rows) g;
+
+-- 9. deduplication turned off at build time, then turned back on.
+-- The reloption does not exist before PostgreSQL 13, so this fixture is
+-- built only where the server accepts it; the 12 leg records its absence.
+DO $dd$
+BEGIN
+  IF current_setting('server_version_num')::int >= 130000 THEN
+    EXECUTE 'CREATE TABLE bl.t_dedup (v int)';
+    EXECUTE 'INSERT INTO bl.t_dedup SELECT g % 10 FROM generate_series(1, ' ||
+            current_setting('bl.rows') || ') g';
+    EXECUTE 'CREATE INDEX i_dedup_off ON bl.t_dedup (v) WITH (deduplicate_items = off)';
+    EXECUTE 'ALTER INDEX bl.i_dedup_off SET (deduplicate_items = on)';
+  END IF;
+END
+$dd$;
+
+-- 10. the four fillfactor fixtures: built at a stated fillfactor, then nine
+-- tenths of the rows deleted and the table vacuumed ------------------------
+CREATE TABLE bl.t_ffdel (id int);
+INSERT INTO bl.t_ffdel SELECT g FROM generate_series(1, :ff_rows) g;
+CREATE INDEX i_ff100_del90 ON bl.t_ffdel (id) WITH (fillfactor = 100);
+CREATE INDEX i_ff50_del90  ON bl.t_ffdel (id) WITH (fillfactor = 50);
+CREATE INDEX i_ff10_del90  ON bl.t_ffdel (id) WITH (fillfactor = 10);
+DELETE FROM bl.t_ffdel WHERE id % 10 <> 0;
+VACUUM bl.t_ffdel;
+
+CREATE TABLE bl.t_ffhead (id int);
+INSERT INTO bl.t_ffhead SELECT g FROM generate_series(1, :ff_rows) g;
+CREATE INDEX i_ff50_delhead ON bl.t_ffhead (id) WITH (fillfactor = 50);
+DELETE FROM bl.t_ffhead WHERE id <= (:ff_rows * 9) / 10;
+VACUUM bl.t_ffhead;
+
+-- 11. two known-content pages, for the implied leaf capacity ---------------
+CREATE TABLE bl.c_one (id int);
+INSERT INTO bl.c_one VALUES (1);
+CREATE INDEX c_one_idx ON bl.c_one (id);
+
+CREATE TABLE bl.c_zero (id int);
+INSERT INTO bl.c_zero VALUES (1);
+CREATE INDEX c_zero_idx ON bl.c_zero (id);
+DELETE FROM bl.c_zero;
+VACUUM bl.c_zero;
+
+-- 12. shapes pgstatindex refuses -------------------------------------------
+CREATE TABLE bl.s_other (id int, v text, g_point point, r int4range);
+INSERT INTO bl.s_other SELECT g, md5(g::text), point(g, g), int4range(g, g + 10)
+  FROM generate_series(1, 20000) g;
+CREATE INDEX s_hash   ON bl.s_other USING hash   (id);
+CREATE INDEX s_gin    ON bl.s_other USING gin    (to_tsvector('simple', v));
+CREATE INDEX s_gist   ON bl.s_other USING gist   (g_point);
+CREATE INDEX s_spgist ON bl.s_other USING spgist (g_point);
+CREATE INDEX s_brin   ON bl.s_other USING brin   (id);
+CREATE VIEW  bl.s_view AS SELECT 1 AS one;
+CREATE SEQUENCE bl.s_seq;
+
+-- 13. an index the catalog says is not valid.  Only a disposable cluster
+-- may have its catalog written to by hand like this.
+CREATE TABLE bl.t_invalid (id int);
+INSERT INTO bl.t_invalid SELECT g FROM generate_series(1, 300000) g;
+CREATE INDEX i_invalid ON bl.t_invalid (id);
+UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'bl.i_invalid'::regclass;
+SQL
+  local ffrows=$((ROWS / 5)) widerows=$((ROWS / 10))
+  # psql does not substitute :variables inside a dollar-quoted body, so the
+  # version-guarded fixture reads its row count from a database-level GUC.
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" \
+    -c "ALTER DATABASE $DB SET bl.rows = '$ROWS'" > /dev/null || die "cannot set bl.rows"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" \
+    -v rows="$ROWS" -v ff_rows="$ffrows" -v wide_rows="$widerows" \
+    -f "$SQLD/fixtures.sql" || die "fixtures failed"
+  note "indexes in bl: $(s "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'bl' AND c.relkind IN ('i','I')")"
+  note "database size: $(s "SELECT pg_size_pretty(pg_database_size(current_database()))")"
+}
+
+# --------------------------------------------------------------- report -----
+# Runs the filed text exactly as filed, including its two SET lines.
+stage_report() {
+  say "run the filed statement"
+  [ -f "$SQLD/report.sql" ] || die "run the texts stage first"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -P footer=off -A -F '|' -d "$DB" \
+    -f "$SQLD/report.sql" > "$OUT/report12.txt" 2> "$OUT/report12.err"
+  local rc=$?
+  if [ "$rc" != 0 ]; then
+    printf 'exact_text=refused\n' > "$OUT/exact12.txt"
+    head -5 "$OUT/report12.err" >> "$OUT/exact12.txt"
+    cat "$OUT/exact12.txt" >&2
+    die "the filed text did not run; see $OUT/report12.err"
+  fi
+  printf 'exact_text=executes\n' > "$OUT/exact12.txt"
+  # footer=off leaves one header line and one line per row.
+  local rows cols
+  rows=$(grep -c '^' "$OUT/report12.txt")
+  rows=$((rows - 1))
+  cols=$(head -1 "$OUT/report12.txt" | tr '|' '\n' | grep -c '^')
+  {
+    printf 'report_rows=%s\n' "$rows"
+    printf 'report_columns=%s\n' "$cols"
+    printf 'report_bytes=%s\n' "$(wc -c < "$OUT/report12.txt")"
+  } >> "$OUT/exact12.txt"
+  cat "$OUT/exact12.txt" >&2
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" \
+    -f "$SQLD/report.sql" > "$OUT/report12_pretty.txt" 2>&1
+}
+
+# ---------------------------------------------------------------- facts -----
+stage_facts() {
+  say "version-local facts, refusals and page arithmetic"
+  fl "$SQLD/view.sql" > /dev/null || die "harness view failed"
+  : > "$OUT/facts12.txt"
+  local f="$OUT/facts12.txt"
+  {
+    printf 'server_version_num=%s\n' "$(s 'SHOW server_version_num')"
+    printf 'block_size=%s\n' "$(s 'SHOW block_size')"
+    printf 'candidates=%s\n' "$(s 'SELECT count(*) FROM bloat_final')"
+    printf 'index_size_equals_relation_size=%s of %s\n' \
+      "$(s 'SELECT count(*) FROM bloat_final f WHERE f.index_size = pg_relation_size(f.idx_oid)')" \
+      "$(s 'SELECT count(*) FROM bloat_final')"
+    printf 'nan_density_indexes=%s\n' "$(s 'SELECT count(*) FROM bloat_final WHERE leaf_pages = 0')"
+    printf 'nan_float8_gt_20=%s\n' "$(s "SELECT ('NaN'::float8 > 20)::text")"
+    printf 'nan_numeric_gt_20=%s\n' "$(s "SELECT ('NaN'::numeric > 20)::text")"
+    printf 'dedup_fixture_present=%s\n' "$(s "SELECT (to_regclass('bl.i_dedup_off') IS NOT NULL)::text")"
+  } >> "$f"
+
+  # Every refusal the cand filters exist for.
+  {
+    printf 'err_hash=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_hash'::regclass)")"
+    printf 'err_gin=%s\n'       "$(err "SELECT * FROM pgstatindex('bl.s_gin'::regclass)")"
+    printf 'err_gist=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_gist'::regclass)")"
+    printf 'err_spgist=%s\n'    "$(err "SELECT * FROM pgstatindex('bl.s_spgist'::regclass)")"
+    printf 'err_brin=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_brin'::regclass)")"
+    printf 'err_partitioned=%s\n' "$(err "SELECT * FROM pgstatindex('bl.i_part'::regclass)")"
+    printf 'err_table=%s\n'     "$(err "SELECT * FROM pgstatindex('bl.t_del90'::regclass)")"
+    printf 'err_view=%s\n'      "$(err "SELECT * FROM pgstatindex('bl.s_view'::regclass)")"
+    printf 'err_sequence=%s\n'  "$(err "SELECT * FROM pgstatindex('bl.s_seq'::regclass)")"
+    printf 'err_stale_oid=%s\n' "$(err "SELECT * FROM pgstatindex(2147483647::oid::regclass)")"
+  } >> "$f"
+
+  # The invalid index: an error on 17, a row on 12.
+  local inv
+  inv=$(err "SELECT * FROM pgstatindex('bl.i_invalid'::regclass)")
+  if [ -n "$inv" ]; then
+    printf 'invalid_index=refused %s\n' "$inv" >> "$f"
+  else
+    printf 'invalid_index=row %s\n' \
+      "$(s "SELECT version || '|' || tree_level || '|' || index_size || '|' || root_block_no || '|' || internal_pages || '|' || leaf_pages || '|' || empty_pages || '|' || deleted_pages || '|' || avg_leaf_density || '|' || leaf_fragmentation FROM pgstatindex('bl.i_invalid'::regclass)")" >> "$f"
+  fi
+
+  # Fresh-build density at four fillfactors, and the reported estimate.
+  printf 'fresh_builds fillfactor|target_density|avg_leaf_density|est_reclaimable_pct\n' >> "$f"
+  s "SELECT f.fillfactor || '|' || round(100 * f.target_density, 2) || '|' ||
+            round(f.avg_leaf_density::numeric, 2) || '|' ||
+            round(100 * (f.index_size - f.est_rebuilt_bytes) / f.index_size, 1)
+       FROM bloat_final f
+      WHERE f.index_name IN ('i_ff100', 'i_fresh', 'i_ff50', 'i_ff10')
+      ORDER BY f.fillfactor DESC" >> "$f"
+
+  # Leaf capacity implied by two pages of known contents.  A root leaf page
+  # holding one int4 entry leaves 8192 - 16 special - 24 header - 16 tuple
+  # - 4 line pointer = 8128 free; an empty leaf page leaves 8148.
+  printf 'implied_max_avail one_tuple|empty_leaf\n' >> "$f"
+  s "SELECT round(8128 / (1 - one.d / 100)::numeric, 1) || '|' ||
+            round(8148 / (1 - zero.d / 100)::numeric, 1)
+       FROM (SELECT avg_leaf_density::numeric AS d FROM pgstatindex('bl.c_one_idx'::regclass)) one,
+            (SELECT avg_leaf_density::numeric AS d FROM pgstatindex('bl.c_zero_idx'::regclass)) zero" >> "$f"
+  printf 'known_page_densities one|zero\n' >> "$f"
+  s "SELECT (SELECT round(avg_leaf_density::numeric, 2) FROM pgstatindex('bl.c_one_idx'::regclass)) || '|' ||
+            (SELECT round(avg_leaf_density::numeric, 2) FROM pgstatindex('bl.c_zero_idx'::regclass))" >> "$f"
+
+  # VACUUM does not give index pages back; REINDEX does.
+  printf 'delhead_after_vacuum=%s dead_pages=%s\n' \
+    "$(s "SELECT index_size FROM pgstatindex('bl.i_delhead'::regclass)")" \
+    "$(s "SELECT empty_pages + deleted_pages FROM pgstatindex('bl.i_delhead'::regclass)")" >> "$f"
+
+  # Another session's temp index, with and without the filter.  Each -c is
+  # its own transaction, so the temp relation is committed and visible to
+  # this session while the sleeping one still owns it; a single multi-
+  # statement -c would keep the catalog rows uncommitted and invisible.
+  "$BIN/psql" -X -q -d "$DB" \
+    -c "CREATE TEMP TABLE tmp_other(id int)" \
+    -c "INSERT INTO tmp_other SELECT g FROM generate_series(1, 300000) g" \
+    -c "CREATE INDEX tmp_other_idx ON tmp_other(id)" \
+    -c "SELECT pg_sleep(25)" > /dev/null 2>&1 &
+  local other=$!
+  sleep 8
+  {
+    printf 'other_temp_candidates_filtered=%s\n' "$(s 'SELECT count(*) FROM bloat_final')"
+    printf 'other_temp_candidates_unfiltered=%s\n' \
+      "$(s "SELECT count(*) FROM pg_class c JOIN pg_index x ON x.indexrelid = c.oid
+              JOIN pg_am a ON a.oid = c.relam
+             WHERE a.amname = 'btree' AND c.relkind = 'i'
+               AND x.indisvalid AND x.indisready AND x.indislive")"
+    printf 'other_temp_index_size=%s\n' \
+      "$(s "SELECT coalesce(pg_size_pretty(max(pg_relation_size(c.oid))), 'none')
+              FROM pg_class c WHERE c.relname = 'tmp_other_idx' AND c.relkind = 'i'")"
+    printf 'other_temp_error=%s\n' \
+      "$(err "SELECT * FROM pgstatindex((SELECT c.oid FROM pg_class c WHERE c.relname = 'tmp_other_idx' AND c.relkind = 'i' LIMIT 1)::regclass)")"
+    printf 'report_rows_with_other_session=%s\n' \
+      "$(( $("$BIN/psql" -X -q -A -F '|' -P footer=off -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/report.sql" 2>/dev/null | grep -c '^') - 1 ))"
+  } >> "$f"
+  wait "$other" 2>/dev/null
+  cat "$f" >&2
+}
+
+# ---------------------------------------------------------------- score -----
+# Ground truth is pg_relation_size before and after REINDEX INDEX, over every
+# index the harness view can see.  This stage is destructive: it rebuilds
+# every index in the database, so it must run after report, facts and cost.
+stage_score() {
+  say "score every estimate against a measured REINDEX INDEX"
+  fl "$SQLD/view.sql" > /dev/null || die "harness view failed"
+  q "DROP VIEW IF EXISTS bl_scored;
+     DROP TABLE IF EXISTS bl_before, bl_after, bl_residual;
+     CREATE TABLE bl_before AS
+       SELECT /* wiki_pgsi_score_before */
+              f.idx_oid, f.schema_name, f.index_name, f.index_size,
+              f.est_rebuilt_bytes, f.wasted_vs_fillfactor, f.avg_leaf_density,
+              f.leaf_pages, f.dead_pages, f.fillfactor, f.target_density,
+              f.leaf_bytes, f.live_leaf_bytes, f.dead_bytes,
+              pg_relation_size(f.idx_oid) AS before_bytes
+         FROM bloat_final f;" > /dev/null || die "bl_before failed"
+  note "indexes to score: $(s 'SELECT count(*) FROM bl_before')"
+  s "SELECT 'REINDEX INDEX ' || idx_oid::regclass || ';' FROM bl_before ORDER BY idx_oid" \
+    > "$SQLD/reindex.sql"
+  fl "$SQLD/reindex.sql" > /dev/null || die "REINDEX pass failed"
+  q "CREATE TABLE bl_after AS
+       SELECT /* wiki_pgsi_score_after */
+              b.idx_oid, pg_relation_size(b.idx_oid) AS after_bytes
+         FROM bl_before b;
+     CREATE VIEW bl_scored AS
+       SELECT b.*, a.after_bytes,
+              100 * (b.index_size - b.est_rebuilt_bytes) / b.index_size AS est_pct,
+              100 * (b.before_bytes - a.after_bytes)::numeric / b.before_bytes AS actual_pct,
+              100 * (b.index_size - b.est_rebuilt_bytes) / b.index_size
+              - 100 * (b.before_bytes - a.after_bytes)::numeric / b.before_bytes AS delta
+         FROM bl_before b JOIN bl_after a USING (idx_oid);" > /dev/null \
+    || die "post-reindex pass failed"
+
+  {
+    printf 'index|size|est_pct|actual_pct|delta|density|dead\n'
+    s "SELECT index_name || '|' || index_size || '|' || round(est_pct, 1) || '|' ||
+              round(actual_pct, 1) || '|' || round(delta, 1) || '|' ||
+              coalesce(round(avg_leaf_density::numeric, 2)::text, 'NaN') || '|' || dead_pages
+         FROM bl_scored WHERE schema_name = 'bl' ORDER BY actual_pct DESC, index_name"
+    # Three populations, because the scoring pass rewrites pg_class while it
+    # runs: a catalog index can grow between the snapshot and its own
+    # REINDEX, which is a property of the harness and not of the estimator.
+    printf '\n-- totals, by population\n'
+    s "SELECT 'all: scored=' || count(*) ||
+              ' within_1.0=' || count(*) FILTER (WHERE abs(delta) <= 1.0) ||
+              ' within_2.0=' || count(*) FILTER (WHERE abs(delta) <= 2.0) ||
+              ' max_over=' || round(max(delta), 1) || ' max_under=' || round(min(delta), 1)
+         FROM bl_scored
+        UNION ALL
+       SELECT 'fixtures (schema bl): scored=' || count(*) ||
+              ' within_1.0=' || count(*) FILTER (WHERE abs(delta) <= 1.0) ||
+              ' within_2.0=' || count(*) FILTER (WHERE abs(delta) <= 2.0) ||
+              ' max_over=' || round(max(delta), 1) || ' max_under=' || round(min(delta), 1)
+         FROM bl_scored WHERE schema_name = 'bl'
+        UNION ALL
+       SELECT 'catalog and TOAST: scored=' || count(*) ||
+              ' within_1.0=' || count(*) FILTER (WHERE abs(delta) <= 1.0) ||
+              ' max_over=' || round(max(delta), 1)
+         FROM bl_scored WHERE schema_name <> 'bl'
+        UNION ALL
+       SELECT 'no leaf pages: ' || count(*) || ', all at est ' ||
+              round(max(abs(est_pct)), 1) || ' and actual ' || round(max(abs(actual_pct)), 1)
+         FROM bl_scored WHERE leaf_pages = 0"
+    printf -- '-- the five largest over-estimates\n'
+    s "SELECT schema_name || '.' || index_name || ' ' || pg_size_pretty(index_size) ||
+              ' +' || round(delta, 1)
+         FROM bl_scored ORDER BY delta DESC LIMIT 5"
+    printf -- '-- the three largest under-estimates\n'
+    s "SELECT schema_name || '.' || index_name || ' ' || pg_size_pretty(index_size) ||
+              ' ' || round(delta, 1)
+         FROM bl_scored ORDER BY delta LIMIT 3"
+  } > "$OUT/scores12.txt"
+  tail -16 "$OUT/scores12.txt" >&2
+}
+
+# ------------------------------------------------------------- residual -----
+# A rebuilt index must report no waste at its own fillfactor.  Reads the
+# tables the score stage left behind.
+stage_residual() {
+  say "post-REINDEX residual of wasted_vs_fillfactor"
+  s "SELECT 1 FROM bl_before LIMIT 1" > /dev/null 2>&1 || die "run the score stage first"
+  # Read the same population the score stage scored, not whatever the view
+  # sees now: creating bl_before itself adds a TOAST index to the database.
+  q "DROP TABLE IF EXISTS bl_residual;
+     CREATE TABLE bl_residual AS
+       SELECT /* wiki_pgsi_score_residual */
+              f.idx_oid, f.wasted_vs_fillfactor AS residual_bytes, f.index_size,
+              f.avg_leaf_density, f.leaf_pages
+         FROM bloat_final f
+        WHERE f.idx_oid IN (SELECT idx_oid FROM bl_before);" > /dev/null \
+    || die "residual pass failed"
+  {
+    printf -- '-- post-REINDEX residual, over the population the score stage scored\n'
+    s "SELECT 'scored=' || count(*) ||
+              ' exactly_zero=' || count(*) FILTER (WHERE residual_bytes = 0) ||
+              ' at_or_below_0.1pct=' || count(*) FILTER (WHERE 100 * residual_bytes / index_size <= 0.1) ||
+              ' worst_pct=' || round(max(100 * residual_bytes / index_size), 1)
+         FROM bl_residual"
+    printf -- '-- worst residual, and the worst among indexes the report prints\n'
+    s "SELECT r.idx_oid::regclass || ' ' || round(100 * r.residual_bytes / r.index_size, 1) ||
+              '% ' || r.residual_bytes || ' bytes, leaf_pages ' || r.leaf_pages ||
+              ', density ' || coalesce(round(r.avg_leaf_density::numeric, 2)::text, 'NaN')
+         FROM bl_residual r ORDER BY 100 * r.residual_bytes / r.index_size DESC LIMIT 3"
+    s "SELECT 'worst at or above 1 MB: ' || r.idx_oid::regclass || ' ' ||
+              round(100 * r.residual_bytes / r.index_size, 1) || '% ' || r.residual_bytes || ' bytes'
+         FROM bl_residual r WHERE r.index_size >= 1024 * 1024
+        ORDER BY 100 * r.residual_bytes / r.index_size DESC LIMIT 1"
+    printf -- '-- how many one-leaf-page indexes carry the worst residual\n'
+    s "SELECT 'at_44.6pct=' || count(*) || ', all with leaf_pages ' || max(leaf_pages)
+         FROM bl_residual WHERE round(100 * residual_bytes / index_size, 1) = 44.6"
+    printf -- '-- the ratio between the two percentage columns, before the rebuild\n'
+    s "SELECT b.index_name || ' ' ||
+              round(b.wasted_vs_fillfactor / (b.index_size - b.est_rebuilt_bytes), 4) ||
+              ' dead_pages ' || b.dead_pages
+         FROM bl_before b
+        WHERE b.index_size - b.est_rebuilt_bytes > 1024 * 1024
+        ORDER BY 1"
+    printf -- '-- indexes where the two definitions coincide: fillfactor 100, or no leaf pages\n'
+    s "SELECT 'coincide=' || count(*) FILTER (WHERE target_density = 1 OR leaf_pages = 0) ||
+              ' of ' || count(*) || ' (fillfactor 100: ' ||
+              count(*) FILTER (WHERE target_density = 1) || ', no leaf pages: ' ||
+              count(*) FILTER (WHERE leaf_pages = 0) || ')'
+         FROM bl_before"
+    printf -- '-- clamped rows: leaves denser than their own target, so the leaf term is 0\n'
+    s "SELECT 'clamped=' || count(*) FILTER (WHERE leaf_pages > 0
+                AND round(leaf_bytes * target_density) <= live_leaf_bytes) ||
+              ' of ' || count(*) FILTER (WHERE leaf_pages > 0) || ' with leaf pages'
+         FROM bl_before"
+  } > "$OUT/residual12.txt"
+  cat "$OUT/residual12.txt" >&2
+}
+
+# ----------------------------------------------------------------- cost -----
+stage_cost() {
+  say "what the statement costs to run"
+  : > "$OUT/cost12.txt"
+  local f="$OUT/cost12.txt"
+  printf 'EXPLAIN (ANALYZE, BUFFERS) of the filed text\n' >> "$f"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off -d "$DB" \
+    -c "SET statement_timeout = '15min'; SET lock_timeout = '5s';" \
+    -c "EXPLAIN (ANALYZE, BUFFERS) $(cat "$SQLD/bare.sql")" >> "$f" 2>&1
+  printf 'plan_lines=%s\n' "$(grep -c '^' "$f")" >> "$f"
+  printf 'cte_scans=%s\n' "$(grep -c 'CTE Scan' "$f")" >> "$f"
+  local i a b
+  printf 'six interleaved end-to-end runs, filed text then superseded text (ms)\n' >> "$f"
+  for i in 1 2 3 4 5 6; do
+    a=$(date +%s%N)
+    "$BIN/psql" -X -q -o /dev/null -d "$DB" -f "$SQLD/report.sql" > /dev/null 2>&1
+    b=$(date +%s%N)
+    printf 'filed=%s.%s ' $(( (b - a) / 1000000 )) $(( ((b - a) / 100000) % 10 )) >> "$f"
+    if [ -f "$SQLD/prev_bare.sql" ]; then
+      a=$(date +%s%N)
+      "$BIN/psql" -X -q -o /dev/null -d "$DB" -f "$SQLD/prev.sql" > /dev/null 2>&1
+      b=$(date +%s%N)
+      printf 'prev=%s.%s' $(( (b - a) / 1000000 )) $(( ((b - a) / 100000) % 10 )) >> "$f"
+    fi
+    printf '\n' >> "$f"
+  done
+  printf 'database_size=%s\n' "$(s 'SELECT pg_size_pretty(pg_database_size(current_database()))')" >> "$f"
+  grep -E 'Execution Time|plan_lines|cte_scans|filed=|Buffers: shared' "$f" | head -20 >&2
+}
+
+# ----------------------------------------------------------------- priv -----
+stage_priv() {
+  say "who may run it"
+  : > "$OUT/priv12.txt"
+  local f="$OUT/priv12.txt"
+  q "DROP ROLE IF EXISTS mon; DROP ROLE IF EXISTS nomon;
+     CREATE ROLE mon LOGIN; CREATE ROLE nomon LOGIN;
+     GRANT pg_stat_scan_tables TO mon;" > /dev/null 2>&1 || die "role setup failed"
+  # The statement passes an OID column cast to regclass, which resolves no
+  # name.  Writing 'bl.i_del90'::regclass in a test would resolve one, so the
+  # OID is read here, as a number, and substituted.
+  local oid
+  oid=$(s "SELECT 'bl.i_del90'::regclass::oid")
+  {
+    printf 'index_oid=%s\n' "$oid"
+    printf 'mon_schema_usage=%s\n' \
+      "$(s "SELECT has_schema_privilege('mon', 'bl', 'USAGE')::text")"
+    printf 'mon_rows_from_statement=%s\n' \
+      "$("$BIN/psql" -X -At -q -U mon -d "$DB" -f "$SQLD/report.sql" 2>&1 | grep -c '|')"
+    printf 'mon_by_name=%s\n' \
+      "$("$BIN/psql" -X -At -q -U mon -d "$DB" -c "SELECT * FROM pgstatindex('bl.i_del90')" 2>&1 | grep -E '^(ERROR|FATAL)' | head -1)"
+    printf 'mon_by_oid_leaf_pages=%s\n' \
+      "$("$BIN/psql" -X -At -q -U mon -d "$DB" -c "SELECT leaf_pages FROM pgstatindex($oid::regclass)" 2>&1 | head -1)"
+    printf 'nomon_by_oid=%s\n' \
+      "$("$BIN/psql" -X -At -q -U nomon -d "$DB" -c "SELECT leaf_pages FROM pgstatindex($oid::regclass)" 2>&1 | head -1)"
+  } >> "$f"
+  q "DROP ROLE IF EXISTS mon; DROP ROLE IF EXISTS nomon;" > /dev/null
+  cat "$f" >&2
+}
+
+# ----------------------------------------------------------------- race -----
+# Two shapes of interference, both driven from a second session:
+#   lock_timeout   an uncommitted DROP INDEX holds AccessExclusiveLock and the
+#                  call is cancelled at the timeout
+#   committed drop the same drop commits while the report waits, so
+#                  relation_open finds nothing behind the lock
+stage_race() {
+  say "locking and the concurrent-drop race"
+  : > "$OUT/race12.txt"
+  local f="$OUT/race12.txt" a b msg
+  "$BIN/psql" -X -q -d "$DB" -c \
+    "BEGIN; DROP INDEX bl.i_del50; SELECT pg_sleep(8); ROLLBACK;" > /dev/null 2>&1 &
+  local holder=$!
+  sleep 2
+  a=$(date +%s%N)
+  msg=$(err "SET lock_timeout = '2s'; SELECT * FROM pgstatindex('bl.i_del50'::regclass)")
+  b=$(date +%s%N)
+  printf 'lock_timeout_error=%s\n' "$msg" >> "$f"
+  printf 'lock_timeout_ms=%s.%s\n' $(( (b - a) / 1000000 )) $(( ((b - a) / 100000) % 10 )) >> "$f"
+  wait "$holder" 2>/dev/null
+
+  # Case 1: the drop commits while cand is still being materialized.  cand
+  # sizes each candidate with pg_relation_size, which opens the relation with
+  # try_relation_open and returns NULL when it has gone, so the row is
+  # filtered out and the report survives, one row shorter.
+  local before after
+  before=$(( $("$BIN/psql" -X -q -A -F '|' -P footer=off -d "$DB" -f "$SQLD/report.sql" 2>/dev/null | grep -c '^') - 1 ))
+  "$BIN/psql" -X -q -d "$DB" -c \
+    "BEGIN; DROP INDEX bl.i_uniq; SELECT pg_sleep(3); COMMIT;" > /dev/null 2>&1 &
+  local dropper=$!
+  sleep 1
+  a=$(date +%s%N)
+  # psql prefixes an error from -f with "psql:<file>:<line>: ", so the match
+  # cannot be anchored at the start of the line; the prefix is then cut.
+  "$BIN/psql" -X -q -A -F '|' -P footer=off -d "$DB" -f "$SQLD/report.sql" \
+    > "$OUT/race12_during.txt" 2>&1
+  b=$(date +%s%N)
+  wait "$dropper" 2>/dev/null
+  msg=$(grep -E '(ERROR|FATAL):' "$OUT/race12_during.txt" | head -1 | sed 's/^psql:[^ ]* //')
+  after=$(( $(grep -c '^' "$OUT/race12_during.txt") - 1 ))
+  printf 'drop_during_cand_error=%s\n' "${msg:-none}" >> "$f"
+  printf 'drop_during_cand_rows=%s (was %s)\n' "$after" "$before" >> "$f"
+  printf 'drop_during_cand_ms=%s\n' $(( (b - a) / 1000000 )) >> "$f"
+  q "CREATE UNIQUE INDEX IF NOT EXISTS i_uniq ON bl.t_uniq (id);" > /dev/null 2>&1
+
+  # Case 2: the drop lands after cand has sized that index and released its
+  # lock, but before pgstatindex opens it.  That window is short, so the
+  # delay is swept until the abort appears.
+  # The target is the fixture index cand materializes last, so the window
+  # between its size check and its pgstatindex call is the whole loop rather
+  # than a few milliseconds.  The dropping session connects first and holds
+  # the delay inside the server, as pg_sleep in the same command, so psql's
+  # start-up cost is out of the critical path.
+  local target defn d attempts=0 hit=
+  target=$(s "SELECT index_name FROM (SELECT index_name, row_number() OVER () AS rn
+                                        FROM bloat_final
+                                       WHERE schema_name = 'bl'
+                                         AND index_size >= 1024 * 1024) q
+               ORDER BY rn DESC LIMIT 1")
+  defn=$(s "SELECT pg_get_indexdef('bl.$target'::regclass)")
+  # The reachable window is (end of cand, pgstatindex on the target).  On a
+  # warm cache the whole report is under 100 ms, so that window sits inside
+  # psql's own start-up skew; the sweep is recorded whether or not it lands.
+  printf 'drop_after_cand_target=%s\n' "$target" >> "$f"
+  for d in 0.005 0.02 0.04 0.06 0.07 0.075 0.08 0.09 0.10 0.12; do
+    a=$(date +%s%N)
+    "$BIN/psql" -X -q -d "$DB" \
+      -c "SELECT pg_sleep($d)" \
+      -c "BEGIN; DROP INDEX bl.$target; SELECT pg_sleep(2); COMMIT;" > /dev/null 2>&1 &
+    local dp=$!
+    "$BIN/psql" -X -q -d "$DB" -f "$SQLD/report.sql" > "$OUT/race12_after.txt" 2>&1
+    b=$(date +%s%N)
+    wait "$dp" 2>/dev/null
+    attempts=$((attempts + 1))
+    msg=$(grep -E '(ERROR|FATAL):' "$OUT/race12_after.txt" | head -1 | sed 's/^psql:[^ ]* //')
+    q "$defn" > /dev/null 2>&1
+    case $msg in
+      *"could not open relation"*)
+        hit="$msg after $(( (b - a) / 1000000 )) ms, drop taken ${d}s in"; break ;;
+    esac
+  done
+  printf 'drop_after_cand_error=%s\n' "${hit:-not reproduced in $attempts attempts}" >> "$f"
+  printf 'drop_after_cand_attempts=%s\n' "$attempts" >> "$f"
+  q "CREATE UNIQUE INDEX IF NOT EXISTS i_uniq ON bl.t_uniq (id);" > /dev/null 2>&1
+  cat "$f" >&2
+}
+
+# -------------------------------------------------------------- summary -----
+stage_summary() {
+  say "what landed in $OUT"
+  ls -la "$OUT" >&2
+  local x
+  for x in platform12 exact12 facts12 cost12 priv12 race12; do
+    [ -f "$OUT/$x.txt" ] && { printf '\n---- %s\n' "$x" >&2; cat "$OUT/$x.txt" >&2; }
+  done
+  [ -f "$OUT/scores12.txt" ] && { printf '\n---- scores12 (tail)\n' >&2; tail -14 "$OUT/scores12.txt" >&2; }
+  [ -f "$OUT/residual12.txt" ] && { printf '\n---- residual12\n' >&2; cat "$OUT/residual12.txt" >&2; }
+}
+
+stage_stop() {
+  say "stop the 12.2 cluster"
+  [ -d "$DATA" ] || { note "no data directory"; return 0; }
+  if "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 || die "pg_ctl stop failed"
+  fi
+  [ -f "$DATA/postmaster.pid" ] && die "postmaster.pid still present in $DATA"
+  pgrep -f "postgres.*-D $DATA" > /dev/null 2>&1 && die "a postgres process still runs on $DATA"
+  [ -n "$(ls -A "$SOCK" 2>/dev/null)" ] && die "socket directory $SOCK is not empty"
+  note "stopped: no postmaster.pid, no process, empty socket directory"
+}
+
+# This leg deletes only its own four directories; the 17 leg owns out/ and
+# sql/ and removes the sandbox itself.
+stage_clean() {
+  stage_stop || exit 1
+  case "$SANDBOX" in
+    "$WIKI_ROOT"/.wiki-runtime/tmp/?*) ;;
+    *) die "refusing to delete under $SANDBOX: not under $WIKI_ROOT/.wiki-runtime/tmp/" ;;
+  esac
+  say "delete this leg's directories under $SANDBOX"
+  rm -rf "$BUILD" "$INST" "$DATA" "$SOCK" "$SQLD"
+}
+
+STAGES_DEFAULT="build check cluster texts fixtures report facts cost priv score residual race summary"
+run_stage() {
+  case "$1" in
+    build|check|cluster|texts|fixtures|report|facts|score|residual|cost|priv|race|summary|stop|clean)
+      "stage_$1" ;;
+    *) die "unknown stage: $1" ;;
+  esac
+}
+main() {
+  local st
+  if [ "$#" -eq 0 ]; then set -- $STAGES_DEFAULT; fi
+  for st in "$@"; do run_stage "$st" || die "stage $st failed"; done
+  say "done: $*"
+}
+main "$@"
+```
+
+### The last run
+
+| Fact | Value |
+|---|---|
+| Date | 2026-09-10 |
+| Host | Linux x86_64, `uname -sm` recorded into `out/platform17.txt` |
+| 17 leg | 17.11 built from `786db8dcf168bd9df8f55047337525ac19118b1c`, `--enable-debug --with-icu --with-readline --with-zlib`, `make check` All 225 tests passed, `contrib/pgstattuple` All 1 |
+| 12 leg | 12.2 built from `45b88269a353ad93744772791feb6d01bc7e1e42`, the same without `--with-icu`, `make check` All 192 tests passed, `contrib/pgstattuple` All 1 |
+| Platform facts the numbers depend on | `block_size` 8192, `max_data_alignment` 8, `initdb --locale=C --encoding=UTF8` |
+| Fixture scale | `ROWS = 1000000`; 39 indexes in schema `bl` and a 1828 MB database on 17.11, 38 and 1801 MB on 12.2 |
+| Statement text | `sql` block 1, SHA-256 `9d2e3a2c73c81f3efb848b61f4bf307365ce0da56d780baee08fa9a9606f6c91`, 126 lines, 6,154 bytes |
+| Stages run | `fixtures report facts cost priv score residual race summary`, 86 s per leg from a built tree |
+| Teardown | both servers stopped with `pg_ctl -m fast -w stop` and the sandbox deleted by the `clean` stages |
+
+The numbers in every section written before this date came from the harness
+these scripts replace, not from the scripts themselves; that is recorded under
+[Open Questions](#open-questions) and is why `verified_by_agent` is still
+`not yet`.
 
 ## Context Reviewed
 
@@ -1009,6 +3132,25 @@ the order the earlier passes need: report, comparison, timing, then rebuild.
   ordinary leaf split, and switches to `BTREE_SINGLEVAL_FILLFACTOR` for a page
   full of one value. That is why the new column is defined against what a
   *rebuild* targets and not against how a growing index packs itself.
+- `src/backend/utils/adt/dbsize.c`, read during the 2026-09-10 review for the
+  one function in the statement that is not `pgstatindex`: `pg_relation_size`
+  opens with `try_relation_open` and returns NULL rather than raising when the
+  relation has gone, and its comment says why. That is what makes the
+  size prefilter absorb a concurrent drop, and it is the reason this page's
+  concurrent-drop claim changed.
+- The full `guc_tables.c` entries for every setting the measurement scripts
+  write, so each one's apply scope can be named: `listen_addresses`, `port`,
+  `unix_socket_directories`, `shared_buffers`, `logging_collector`, `fsync`,
+  `autovacuum`, `maintenance_work_mem` and
+  `max_parallel_maintenance_workers`.
+- `doc/src/sgml/installation.sgml`, for the VPATH build the scripts use to keep
+  `raw/postgres-17/` read-only.
+- This page's own git history, for the two superseded statement texts and their
+  sizes, and the v17 checkout's history for the back-patch note on
+  `13503eb5905`.
+- All 116 source citations on this page were re-read against the pinned
+  checkout on 2026-09-10: 50 distinct ranges over 21 files, every one resolving
+  and in bounds, none pointing outside `raw/postgres-17/`.
 
 ## Evidence Map
 
@@ -1026,7 +3168,8 @@ the order the earlier passes need: report, comparison, timing, then rebuild.
 | VACUUM never returns index pages to the filesystem | no `RelationTruncate`/`smgrtruncate` under `src/backend/access/nbtree/`, [nbtree.c#RecordFreeIndexPage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1165-L1170); 1,918 dead pages survived VACUUM and disappeared on REINDEX |
 | Access is `pg_stat_scan_tables`, and the OID form needs no schema `USAGE` | [pgstattuple--1.4--1.5.sql#grants](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92), [pgstattuple.sgml#access](../../../../raw/postgres-17/doc/src/sgml/pgstattuple.sgml#L15-L24); measured with two non-superuser roles on both servers |
 | The call waits on `AccessExclusiveLock`; `lock_timeout` bounds the wait | [pgstatindex.c#pgstatindexbyid_v1_5](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L204-L213), [guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631); cancelled at 2000.9 ms and 2001.0 ms |
-| A concurrent drop aborts the whole report | measured `could not open relation with OID 16897` (17.11) and `17173` (12.2) after 6.0 s |
+| A concurrent drop that commits while `cand` runs costs one row, not the report | [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L371) opens with `try_relation_open` and returns NULL; measured on both servers on 2026-09-10, the report waited out a three-second `DROP INDEX` and returned 24 rows against 25 on 17.11 and 23 against 24 on 12.2, with no error |
+| A concurrent drop that commits between the size check and the per-index call aborts the whole report | [pgstatindex.c#pgstatindexbyid_v1_5](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L204-L213) uses `relation_open`, which raises; measured `could not open relation with OID 16897` (17.11) and `17173` (12.2) after 6.0 s in the original run, **not reproduced** in the 2026-09-10 re-run's ten-delay sweep on either server |
 | The scan uses a 256 kB bulk-read ring | [pgstatindex.c#BAS_BULKREAD](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L215-L222), [freelist.c#GetAccessStrategy](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L540-L574) |
 | Deduplication is the only thing that made the two servers' numbers differ | [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1151); 24 of the report's rows identical, `i_dup`/`i_dup_ins` 21 MB against 6800 kB and 20 MB against 6368 kB |
 | Dropping `alert_pct` and `status` changes nothing else the statement returns | measured on both restarted servers: the amended output equals the filed output with field 14 cut, byte for byte (2,448 and 2,531 bytes); one view per text over the internal `final` stage exposes 29 columns against 28 with `alert_pct` the only loss, and `EXCEPT` in both directions over the 28 shared columns returns 0 rows across 214 and 220 indexes |
@@ -1038,9 +3181,58 @@ the order the earlier passes need: report, comparison, timing, then rebuild.
 | The new column over-reports on indexes too small to fill a page | measured: `c_one_idx`, one tuple on one leaf page at 0.29% density, reports 7,309 bytes and 44.6% after a rebuild on both servers; the old baseline read 8,128 bytes and 49.6% on the same index |
 | For in-page waste the new column is `(leaf_capacity - target_free) / block_size` of `est_reclaimable` | predicted 0.8951 at 8192/90; measured 0.8868-0.8921 over the 13 dead-page-free indexes with more than 1 MB of estimated reclaim, `1.0001` on the dead-page fixture `i_delhead`, and `0.8321` on `i_wide`, identically on both servers |
 | Rebasing costs nothing to run | measured: identical plan shape (4 `CTE Scan` nodes; 68 and 60 plan lines) and identical total buffers, 108,021 on 17.11 and 108,327 on 12.2, differing only in the hit/read split; execution 131.1 against 120.9 ms on 17.11 and 123.6 against 117.5 ms on 12.2 |
+| `BTPageOpaqueData` is 16 bytes across five fields | [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-17/src/include/access/nbtree.h#L62-L71), [nbtree.h:29](../../../../raw/postgres-17/src/include/access/nbtree.h#L29): two `BlockNumber`, one `uint32`, `btpo_flags` as `uint16` and `btpo_cycleid` as `BTCycleId`, itself a `uint16` |
+| The invalid-index check separates these two minors, not the two majors | commit `13503eb5905` in this checkout's history ends "Back-patch to v11 (all supported versions)"; the pinned 12.2 predates it and returns a row |
+| Every number this page takes from a running server has a published script | [Measurement Script](#measurement-script); both legs run end to end and were last run on 2026-09-10 |
 
 ## Open Questions
 
+- **Most of the numbers on this page predate the script that is now filed for
+  them.** The sections written before 2026-09-10 were measured by a harness
+  that was never published, in a sandbox that has since been deleted, so the
+  fixture DDL behind figures such as the 27-and-28-row reports, the 94-and-93
+  index accuracy totals and the `EXCEPT` attribution counts cannot be
+  recovered. [Measurement Script](#measurement-script) is a reconstruction
+  built to the same recipe from the page's own descriptions, and
+  [Re-measured from a published script](#re-measured-from-a-published-script)
+  reports how close it lands: identical on the refusals, the invalid-index row,
+  the implied leaf capacity, the dead-page fixture and eighteen of the accuracy
+  rows, and different where the reconstruction's row counts differ. Until every
+  older figure is re-derived from the filed scripts, or deleted,
+  `verified_by_agent` stays `not yet`.
+- **One of the four fillfactor fixtures does not scale like the other three.**
+  The filed table gives `i_ff10_del90` 1,579 leaf pages, which is a third of
+  what a fillfactor-10 index over the same row count as `i_ff100_del90` (493
+  pages) and `i_ff50_del90` (991) would hold; the reconstruction, built at one
+  row count for all four, reads 5,264. Every percentage in that row is
+  scale-invariant and reproduced exactly, so the discrepancy is a fixture-size
+  difference and not an estimator defect, but the original row counts cannot be
+  confirmed.
+- **The concurrent-drop abort was not reproduced.** The source says it is
+  reachable — `pgstatindexbyid_v1_5` uses `relation_open`, which raises — and
+  the original run recorded it on both servers, but the 2026-09-10 sweep of ten
+  delays per server never landed in the window between `cand`'s size check and
+  the per-index call. On this fixture suite the whole report runs in about
+  80 ms, so that window is smaller than the difference between two `psql`
+  start-ups. A reproduction needs either a report slow enough to widen the
+  window or an injection point the filed text does not have.
+- **The page reports three different scored populations and only the newest one
+  is defined.** 218 and 212 candidates, 94 and 93 scored indexes, 97 and 96 in
+  the residual pass, 214 and 220 in the `EXCEPT` attribution. Part of that is
+  explained — creating a helper table adds a TOAST index between passes, which
+  the re-run reproduced — but the older figures cannot be reconciled against
+  each other now that their harness is gone. The re-run states its population
+  exactly: 201 and 195, of which 32 and 31 are fixtures.
+- **Which 12 minor first refuses an invalid index is not readable here.** The
+  commit that added the check was back-patched to every then-supported branch,
+  so some 12.x behaves like 17.11, but naming it would need a v12 checkout at
+  another pin, which this page may not cite.
+- **The 12 leg's cluster settings have no citable apply scope on this page.**
+  The contexts in
+  [What the scripts read from the environment](#what-the-scripts-read-from-the-environment)
+  come from the v17 GUC table, because a v17 page may not cite the v12
+  checkout. Nothing in the run depends on them differing, and the 12 leg
+  accepted every setting, but the 12.2 contexts are asserted, not cited.
 - **Nothing was run on a standby.** The `relpersistence <> 'u' OR NOT
   pg_is_in_recovery()` filter is reasoning from
   [plancat.c#recovery](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L149-L153)
@@ -1048,9 +3240,11 @@ the order the earlier passes need: report, comparison, timing, then rebuild.
   measurement. What `pgstatindex` actually returns for an unlogged index on a hot
   standby is untested, and so is the whole report's behaviour there.
 - **Only two minor versions were tested**, 12.2 and 17.11, both from this repo's
-  pins. The invalid-index check has no release tag before `REL_17_0` in the v17
-  checkout, but whether some later 12.x minor changed anything relevant was not
-  checked and cannot be checked from this page's evidence base.
+  pins, twice: once by the original harness and once by the filed scripts. The
+  invalid-index check has no release tag before `REL_17_0` in the v17 checkout
+  and its commit says it was back-patched, so at least one later 12.x minor
+  differs from the pinned 12.2; what else may have changed in a later 12.x
+  cannot be checked from this page's evidence base.
 - **One block size.** Every measurement is at `block_size` 8192. The statement
   reads `block_size` from the server, but the 24 and 16 constants, the whole
   target-density model, and the `(leaf_capacity - target_free) / block_size`
@@ -1153,6 +3347,19 @@ the order the earlier passes need: report, comparison, timing, then rebuild.
 - [plancat.c#recovery](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L149-L153)
 - [guc_tables.c#statement_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620)
 - [guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631)
+- [nbtree.h:29](../../../../raw/postgres-17/src/include/access/nbtree.h#L29)
+- [pgstatindex.c:70](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L70)
+- [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L371)
+- [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L425-L436)
+- [guc_tables.c#listen_addresses](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4436-L4445)
+- [guc_tables.c#port](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2393-L2401)
+- [guc_tables.c#unix_socket_directories](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4425-L4434)
+- [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2261-L2270)
+- [guc_tables.c#logging_collector](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1640-L1648)
+- [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1096-L1107)
+- [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1449-L1457)
+- [guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2465-L2474)
+- [guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3409-L3417)
 
 ## Navigation
 
