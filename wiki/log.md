@@ -2,6 +2,117 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-10] review v17 | B-tree estimator suite re-run end to end on Darwin arm64, stop stages repaired
+
+- Reviewed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64)
+  at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), with the
+  12 leg at `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). **Prompt hygiene
+  first**: the original read `follow agents.md, in postgresql 17, review
+  question: # Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17 (unverified)`; the asker chose "correct and restate", then a
+  **targeted script run** rather than a claim-by-claim citation pass, and
+  **repair in place**.
+- **Three script defects repaired before running.** Both `stop` stages used
+  `pg_ctl -m immediate`, the defect the teardown-rule entry below reported and
+  left; they now run `pg_ctl -m fast -w stop`, then die unless `postmaster.pid`
+  is gone, no process names the data directory and the socket directory is
+  empty, so `clean` can no longer delete a live cluster. The 12 leg's `cluster`
+  stage tested for its `leg12` database through a helper that connects to that
+  database, printing `FATAL: database "leg12" does not exist` on every fresh
+  cluster before falling through to `createdb`; it now asks `postgres`. The 17
+  leg's `extstat` ran right after `texts`, so a fresh full run measured its
+  equivalence counts and cost pairs on an empty `suite` database (`rows=0`); it
+  now follows `suite` and reports the targeted re-run's 186 rows, 7 fed. Two
+  paperwork drifts fixed: the "stages, in default order" table lacked
+  `extstat`, and the last-run marker moved. Both scripts were re-extracted with
+  `md_block`, parsed (`bash -n`, 2,062 and 681 lines) and diffed so that only
+  those hunks changed; the four `sql` baselines and the superseded text still
+  hash to `646df923…`, `bfa7721f…`, `0b03f0c9…`, `3e57a568…` and `bffd166e…`.
+- **Environment.** This host, not the Linux one of every earlier run:
+  `Darwin arm64`, macOS 26.6.2, Apple clang 21.0.0 (clang-2100.3.34.2), ICU
+  78.3 from Homebrew `icu4c@78` through `ICU_CFLAGS`/`ICU_LIBS` because the
+  host has no `pkg-config`, bash 5.3.15, `sha256sum` from `/sbin`, ten cores,
+  `JOBS=8`. Both legs built out of tree under `.wiki-runtime/tmp/btree-suite/`
+  with `--enable-debug --with-icu --with-readline --with-zlib`, 12.2 with
+  `CFLAGS="-O2 -g -DTRUE=1 -DFALSE=0"`; the 12.2 banner reads
+  `arm-apple-darwin25.6.0`. `pg_control_init()` reports `max_data_alignment`
+  8 and `database_block_size` 8192. `make check` **All 225** plus 8, 1 and 3
+  on 17.11; **All 192** plus 5, 1 and 2 on 12.2. Both checkouts stayed
+  read-only and clean at their pins.
+- **Both legs were run twice from an empty sandbox**, first under the
+  stop-repaired text (13:29-13:34 UTC), then under the final text
+  (13:36:55-13:42:00 UTC); the filed numbers are the second pair's. **Every
+  verdict count of the 2026-09-09 Linux run reproduced**: geometry 78/78
+  leaf-exact and 78/78 `relpages`; fresh sorted builds `0 bytes` on 10 of 10
+  with the superseded text at `-0.7`, `-3.4`, `+11.0`, `-33.9`; gate 28
+  fixtures, 0 over-credits, 0 metapage disagreements, 2 under-credits, worst
+  28.8 %; compression 367 against 10,003 blocks at `-2625.6 %`; barrier
+  0/200,000 against 200,000/400,000; calibration digit for digit; numbered
+  suite 53 withheld, 0 unexplained, 0 contract failures, floor 81/19/7/3/2 and
+  point 77/25/5/3/2 where Linux read 80/20 and 76/26, the one row being
+  fixture 120 at `-50.0 %` (87.5 % in the first Darwin run); the same five
+  reported critical false positives (`f84` 94.2, `i103` 84.1, `x108` 62.5,
+  `x109` 62.5, `p118` 99.3) and the same twelve true detections; probes 73 on
+  `suite` and 31 on `acc` with the same answers and 5,000 groups against a
+  modelled 4,997; cost 36.7-49.4 against 29.0-30.4 ms over 325 indexes and
+  85,023 blocks; `extstat` 0 and 0 over 186 rows with the same scorecard.
+  Posting tails: mean absolute error 11.42 % -> 0.35 %, within one point
+  7 -> 12 of 13. The 12 leg: the exact text executes with `transform_edits=0`,
+  facts unchanged, 13 PASS / 5 / 1, all `ineligible`, the previous text still
+  refused at `LINE 116`, the widened text agreeing 0 and 0 over 25 rows.
+- **Runtimes.** 17 leg full run **2 min 26 s** (`real 2m26.017s`); 12 leg full
+  run **1 min 52 s** (`real 1m51.476s`), which records the 12 leg's missing
+  full-run figure; `suite attribution probes score criteria` from a built
+  tree **65 s**. The Linux host's figures were about eleven minutes and about
+  ninety seconds.
+- **One number did not reproduce.** The `EXCEPT` attribution returns 31 rows
+  per direction (21 moved numbers, 10 caveat-only) against the filed 26 (23
+  and 3); the Linux output was deleted with its sandbox, so this is a new open
+  question rather than a correction. Sample-dependent cells moved within their
+  verdicts: the inheritance parent read `-417.8 %` -> `0.0 %` at inherited
+  `avg_width` 58, `b95` 88.4 then 89.9, `p76` 50.8 then 50.3, `f91` `-256.8`
+  then `-248.6`, the 12 leg's `p1004` 89.1 then 90.2.
+- Page edits: the corrected tenth prompt under Question; two lead paragraphs
+  and the `## Measurement Script` intro; the Runtime, Cleanup and Prerequisites
+  items of the usage section, the last with a macOS bullet naming the ICU
+  flags and the SIP note; both stage tables and the default-order table; the
+  two script blocks; the last-run marker of the targeted re-run; two new
+  subsections,
+  [The stop stage, repaired](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-stop-stage-repaired)
+  with 17 new citations and
+  [What the 2026-09-10 full re-run measured on Darwin arm64](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64);
+  the "Untested configurations" and "Fixture verdicts that depend on the
+  ANALYZE sample" open questions updated; "The repaired scripts have been
+  re-run only in part" and "The 12 leg's runtime is recorded only from a built
+  tree" removed as closed; "Attribution row counts differ between hosts"
+  added; Contents, Context Reviewed, Evidence Map and Source References
+  updated. The source pin and both verification fields are unchanged; the page
+  stays agent-unverified because this pass measured rather than re-read every
+  claim.
+- **Teardown.** Each leg's `clean` stage ran after its output was copied:
+  `pg_ctl -m fast -w stop`, `database system is shut down` in each server log,
+  no `postmaster.pid`, no postgres process, empty socket directories, then the
+  deletion of the 8.4 GB sandbox (`data17` 6.3 GB, `data12` 1.8 GB, the builds
+  216 MB and 139 MB, the installs 38 MB and 30 MB). Afterwards `pgrep -fl
+  postgres` is empty, ports 55437 and 55412 are free, `.wiki-runtime/tmp/`
+  holds only `btree-suite-scripts/` (1.8 MB: script copies, run logs and both
+  runs' `out/` text, kept as generated artifacts), and `.wiki-runtime` is
+  262 MB.
+- Validation: 705 citations over 85 files, every one resolving in bounds
+  inside `raw/postgres-17/` and no other checkout cited; 81 headings, 69
+  distinct anchors linked, all resolving; the 61 Contents entries match the
+  `##`/`###` headings in order; both `bash` blocks are byte-identical to the
+  copies that ran; `git diff --check` passes.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports the same 9 errors
+  and 2 warnings as this host's pre-edit baseline, all on other pages or
+  other checkouts (six v18 injection-point citation targets, the v19 and v18
+  pins absent from this host's checkouts, the v14 checkout on another commit,
+  and untracked `.DS_Store` files in v14 and v12); nothing on this page.
+  Updated `wiki/index.md`, `wiki/v17/index.md`, and the v17 coverage cell
+  plus a dated note in `wiki/versions.md`.
+
 ## [2026-09-10] restructure | mandatory teardown of services and sandboxes started for wiki work
 
 - Added teardown rules to `AGENTS.md`. Anything started for wiki processing or

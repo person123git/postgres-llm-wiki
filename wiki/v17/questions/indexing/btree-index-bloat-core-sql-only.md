@@ -44,6 +44,8 @@ verified_by_agent: not yet
   - [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
   - [What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured)
   - [Measurement-script section review](#measurement-script-section-review)
+  - [The stop stage, repaired](#the-stop-stage-repaired)
+  - [What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -64,10 +66,9 @@ verified_by_agent: not yet
   - [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement)
   - [Integer-truncated widths across an alignment boundary](#integer-truncated-widths-across-an-alignment-boundary)
   - [Fixture recipes that do not reproduce](#fixture-recipes-that-do-not-reproduce)
-  - [The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part)
+  - [Attribution row counts differ between hosts](#attribution-row-counts-differ-between-hosts)
   - [Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged)
   - [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
-  - [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree)
 - [Source References](#source-references)
 - [Navigation](#navigation)
 
@@ -224,6 +225,24 @@ stages rather than only propose it. The work is filed under
 and
 [What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
 
+Tenth prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, review the question "Testing the
+> PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17".
+
+The original read `follow agents.md, in postgresql 17, review  question: #
+Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+(unverified)`: `agents.md` for AGENTS.md, lowercase `postgresql`, a double
+space after `review`, `review question:` without an article, a stray `#`
+before the title, the `(unverified)` title hint treated as part of the title,
+and no sentence capitalisation or terminal period. The asker chose a
+**targeted script run** over a claim-by-claim citation pass: fix the known
+script defects, re-run the stages the 2026-09-10 pass had not re-run under the
+repaired script text, build and check the 12 leg so that its full runtime is
+measured, and **repair in place**. The work is filed under
+[The stop stage, repaired](#the-stop-stage-repaired) and
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
+
 ## Answer
 
 **All ten repair plans are now implemented, and the revised statement is exact
@@ -320,11 +339,26 @@ stage missing from the 17 script's own stage list, a `KEEP` variable documented
 but never read, three cluster settings written without their apply scopes named,
 `psql` calls whose errors could not raise the exit status, an unguarded
 `rm -rf` on an environment variable, and fixture blocks that were never marked
-disposable. Because the scripts were repaired and not re-run, every number this
-page reports predates its current script text.
+disposable. The repaired scripts were re-run in part that day and in full the
+next.
 [Measurement-script section review](#measurement-script-section-review),
 [startup.c#single-query-action](../../../../raw/postgres-17/src/bin/psql/startup.c#L377-L386),
 [mainloop.c#die_on_error](../../../../raw/postgres-17/src/bin/psql/mainloop.c#L587-L594).
+
+**Both scripts were then run end to end from an empty sandbox on a second
+platform, Darwin arm64, and every verdict count of the Linux run reproduced.**
+That pass first repaired the one defect the scripts still carried, a `stop`
+stage that used `pg_ctl -m immediate`, which skips the shutdown checkpoint and
+forces crash recovery on the next start; both legs now stop with `-m fast -w`
+and confirm the teardown before `clean` deletes anything. On this host the 17
+leg's full run takes 2 min 26 s and the 12 leg's 1 min 52 s, so the 12 leg's
+full-run runtime is recorded at last; and the one number that would not
+reproduce is the attribution row count, 31 rows in each direction against the
+filed 26.
+[The stop stage, repaired](#the-stop-stage-repaired),
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64),
+[postmaster.c#process_pm_shutdown_request-immediate](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2307-L2342),
+[xlogrecovery.c#not-properly-shut-down](../../../../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L922-L949).
 
 ### The current recommended statement
 
@@ -2313,7 +2347,9 @@ gaps this review found.
 Two scripts produce the numbers this page reports, one per version leg:
 `btree_bloat_suite_v17.sh` for 17.11 and `btree_bloat_suite_v12.sh` for the
 12.2 cross-version leg. Both are filed in full below, in Bash and SQL only, and
-both were run end to end on 2026-09-09.
+both were run end to end on 2026-09-09 on Linux x86_64 and again, from an
+empty sandbox and under the script text now filed, on 2026-09-10 on Darwin
+arm64.
 
 - The 17 leg backs
   [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
@@ -2344,8 +2380,8 @@ both were run end to end on 2026-09-09.
 | Environment | 7 variables, all with defaults; see [what the scripts read from the environment](#what-the-scripts-read-from-the-environment) | 7 variables, all with defaults; same table |
 | Prerequisites | see [Prerequisites](#prerequisites) | the same, plus `-DTRUE=1 -DFALSE=0` in `EXTRA_CFLAGS` on a host whose ICU headers no longer define those macros |
 | Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt` |
-| Runtime | about eleven minutes for a full run on the host recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), most of it the build and the four regression suites; about ninety seconds for `suite attribution probes score criteria` from a built tree, and 7.4 s for `extstat` | the full run is unmeasured and dominated by the 12.2 build and its `make check`; from a built tree and a running cluster, 0.3 s for `exact transform facts` and 52.7 s for `fixtures score extstat report`. See [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree) |
-| Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server and deletes `$SANDBOX`; `stop` stops it and keeps everything | `bash btree_bloat_suite_v12.sh clean` stops the 12 server and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
+| Runtime | about eleven minutes for a full run on the Linux host recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server), most of it the build and the four regression suites, and about ninety seconds for `suite attribution probes score criteria` from a built tree; on the Darwin arm64 host recorded under [What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64), 2 min 26 s for the full run and 65 s for those five stages from a built tree | 1 min 52 s for the full run on the Darwin host, most of it the 12.2 build and its `make check`; from a built tree and a running cluster, 0.3 s for `exact transform facts` and 52.7 s for `fixtures score extstat report` on the Linux host |
+| Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server cleanly with `pg_ctl -m fast -w stop`, confirms the teardown (no `postmaster.pid`, no postgres process on the data directory, an empty socket directory) and only then deletes `$SANDBOX`; `stop` does the first two and keeps everything | `bash btree_bloat_suite_v12.sh clean` stops the 12 server the same way and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
 
 Save the two fenced blocks below as `btree_bloat_suite_v17.sh` and
 `btree_bloat_suite_v12.sh`, then run them from the repository root, because
@@ -2371,20 +2407,20 @@ have run. The default order is the order of this table.
 | `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt` | `build` |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the six UTF8 databases `geo`, `cal`, `gate`, `acc`, `suite` and `xstat` | `build` |
 | `texts` | extracts the four `sql` blocks of this page and the superseded text from `OLD_REV`, checks all five SHA-256 baselines, runs both exact texts as filed, and installs the two harness views in five databases | `cluster` |
-| `extstat` | rebuilds the two texts the portable `extstat` filter replaced — `est_pre`, which must hash to `BASEPRE`, and `est_wide` — runs both, then compares all three over every database and scores them on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat.txt` | `texts` |
 | `geometry` | the 78 (key width, fillfactor) cells, scored against `pageinspect` | `texts` |
 | `calibration` | the seven insertion patterns, each scored against its own `REINDEX INDEX` | `texts` |
 | `gate` | the deduplication-gate fixtures, with `bt_metap().allequalimage` and the build's `DEBUG1` verdicts as oracles | `texts` |
 | `acceptance` | fresh sorted builds, the deterministic defects read as two roles, in-index compression, posting tails, the probe fixtures and the statistics barrier | `texts` |
 | `suite` | resets the `suite` schema, reinstalls both views, and builds the 112 numbered fixtures with their population assertions; it plans and scores nothing | `texts` |
+| `extstat` | rebuilds the two texts the portable `extstat` filter replaced — `est_pre`, which must hash to `BASEPRE`, and `est_wide` — runs both, then compares all three over every database and scores them on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat.txt`. It rebuilds indexes only in `xstat`, so the `suite` fixtures are still untouched when `attribution` runs | `texts`; it follows `suite` in the default order so that its equivalence counts and cost pairs see the populated `suite` database. Until 2026-09-10 it ran right after `texts`, where a fresh full run found `suite` empty |
 | `attribution` | `EXCEPT` in both directions between the two texts, taken before any rebuild | `suite` |
 | `probes` | runs the probe generator on `suite` and `acc` and executes every statement it emits, still before any rebuild | `suite` |
 | `score` | `CALL score_all()`: per fixture assert the population, read both views, `REINDEX INDEX`, re-read the size; then writes `out/verdicts.txt` | `suite` |
 | `cost` | six interleaved timings of the two exact texts, and the size of the database they ran against | `texts` |
 | `criteria` | the six pass-criteria blocks into `out/criteria.txt` | `check`, `texts`, `gate`, `attribution`, `score` |
 | `report` | lists what landed in `out/` | nothing |
-| `stop` | stops the server with `pg_ctl -m immediate` | `cluster` |
-| `clean` | `stop`, then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/` | nothing |
+| `stop` | stops the server with `pg_ctl -m fast -w stop`, so the checkpointer writes a shutdown checkpoint and the next start needs no recovery, then confirms the teardown: no `postmaster.pid`, no postgres process on the data directory, an empty socket directory. It dies rather than report a stop that did not happen. Until 2026-09-10 it used `-m immediate`, which skips the checkpoint and forces crash recovery on restart | `cluster` |
+| `clean` | `stop`, then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`; because `stop` dies on a failed teardown, `clean` never deletes a live cluster | nothing |
 
 #### The 12 leg's stages
 
@@ -2400,7 +2436,7 @@ have run. The default order is the order of this table.
 | `score` | the same measured-`REINDEX INDEX` scoring, into `out/verdicts12.txt` | `fixtures` |
 | `extstat` | rebuilds the text filed before the portable `extstat` filter, checks it against `BASEPRE`, records that this server still refuses it, then scores the filed text against the widened one on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat12.txt` | `transform` |
 | `report` | prints `out/v12_facts.txt` | `facts` |
-| `stop` | stops the 12 server | `cluster` |
+| `stop` | stops the 12 server with `pg_ctl -m fast -w stop` and confirms the same three teardown facts, dying on any of them; `-m immediate` until 2026-09-10 | `cluster` |
 | `clean` | `stop`, then deletes this leg's four directories after the same containment check | nothing |
 
 #### What the scripts read from the environment
@@ -2455,6 +2491,17 @@ overridden rather than honoured.
 - Disk for two source builds, two clusters and the fixtures. The 2026-09-09 run
   left 325 B-tree indexes over 85,017 blocks in the 17 leg's `suite` database
   alone.
+- On macOS, measured on 2026-09-10: Apple's command-line tools supply the
+  compiler, `make`, `bison`, `flex` and `perl`, and `sha256sum` ships at
+  `/sbin`. Homebrew's `icu4c` is keg-only and that host had no `pkg-config`,
+  so export `ICU_CFLAGS="-I<prefix>/include"` and
+  `ICU_LIBS="-L<prefix>/lib -licui18n -licuuc -licudata"` before either
+  script; `configure` reads both from the environment and then needs no
+  `pkg-config`. The documentation's warning that System Integrity Protection
+  breaks `make check` unless `make install` runs first does not bite, because
+  both `build` stages install before `check` runs.
+  [installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193),
+  [installation.sgml#SIP](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L3611-L3618).
 
 Every statement either script sends is disposable. The fixtures create and drop
 tables, indexes, operator classes, collations, a login role and, in the `suite`
@@ -2701,8 +2748,15 @@ The stages, in default order:
 
 | Script | Stages |
 |---|---|
-| `btree_bloat_suite_v17.sh` | `build check cluster texts geometry calibration gate acceptance suite attribution probes score cost criteria report`, plus `stop` and `clean` |
-| `btree_bloat_suite_v12.sh` | `build check cluster exact transform facts fixtures score report`, plus `stop` and `clean` |
+| `btree_bloat_suite_v17.sh` | `build check cluster texts geometry calibration gate acceptance suite extstat attribution probes score cost criteria report`, plus `stop` and `clean` |
+| `btree_bloat_suite_v12.sh` | `build check cluster exact transform facts fixtures score extstat report`, plus `stop` and `clean` |
+
+Until 2026-09-10 this table omitted the `extstat` stage that both scripts had
+run by default since that morning's filter change; the stage tables under
+[How to use the suite scripts](#how-to-use-the-suite-scripts) had it, this
+one did not. The same pass moved the 17 leg's `extstat` from right after
+`texts` to right after `suite`; see
+[The stop stage, repaired](#the-stop-stage-repaired).
 
 The cluster the 17 script writes uses the settings
 [How to run the suite against the current statement](#how-to-run-the-suite-against-the-current-statement)
@@ -2770,8 +2824,8 @@ tree, `suite attribution probes score criteria` is about ninety seconds.
 #   bash btree_bloat_suite_v17.sh build check     # selected stages
 #   bash btree_bloat_suite_v17.sh clean           # stop and delete the sandbox
 #
-# Stages: build check cluster texts extstat geometry calibration gate
-#         acceptance suite attribution probes score cost criteria report
+# Stages: build check cluster texts geometry calibration gate acceptance
+#         suite extstat attribution probes score cost criteria report
 #         stop clean
 #
 # Environment: WIKI_ROOT PAGE SRC SANDBOX PORT JOBS OLD_REV
@@ -2984,6 +3038,9 @@ $INTERNALS_R2" > "$SQLD/view_r2.sql"
 # Pass: est_r2 equals est_pre row for row in every database, and est_wide
 # differs on the inheritance parent, whose own ANALYZE pass is the only one
 # describing the rows the parent's own index actually contains.
+# In the default order this stage runs after suite, so that its equivalence
+# counts and its cost pairs see the populated suite database; until 2026-09-10
+# it ran right after texts, where a fresh full run found suite empty.
 stage_extstat() {
   say "extstat: the portable inherited filter against the two readings it replaces"
   [ -s "$SQLD/est_r2.sql" ] || die "no $SQLD/est_r2.sql; run the texts stage first"
@@ -4754,7 +4811,30 @@ stage_report() {
   ls -1 "$OUT" >&2
 }
 
-stage_stop()  { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "server stopped"; }
+# ---------------------------------------------------------------- stop -------
+# Shut the server down cleanly.  -m fast disconnects clients and lets the
+# checkpointer write a shutdown checkpoint, so the next start needs no
+# recovery; -m immediate, which this stage used until 2026-09-10, skips that
+# and forces crash recovery on restart.  The stop is then confirmed the way
+# the teardown rule asks, and the stage dies rather than report a stop that
+# did not happen, so clean never deletes a live cluster.
+stage_stop() {
+  say "stop the server cleanly"
+  [ -x "$BIN/pg_ctl" ] || { note "no server binary under $BIN, nothing to stop"; return 0; }
+  if [ -s "$DATA/postmaster.pid" ] && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 || die "pg_ctl -m fast stop failed"
+    tail -3 "$OUT/server.log" 2>/dev/null | grep -q 'database system is shut down' \
+      && note "server.log: database system is shut down"
+  else
+    note "not running"
+  fi
+  [ -e "$DATA/postmaster.pid" ] && die "$DATA/postmaster.pid still exists"
+  if command -v pgrep > /dev/null 2>&1 && pgrep -f -- "-D $DATA" > /dev/null 2>&1; then
+    die "a postgres process still runs on $DATA"
+  fi
+  [ -z "$(ls -A "$SOCK" 2>/dev/null)" ] || die "socket directory $SOCK is not empty"
+  note "confirmed: no postmaster.pid, no postgres process on $DATA, socket directory empty"
+}
 
 # Containment check before any rm -rf: SANDBOX comes from the environment, so
 # refuse to delete anything outside this repository's .wiki-runtime/tmp tree.
@@ -4772,8 +4852,8 @@ stage_clean() {
 
 main() {
   local stages=("$@")
-  [ ${#stages[@]} -eq 0 ] && stages=(build check cluster texts extstat geometry \
-                                     calibration gate acceptance suite attribution \
+  [ ${#stages[@]} -eq 0 ] && stages=(build check cluster texts geometry calibration \
+                                     gate acceptance suite extstat attribution \
                                      probes score cost criteria report)
   local st
   for st in "${stages[@]}"; do
@@ -4968,8 +5048,11 @@ CONF
     fi
     "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server12.log" -w start > /dev/null || die "start failed"
   fi
-  s "select /* wiki_btree_leg12_database_exists */ 1
-       from pg_database where datname='$DB'" | grep -q 1 \
+  # The helpers connect to $DB, which does not exist yet on a fresh cluster, so
+  # this one check connects to postgres rather than failing its way to createdb.
+  "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d postgres \
+      -c "select /* wiki_btree_leg12_database_exists */ 1
+            from pg_database where datname='$DB'" | grep -q 1 \
     || "$BIN/createdb" -T template0 -E UTF8 --locale=C "$DB"
   note "$(s 'select /* wiki_btree_leg12_version */ version()')"
 }
@@ -5425,7 +5508,27 @@ SQL
 }
 
 stage_report() { say "12.2 leg written to $OUT"; cat "$OUT/v12_facts.txt" >&2; }
-stage_stop()   { "$BIN/pg_ctl" -D "$DATA" -m immediate stop > /dev/null 2>&1; say "12.2 server stopped"; }
+
+# Clean stop, confirmed, as in the 17 leg: -m fast rather than the -m immediate
+# this stage used until 2026-09-10, then no postmaster.pid, no postgres process
+# on the data directory and an empty socket directory, or the stage dies.
+stage_stop() {
+  say "stop the 12.2 server cleanly"
+  [ -x "$BIN/pg_ctl" ] || { note "no server binary under $BIN, nothing to stop"; return 0; }
+  if [ -s "$DATA/postmaster.pid" ] && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 || die "pg_ctl -m fast stop failed"
+    tail -3 "$OUT/server12.log" 2>/dev/null | grep -q 'database system is shut down' \
+      && note "server12.log: database system is shut down"
+  else
+    note "not running"
+  fi
+  [ -e "$DATA/postmaster.pid" ] && die "$DATA/postmaster.pid still exists"
+  if command -v pgrep > /dev/null 2>&1 && pgrep -f -- "-D $DATA" > /dev/null 2>&1; then
+    die "a postgres process still runs on $DATA"
+  fi
+  [ -z "$(ls -A "$SOCK" 2>/dev/null)" ] || die "socket directory $SOCK is not empty"
+  note "confirmed: no postmaster.pid, no postgres process on $DATA, socket directory empty"
+}
 
 # Containment check before any rm -rf, as in the 17 leg.  This stage removes
 # only this leg's four directories: out/ and sql/ belong to the 17 leg, whose
@@ -5583,8 +5686,8 @@ its cross-version finding is the one the 2026-09-10 fix reverses. **Date**
 `max_data_alignment` 8, `database_block_size` 8192, gcc 13.3.0. The numbers
 below were produced by the script text as it stood that day, before the
 [Measurement-script section review](#measurement-script-section-review) repaired
-it; see
-[The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part).
+it; the repaired text was run in full on 2026-09-10, see
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
 
 Everything below is output from the two scripts as filed above, on the host
 recorded under [Re-verified on a rebuilt server](#re-verified-on-a-rebuilt-server).
@@ -5678,7 +5781,10 @@ its ICU headers no longer define those macros; the script carries that in
 
 ### What the 2026-09-10 targeted re-run measured
 
-**This is the last-run record.** **Date** 2026-09-10; **pin**
+This was the last-run record until the full re-run later the same day,
+recorded under
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
+**Date** 2026-09-10; **pin**
 `786db8dcf168bd9df8f55047337525ac19118b1c` for the 17 leg and
 `45b88269a353ad93744772791feb6d01bc7e1e42` for the 12 leg; **servers** the same
 17.11 and 12.2 clusters the 2026-09-09 run built under
@@ -5815,8 +5921,9 @@ Three findings were left as they are, deliberately:
 - **The 12 leg's cluster settings have no apply scope on this page**, because a
   v17 page may not cite a v12 checkout.
   See [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here).
-- **The 12 leg's runtime was never recorded.**
-  See [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree).
+- **The 12 leg's runtime was never recorded.** Its from-a-built-tree half was
+  measured later that day and its full-run figure on 2026-09-10; see
+  [What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
 
 Every repair above is either a comment, a documentation table, or a fail-closed
 guard on a path that previously had none; none of them changes a statement, a
@@ -5825,7 +5932,180 @@ the figures under
 [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
 predate the script text now filed, and
 `verified_by_agent` stays `not yet`.
-See [The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part).
+That gap was closed on 2026-09-10 by the full re-run recorded under
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
+
+### The stop stage, repaired
+
+**Both scripts stopped their server with `pg_ctl -m immediate`, which is not a
+clean shutdown, and printed "server stopped" whether or not anything had been
+running. Both `stop` stages were rewritten on 2026-09-10 to stop with
+`-m fast -w` and to confirm the teardown before returning, and `clean`, which
+calls `stop` first, now refuses to delete a data directory it could not
+confirm stopped.** The 2026-09-10 teardown rule found the defect while
+stopping the two servers the 2026-09-09 run had left behind, and reported it
+rather than fixing it; this pass fixes it and then re-runs both legs end to
+end under the repaired text.
+
+What the two modes do, read from the 17 source. On a fast shutdown request the
+postmaster logs `received fast shutdown request`, moves to `PM_STOP_BACKENDS`
+so that every child is sent `SIGTERM`, and lets its state machine take the
+next step; when the checkpointer's own shutdown request is pending it calls
+`ShutdownXLOG()`, which writes a checkpoint flagged
+`CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_IMMEDIATE`, and the next start finds the
+control file in `DB_SHUTDOWNED` and skips recovery. On an immediate request
+the postmaster sends every child `SIGQUIT` and, in its own words, exits
+"without attempt to properly shut down the data base system"; the next start
+then logs `database system was not properly shut down; automatic recovery in
+progress`. `pg_ctl`'s usage text says the same in one line each: `fast` is
+"quit directly, with proper shutdown (default)", `immediate` is "quit without
+complete shutdown; will lead to recovery on restart".
+[postmaster.c#process_pm_shutdown_request-fast](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2266-L2305),
+[postmaster.c#process_pm_shutdown_request-immediate](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2307-L2342),
+[checkpointer.c#ShutdownRequestPending](../../../../raw/postgres-17/src/backend/postmaster/checkpointer.c#L584-L600),
+[xlog.c#ShutdownXLOG](../../../../raw/postgres-17/src/backend/access/transam/xlog.c#L6580-L6621),
+[xlogrecovery.c#not-properly-shut-down](../../../../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L922-L949),
+[pg_ctl.c#shutdown-modes-usage](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L2006-L2011),
+[pg_ctl-ref.sgml#shutdown-modes](../../../../raw/postgres-17/doc/src/sgml/ref/pg_ctl-ref.sgml#L186-L198).
+
+What the repaired stage does, in order, and why each check is enough:
+
+| Step | Check | Evidence |
+|---|---|---|
+| 1 | `pg_ctl status` on the data directory, tried only when `postmaster.pid` exists; a sandbox that was never started, or is already stopped, is reported as `not running` and nothing is sent | `status` prints `no server running` and exits 3 when there is no live postmaster. [pg_ctl.c#do_status](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L1336-L1388), [pg_ctl-ref.sgml#status-exit-status](../../../../raw/postgres-17/doc/src/sgml/ref/pg_ctl-ref.sgml#L221-L227) |
+| 2 | `pg_ctl -D <data> -m fast -w stop`; the stage dies if it fails | `fast` is the documented default mode, and with `-w` `do_stop` sends the signal, waits in `wait_for_postmaster_stop()`, and exits 1 rather than print `server stopped` when the postmaster does not go away. [pg_ctl-ref.sgml#-m](../../../../raw/postgres-17/doc/src/sgml/ref/pg_ctl-ref.sgml#L310-L320), [pg_ctl.c#do_stop](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L1015-L1065) |
+| 3 | the last three lines of the server log are searched for `database system is shut down`, and the stage notes it when found | that line is written by the postmaster's lock-file removal callback, which the source calls "the last externally visible action of a postmaster". [miscinit.c#UnlinkLockFiles](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L1170-L1194) |
+| 4 | no `postmaster.pid` in the data directory; the stage dies if one remains | the same callback unlinks it. [miscinit.c#UnlinkLockFiles](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L1170-L1194), [miscinit.c#DIRECTORY_LOCK_FILE](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L60) |
+| 5 | no process whose command line carries `-D <data>`, checked with `pgrep -f` when `pgrep` exists; the stage dies on a match | `pg_ctl` starts the postmaster as `exec "<postgres>" -D "<data>" ...`, so a match is a postmaster still holding that directory. [pg_ctl.c#start_postmaster-command](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L489-L494), [pg_ctl.c#pgdata_opt](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L2278) |
+| 6 | the socket directory is empty; the stage dies otherwise | the postmaster unlinks every socket file it created at shutdown. [pqcomm.c#RemoveSocketFiles](../../../../raw/postgres-17/src/backend/libpq/pqcomm.c#L846-L861) |
+
+The 12 leg's stage is the same text against `server12.log`, `data12` and
+`sock12`. Neither stage changes a statement, a fixture, a threshold or a
+measured number; what changes is that a run can no longer end with a cluster
+that needs recovery, and that a failed stop is an error rather than a note.
+The stage tables under [The 17 leg's stages](#the-17-legs-stages) and
+[The 12 leg's stages](#the-12-legs-stages) record the old mode beside the new
+one.
+
+Two paperwork drifts were fixed in the same pass. The "stages, in default
+order" table under
+[The two suite scripts, and the rules they follow](#the-two-suite-scripts-and-the-rules-they-follow)
+omitted `extstat` for both legs, although both scripts have run it by default
+since that morning's filter change, and the last-run marker on
+[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured)
+now points at the run below.
+
+Two more script defects surfaced in the first full run of the day and were
+fixed before the second. The 12 leg's `cluster` stage tested whether its
+`leg12` database existed through a helper that connects to that very
+database, so on a fresh cluster the test failed with
+`psql: error: could not connect to server: FATAL: database "leg12" does not
+exist` and fell through to `createdb`; it worked by accident and printed an
+error. The check now connects to `postgres`. And the 17 leg ran `extstat`
+right after `texts`, so in a fresh full run its equivalence counts and its
+cost pairs saw an empty `suite` database (`rows=0`) where the targeted re-run
+had seen 114 rows; the stage now follows `suite` in the default order, and the
+full run below reports the same 186 rows, 7 of them fed by the changed CTE,
+as the targeted re-run did.
+
+### What the 2026-09-10 full re-run measured on Darwin arm64
+
+**This is the last-run record. Both scripts were run end to end, twice, from
+an empty sandbox, on a second platform, under the repaired script text, and
+every verdict count of the 2026-09-09 Linux run reproduced.** The first pair
+of runs carried the `stop` repair alone; the second pair, whose numbers are
+filed here, carried the two further fixes above as well. The two pairs agreed
+on every count and differed only in the sample-dependent cells named below.
+
+**Date** 2026-09-10. **Pins** `786db8dcf168bd9df8f55047337525ac19118b1c` for
+the 17 leg and `45b88269a353ad93744772791feb6d01bc7e1e42` for the 12 leg.
+**Platform** `uname -sm` `Darwin arm64`; macOS 26.6.2; the server banners read
+`PostgreSQL 17.11 on aarch64-apple-darwin25.6.0, compiled by Apple clang
+version 21.0.0 (clang-2100.3.34.2), 64-bit` and
+`PostgreSQL 12.2 on arm-apple-darwin25.6.0`, same compiler; ICU 78.3 from
+Homebrew's `icu4c@78`, reached through `ICU_CFLAGS` and `ICU_LIBS` because
+the host has no `pkg-config`; GNU bash 5.3.15; `sha256sum` from `/sbin`;
+ten CPU cores and 16 GB of memory, with `JOBS=8`. `pg_control_init()`
+reports `max_data_alignment` **8** and `database_block_size` **8192**, the
+same values as the Linux host, so the geometry constants were measured at the
+alignment and block size they assume. Both clusters ran `--locale=C` with
+UTF8 databases and the settings under
+[The two suite scripts, and the rules they follow](#the-two-suite-scripts-and-the-rules-they-follow);
+both builds used `--enable-debug --with-icu --with-readline --with-zlib`,
+the 12 leg with `CFLAGS="-O2 -g -DTRUE=1 -DFALSE=0"`. Neither checkout was
+written to; both are clean at their pins.
+[pg_proc.dat#pg_control_init](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L11989-L11997),
+[installation.sgml#ICU_CFLAGS](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L184-L193).
+
+**Runtimes on this host.** The 17 leg's full run, from configure through
+`report`, took **2 min 26 s** (`real 2m26.017s`; the first run of the day
+2m26.072s). The 12 leg's full run took **1 min 52 s** (`real 1m51.476s`;
+first run 1m51.927s), which is the figure the open question on the 12 leg's
+runtime was missing; that question is closed. From a built tree and a running cluster, the
+17 leg's `suite attribution probes score criteria` took **65 s**
+(`1:05.34 total`). The Linux host's figures were about eleven minutes and
+about ninety seconds.
+
+**Teardown.** Each leg's `clean` stage ran after its results were copied out:
+both servers stopped with `pg_ctl -m fast -w stop`, each `server.log` ended
+in `database system is shut down`, and each stage confirmed no
+`postmaster.pid`, no postgres process on its data directory and an empty
+socket directory before deleting anything. The sandbox
+`.wiki-runtime/tmp/btree-suite/` was 8.4 GB (`data17` 6.3 GB, `data12`
+1.8 GB, `build17` 216 MB, `build12` 139 MB, `install17` 38 MB, `install12`
+30 MB) and is gone; afterwards `pgrep` found no postgres process, ports 55437
+and 55412 were free, and `.wiki-runtime/tmp/` held only
+`btree-suite-scripts/`, 1.8 MB of script copies, run logs and the `out/`
+text of both runs, kept as generated artifacts under `.wiki-runtime/`.
+[miscinit.c#UnlinkLockFiles](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L1170-L1194),
+[pqcomm.c#RemoveSocketFiles](../../../../raw/postgres-17/src/backend/libpq/pqcomm.c#L846-L861).
+
+The 17 leg, family by family, against the 2026-09-09 Linux run:
+
+| Family | Linux x86_64, 2026-09-09 | Darwin arm64, 2026-09-10 |
+|---|---|---|
+| Engine suites | All 225 core tests; `pageinspect` 8, `pgstattuple` 1, `amcheck` 3 | identical: `core=0 All 225 tests passed`, 8, 1 and 3 |
+| Text hashes | five `match` | five `match`; `est_pre` rebuilt to `BASEPRE` `8acd531b…`, `est_wide` `615d1674…`; both exact texts run as filed on `suite` and `acc` |
+| Page geometry, 78 cells | 78 of 78 leaf-exact, 78 of 78 `relpages` | 78 of 78, none one-high, 78 of 78 within the internal cap, 78 of 78 `relpages` |
+| Fresh sorted builds, 10 widths | `0 bytes` on 10 of 10; superseded `-0.7`, `-3.4`, `+11.0`, `-33.9` at 400, 800, 1000, 2000 | identical, at the same block counts 254 to 375 |
+| Deduplication gate, 28 fixtures | 0 over-credits, 0 metapage disagreements, 2 under-credits, worst 28.8 % | identical; `DEBUG1` 16 "can safely use" and 13 "cannot use"; `text_pattern_ops` refuses the nondeterministic collation verbatim |
+| Posting tails, 13 classes | mean absolute error 11.38 % -> 0.38 %; within one point 8 -> 11 of 13 | 11.42 % -> 0.35 %; 7 -> 12 of 13, the mean and the counts taken over the 13-row `tail_res` table the script prints; the first run of the day read 11.64 % -> 0.52 % and 7 -> 11 |
+| In-index compression | 367 against 10,003 blocks, `avg_width` 904 both, `-2625.6 %` against `0.0 %` | identical |
+| Statistics barrier | 0 and 200,000 with the barrier; 200,000 and 400,000 without | identical |
+| Three deterministic defects | inheritance parent `-461.0 %` -> `0.0 %`; expression index `0.0`; `st0_i` `-22.3` with its caveat; superseded text aborts on the `bigint` range | `inh_i` `-417.8 %` -> `0.0 %` at `avg_width` 21 and 58; `expr_i` `0.0`; `st0_i` `-22.3` with `statistics target zero on an index column`; the superseded text aborts with `ERROR: bigint out of range` while the current one prints `1000000000000000000000000000000`; the non-owner run reports its rows with `statistics not visible to this role` |
+| Calibration, 7 patterns | every value | digit for digit: densities and readings 0.0/0.0, 0.0/0.0, 25.7/25.7, 23.8/23.8, `-7.5`/`-6.7` with the floor at `-245.2`, 49.8/49.8, 33.3/33.3 |
+| Numbered suite, 112 fixtures | floor 80 PASS / 20 critical false positives / 7 false negatives / 3 false positives / 2 unmeasured; point 76 / 26 / 5 / 3 / 2; 53 withheld, 0 unexplained, 0 contract failures | floor 81 / 19 / 7 / 3 / 2 and point 77 / 25 / 5 / 3 / 2, the one moved row being fixture 120 at `-50.0 %`; the first run of the day read it at 87.5 % and matched the Linux counts exactly; 53 withheld, 0 unexplained, 0 contract failures |
+| Reported critical false positives | `f84` 94.2, `i103` 84.1, `x108` 62.5, `x109` 62.5, `p118` 99.3, `p120` 87.5 | the same five at the same values; `p120` at `-50.0` this run and 87.5 in the first |
+| True detections | 12, all PASS | 12, all PASS: 68 at 87.5 against 87.4, 74 at 74.3/74.3, 75 at 89.5/89.1, 76 at 50.3/49.9, 77 at 94.2/94.2, 92 at 89.1/89.1, 95 at 89.9/89.1, 99 at 93.6/93.6 with the floor at 81.3, 107 at 90.0/90.0, 113b and 113c at 100.0/100.0, 114 at 98.9/98.9 |
+| `f91` and `p36` | `-254.1` against 89.2; `-217.2` | `-248.6` against 89.2 (first run `-256.8`); `-217.2` |
+| Attribution | 26 rows in each direction: 23 a moved number, 3 a caveat string | **31** in each direction: 21 a moved number, 10 differing in the caveat string alone; the first run 33, as 22 and 11. See [Attribution row counts differ between hosts](#attribution-row-counts-differ-between-hosts) |
+| Probes | 73 emitted and executed; `false` for `p113b`, `p113c`, `p117`, `true` for `p115`, `p118`; 5,000 groups against a modelled 4,996 | 73 on `suite` and 31 on `acc`, every one executed; the same five answers, `forged_open` `true`; `groups_k` 5,000 against a modelled 4,997 |
+| Cost, `suite` | 61.5-67.4 ms against 52.5-56.1 ms over 325 indexes and 85,017 blocks | 36.7-49.4 ms (five of six between 36.7 and 37.6) against 29.0-30.4 ms over 325 indexes and 85,023 blocks |
+| `extstat` | 0 and 0 over 186 rows, 7 fed; scorecard 0.8 / 59.7 / 0.8 against widened 2.3 / 60.1 / `-33.7`; 95.3 against 91.6 ms | 0 and 0 over the same 186 rows (`geo` 0, `cal` 7, `gate` 28, `acc` 33, `suite` 114, `xstat` 4), 7 fed; the same scorecard, with inherited `n_distinct` 3490, 1404 and 28606; cost pairs 39.9-49.1 against 39.8-41.0 ms |
+
+The 12 leg reproduced everything the targeted re-run recorded: the exact
+filed text executes with `transform_edits=0`; `server_version_num` 120002,
+block size 8192, alignment 8, no `pg_stat_force_next_flush()`, thirteen
+`pg_stats_ext` columns with no `inherited`, support functions 1, 2 and 3,
+`deduplicate_items` rejected; the previous text rebuilt to `8acd531b…` and
+refused at `LINE 116` with `column se.inherited does not exist`; the widened
+text agreeing with the filed one, 0 and 0 over 25 rows; the four
+extended-statistics fixtures at 827 blocks each, one view row per statistics
+object; and 19 fixtures at 13 PASS, 5 critical false positives and 1 false
+positive, all `ineligible`, nothing credited, with the fresh builds at 254,
+258 and 353 blocks and `0.0 %`, `w_key` at 84.1 against a measured 0.0, and
+`nz_k` at 100.0 against 66.6. Two cells moved with the sample: `p1003` read
+49.6 against 49.6, and `p1004` 90.2 against 89.1 (89.1 in the first run).
+
+What moved between the two Darwin runs, and between Darwin and Linux, is
+exactly the sample-dependent set: fixture 120's flip, the posting-tail
+decimals, the inheritance parent's inherited `avg_width` (58 here, 66 and 77
+in the two Linux passes), `b95` (88.4 then 89.9 against 89.1), `p76` (50.8
+then 50.3 against 49.9), `f91`, the moved-row half of the attribution, and
+the 12 leg's `p1004`. No verdict count other than fixture 120's changed
+between any two runs, on either platform.
+[analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894),
+[analyze.c#compute_scalar_stats-width](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2420-L2426).
 
 ## Context Reviewed
 
@@ -5840,6 +6120,8 @@ See [The repaired scripts have been re-run only in part](#the-repaired-scripts-h
 - Measurement-script section review on 2026-09-09, same pin, read-only with no server built or started: `AGENTS.md`'s `MANDATORY Measurement Script`, `MANDATORY Production SQL`, `MANDATORY GUC Changes`, `MANDATORY Table of Contents` and `MANDATORY Citations` rules against this section as filed; both script bodies re-extracted from this page with their own `md_block` logic and parsed with `bash -n` (1,793 and 474 lines); the four `sql` blocks and the superseded text from revision `f2d73b4` re-hashed against all five baselines; the 37 source citations inside the section re-read against `raw/postgres-17/`, including the seven whose label token is not literally inside the range; `psql`'s exit-status handling for `-c` and `-f` actions (`startup.c`, `mainloop.c`, `psql-ref.sgml`); the GUC definitions of `listen_addresses`, `port` and `logging_collector`; and the containment guard tested against nine paths, including `/`, `$HOME`, the repository root, the `tmp` directory itself and a `tmpx` lookalike. Both pinned checkouts were clean at their pins throughout, and no sandbox, cluster or build was created.
 
 - Suite-script run on 2026-09-09, same pin, both legs built and executed: 17.11 out of tree under `.wiki-runtime/tmp/btree-suite/build17` (`--enable-debug --with-icu --with-readline --with-zlib`), `make check` All 225 tests plus 8, 1 and 3 for `pageinspect`, `pgstattuple` and `amcheck`; a cluster at `--locale=C`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0`, default `BLCKSZ`, with five UTF8 databases for geometry, calibration, the deduplication gate, the acceptance fixtures and the 112-fixture numbered suite. 12.2 was built out of tree from this repository's pinned 12 checkout the same way, needing `-DTRUE=1 -DFALSE=0` for this host's ICU headers, and passed All 192 core tests plus 5, 1 and 2. Both checkouts stayed read-only and clean at their pins; the two scripts, their SQL and their output lived under the git-ignored `.wiki-runtime/tmp/btree-suite/`, deleted on 2026-09-10. The estimator, probe-generator, geometry and calibration blocks were re-extracted from this page after the edit that added the two script blocks, and all four still hash to their baselines, together with the superseded text from revision `f2d73b4`.
+
+- Full re-run of both suite scripts on 2026-09-10, same pins, on a second platform: the postmaster's fast and immediate shutdown paths, the checkpointer's shutdown checkpoint, the recovery decision at the next start, `pg_ctl`'s `stop`, `status` and `start` command construction, lock-file and socket-file removal (`postmaster.c`, `checkpointer.c`, `xlog.c`, `xlogrecovery.c`, `pg_ctl.c`, `miscinit.c`, `pqcomm.c`, `pg_ctl-ref.sgml`), and the installation notes on ICU flags and macOS System Integrity Protection. Both `stop` stages were rewritten from `pg_ctl -m immediate` to `-m fast -w` with a confirmed teardown, the 12 leg's database-existence check was pointed at `postgres`, and the 17 leg's `extstat` stage was moved after `suite`; both scripts were re-extracted from this page with their own `md_block` logic, parsed with `bash -n` (2,062 and 681 lines), and diffed against the previous extraction so that only those hunks changed. Each leg was then built from scratch and run end to end twice under `.wiki-runtime/tmp/btree-suite/` on Darwin arm64 (macOS 26.6.2, Apple clang 21.0.0, ICU 78.3 via `ICU_CFLAGS`/`ICU_LIBS`, `JOBS=8`): `make check` All 225 plus 8, 1 and 3 on 17.11 and All 192 plus 5, 1 and 2 on 12.2, all five text hashes matching, and every verdict count of the Linux run reproduced. Both servers were stopped by the repaired `stop` stages, the 8.4 GB sandbox was deleted, and both checkouts stayed read-only and clean at their pins; 1.8 MB of script copies, run logs and output text remains under `.wiki-runtime/tmp/btree-suite-scripts/`.
 
 - Portable extended-statistics filter, filed and measured on 2026-09-10, same pin: the `pg_stats_ext` and `pg_stats` view definitions and the `pg_statistic_ext_data` grant boundary (`system_views.sql`); the `stxdinherit` catalog column and its place in the data row's unique key (`pg_statistic_ext_data.h`); the two `ANALYZE` passes and the `inh` flag each one stores (`analyze.c`, `extended_stats.c`); and the whole `row_to_json` -> `->>` -> `boolean` chain, including what a missing key returns (`pg_proc.dat`, `pg_operator.dat`, `json.c`, `jsonfuncs.c`, `bool.c`). Both scripts were edited in place — one new `extstat` stage each, a new `BASEPRE` baseline, `BASE1` re-baselined to `646df923…`, an idempotent `cluster` stage, and a sixth database `xstat` — re-extracted from this page, parsed with `bash -n` (2,036 and 658 lines; this entry first recorded 2,004 and 648, corrected on 2026-09-10 by re-extracting both blocks), and run against the 17.11 and 12.2 clusters the 2026-09-09 run left in place under `.wiki-runtime/tmp/btree-suite/`: the 17 leg's `cluster texts extstat` and the 12 leg's `exact transform facts fixtures score extstat report`. Neither server was rebuilt, neither regression suite was re-run, both checkouts stayed read-only at their pins, and the sandbox was left in place for that pass, then stopped and deleted on 2026-09-10. The reconstruction of the previous statement text reproduced its filed SHA-256 exactly, which is what makes the one-line diff auditable.
 
@@ -5859,6 +6141,7 @@ See [The repaired scripts have been re-run only in part](#the-repaired-scripts-h
 | Flush ordering and the counter artifact | [postgres.c#idle-stats-flush](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4634-L4705), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L584-L600), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337). |
 | Output formatting, range errors and split strategies | [dbsize.c#pg_size_pretty-sign](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L569-L600), [numeric.c#bigint-out-of-range](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4546-L4549), [nbtsplitloc.c#_bt_strategy-single-value](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1020-L1033). |
 | Harness oracles | [btreefuncs.c#GetBTPageStatistics](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L108-L194), [pageinspect--1.8--1.9.sql#bt_page_stats](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L87-L124), [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31). |
+| Clean shutdown and teardown confirmation in the suite scripts | [postmaster.c#process_pm_shutdown_request-fast](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2266-L2305), [postmaster.c#process_pm_shutdown_request-immediate](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2307-L2342), [xlog.c#ShutdownXLOG](../../../../raw/postgres-17/src/backend/access/transam/xlog.c#L6580-L6621), [xlogrecovery.c#not-properly-shut-down](../../../../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L922-L949), [pg_ctl.c#do_stop](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L1015-L1065), [miscinit.c#UnlinkLockFiles](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L1170-L1194), [pqcomm.c#RemoveSocketFiles](../../../../raw/postgres-17/src/backend/libpq/pqcomm.c#L846-L861). |
 | Core-SQL contract and model-specific choices | [The current recommended statement](#the-current-recommended-statement). These expressions are the wiki's model, not a PostgreSQL engine guarantee. |
 | Mandatory test inventory and what the engine suites cover | [regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59), [regress.sgml#contrib-suites](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L171-L195), [installation.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L515-L522). |
 | Expected deduplication-gate verdicts | [nbtutils.c#_bt_allequalimage-INCLUDE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147), [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180), [fmgr.c#internal-function-resolution](../../../../raw/postgres-17/src/backend/utils/fmgr/fmgr.c#L216-L240), [nbtree.h#BTGetDeduplicateItems](../../../../raw/postgres-17/src/include/access/nbtree.h#L1146-L1150). |
@@ -5885,12 +6168,15 @@ the 2026-09-09 re-verification, each with the number that measured it. The
 [Multicolumn key groups without extended statistics](#multicolumn-key-groups-without-extended-statistics)
 and replaced the platform question with
 [Fixture recipes that do not reproduce](#fixture-recipes-that-do-not-reproduce).
-The measurement-script review of the same day added the last four, which are
-about the scripts rather than about the estimator:
-[The repaired scripts have been re-run only in part](#the-repaired-scripts-have-been-re-run-only-in-part),
-[Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged),
+The measurement-script review of the same day added four questions about the
+scripts rather than about the estimator; the full re-run of 2026-09-10 closed
+two of them (the partial re-run and the 12 leg's unmeasured full runtime),
+left
+[Fixture statements are marked disposable, not tagged](#fixture-statements-are-marked-disposable-not-tagged)
+and
 [The 12 leg's settings have no citable apply scope here](#the-12-legs-settings-have-no-citable-apply-scope-here)
-and [The 12 leg's runtime is recorded only from a built tree](#the-12-legs-runtime-is-recorded-only-from-a-built-tree).
+open, and added
+[Attribution row counts differ between hosts](#attribution-row-counts-differ-between-hosts).
 
 The 2026-09-10 pass closed the parse half of
 [Cross-version execution of the revised statement](#cross-version-execution-of-the-revised-statement)
@@ -5990,10 +6276,13 @@ run measured only the four-byte-header case, where the correction is exact.
 Nothing here was measured at a non-default `BLCKSZ`, at a `MAXIMUM_ALIGNOF` other
 than 8, or on a big-endian machine, and parallel index builds, `CREATE INDEX
 CONCURRENTLY`, `REINDEX CONCURRENTLY`, partitioned tables and a non-C cluster
-locale were outside both runs. Every number on this page is a 17.11 build on
-x86-64 Linux with `--locale=C`, at `max_data_alignment` 8 and
-`database_block_size` 8192; the 2026-09-09 pass recorded those two values from
-`pg_control_init()` rather than assuming them. The nondeterministic-collation
+locale were outside both runs. Every number on this page is a 17.11 build with
+`--locale=C` at `max_data_alignment` 8 and `database_block_size` 8192, on
+x86-64 Linux with gcc until 2026-09-10 and since then also on arm64 macOS with
+Apple clang and ICU 78, where the whole suite reproduced; both passes recorded
+those two values from `pg_control_init()` rather than assuming them. A second
+architecture is not a second alignment or block size, so the geometry
+constants remain measured at one setting of each. The nondeterministic-collation
 gap is closed: that pass built with ICU and measured the `collisdeterministic`
 branch on both sides, in a UTF8 database, under
 [The collation branch, measured with ICU](#the-collation-branch-measured-with-icu).
@@ -6061,8 +6350,14 @@ Both outcomes are legitimate readings of the same physical index, and the
 verdict flips between `CRITICAL FALSE POSITIVE` and `PASS` with them. The suite
 therefore has at least one cell that cannot be compared run to run, and the
 honest fix is either to seed the sample, to score the fixture over repetitions,
-or to state its verdict as a distribution. No other fixture was observed to
-flip, but nothing in the harness proves that none can.
+or to state its verdict as a distribution. Three more runs on Darwin arm64 on
+2026-09-10 read 87.5 %, `-50.0 %` and `-50.0 %`. No other fixture was
+observed to flip its verdict on either platform, but several moved within
+their verdict with the sample: `b95` read 88.4 and then 89.9 against 89.1,
+`p76` 50.8 and then 50.3 against 49.9, `f91` `-256.8` and then `-248.6`, the
+12 leg's `p1004` 89.1 and then 90.2 against 89.1, and the moved-number half of
+the attribution changed membership between runs. Nothing in the harness
+proves that no other verdict can flip.
 [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894),
 [guc_tables.c#default_statistics_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2071-L2074).
 
@@ -6211,29 +6506,29 @@ matches this page's "x86-64 Linux" statement. See
 [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L204),
 [analyze.c#stawidth](../../../../raw/postgres-17/src/backend/commands/analyze.c#L2536-L2540).
 
-### The repaired scripts have been re-run only in part
+### Attribution row counts differ between hosts
 
-The 2026-09-09 measurement-script review edited both scripts in place and did
-not re-run them. The 2026-09-10 pass re-ran them under the repairs, but only
-the stages the statement change can reach: the 12 leg's
-`exact transform facts fixtures score extstat report` and the 17 leg's
-`cluster texts extstat`. Those stages now carry the repaired helpers, including
-`ON_ERROR_STOP` on every `psql` call, and the 12 leg's whole scored subset came
-back with the same verdict counts, which answers the review's own question for
-that leg: nothing was erroring unnoticed there.
-
-Still not re-run since the repairs: the 17 leg's `build`, `check`, `geometry`,
-`calibration`, `gate`, `acceptance`, `suite`, `attribution`, `probes`, `score`,
-`cost` and `criteria` stages, and the 12 leg's `build` and `check`. So the
-figures under
+The `EXCEPT` attribution between the current and the superseded text returned
+26 rows in each direction on the 2026-09-09 Linux run, read as 23 rows with a
+moved number and 3 that differ in the caveat string alone. The two Darwin arm64
+runs of 2026-09-10 returned 33 and then 31 rows in each direction, read the
+same way as 22 and 11, then 21 and 10. The moved-number half is expected to
+vary: five of its rows differ between the texts by 0.1 to 0.4 points
+(`f83` 48.7 against 48.6, `i101` `-1.0` against `-1.1`, `i102` `-1.1`
+against `-1.2`, `p49b` 1.1 against 1.0, `p54` 0.0 against 0.4), which is the
+size of a rounding step, so whether such a row lands in the set depends on the
+`ANALYZE` sample. The caveat-only half should not vary, and here it does: on
+Darwin the ten rows are the eight zero-row fixtures (`nz_k`, `p113b`,
+`p113c`, `p115`, `p116`, `p117`, `p118`, and `x109` with
+`statistics target zero on an index column`) plus the harness's own
+`plan_pkey` and `res_pkey`, every one differing because the current text adds
+a caveat the superseded text does not have. The Linux output that read 3 was
+deleted with its sandbox on 2026-09-10, so the discrepancy cannot be
+reconciled from this page; the next run on that host settles it, and until
+then the 26-row figure under
 [What the two scripts measured on 2026-09-09](#what-the-two-scripts-measured-on-2026-09-09)
-that come from those stages — the 78 geometry cells, the seven calibration
-patterns, the 27-fixture gate, the acceptance tables and the 112 numbered
-fixtures — still predate the script text now filed. The 2026-09-10 equivalence
-run is evidence that the statement edit cannot have moved them; it is not
-evidence that the repaired script text reproduces them.
-[Measurement-script section review](#measurement-script-section-review),
-[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
+is a recorded output whose split this page cannot re-derive.
+[What the 2026-09-10 full re-run measured on Darwin arm64](#what-the-2026-09-10-full-re-run-measured-on-darwin-arm64).
 
 ### Fixture statements are marked disposable, not tagged
 
@@ -6264,20 +6559,6 @@ setting is in place before the first start, but a reader who changes one of them
 on a 12.2 server has to look up its scope elsewhere. The clean fix is a
 `pg_settings` capture on the 12 leg, added to `stage_facts` and re-run, or the
 same table on a v12 page.
-
-### The 12 leg's runtime is recorded only from a built tree
-
-`MANDATORY Measurement Script` asks for the runtime of a full run and of a
-re-run from a built tree. The 17 leg has both, measured on the recorded host:
-about eleven minutes and about ninety seconds. The 12 leg now has the second
-half, measured on 2026-09-10 against the already-built tree and the running
-cluster: 0.3 s for `exact transform facts` and 52.7 s for
-`fixtures score extstat report`. Its full-run figure is still unmeasured,
-because that means building 12.2 and running `make check` again, which the
-2026-09-10 pass deliberately did not do. What is known about the missing part is
-its shape — the source build and `make check` dominate it — but no number is
-filed, so none is claimed.
-[What the 2026-09-10 targeted re-run measured](#what-the-2026-09-10-targeted-re-run-measured).
 
 ## Source References
 
@@ -6469,6 +6750,23 @@ filed, so none is claimed.
 - [jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895)
 - [bool.c#parse_bool_with_len](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L36-L58)
 - [bool.c#boolin](../../../../raw/postgres-17/src/backend/utils/adt/bool.c#L126-L150)
+- [postmaster.c#process_pm_shutdown_request-fast](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2266-L2305)
+- [postmaster.c#process_pm_shutdown_request-immediate](../../../../raw/postgres-17/src/backend/postmaster/postmaster.c#L2307-L2342)
+- [checkpointer.c#ShutdownRequestPending](../../../../raw/postgres-17/src/backend/postmaster/checkpointer.c#L584-L600)
+- [xlog.c#ShutdownXLOG](../../../../raw/postgres-17/src/backend/access/transam/xlog.c#L6580-L6621)
+- [xlogrecovery.c#not-properly-shut-down](../../../../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L922-L949)
+- [pg_ctl.c#shutdown-modes-usage](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L2006-L2011)
+- [pg_ctl-ref.sgml#shutdown-modes](../../../../raw/postgres-17/doc/src/sgml/ref/pg_ctl-ref.sgml#L186-L198)
+- [pg_ctl.c#do_status](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L1336-L1388)
+- [pg_ctl-ref.sgml#status-exit-status](../../../../raw/postgres-17/doc/src/sgml/ref/pg_ctl-ref.sgml#L221-L227)
+- [pg_ctl-ref.sgml#-m](../../../../raw/postgres-17/doc/src/sgml/ref/pg_ctl-ref.sgml#L310-L320)
+- [pg_ctl.c#do_stop](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L1015-L1065)
+- [miscinit.c#UnlinkLockFiles](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L1170-L1194)
+- [miscinit.c#DIRECTORY_LOCK_FILE](../../../../raw/postgres-17/src/backend/utils/init/miscinit.c#L60)
+- [pg_ctl.c#start_postmaster-command](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L489-L494)
+- [pg_ctl.c#pgdata_opt](../../../../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L2278)
+- [pqcomm.c#RemoveSocketFiles](../../../../raw/postgres-17/src/backend/libpq/pqcomm.c#L846-L861)
+- [installation.sgml#SIP](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L3611-L3618)
 
 ## Navigation
 
