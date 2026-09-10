@@ -2,6 +2,110 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-10] restructure | mandatory teardown of services and sandboxes started for wiki work
+
+- Added teardown rules to `AGENTS.md`. Anything started for wiki processing or
+  document generation must be stopped, and its sandbox deleted, before the
+  agent's final response.
+- **Prompt hygiene first.** The original read `add to agents.md a new mandatory
+  rule , stop any services or db engines used during wiki processing or
+  documenent generation.`; the asker chose "correct and proceed", so the
+  corrections are `agents.md` -> `AGENTS.md`, the space before the comma, the
+  comma read as the colon it was doing the work of, `documenent` -> `document`,
+  `db` -> `database`, and the capitalized leading verb: *Add to AGENTS.md a new
+  mandatory rule: stop any services or database engines used during wiki
+  processing or document generation.* Three scoping answers were taken before
+  drafting: **bullets in existing rules** rather than a new top-level
+  `## MANDATORY` section, **stop and delete the sandbox** rather than stopping
+  processes only, and **before the final response on success or failure**
+  rather than only after a run that completes normally.
+- **Why the rule exists.** This log already records the failure mode three
+  times, always found by a later session rather than by the one that caused it:
+  three servers left running from earlier sessions, stopped with
+  `pg_ctl -D <datadir> -m fast stop` before any deletion (2026-08-11); one
+  17.11 postmaster, pid 148760 on `.wiki-runtime/tmp/review17/data`, stopped
+  the same way (2026-08-19); and postmaster PID 508251 killed mid-shutdown by a
+  host restart at roughly 11:51, leaving a stale `postmaster.pid` reading
+  `stopping` and a stale socket (2026-08-24). A cluster nobody stops outlives
+  the task that needed it, holds its data directory, socket and port, and is
+  eventually ended by something that is not a clean shutdown.
+- **Four bullets at the end of `MANDATORY Environment Isolation`** carry the
+  rule: stop every service you started before the final response, whether the
+  work succeeded, failed, or was abandoned mid-run, covering postmasters,
+  standbys and replicas, connection poolers, background `psql` sessions,
+  watchers and any other daemon; shut a cluster down with
+  `pg_ctl -D <datadir> -m fast stop` and confirm the teardown by the absence of
+  `postmaster.pid`, the absence of a matching `pgrep -a postgres` process, and
+  a free socket directory and port; delete the sandbox under
+  `.wiki-runtime/tmp/<name>/` once stopped unless the user asked to keep it,
+  and if kept, leave it stopped, name the retained path and say how to restart
+  it.
+- **The safety boundary is explicit**, because "stop any service used" could
+  otherwise be read as licence to shut down something the asker runs for their
+  own reasons: never stop, kill or delete a cluster, service or data directory
+  you did not start; report the process and its data directory and ask first.
+  That matches the existing `MANDATORY Measurement Script` line forbidding
+  measurement against a cluster the user did not name.
+- **Three cross-references, no new section**, per the placement answer: a
+  bullet in the isolation-and-safety list of `MANDATORY Measurement Script`
+  requiring a cleanup stage *and* requiring it to be run, since the eight-row
+  usage table already made publishing one mandatory and publishing is not
+  stopping; a clause in step 7 of `MANDATORY Answer And File`; and a bullet in
+  `MANDATORY Bookkeeping` requiring each entry for a step that ran a service to
+  record what was stopped, what was deleted, what was kept and where, or that
+  nothing was running.
+- **The rule applied to itself immediately.** `pgrep -a postgres` during this
+  edit found two postmasters still running from the 2026-09-09 suite run: 17.11
+  as pid 405706 on `.wiki-runtime/tmp/btree-suite/data17`, port 55437, and 12.2
+  as pid 407802 on `.wiki-runtime/tmp/btree-suite/data12`, port 55412, both
+  recorded as left in place by the entry below and by
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md).
+  This step started neither, so under the new safety bullet they were reported
+  to the asker first; on approval both were stopped with
+  `pg_ctl -D <datadir> -m fast stop`, each with its own leg's `pg_ctl`. Both
+  wrote a shutdown checkpoint and logged `database system is shut down`;
+  afterwards neither data directory held a `postmaster.pid`, `pgrep -a
+  postgres` was empty, both socket directories were empty, and nothing listened
+  on 55437 or 55412.
+- **The asker then asked for the sandbox itself, and 8.7 GB was deleted.**
+  `.wiki-runtime/tmp/btree-suite/` is gone: `data17` 6.1 GB, `data12` 1.8 GB,
+  `build17` 395 MB, `build12` 261 MB, `install17` 92 MB, `install12` 67 MB,
+  plus `out/`, `sql/` and the two socket directories. `.wiki-runtime/` went
+  from 8.7 GB to 14 MB. Checks before the `rm -rf`: both servers already
+  stopped, no `postmaster.pid`, no postgres process, both `pg_tblspc`
+  directories empty so no tablespace lived outside the tree, and no symlink
+  pointing out of it. The 204 KB `tmp/btree-suite-scripts/` was not named for
+  deletion and remains, holding the two scripts and three run logs.
+- **Nothing unfiled was lost, and that was checked rather than assumed.** Both
+  scripts on disk were diffed against the two `bash` blocks of the page before
+  the deletion — page lines 2753-4788 and 4806-5463 — and are byte identical,
+  both parsing under `bash -n`. This is what the publish-in-the-page half of
+  `MANDATORY Measurement Script` buys: the script outlives the sandbox it ran
+  in, so deleting 8.7 GB costs rebuild time and no evidence.
+- **Four corrections to the B-tree estimator page**, since stopping and
+  deleting falsified its state claims: the last-run record now reports both
+  clean stops and the deletion, and says reproducing any number means
+  rebuilding both legs from their pins and re-running the published scripts;
+  the 2026-09-09 Context Reviewed bullet no longer says the scripts, SQL and
+  output "live under" the sandbox; the 2026-09-10 bullet no longer says it was
+  left in place for the next pass; and that bullet's `bash -n` line counts,
+  recorded as 2,004 and 648, are corrected to the measured 2,036 and 658 with
+  the old figures named.
+- **One defect found in a filed script, reported and not fixed.** Both suite
+  scripts' `stage_stop` runs `pg_ctl -m immediate stop`, which skips the
+  shutdown checkpoint and forces recovery on the next start, so the page's own
+  `stop` and `clean` stages do not satisfy the new "shut down cleanly" bullet.
+  The stops above used `-m fast` instead. Left as a follow-up rather than
+  edited here: no filed number depends on the shutdown mode, and the asker
+  asked for the servers to be stopped, not for a script rewrite.
+- The page edits touch only sandbox-state records and that one line count. No
+  claim, citation, statement, script body or measured number changed, no index
+  or version pin changed, both `raw/` checkouts stayed read-only and clean at
+  their pins, and the page keeps `verified: false` and `verified_by_agent: not
+  yet`. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors,
+  0 warnings.
+
 ## [2026-09-10] review v17 | portable extended-statistics filter fixes the B-tree estimator's cross-version refusal
 
 - Fixed the failed cross-version execution test on [Testing the PostgreSQL 12

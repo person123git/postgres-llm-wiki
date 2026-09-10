@@ -23,6 +23,10 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - Use network only for `scripts/bootstrap_venv` or user-requested source fetches.
 - Do not use `WIKI_ALLOW_SYSTEM_PYTHON=1` in normal work.
 - Keep generated artifacts, caches, and the venv under `.wiki-runtime/`.
+- Stop every service you started for wiki processing or document generation before your final response, whether the work succeeded, failed, or was abandoned mid-run. This covers PostgreSQL postmasters, standbys and replicas, connection poolers, background `psql` sessions, watchers, and any other daemon.
+- Shut a cluster down cleanly with `pg_ctl -D <datadir> -m fast stop`, then confirm the teardown: no `postmaster.pid` in the data directory, no matching process in `pgrep -a postgres`, and the socket directory and port free.
+- Delete the sandbox you created under `.wiki-runtime/tmp/<name>/` once it is stopped, unless the user asked to keep it. If the user asked to keep it, leave it stopped, name the retained path on the page or in the log entry, and say how to restart it.
+- Never stop, kill, or delete a cluster, service, or data directory you did not start. Report the process and its data directory to the user and ask first.
 
 ## MANDATORY Evidence
 
@@ -173,6 +177,7 @@ Isolation and safety, on top of `MANDATORY Environment Isolation`:
 - Follow `MANDATORY Production SQL` for the statements the script sends: the inline tag comment after the leading verb, and session-scoped `statement_timeout` and `lock_timeout`.
 - Name the context and apply scope of every GUC the script sets, per `MANDATORY GUC Changes`.
 - Mark fixture statements as disposable. They create and drop objects and are not meant for a database anyone cares about.
+- Give the script a cleanup stage that stops the server and deletes the sandbox, and run that stage before your final response. Publishing the stage is not enough; see the teardown bullets in `MANDATORY Environment Isolation`.
 - A script published inside a fenced block must not contain a literal Markdown fence. Assemble one at run time when the script has to read fenced blocks out of the page, e.g. `fence=$(printf '\140\140\140')`.
 
 Evidence boundary:
@@ -372,6 +377,7 @@ After each meaningful wiki change:
 - Update `wiki/versions.md` for supported-version lifecycle, repin, or meaningful coverage changes.
 - Update `wiki/vNN/index.md` for created or substantially changed version-local pages.
 - Append to `wiki/log.md` after scaffold changes, ingests, lint passes, filed answers, measurement runs, or version lifecycle events.
+- Record teardown in the `wiki/log.md` entry for any step that ran a service: what was stopped, what was deleted, what was kept and where, or that nothing was running.
 - Run `scripts/wiki_lint` after every wiki-facing edit, including small edits to existing pages, indexes, version pages, log entries, citations, titles, or front matter.
 
 Log heading format:
@@ -401,7 +407,7 @@ Log heading format:
 4. Draft a claim-to-source map.
 5. Move unverified claims to `## Open Questions`.
 6. Answer with matching-version raw citations.
-7. If the page reports a measured number, run the page's script and file it under `## Measurement Script`; see `MANDATORY Measurement Script`.
+7. If the page reports a measured number, run the page's script and file it under `## Measurement Script`, then run the script's cleanup stage so no server or sandbox is left behind; see `MANDATORY Measurement Script`.
 8. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
 9. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
 10. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
