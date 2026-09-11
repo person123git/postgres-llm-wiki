@@ -8,6 +8,7 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - Read `wiki/index.md`.
 - Read the last ~20 entries of `wiki/log.md`.
 - For version-local work, read `wiki/vNN/index.md`.
+- Read the `wiki/vNN/common-concepts/` pages that cover concepts your work touches, and link them instead of re-explaining them.
 - Use the matching `raw/postgres-NN/` checkout as the PostgreSQL evidence base.
 
 ## MANDATORY Environment Isolation
@@ -92,7 +93,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 
   - Link text: short human label, typically `file.ext#Symbol` (function, struct, macro, GUC, or doc-section name). Use `file.ext:line` for a single-line citation.
   - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment. Single-line citations use `#L42`.
-  - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For question pages under `wiki/vNN/questions/<category>/`, that prefix is `../../../../raw/postgres-NN/...`; see `MANDATORY Question Categories`.
+  - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For question pages under `wiki/vNN/questions/<category>/`, that prefix is `../../../../raw/postgres-NN/...`; see `MANDATORY Question Categories`. For common concept pages under `wiki/vNN/common-concepts/`, that prefix is `../../../raw/postgres-NN/...`; see `MANDATORY Common Concept Documents`.
   - New or edited source citations must use this page-relative format. `scripts/wiki_lint` may normalize repo-relative `raw/postgres-NN/...` URLs for validation, but that is compatibility behavior, not the citation style for new work.
   - Line numbers are stable because every page pins an exact commit via `pinned_commit:`; they jump correctly in VS Code and editors that understand Markdown line fragments.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
@@ -216,6 +217,16 @@ verified: false
 verified_by_agent: not yet
 ```
 
+- Common concept pages use this exact front matter order and are read-only from other documents' work; see `MANDATORY Common Concept Documents`:
+
+```yaml
+type: common-concept
+version: NN
+pinned_commit: abc123...
+verified: false
+verified_by_agent: not yet
+```
+
 - Legacy `type: answer` pages use the same field order with `type: answer`. Do not file new answer pages; see `MANDATORY Question Documents`.
 
 - Do not set the timestamp form if any claim is unverified. Fix it, move it under `## Open Questions`, or leave `verified_by_agent: not yet`.
@@ -254,7 +265,7 @@ wiki/vNN/codebase-navigation-guide.md
 ```
 
 - Use `type: codebase-navigation-guide`.
-- File it at the version root, not under `questions/`, `concepts/`, or `answers/`.
+- File it at the version root, not under `questions/`, `common-concepts/`, or `answers/`.
 - Treat it as version-local content and as a question-style document. It must have front matter, a `## Contents` table of contents, `## Question`, inline `## Answer`, matching-version raw source citations, `## Context Reviewed`, `## Evidence Map`, `## Open Questions`, `## Source References`, and `## Navigation`.
 - Apply every `MANDATORY Question Documents` rule unless it conflicts with the fixed `type:` or fixed root-level path for this guide.
 - If a user-requested guide prompt exists, restate that prompt verbatim under `## Question` after applying `MANDATORY Prompt Hygiene`. If the guide is generated as a mandatory per-version scaffold without a user prompt, use this canonical question text: `Create a codebase navigation guide document for PostgreSQL NN.`
@@ -271,6 +282,7 @@ When a user asks a question, the deliverable is a single `type: question` page t
 - Put the full answer, with matching-version raw citations, inline under `## Answer`.
 - Add `## Measurement Script` when the page reports a measured number; see `MANDATORY Measurement Script`.
 - Keep `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` on the same page when gaps exist.
+- Scaffold a new page from `templates/question.md`.
 
 Why one document per question, not a question page plus an answer page:
 
@@ -278,7 +290,7 @@ Why one document per question, not a question page plus an answer page:
 - One page per Q&A removes duplicate, drifting pages. A separate answer document forces two titles, two `(unverified)` hints, two `pinned_commit:` values, and two index entries to keep in sync.
 - It keeps verification honest. One page carries one `verified:` / `verified_by_agent:` state over one claim-to-source map, instead of a question page that silently goes stale against its answer page.
 
-Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not create new ones. Leave existing answer pages in place until they are next substantially revised, then fold them back into their question page.
+Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not create new ones. Leave existing answer pages in place until they are next substantially revised, then fold them back into their question page. The `templates/answer.md` scaffold was deleted on 2026-09-11; a type you must not file has no scaffold.
 
 ## MANDATORY Question Categories
 
@@ -323,9 +335,101 @@ Index grouping:
 
 All question pages were migrated into categories on 2026-08-06. No uncategorized question page is grandfathered.
 
+## MANDATORY Common Concept Documents
+
+A common concept document is the wiki's single shared explanation of one PostgreSQL concept. Other pages link it as the source for that concept instead of explaining the concept again. It is the third document type, alongside `type: question` and `type: codebase-navigation-guide`.
+
+- Use `type: common-concept`.
+- File it at `wiki/vNN/common-concepts/<concept-slug>.md`.
+- Create a concept page only when the user asks for that page. It is never a side effect of another document and never a mandatory per-version scaffold, unlike `MANDATORY Codebase Navigation Guide`. A version with no concept page is a valid state.
+- Common concept pages are not categorized. `MANDATORY Question Categories` does not apply to them.
+- One page per concept per version. The page is pinned to that version like any other page, and every citation comes from the matching `raw/postgres-NN/` checkout.
+- Use the same basename for the same concept in every version, so `wiki/v17/common-concepts/visibility-map.md` and `wiki/v18/common-concepts/visibility-map.md` stay parallel.
+- Name the page for the concept, not for a question: `visibility-map.md`, `multixact.md`, `shared-buffer-mapping.md`.
+- Create the `common-concepts/` directory when its first page is filed. Do not create it empty.
+
+What belongs on a concept page, one concept per page:
+
+- What it is, in the lead, in one paragraph.
+- Why the engine has it.
+- How it works on the normal path, plus the edge and error paths that change its meaning.
+- Where it lives in the pinned source tree.
+- The structs, macros, functions, catalogs, and GUCs that carry it.
+- Where it meets neighboring concepts, and where that boundary is.
+
+What does not belong on a concept page:
+
+- A user's question or its answer. That is a `type: question` page, and it links the concept page.
+- Measured numbers. A concept page is source-only, so `MANDATORY Measurement Script` never applies to it. Measurements belong on the question page that ran them.
+- A list of the pages that use the concept. Links run from consumer to concept only, never back, so adding a consumer never edits the concept page.
+- Cross-version comparison. Each version's page describes that version; a "changed in NN" answer is a question page.
+
+Read-only from other work. A common concept page changes only when the user asks for a change to that concept page:
+
+- While creating or editing any other document, do not create, edit, rename, re-scope, split, merge, or delete a common concept page. Use it as a source and link it.
+- Filing, revising, or verifying a question page or a navigation guide is never a reason to touch a concept page, not to add a backlink, not to fix wording, not to widen a definition so it covers the new page.
+- If a concept page is wrong, incomplete, or missing for the document you are writing, do not fix it in passing. Write what the current document needs on the current document, record the gap under that document's `## Open Questions`, and tell the user the concept page needs its own change.
+- A change to a concept page is its own task, with the user's go-ahead, its own `wiki/log.md` entry, and a re-read of the pages that link it.
+- Repinning a version is the only exception. A repin rewrites `pinned_commit:` and citation line ranges across that version's pages, concept pages included, as part of the repin task.
+
+Use the concept layer when you file a document:
+
+- Before drafting any page, list the concepts the answer leans on, then read `wiki/vNN/common-concepts/` for that version and link the pages that already cover them.
+- Link the concept page on first use of the term instead of restating the definition; see `MANDATORY Writing Style`. Keep the consumer page's own coverage to what its question needs.
+- Link only your own version's concept page. If the concept has no page for that version, explain what the consumer page needs inline and do not link another version's page.
+- When a document needs a concept that has no page yet, say so in your response and propose the page. Do not create it as a side effect of the other document's work.
+
+Evidence boundary:
+
+- Every claim on a concept page cites matching-version raw source, like on any other content page.
+- A consumer page may link a concept page instead of repeating the explanation, but every behavioral claim the consumer page makes still needs its own matching-version raw citation. `MANDATORY Evidence` still forbids uncited wiki prose as factual support.
+- A concept page never cites a wiki page as evidence, including another concept page. It links wiki pages for navigation only.
+
+Concept page shape. Front matter, in this exact order:
+
+```yaml
+type: common-concept
+version: NN
+pinned_commit: abc123...
+verified: false
+verified_by_agent: not yet
+```
+
+Required headings, in this order and with this exact text:
+
+```md
+# Concept Name (unverified)
+
+## Contents
+## Definition
+## Why It Exists
+## How It Works
+## Where It Appears in Source
+## Related Structures and Functions
+## Interactions with Other Concepts
+## Open Questions
+## Source References
+## Navigation
+```
+
+- Scaffold a new page from `templates/common-concept.md`, which carries this front matter and these headings.
+- `## Definition` must be non-empty and must lead with the definition.
+- Add `## Context Reviewed` and `## Evidence Map` before `## Open Questions` when the claim-to-source map is large.
+- Do not drop or rename a required heading. `scripts/wiki_lint` matches each one by exact text.
+- `MANDATORY Table of Contents`, `MANDATORY Citations`, `MANDATORY Writing Style`, and `MANDATORY Verification Fields` apply unchanged. From `wiki/vNN/common-concepts/`, the citation prefix is `../../../raw/postgres-NN/...`.
+
+Bookkeeping and lint:
+
+- `wiki/vNN/index.md` lists its concept pages under a `## Common Concepts` section, placed after `## Questions`.
+- `wiki/index.md` lists them under a `#### Common Concepts` heading inside that version's `### PostgreSQL NN` section, after the question-category groups.
+- `scripts/wiki_lint` checks front matter presence and key order, `version:` and `pinned_commit:` against `wiki/versions.md`, citations from the matching checkout only, complete Markdown citation form, a non-empty `## Source References`, the required headings above, a non-empty `## Definition`, the `(unverified)` title hint, and that `type: common-concept` and `wiki/vNN/common-concepts/` always pair.
+- Lint cannot check that a consumer links an existing concept page, that a concept page stays source-only, or that another document's work left concept pages untouched. Check those by hand.
+
+Retirement note: `type: concept` under `wiki/vNN/concepts/` is retired and replaced by this type. No `type: concept` page was ever filed, so there is nothing to migrate. Do not file one. If an old-style concept page appears, refile it as `type: common-concept` under `wiki/vNN/common-concepts/`, fix the links into it, and log the move. The retired type's `templates/concept-shared.md` and `templates/concept-version.md` scaffolds were deleted on 2026-09-11 and replaced by `templates/common-concept.md`.
+
 ## MANDATORY Table of Contents
 
-- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: concept`, and legacy `type: answer` pages, regardless of page length.
+- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: common-concept`, and legacy `type: answer` pages, regardless of page length.
 - Navigation pages are exempt: `wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, and the `wiki/vNN/index.md` version landing pages.
 - Place the `## Contents` block between the page title (`# ...`) and the first content section. On a question-style page, including `type: codebase-navigation-guide`, that means immediately before `## Question`.
 - List every `##` and `###` section in document order as a nested Markdown bullet list: each `##` is a top-level bullet and its `###` subsections are indented two spaces beneath it. Do not list `####` or deeper headings.
@@ -362,8 +466,9 @@ Migration note: existing content pages without a `## Contents` block remain vali
 - Each `wiki/vNN/` root must contain `index.md` and the mandatory `codebase-navigation-guide.md`.
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
   - `wiki/vNN/questions/<category>/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`. The category directory is mandatory; see `MANDATORY Question Categories`.
-  - `wiki/vNN/concepts/` for `type: concept` pages. Concept pages are not categorized.
+  - `wiki/vNN/common-concepts/` for `type: common-concept` pages. Concept pages are not categorized, and other documents only read them; see `MANDATORY Common Concept Documents`.
   - `wiki/vNN/answers/` holds legacy `type: answer` pages only. Do not file new answer pages there.
+  - `wiki/vNN/concepts/` is retired with `type: concept`. Do not create it.
 - The version landing page `wiki/vNN/index.md` and `wiki/vNN/codebase-navigation-guide.md` are the only Markdown pages allowed at the version root.
 - `wiki/vNN/questions/` itself holds only category directories, never Markdown pages.
 - Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../../index.md)` and `[versions](../../../versions.md)` from a `wiki/v18/questions/<category>/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
@@ -408,20 +513,33 @@ Log heading format:
 1. Assume the primary version unless the user specifies another.
 2. Use `wiki/versions.md`, `wiki/index.md`, and the version landing page as navigation only.
 3. Build the deep-inquiry context envelope from the pinned checkout.
-4. Draft a claim-to-source map.
-5. Move unverified claims to `## Open Questions`.
-6. Answer with matching-version raw citations.
-7. If the page reports a measured number, run the page's script and file it under `## Measurement Script`, then run the script's cleanup stage so no server or sandbox is left behind; see `MANDATORY Measurement Script`.
-8. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
-9. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
-10. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
-11. Update indexes and log.
+4. List the concepts the answer leans on, read `wiki/vNN/common-concepts/` for that version, and plan to link the pages that already cover them; see `MANDATORY Common Concept Documents`.
+5. Draft a claim-to-source map.
+6. Move unverified claims to `## Open Questions`.
+7. Answer with matching-version raw citations, linking the concept pages instead of re-explaining their concepts. Do not edit a concept page as part of this work.
+8. If the page reports a measured number, run the page's script and file it under `## Measurement Script`, then run the script's cleanup stage so no server or sandbox is left behind; see `MANDATORY Measurement Script`.
+9. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
+10. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
+11. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
+12. Update indexes and log. Name any missing or wrong concept page in your response instead of changing it.
+
+### MANDATORY File Or Change A Common Concept Document
+
+Run this workflow only when the user asks for the concept page itself. Never as a step inside another document's work.
+
+1. Confirm the target version and the exact concept boundary with the user.
+2. Read `wiki/vNN/common-concepts/` for that version to check the concept has no page and no overlapping page.
+3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map.
+4. File or edit `wiki/vNN/common-concepts/<concept-slug>.md` with `type: common-concept`, the required headings, and matching-version raw citations only; see `MANDATORY Common Concept Documents`.
+5. Keep it source-only. Move anything unresolved to `## Open Questions`, and leave measurements to the question page that ran them.
+6. Re-read the pages that link the concept page and report, without editing them, any consumer the change now contradicts.
+7. Link it from `wiki/vNN/index.md` under `## Common Concepts` and from `wiki/index.md`, then append to `wiki/log.md` and run `scripts/wiki_lint`.
 
 ## MANDATORY Lint
 
 Lint is required after every wiki-facing change. Do not treat it as optional or only for new pages; run it before the final response whenever any wiki document changed.
 
-Check broken links, orphan pages, missing source references, stale pins, wrong-version citations, invalid verification fields, unverified title hints, and version landing-page links.
+Check broken links, orphan pages, missing source references, stale pins, wrong-version citations, invalid verification fields, unverified title hints, required common-concept sections, and version landing-page links.
 
 Use the project venv:
 

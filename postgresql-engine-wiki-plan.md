@@ -92,7 +92,7 @@ Version | Status | Wiki Home | Branch | Pinned Commit | Coverage
 ## Page Rules
 
 - Keep version-local pages under `wiki/vNN/`.
-- File pages by `type:` into a per-type subdirectory: `wiki/vNN/questions/`, `wiki/vNN/answers/`, `wiki/vNN/concepts/`. The version landing page `wiki/vNN/index.md` is the only page at the version root.
+- File pages by `type:` into a per-type subdirectory: `wiki/vNN/questions/<category>/`, `wiki/vNN/common-concepts/`, and the legacy `wiki/vNN/answers/`. `wiki/vNN/concepts/` is retired with `type: concept`. The version landing page `wiki/vNN/index.md` and `wiki/vNN/codebase-navigation-guide.md` are the only pages at the version root.
 - Filed answer and question pages are pinned to a single version.
 - Every behavioral claim needs a matching raw citation.
 - Unverified managed pages must show `(unverified)` in the visible title and index or landing-page link text.

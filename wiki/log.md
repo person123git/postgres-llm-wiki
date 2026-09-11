@@ -2,6 +2,153 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] restructure | question scaffold refreshed, answer scaffold deleted, concept pages stay user-triggered
+
+- Rewrote `templates/question.md` to the current rules and deleted
+  `templates/answer.md`. `templates/` now holds exactly the two scaffolds a
+  filing agent may use: `question.md` and `common-concept.md`.
+- **The old question scaffold could not produce a lint-clean page.** It had no
+  `## Source References`, which `scripts/wiki_lint` has required of every
+  `type: question` page, and no `## Contents`, which `MANDATORY Table of
+  Contents` requires of every content page. Its `## Short Answer` and
+  `## Detailed Answer` split predates `MANDATORY Question Documents`' single
+  inline `## Answer`, and `## Related Pages` predates `## Navigation`.
+- The replacement carries the five front matter keys in order, an
+  `(unverified)` title, a `## Contents` list with slug-rule anchors, then
+  `## Question`, `## Answer`, `## Measurement Script`, `## Context Reviewed`,
+  `## Evidence Map`, `## Open Questions`, `## Source References` and
+  `## Navigation`. The measurement section carries a delete-unless-you-measured
+  instruction rather than being left out, because its placement between
+  `## Answer` and `## Context Reviewed` is the part that gets filed wrong. Its
+  citation placeholder uses the four-deep `../../../../raw/postgres-NN/` prefix
+  a `questions/<category>/` page needs, and its `## Answer` hint tells the
+  filing agent to link this version's concept pages instead of explaining those
+  concepts again.
+- `templates/answer.md` is gone because `MANDATORY Question Documents` forbids
+  filing that type; keeping a scaffold for it invited the mistake. Its sections
+  (`## Short Answer`, `## Detailed Answer`, `## Evidence`, `## Related Pages`,
+  `## Follow-Up Work`) match no current rule. Existing legacy answer pages are
+  unaffected, and there are none in `wiki/`.
+- **Concept-page generation is user-triggered**, per the user's instruction, so
+  no first concept page was filed and `wiki/vNN/common-concepts/` still does
+  not exist anywhere. `MANDATORY Common Concept Documents` gained a bullet that
+  says so outright: a concept page is created only when the user asks for that
+  page, it is never a side effect of another document, it is never a mandatory
+  per-version scaffold like the codebase navigation guide, and a version with
+  no concept page is a valid state. `MANDATORY Question Documents` gained a
+  scaffold bullet and records that the answer scaffold was deleted.
+- No wiki page content changed and no service was started, so there is nothing
+  to tear down. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors,
+  0 warnings**.
+
+## [2026-09-11] restructure | one common-concept template replaces the two retired concept scaffolds
+
+- Deleted `templates/concept-shared.md` and `templates/concept-version.md` and
+  added `templates/common-concept.md`. This supersedes the previous entry's
+  statement that the retired scaffolds were "left in place"; the user asked for
+  them to be replaced.
+- The new scaffold is the exact shape `MANDATORY Common Concept Documents`
+  requires: the five front matter keys in order, an `(unverified)` title, a
+  `## Contents` list whose anchors follow the VS Code slug rule, and the ten
+  required headings in order. Its `## Source References` placeholder carries
+  the concept-page citation prefix `../../../raw/postgres-NN/`, and its
+  `## Navigation` placeholder the `../index.md` and `../../index.md` hops, so a
+  copied page starts with the two depths that are easiest to get wrong. The
+  placeholders are deliberately unresolvable, so an unedited copy fails
+  `scripts/wiki_lint` instead of filing a fake citation.
+- What the retired scaffolds carried and this one drops: `scope: shared`,
+  `verified_against:` and `primary_example_version:` from the shared variant,
+  which encoded a cross-version concept page that the version-local decision
+  rules out, and the shared variant's `## Version Notes` section, which is a
+  question page's job. `verified:` without `verified_by_agent:` from the
+  version variant is now the full five-key set, and both variants' missing
+  `## Contents` and `## Navigation` sections are present.
+- `AGENTS.md` updated in two places: the `MANDATORY Common Concept Documents`
+  retirement note now records the deletion and the replacement instead of
+  labelling the old files retired, and the concept-page shape block gained a
+  bullet pointing at the scaffold.
+- `templates/answer.md` and `templates/question.md` were still drifting at this
+  point; the entry above resolves them. No wiki page content changed, no
+  concept page exists yet, and no service was started, so there is nothing to
+  tear down. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0
+  warnings**.
+
+## [2026-09-11] restructure | common concept documents as the wiki's shared concept source
+
+- Added `MANDATORY Common Concept Documents` to `AGENTS.md` and wired the new
+  `type: common-concept` into `scripts/wiki_lint`. A concept page is the wiki's
+  single shared explanation of one PostgreSQL concept; other documents link it
+  as the source for that concept instead of explaining the concept again, and
+  other documents' work may never change it.
+- The prompt read `add to agents.md, new type of document called common
+  concepts to store common concepts that can be used by other documents as
+  source for a concept , and changes on a document can not change concept
+  documents only use it as a source. concept documents as meant to be shared by
+  other documents on the wiki when the user asks for a document should use a
+  common concept document.` It was taken as written, without the
+  `MANDATORY Prompt Hygiene` stop, because no filed page restates it; its
+  defects (`agents.md`, the space before a comma, `as meant to be`, two run-on
+  sentences) do not reach wiki content. Three scoping answers were taken before
+  drafting: **version-local pages**, not a cross-version shared directory;
+  **replace** the never-used `type: concept` rather than keep both; and
+  **`AGENTS.md` plus `wiki_lint`**, without a new template scaffold.
+- **Version-local, because citations are.** `MANDATORY Evidence` forbids
+  answering one version with another version's evidence, so a concept page is
+  pinned like any other page: `wiki/vNN/common-concepts/<concept-slug>.md`,
+  `pinned_commit:` from `wiki/versions.md`, citations only from the matching
+  `raw/postgres-NN/`, and the same basename across versions so the same concept
+  stays a directory diff. Consumers link only their own version's page.
+- **Read-only from other work, and links run one way.** Filing, revising or
+  verifying any other document may not create, edit, rename, re-scope, split,
+  merge or delete a concept page, not even to add a backlink or widen a
+  definition to fit the new page; the gap goes under the consumer's
+  `## Open Questions` and into the response instead. A concept page therefore
+  never lists its consumers, which is what keeps "add a question page" from
+  meaning "edit the concept layer". A repin is the one exception, because it
+  rewrites pins and line ranges across every page of a version.
+- **Evidence boundary kept intact.** A concept page is a shared explanation,
+  not a second evidence base: every claim on it cites matching-version raw
+  source, a consumer that links it still needs its own raw citation for every
+  behavioral claim it makes, and a concept page never cites a wiki page as
+  evidence. Concept pages are also source-only, so `MANDATORY Measurement
+  Script` never applies to one and measured numbers stay on the question page
+  that ran them.
+- **`AGENTS.md` touch points**, besides the new section: a `MANDATORY Read
+  First` bullet; the retired `concepts/` mention in `MANDATORY Codebase
+  Navigation Guide`; the `type:` list in `MANDATORY Table of Contents`; a front
+  matter block in `MANDATORY Verification Fields`; the per-type subdirectory
+  list in `MANDATORY Wiki Structure`, which now also forbids re-creating
+  `wiki/vNN/concepts/`; three steps in `MANDATORY Answer And File` plus the new
+  `MANDATORY File Or Change A Common Concept Document` workflow, which runs
+  only when the user asks for the concept page itself; and the check list in
+  `MANDATORY Lint`. `postgresql-engine-wiki-plan.md`'s stale per-type
+  subdirectory line was corrected to match.
+- **Lint now checks** front matter presence and key order, `version:` and
+  `pinned_commit:` against `wiki/versions.md`, wrong-version citations,
+  Markdown citation form, a non-empty `## Source References`, the ten required
+  headings by exact text, a non-empty `## Definition`, and that
+  `type: common-concept` and `wiki/vNN/common-concepts/` always pair. The
+  `(unverified)` title-hint check is new and applies to question, guide, legacy
+  answer and concept pages alike; it found no defect on any existing page.
+  Lint still cannot see whether a consumer linked an existing concept page,
+  whether a concept page stayed source-only, or whether other work left the
+  concept layer untouched.
+- **Self-tested against three temporary pages**, since no concept page exists
+  yet: a well-formed one produced only the expected orphan and landing-page
+  warnings; a deliberately broken one produced all eight missing-heading
+  errors, the empty-`## Definition` error, the missing title hint, the
+  wrong-version citation pair and the key-order warning; and a `type:
+  common-concept` page filed under `questions/indexing/` produced the placement
+  error. All three were deleted and the empty `wiki/v18/common-concepts/`
+  directory removed, per the rule that the directory appears with its first
+  real page.
+- No wiki page content changed, no concept page was filed, and no service was
+  started, so there is nothing to tear down. The legacy
+  `templates/concept-shared.md` and `templates/concept-version.md` scaffolds
+  were left in place and are now labelled retired in `AGENTS.md`.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**,
+  the same as before the change.
+
 ## [2026-09-11] answer v17 | index-entry gate and a simulated auto-analyze for the COMMENT-stored B-tree heuristic
 
 - Revised [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for

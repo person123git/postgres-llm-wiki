@@ -29,12 +29,29 @@ from wiki_tooling import (
 )
 
 
-MANAGED_VERSION_DIRS = ("questions",)
+COMMON_CONCEPT_DIR = "common-concepts"
+COMMON_CONCEPT_TYPE = "common-concept"
+MANAGED_VERSION_DIRS = ("questions", COMMON_CONCEPT_DIR)
 CODEBASE_GUIDE_BASENAME = "codebase-navigation-guide"
 CODEBASE_GUIDE_TYPE = "codebase-navigation-guide"
-SOURCE_REQUIRED_TYPES = {"question", CODEBASE_GUIDE_TYPE}
+SOURCE_REQUIRED_TYPES = {"question", CODEBASE_GUIDE_TYPE, COMMON_CONCEPT_TYPE}
 QUESTION_STYLE_TYPES = {"question", CODEBASE_GUIDE_TYPE}
 QUESTION_SECTION_REQUIRED_TYPES = {CODEBASE_GUIDE_TYPE}
+FRONT_MATTER_ORDER_TYPES = QUESTION_STYLE_TYPES | {COMMON_CONCEPT_TYPE}
+TITLE_HINT_TYPES = QUESTION_STYLE_TYPES | {COMMON_CONCEPT_TYPE, "answer"}
+UNVERIFIED_HINT = "(unverified)"
+COMMON_CONCEPT_REQUIRED_SECTIONS = (
+    "Contents",
+    "Definition",
+    "Why It Exists",
+    "How It Works",
+    "Where It Appears in Source",
+    "Related Structures and Functions",
+    "Interactions with Other Concepts",
+    "Open Questions",
+    "Source References",
+    "Navigation",
+)
 ROOT_EXEMPT_SLUGS = {"index", "overview", "versions", "log"}
 VERSION_ROOT_ALLOWED_BASENAMES = {"index", CODEBASE_GUIDE_BASENAME}
 
@@ -67,6 +84,18 @@ def requires_front_matter(slug: str) -> bool:
 def has_source_references(text: str) -> bool:
     refs = section_text(text, "Source References")
     return bool(re.search(r"(raw/postgres-\d+/|src/)", refs))
+
+
+def has_section(text: str, heading: str) -> bool:
+    return any(line.strip() == f"## {heading}" for line in text.splitlines())
+
+
+def page_title(text: str) -> str | None:
+    """Return the first top-level Markdown title, which always precedes body content."""
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return None
 
 
 def git(checkout: Path, *args: str) -> tuple[int, str]:
@@ -182,8 +211,20 @@ def lint() -> tuple[list[Issue], list[Issue]]:
         if page_type == CODEBASE_GUIDE_TYPE and version_local_kind != CODEBASE_GUIDE_TYPE:
             errors.append(Issue("ERROR", rel(path), "codebase navigation guide must live at wiki/vNN/codebase-navigation-guide.md"))
 
+        if version_local_kind == COMMON_CONCEPT_DIR and page_type != COMMON_CONCEPT_TYPE:
+            errors.append(Issue("ERROR", rel(path), f"common concept page must have type: {COMMON_CONCEPT_TYPE}"))
+        if page_type == COMMON_CONCEPT_TYPE and version_local_kind != COMMON_CONCEPT_DIR:
+            errors.append(Issue("ERROR", rel(path), f"common concept page must live under wiki/vNN/{COMMON_CONCEPT_DIR}/"))
+
         if page_type in SOURCE_REQUIRED_TYPES and not has_source_references(text):
             errors.append(Issue("ERROR", rel(path), "missing ## Source References entries"))
+
+        if page_type == COMMON_CONCEPT_TYPE:
+            for heading in COMMON_CONCEPT_REQUIRED_SECTIONS:
+                if not has_section(text, heading):
+                    errors.append(Issue("ERROR", rel(path), f"common concept page missing ## {heading} section"))
+            if not section_text(text, "Definition"):
+                errors.append(Issue("ERROR", rel(path), "missing non-empty ## Definition section"))
 
         if page_type in QUESTION_SECTION_REQUIRED_TYPES:
             if not section_text(text, "Question"):
@@ -205,11 +246,20 @@ def lint() -> tuple[list[Issue], list[Issue]]:
             if page_type in QUESTION_STYLE_TYPES and verified != "false":
                 errors.append(Issue("ERROR", rel(path), "question-style pages must have verified: false"))
 
-            if page_type in QUESTION_STYLE_TYPES:
+            if page_type in FRONT_MATTER_ORDER_TYPES:
                 all_keys = ['type', 'version', 'pinned_commit', 'verified', 'verified_by_agent']
                 present_expected = [k for k in all_keys if k in fm]
                 if list(fm.keys()) != present_expected:
                     warnings.append(Issue("WARN", rel(path), f"front matter keys not in order: {list(fm.keys())} (expected {all_keys})"))
+
+            if page_type in TITLE_HINT_TYPES:
+                title = page_title(text)
+                if title is None:
+                    errors.append(Issue("ERROR", rel(path), "missing top-level # title"))
+                elif verified == "true" and UNVERIFIED_HINT in title:
+                    errors.append(Issue("ERROR", rel(path), f"verified page title must not contain {UNVERIFIED_HINT}"))
+                elif verified != "true" and not title.endswith(UNVERIFIED_HINT):
+                    errors.append(Issue("ERROR", rel(path), f"unverified page title must end with {UNVERIFIED_HINT}"))
 
             if verified is None and vba is None:
                 warnings.append(Issue("WARN", rel(path), "Missing verification fields (verified or verified_by_agent)"))
