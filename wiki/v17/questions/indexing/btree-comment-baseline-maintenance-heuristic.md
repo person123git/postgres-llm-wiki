@@ -951,7 +951,10 @@ heuristic: a fixture that changes more than 10 % of a table's heap tuples must
 `ANALYZE` it, because on a server with autovacuum on the launcher would have. The
 suite's cluster runs `autovacuum = off` so that nothing moves a fixture between
 the baseline, the churn, the decision and the rebuild oracle, so the `ANALYZE`
-has to be supplied.
+has to be supplied. This instruction is now rule 3 of the shared suite
+definition, and applies to every method scored against it:
+[Rule 3 the simulated auto-analyze](../../common-concepts/mandatory-btree-bloat-tests.md#rule-3-the-simulated-auto-analyze).
+What this section reports is what the rule did on these two servers.
 
 It is not hand-written per fixture. The new step reads the engine's own counter
 and applies the engine's own test:
@@ -1318,29 +1321,26 @@ Every Non-B-Tree Index in PostgreSQL 12
 
 ### The ported mandatory suite
 
-The sibling page's mandatory suite is its numbered fixtures: tests 1-17 (the
-deduplication gate), 18-91 (partial indexes), and controls 92-121 (threshold
-calibration, non-partial controls, variable-width `INCLUDE`, expression
-statistics, the drained queue and the stale-zero shapes). All of them are ported
-here, recipe by recipe, and scored against this heuristic instead of against an
-estimator. Three things had to change, and all three are deliberate:
+The suite itself - its six fixture families, its three porting rules, its
+`REINDEX INDEX` oracle and its four verdict bands - is defined once for this
+version in
+[Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md),
+and is not restated here. What follows is only what is local to this page: which
+of that suite's fixtures this heuristic was scored on, and where this run departs
+from the shared definition.
 
-1. **Every recipe is split in two.** The originals built one final state and
-   asked one question about it; a before-and-after heuristic needs a baseline.
-   The build file carries each recipe up to and including the creation of the
-   index that is scored, then the filed apply block stores an as-built baseline in
-   every comment, and the churn file carries the rest of the recipe.
-2. **Fixtures with no churn of their own get a uniform drain**, 90 % of their heap
-   blocks followed by `VACUUM` and `ANALYZE`, so that a shape fixture designed for
-   a one-shot estimator can also be asked an after question. The fixtures whose
-   whole point is that a fresh index must *not* be touched are exempt and stay
-   untouched: 70-71, 78-85, 96-97, 101-105, 108-112, 116 and 120.
-3. **Every fixture table that moved more than 10 % of its heap tuples is
-   analyzed**, between the churn and the decision, because a server with
-   autovacuum on would have analyzed it. The trigger is the engine's own; see
-   [The simulated auto-analyze the tests now run](#the-simulated-auto-analyze-the-tests-now-run).
+All 121 numbered tests are ported, recipe by recipe, and scored against this
+heuristic instead of against an estimator. Rule 1 (split each recipe at the index
+build) is carried out by the filed apply block, which stores the as-built
+baseline in every comment between the build file and the churn file. Rule 2 (the
+uniform heap-block drain, with 70-71, 78-85, 96-97, 101-105, 108-112, 116 and 120
+exempt) and rule 3 (the simulated auto-analyze, applied through the engine's own
+threshold; see
+[The simulated auto-analyze the tests now run](#the-simulated-auto-analyze-the-tests-now-run))
+are applied as the concept page specifies, with no fixture-level exceptions
+beyond that exempt list.
 
-The third change costs coverage, and the cost is named here rather than hidden.
+Rule 3 costs coverage, and the cost is named here rather than hidden.
 Every ported fixture whose point was a stale count had its table analyzed, with
 the measured modified share in brackets: 64 `stale statistics after inserts into
 the subset` (140 %), 65 `stale statistics after deletes, no VACUUM` (118 %), 69
@@ -1365,21 +1365,16 @@ such function (measured, 0 `pg_proc` rows). The census reads
 `n_mod_since_analyze` instead, one second after the churn sessions have exited,
 which is what makes their pending statistics visible on both servers.
 
-The scoring is a measured `REINDEX INDEX` on every fixture after the heuristic has
-had its turn, which makes `actual_pct` - the reclaim a rebuild of the churned file
-really gave back - the only oracle. Verdicts follow the sibling page's bands,
-with the thresholds this brief specifies:
-
-| Verdict | Rule |
-|---|---|
-| `CRITICAL FALSE POSITIVE` | rebuilt, and the rebuild gave back less than 10 % |
-| `FALSE POSITIVE` | rebuilt, and the rebuild gave back less than 35 % |
-| `FALSE NEGATIVE` | not rebuilt, and a rebuild would have given back 50 % or more |
-| `PASS` | everything else |
-
-Each fixture is also checked against the gate arithmetic recomputed
-independently from the recorded baseline (`expected_stage`), and against a
-prediction filed before the run (`want_stage`).
+The oracle, the four verdict bands and the two mandatory scoring columns are the
+shared ones, unchanged:
+[The oracle and the verdict bands](../../common-concepts/mandatory-btree-bloat-tests.md#the-oracle-and-the-verdict-bands).
+A measured `REINDEX INDEX` runs on every fixture after the heuristic has had its
+turn, so `actual_pct` - the reclaim a rebuild of the churned file really gave
+back - is the only oracle; `expected_stage` recomputes this heuristic's gate
+arithmetic independently from the recorded baseline, and `want_stage` is the
+per-fixture prediction filed before the first run and left untouched since. The
+20 % gates and the 40 % rebuild threshold are the method under test, not part of
+the suite.
 
 ### Results on 17.11
 
@@ -1567,6 +1562,12 @@ migration cases.
 
 ### Mandatory test review
 
+One row per family of
+[Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md),
+with what each family did against this heuristic on each server. The `Fixtures
+and oracle` column states what this run built; the family's purpose and the
+engine behavior it targets are on the concept page.
+
 | Group | Tests | Fixtures and oracle | 17.11 | 12.2 |
 |---|---|---|---|---|
 | Deduplication gate | 1-17 | 28 indexes on two 500,000-row tables, drained 90 %; measured `REINDEX INDEX` | run, 28 of 28 `PASS` | run, 13 of 13 `PASS`, 15 skipped for missing features |
@@ -1580,7 +1581,7 @@ migration cases.
 | Engine regression | `make check` plus `pgstattuple`, `pageinspect`, `amcheck` | temporary installation in the build tree | 225, 1, 8, 3 - all passed | 192, 1, 5, 2 - all passed |
 | Repository checks | `scripts/wiki_lint`, block hashes, pipeline identity, Contents anchors | this repository | pass | pass |
 
-The contract the sibling page set is that a statement failing a mandatory test is
+The contract the suite sets is that a statement failing a mandatory test is
 corrected, not merely reported. Two defects were found and corrected in the filed
 texts of the first revision; see
 [Two defects the first revision's suite found](#two-defects-the-first-revisions-suite-found).

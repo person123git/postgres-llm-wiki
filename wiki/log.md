@@ -2,6 +2,116 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] concept v17 | mandatory B-tree bloat tests, the wiki's first common concept page
+
+- Filed [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), the **first
+  `type: common-concept` page in the wiki**, and moved the shared suite
+  definition into it out of [A COMMENT-Stored Baseline B-Tree Index-Maintenance
+  Heuristic for PostgreSQL 12 Through 17
+  (unverified)](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md#the-ported-mandatory-suite).
+  `wiki/v17/common-concepts/` is created with this page, per the rule that the
+  directory appears with its first real page.
+- **Prompt hygiene first.** The asker chose "correct and proceed". The original
+  read `follow agents.md, in postgresql 17, create a common concept for
+  mandatory btree bloat tests, extract the test from question: # A
+  COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for PostgreSQL 12
+  Through 17 (unverified)`; the corrections are `agents.md` -> `AGENTS.md`,
+  lowercase `postgresql` -> `PostgreSQL 17`, `btree` -> `B-tree`, `a common
+  concept` -> `a common concept page`, `the test` -> `the tests`, the stray `#`
+  pasted before the page title, and the `(unverified)` title hint treated as
+  part of the title. No page restates the prompt, because a concept page has no
+  `## Question` section; the corrected form is recorded here instead.
+- Three scoping answers were taken before drafting: the concept boundary is
+  **the whole mandatory test suite** under the slug
+  `mandatory-btree-bloat-tests`, not the narrower rules-and-oracle page and not
+  a `btree-index-bloat` engine-concept page with tests inside it; "extract"
+  means **move and link**, so the question page was edited in the same task;
+  and the fixture detail is a **catalogue table** per family, with the runnable
+  SQL left in the question page's measurement script.
+- **Two rule tensions were raised with the asker before any file was written**,
+  and both shaped the page. A concept page may carry no measured number and may
+  not cite a wiki page as evidence, so every result the suite has ever produced
+  stayed on the question page and all 167 citations come from
+  `raw/postgres-17/`. And a test suite is wiki methodology rather than an engine
+  concept, so the page is written as a protocol whose every claim is anchored to
+  the v17 behavior the fixture targets, not as prose about the fixtures.
+- **What the page defines**, once, for every method scored against it: 121
+  numbered tests in six families; the five phases each fixture runs (build,
+  baseline, churn, decide, and a measured `REINDEX INDEX` as the only oracle);
+  the three porting rules - split each recipe at the index build, drain nine
+  heap blocks in ten for shape fixtures with 70-71, 78-85, 96-97, 101-105,
+  108-112, 116 and 120 exempt, and simulate the auto-analyze using the engine's
+  own `mod_since_analyze > autovacuum_analyze_threshold +
+  autovacuum_analyze_scale_factor * reltuples` test rather than a
+  hand-annotation; the four verdict bands, with `CRITICAL FALSE POSITIVE` kept
+  separate from `FALSE POSITIVE`; the two mandatory scoring columns
+  `expected_stage` and `want_stage`; why catalog forgeries must run after the
+  census; the three feature gates that may skip a fixture; and six named limits.
+- **The catalogue is per fixture for family 1 and per sub-group elsewhere**, and
+  each row names the v17 behavior it targets: `_bt_allequalimage`'s `INCLUDE`
+  refusal before any opclass lookup, the per-key support function 4 lookup and
+  call, `btequalimage` returning true unconditionally against
+  `btvarstrequalimage`'s collation test, `prosrc`-based internal-function
+  resolution behind the alias and impostor tests, the `deduplicate_items`
+  reloption as a second switch, and the `!btspool->isunique` build gate; the
+  partial-index axis, where `ANALYZE` estimates the index's own population as
+  `ceil(tupleFract * totalrows)` while the executor skips rows failing the
+  predicate; the eight false-positive constructions that must not be rebuilt and
+  the six false-negative ones that must be; the threshold, `INCLUDE`-width and
+  expression-statistics controls, including `attstattarget = 0` and the
+  `300 * attstattarget` sample; and the drained-queue family that exercises all
+  four writers of `reltuples` down to the `-1` a new relfilenode leaves.
+- **Consumer edit, kept narrow.** On the heuristic page, `### The ported
+  mandatory suite` now leads with the concept-page link and keeps only what is
+  page-local (which fixtures lost their stale-count point to rule 3, the
+  `pg_stat_force_next_flush()` deviation, and the note that the 20 % gates and
+  40 % threshold are the method under test, not the suite); the verdict-band
+  table and the three-rule enumeration are gone from it. `### The simulated
+  auto-analyze the tests now run` and `### Mandatory test review` gained a link
+  and a one-line frame each. No measured number, no SQL and no script line was
+  touched: all four fenced blocks re-extracted from the edited page still hash
+  to `93b64e2dd33d4119…`, `7427d62d2ca3bb43…`, `c2f99506a492395a…` and
+  `7318192e8a8bb95b…`, the values the scripts check. The edit is 41 lines for
+  40, and the page's `## Contents` still matches its headings in document order.
+- **The sibling page `btree-index-bloat-core-sql-only.md`, where the numbered
+  suite originated, was deliberately not edited.** The asker's "move and link"
+  choice covered the heuristic page only; re-pointing the origin page at the
+  concept page is its own task.
+- Validation: 167 citations, **63 distinct ranges over 33 files**, every one
+  resolving, in bounds and inside `raw/postgres-17/`. Self-review before filing
+  caught **one wrong range and three imprecisions**: the `autovacuum` GUC
+  citation pointed at a `hot_standby_feedback` block and was moved to
+  `guc_tables.c#L1450-L1457`; a `pgstat_report_analyze` label was narrowed to
+  `report_analyze-reset` because the cited hunk is the reset, not the signature;
+  a `pg_class.h` range was normalized to the `reltuples` comment and field
+  alone; and the "metapage flag" sentence gained the two citations it was
+  missing, `nbtree.h#btm_allequalimage` and `nbtpage.c#_bt_metaversion`. Five
+  fixture descriptions were also corrected against the recipes: the family 1
+  tables carry 5,000 distinct values per *deduplication* key column beside one
+  unique column, the 18-21 ladder spans a hundredth to four fifths of the table
+  rather than "two orders of magnitude", family 3 is five predicate-conditioned
+  traps plus a missing-statistics, a forged and a stale one, control 103 is a
+  wide *key* column rather than an `INCLUDE` payload, and the `VACUUM`-withheld
+  fixtures are 65, 67, 113a and 113c, with 69, 106, 117 and 121 withholding the
+  `ANALYZE` instead. All 25 `## Contents` entries match the headings in document
+  order with no dangling anchor, and the ten required concept-page headings are
+  present in order with `## Context Reviewed` and `## Evidence Map` added before
+  `## Open Questions`.
+- Six open questions are filed, the first being that no fixture closes the
+  dead-but-unvacuumed blind spot; `verified:` untouched and
+  `verified_by_agent: not yet`.
+- Bookkeeping: `wiki/v17/index.md` gained a `## Common Concepts` section after
+  `## Questions`, `wiki/index.md` a `#### Common Concepts` group inside
+  `### PostgreSQL 17.11`, and `wiki/versions.md` a dated note plus a clause on
+  the v17 coverage cell.
+- No server, cluster or other service was started for this change, and nothing
+  was written under `.wiki-runtime/tmp/`, so there is nothing to tear down.
+  `raw/postgres-17/` was read only and has a zero-length `git status
+  --porcelain` at its pin.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-09-11] restructure | question scaffold refreshed, answer scaffold deleted, concept pages stay user-triggered
 
 - Rewrote `templates/question.md` to the current rules and deleted
