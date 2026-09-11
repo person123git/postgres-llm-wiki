@@ -2,6 +2,111 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] answer v17 | index-entry gate and a simulated auto-analyze for the COMMENT-stored B-tree heuristic
+
+- Revised [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for
+  PostgreSQL 12 Through 17
+  (unverified)](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  in place at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11)
+  and `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2), and **re-ran both legs
+  end to end** rather than filing numbers that predated the change.
+- **Prompt hygiene first.** The asker chose "correct and restate". The follow-up
+  read `update heuristic to store also index tuples and have the 20% up and down
+  trigger for pg_statindex also applying for it , update mandatory tests that
+  change more 10% of heap tuples should call an analyze to simulate an
+  auto-analyze.`; the restated form under `## Question` fixes `pg_statindex` ->
+  `pgstatindex()`, `store also index tuples` -> `also store the index's own tuple
+  count`, `change more 10%` -> `change more than 10%`, `an analyze` -> `ANALYZE`,
+  two lower-case sentence starts and a space before a comma. Three scoping
+  answers were taken before drafting: re-run both legs, bump the payload format
+  version to 2, and apply the `ANALYZE` rule everywhere with the catalog
+  forgeries written after it.
+- **Change 1, the third gate.** Both filed texts now store the index's own
+  `pg_class.reltuples` as `itup` in an 86-byte v2 payload and run the same 20 %
+  up-or-down test on it, `OR`-ed into rule 4. `idx_tuples_unknown` disables that
+  test on a `-1`; a stored zero makes any non-zero count a fire; step 2 re-reads
+  all three values after a rebuild; `notes` gained five strings, including three
+  that name which gate fired, replacing `both gates fired`. The shared pipeline
+  region of the two texts is still byte-identical, now 118 lines,
+  `39a2e57379dde00b…`.
+- **Change 2, the simulated auto-analyze.** The ported suite gained a step
+  between the churn and the decision that applies the engine's own test,
+  `n_mod_since_analyze > autovacuum_analyze_threshold +
+  autovacuum_analyze_scale_factor * reltuples`, read back as 50 and 0.1 on both
+  servers, rather than hand-annotating fixtures. It analyzed **77 of 99 tables on
+  17.11 and 57 of 97 on 12.2**, recorded every counter before and after, and the
+  rule's boundary is visible in its own output: `pb73` at 11.1 % analyzed and
+  `f88t` at 9.8 % left alone, identically on both legs. The step dies if no table
+  crosses the threshold, because that would mean the churn counters were
+  invisible.
+- **Result: 21 false negatives became 4.** 136 of 140 `PASS` on 17.11 and 118 of
+  122 on 12.2, 0 false positives, 0 gate disagreements against independently
+  recomputed arithmetic, 140 of 140 and 122 of 122 stored index counts equal to
+  the catalog's, 103 and 85 rebuilds at a mean 86.3 % and 87.0 % measured
+  reclaim, and **0 unexpected server errors** on either leg. The third gate
+  **opened 26 fixtures the two-gate form skipped and lost none**, 21 of them
+  genuinely bloated at a mean 76.3 % reclaim. All six false-negative
+  constructions (86-91) are now caught and rebuilt.
+- **The four remaining failures are threshold losses, not gate losses.**
+  `p113a`, `p113c`, `p65` and `p67` each had the index-count gate open them, and
+  `pgstatindex` then read 0.0-0.1 % wasted on a file a rebuild emptied by
+  89.1-100.0 %: none of them ran a `VACUUM`, so the dead index entries are still
+  physically present and the density is a density of dead tuples. Filed as the
+  first open question with two unmeasured candidate inputs.
+- **All three gates are needed.** `p76` — an indexed-key `UPDATE` that doubled
+  the file while the entry count moved from 100,000 to 100,284 — is opened by the
+  size test alone, and no fixture is opened by the table count alone.
+- New source reading behind the design, all cited: who writes an index's
+  `reltuples` (`index_update_stats` exact from a build; `do_analyze_rel`'s
+  per-index `ceil(tupleFract * totalrows)`, with the fraction refined only for an
+  index with statistics columns or a predicate; `update_relstats_all_indexes`
+  exact from `VACUUM` unless `estimated_count` is set, which `btvacuumcleanup`
+  does for a cleanup-only scan), the 2 % `BYPASS_THRESHOLD_PAGES` index-vacuum
+  bypass, `relation_needs_vacanalyze`'s `doanalyze` test, both autovacuum GUC
+  defaults in `guc_tables.c` and `config.sgml`, `pg_stat_all_tables.n_mod_since_analyze`,
+  and the `pgstat_report_analyze` reset against the later pending-stats flush
+  under `PGSTAT_MIN_INTERVAL`.
+- Honest caveats recorded on the page: the census over-triggers, because a
+  backend can flush pending counts after the `ANALYZE` that reset them
+  (`e_del80` read 400,000 mods after its own `ANALYZE`, `e_del90` read 0); and
+  the third gate can fire on sampling noise, measured once as `p120` at
+  `idx_tuple_ratio` 0.1941 on 17.11 against 1.0000 for the same fixture on 12.2.
+- Suite changes beyond the two asked for: fixture 84's forgery moved out of the
+  churn file into `forge.sql`, three edge forgeries re-applied in
+  `edge_forge.sql`, four new gate-boundary fixtures (index count up/down, on and
+  off), two new comment shapes (a v1 payload and a missing `itup`), a forged
+  index `reltuples = -1` fixture, and a scorer that attributes each measurement
+  to a gate and recomputes what the two-gate form would have done. One harness
+  defect was found and fixed during the run: `round(double precision, integer)`
+  from multiplying a `numeric` scale factor by a `real` `reltuples`.
+- Both published leg scripts are byte-identical to the ones that ran
+  (`c2f99506a4923951…` and `7318192e8a8bb95b…`), and the page's two fenced SQL
+  blocks hash to the values the scripts check (`93b64e2dd33d4119…`,
+  `7427d62d2ca3bb43…`). `make check` 225 of 225 on 17.11 with `pgstattuple` 1,
+  `pageinspect` 8, `amcheck` 3; 192 of 192 on 12.2 with 1, 5 and 2.
+- Page structure: all 45 `## Contents` entries match the headings in document
+  order, and all 112 range citations plus 30 bare file links resolve inside
+  `raw/postgres-17/` and sit in bounds. Twelve open questions now; `verified:`
+  untouched and `verified_by_agent: not yet`, because this revision is a close
+  source read and a measured run, not a claim-by-claim re-verification of the
+  whole page.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md`, the v17 coverage cell and a
+  dated note in `wiki/versions.md`.
+- Teardown: both servers stopped by the scripts' own `stop` stage with
+  `pg_ctl -m fast -w stop`, each confirming no `postmaster.pid`, no matching
+  process and an empty socket directory, then the 12 GB sandbox deleted by
+  `clean`; the two scratch copies of the leg scripts were removed from the
+  repository root. A 1.5 MB working copy of the two scripts and both legs' output
+  files is retained at `.wiki-runtime/tmp/btmaint-work/`; nothing there is a
+  cluster or a data directory. `raw/postgres-17/` and `raw/postgres-12/` both
+  have a zero-length `git status --porcelain` at their pins.
+- Re-extracted from the filed page after every prose edit: the four fenced blocks
+  hash to `93b64e2dd33d4119…` (report, 243 lines), `7427d62d2ca3bb43…` (apply,
+  267 lines), `c2f99506a4923951…` (17 leg script, 2,672 lines) and
+  `7318192e8a8bb95b…` (12 leg script, 2,718 lines), so the published text is the
+  text that ran.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 0 warnings.
+
 ## [2026-09-11] answer v17 | COMMENT-stored baseline B-tree maintenance heuristic, 12 through 17
 
 - Filed [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for

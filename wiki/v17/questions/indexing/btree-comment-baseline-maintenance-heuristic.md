@@ -12,6 +12,7 @@ verified_by_agent: not yet
 
 - [Question](#question)
   - [Prompt corrections](#prompt-corrections)
+  - [The follow-up prompt](#the-follow-up-prompt)
 - [Answer](#answer)
   - [Verdict](#verdict)
   - [What is stored, and where](#what-is-stored-and-where)
@@ -20,19 +21,22 @@ verified_by_agent: not yet
   - [How to read the plan](#how-to-read-the-plan)
   - [The decision ladder, in order](#the-decision-ladder-in-order)
   - [Why every candidate filter is there](#why-every-candidate-filter-is-there)
-  - [The gate, measured at both boundaries](#the-gate-measured-at-both-boundaries)
+  - [The three gates, measured at every boundary](#the-three-gates-measured-at-every-boundary)
+  - [The index's own entry count, and who writes it](#the-indexs-own-entry-count-and-who-writes-it)
+  - [The simulated auto-analyze the tests now run](#the-simulated-auto-analyze-the-tests-now-run)
   - [Wasted space, and where the threshold lands](#wasted-space-and-where-the-threshold-lands)
-  - [What the specified gate cannot see](#what-the-specified-gate-cannot-see)
+  - [What the gate still cannot see](#what-the-gate-still-cannot-see)
   - [The comment survives both REINDEX forms](#the-comment-survives-both-reindex-forms)
   - [Privileges: measure, rebuild, write the baseline](#privileges-measure-rebuild-write-the-baseline)
   - [Locks, transactions and the two commands a DO block cannot reach](#locks-transactions-and-the-two-commands-a-do-block-cannot-reach)
   - [What it costs to run](#what-it-costs-to-run)
-  - [Two defects the suite found, and their repairs](#two-defects-the-suite-found-and-their-repairs)
+  - [What this revision changed, and why](#what-this-revision-changed-and-why)
+  - [Two defects the first revision's suite found](#two-defects-the-first-revisions-suite-found)
   - [What is version-local between 12 and 17](#what-is-version-local-between-12-and-17)
   - [The ported mandatory suite](#the-ported-mandatory-suite)
   - [Results on 17.11](#results-on-1711)
   - [Results on 12.2](#results-on-122)
-  - [The 21 false negatives, in three families](#the-21-false-negatives-in-three-families)
+  - [The four false negatives that remain](#the-four-false-negatives-that-remain)
   - [Filed predictions against measured verdicts](#filed-predictions-against-measured-verdicts)
   - [Comment parsing and preservation](#comment-parsing-and-preservation)
   - [Idempotence, dry runs and dumps](#idempotence-dry-runs-and-dumps)
@@ -65,6 +69,16 @@ the full numbered suite, to build and measure both version legs, and to keep the
 page in v17 while linking the v12 pages rather than citing another version's
 source. The corrected text is below.
 
+The 2026-09-11 follow-up prompt was corrected the same way, again at the asker's
+request: it wrote `pg_statindex` for `pgstatindex()`, `store also index tuples`
+for `also store the index's own tuple count`, `change more 10%` for `change more
+than **10%**`, lowercase `analyze` for the `ANALYZE` command, began two sentences
+in lower case, and put a space before a comma. Three scoping answers were taken
+before drafting: **re-run both legs** rather than one, **bump the payload format
+version to 2** so an old baseline is re-initialized rather than half-read, and
+**apply the `ANALYZE` rule everywhere**, writing the deliberate catalog forgeries
+after it so they survive, and recording which fixtures lose their original point.
+
 Follow `AGENTS.md`, in PostgreSQL 17. Question:
 
 Create a PostgreSQL B-tree index-maintenance heuristic compatible with versions
@@ -92,49 +106,78 @@ Add all mandatory tests from the question [Testing the PostgreSQL 12 Core-SQL
 B-Tree Bloat Method on PostgreSQL 17
 (unverified)](btree-index-bloat-core-sql-only.md).
 
+### The follow-up prompt
+
+Filed 2026-09-11, after the corrections above:
+
+Follow `AGENTS.md`, in PostgreSQL 17, for question: A COMMENT-Stored Baseline
+B-Tree Index-Maintenance Heuristic for PostgreSQL 12 Through 17 (unverified).
+Update the heuristic to also store the index's own tuple count, and have the
+**20%** up-and-down trigger for `pgstatindex()` apply to it as well. Update the
+mandatory tests so that a test changing more than **10%** of the heap tuples
+calls `ANALYZE`, to simulate an auto-analyze.
+
 ## Answer
 
 ### Verdict
 
 Two texts do it, and both run unchanged on 12.2 and 17.11: a read-only statement
 that decides, and a `DO` block that carries the decision out. The baseline lives
-in a 72-byte `@btmaint:` payload appended to the index's own comment, which
+in an 86-byte `@btmaint:` payload appended to the index's own comment, which
 survives `REINDEX INDEX` because the comment is keyed by the index's OID, and
 survives `REINDEX INDEX CONCURRENTLY` because `index_concurrently_swap` moves the
 `pg_description` row to the new index
 ([index.c#index_concurrently_swap-comment](../../../../raw/postgres-17/src/backend/catalog/index.c#L1740-L1784),
 [pg_description.h#FormData](../../../../raw/postgres-17/src/include/catalog/pg_description.h#L44-L57)).
 
-On the ported mandatory suite the specified design is precise where it fires and
-blind in one specific way:
+**The follow-up asked for two changes, and together they close the blind spot the
+first revision measured.** The payload now carries a third value, the index's own
+`pg_class.reltuples`, and the same 20 % up-or-down test runs on it; and the ported
+mandatory suite now simulates the auto-analyze that churn would have triggered on
+a server with autovacuum on. Both legs were rebuilt from their pins and the whole
+suite re-run:
 
-| Result | 17.11 | 12.2 |
-|---|---|---|
-| Numbered fixtures scored | 140 | 122 |
-| Gate decision equal to the same arithmetic done independently | 140 of 140 | 122 of 122 |
-| `PASS` | 119 | 101 |
-| `FALSE NEGATIVE` | 21 | 21 |
-| `CRITICAL FALSE POSITIVE`, `FALSE POSITIVE` | 0 | 0 |
-| Indexes rebuilt, and their mean measured reclaim | 84, 87.1 % | 66, 88.9 % |
-| Fresh indexes wrongly rebuilt (the eight false-positive constructions) | 0 of 8 | 0 of 8 |
-| Baselines readable after the run | 140 of 140 | 122 of 122 |
+| Result | 17.11 | 12.2 | Two-gate revision, 17.11 |
+|---|---|---|---|
+| Numbered fixtures scored | 140 | 122 | 140 |
+| Gate decision equal to the same arithmetic done independently | 140 of 140 | 122 of 122 | 140 of 140 |
+| `PASS` | **136** | **118** | 119 |
+| `FALSE NEGATIVE` | **4** | **4** | 21 |
+| `CRITICAL FALSE POSITIVE`, `FALSE POSITIVE` | 0 | 0 | 0 |
+| Indexes rebuilt, and their mean measured reclaim | 103, 86.3 % | 85, 87.0 % | 84, 87.1 % |
+| Fresh indexes wrongly rebuilt (the eight false-positive constructions) | 0 of 8 | 0 of 8 | 0 of 8 |
+| Baselines readable after the run | 140 of 140 | 122 of 122 | 140 of 140 |
+| Stored index count equal to the catalog's at baseline time | 140 of 140 | 122 of 122 | - |
 
-Every one of the 21 false negatives is a **partial index**, and the reason is
-structural: the question's gate watches the *table's* estimated tuple count, and a
-partial index's population is not its table's population. Four fixtures drained
-their subset to zero while the table kept every row (`tuple_ratio` 1.0000,
-`idx_tuple_ratio` 0.0000), and eleven more lost 75-95 % of their entries while the
-table lost only 15-19 % — just under the 20 % gate. A gate on the index's own
-`pg_class.reltuples` would have caught **18 of the 21** on both servers; the other
-three are invisible to any catalog-only gate, because nothing had updated any
-count yet. That is a property of the specified inputs, not a defect in the
-implementation, and it is the first thing to change if the brief can be widened.
+**The third gate is what opened the previously lost fixtures, and it opened
+nothing else.** Of 116 measured fixtures on 17.11, the index-count test fired on
+115, the table-count test on 85 and the size test on 9; **26 were measured that
+the two-gate form skipped**, and 21 of those 26 were genuinely bloated, with a
+mean measured reclaim of 76.3 %. Not one measurement was lost: every fixture the
+two-gate form measured, the three-gate form measures too. The five healthy indexes
+it newly measured cost one `pgstatindex()` call each and were correctly left
+alone or rebuilt above the 35 % bar; no fixture became a false positive. The 12.2
+leg agrees fixture for fixture: 25 newly measured, 21 of them bloated.
 
-Where the gate does fire, the decision is good: over 90 measured fixtures on
-17.11, `wasted_pct` under-estimates the reclaim a rebuild actually gave back by a
-mean of 8.4 points (min -0.1, max 19.5), 88 of 90 within 15 points, and only 2
-over-estimates. The 40 % threshold therefore trips at roughly 45 % of entries
-deleted, measured exactly on a nine-point curve.
+**All three gates are needed, and each catches something the others cannot.** One
+fixture is measured by the size test alone: `p76`, bloated by updating an indexed
+key, whose file doubled (`size_ratio` 1.9964) while its entry count moved from
+100,000 to 100,284. No fixture is caught by the table count alone.
+
+**Four false negatives remain, and they are no longer gate losses.** On both
+servers the index-count gate *did* open `p113a`, `p113c`, `p65` and `p67` — and
+`pgstatindex` then reported 0.0 % to 0.1 % wasted on a file a rebuild emptied by
+89.1 % to 100.0 %. All four deleted or moved rows out of the index without a
+following `VACUUM`, so the dead entries are still physically present and the
+density the decision reads is a density of dead tuples. That is a limit of the
+measurement the brief specifies, not of the gate, and no catalog-only input can
+fix it.
+
+Where the gate fires, the decision is as good as before: over 116 measured
+fixtures on 17.11, `wasted_pct` under-estimates the reclaim a rebuild gave back by
+a mean of 10.7 points (min -5.9, max 100.0 — the max being those four unvacuumed
+files), 108 of 116 within 15 points, and 8 over-estimates. The nine-point curve is
+unchanged, so the 40 % threshold still trips at 45.0 % of entries deleted.
 
 ### What is stored, and where
 
@@ -151,24 +194,37 @@ The payload is one line, appended after any human text:
 
 ```text
 hand-written note kept by the DBA
-@btmaint:{"v":1,"sz":4513792,"tup":200000,"at":"2026-09-11T09:19:23-04"}
+@btmaint:{"v":2,"sz":4513792,"tup":200000,"itup":200000,"at":"2026-09-11T15:11:43-04"}
 ```
 
 | Field | Meaning | Why it is there |
 |---|---|---|
-| `v` | payload format version, `1` | a future change of shape must not be read as a baseline; a mismatch is treated as unreadable |
+| `v` | payload format version, now `2` | a change of shape must not be read as a baseline; a mismatch is treated as unreadable |
 | `sz` | `pg_relation_size(index)` at baseline time, bytes | the question's first input; main fork only ([system_functions.sql#pg_relation_size](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L285-L289)) |
 | `tup` | the table's `pg_class.reltuples`, rounded | the question's second input |
+| `itup` | the index's own `pg_class.reltuples`, rounded | the follow-up's input: a partial index's population is not its table's ([pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)) |
 | `at` | when the baseline was written | staleness is otherwise invisible; it takes no part in any decision |
 
-Measured length: **72 bytes** for an index with no human comment. The payload is
-plain text, not `jsonb`, and it is read with `substring(... from '...')` rather
-than a cast, for a reason that is version-local: casting a malformed payload to
-`jsonb` raises, one raised error aborts the whole statement, and the guard that
-would prevent it, `pg_input_is_valid()`, exists on 17 and not on 12 - measured, 1
-matching `pg_proc` row against 0. A regex `substring` returns NULL instead of
-raising, and each field's pattern ends in `[,}]`, so a number longer than the
-pattern allows fails to match rather than silently truncating.
+Measured length: **86 bytes** for an index with no human comment, 14 more than the
+two-value payload. The payload is plain text, not `jsonb`, and it is read with
+`substring(... from '...')` rather than a cast, for a reason that is
+version-local: casting a malformed payload to `jsonb` raises, one raised error
+aborts the whole statement, and the guard that would prevent it,
+`pg_input_is_valid()`, exists on 17 and not on 12 - measured, 1 matching `pg_proc`
+row against 0. A regex `substring` returns NULL instead of raising, and each
+field's pattern ends in `[,}]`, so a number longer than the pattern allows fails
+to match rather than silently truncating.
+
+**Version 1 baselines are re-initialized, not half-read.** The `baseline` test
+treats a missing `itup` exactly as it treats a missing `sz`: unreadable. Both
+shapes were measured — a well-formed `{"v":1,"sz":1,"tup":1}` and a
+`{"v":2,"sz":1,"tup":1}` with the key simply absent — and both read `invalid`,
+take the `initialize` branch, and end at 86 bytes. The cost of the upgrade is
+therefore one comment write per index on the first run, with no rebuild and no
+measurement, and the third gate is live from the second run on. The alternative,
+accepting a v1 payload and running two gates for that index, was rejected: it
+would leave a database in which two indexes with the same comment shape are gated
+differently, and nothing in the comment would say so.
 
 ### Step 1: the plan
 
@@ -181,13 +237,15 @@ Read-only. It decides, prints the exact commands, and writes nothing.
 --   params   thresholds, the comment marker and the two page-layout constants
 --   cand     every B-tree index this session may both measure and comment on
 --   parsed   the @btmaint: payload pulled out of the index's own comment
---   gate     the two 20 % tests, and the states that bypass them
+--   gate     the three 20 % tests, and the states that bypass them
 --   meas     one pgstatindex() call per gated index, and none for the rest
 --   wasted   free bytes beyond a rebuild at this index's own fillfactor
 --   plan     the action, and the exact commands that carry it out
 --
--- Gate: measure when the index has grown by 20 % or more, or when the table's
--- estimated tuple count has moved by 20 % or more in either direction.
+-- Gate: measure when the index has grown by 20 % or more, when the table's
+-- estimated tuple count has moved by 20 % or more in either direction, or when
+-- the index's own estimated entry count has moved by 20 % or more in either
+-- direction.
 -- Decide: wasted_pct > 40 -> reindex; 40 or less -> just refresh the baseline.
 -- Nothing here writes.  Step 2 applies the plan.
 
@@ -199,10 +257,10 @@ WITH params AS (
            24::numeric        AS page_header,     -- SizeOfPageHeaderData
            16::numeric        AS btree_special,   -- MAXALIGN(BTPageOpaqueData)
            1.20::numeric      AS grow_ratio,      -- index-size gate
-           0.20::numeric      AS tuple_ratio,     -- table tuple-count gate
+           0.20::numeric      AS tuple_ratio,     -- tuple-count gate, table and index
            40::numeric        AS wasted_max,      -- reindex above this percent
            0::numeric         AS min_index_bytes, -- ignore anything smaller
-           1::numeric         AS fmt              -- payload format version
+           2::numeric         AS fmt              -- payload format version
 ),
 cand AS MATERIALIZED (
     SELECT c.oid                  AS idx_oid,
@@ -211,6 +269,7 @@ cand AS MATERIALIZED (
            t.relname              AS table_name,
            pg_relation_size(c.oid) AS cur_bytes,
            t.reltuples::numeric   AS cur_tuples,
+           c.reltuples::numeric   AS cur_idx_tuples,
            (SELECT o.option_value::int
               FROM pg_options_to_table(c.reloptions) o
              WHERE o.option_name = 'fillfactor')      AS fillfactor_opt,
@@ -241,6 +300,8 @@ parsed AS MATERIALIZED (
            substring(pay.payload from '"sz":([0-9]{1,25})[,}]')::numeric    AS base_bytes,
            substring(pay.payload from
                      '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric AS base_tuples,
+           substring(pay.payload from
+                     '"itup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric AS base_idx_tuples,
            substring(pay.payload from '"at":"([^"]{1,40})"')            AS base_at,
            -- Two passes, in this order: a well-formed payload goes first, so
            -- that human text on the same line survives, and only a leftover
@@ -261,11 +322,13 @@ gate AS MATERIALIZED (
            CASE WHEN s.cmt IS NULL OR s.cmt !~ '@btmaint:'   THEN 'absent'
                 WHEN s.pv IS DISTINCT FROM p.fmt
                   OR s.base_bytes IS NULL
-                  OR s.base_tuples IS NULL                   THEN 'invalid'
+                  OR s.base_tuples IS NULL
+                  OR s.base_idx_tuples IS NULL               THEN 'invalid'
                 ELSE 'ok' END                                AS baseline,
-           -- reltuples is -1 on a table no ANALYZE, VACUUM or index build has
-           -- counted since PostgreSQL 14; 12 and 13 leave 0 there instead
-           (s.cur_tuples < 0)                                AS tuples_unknown
+           -- reltuples is -1 on a relation no ANALYZE, VACUUM or index build
+           -- has counted since PostgreSQL 14; 12 and 13 leave 0 there instead
+           (s.cur_tuples < 0)                                AS tuples_unknown,
+           (s.cur_idx_tuples < 0)                            AS idx_tuples_unknown
       FROM parsed s CROSS JOIN params p
 ),
 decided AS MATERIALIZED (
@@ -274,6 +337,9 @@ decided AS MATERIALIZED (
                 THEN round(g.cur_bytes / g.base_bytes, 4) END AS size_ratio,
            CASE WHEN g.base_tuples > 0 AND NOT g.tuples_unknown
                 THEN round(g.cur_tuples / g.base_tuples, 4) END AS tuple_ratio_now,
+           CASE WHEN g.base_idx_tuples > 0 AND NOT g.idx_tuples_unknown
+                THEN round(g.cur_idx_tuples / g.base_idx_tuples, 4) END
+                                                              AS idx_tuple_ratio_now,
            (g.baseline = 'ok' AND g.base_bytes > 0
             AND g.cur_bytes >= g.base_bytes * g.grow_ratio)     AS size_gate,
            (g.baseline = 'ok' AND NOT g.tuples_unknown
@@ -282,6 +348,15 @@ decided AS MATERIALIZED (
                       THEN g.cur_tuples > 0
                       ELSE abs(g.cur_tuples - g.base_tuples)
                            >= g.base_tuples * g.tuple_ratio END))  AS tuple_gate,
+           -- The index's own entry count, gated exactly like the table's.  A
+           -- partial index's population is not its table's population, which
+           -- is the whole reason this test is separate.
+           (g.baseline = 'ok' AND NOT g.idx_tuples_unknown
+            AND g.base_idx_tuples >= 0
+            AND (CASE WHEN g.base_idx_tuples = 0
+                      THEN g.cur_idx_tuples > 0
+                      ELSE abs(g.cur_idx_tuples - g.base_idx_tuples)
+                           >= g.base_idx_tuples * g.tuple_ratio END)) AS idx_tuple_gate,
            (g.baseline = 'ok' AND g.base_bytes > 0
             AND g.cur_bytes < g.base_bytes)                     AS shrank
       FROM gate g
@@ -291,7 +366,8 @@ staged AS MATERIALIZED (
            CASE WHEN NOT d.owns_index                    THEN 'blocked'
                 WHEN d.baseline <> 'ok'                  THEN 'initialize'
                 WHEN d.shrank                            THEN 'refresh'
-                WHEN d.size_gate OR d.tuple_gate         THEN 'measure'
+                WHEN d.size_gate OR d.tuple_gate
+                  OR d.idx_tuple_gate                    THEN 'measure'
                 ELSE 'skip' END                          AS stage
       FROM decided d
 ),
@@ -355,6 +431,9 @@ SELECT /* wiki_btmaint_plan_12_17 */
        p.cur_tuples AS table_tuples,
        p.base_tuples AS baseline_tuples,
        p.tuple_ratio_now,
+       p.cur_idx_tuples AS index_tuples,
+       p.base_idx_tuples AS baseline_index_tuples,
+       p.idx_tuple_ratio_now,
        CASE WHEN p.stage = 'measure' THEN round(p.avg_leaf_density::numeric, 2) END
            AS avg_leaf_density,
        CASE WHEN p.stage = 'measure' THEN p.dead_pages END AS dead_pages,
@@ -363,10 +442,14 @@ SELECT /* wiki_btmaint_plan_12_17 */
            CASE WHEN NOT p.owns_index THEN 'not the index owner: no comment can be written' END,
            CASE WHEN p.owns_index AND NOT p.owns_table THEN 'not the table owner: REINDEX may be refused' END,
            CASE WHEN p.baseline = 'invalid' THEN 'unreadable @btmaint: payload, replaced' END,
-           CASE WHEN p.tuples_unknown THEN 'table reltuples unknown: tuple gate cannot fire' END,
-           CASE WHEN p.baseline = 'ok' AND p.base_tuples = 0 THEN 'baseline tuple count was zero' END,
+           CASE WHEN p.tuples_unknown THEN 'table reltuples unknown: table tuple gate cannot fire' END,
+           CASE WHEN p.idx_tuples_unknown THEN 'index reltuples unknown: index tuple gate cannot fire' END,
+           CASE WHEN p.baseline = 'ok' AND p.base_tuples = 0 THEN 'baseline table tuple count was zero' END,
+           CASE WHEN p.baseline = 'ok' AND p.base_idx_tuples = 0 THEN 'baseline index tuple count was zero' END,
            CASE WHEN p.shrank THEN 'index smaller than its baseline: rebuilt elsewhere' END,
-           CASE WHEN p.size_gate AND p.tuple_gate THEN 'both gates fired' END,
+           CASE WHEN p.size_gate THEN 'size gate fired' END,
+           CASE WHEN p.tuple_gate THEN 'table tuple gate fired' END,
+           CASE WHEN p.idx_tuple_gate THEN 'index tuple gate fired' END,
            CASE WHEN p.stage = 'measure' AND p.leaf_pages = 0 THEN 'no leaf pages' END,
            CASE WHEN p.stage = 'measure' AND p.leaf_fragmentation >= 30
                 THEN 'fragmented, not wasted space' END,
@@ -378,8 +461,9 @@ SELECT /* wiki_btmaint_plan_12_17 */
             THEN format('COMMENT ON INDEX %I.%I IS %L', p.schema_name, p.index_name,
                    CASE WHEN length(btrim(p.user_cmt)) > 0
                         THEN btrim(p.user_cmt) || E'\n' ELSE '' END
-                   || '@btmaint:{"v":1,"sz":' || p.cur_bytes
+                   || '@btmaint:{"v":2,"sz":' || p.cur_bytes
                    || ',"tup":' || round(GREATEST(p.cur_tuples, -1))
+                   || ',"itup":' || round(GREATEST(p.cur_idx_tuples, -1))
                    || ',"at":"' || to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSOF') || '"}') END
            AS comment_command,
        CASE WHEN p.action = 'reindex'
@@ -441,6 +525,7 @@ DECLARE
     r_idx     text;
     r_bytes   numeric;
     r_tuples  numeric;
+    r_itup    numeric;
     r_user    text;
     r_tdens   numeric;
     r_wasted  numeric;
@@ -452,10 +537,10 @@ WITH params AS (
            24::numeric        AS page_header,     -- SizeOfPageHeaderData
            16::numeric        AS btree_special,   -- MAXALIGN(BTPageOpaqueData)
            1.20::numeric      AS grow_ratio,      -- index-size gate
-           0.20::numeric      AS tuple_ratio,     -- table tuple-count gate
+           0.20::numeric      AS tuple_ratio,     -- tuple-count gate, table and index
            40::numeric        AS wasted_max,      -- reindex above this percent
            0::numeric         AS min_index_bytes, -- ignore anything smaller
-           1::numeric         AS fmt              -- payload format version
+           2::numeric         AS fmt              -- payload format version
 ),
 cand AS MATERIALIZED (
     SELECT c.oid                  AS idx_oid,
@@ -464,6 +549,7 @@ cand AS MATERIALIZED (
            t.relname              AS table_name,
            pg_relation_size(c.oid) AS cur_bytes,
            t.reltuples::numeric   AS cur_tuples,
+           c.reltuples::numeric   AS cur_idx_tuples,
            (SELECT o.option_value::int
               FROM pg_options_to_table(c.reloptions) o
              WHERE o.option_name = 'fillfactor')      AS fillfactor_opt,
@@ -494,6 +580,8 @@ parsed AS MATERIALIZED (
            substring(pay.payload from '"sz":([0-9]{1,25})[,}]')::numeric    AS base_bytes,
            substring(pay.payload from
                      '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric AS base_tuples,
+           substring(pay.payload from
+                     '"itup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric AS base_idx_tuples,
            substring(pay.payload from '"at":"([^"]{1,40})"')            AS base_at,
            -- Two passes, in this order: a well-formed payload goes first, so
            -- that human text on the same line survives, and only a leftover
@@ -514,11 +602,13 @@ gate AS MATERIALIZED (
            CASE WHEN s.cmt IS NULL OR s.cmt !~ '@btmaint:'   THEN 'absent'
                 WHEN s.pv IS DISTINCT FROM p.fmt
                   OR s.base_bytes IS NULL
-                  OR s.base_tuples IS NULL                   THEN 'invalid'
+                  OR s.base_tuples IS NULL
+                  OR s.base_idx_tuples IS NULL               THEN 'invalid'
                 ELSE 'ok' END                                AS baseline,
-           -- reltuples is -1 on a table no ANALYZE, VACUUM or index build has
-           -- counted since PostgreSQL 14; 12 and 13 leave 0 there instead
-           (s.cur_tuples < 0)                                AS tuples_unknown
+           -- reltuples is -1 on a relation no ANALYZE, VACUUM or index build
+           -- has counted since PostgreSQL 14; 12 and 13 leave 0 there instead
+           (s.cur_tuples < 0)                                AS tuples_unknown,
+           (s.cur_idx_tuples < 0)                            AS idx_tuples_unknown
       FROM parsed s CROSS JOIN params p
 ),
 decided AS MATERIALIZED (
@@ -527,6 +617,9 @@ decided AS MATERIALIZED (
                 THEN round(g.cur_bytes / g.base_bytes, 4) END AS size_ratio,
            CASE WHEN g.base_tuples > 0 AND NOT g.tuples_unknown
                 THEN round(g.cur_tuples / g.base_tuples, 4) END AS tuple_ratio_now,
+           CASE WHEN g.base_idx_tuples > 0 AND NOT g.idx_tuples_unknown
+                THEN round(g.cur_idx_tuples / g.base_idx_tuples, 4) END
+                                                              AS idx_tuple_ratio_now,
            (g.baseline = 'ok' AND g.base_bytes > 0
             AND g.cur_bytes >= g.base_bytes * g.grow_ratio)     AS size_gate,
            (g.baseline = 'ok' AND NOT g.tuples_unknown
@@ -535,6 +628,15 @@ decided AS MATERIALIZED (
                       THEN g.cur_tuples > 0
                       ELSE abs(g.cur_tuples - g.base_tuples)
                            >= g.base_tuples * g.tuple_ratio END))  AS tuple_gate,
+           -- The index's own entry count, gated exactly like the table's.  A
+           -- partial index's population is not its table's population, which
+           -- is the whole reason this test is separate.
+           (g.baseline = 'ok' AND NOT g.idx_tuples_unknown
+            AND g.base_idx_tuples >= 0
+            AND (CASE WHEN g.base_idx_tuples = 0
+                      THEN g.cur_idx_tuples > 0
+                      ELSE abs(g.cur_idx_tuples - g.base_idx_tuples)
+                           >= g.base_idx_tuples * g.tuple_ratio END)) AS idx_tuple_gate,
            (g.baseline = 'ok' AND g.base_bytes > 0
             AND g.cur_bytes < g.base_bytes)                     AS shrank
       FROM gate g
@@ -544,7 +646,8 @@ staged AS MATERIALIZED (
            CASE WHEN NOT d.owns_index                    THEN 'blocked'
                 WHEN d.baseline <> 'ok'                  THEN 'initialize'
                 WHEN d.shrank                            THEN 'refresh'
-                WHEN d.size_gate OR d.tuple_gate         THEN 'measure'
+                WHEN d.size_gate OR d.tuple_gate
+                  OR d.idx_tuple_gate                    THEN 'measure'
                 ELSE 'skip' END                          AS stage
       FROM decided d
 )
@@ -562,11 +665,12 @@ FOR i IN 1 .. COALESCE(array_length(v_oid, 1), 0) LOOP
     -- Re-read the index under its own lock-free catalog snapshot.  A row that
     -- has gone is a dropped index, and a dropped index is not an error here.
     SELECT n.nspname, c.relname, pg_relation_size(c.oid), t.reltuples::numeric,
+           c.reltuples::numeric,
            regexp_replace(
              regexp_replace(COALESCE(d.description, ''),
                             '[[:space:]]*@btmaint:\{[^}]*\}', '', 'g'),
                             '[[:space:]]*@btmaint:[^\n]*', '', 'g')
-      INTO r_nsp, r_idx, r_bytes, r_tuples, r_user
+      INTO r_nsp, r_idx, r_bytes, r_tuples, r_itup, r_user
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
       JOIN pg_index x     ON x.indexrelid = c.oid
@@ -623,10 +727,11 @@ FOR i IN 1 .. COALESCE(array_length(v_oid, 1), 0) LOOP
         END IF;
         IF NOT dry_run THEN
             EXECUTE format('REINDEX /* wiki_btmaint_reindex */ INDEX %I.%I', r_nsp, r_idx);
-            -- The rebuild resized the file and recounted the heap, so both
-            -- baseline values are re-read after it, not before.
-            SELECT pg_relation_size(c.oid), t.reltuples::numeric
-              INTO r_bytes, r_tuples
+            -- The rebuild resized the file and recounted both the heap and the
+            -- index, so all three baseline values are re-read after it, not
+            -- before.
+            SELECT pg_relation_size(c.oid), t.reltuples::numeric, c.reltuples::numeric
+              INTO r_bytes, r_tuples, r_itup
               FROM pg_class c
               JOIN pg_index x ON x.indexrelid = c.oid
               JOIN pg_class t ON t.oid = x.indrelid
@@ -639,8 +744,9 @@ FOR i IN 1 .. COALESCE(array_length(v_oid, 1), 0) LOOP
     END IF;
 
     r_cmt := CASE WHEN length(btrim(r_user)) > 0 THEN btrim(r_user) || E'\n' ELSE '' END
-             || '@btmaint:{"v":1,"sz":' || r_bytes
+             || '@btmaint:{"v":2,"sz":' || r_bytes
              || ',"tup":' || round(GREATEST(r_tuples, -1))
+             || ',"itup":' || round(GREATEST(r_itup, -1))
              || ',"at":"' || to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSOF') || '"}';
     IF NOT dry_run THEN
         EXECUTE format('COMMENT /* wiki_btmaint_comment */ ON INDEX %I.%I IS %L',
@@ -671,9 +777,10 @@ parallel arrays to its driver. The gate is therefore defined once.
 | `baseline` | `ok`, `absent`, `invalid` | `invalid` is a marker that could not be parsed; it is replaced, not trusted |
 | `size_ratio` | current bytes over stored bytes | `>= 1.20` is the first gate |
 | `tuple_ratio_now` | current table `reltuples` over stored | a move of 20 % either way is the second gate |
+| `index_tuples`, `baseline_index_tuples`, `idx_tuple_ratio_now` | the index's own `pg_class.reltuples`, now and at baseline, and their ratio | a move of 20 % either way is the third gate; this is the column that sees a partial index drain |
 | `avg_leaf_density`, `dead_pages` | straight from `pgstatindex`, present only for measured rows | density is blind to pages holding nothing; `dead_pages` is 100 % waste |
 | `wasted_pct` | free bytes beyond a rebuild at this index's own fillfactor, plus every empty and deleted page, over the file | `> 40` is the rebuild decision |
-| `notes` | why a row looks odd | ten strings, listed in the ladder below |
+| `notes` | why a row looks odd, and which gates fired | fourteen strings, listed in the ladder below |
 | `comment_command`, `reindex_command` | exactly what step 2 will run | `comment_command` is NULL for a `reindex` row, because its new baseline is only known after the rebuild |
 
 ### The decision ladder, in order
@@ -685,12 +792,18 @@ the suite scores it against the same arithmetic computed independently: 140 of
 | # | Condition | Action | Measures? | Writes? |
 |---|---|---|---|---|
 | 1 | this session does not own the index | `blocked` | no | no |
-| 2 | no readable `@btmaint:` payload | `initialize` | no | baseline |
+| 2 | no readable `@btmaint:` payload, including any v1 payload | `initialize` | no | baseline |
 | 3 | the index is *smaller* than its stored baseline | `refresh` | no | baseline |
-| 4 | size ratio `>= 1.20`, or table tuples moved `>= 20 %` | `measure` | one `pgstatindex()` call | see below |
+| 4 | size ratio `>= 1.20`, or table tuples moved `>= 20 %`, or index tuples moved `>= 20 %` | `measure` | one `pgstatindex()` call | see below |
 | 5 | none of the above | `skip` | no | no |
 | 4a | measured `wasted_pct > 40` | `reindex` | - | `REINDEX`, then the post-rebuild baseline |
 | 4b | measured `wasted_pct <= 40` | `update` | - | baseline at current values |
+
+The three tests in rule 4 are an `OR`, so the order among them does not matter,
+and each is disabled separately when its input is unusable: a `reltuples` of `-1`
+disables that count's test and says so in `notes`, while a stored count of zero
+makes any non-zero current count a fire, because an increase from zero has no
+finite ratio.
 
 Rule 3 is not in the brief and is needed: something else rebuilt or truncated the
 index, the stored size is now too high, and a high baseline can hide real growth
@@ -706,12 +819,17 @@ rebuilt, and its baseline is then reset to the larger current size, so the next
 needs progressively more absolute growth to be looked at again. The nine-point
 curve below shows exactly where that leaves it.
 
-Ten `notes` strings exist, and each one is a fact the reader would otherwise have
-to guess: `not the index owner: no comment can be written`, `not the table owner:
-REINDEX may be refused`, `unreadable @btmaint: payload, replaced`, `table
-reltuples unknown: tuple gate cannot fire`, `baseline tuple count was zero`,
-`index smaller than its baseline: rebuilt elsewhere`, `both gates fired`, `no leaf
-pages`, `fragmented, not wasted space`, and `fillfactor N`.
+Fourteen `notes` strings exist, and each one is a fact the reader would otherwise
+have to guess: `not the index owner: no comment can be written`, `not the table
+owner: REINDEX may be refused`, `unreadable @btmaint: payload, replaced`, `table
+reltuples unknown: table tuple gate cannot fire`, `index reltuples unknown: index
+tuple gate cannot fire`, `baseline table tuple count was zero`, `baseline index
+tuple count was zero`, `index smaller than its baseline: rebuilt elsewhere`, `size
+gate fired`, `table tuple gate fired`, `index tuple gate fired`, `no leaf pages`,
+`fragmented, not wasted space`, and `fillfactor N`. The three "gate fired" strings
+replace the previous revision's single `both gates fired`: with three tests, which
+one opened the measurement is the interesting part, and every measured row now
+names its own reason.
 
 ### Why every candidate filter is there
 
@@ -737,27 +855,160 @@ itself is safe against a concurrent drop: it opens with `try_relation_open` and
 returns NULL rather than raising, so a dropped index leaves the candidate set
 quietly ([dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L346-L368)).
 
-### The gate, measured at both boundaries
+### The three gates, measured at every boundary
 
-Six forged baselines, one index each, on a 200,000-row table. The gate is exact:
+Ten forged baselines, one index each, on a 200,000-row table, with one input moved
+per fixture and the other two set to the current value so they cannot fire. Every
+boundary is exact, and the measured `notes` column names the one gate that opened
+each row. Identical on 12.2 and 17.11:
 
-| Fixture | `size_ratio` | `tuple_ratio` | Action |
-|---|---|---|---|
-| `e_g_size_on` | 1.200000 | 1.000000 | `update` (measured) |
-| `e_g_size_off` | 1.199999 | 1.000000 | `skip` |
-| `e_g_up_on` | 1.000000 | 1.200005 | `update` (measured) |
-| `e_g_up_off` | 1.000000 | 1.199890 | `skip` |
-| `e_g_dn_on` | 1.000000 | 0.800000 | `update` (measured) |
-| `e_g_dn_off` | 1.000000 | 0.800106 | `skip` |
+| Fixture | `size_ratio` | `tuple_ratio` | `idx_tuple_ratio` | Action | Gate named in `notes` |
+|---|---|---|---|---|---|
+| `e_g_size_on` | 1.200000 | 1.000000 | 1.000000 | `update` (measured) | size gate fired |
+| `e_g_size_off` | 1.199999 | 1.000000 | 1.000000 | `skip` | - |
+| `e_g_up_on` | 1.000000 | 1.200005 | 1.000000 | `update` (measured) | table tuple gate fired |
+| `e_g_up_off` | 1.000000 | 1.199890 | 1.000000 | `skip` | - |
+| `e_g_dn_on` | 1.000000 | 0.800000 | 1.000000 | `update` (measured) | table tuple gate fired |
+| `e_g_dn_off` | 1.000000 | 0.800106 | 1.000000 | `skip` | - |
+| `e_g_iup_on` | 1.000000 | 1.000000 | 1.200005 | `update` (measured) | index tuple gate fired |
+| `e_g_iup_off` | 1.000000 | 1.000000 | 1.199890 | `skip` | - |
+| `e_g_idn_on` | 1.000000 | 1.000000 | 0.800000 | `update` (measured) | index tuple gate fired |
+| `e_g_idn_off` | 1.000000 | 1.000000 | 0.800106 | `skip` | - |
 
-Both gates are `>=` comparisons on `numeric`, so 1.20 exactly fires, and the
-brief's "20 % or more" is implemented as written. Two edge states are handled
-explicitly rather than left to arithmetic: a baseline tuple count of zero makes
-any non-zero current count a fire (an increase from zero has no finite ratio), and
-`reltuples < 0` - the `-1` that means "no ANALYZE, VACUUM or index build has
-counted this table yet" from PostgreSQL 14 on
+All three gates are `>=` comparisons on `numeric`, so 1.20 exactly fires, and the
+brief's "20 % or more" is implemented as written on each input. Four edge states
+are handled explicitly rather than left to arithmetic: a stored count of zero, on
+either counter, makes any non-zero current count a fire (an increase from zero has
+no finite ratio), and `reltuples < 0` - the `-1` that means "no ANALYZE, VACUUM or
+index build has counted this relation yet" from PostgreSQL 14 on
 ([pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)) -
-disables the tuple gate for that row and says so in `notes`.
+disables that counter's gate and says so in `notes`. Both unknown states were
+measured with a forged `-1`, one on a table and one on an index, each with a
+readable baseline so the gate it disables is a gate that would otherwise have an
+opinion:
+
+| Fixture | Forged | Candidate? | Action | `notes` |
+|---|---|---|---|---|
+| `e_unk_k` | the table's `reltuples = -1` | yes | `skip` | `table reltuples unknown: table tuple gate cannot fire` |
+| `e_iunk_k` | the index's `reltuples = -1` | yes | `skip` | `index reltuples unknown: index tuple gate cannot fire` |
+
+### The index's own entry count, and who writes it
+
+The third gate is only as fresh as the last writer of `pg_class.reltuples` for the
+index, and there are exactly three of them. All three were measured on both
+servers, on one 10,000-row table carrying a plain index and a partial index whose
+predicate selects one row in five:
+
+| Step | table | plain index | partial index | Writer |
+|---|---|---|---|---|
+| after both `CREATE INDEX` | - | 10000 | **2000** | `index_update_stats`, an exact count from the build's own scan ([index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2788-L2812)) |
+| after `ANALYZE` | 10000 | 10000 | **2000** | `do_analyze_rel`'s per-index update, `ceil(tupleFract * totalrows)` ([analyze.c#same-for-indexes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663)) |
+| after deleting 98 % of the subset, then `VACUUM` | 8200 | 8200 | **200** | `update_relstats_all_indexes`, from the AM's own `num_index_tuples` ([vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099)) |
+| after a second `ANALYZE` | 8200 | 8200 | 200 | the sample agreed with the exact count |
+| after a 10-row `UPDATE` and another `VACUUM` | 8200 | 8200 | 200 | nothing: see the estimated-count rule below |
+| after `REINDEX INDEX` on the partial index | - | - | 200 | `index_update_stats` again |
+
+Three properties of those writers decide what the gate can see:
+
+- **ANALYZE estimates a partial index from its sample, and a plain index from the
+  table.** `tupleFract` starts at 1.0 for every index and is only refined for an
+  index `compute_index_stats` processes, which it does when the index has
+  statistics columns *or* a predicate
+  ([analyze.c#tupleFract-init](../../../../raw/postgres-17/src/backend/commands/analyze.c#L443-L449),
+  [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L827-L863)).
+  For a partial index the fraction is the share of sampled rows that pass the
+  predicate, `numindexrows / numrows`
+  ([analyze.c#tupleFract-from-sample](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953)).
+  So for a plain index the third gate carries no information the second one does
+  not; for a partial index it is the only catalog number that moves at all.
+- **VACUUM writes an exact count, but only when it is exact.**
+  `update_relstats_all_indexes` skips any index whose result came back with
+  `estimated_count` set, and `btvacuumcleanup` sets exactly that whenever it runs
+  as a cleanup-only scan, because it then counts index items per page rather than
+  live TIDs
+  ([nbtree.c#btvacuumcleanup-estimated](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L874-L892),
+  [nbtree.c#btvacuumpage-counting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1345-L1362)).
+  `lazy_cleanup_all_indexes` also marks the count estimated when the heap scan
+  skipped pages
+  ([vacuumlazy.c#lazy_cleanup_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2349-L2360)).
+  The measured 10-row `UPDATE` above is that case: a `VACUUM` ran, and no count
+  moved.
+- **A VACUUM can skip index vacuuming entirely.** When fewer than
+  `BYPASS_THRESHOLD_PAGES`, 2 % of heap pages, hold dead items, `lazy_vacuum`
+  bypasses index vacuuming and does cleanup only
+  ([vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89),
+  [vacuumlazy.c#lazy_vacuum-bypass](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1940)),
+  which by the rule above leaves the index's count where it was.
+
+The suite checks the value the heuristic stores against the value the catalog
+holds at baseline time, independently of the filed text: **140 of 140 agree on
+17.11 and 122 of 122 on 12.2**, and every acted row wrote an `itup` back.
+
+### The simulated auto-analyze the tests now run
+
+The follow-up's second instruction is a property of the *tests*, not of the
+heuristic: a fixture that changes more than 10 % of a table's heap tuples must
+`ANALYZE` it, because on a server with autovacuum on the launcher would have. The
+suite's cluster runs `autovacuum = off` so that nothing moves a fixture between
+the baseline, the churn, the decision and the rebuild oracle, so the `ANALYZE`
+has to be supplied.
+
+It is not hand-written per fixture. The new step reads the engine's own counter
+and applies the engine's own test:
+
+```text
+n_mod_since_analyze > autovacuum_analyze_threshold
+                      + autovacuum_analyze_scale_factor * reltuples
+```
+
+That is `relation_needs_vacanalyze`'s `doanalyze` verbatim
+([autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3060-L3096),
+[autovacuum.c#anl-thresholds](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3005-L3018)),
+and at the shipped defaults of 50 tuples and 0.1 it is "50 rows plus 10 % of the
+table"
+([guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3367-L3375),
+[guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3906-L3914),
+[config.sgml#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L8832-L8850)).
+Both defaults were read back from each running server: 50 and 0.1 on 12.2 and on
+17.11. The counter itself is `pg_stat_all_tables.n_mod_since_analyze`
+([system_views.sql#n_mod_since_analyze](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L689)),
+which the flush adds to and `pgstat_report_analyze` resets
+([pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338),
+[pgstat_relation.c#flush-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L845-L860)).
+
+What that decided, per leg:
+
+| | 17.11 | 12.2 |
+|---|---|---|
+| Fixture tables considered | 99 | 97 |
+| Analyzed, because the churn crossed the threshold | **77** | **57** |
+| Left alone | 22 | 40 |
+| Counter back to zero afterwards | 77 of 77 | 57 of 57 |
+| Smallest modified share analyzed | **11.1 %** | **11.1 %** |
+| Largest modified share left alone | **9.8 %** | **9.8 %** |
+
+The two boundary rows are the rule itself, measured: `pb73` moved 50,000 of
+450,000 rows, 11.1 %, and was analyzed; `f88t` moved 17,778 of 182,222 rows,
+9.8 %, and was not. The step also records the counter after the fact, which is how
+the run proves the `ANALYZE` really fired rather than reporting an intention.
+
+Two honest caveats about the census, both visible in its own output:
+
+- **It can analyze a table that was analyzed moments earlier.** A backend flushes
+  pending table statistics at most once per `PGSTAT_MIN_INTERVAL`, 1000 ms
+  ([pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L110-L122),
+  [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L655)),
+  so a `DELETE`, `VACUUM`, `ANALYZE` sequence in one session can reset
+  `mod_since_analyze` to zero and *then* have the delete's own modification count
+  added to it. In the edge database the curve fixtures show both outcomes side by
+  side: `e_del80` reads 400,000 mods after its own `ANALYZE`, while `e_del90`,
+  whose flush happened to land before its `ANALYZE`, reads 0. The census therefore
+  over-triggers rather than under-triggers, which is the safe direction for a test
+  that is meant to make counts fresh.
+- **It repaired several fixtures whose point was a stale count.** That is what
+  "apply the rule everywhere" means, and the affected fixtures are named in
+  [The ported mandatory suite](#the-ported-mandatory-suite). The two deliberate
+  catalog forgeries are written after the census, so they survive it.
 
 ### Wasted space, and where the threshold lands
 
@@ -802,7 +1053,7 @@ to do:
 
 | Rows deleted | `wasted_pct` | Action |
 |---|---|---|
-| 10 % | not measured | `skip` - the tuple gate never fired |
+| 10 % | not measured | `skip` - no gate fired |
 | 20 % | 17.7 | `update` |
 | 30 % | 26.6 | `update` |
 | 40 % | 35.5 | `update` |
@@ -816,35 +1067,38 @@ The reading is `0.888 × fraction deleted` to three digits across the whole rang
 which is what the formula predicts: `target_density` (0.8995 at 8192 and
 fillfactor 90) times the leaf share of the file. So **the 40 % threshold trips at
 45.0 % of entries deleted**, and the 10 % row is the gate's own blind spot rather
-than the threshold's - a 10 % drain moves the table count by 10 %, under the 20 %
-gate, so nothing is measured at all.
+than the threshold's. The third gate does not change that row: these are
+non-partial unique indexes, so a 10 % drain moves the table's count and the
+index's count by the same 10 %, both under the 20 % threshold, and the file has
+not grown. The curve is unchanged from the two-gate revision, point for point.
 
-### What the specified gate cannot see
+### What the gate still cannot see
 
-Twenty-one of 140 fixtures on 17.11 (and the same 21 of 122 on 12.2) were left
-alone while a rebuild would have given back 50 % or more. Every one is a partial
-index. The three families, with the ratios the gate actually saw:
+The previous revision lost 21 of 140 fixtures on 17.11, and the same 21 of 122 on
+12.2, to the gate: all partial indexes, in three families. **The index-count gate
+and the simulated auto-analyze between them close all 21**, and the two changes
+are needed in combination, because two of the three families are a gate problem
+and one is a statistics problem:
 
-| Family | Fixtures | What the table showed | What the index held | Reclaim left behind |
+| Family that the two-gate form lost | Fixtures | Why it was lost | What fixed it | Now |
 |---|---|---|---|---|
-| The subset drained, the table did not | `p113b`, `p113c`, `p114`, `p117` | `tuple_ratio` 1.0000 | `idx_tuple_ratio` 0.0000 to 0.0097 | 98.9 % to 100.0 % |
-| The table moved 15-19 %, the index lost 75-95 % | `p77`, `f87`, `i100`, `f91`, `p75`, `b92`-`b95`, `p69`, `p74`, `f90`, `f86`, `f89` | `tuple_ratio` 0.8100 to 0.8500 | `idx_tuple_ratio` 0.0513 to 0.2577 | 72.5 % to 94.2 % |
-| Nothing had counted anything yet | `p113a`, `p65`, `p67` | `tuple_ratio` 1.0000 | `idx_tuple_ratio` 1.0000 | 89.1 % to 100.0 % |
+| The subset drained, the table did not | `p113b`, `p113c`, `p114`, `p117` | `tuple_ratio` 1.0000 against `idx_tuple_ratio` 0.0000 to 0.0103 | the index-count gate | all four measured; `p113b`, `p114`, `p117` rebuilt at 98.9 % to 100.0 % reclaim, `p113c` still lost at the threshold |
+| The table moved 15-19 %, the index lost 75-95 % | `p77`, `f86`-`f91`, `i100`, `p69`, `p74`, `p75`, `b92`-`b95` | the table's count moved 18 %, two points under the gate | the index-count gate | all 14 measured and rebuilt, 40.5 % to 94.2 % reclaim |
+| Nothing had counted anything yet | `p113a`, `p65`, `p67` | no `VACUUM` and no `ANALYZE`, so neither count had moved | the simulated auto-analyze moved the index's count | all three measured; all three still lost at the threshold, below |
 
-The second family is the sharpest: deleting 90 % of a subset that is 20 % of the
-table moves the table's count by exactly 18 %, and the gate needs 20 %. Four of
-those fixtures (`b92`-`b95`) are the sibling page's own threshold-calibration
-controls, and they land 2 points under the gate on both servers.
+The second family is the sharpest illustration of why the table's count is the
+wrong input: deleting 90 % of a subset that is 20 % of the table moves the
+table's count by exactly 18 %, and the gate needs 20 %. Four of those fixtures
+(`b92`-`b95`) are the sibling page's own threshold-calibration controls, built to
+sit just under a threshold, and the index's own count moves from 1.0000 to about
+0.10 on exactly the same churn.
 
-The first two families would both be caught by the *index's* own
-`pg_class.reltuples` instead of the table's: **18 of the 21 on each server**,
-measured by the same harness in the same run. That is one changed expression, and
-it is outside the brief, so it is filed as the first open question rather than
-built into the text. The third family cannot be caught by any catalog-only gate:
-`p113a` updated every row without a `VACUUM` or an `ANALYZE`, `p65` deleted
-without either, `p67` updated rows out of the predicate - so neither count had
-moved when the heuristic looked. It takes a physical read to see those, which is
-exactly what the gate exists to avoid.
+The third family is the one the first revision called invisible to any
+catalog-only gate, and it was — with autovacuum off and no `ANALYZE` in the
+recipe. With the 10 % rule in force, an `ANALYZE` runs, the partial index's
+estimated entry count collapses, and the gate opens. What happens next is a
+separate failure, described in
+[The four false negatives that remain](#the-four-false-negatives-that-remain).
 
 ### The comment survives both REINDEX forms
 
@@ -853,8 +1107,11 @@ recorded before and after:
 
 | Index | Rebuilt with | OID before | OID after | Comment md5 |
 |---|---|---|---|---|
-| `e_surv_a` | `REINDEX INDEX` | 17437 | 17437 | `28f5531a…` unchanged |
-| `e_surv_b` | `REINDEX INDEX CONCURRENTLY` | 17438 | **17440** | `28f5531a…` unchanged |
+| `e_surv_a` | `REINDEX INDEX` | 18146 | 18146 | `f6e063ed…` unchanged |
+| `e_surv_b` | `REINDEX INDEX CONCURRENTLY` | 18147 | **18149** | `f6e063ed…` unchanged |
+
+On 12.2 the same fixture reads 17414 unchanged and 17415 -> 17417, with the same
+comment md5 before and after.
 
 The plain form keeps the same `pg_class` row and only swaps the relfilenode, so a
 comment keyed by the index OID cannot move
@@ -866,17 +1123,20 @@ because `index_concurrently_swap` explicitly rewrites the `pg_description` row's
 ([index.c#index_concurrently_swap-comment](../../../../raw/postgres-17/src/backend/catalog/index.c#L1740-L1784)).
 The measured OID change proves it was the second path.
 
-One thing the rebuild does that the brief does not mention: it refreshes the
-table's own row count. `index_build` calls `index_update_stats` twice, once for
-the heap with the tuples its scan counted and once for the index
+One thing the rebuild does that the brief does not mention: it refreshes both row
+counts. `index_build` calls `index_update_stats` twice, once for the heap with the
+tuples its scan counted and once for the index
 ([index.c#index_build-update-stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L3129-L3134),
-[index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2789-L2812)).
-Measured on both servers: `reltuples` reads `-1` on 17.11 (`0` on 12.2) after
-`CREATE TABLE` and after 1,000 inserts, then **1000 after `CREATE INDEX`**, 1000
-after `ANALYZE`, `-1` again on 17.11 (`0` on 12.2) after `TRUNCATE`, and **2000
-after `REINDEX`** once 1,000 more rows were added. That is why step 2 re-reads
-both values *after* the rebuild rather than before: the post-rebuild baseline it
-stores is a counted number, not an estimate.
+[index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2788-L2812)).
+Measured on both servers: the table's `reltuples` reads `-1` on 17.11 (`0` on
+12.2) after `CREATE TABLE` and after 1,000 inserts, then **1000 after `CREATE
+INDEX`**, 1000 after `ANALYZE`, `-1` again on 17.11 (`0` on 12.2) after
+`TRUNCATE`, and **2000 after `REINDEX`** once 1,000 more rows were added. The
+index's own count behaves the same way and is exact after either build: a partial
+index reads 2000 of a 10,000-row table after `CREATE INDEX`, and 200 after a
+`REINDEX` that followed a drain. That is why step 2 re-reads **all three** values
+*after* the rebuild rather than before: the post-rebuild baseline it stores is
+two counted numbers and a file size, not an estimate.
 
 ### Privileges: measure, rebuild, write the baseline
 
@@ -943,25 +1203,50 @@ Three refusals shape step 2's design, all measured identically on 12.2 and 17.11
 ### What it costs to run
 
 Measured six times in each state on a database holding 143 B-tree indexes and
-561 MB of index files on 17.11, 125 indexes and 569 MB on 12.2:
+561 MB of index files on 17.11, 125 indexes and 569 MB on 12.2. The gated state
+is forged by halving every stored `sz` while leaving both counts current, so it
+isolates one gate and reads every gated index end to end:
 
 | State | Gated indexes | Wall time, six runs | Buffers |
 |---|---|---|---|
-| Settled, 17.11 | 0 of 143 | 21.3 - 32.6 ms | 3,542 hit, 0 read |
-| Every baseline halved, 17.11 | 140 of 143 | 108.4 - 128.3 ms | 17,673 hit, 57,836 read |
-| Settled, 12.2 | 0 of 125 | 17.3 - 19.1 ms | 2,448 hit, 0 read |
-| Every baseline halved, 12.2 | 122 of 125 | 108.5 - 123.0 ms | 15,582 hit, 59,733 read |
+| Settled, 17.11 | 0 of 143 | 19.3 - 21.0 ms | 4,074 hit, 0 read |
+| Every baseline halved, 17.11 | 140 of 143 | 108.7 - 130.4 ms | 17,915 hit, 57,932 read |
+| Settled, 12.2 | 0 of 125 | 18.9 - 20.4 ms | 2,448 hit, 0 read |
+| Every baseline halved, 12.2 | 122 of 125 | 112.3 - 130.2 ms | 15,454 hit, 59,861 read |
 
-The gate is the whole point of the cost profile: a settled database reads **no
-data pages at all**, and a fully gated one reads about 452 MB of the 561 MB
-present, because `pgstatindex` reads every page of every index it is called on
-through a `BAS_BULKREAD` strategy ring
+The third gate costs no data-page reads, which is the structural point: it reads
+one more column from a `pg_class` row the statement already has. The settled
+readings are **0 reads** on both servers, at 4,074 buffer hits on 17.11 and 2,448
+on 12.2; the 17.11 figure is 532 hits above the two-gate revision's 3,542 while
+12.2's is unchanged, so those 532 hits are not attributable to the new column on
+this evidence. The fully gated state touches 75,847 buffers, about 592 MB, and the
+hit/read split moves between runs with what shared buffers already held: 57,932
+read on this run against 51,051 on an earlier one for the same 75,818 total.
+`pgstatindex` reads every page of
+every index it is called on, through a `BAS_BULKREAD` strategy ring
 ([pgstatindex.c#bstrategy](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L215-L222),
 [pgstatindex.c#scan-loop](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L278-L331)).
 A scheduled run in a healthy database is therefore a catalog query, and the
 expensive path is entered only for indexes that moved.
 
-### Two defects the suite found, and their repairs
+### What this revision changed, and why
+
+| Change | Where | Why |
+|---|---|---|
+| A third payload field, `itup` | both texts | a partial index's population is not its table's, which cost the previous revision 21 fixtures |
+| `fmt` 1 -> 2, and a missing `itup` reads `invalid` | both texts | a half-read baseline would gate two indexes differently for no visible reason |
+| `idx_tuple_gate`, `OR`-ed into rule 4 | both texts | the follow-up's instruction, at the same 20 % up-or-down threshold |
+| `idx_tuples_unknown`, and two new `notes` strings for the unknown and zero cases | both texts | `-1` must disable a gate, not read as a 100 % collapse |
+| `both gates fired` replaced by three per-gate strings | step 1's `notes` | with three tests, which one fired is the part a reader needs |
+| Three new output columns | step 1 | the gate's third input has to be visible to be checked |
+| All three values re-read after a rebuild | step 2 | the post-rebuild baseline must be counted, not estimated |
+| A simulated auto-analyze step, driven by the engine's own threshold | both leg scripts | the follow-up's second instruction, applied to every fixture table |
+| Fixture 84's forgery moved out of the churn file | both leg scripts | an `ANALYZE` would have repaired the forgery the fixture exists to test |
+| Four new gate-boundary fixtures and two new comment shapes | both leg scripts | a new gate and a new payload shape need their own boundaries |
+| A forged index `reltuples = -1` fixture | both leg scripts | the unknown-index-count branch had no test |
+| A per-gate attribution and a two-gate counterfactual in the scorer | both leg scripts | "the third gate helped" is a claim that needs its own arithmetic |
+
+### Two defects the first revision's suite found
 
 **The gate did not gate.** The first filed text measured with
 `LEFT JOIN LATERAL (SELECT * FROM pgstatindex(...) WHERE stage = 'measure')`,
@@ -977,17 +1262,21 @@ the rest added back by `UNION ALL` - and the settled reading fell to 3,542 hits
 and zero reads.
 
 **A malformed marker was kept as if it were a human note.** The payload stripper
-matched `@btmaint:\{[^}]*\}` only, so `@btmaint:{"v":1,"sz":1` with no closing
-brace, and `@btmaint:not json at all`, survived the rewrite and were carried
-forward as the user's own text - measured at 95 and 97 bytes where a clean
-initialize writes 72. The repair is two passes in one expression: a well-formed
-payload is removed first, so human text on the same line survives, and only then
-is any leftover marker removed to the end of its line. Both fixtures now read
-`invalid` and end at 72 bytes, while `e_mid` - `@btmaint:{...} and text after it` -
-still keeps its trailing sentence.
+matched `@btmaint:\{[^}]*\}` only, so a payload with no closing brace, and
+`@btmaint:not json at all`, survived the rewrite and were carried forward as the
+user's own text - measured at 95 and 97 bytes where a clean initialize then wrote
+72. The repair is two passes in one expression: a well-formed payload is removed
+first, so human text on the same line survives, and only then is any leftover
+marker removed to the end of its line. Both fixtures read `invalid` and end at the
+clean length - now 86 bytes - while `e_mid`,
+`@btmaint:{...} and text after it`, still keeps its trailing sentence.
 
 Both repairs are in the filed texts, and every number on this page was measured
-after them.
+after them. The 2026-09-11 re-measurement found no new defect in the two texts;
+it did find one in the new harness step, a `round(double precision, integer)`
+error from multiplying a `numeric` scale factor by a `real` `reltuples`, which
+aborted the first census run and is fixed by casting the count in both leg
+scripts.
 
 ### What is version-local between 12 and 17
 
@@ -1008,6 +1297,11 @@ row was discovered by the scripts on the running server, not assumed:
 | `REINDEX` refusal for a non-owner | `permission denied for index` | `must be owner of index` | same outcome, different message |
 | `COMMIT` inside `DO` at top level | accepted | accepted | one transaction per index |
 | `pgstattuple` extension version | 1.5 | 1.5 | same `pgstatindex(regclass)` signature |
+| Index `reltuples` after `CREATE INDEX`, plain and partial | 10000, 2000 | 10000, 2000 | the third gate's baseline is an exact count on both |
+| Index `reltuples` after `ANALYZE`, plain and partial | 10000, 2000 | 10000, 2000 | a partial index is estimated from the sample on both |
+| Index `reltuples` after a drain and `VACUUM` | 8200, 200 | 8200, 200 | the third gate sees the drain on both |
+| `autovacuum_analyze_threshold`, `autovacuum_analyze_scale_factor` | 50, 0.1 | 50, 0.1 | the 10 % test the mandatory tests simulate is the same on both |
+| `pg_stat_force_next_flush()` | 1 `pg_proc` row | **0** | the census waits a second and reads from a new session instead |
 
 The v12 side of each source claim is on the v12 pages rather than cited here, as
 this page may only cite `raw/postgres-17/`: [How pgstatindex Calculates B-Tree
@@ -1029,7 +1323,7 @@ deduplication gate), 18-91 (partial indexes), and controls 92-121 (threshold
 calibration, non-partial controls, variable-width `INCLUDE`, expression
 statistics, the drained queue and the stale-zero shapes). All of them are ported
 here, recipe by recipe, and scored against this heuristic instead of against an
-estimator. Two things had to change, and both are deliberate:
+estimator. Three things had to change, and all three are deliberate:
 
 1. **Every recipe is split in two.** The originals built one final state and
    asked one question about it; a before-and-after heuristic needs a baseline.
@@ -1041,12 +1335,35 @@ estimator. Two things had to change, and both are deliberate:
    a one-shot estimator can also be asked an after question. The fixtures whose
    whole point is that a fresh index must *not* be touched are exempt and stay
    untouched: 70-71, 78-85, 96-97, 101-105, 108-112, 116 and 120.
+3. **Every fixture table that moved more than 10 % of its heap tuples is
+   analyzed**, between the churn and the decision, because a server with
+   autovacuum on would have analyzed it. The trigger is the engine's own; see
+   [The simulated auto-analyze the tests now run](#the-simulated-auto-analyze-the-tests-now-run).
 
-`pg_stat_force_next_flush()` is not called anywhere, unlike the original recipes,
-because this heuristic reads `pg_class.reltuples` and never a cumulative
-statistics view, so no statistics-publication barrier applies - and the same
-fixture text then runs on a 12 server, which has no such function (measured, 0
-`pg_proc` rows).
+The third change costs coverage, and the cost is named here rather than hidden.
+Every ported fixture whose point was a stale count had its table analyzed, with
+the measured modified share in brackets: 64 `stale statistics after inserts into
+the subset` (140 %), 65 `stale statistics after deletes, no VACUUM` (118 %), 69
+`stale reltuples, VACUUM but no ANALYZE` (143.9 %), 85 `stale table statistics`
+(120 %), 98 `plain index, stale row counts after 300,000 inserts` (160 %), 106
+`expression index, no statistics row, 90% deleted` (900 %), 113a and 113c (200 %
+and 100 %), 115 `index built on an analysed empty table, then loaded`, 117
+`drained, then VACUUM only`, and all three tables of 121 `three ways to leave a
+stale row count behind`. Those fixtures now test the heuristic against *fresh*
+statistics, which is what a production server with autovacuum on would give it.
+The stale-count shapes they used to cover are covered instead by the three forged
+fixtures — a table `reltuples = -1`, an index `reltuples = -1`, and fixture 84's
+forged partial-index count — because a forgery written after the census is one no
+`ANALYZE` can repair. Two fixtures keep a stale count without any forgery: `p119`
+inserted 50,000 rows into a 1,050,000-row table (4.8 %) and `pb72` deleted 25,000
+of 475,000 (5.3 %), both under the 10 % rule and both left alone.
+
+`pg_stat_force_next_flush()` is still not called anywhere, unlike the original
+recipes, because this heuristic reads `pg_class.reltuples` and never a cumulative
+statistics view - and the same fixture text then runs on a 12 server, which has no
+such function (measured, 0 `pg_proc` rows). The census reads
+`n_mod_since_analyze` instead, one second after the churn sessions have exited,
+which is what makes their pending statistics visible on both servers.
 
 The scoring is a measured `REINDEX INDEX` on every fixture after the heuristic has
 had its turn, which makes `actual_pct` - the reclaim a rebuild of the churned file
@@ -1073,26 +1390,36 @@ primary keys), `make check` 225 of 225 with `pgstattuple` 1, `pageinspect` 8 and
 | Group | Fixtures | Rebuilt | Updated | Skipped | Refreshed | False negatives | Mean `wasted_pct` | Mean actual |
 |---|---|---|---|---|---|---|---|---|
 | `gate` (1-17) | 28 | 28 | 0 | 0 | 0 | 0 | 78.6 | 88.4 |
-| `partial` (18-77) | 64 | 52 | 2 | 10 | 0 | 6 | 75.4 | 80.2 |
-| `falsepos` (78-85) | 8 | 0 | 0 | 8 | 0 | 0 | - | 0.0 |
-| `falseneg` (86-91) | 6 | 0 | 0 | 6 | 0 | 5 | - | 73.0 |
-| `control` (92-112) | 21 | 3 | 1 | 17 | 0 | 5 | 62.1 | 34.3 |
-| `zero` (113-121) | 13 | 1 | 3 | 8 | 1 | 5 | 16.7 | 43.5 |
+| `partial` (18-77) | 64 | 57 | 5 | 2 | 0 | 2 | 71.9 | 80.2 |
+| `falsepos` (78-85) | 8 | 0 | 1 | 7 | 0 | 0 | 0.1 | 0.0 |
+| `falseneg` (86-91) | 6 | 6 | 0 | 0 | 0 | 0 | 73.5 | 73.0 |
+| `control` (92-112) | 21 | 8 | 1 | 12 | 0 | 0 | 69.9 | 34.3 |
+| `zero` (113-121) | 13 | 4 | 6 | 2 | 1 | 2 | 36.0 | 43.5 |
 
 - All 28 deduplication-gate shapes were measured and rebuilt after the 90 % drain,
   and every one was right to rebuild: mean reclaim 88.4 %. The equal-image class
   of the key made no difference to the decision, which is the answer this group
   gives for a heuristic that reads physical density rather than modelling keys.
+- **The six false-negative constructions are all caught now.** The previous
+  revision skipped all six and lost five of them; the index-count gate opened
+  every one, and all six were rebuilt at 40.5 % to 89.9 % measured reclaim.
 - The eight false-positive constructions - predicate-conditioned width, NULL,
   `n_distinct` and MCV mismatches, a missing statistics row, a forged partial
-  `reltuples`, stale table statistics - are **all skipped**, and a rebuild of each
-  would have returned 0.0 %. The catalog shapes that break an estimator do not
-  reach a heuristic that measures the file.
-- Accuracy of the decision input against the oracle, over the 90 measured
-  fixtures: mean error `+8.4` points (the reading under-estimates), min `-0.1`,
-  max `+19.5`, 88 of 90 within 15 points, 2 over-estimates.
+  `reltuples`, stale table statistics - are still **not rebuilt**, and a rebuild
+  of each would have returned 0.0 %. Seven are skipped outright. The eighth is
+  fixture 84, whose forged index count of 5,000 against a real 100,000 now opens
+  the gate: it is measured, reads 0.1 % wasted, and is left alone. One wasted
+  `pgstatindex()` call is the whole price of a forged count.
+- Accuracy of the decision input against the oracle, over the 116 measured
+  fixtures: mean error `+10.7` points (the reading under-estimates), min `-5.9`,
+  max `+100.0`, 108 of 116 within 15 points, 8 over-estimates. The `+100.0` is
+  `p113a`, one of the four unvacuumed files below.
+- Which gate opened each measurement: size 9, table count 85, index count 115, and
+  26 measured by the index count alone. One fixture, `p76`, is opened by the size
+  test alone. No fixture is opened by the table count alone, and no measured
+  fixture had no gate fire.
 - Payload health after the run: 140 of 140 readable, 0 unparseable, 0 without a
-  marker.
+  marker, and 140 of 140 stored index counts equal to the catalog's.
 
 ### Results on 12.2
 
@@ -1103,20 +1430,25 @@ swept, `make check` 192 of 192 with `pgstattuple` 1, `pageinspect` 5 and `amchec
 | Group | Fixtures | Rebuilt | Updated | Skipped | Refreshed | False negatives | Mean `wasted_pct` | Mean actual |
 |---|---|---|---|---|---|---|---|---|
 | `gate` | 13 | 13 | 0 | 0 | 0 | 0 | 80.1 | 89.9 |
-| `partial` | 61 | 49 | 2 | 10 | 0 | 6 | 76.8 | 81.1 |
-| `falsepos` | 8 | 0 | 0 | 8 | 0 | 0 | - | 0.0 |
-| `falseneg` | 6 | 0 | 0 | 6 | 0 | 5 | - | 72.5 |
-| `control` | 21 | 3 | 1 | 17 | 0 | 5 | 62.2 | 34.3 |
-| `zero` | 13 | 1 | 4 | 7 | 1 | 5 | 13.4 | 43.5 |
+| `partial` | 61 | 54 | 5 | 2 | 0 | 2 | 73.0 | 81.1 |
+| `falsepos` | 8 | 0 | 1 | 7 | 0 | 0 | 0.1 | 0.0 |
+| `falseneg` | 6 | 6 | 0 | 0 | 0 | 0 | 72.1 | 72.5 |
+| `control` | 21 | 8 | 1 | 12 | 0 | 0 | 70.0 | 34.3 |
+| `zero` | 13 | 4 | 5 | 3 | 1 | 2 | 39.4 | 43.5 |
 
-The two servers agree on every structural result: the same 21 false negatives, the
-same three families, the same 18 that an index-entry gate would catch, 0 false
-positives, 0 gate disagreements, and an accuracy profile inside a point of the
-17 leg's (73 measured, mean error `+7.9`, min `-0.1`, max `+19.5`, 71 of 73 within
-15, 2 over-estimates). What differs is the physical size of the same fixture: the
-duplicate-heavy control index `e_am_btree` has 547 leaf pages on 12.2 against 137
-on 17.11, because v13 deduplication compresses its 977 distinct keys over 200,000
-rows. The decision is unmoved by that - both servers rebuild it - but a reader
+The two servers agree on every structural result: the same four false negatives,
+the same four fixtures named, 0 false positives, 0 gate disagreements, 25 newly
+measured of which 21 bloated, 122 of 122 stored index counts equal to the
+catalog's, and an accuracy profile inside a point of the 17 leg's (97 measured,
+mean error `+11.0`, min `-0.3`, max `+100.0`, 89 of 97 within 15, 5
+over-estimates). The gate attribution is the same shape too: size 9, table count
+67, index count 95, 25 by the index count alone, and again exactly one fixture
+(`p76`) opened by the size test alone. What differs is the physical size of the
+same fixture: the
+duplicate-heavy control index `e_am_btree` has 547 leaf pages on 12.2 against 173
+on 17.11, because v13 deduplication compresses its 97 distinct keys over 200,000
+rows. The decision is unmoved by that - it is a filter control, initialized and
+then left alone on both servers - but a reader
 comparing absolute sizes across a `pg_upgrade` boundary should expect the file to
 be several times larger before the upgrade, and the first post-upgrade baseline to
 be written against an index that cannot deduplicate until it is rebuilt; see
@@ -1124,106 +1456,147 @@ be written against an index that cannot deduplicate until it is rebuilt; see
 pg_upgrade From PostgreSQL 12 to 17
 (unverified)](btree-deduplication-after-pg-upgrade.md).
 
-### The 21 false negatives, in three families
+### The four false negatives that remain
 
-The per-fixture table is in `$OUT/lost.txt` in both legs; the families and their
-ratios are in [What the specified gate cannot see](#what-the-specified-gate-cannot-see).
-Two rows are worth quoting exactly, because they bracket the problem:
+All four are on both servers, and all four are `lost_by = threshold`, not
+`lost_by = gate`: the index-count test opened every one of them, `pgstatindex` was
+called, and the number it returned was 0.0 % or 0.1 % on a file whose rebuild gave
+back 89.1 % to 100.0 %. The 17.11 rows, verbatim from `$OUT/lost.txt`:
 
 ```text
- num | leg |  idx  | actual_pct | size_ratio | tuple_ratio | idx_tuple_ratio | idx_gate_would_fire
- 117 |     | p117  |      100.0 |     1.0000 |      1.0000 |          0.0000 | t
-  92 |     | b92   |       89.1 |     1.0000 |      0.8200 |          0.0964 | t
+ num | leg |  idx  | action | wasted_pct | actual_pct |  lost_by  | size_ratio | tuple_ratio | idx_tuple_ratio
+ 113 | a   | p113a | update |        0.0 |      100.0 | threshold |     1.0000 |      1.0000 |          0.0000
+ 113 | c   | p113c | update |        0.0 |      100.0 | threshold |     1.0000 |      1.0000 |          0.0000
+  65 |     | p65   | update |        0.1 |       89.1 | threshold |     1.0000 |      0.8200 |          0.0995
+  67 |     | p67   | update |        0.1 |       89.1 | threshold |     1.0000 |      1.0000 |          0.0948
 ```
 
-`p117` is a queue whose every row moved from `pending` to `done` and was then
-vacuumed: the table has all 1,000,000 rows, the partial index has none, and its
-file is 100 % reclaimable. `b92` is the sibling page's calibration control: 90 % of
-a 20 % subset deleted, which is 18 % of the table, two points under the gate.
+One property is common to all four and absent from every fixture that passed:
+**no `VACUUM` ran after the rows left the index**. `p113a` and `p113c` moved every
+row of a 1,000,000-row queue from `pending` to `done`, one with an `ANALYZE` and
+one without; `p65` deleted 98 % of a subset; `p67` updated rows out of the
+predicate. The index entries are all still physically there, marked dead but not
+removed, so `avg_leaf_density` is high, `empty_pages` and `deleted_pages` are
+zero, and the wasted-space formula has nothing to add up. The rebuild then writes
+an index holding almost nothing, which is where the 89-100 % comes from.
+
+That is a known property of the measurement rather than of the gate, and the
+sibling page measured the same thing from the other direction: its estimator
+under-read a deleted-but-not-vacuumed index by 90 points
+([B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and 17
+(unverified)](btree-bloat-with-pgstatindex.md)). Nothing in `pgstatindex`'s output
+distinguishes a dead entry from a live one, so no threshold on its numbers can
+catch these four. What *would* catch them is a fourth input the brief does not
+have: the index's entry count against its own leaf-page capacity, or
+`pg_stat_all_tables.n_dead_tup` on the table. Both are filed as open questions.
 
 ### Filed predictions against measured verdicts
 
-A `want_stage` was filed for every fixture before the run. On 17.11 it was right
-for 119 of 140 and wrong for 21; on 12.2, 100 of 122 and 22. The misses are
-informative, and they are not the same set as the false negatives:
+A `want_stage` was filed for every fixture before the first run, and it was left
+untouched for this one, because a prediction rewritten after the fact proves
+nothing. On 17.11 it is now right for **129 of 140** against 119 before, and on
+12.2 for **112 of 122** against 100. Every previous miss of the form "predicted
+`measure`, measured `skip`" is gone: all 20 of them now measure.
 
-| Prediction | Fixtures | Measured | Why the prediction was wrong |
-|---|---|---|---|
-| `skip`, measured `reindex` | `p29` | `wasted_pct` 77.6, actual 87.4 | an all-NULL partial index on a drained table: the drain moved the table count, so the gate fired correctly |
-| `measure`, measured `skip` | 20 on 17.11 | - | every one is the partial-index blind spot; 14 of them are also false negatives, while `p72` (25.0 %), `p73` (49.6 %) and `f88` (40.5 %) fall under the 50 % bar and score `PASS` |
+The direction of the remaining misses has flipped. All 11 on 17.11, and all 10 on
+12.2, predicted `skip` and got `measure`, which is the third gate doing its job on
+fixtures whose predictions were written when only two gates existed:
 
-`p73` at 49.6 % is the closest thing to an accidental pass on the page: four
-tenths of a point below the `FALSE NEGATIVE` bar.
+| Prediction | Fixtures | What the measurement then decided |
+|---|---|---|
+| `skip`, measured `reindex` | `p29`, `p113b`, `p114`, `p117` | 77.6 % to 99.9 % wasted, 87.4 % to 100.0 % actually reclaimed - correct rebuilds |
+| `skip`, measured `update` | `p65`, `f84`, `p113a`, `p113c`, `p118`, `p119`, `p120` | 0.0 % to 5.9 % wasted; three are unvacuumed false negatives, the other four are healthy indexes correctly left alone |
+
+The 12.2 leg is the same list without `p120`, and the difference is instructive:
+`p120` is the fixture whose 2,000-row subset a 300-row sample can miss, and on
+17.11 the census re-analyzed its table and the partial index's *estimated* count
+came back at 0.1941 of the baseline, which fires the gate on sampling noise
+alone. On 12.2 the fixture's own `ANALYZE` was the last writer, the count stayed
+at 1.0000, and the row was skipped. The consequence is one `pgstatindex()` call
+on a healthy index, which read 5.9 % wasted and was left alone, and it is the
+clearest single example of what the third gate costs. No prediction is now wrong
+in the expensive direction: nothing predicted `measure` was skipped.
 
 ### Comment parsing and preservation
 
-Thirteen comment shapes, each read and then rewritten by the filed texts:
+Fifteen comment shapes, each read and then rewritten by the filed texts. The two
+new rows are the migration cases the payload change creates:
 
 | Case | Comment before | `baseline` | Action | Comment after |
 |---|---|---|---|---|
-| absent | none | `absent` | `initialize` | 72-byte payload |
-| human text only | `human note, kept verbatim` | `absent` | `initialize` | note, newline, payload; 98 bytes |
-| empty `sz` | `@btmaint:{"v":1,"sz":,"tup":1}` | `invalid` | `initialize` | 72 bytes, nothing left over |
-| wrong version | `…{"v":9,…}` | `invalid` | `initialize` | 72 bytes |
-| non-numeric `sz` | `…"sz":"big"…` | `invalid` | `initialize` | 72 bytes |
-| truncated payload | `@btmaint:{"v":1,"sz":1` | `invalid` | `initialize` | 72 bytes |
-| marker without JSON | `@btmaint:not json at all` | `invalid` | `initialize` | 72 bytes |
-| missing `sz` key | `…{"v":1,"tup":1}` | `invalid` | `initialize` | 72 bytes |
-| 32-digit `sz` | `…"sz":999…999,…` | `invalid` | `initialize` | 72 bytes |
-| marker mid-string | `@btmaint:{…} and text after it` | `ok` | `update` | ` and text after it`, newline, payload; 90 bytes |
-| two markers | two payload lines | `ok` | `update` | one payload; 72 bytes |
+| absent | none | `absent` | `initialize` | 86-byte payload |
+| human text only | `human note, kept verbatim` | `absent` | `initialize` | note, newline, payload; 112 bytes |
+| empty `sz` | `@btmaint:{"v":2,"sz":,"tup":1,"itup":1}` | `invalid` | `initialize` | 86 bytes, nothing left over |
+| wrong version | `…{"v":9,…}` | `invalid` | `initialize` | 86 bytes |
+| non-numeric `sz` | `…"sz":"big"…` | `invalid` | `initialize` | 86 bytes |
+| truncated payload | `@btmaint:{"v":2,"sz":1` | `invalid` | `initialize` | 86 bytes |
+| marker without JSON | `@btmaint:not json at all` | `invalid` | `initialize` | 86 bytes |
+| missing `sz` key | `…{"v":2,"tup":1,"itup":1}` | `invalid` | `initialize` | 86 bytes |
+| 32-digit `sz` | `…"sz":999…999,…` | `invalid` | `initialize` | 86 bytes |
+| **a v1 payload** | `@btmaint:{"v":1,"sz":1,"tup":1}` | `invalid` | `initialize` | 86 bytes |
+| **missing `itup` key** | `@btmaint:{"v":2,"sz":1,"tup":1}` | `invalid` | `initialize` | 86 bytes |
+| marker mid-string | `@btmaint:{…} and text after it` | `ok` | `update` | ` and text after it`, newline, payload; 104 bytes |
+| two markers | two payload lines | `ok` | `update` | one payload; 86 bytes |
 | quoting | quote, backslash, per cent, newline | `ok` | `update` | human text byte-identical, verified by equality on the exact original |
-| 8,000-character note | 8,000 `L` | `ok` | `update` | 8,073 bytes, the 8,000 `L` intact |
+| 8,000-character note | 8,000 `L` | `ok` | `update` | 8,087 bytes, the 8,000 `L` intact |
 
 The `invalid` reading is deliberately generous: a comment that contains the marker
 at all but yields no parseable payload is `invalid`, not `absent`, so the reader
 sees `unreadable @btmaint: payload, replaced` rather than a silent
-re-initialization. All thirteen behave identically on 12.2.
+re-initialization. All fifteen behave identically on 12.2, including both
+migration cases.
 
 ### Idempotence, dry runs and dumps
 
-- **Three consecutive runs** of step 2 on the same database: the first acted on 30
-  indexes (`reindex=5 update=12 initialize=13`), the second and third reported
+- **Three consecutive runs** of step 2 on the same database: the first acted on 35
+  indexes (`reindex=5 update=14 initialize=16` on 17.11, `reindex=5 update=14
+  initialize=14` on 12.2), the second and third reported
   `reindex=0 update=0 initialize=0 refresh=0 blocked=0 failed=0`. A settled
   database is not written to at all - no comment churn, no WAL, no locks beyond
-  the read.
-- **`dry_run := true`** reports the same 30 decisions, including the five rebuilds
+  the read. That the second run writes nothing is also the proof that the payload
+  it wrote on the first run is one it can read back: an unreadable `itup` would
+  re-initialize every index on every run.
+- **`dry_run := true`** reports the same 35 decisions, including the five rebuilds
   it would run, and the md5 of every `pg_class` comment in the database is
   unchanged afterwards.
-- **`pg_dump`** of one fixture table emitted 13 `COMMENT ON INDEX` statements, all
-  13 carrying the payload. The baseline therefore survives dump and restore, which
+- **`pg_dump`** of one fixture table emitted 15 `COMMENT ON INDEX` statements, all
+  15 carrying the payload. The baseline therefore survives dump and restore, which
   cuts both ways: restoring an old dump restores an old baseline, and the first run
   after the restore will compare today's index against it. Rule 3 catches the
-  shrink direction; a stale-low baseline is caught only by the 20 % growth test.
+  shrink direction; a stale-low baseline is caught only by the three growth tests.
 
 ### Mandatory test review
 
 | Group | Tests | Fixtures and oracle | 17.11 | 12.2 |
 |---|---|---|---|---|
 | Deduplication gate | 1-17 | 28 indexes on two 500,000-row tables, drained 90 %; measured `REINDEX INDEX` | run, 28 of 28 `PASS` | run, 13 of 13 `PASS`, 15 skipped for missing features |
-| Partial indexes | 18-77 | 64 indexes over 58 tables, each with its own churn or the uniform drain | run, 58 `PASS`, 6 `FALSE NEGATIVE` | run, 55 `PASS`, 6 `FALSE NEGATIVE` |
-| False-positive constructions | 78-85 | 8 freshly built indexes that must not be touched | run, 8 of 8 left alone | run, 8 of 8 left alone |
-| False-negative constructions | 86-91 | 6 genuinely bloated, vacuumed and analysed | run, 1 `PASS`, 5 `FALSE NEGATIVE` | the same |
-| Change A-D controls | 92-112 | threshold calibration 92-95, non-partial 96-99, `INCLUDE` 100-105, expression statistics 106-112 | run, 16 `PASS`, 5 `FALSE NEGATIVE` | the same |
-| Drained queue and change E | 113a-c, 114-121 | one 1,000,000-row table per state, `reltuples = 0` shapes | run, 8 `PASS`, 5 `FALSE NEGATIVE` | the same |
-| This heuristic's acceptance fixtures | - | 13 comment shapes, 10 filter shapes, 6 gate boundaries, 9 curve points, survival, privileges, locks, dry run, idempotence, dump | run | run |
+| Partial indexes | 18-77 | 64 indexes over 58 tables, each with its own churn or the uniform drain | run, 62 `PASS`, 2 `FALSE NEGATIVE` | run, 59 `PASS`, 2 `FALSE NEGATIVE` |
+| False-positive constructions | 78-85 | 8 freshly built indexes that must not be touched | run, 8 of 8 left un-rebuilt (7 skipped, 1 measured and updated) | the same |
+| False-negative constructions | 86-91 | 6 genuinely bloated, vacuumed and analysed | run, 6 of 6 `PASS`, all rebuilt | the same |
+| Change A-D controls | 92-112 | threshold calibration 92-95, non-partial 96-99, `INCLUDE` 100-105, expression statistics 106-112 | run, 21 of 21 `PASS` | the same |
+| Drained queue and change E | 113a-c, 114-121 | one 1,000,000-row table per state, `reltuples = 0` shapes | run, 11 `PASS`, 2 `FALSE NEGATIVE` | the same |
+| Simulated auto-analyze | the new rule | every fixture table, gated on the engine's own threshold | run, 77 of 99 analyzed, boundary at 9.8 % / 11.1 % | run, 57 of 97 analyzed, same boundary |
+| This heuristic's acceptance fixtures | - | 15 comment shapes, 11 filter shapes, 10 gate boundaries, 9 curve points, survival, privileges, locks, dry run, idempotence, dump | run | run |
 | Engine regression | `make check` plus `pgstattuple`, `pageinspect`, `amcheck` | temporary installation in the build tree | 225, 1, 8, 3 - all passed | 192, 1, 5, 2 - all passed |
 | Repository checks | `scripts/wiki_lint`, block hashes, pipeline identity, Contents anchors | this repository | pass | pass |
 
 The contract the sibling page set is that a statement failing a mandatory test is
 corrected, not merely reported. Two defects were found and corrected in the filed
-texts before these numbers were taken; see
-[Two defects the suite found, and their repairs](#two-defects-the-suite-found-and-their-repairs).
-The 21 false negatives are **not** corrected, because correcting them means
-changing the gate the question specifies; they are reported, quantified, and filed
-as the first open question.
+texts of the first revision; see
+[Two defects the first revision's suite found](#two-defects-the-first-revisions-suite-found).
+This revision corrects the largest reported failure of that revision rather than
+re-reporting it: 21 of the 21 gate losses are closed. The four that remain are
+**not** corrected, because correcting them needs an input the brief does not
+specify and `pgstatindex` does not expose; they are reported, quantified, and
+filed as the first open question.
 
 ### What still needs to be tested
 
-1. **The index-entry gate, as a real variant.** The suite measures that
-   `abs(index reltuples change) >= 20 %` would catch 18 of the 21 false negatives,
-   but it has never been run as the gate. It needs its own pass over all 140
-   fixtures to find out what it costs in extra measurements on healthy indexes.
+1. **A fourth input for the unvacuumed case.** The four remaining false negatives
+   are files full of dead index entries, which `pgstatindex` reports as dense.
+   Neither a stored entry count against leaf-page capacity nor
+   `pg_stat_all_tables.n_dead_tup` has been tried as a further gate or as a
+   correction to `wasted_pct`.
 2. **Concurrent rebuilds end to end.** `REINDEX INDEX CONCURRENTLY` is measured
    only for comment survival. A run where step 1 emits the concurrent command, an
    operator executes it at the top level, and the next run stores the baseline
@@ -1245,6 +1618,16 @@ as the first open question.
 8. **Standby behaviour.** The `relpersistence <> 'u' OR NOT pg_is_in_recovery()`
    filter has never been exercised on a real standby, and no part of the heuristic
    can write a comment there.
+9. **How often sampling noise opens the third gate.** `p120` is one measured
+   example, at `idx_tuple_ratio` 0.1941 on an index whose entry count had not
+   really moved. The suite has no fixture family that sweeps subset selectivity
+   against `default_statistics_target` to find where a sample-based count becomes
+   noisy enough to cost regular measurements.
+10. **A run with autovacuum actually on.** The mandatory tests simulate the
+    auto-analyze; they do not let the launcher do it. A cluster with
+    `autovacuum = on` would also vacuum, which would change what `pgstatindex`
+    sees on exactly the four fixtures that still fail, and is the obvious next
+    experiment.
 
 ## Measurement Script
 
@@ -1254,13 +1637,13 @@ this page.
 
 | Item | This suite |
 |---|---|
-| Purpose | Build the pinned checkout, run the engine regression suites, start an isolated cluster, take this page's two texts out of this page, port every numbered fixture of the sibling page's mandatory suite, store an as-built baseline in every index comment, churn each fixture, run the heuristic, and score every decision against a measured `REINDEX INDEX`. It also measures this heuristic's own surface: comment parsing and preservation, the candidate filters, both gate boundaries, the 40 % decision curve, privileges, locks, dry runs, idempotence, dumps, and cost. Every figure in [Verdict](#verdict) through [Idempotence, dry runs and dumps](#idempotence-dry-runs-and-dumps) is one of its outputs. |
+| Purpose | Build the pinned checkout, run the engine regression suites, start an isolated cluster, take this page's two texts out of this page, port every numbered fixture of the sibling page's mandatory suite, store an as-built baseline in every index comment, churn each fixture, simulate the auto-analyze the churn would have triggered, apply the catalog forgeries an `ANALYZE` would have repaired, run the heuristic, and score every decision against a measured `REINDEX INDEX`. It also measures this heuristic's own surface: comment parsing and preservation, the candidate filters, all three gate boundaries, the 40 % decision curve, privileges, locks, dry runs, idempotence, dumps, and cost. Every figure in [Verdict](#verdict) through [Idempotence, dry runs and dumps](#idempotence-dry-runs-and-dumps) is one of its outputs. |
 | Invocation | From the repository root: `bash btmaint_suite_v17.sh` and `bash btmaint_suite_v12.sh`. Selected stages: `bash btmaint_suite_v17.sh suite score`. |
-| Stages | 17 leg: `build check cluster sql texts facts suite edge cost score criteria report`, in that default order, plus `stop` and `clean`. The 12 leg inserts `exact` between `texts` and `facts`. |
+| Stages | 17 leg: `build check cluster sql texts facts suite edge cost score criteria report`, in that default order, plus `stop` and `clean`. The 12 leg inserts `exact` between `texts` and `facts`. The simulated auto-analyze and the forgeries are steps inside `suite` and `edge`, not stages of their own, because a decision taken without them would be a decision on statistics no production server would have had. |
 | Environment | `WIKI_ROOT` (default `$PWD`), `PAGE` (default this page), `SRC` (default `raw/postgres-17` or `raw/postgres-12`), `SANDBOX` (default `.wiki-runtime/tmp/btmaint`), `PORT` (55417 / 55412), `JOBS` (8). |
 | Prerequisites | A C toolchain, `make`, and the two pinned checkouts. The 17 leg configures `--with-icu`, the 12 leg `--without-icu`. `pgstattuple` is installed from the same build. No installed PostgreSQL is used. |
-| Output | Everything under `$SANDBOX/out` (17) and `$SANDBOX/out12` (12). Read `criteria.txt` first; then `counters.txt`, `verdicts.txt`, `lost.txt`, `cost.txt`, `facts.txt`, and the `edge_*.txt` files. |
-| Runtime | From a built tree, `cluster` through `cost` took 1 min 37 s on the 17 leg and 1 min 45 s on the 12 leg (file timestamps, `initdb.log` to `cost.txt`). `build` and `check` were run separately and are not in those figures. |
+| Output | Everything under `$SANDBOX/out` (17) and `$SANDBOX/out12` (12). Read `criteria.txt` first; then `counters.txt`, `verdicts.txt`, `lost.txt`, `newly_measured.txt`, `autoanalyze.txt`, `cost.txt`, `facts.txt`, and the `edge_*.txt` files. |
+| Runtime | Measured from each invocation's own log file, first write to last, on 22 cores at `JOBS=16` with `fsync = off` in the sandbox cluster: the 17 leg's `build check cluster sql` took 1 min 10 s and its `cluster` through `report` re-run 1 min 43 s; the 12 leg's `build` through `facts` took 1 min 10 s, `suite` 1 min 17 s, and `edge` through `report` 16 s. A re-run from a built tree therefore needs about two minutes per leg. |
 | Cleanup | `bash btmaint_suite_v17.sh clean` and `bash btmaint_suite_v12.sh clean`: each stops its own server with `pg_ctl -m fast -w stop`, confirms no `postmaster.pid`, no matching process and an empty socket directory, and only then deletes the sandbox. Both were run before this page was filed. |
 
 ### How to use the two leg scripts
@@ -1277,15 +1660,18 @@ baseline recorded in the script, so editing this page's SQL without re-measuring
 is visible in the output:
 
 ```text
-report 4a3d970d76b357976c51ed9121e5deb1ce65f81fdf578b12c72cc0a9cec10cf2 match
-apply  86e0ae3d77c7dd8c8dfa201a4b819674f15fe45ab21d12a7f77649c9f29d9f85 match
-report lines=215 bytes=11340
-apply  lines=245 bytes=11661
-pipeline report 62225bce7d3e31b93f99c6d1e1be616bd376ffd04464efe476159500644edc16
-pipeline apply  62225bce7d3e31b93f99c6d1e1be616bd376ffd04464efe476159500644edc16
-pipeline lines  100
+report 93b64e2dd33d411951ceffd9d665a3e3e8ce3a71fde60bbca9e61c219febd0e9 match
+apply  7427d62d2ca3bb43dd2f7c5a8aa97c27fc8111d65d3066594660c2808d47992d match
+report lines=243 bytes=13167
+apply  lines=267 bytes=13028
+pipeline report 39a2e57379dde00ba6eb64edb38b1d81d68f594aa349e2bc3cdb0aafbdc4ef02
+pipeline apply  39a2e57379dde00ba6eb64edb38b1d81d68f594aa349e2bc3cdb0aafbdc4ef02
+pipeline lines  118
 pipeline identical yes
 ```
+
+Both legs printed those eight lines. The shared pipeline grew from 100 lines to
+118 with the third gate, and is still byte-identical in the two texts.
 
 `stage_texts` also builds the one harness object the suite needs from step 1: a
 view over the filed statement, with exactly one documented edit - the two `SET`
@@ -1300,14 +1686,14 @@ decisions without re-typing them.
 | `build` | Configures and builds the pinned checkout out of tree, installs it plus `pgstattuple`, `pageinspect` and `amcheck` under `$SANDBOX/inst/NN`. Skipped if the binary is already there. |
 | `check` | `make check` and the three contrib suites, with the pass counts and any `regression.diffs` copied where `clean` will not delete them. |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, writes the cluster settings, starts the server, records `version()` and `pg_control_init()`, creates the `suite` and `edge` databases with `pgstattuple`. Idempotent. |
-| `sql` | Writes every SQL file the suite uses: the harness, the fixture build and churn files, the PostgreSQL 13 and ICU fixture files, and the edge fixtures. |
+| `sql` | Writes every SQL file the suite uses: the harness, the fixture build and churn files, the PostgreSQL 13 and ICU fixture files, the simulated auto-analyze census, the forgery files, and the edge fixtures. |
 | `texts` | Extracts, hashes and line-counts the two texts, checks that their shared pipeline region is byte-identical, and builds the one-edit view. |
 | `exact` (12 leg) | Executes both filed texts verbatim on this server before any fixture exists, and records the outcome, the comment written, and what a second run does. |
-| `facts` | Discovers every version-local fact the texts depend on, on the running server. |
-| `suite` | Builds the numbered fixtures, runs the filed apply block to store as-built baselines, churns, records the filed report's decisions, runs the filed apply block again to act, then rebuilds every fixture as the oracle. |
-| `edge` | Builds and scores this heuristic's own fixtures: 13 comment shapes, 10 filter shapes, 6 gate boundaries, the 9-point curve, comment survival across both `REINDEX` forms, privileges including `MAINTAIN` where it exists, the lock `COMMENT` takes, a dry run, three consecutive runs, and a `pg_dump`. |
-| `cost` | Settles the database with one apply run, times the filed report six times and reads its buffer counts, then halves every stored `sz` so the size gate fires everywhere and repeats. |
-| `score` | Writes the verdict rows, the verdict and action counts, the per-group table, the accuracy row, the gate-agreement row, the lost-fixture detail, and the payload-health row. |
+| `facts` | Discovers every version-local fact the texts depend on, on the running server, including who writes an index's `reltuples` and the two auto-analyze defaults. |
+| `suite` | Builds the numbered fixtures, runs the filed apply block to store as-built baselines, churns, **runs the simulated auto-analyze and then the catalog forgeries**, records the filed report's decisions, runs the filed apply block again to act, then rebuilds every fixture as the oracle. It dies rather than continue if no table crossed the auto-analyze threshold, because that would mean the churn counters were invisible. |
+| `edge` | Builds and scores this heuristic's own fixtures: 15 comment shapes, 11 filter shapes, 10 gate boundaries, the 9-point curve, comment survival across both `REINDEX` forms, privileges including `MAINTAIN` where it exists, the lock `COMMENT` takes, a dry run, three consecutive runs, and a `pg_dump`. It applies the same auto-analyze rule and then re-applies its three forgeries. |
+| `cost` | Settles the database with one apply run, times the filed report six times and reads its buffer counts, then halves every stored `sz`, leaving both counts current, so the size gate alone fires everywhere, and repeats. |
+| `score` | Writes the verdict rows, the verdict and action counts, the per-group table, the accuracy row, the gate-agreement row, the per-gate attribution, the two-gate counterfactual, the newly-measured detail, the stored-index-count check, the lost-fixture detail, and the payload-health row. |
 | `criteria` | Collects the pass criteria into one file and audits the server log for any error the suite did not deliberately provoke. |
 | `report` | Lists the output directory. |
 | `stop` | `pg_ctl -m fast -w stop`, then confirms the teardown and dies rather than report a stop that did not happen. |
@@ -1334,8 +1720,12 @@ between the baseline, the churn, the decision and the oracle.
 
 Both scripts mark their fixture statements as disposable. They create, forge and
 drop tables, indexes, operator classes, collations, roles and catalog rows in the
-sandbox cluster's own databases, including two deliberate `pg_class` and
-`pg_index` forgeries, and are not meant for a database anyone cares about.
+sandbox cluster's own databases, including four deliberate `pg_class` and
+`pg_index` forgeries, and are not meant for a database anyone cares about. The
+forgeries are applied *after* the simulated auto-analyze, in `forge.sql` and
+`edge_forge.sql`, because an `ANALYZE` of the table rewrites `reltuples` for the
+table and for every index on it, which would repair exactly the state those
+fixtures exist to create.
 
 ### Prerequisites
 
@@ -1356,14 +1746,19 @@ sandbox cluster's own databases, including two deliberate `pg_class` and
 | `max_data_alignment` | 8 | 8 |
 | Platform | Linux x86_64, gcc 13.3.0 | Linux x86_64, gcc 13.3.0 |
 | Locale, encoding | C, UTF8 | C, UTF8 |
+| `autovacuum_analyze_threshold`, `autovacuum_analyze_scale_factor` | 50, 0.1 | 50, 0.1 |
 | Engine tests | 225 core, `pgstattuple` 1, `pageinspect` 8, `amcheck` 3 | 192 core, `pgstattuple` 1, `pageinspect` 5, `amcheck` 2 |
 | Unexpected server errors | 0 | 0 |
-| Text hashes | `4a3d970d…` report, `86e0ae3d…` apply | the same two |
-| Script SHA-256 | `2b0d4630da4453ffdf4a0de5d8fd190047092e41c4fb222a55ad7084ca9df5de` | `920c7cb969131b8107551a2171fb72e7e225f7ec8f5fb816dd42810f96d810dc` |
+| Text hashes | `93b64e2d…` report, `7427d62d…` apply | the same two |
+| Script SHA-256 | `c2f99506a492395a17b7cbb66209974c34b23e38c9ca0dc214867ef6fd8f0889` | `7318192e8a8bb95b0ba8f2f354fd708bf017807cfe647208b1f9fbdee6272606` |
 
-Both servers were stopped by the scripts' own `stop` stage and the 12 GB sandbox
-deleted by `clean`, with no `postmaster.pid`, no matching process and an empty
-socket directory confirmed for each.
+Every figure on this page comes from that pair of runs, taken with the script text
+published below: the 12 leg in one pass from `build` to `report`, and the 17 leg
+re-run in one pass from `cluster` to `report` after its `build` and `check` so
+that no number predates the final script. Both servers were then stopped by the
+scripts' own `stop` stage and the 12 GB sandbox deleted by `clean`, with no
+`postmaster.pid`, no matching process and an empty socket directory confirmed for
+each.
 
 ### The PostgreSQL 17 leg script
 
@@ -1378,11 +1773,21 @@ socket directory confirmed for each.
 # regression suites, starts an isolated cluster, takes the page's two texts out
 # of the page itself, ports every numbered fixture of the sibling page's
 # mandatory suite (tests 1-17, 18-91 and controls 92-121), stores an as-built
-# baseline in each index comment, churns each fixture, runs the heuristic, and
-# scores every decision against a measured REINDEX INDEX.  A second group of
-# fixtures covers this heuristic's own surface: comment parsing, comment
-# preservation, the candidate filters, both gate boundaries and the 40 %
-# decision curve.
+# baseline in each index comment, churns each fixture, simulates the auto-analyze
+# that churn would have triggered on a server with autovacuum on, runs the
+# heuristic, and scores every decision against a measured REINDEX INDEX.  A
+# second group of fixtures covers this heuristic's own surface: comment parsing,
+# comment preservation, the candidate filters, all three gate boundaries and the
+# 40 % decision curve.
+#
+# The simulated auto-analyze is the mandatory-test rule that any fixture moving
+# more than 10 % of a table's heap tuples must ANALYZE it.  It is not
+# hand-annotated per fixture: stage_autoanalyze reads the engine's own
+# n_mod_since_analyze counter and applies the engine's own threshold,
+# autovacuum_analyze_threshold + autovacuum_analyze_scale_factor * reltuples
+# (50 + 0.1 * reltuples at the defaults), so the tables it analyzes are exactly
+# the tables an autovacuum launcher would have analyzed.  Every table it
+# considered, with its counter, its threshold and the verdict, is recorded.
 #
 # The pinned checkout is read only: everything this script writes lives under
 # $SANDBOX (default .wiki-runtime/tmp/btmaint).
@@ -1412,8 +1817,8 @@ export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
 # SHA-256 baselines of the two fenced SQL blocks of the page, in page order:
 # the report statement and the apply block.  A changed text must be re-measured
 # and the hash refiled; that is the point of recording them here.
-BASE_REPORT=4a3d970d76b357976c51ed9121e5deb1ce65f81fdf578b12c72cc0a9cec10cf2
-BASE_APPLY=86e0ae3d77c7dd8c8dfa201a4b819674f15fe45ab21d12a7f77649c9f29d9f85
+BASE_REPORT=93b64e2dd33d411951ceffd9d665a3e3e8ce3a71fde60bbca9e61c219febd0e9
+BASE_APPLY=7427d62d2ca3bb43dd2f7c5a8aa97c27fc8111d65d3066594660c2808d47992d
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -1592,11 +1997,12 @@ CREATE TABLE plan(num int, leg text DEFAULT '', grp text, req text, idx text,
                   PRIMARY KEY (num, leg));
 
 -- One row per index per phase.  phase is 'built', 'init', 'churned', 'applied'.
--- idx_tuples is the index's own pg_class.reltuples, which the heuristic does
--- not read: it is here to measure what a different gate would have seen.
+-- idx_tuples is the index's own pg_class.reltuples, which the heuristic now
+-- reads as its third gate input; base_idx_tuples is the itup field of the
+-- stored payload, parsed here independently of the filed text.
 CREATE TABLE snap(phase text, idx text, idx_oid oid, bytes bigint,
                   tbl_tuples numeric, idx_tuples numeric, cmt text, payload text,
-                  base_bytes numeric, base_tuples numeric,
+                  base_bytes numeric, base_tuples numeric, base_idx_tuples numeric,
                   PRIMARY KEY (phase, idx));
 
 -- What the heuristic decided, and what a rebuild actually gave back.
@@ -1625,7 +2031,9 @@ BEGIN
          substring(d.description from '@btmaint:(\{[^}]*\})'),
          substring(d.description from '"sz":([0-9]{1,25})[,}]')::numeric,
          substring(d.description from
-                   '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric
+                   '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric,
+         substring(d.description from
+                   '"itup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric
     FROM plan p
     JOIN pg_class c ON c.relname = p.idx AND c.relkind = 'i'
     JOIN pg_index x ON x.indexrelid = c.oid
@@ -1665,17 +2073,32 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
             THEN round(ch.bytes / ic.base_bytes, 4) END          AS size_ratio,
        CASE WHEN ic.base_tuples > 0
             THEN round(ch.tbl_tuples / ic.base_tuples, 4) END    AS tuple_ratio,
-       -- What a gate on the index's own entry count would have seen instead.
-       ic.idx_tuples AS base_idx_tuples, ch.idx_tuples AS churned_idx_tuples,
-       CASE WHEN ic.idx_tuples > 0
-            THEN round(ch.idx_tuples / ic.idx_tuples, 4) END     AS idx_tuple_ratio,
-       (ic.idx_tuples > 0 AND ch.idx_tuples >= 0
-        AND abs(ch.idx_tuples - ic.idx_tuples) >= ic.idx_tuples * 0.20)
-                                                                 AS idx_gate_would_fire,
+       -- The index's own entry count: the baseline the payload stored, the
+       -- count the catalog holds after the churn, and their ratio.  The
+       -- payload value is what the heuristic reads; ic.idx_tuples is the live
+       -- catalog value at baseline time, so the two must agree.
+       ic.base_idx_tuples, ch.idx_tuples AS churned_idx_tuples,
+       (ic.base_idx_tuples = round(ic.idx_tuples))               AS itup_stored_matches,
+       CASE WHEN ic.base_idx_tuples > 0
+            THEN round(ch.idx_tuples / ic.base_idx_tuples, 4) END AS idx_tuple_ratio,
+       -- Which of the three gates fires, each recomputed here from the
+       -- recorded baseline, independently of the filed text.
+       (ic.base_bytes > 0 AND ch.bytes >= ic.base_bytes * 1.20)  AS size_gate_fires,
+       (ch.tbl_tuples >= 0 AND ic.base_tuples >= 0
+        AND (CASE WHEN ic.base_tuples = 0 THEN ch.tbl_tuples > 0
+                  ELSE abs(ch.tbl_tuples - ic.base_tuples)
+                       >= ic.base_tuples * 0.20 END))            AS tbl_gate_fires,
+       (ch.idx_tuples >= 0 AND ic.base_idx_tuples >= 0
+        AND (CASE WHEN ic.base_idx_tuples = 0 THEN ch.idx_tuples > 0
+                  ELSE abs(ch.idx_tuples - ic.base_idx_tuples)
+                       >= ic.base_idx_tuples * 0.20 END))        AS idx_gate_fires,
        -- The sz the report proposed to store, against the sz that was stored.
        substring(t.cmd_report from '"sz":([0-9]+)')::numeric      AS sz_reported,
        substring(t.cmd_written from '"sz":([0-9]+)')::numeric     AS sz_written,
+       substring(t.cmd_written from '"itup":(-?[0-9]+)')::numeric AS itup_written,
        CASE WHEN ic.payload IS NULL                              THEN 'initialize'
+            WHEN ic.base_bytes IS NULL OR ic.base_tuples IS NULL
+              OR ic.base_idx_tuples IS NULL                      THEN 'initialize'
             WHEN ic.base_bytes > 0 AND ch.bytes < ic.base_bytes  THEN 'refresh'
             WHEN ic.base_bytes > 0 AND ch.bytes >= ic.base_bytes * 1.20
                                                                  THEN 'measure'
@@ -1684,7 +2107,25 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
                                                                  THEN 'measure'
             WHEN ch.tbl_tuples >= 0 AND ic.base_tuples = 0 AND ch.tbl_tuples > 0
                                                                  THEN 'measure'
+            WHEN ch.idx_tuples >= 0 AND ic.base_idx_tuples > 0
+             AND abs(ch.idx_tuples - ic.base_idx_tuples) >= ic.base_idx_tuples * 0.20
+                                                                 THEN 'measure'
+            WHEN ch.idx_tuples >= 0 AND ic.base_idx_tuples = 0 AND ch.idx_tuples > 0
+                                                                 THEN 'measure'
             ELSE 'skip' END                                      AS expected_stage,
+       -- The two-gate form this page filed before the index count was stored,
+       -- recomputed on the same fixtures so the change can be quantified.
+       CASE WHEN ic.payload IS NULL                              THEN 'initialize'
+            WHEN ic.base_bytes IS NULL OR ic.base_tuples IS NULL THEN 'initialize'
+            WHEN ic.base_bytes > 0 AND ch.bytes < ic.base_bytes  THEN 'refresh'
+            WHEN ic.base_bytes > 0 AND ch.bytes >= ic.base_bytes * 1.20
+                                                                 THEN 'measure'
+            WHEN ch.tbl_tuples >= 0 AND ic.base_tuples > 0
+             AND abs(ch.tbl_tuples - ic.base_tuples) >= ic.base_tuples * 0.20
+                                                                 THEN 'measure'
+            WHEN ch.tbl_tuples >= 0 AND ic.base_tuples = 0 AND ch.tbl_tuples > 0
+                                                                 THEN 'measure'
+            ELSE 'skip' END                                      AS two_gate_stage,
        CASE WHEN t.action IN ('reindex', 'update') THEN 'measure'
             ELSE t.action END                                    AS taken_stage,
        -- The rebuild oracle against the 40 % decision.
@@ -2658,8 +3099,9 @@ DELETE FROM pb77 WHERE hot AND k < 475000;
 VACUUM pb77;
 ANALYZE pb77;
 
--- 84: a forged partial-index reltuples.  Disposable catalog forgery.
-UPDATE pg_class SET reltuples = 5000 WHERE relname = 'f84';
+-- 84's forged partial-index reltuples has moved to forge.sql, which runs after
+-- the simulated auto-analyze, because an ANALYZE of its table would overwrite
+-- the forgery and the fixture would stop testing anything.
 
 -- 86-91: genuinely bloated, VACUUMed and ANALYZEd.
 DELETE FROM f86t WHERE hot AND k >= 25;
@@ -2805,9 +3247,130 @@ SELECT /* wiki_btmaint_drainicu_generator */ format(st.tmpl, tb.name)
  ORDER BY tb.n, st.k
 \gexec
 CHURN_ICU
+  cat > "$SQLD/autoanalyze.sql" <<'AUTOANALYZE'
+-- The simulated auto-analyze, and the mandatory-test rule behind it: a fixture
+-- that changes more than 10 % of a table's heap tuples must ANALYZE it, because
+-- on a server with autovacuum on the launcher would have.
+--
+-- The trigger is not hand-written per fixture.  It is the engine's own test,
+-- n_mod_since_analyze > autovacuum_analyze_threshold +
+-- autovacuum_analyze_scale_factor * reltuples, which is exactly what
+-- relation_needs_vacanalyze() compares; at the defaults that is 50 + 10 % of
+-- the table's estimated row count.  autovacuum is off in this cluster, so no
+-- background worker can have analyzed anything, and every ANALYZE below is one
+-- this fixture set asked for.
+--
+-- Both counter states are recorded: autoanl holds what the churn left behind,
+-- autoanl_after holds the same counters once the ANALYZEs have run, which is
+-- how the run proves the simulation actually fired.
+-- Disposable fixtures, suite database of the sandbox cluster only.
+SET /* wiki_btmaint_autoanl_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_autoanl_statement_timeout */ statement_timeout = '900s';
+SET /* wiki_btmaint_autoanl_lock_timeout */ lock_timeout = '5s';
+
+DROP TABLE IF EXISTS autoanl;
+DROP TABLE IF EXISTS autoanl_after;
+CREATE TABLE autoanl AS
+SELECT /* wiki_btmaint_autoanalyze_census */
+       c.relname                                   AS tbl,
+       GREATEST(c.reltuples, 0)::numeric           AS reltuples,
+       st.n_mod_since_analyze::numeric             AS mods,
+       round(current_setting('autovacuum_analyze_threshold')::numeric
+             + current_setting('autovacuum_analyze_scale_factor')::numeric
+               * GREATEST(c.reltuples, 0)::numeric, 1) AS threshold,
+       round(100 * st.n_mod_since_analyze
+             / GREATEST(c.reltuples, 1)::numeric, 1)   AS mod_pct,
+       (st.n_mod_since_analyze
+        > current_setting('autovacuum_analyze_threshold')::numeric
+          + current_setting('autovacuum_analyze_scale_factor')::numeric
+            * GREATEST(c.reltuples, 0)::numeric)       AS would_autoanalyze
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public'
+   AND c.relkind = 'r'
+   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after');
+
+SELECT /* wiki_btmaint_autoanalyze_generator */
+       format('ANALYZE /* wiki_btmaint_autoanalyze */ %I', tbl)
+  FROM autoanl WHERE would_autoanalyze ORDER BY tbl
+\gexec
+
+CREATE TABLE autoanl_after AS
+SELECT /* wiki_btmaint_autoanalyze_recheck */
+       c.relname AS tbl, st.n_mod_since_analyze::numeric AS mods,
+       GREATEST(c.reltuples, 0)::numeric AS reltuples
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public' AND c.relkind = 'r'
+   AND c.relname IN (SELECT tbl FROM autoanl WHERE would_autoanalyze);
+AUTOANALYZE
+  cat > "$SQLD/forge.sql" <<'FORGE'
+-- The numbered suite's catalog forgeries, applied after the simulated
+-- auto-analyze so that an ANALYZE cannot overwrite them.  Fixture 84 is a
+-- partial index whose recorded entry count is deliberately wrong, which is now
+-- an input the heuristic reads rather than one it ignores.
+-- Disposable catalog forgery, suite database of the sandbox cluster only.
+SET /* wiki_btmaint_forge_client_min_messages */ client_min_messages = warning;
+UPDATE /* wiki_btmaint_forge_84 */ pg_class SET reltuples = 5000
+ WHERE relname = 'f84';
+SELECT /* wiki_btmaint_forge_check */ 'f84 reltuples now ' || reltuples
+  FROM pg_class WHERE relname = 'f84';
+FORGE
+  cat > "$SQLD/edge_autoanalyze.sql" <<'EDGE_AUTOANALYZE'
+-- The same simulated auto-analyze rule, applied to the edge database so that
+-- no fixture group is exempt from it.  Its curve fixtures analyze themselves
+-- as part of their recipe, so this census is expected to find little or
+-- nothing left to do; that is a result, and it is recorded rather than assumed.
+-- Disposable fixtures, edge database of the sandbox cluster only.
+SET /* wiki_btmaint_eautoanl_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_eautoanl_statement_timeout */ statement_timeout = '900s';
+SET /* wiki_btmaint_eautoanl_lock_timeout */ lock_timeout = '5s';
+
+DROP TABLE IF EXISTS eautoanl;
+CREATE TABLE eautoanl AS
+SELECT /* wiki_btmaint_eautoanalyze_census */
+       c.relname                                   AS tbl,
+       GREATEST(c.reltuples, 0)::numeric           AS reltuples,
+       st.n_mod_since_analyze::numeric             AS mods,
+       round(current_setting('autovacuum_analyze_threshold')::numeric
+             + current_setting('autovacuum_analyze_scale_factor')::numeric
+               * GREATEST(c.reltuples, 0)::numeric, 1) AS threshold,
+       round(100 * st.n_mod_since_analyze
+             / GREATEST(c.reltuples, 1)::numeric, 1)   AS mod_pct,
+       (st.n_mod_since_analyze
+        > current_setting('autovacuum_analyze_threshold')::numeric
+          + current_setting('autovacuum_analyze_scale_factor')::numeric
+            * GREATEST(c.reltuples, 0)::numeric)       AS would_autoanalyze
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public'
+   AND c.relkind = 'r'
+   AND c.relname NOT IN ('ecase', 'eplan', 'eautoanl');
+
+SELECT /* wiki_btmaint_eautoanalyze_generator */
+       format('ANALYZE /* wiki_btmaint_autoanalyze */ %I', tbl)
+  FROM eautoanl WHERE would_autoanalyze ORDER BY tbl
+\gexec
+EDGE_AUTOANALYZE
+  cat > "$SQLD/edge_forge.sql" <<'EDGE_FORGE'
+-- The edge database's three catalog forgeries, re-applied after the simulated
+-- auto-analyze for the same reason fixture 84's is: an ANALYZE of the table
+-- rewrites reltuples for the table and for every index on it, which would
+-- quietly repair the two "nothing has counted this" fixtures.
+-- Disposable catalog forgeries, edge database of the sandbox cluster only.
+SET /* wiki_btmaint_eforge_client_min_messages */ client_min_messages = warning;
+UPDATE /* wiki_btmaint_eforge_invalid */ pg_index SET indisvalid = false
+ WHERE indexrelid = 'e_inv_k'::regclass;
+UPDATE /* wiki_btmaint_eforge_tbl_unknown */ pg_class SET reltuples = -1
+ WHERE relname = 'e_unk';
+UPDATE /* wiki_btmaint_eforge_idx_unknown */ pg_class SET reltuples = -1
+ WHERE relname = 'e_iunk_k';
+SELECT /* wiki_btmaint_eforge_check */ relname || ' reltuples ' || reltuples
+  FROM pg_class WHERE relname IN ('e_unk', 'e_iunk_k') ORDER BY relname;
+EDGE_FORGE
   cat > "$SQLD/edge_build.sql" <<'EDGE_BUILD'
 -- The heuristic's own acceptance fixtures: comment parsing, comment
--- preservation, the candidate filters, the two gate boundaries and the 40 %
+-- preservation, the candidate filters, the three gate boundaries and the 40 %
 -- decision curve.  Everything here is disposable and lives in the edge
 -- database of the sandbox cluster.
 SET /* wiki_btmaint_edge_client_min_messages */ client_min_messages = warning;
@@ -2823,14 +3386,16 @@ $$ INSERT INTO ecase VALUES (n, i, k, nt) $$;
 
 -- set_payload writes a forged baseline, so that a gate boundary can be hit
 -- exactly without waiting for a table to grow.  Harness object, not part of
--- the heuristic.
+-- the heuristic.  itup is the index's own entry count, the third gate input.
 CREATE OR REPLACE PROCEDURE set_payload(idx text, sz numeric, tup numeric,
+                                        itup numeric DEFAULT 0,
                                         usr text DEFAULT NULL,
                                         raw text DEFAULT NULL)
 LANGUAGE plpgsql AS $sp$
 DECLARE body text;
 BEGIN
-  body := COALESCE(raw, '@btmaint:{"v":1,"sz":' || sz || ',"tup":' || tup
+  body := COALESCE(raw, '@btmaint:{"v":2,"sz":' || sz || ',"tup":' || tup
+                        || ',"itup":' || itup
                         || ',"at":"2026-01-01T00:00:00+00"}');
   EXECUTE format('COMMENT ON INDEX %I IS %L', idx,
                  CASE WHEN usr IS NULL THEN body ELSE usr || E'\n' || body END);
@@ -2849,28 +3414,37 @@ CREATE INDEX e_bad4  ON e_t ((k + 4));
 CREATE INDEX e_bad5  ON e_t ((k + 5));
 CREATE INDEX e_bad6  ON e_t ((k + 6));
 CREATE INDEX e_bad7  ON e_t ((k + 7));
+CREATE INDEX e_bad8  ON e_t ((k + 12));
+CREATE INDEX e_bad9  ON e_t ((k + 13));
 CREATE INDEX e_quote ON e_t ((k + 8));
 CREATE INDEX e_long  ON e_t ((k + 9));
 CREATE INDEX e_mid   ON e_t ((k + 10));
 CREATE INDEX e_two   ON e_t ((k + 11));
 
 COMMENT ON INDEX e_user IS 'human note, kept verbatim';
-CALL set_payload('e_bad1', 0, 0, NULL, '@btmaint:{"v":1,"sz":,"tup":1}');
-CALL set_payload('e_bad2', 0, 0, NULL, '@btmaint:{"v":9,"sz":1,"tup":1}');
-CALL set_payload('e_bad3', 0, 0, NULL, '@btmaint:{"v":1,"sz":"big","tup":1}');
-CALL set_payload('e_bad4', 0, 0, NULL, '@btmaint:{"v":1,"sz":1');
-CALL set_payload('e_bad5', 0, 0, NULL, '@btmaint:not json at all');
-CALL set_payload('e_bad6', 0, 0, NULL, '@btmaint:{"v":1,"tup":1}');
-CALL set_payload('e_bad7', 0, 0, NULL,
-                 '@btmaint:{"v":1,"sz":99999999999999999999999999999999,"tup":1}');
-CALL set_payload('e_quote', 0, 0,
+CALL set_payload('e_bad1', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":,"tup":1,"itup":1}');
+CALL set_payload('e_bad2', 0, 0, 0, NULL, '@btmaint:{"v":9,"sz":1,"tup":1,"itup":1}');
+CALL set_payload('e_bad3', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":"big","tup":1,"itup":1}');
+CALL set_payload('e_bad4', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":1');
+CALL set_payload('e_bad5', 0, 0, 0, NULL, '@btmaint:not json at all');
+CALL set_payload('e_bad6', 0, 0, 0, NULL, '@btmaint:{"v":2,"tup":1,"itup":1}');
+CALL set_payload('e_bad7', 0, 0, 0, NULL,
+                 '@btmaint:{"v":2,"sz":99999999999999999999999999999999,"tup":1,"itup":1}');
+-- The migration case: a well-formed payload in the format this page filed
+-- before the index entry count was stored.  It must read invalid, because a
+-- v1 baseline cannot answer the index tuple gate.
+CALL set_payload('e_bad8', 0, 0, 0, NULL, '@btmaint:{"v":1,"sz":1,"tup":1}');
+-- A v2 payload with the itup key missing, which is the same defect arriving
+-- without the version number moving.
+CALL set_payload('e_bad9', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":1,"tup":1}');
+CALL set_payload('e_quote', 0, 0, 0,
                  'quote '' backslash \ percent %s newline'
                  || E'\n' || 'second line of the human note');
-CALL set_payload('e_long', 0, 0, repeat('L', 8000));
-COMMENT ON INDEX e_mid IS '@btmaint:{"v":1,"sz":1,"tup":1} and text after it';
+CALL set_payload('e_long', 0, 0, 0, repeat('L', 8000));
+COMMENT ON INDEX e_mid IS '@btmaint:{"v":2,"sz":1,"tup":1,"itup":1} and text after it';
 -- COMMENT takes a string literal, never an expression, so the two-marker case
 -- is written as one literal with an embedded newline.
-COMMENT ON INDEX e_two IS E'@btmaint:{"v":1,"sz":1,"tup":1}\n@btmaint:{"v":1,"sz":2,"tup":2}';
+COMMENT ON INDEX e_two IS E'@btmaint:{"v":2,"sz":1,"tup":1,"itup":1}\n@btmaint:{"v":2,"sz":2,"tup":2,"itup":2}';
 SELECT ecase_add('absent payload', 'e_none', 'parse', 'no comment at all');
 SELECT ecase_add('user comment only', 'e_user', 'parse', 'human text, no marker');
 SELECT ecase_add('empty sz', 'e_bad1', 'parse', 'malformed JSON');
@@ -2878,8 +3452,10 @@ SELECT ecase_add('wrong format version', 'e_bad2', 'parse', 'v = 9');
 SELECT ecase_add('non-numeric sz', 'e_bad3', 'parse', 'quoted string');
 SELECT ecase_add('truncated payload', 'e_bad4', 'parse', 'no closing brace');
 SELECT ecase_add('marker without JSON', 'e_bad5', 'parse', 'free text');
-SELECT ecase_add('missing sz key', 'e_bad6', 'parse', 'tup only');
+SELECT ecase_add('missing sz key', 'e_bad6', 'parse', 'tup and itup only');
 SELECT ecase_add('32-digit sz', 'e_bad7', 'parse', 'longer than the regex bound');
+SELECT ecase_add('v1 payload, no index count', 'e_bad8', 'parse', 'the migration case');
+SELECT ecase_add('missing itup key', 'e_bad9', 'parse', 'v2 shape, key absent');
 SELECT ecase_add('quoting round trip', 'e_quote', 'parse', 'quote, backslash, percent, newline');
 SELECT ecase_add('8000-character note', 'e_long', 'parse', 'toasted description');
 SELECT ecase_add('marker mid-string', 'e_mid', 'parse', 'text after the payload');
@@ -2918,16 +3494,38 @@ UPDATE pg_index SET indisvalid = false
  WHERE indexrelid = 'e_inv_k'::regclass;    -- disposable catalog forgery
 SELECT ecase_add('invalid index', 'e_inv_k', 'filter', 'forged indisvalid = false');
 
+-- Both "nothing has counted this" fixtures get a readable baseline first, so
+-- that the gate they disable is a gate that would otherwise have an opinion,
+-- and the reason appears in notes instead of the row reading 'initialize'.
 CREATE TABLE e_unk AS SELECT i::int AS k FROM generate_series(1, 200000) i;
 ANALYZE e_unk;
 CREATE INDEX e_unk_k ON e_unk (k);
-UPDATE pg_class SET reltuples = -1 WHERE relname = 'e_unk';  -- disposable forgery
+CREATE TABLE e_iunk AS SELECT i::int AS k FROM generate_series(1, 200000) i;
+ANALYZE e_iunk;
+CREATE INDEX e_iunk_k ON e_iunk (k);
+DO $eu$
+DECLARE sz numeric; tup numeric; itup numeric;
+BEGIN
+  sz  := pg_relation_size('e_unk_k'::regclass);
+  SELECT reltuples::numeric INTO tup  FROM pg_class WHERE relname = 'e_unk';
+  SELECT reltuples::numeric INTO itup FROM pg_class WHERE relname = 'e_unk_k';
+  CALL set_payload('e_unk_k', sz, tup, itup);
+  sz  := pg_relation_size('e_iunk_k'::regclass);
+  SELECT reltuples::numeric INTO tup  FROM pg_class WHERE relname = 'e_iunk';
+  SELECT reltuples::numeric INTO itup FROM pg_class WHERE relname = 'e_iunk_k';
+  CALL set_payload('e_iunk_k', sz, tup, itup);
+END $eu$;
+UPDATE pg_class SET reltuples = -1 WHERE relname = 'e_unk';     -- disposable forgery
+UPDATE pg_class SET reltuples = -1 WHERE relname = 'e_iunk_k';  -- disposable forgery
 SELECT ecase_add('table reltuples unknown', 'e_unk_k', 'filter', 'forged reltuples = -1');
+SELECT ecase_add('index reltuples unknown', 'e_iunk_k', 'filter', 'forged index reltuples = -1');
 
 -- --------------------------------------------------------- gate boundaries ---
--- One 200,000-row table, six indexes, six forged baselines.  The index size is
--- read back and the baseline is set so that the ratio is exactly on, or just
--- under, each threshold.
+-- One 200,000-row table, ten indexes, ten forged baselines.  The index size
+-- and both entry counts are read back and the baseline is set so that the
+-- ratio is exactly on, or just under, each of the three thresholds.  Only one
+-- input is moved per fixture; the other two are set to the current value so
+-- they cannot fire.
 CREATE TABLE e_gate AS SELECT i::int AS k FROM generate_series(1, 200000) i;
 ANALYZE e_gate;
 CREATE INDEX e_g_size_on  ON e_gate (k);
@@ -2936,33 +3534,49 @@ CREATE INDEX e_g_up_on    ON e_gate ((k + 2));
 CREATE INDEX e_g_up_off   ON e_gate ((k + 3));
 CREATE INDEX e_g_dn_on    ON e_gate ((k + 4));
 CREATE INDEX e_g_dn_off   ON e_gate ((k + 5));
+CREATE INDEX e_g_iup_on   ON e_gate ((k + 6));
+CREATE INDEX e_g_iup_off  ON e_gate ((k + 7));
+CREATE INDEX e_g_idn_on   ON e_gate ((k + 8));
+CREATE INDEX e_g_idn_off  ON e_gate ((k + 9));
 DO $eg$
-DECLARE sz numeric; tup numeric;
+DECLARE sz numeric; tup numeric; itup numeric;
 BEGIN
   sz  := pg_relation_size('e_g_size_on'::regclass);
   tup := (SELECT reltuples::numeric FROM pg_class WHERE relname = 'e_gate');
+  -- every index here is non-partial on the same table, so CREATE INDEX wrote
+  -- the same entry count into all ten of them
+  itup := (SELECT reltuples::numeric FROM pg_class WHERE relname = 'e_g_size_on');
   -- size gate: current / baseline >= 1.20 fires
-  CALL set_payload('e_g_size_on',  floor(sz / 1.20),   tup);
-  CALL set_payload('e_g_size_off', ceil(sz / 1.20) + 1, tup);
-  -- tuple gate: |current - baseline| >= 0.20 * baseline fires
-  CALL set_payload('e_g_up_on',  sz, floor(tup / 1.20));
-  CALL set_payload('e_g_up_off', sz, ceil(tup / 1.1999) + 1);
-  CALL set_payload('e_g_dn_on',  sz, ceil(tup / 0.80));
-  CALL set_payload('e_g_dn_off', sz, floor(tup / 0.8001) - 1);
+  CALL set_payload('e_g_size_on',  floor(sz / 1.20),    tup, itup);
+  CALL set_payload('e_g_size_off', ceil(sz / 1.20) + 1, tup, itup);
+  -- table tuple gate: |current - baseline| >= 0.20 * baseline fires
+  CALL set_payload('e_g_up_on',  sz, floor(tup / 1.20),        itup);
+  CALL set_payload('e_g_up_off', sz, ceil(tup / 1.1999) + 1,   itup);
+  CALL set_payload('e_g_dn_on',  sz, ceil(tup / 0.80),         itup);
+  CALL set_payload('e_g_dn_off', sz, floor(tup / 0.8001) - 1,  itup);
+  -- index tuple gate: the same arithmetic on the index's own entry count
+  CALL set_payload('e_g_iup_on',  sz, tup, floor(itup / 1.20));
+  CALL set_payload('e_g_iup_off', sz, tup, ceil(itup / 1.1999) + 1);
+  CALL set_payload('e_g_idn_on',  sz, tup, ceil(itup / 0.80));
+  CALL set_payload('e_g_idn_off', sz, tup, floor(itup / 0.8001) - 1);
 END $eg$;
 SELECT ecase_add('size ratio exactly 1.20', 'e_g_size_on', 'gate', 'must measure');
 SELECT ecase_add('size ratio just under 1.20', 'e_g_size_off', 'gate', 'must skip');
-SELECT ecase_add('tuples up by 20%', 'e_g_up_on', 'gate', 'must measure');
-SELECT ecase_add('tuples up by just under 20%', 'e_g_up_off', 'gate', 'must skip');
-SELECT ecase_add('tuples down by 20%', 'e_g_dn_on', 'gate', 'must measure');
-SELECT ecase_add('tuples down by just under 20%', 'e_g_dn_off', 'gate', 'must skip');
+SELECT ecase_add('table tuples up by 20%', 'e_g_up_on', 'gate', 'must measure');
+SELECT ecase_add('table tuples up by just under 20%', 'e_g_up_off', 'gate', 'must skip');
+SELECT ecase_add('table tuples down by 20%', 'e_g_dn_on', 'gate', 'must measure');
+SELECT ecase_add('table tuples down by just under 20%', 'e_g_dn_off', 'gate', 'must skip');
+SELECT ecase_add('index tuples up by 20%', 'e_g_iup_on', 'gate', 'must measure');
+SELECT ecase_add('index tuples up by just under 20%', 'e_g_iup_off', 'gate', 'must skip');
+SELECT ecase_add('index tuples down by 20%', 'e_g_idn_on', 'gate', 'must measure');
+SELECT ecase_add('index tuples down by just under 20%', 'e_g_idn_off', 'gate', 'must skip');
 
 -- ------------------------------------------------- the 40 % decision curve ---
 -- Nine 500,000-row tables, one index each, drained by a known fraction and
 -- vacuumed, with a baseline that makes the tuple gate fire everywhere.  The
 -- curve is wasted_pct against the fraction deleted, and the action it produces.
 DO $dc$
-DECLARE f int; sz numeric; tup numeric;
+DECLARE f int; sz numeric; tup numeric; itup numeric;
 BEGIN
   FOR f IN SELECT unnest(ARRAY[10, 20, 30, 40, 50, 60, 70, 80, 90]) LOOP
     EXECUTE format('CREATE TABLE e_del%s AS SELECT i::int AS k
@@ -2970,11 +3584,13 @@ BEGIN
     EXECUTE format('ANALYZE e_del%s', f);
     EXECUTE format('CREATE INDEX e_del%s_k ON e_del%s (k)', f, f);
     -- the as-built baseline, stored the way a first run would store it.  A
-    -- CALL argument cannot be a subquery, so both values are read first.
+    -- CALL argument cannot be a subquery, so all three values are read first.
     sz := pg_relation_size(format('e_del%s_k', f)::regclass);
     SELECT reltuples::numeric INTO tup FROM pg_class
       WHERE relname = format('e_del%s', f);
-    CALL set_payload(format('e_del%s_k', f), sz, tup);
+    SELECT reltuples::numeric INTO itup FROM pg_class
+      WHERE relname = format('e_del%s_k', f);
+    CALL set_payload(format('e_del%s_k', f), sz, tup, itup);
     EXECUTE format('SELECT ecase_add(''%s%% of the rows deleted'', ''e_del%s_k'',
                                      ''curve'', ''vacuumed, not reindexed'')', f, f);
   END LOOP;
@@ -3088,6 +3704,40 @@ stage_facts() {
   q suite 'INSERT INTO zz_rt SELECT i FROM generate_series(1,2000) i' > /dev/null
   q suite 'REINDEX INDEX zz_rt_k' > /dev/null
   fact reltuples_after_reindex "$(s suite "SELECT reltuples FROM pg_class WHERE relname='zz_rt'")"
+  # The index's own reltuples, which is the third gate input: who writes it,
+  # what each writer writes, and what a partial index gets.  A plain index and
+  # a partial index on the same 10,000-row table, where the predicate selects
+  # exactly one row in five.
+  fact autovacuum_analyze_threshold "$(s suite 'SHOW autovacuum_analyze_threshold')"
+  fact autovacuum_analyze_scale_factor "$(s suite 'SHOW autovacuum_analyze_scale_factor')"
+  q suite 'DROP TABLE IF EXISTS zz_it' > /dev/null 2>&1
+  q suite 'CREATE TABLE zz_it AS SELECT i::int AS k, (i % 5 = 0) AS hot
+             FROM generate_series(1,10000) i' > /dev/null
+  q suite 'CREATE INDEX zz_it_all ON zz_it (k)' > /dev/null
+  q suite 'CREATE INDEX zz_it_part ON zz_it (k) WHERE hot' > /dev/null
+  local ir
+  ir() { s suite "SELECT reltuples FROM pg_class WHERE relname='$1'"; }
+  fact idx_reltuples_after_build "plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'ANALYZE zz_it' > /dev/null
+  fact idx_reltuples_after_analyze \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'DELETE FROM zz_it WHERE hot AND k % 50 <> 0' > /dev/null
+  q suite 'VACUUM zz_it' > /dev/null
+  fact idx_reltuples_after_vacuum \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'ANALYZE zz_it' > /dev/null
+  fact idx_reltuples_after_analyze2 \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  # A VACUUM with nothing to delete is cleanup-only, and an index AM that
+  # reports an estimated count leaves pg_class alone: the count can therefore
+  # be older than the last VACUUM.
+  q suite 'UPDATE zz_it SET k = k + 100000 WHERE k % 1000 = 0' > /dev/null
+  q suite 'VACUUM zz_it' > /dev/null
+  fact idx_reltuples_after_small_vacuum \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'REINDEX INDEX zz_it_part' > /dev/null
+  fact idx_reltuples_after_reindex "partial=$(ir zz_it_part)"
+  q suite 'DROP TABLE IF EXISTS zz_it' > /dev/null 2>&1
   # Transaction control inside DO, which the apply block needs for its COMMIT,
   # and the two commands that cannot be reached from inside one.
   fact commit_inside_do \
@@ -3109,8 +3759,9 @@ stage_facts() {
 }
 
 # ---------------------------------------------------------------- suite ------
-# The ported numbered suite, in six steps: build, baseline, churn, decide, act,
-# oracle.  Steps 2 and 5 run the page's apply block exactly as filed.
+# The ported numbered suite, in eight steps: build, baseline, churn,
+# auto-analyze, forge, decide, act, oracle.  Steps 2 and 7 run the page's apply
+# block exactly as filed.
 stage_suite() {
   say "the ported numbered suite: tests 1-17, 18-91 and controls 92-121"
   q suite 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public' > /dev/null
@@ -3146,6 +3797,44 @@ stage_suite() {
     || { tail -5 "$OUT/suite_churn.log" >&2; die "churn failed"; }
   [ "$have13" = yes ] && f suite "$SQLD/churn_v13.sql" >> "$OUT/suite_churn.log" 2>&1
   [ "$haveicu" = yes ] && f suite "$SQLD/churn_icu.sql" >> "$OUT/suite_churn.log" 2>&1
+
+  # The mandatory-test rule: a fixture that moved more than 10 % of a table's
+  # heap tuples gets an ANALYZE, because autovacuum would have run one.  The
+  # churn ran in psql processes that have now exited, so their statistics are
+  # flushed; one second of grace covers the collector interval of the older
+  # server, whose reader also waits for a fresh file.
+  say "simulated auto-analyze: the engine's own threshold on its own counters"
+  sleep 1
+  f suite "$SQLD/autoanalyze.sql" > "$OUT/autoanalyze.log" 2>&1 \
+    || { tail -5 "$OUT/autoanalyze.log" >&2; die "simulated auto-analyze failed"; }
+  t suite "SELECT /* wiki_btmaint_autoanalyze_report */ tbl, reltuples, mods,
+                  threshold, mod_pct, would_autoanalyze
+             FROM autoanl ORDER BY would_autoanalyze DESC, mods DESC, tbl" \
+    > "$OUT/autoanalyze.txt" 2>&1
+  { printf 'tables considered  %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl')"
+    printf 'analyzed           %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl WHERE would_autoanalyze')"
+    printf 'left alone         %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl WHERE NOT would_autoanalyze')"
+    printf 'counters reset     %s of %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl_after WHERE mods = 0')" \
+      "$(s suite 'SELECT count(*) FROM autoanl_after')"
+    printf 'mod_pct of those analyzed, min/median/max %s\n' \
+      "$(s suite "SELECT min(mod_pct) || ' / ' ||
+                         percentile_disc(0.5) WITHIN GROUP (ORDER BY mod_pct) || ' / ' ||
+                         max(mod_pct) FROM autoanl WHERE would_autoanalyze")"
+    printf 'largest mod_pct left alone %s\n' \
+      "$(s suite "SELECT COALESCE(max(mod_pct)::text, 'none')
+                    FROM autoanl WHERE NOT would_autoanalyze")"; } \
+    >> "$OUT/autoanalyze.txt"
+  [ "$(s suite 'SELECT count(*) FROM autoanl WHERE would_autoanalyze')" -gt 0 ] \
+    || die "no table crossed the auto-analyze threshold: the churn counters are not visible"
+  tail -6 "$OUT/autoanalyze.txt" >&2
+
+  say "forge: the catalog forgeries an ANALYZE would have overwritten"
+  f suite "$SQLD/forge.sql" > "$OUT/forge.log" 2>&1 || die "forge failed"
+  cat "$OUT/forge.log" >&2
   q suite 'CALL take_snap($$churned$$)' || die "snapshot churned failed"
 
   say "decide: the filed report statement, as filed and through the one-edit view"
@@ -3193,6 +3882,17 @@ stage_edge() {
     || { tail -5 "$OUT/edge_build.log" >&2; die "edge fixtures failed"; }
   f edge "$SQLD/edge_churn.sql" > "$OUT/edge_churn.log" 2>&1 \
     || { tail -5 "$OUT/edge_churn.log" >&2; die "edge churn failed"; }
+  # The same >10 % rule, and then the forgeries an ANALYZE would have repaired.
+  sleep 1
+  f edge "$SQLD/edge_autoanalyze.sql" > "$OUT/edge_autoanalyze.log" 2>&1 \
+    || { tail -5 "$OUT/edge_autoanalyze.log" >&2; die "edge auto-analyze failed"; }
+  f edge "$SQLD/edge_forge.sql" > "$OUT/edge_forge.log" 2>&1 \
+    || die "edge forge failed"
+  t edge "SELECT /* wiki_btmaint_eautoanalyze_report */ tbl, reltuples, mods,
+                 threshold, mod_pct, would_autoanalyze
+            FROM eautoanl ORDER BY would_autoanalyze DESC, mods DESC, tbl" \
+    > "$OUT/edge_autoanalyze.txt" 2>&1
+  cat "$OUT/edge_forge.log" >> "$OUT/edge_autoanalyze.txt"
   f edge "$SQLD/plan_view.sql" || die "plan_v in edge failed"
 
   # What the filed statement decides, and what the raw pgstatindex call does to
@@ -3201,29 +3901,30 @@ stage_edge() {
   f edge /dev/stdin <<'SQL' || die "edge plan failed"
 CREATE TABLE eplan AS
 SELECT e.name, e.idx, e.kind, e.note, v.action, v.baseline, v.wasted_pct,
-       v.size_ratio, v.tuple_ratio_now, v.notes, v.comment_command,
-       (v.index_name IS NOT NULL) AS is_candidate
+       v.size_ratio, v.tuple_ratio_now, v.idx_tuple_ratio_now, v.notes,
+       v.comment_command, (v.index_name IS NOT NULL) AS is_candidate
   FROM ecase e LEFT JOIN plan_v v ON v.index_name = e.idx;
 SQL
   t edge "SELECT /* wiki_btmaint_edge_parse */ name, idx, action, baseline, notes
             FROM eplan WHERE kind = 'parse' ORDER BY idx" > "$OUT/edge_parse.txt" 2>&1
-  t edge "SELECT /* wiki_btmaint_edge_filter */ name, idx, is_candidate, action
+  t edge "SELECT /* wiki_btmaint_edge_filter */ name, idx, is_candidate, action, notes
             FROM eplan WHERE kind = 'filter' ORDER BY idx" > "$OUT/edge_filter.txt" 2>&1
   t edge "SELECT /* wiki_btmaint_edge_gate */ e.name, e.idx, p.action,
-                 pg_relation_size(e.idx::regclass) AS cur_bytes,
-                 substring(obj_description(e.idx::regclass, 'pg_class')
-                           from '\"sz\":([0-9]+)')::numeric AS base_bytes,
                  round(pg_relation_size(e.idx::regclass)
                        / substring(obj_description(e.idx::regclass, 'pg_class')
                                    from '\"sz\":([0-9]+)')::numeric, 6) AS size_ratio,
-                 substring(obj_description(e.idx::regclass, 'pg_class')
-                           from '\"tup\":([0-9]+)')::numeric AS base_tuples,
                  round((SELECT t.reltuples::numeric FROM pg_class c
                           JOIN pg_index x ON x.indexrelid = c.oid
                           JOIN pg_class t ON t.oid = x.indrelid
                          WHERE c.oid = e.idx::regclass)
                        / substring(obj_description(e.idx::regclass, 'pg_class')
-                                   from '\"tup\":([0-9]+)')::numeric, 6) AS tuple_ratio
+                                   from '\"tup\":([0-9]+)')::numeric, 6) AS tuple_ratio,
+                 round((SELECT c.reltuples::numeric FROM pg_class c
+                         WHERE c.oid = e.idx::regclass)
+                       / substring(obj_description(e.idx::regclass, 'pg_class')
+                                   from '\"itup\":([0-9]+)')::numeric, 6)
+                     AS idx_tuple_ratio,
+                 p.notes
             FROM ecase e JOIN eplan p ON p.idx = e.idx
            WHERE e.kind = 'gate' ORDER BY e.idx" > "$OUT/edge_gate.txt" 2>&1
   t edge "SELECT /* wiki_btmaint_edge_curve */ name, idx, action, wasted_pct
@@ -3265,8 +3966,8 @@ CREATE TABLE e_surv AS SELECT i::int AS k FROM generate_series(1, 200000) i;
 ANALYZE e_surv;
 CREATE INDEX e_surv_a ON e_surv (k);
 CREATE INDEX e_surv_b ON e_surv ((k + 1));
-COMMENT ON INDEX e_surv_a IS E'human note\n@btmaint:{"v":1,"sz":1,"tup":2}';
-COMMENT ON INDEX e_surv_b IS E'human note\n@btmaint:{"v":1,"sz":1,"tup":2}';
+COMMENT ON INDEX e_surv_a IS E'human note\n@btmaint:{"v":2,"sz":1,"tup":2,"itup":3}';
+COMMENT ON INDEX e_surv_b IS E'human note\n@btmaint:{"v":2,"sz":1,"tup":2,"itup":3}';
 SQL
   printf 'before      a=%s b=%s\n' \
     "$(s edge "SELECT md5(obj_description('e_surv_a'::regclass,'pg_class'))")" \
@@ -3434,14 +4135,25 @@ stage_cost() {
     -c 'EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM plan_v' 2>&1 \
     | grep -m 1 -E 'Buffers: shared' | sed 's/^ */  total /' >> "$OUT/cost.txt"
   printf 'fully gated state (every stored sz halved)\n' >> "$OUT/cost.txt"
+  # Only the size input is forged: both tuple counts are written at their
+  # current values, so the fully gated reading isolates one gate rather than
+  # three, and the worst case it measures is still every gated index read end
+  # to end.
   f suite /dev/stdin > /dev/null 2>&1 <<'SQL'
 DO $fg$
 DECLARE r record;
 BEGIN
-  FOR r IN SELECT p.idx, pg_relation_size(p.idx::regclass) AS b FROM plan p LOOP
+  FOR r IN SELECT p.idx, pg_relation_size(p.idx::regclass) AS b,
+                  c.reltuples::numeric AS itup, t.reltuples::numeric AS tup
+             FROM plan p
+             JOIN pg_class c ON c.relname = p.idx AND c.relkind = 'i'
+             JOIN pg_index x ON x.indexrelid = c.oid
+             JOIN pg_class t ON t.oid = x.indrelid LOOP
     EXECUTE format('COMMENT /* wiki_btmaint_cost_forgery */ ON INDEX %I IS %L',
-                   r.idx, '@btmaint:{"v":1,"sz":' || (r.b / 2)::bigint
-                          || ',"tup":1,"at":"2026-01-01T00:00:00+00"}');
+                   r.idx, '@btmaint:{"v":2,"sz":' || (r.b / 2)::bigint
+                          || ',"tup":' || round(GREATEST(r.tup, -1))
+                          || ',"itup":' || round(GREATEST(r.itup, -1))
+                          || ',"at":"2026-01-01T00:00:00+00"}');
   END LOOP;
 END $fg$;
 SQL
@@ -3466,7 +4178,8 @@ stage_score() {
   say "score"
   t suite "SELECT /* wiki_btmaint_verdict_rows */ num, leg, grp, idx, action,
                   wasted_pct, actual_pct, applied_pct, verdict, lost_by,
-                  expected_stage, taken_stage, want_stage, size_ratio, tuple_ratio
+                  expected_stage, taken_stage, two_gate_stage, want_stage,
+                  size_ratio, tuple_ratio, idx_tuple_ratio
              FROM verdicts ORDER BY num, leg" > "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_verdict_counts */ verdict, count(*)
              FROM verdicts GROUP BY 1 ORDER BY 2 DESC" >> "$OUT/verdicts.txt" 2>&1
@@ -3520,15 +4233,49 @@ stage_score() {
                   count(*) FILTER (WHERE sz_reported = sz_written) AS sz_agrees,
                   count(*) FILTER (WHERE sz_written = bytes_applied) AS sz_is_current
              FROM verdicts GROUP BY action ORDER BY action" >> "$OUT/verdicts.txt" 2>&1
-  t suite "SELECT /* wiki_btmaint_alt_gate */
-                  count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE') AS false_negatives,
-                  count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE'
-                                     AND idx_gate_would_fire) AS caught_by_index_gate,
-                  count(*) FILTER (WHERE action = 'skip' AND idx_gate_would_fire
-                                     AND actual_pct < 50) AS extra_measurements
+  # Which gate opened each measured fixture, and what the third one changed.
+  t suite "SELECT /* wiki_btmaint_gate_attribution */
+                  count(*) FILTER (WHERE taken_stage = 'measure') AS measured,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND size_gate_fires) AS by_size,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND tbl_gate_fires) AS by_table_tuples,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND idx_gate_fires) AS by_index_tuples,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND idx_gate_fires AND NOT size_gate_fires
+                                     AND NOT tbl_gate_fires) AS index_gate_only,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND NOT size_gate_fires AND NOT tbl_gate_fires
+                                     AND NOT idx_gate_fires) AS no_gate
+             FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_two_gate_delta */
+                  count(*) AS fixtures,
+                  count(*) FILTER (WHERE two_gate_stage = taken_stage) AS same_as_two_gate,
+                  count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                     AND taken_stage = 'measure') AS newly_measured,
+                  count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                     AND taken_stage = 'measure'
+                                     AND actual_pct >= 50) AS newly_measured_bloated,
+                  count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                     AND taken_stage = 'measure'
+                                     AND actual_pct < 50) AS newly_measured_healthy,
+                  count(*) FILTER (WHERE two_gate_stage = 'measure'
+                                     AND taken_stage <> 'measure') AS lost_measurements
+             FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_newly_measured */ num, leg, idx, action,
+                  wasted_pct, actual_pct, verdict, idx_tuple_ratio, req
+             FROM verdicts WHERE two_gate_stage = 'skip' AND taken_stage = 'measure'
+            ORDER BY actual_pct DESC" > "$OUT/newly_measured.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_itup_stored */
+                  count(*) AS fixtures,
+                  count(*) FILTER (WHERE itup_stored_matches) AS itup_matches_catalog,
+                  count(*) FILTER (WHERE base_idx_tuples IS NULL) AS itup_missing,
+                  count(*) FILTER (WHERE itup_written IS NOT NULL) AS itup_written_back
              FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_lost_detail */ num, leg, idx, actual_pct,
-                  size_ratio, tuple_ratio, idx_tuple_ratio, idx_gate_would_fire, req
+                  size_ratio, tuple_ratio, idx_tuple_ratio,
+                  size_gate_fires, tbl_gate_fires, idx_gate_fires, req
              FROM verdicts WHERE lost_by IS NOT NULL
             ORDER BY actual_pct DESC" >> "$OUT/lost.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_payload_health */
@@ -3579,19 +4326,47 @@ SELECT '  payload with=' || count(*) FILTER (WHERE payload IS NOT NULL) ||
        ' no_marker='     || count(*) FILTER (WHERE cmt !~ '@btmaint:')
   FROM snap WHERE phase = 'applied';
 SELECT '  false negatives=' || count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE') ||
-       ' of which an index-entry gate would catch=' ||
-       count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE' AND idx_gate_would_fire)
+       ' of which the index tuple gate opened=' ||
+       count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE' AND idx_gate_fires)
   FROM verdicts;
+SELECT '  measured=' || count(*) FILTER (WHERE taken_stage = 'measure') ||
+       ' by size='   || count(*) FILTER (WHERE taken_stage = 'measure' AND size_gate_fires) ||
+       ' by table='  || count(*) FILTER (WHERE taken_stage = 'measure' AND tbl_gate_fires) ||
+       ' by index='  || count(*) FILTER (WHERE taken_stage = 'measure' AND idx_gate_fires) ||
+       ' index only='|| count(*) FILTER (WHERE taken_stage = 'measure' AND idx_gate_fires
+                                          AND NOT size_gate_fires AND NOT tbl_gate_fires)
+  FROM verdicts;
+SELECT '  versus the two-gate form: same=' ||
+       count(*) FILTER (WHERE two_gate_stage = taken_stage) ||
+       ' newly measured=' || count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                                AND taken_stage = 'measure') ||
+       ' of those bloated=' || count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                                 AND taken_stage = 'measure'
+                                                 AND actual_pct >= 50) ||
+       ' healthy=' || count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                        AND taken_stage = 'measure'
+                                        AND actual_pct < 50)
+  FROM verdicts;
+SELECT '  itup stored = catalog count: ' ||
+       count(*) FILTER (WHERE itup_stored_matches) || ' of ' || count(*)
+  FROM verdicts;
+SELECT '  simulated auto-analyze: ' ||
+       count(*) FILTER (WHERE would_autoanalyze) || ' of ' || count(*) ||
+       ' tables analyzed, largest left alone ' ||
+       COALESCE(max(mod_pct) FILTER (WHERE NOT would_autoanalyze)::text, 'none') || ' %'
+  FROM autoanl;
 SQL
   { printf '1. texts\n'; cat "$OUT/hashes.txt" 2>/dev/null
     printf '2. engine checks\n'; cat "$OUT/checks.txt" 2>/dev/null
     printf '3. fixture groups\n'; cat "$OUT/suite_groups.txt" 2>/dev/null
     printf '4. counters\n'; sed 's/^/   /' "$OUT/counters.txt" 2>/dev/null
     printf '5. cost\n'; sed 's/^/   /' "$OUT/cost.txt" 2>/dev/null
+    printf '5a. simulated auto-analyze\n'
+    sed 's/^/   /' "$OUT/autoanalyze.txt" 2>/dev/null
     printf '6. edge groups\n'
     for fl in edge_parse edge_filter edge_gate edge_curve edge_refusals \
               edge_survival edge_priv edge_lock edge_dryrun edge_idempotence \
-              edge_written edge_dump; do
+              edge_written edge_dump edge_autoanalyze; do
       printf '   --- %s\n' "$fl"; sed 's/^/   /' "$OUT/$fl.txt" 2>/dev/null
     done
     printf '7. facts\n'; sed 's/^/   /' "$OUT/facts.txt" 2>/dev/null
@@ -3685,11 +4460,21 @@ main "$@"
 # regression suites, starts an isolated cluster, takes the page's two texts out
 # of the page itself, ports every numbered fixture of the sibling page's
 # mandatory suite (tests 1-17, 18-91 and controls 92-121), stores an as-built
-# baseline in each index comment, churns each fixture, runs the heuristic, and
-# scores every decision against a measured REINDEX INDEX.  A second group of
-# fixtures covers this heuristic's own surface: comment parsing, comment
-# preservation, the candidate filters, both gate boundaries and the 40 %
-# decision curve.
+# baseline in each index comment, churns each fixture, simulates the auto-analyze
+# that churn would have triggered on a server with autovacuum on, runs the
+# heuristic, and scores every decision against a measured REINDEX INDEX.  A
+# second group of fixtures covers this heuristic's own surface: comment parsing,
+# comment preservation, the candidate filters, all three gate boundaries and the
+# 40 % decision curve.
+#
+# The simulated auto-analyze is the mandatory-test rule that any fixture moving
+# more than 10 % of a table's heap tuples must ANALYZE it.  It is not
+# hand-annotated per fixture: stage_autoanalyze reads the engine's own
+# n_mod_since_analyze counter and applies the engine's own threshold,
+# autovacuum_analyze_threshold + autovacuum_analyze_scale_factor * reltuples
+# (50 + 0.1 * reltuples at the defaults), so the tables it analyzes are exactly
+# the tables an autovacuum launcher would have analyzed.  Every table it
+# considered, with its counter, its threshold and the verdict, is recorded.
 #
 # The pinned checkout is read only: everything this script writes lives under
 # $SANDBOX (default .wiki-runtime/tmp/btmaint).
@@ -3719,8 +4504,8 @@ export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
 # SHA-256 baselines of the two fenced SQL blocks of the page, in page order:
 # the report statement and the apply block.  A changed text must be re-measured
 # and the hash refiled; that is the point of recording them here.
-BASE_REPORT=4a3d970d76b357976c51ed9121e5deb1ce65f81fdf578b12c72cc0a9cec10cf2
-BASE_APPLY=86e0ae3d77c7dd8c8dfa201a4b819674f15fe45ab21d12a7f77649c9f29d9f85
+BASE_REPORT=93b64e2dd33d411951ceffd9d665a3e3e8ce3a71fde60bbca9e61c219febd0e9
+BASE_APPLY=7427d62d2ca3bb43dd2f7c5a8aa97c27fc8111d65d3066594660c2808d47992d
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -3899,11 +4684,12 @@ CREATE TABLE plan(num int, leg text DEFAULT '', grp text, req text, idx text,
                   PRIMARY KEY (num, leg));
 
 -- One row per index per phase.  phase is 'built', 'init', 'churned', 'applied'.
--- idx_tuples is the index's own pg_class.reltuples, which the heuristic does
--- not read: it is here to measure what a different gate would have seen.
+-- idx_tuples is the index's own pg_class.reltuples, which the heuristic now
+-- reads as its third gate input; base_idx_tuples is the itup field of the
+-- stored payload, parsed here independently of the filed text.
 CREATE TABLE snap(phase text, idx text, idx_oid oid, bytes bigint,
                   tbl_tuples numeric, idx_tuples numeric, cmt text, payload text,
-                  base_bytes numeric, base_tuples numeric,
+                  base_bytes numeric, base_tuples numeric, base_idx_tuples numeric,
                   PRIMARY KEY (phase, idx));
 
 -- What the heuristic decided, and what a rebuild actually gave back.
@@ -3932,7 +4718,9 @@ BEGIN
          substring(d.description from '@btmaint:(\{[^}]*\})'),
          substring(d.description from '"sz":([0-9]{1,25})[,}]')::numeric,
          substring(d.description from
-                   '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric
+                   '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric,
+         substring(d.description from
+                   '"itup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric
     FROM plan p
     JOIN pg_class c ON c.relname = p.idx AND c.relkind = 'i'
     JOIN pg_index x ON x.indexrelid = c.oid
@@ -3972,17 +4760,32 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
             THEN round(ch.bytes / ic.base_bytes, 4) END          AS size_ratio,
        CASE WHEN ic.base_tuples > 0
             THEN round(ch.tbl_tuples / ic.base_tuples, 4) END    AS tuple_ratio,
-       -- What a gate on the index's own entry count would have seen instead.
-       ic.idx_tuples AS base_idx_tuples, ch.idx_tuples AS churned_idx_tuples,
-       CASE WHEN ic.idx_tuples > 0
-            THEN round(ch.idx_tuples / ic.idx_tuples, 4) END     AS idx_tuple_ratio,
-       (ic.idx_tuples > 0 AND ch.idx_tuples >= 0
-        AND abs(ch.idx_tuples - ic.idx_tuples) >= ic.idx_tuples * 0.20)
-                                                                 AS idx_gate_would_fire,
+       -- The index's own entry count: the baseline the payload stored, the
+       -- count the catalog holds after the churn, and their ratio.  The
+       -- payload value is what the heuristic reads; ic.idx_tuples is the live
+       -- catalog value at baseline time, so the two must agree.
+       ic.base_idx_tuples, ch.idx_tuples AS churned_idx_tuples,
+       (ic.base_idx_tuples = round(ic.idx_tuples))               AS itup_stored_matches,
+       CASE WHEN ic.base_idx_tuples > 0
+            THEN round(ch.idx_tuples / ic.base_idx_tuples, 4) END AS idx_tuple_ratio,
+       -- Which of the three gates fires, each recomputed here from the
+       -- recorded baseline, independently of the filed text.
+       (ic.base_bytes > 0 AND ch.bytes >= ic.base_bytes * 1.20)  AS size_gate_fires,
+       (ch.tbl_tuples >= 0 AND ic.base_tuples >= 0
+        AND (CASE WHEN ic.base_tuples = 0 THEN ch.tbl_tuples > 0
+                  ELSE abs(ch.tbl_tuples - ic.base_tuples)
+                       >= ic.base_tuples * 0.20 END))            AS tbl_gate_fires,
+       (ch.idx_tuples >= 0 AND ic.base_idx_tuples >= 0
+        AND (CASE WHEN ic.base_idx_tuples = 0 THEN ch.idx_tuples > 0
+                  ELSE abs(ch.idx_tuples - ic.base_idx_tuples)
+                       >= ic.base_idx_tuples * 0.20 END))        AS idx_gate_fires,
        -- The sz the report proposed to store, against the sz that was stored.
        substring(t.cmd_report from '"sz":([0-9]+)')::numeric      AS sz_reported,
        substring(t.cmd_written from '"sz":([0-9]+)')::numeric     AS sz_written,
+       substring(t.cmd_written from '"itup":(-?[0-9]+)')::numeric AS itup_written,
        CASE WHEN ic.payload IS NULL                              THEN 'initialize'
+            WHEN ic.base_bytes IS NULL OR ic.base_tuples IS NULL
+              OR ic.base_idx_tuples IS NULL                      THEN 'initialize'
             WHEN ic.base_bytes > 0 AND ch.bytes < ic.base_bytes  THEN 'refresh'
             WHEN ic.base_bytes > 0 AND ch.bytes >= ic.base_bytes * 1.20
                                                                  THEN 'measure'
@@ -3991,7 +4794,25 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
                                                                  THEN 'measure'
             WHEN ch.tbl_tuples >= 0 AND ic.base_tuples = 0 AND ch.tbl_tuples > 0
                                                                  THEN 'measure'
+            WHEN ch.idx_tuples >= 0 AND ic.base_idx_tuples > 0
+             AND abs(ch.idx_tuples - ic.base_idx_tuples) >= ic.base_idx_tuples * 0.20
+                                                                 THEN 'measure'
+            WHEN ch.idx_tuples >= 0 AND ic.base_idx_tuples = 0 AND ch.idx_tuples > 0
+                                                                 THEN 'measure'
             ELSE 'skip' END                                      AS expected_stage,
+       -- The two-gate form this page filed before the index count was stored,
+       -- recomputed on the same fixtures so the change can be quantified.
+       CASE WHEN ic.payload IS NULL                              THEN 'initialize'
+            WHEN ic.base_bytes IS NULL OR ic.base_tuples IS NULL THEN 'initialize'
+            WHEN ic.base_bytes > 0 AND ch.bytes < ic.base_bytes  THEN 'refresh'
+            WHEN ic.base_bytes > 0 AND ch.bytes >= ic.base_bytes * 1.20
+                                                                 THEN 'measure'
+            WHEN ch.tbl_tuples >= 0 AND ic.base_tuples > 0
+             AND abs(ch.tbl_tuples - ic.base_tuples) >= ic.base_tuples * 0.20
+                                                                 THEN 'measure'
+            WHEN ch.tbl_tuples >= 0 AND ic.base_tuples = 0 AND ch.tbl_tuples > 0
+                                                                 THEN 'measure'
+            ELSE 'skip' END                                      AS two_gate_stage,
        CASE WHEN t.action IN ('reindex', 'update') THEN 'measure'
             ELSE t.action END                                    AS taken_stage,
        -- The rebuild oracle against the 40 % decision.
@@ -4965,8 +5786,9 @@ DELETE FROM pb77 WHERE hot AND k < 475000;
 VACUUM pb77;
 ANALYZE pb77;
 
--- 84: a forged partial-index reltuples.  Disposable catalog forgery.
-UPDATE pg_class SET reltuples = 5000 WHERE relname = 'f84';
+-- 84's forged partial-index reltuples has moved to forge.sql, which runs after
+-- the simulated auto-analyze, because an ANALYZE of its table would overwrite
+-- the forgery and the fixture would stop testing anything.
 
 -- 86-91: genuinely bloated, VACUUMed and ANALYZEd.
 DELETE FROM f86t WHERE hot AND k >= 25;
@@ -5112,9 +5934,130 @@ SELECT /* wiki_btmaint_drainicu_generator */ format(st.tmpl, tb.name)
  ORDER BY tb.n, st.k
 \gexec
 CHURN_ICU
+  cat > "$SQLD/autoanalyze.sql" <<'AUTOANALYZE'
+-- The simulated auto-analyze, and the mandatory-test rule behind it: a fixture
+-- that changes more than 10 % of a table's heap tuples must ANALYZE it, because
+-- on a server with autovacuum on the launcher would have.
+--
+-- The trigger is not hand-written per fixture.  It is the engine's own test,
+-- n_mod_since_analyze > autovacuum_analyze_threshold +
+-- autovacuum_analyze_scale_factor * reltuples, which is exactly what
+-- relation_needs_vacanalyze() compares; at the defaults that is 50 + 10 % of
+-- the table's estimated row count.  autovacuum is off in this cluster, so no
+-- background worker can have analyzed anything, and every ANALYZE below is one
+-- this fixture set asked for.
+--
+-- Both counter states are recorded: autoanl holds what the churn left behind,
+-- autoanl_after holds the same counters once the ANALYZEs have run, which is
+-- how the run proves the simulation actually fired.
+-- Disposable fixtures, suite database of the sandbox cluster only.
+SET /* wiki_btmaint_autoanl_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_autoanl_statement_timeout */ statement_timeout = '900s';
+SET /* wiki_btmaint_autoanl_lock_timeout */ lock_timeout = '5s';
+
+DROP TABLE IF EXISTS autoanl;
+DROP TABLE IF EXISTS autoanl_after;
+CREATE TABLE autoanl AS
+SELECT /* wiki_btmaint_autoanalyze_census */
+       c.relname                                   AS tbl,
+       GREATEST(c.reltuples, 0)::numeric           AS reltuples,
+       st.n_mod_since_analyze::numeric             AS mods,
+       round(current_setting('autovacuum_analyze_threshold')::numeric
+             + current_setting('autovacuum_analyze_scale_factor')::numeric
+               * GREATEST(c.reltuples, 0)::numeric, 1) AS threshold,
+       round(100 * st.n_mod_since_analyze
+             / GREATEST(c.reltuples, 1)::numeric, 1)   AS mod_pct,
+       (st.n_mod_since_analyze
+        > current_setting('autovacuum_analyze_threshold')::numeric
+          + current_setting('autovacuum_analyze_scale_factor')::numeric
+            * GREATEST(c.reltuples, 0)::numeric)       AS would_autoanalyze
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public'
+   AND c.relkind = 'r'
+   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after');
+
+SELECT /* wiki_btmaint_autoanalyze_generator */
+       format('ANALYZE /* wiki_btmaint_autoanalyze */ %I', tbl)
+  FROM autoanl WHERE would_autoanalyze ORDER BY tbl
+\gexec
+
+CREATE TABLE autoanl_after AS
+SELECT /* wiki_btmaint_autoanalyze_recheck */
+       c.relname AS tbl, st.n_mod_since_analyze::numeric AS mods,
+       GREATEST(c.reltuples, 0)::numeric AS reltuples
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public' AND c.relkind = 'r'
+   AND c.relname IN (SELECT tbl FROM autoanl WHERE would_autoanalyze);
+AUTOANALYZE
+  cat > "$SQLD/forge.sql" <<'FORGE'
+-- The numbered suite's catalog forgeries, applied after the simulated
+-- auto-analyze so that an ANALYZE cannot overwrite them.  Fixture 84 is a
+-- partial index whose recorded entry count is deliberately wrong, which is now
+-- an input the heuristic reads rather than one it ignores.
+-- Disposable catalog forgery, suite database of the sandbox cluster only.
+SET /* wiki_btmaint_forge_client_min_messages */ client_min_messages = warning;
+UPDATE /* wiki_btmaint_forge_84 */ pg_class SET reltuples = 5000
+ WHERE relname = 'f84';
+SELECT /* wiki_btmaint_forge_check */ 'f84 reltuples now ' || reltuples
+  FROM pg_class WHERE relname = 'f84';
+FORGE
+  cat > "$SQLD/edge_autoanalyze.sql" <<'EDGE_AUTOANALYZE'
+-- The same simulated auto-analyze rule, applied to the edge database so that
+-- no fixture group is exempt from it.  Its curve fixtures analyze themselves
+-- as part of their recipe, so this census is expected to find little or
+-- nothing left to do; that is a result, and it is recorded rather than assumed.
+-- Disposable fixtures, edge database of the sandbox cluster only.
+SET /* wiki_btmaint_eautoanl_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_eautoanl_statement_timeout */ statement_timeout = '900s';
+SET /* wiki_btmaint_eautoanl_lock_timeout */ lock_timeout = '5s';
+
+DROP TABLE IF EXISTS eautoanl;
+CREATE TABLE eautoanl AS
+SELECT /* wiki_btmaint_eautoanalyze_census */
+       c.relname                                   AS tbl,
+       GREATEST(c.reltuples, 0)::numeric           AS reltuples,
+       st.n_mod_since_analyze::numeric             AS mods,
+       round(current_setting('autovacuum_analyze_threshold')::numeric
+             + current_setting('autovacuum_analyze_scale_factor')::numeric
+               * GREATEST(c.reltuples, 0)::numeric, 1) AS threshold,
+       round(100 * st.n_mod_since_analyze
+             / GREATEST(c.reltuples, 1)::numeric, 1)   AS mod_pct,
+       (st.n_mod_since_analyze
+        > current_setting('autovacuum_analyze_threshold')::numeric
+          + current_setting('autovacuum_analyze_scale_factor')::numeric
+            * GREATEST(c.reltuples, 0)::numeric)       AS would_autoanalyze
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public'
+   AND c.relkind = 'r'
+   AND c.relname NOT IN ('ecase', 'eplan', 'eautoanl');
+
+SELECT /* wiki_btmaint_eautoanalyze_generator */
+       format('ANALYZE /* wiki_btmaint_autoanalyze */ %I', tbl)
+  FROM eautoanl WHERE would_autoanalyze ORDER BY tbl
+\gexec
+EDGE_AUTOANALYZE
+  cat > "$SQLD/edge_forge.sql" <<'EDGE_FORGE'
+-- The edge database's three catalog forgeries, re-applied after the simulated
+-- auto-analyze for the same reason fixture 84's is: an ANALYZE of the table
+-- rewrites reltuples for the table and for every index on it, which would
+-- quietly repair the two "nothing has counted this" fixtures.
+-- Disposable catalog forgeries, edge database of the sandbox cluster only.
+SET /* wiki_btmaint_eforge_client_min_messages */ client_min_messages = warning;
+UPDATE /* wiki_btmaint_eforge_invalid */ pg_index SET indisvalid = false
+ WHERE indexrelid = 'e_inv_k'::regclass;
+UPDATE /* wiki_btmaint_eforge_tbl_unknown */ pg_class SET reltuples = -1
+ WHERE relname = 'e_unk';
+UPDATE /* wiki_btmaint_eforge_idx_unknown */ pg_class SET reltuples = -1
+ WHERE relname = 'e_iunk_k';
+SELECT /* wiki_btmaint_eforge_check */ relname || ' reltuples ' || reltuples
+  FROM pg_class WHERE relname IN ('e_unk', 'e_iunk_k') ORDER BY relname;
+EDGE_FORGE
   cat > "$SQLD/edge_build.sql" <<'EDGE_BUILD'
 -- The heuristic's own acceptance fixtures: comment parsing, comment
--- preservation, the candidate filters, the two gate boundaries and the 40 %
+-- preservation, the candidate filters, the three gate boundaries and the 40 %
 -- decision curve.  Everything here is disposable and lives in the edge
 -- database of the sandbox cluster.
 SET /* wiki_btmaint_edge_client_min_messages */ client_min_messages = warning;
@@ -5130,14 +6073,16 @@ $$ INSERT INTO ecase VALUES (n, i, k, nt) $$;
 
 -- set_payload writes a forged baseline, so that a gate boundary can be hit
 -- exactly without waiting for a table to grow.  Harness object, not part of
--- the heuristic.
+-- the heuristic.  itup is the index's own entry count, the third gate input.
 CREATE OR REPLACE PROCEDURE set_payload(idx text, sz numeric, tup numeric,
+                                        itup numeric DEFAULT 0,
                                         usr text DEFAULT NULL,
                                         raw text DEFAULT NULL)
 LANGUAGE plpgsql AS $sp$
 DECLARE body text;
 BEGIN
-  body := COALESCE(raw, '@btmaint:{"v":1,"sz":' || sz || ',"tup":' || tup
+  body := COALESCE(raw, '@btmaint:{"v":2,"sz":' || sz || ',"tup":' || tup
+                        || ',"itup":' || itup
                         || ',"at":"2026-01-01T00:00:00+00"}');
   EXECUTE format('COMMENT ON INDEX %I IS %L', idx,
                  CASE WHEN usr IS NULL THEN body ELSE usr || E'\n' || body END);
@@ -5156,28 +6101,37 @@ CREATE INDEX e_bad4  ON e_t ((k + 4));
 CREATE INDEX e_bad5  ON e_t ((k + 5));
 CREATE INDEX e_bad6  ON e_t ((k + 6));
 CREATE INDEX e_bad7  ON e_t ((k + 7));
+CREATE INDEX e_bad8  ON e_t ((k + 12));
+CREATE INDEX e_bad9  ON e_t ((k + 13));
 CREATE INDEX e_quote ON e_t ((k + 8));
 CREATE INDEX e_long  ON e_t ((k + 9));
 CREATE INDEX e_mid   ON e_t ((k + 10));
 CREATE INDEX e_two   ON e_t ((k + 11));
 
 COMMENT ON INDEX e_user IS 'human note, kept verbatim';
-CALL set_payload('e_bad1', 0, 0, NULL, '@btmaint:{"v":1,"sz":,"tup":1}');
-CALL set_payload('e_bad2', 0, 0, NULL, '@btmaint:{"v":9,"sz":1,"tup":1}');
-CALL set_payload('e_bad3', 0, 0, NULL, '@btmaint:{"v":1,"sz":"big","tup":1}');
-CALL set_payload('e_bad4', 0, 0, NULL, '@btmaint:{"v":1,"sz":1');
-CALL set_payload('e_bad5', 0, 0, NULL, '@btmaint:not json at all');
-CALL set_payload('e_bad6', 0, 0, NULL, '@btmaint:{"v":1,"tup":1}');
-CALL set_payload('e_bad7', 0, 0, NULL,
-                 '@btmaint:{"v":1,"sz":99999999999999999999999999999999,"tup":1}');
-CALL set_payload('e_quote', 0, 0,
+CALL set_payload('e_bad1', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":,"tup":1,"itup":1}');
+CALL set_payload('e_bad2', 0, 0, 0, NULL, '@btmaint:{"v":9,"sz":1,"tup":1,"itup":1}');
+CALL set_payload('e_bad3', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":"big","tup":1,"itup":1}');
+CALL set_payload('e_bad4', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":1');
+CALL set_payload('e_bad5', 0, 0, 0, NULL, '@btmaint:not json at all');
+CALL set_payload('e_bad6', 0, 0, 0, NULL, '@btmaint:{"v":2,"tup":1,"itup":1}');
+CALL set_payload('e_bad7', 0, 0, 0, NULL,
+                 '@btmaint:{"v":2,"sz":99999999999999999999999999999999,"tup":1,"itup":1}');
+-- The migration case: a well-formed payload in the format this page filed
+-- before the index entry count was stored.  It must read invalid, because a
+-- v1 baseline cannot answer the index tuple gate.
+CALL set_payload('e_bad8', 0, 0, 0, NULL, '@btmaint:{"v":1,"sz":1,"tup":1}');
+-- A v2 payload with the itup key missing, which is the same defect arriving
+-- without the version number moving.
+CALL set_payload('e_bad9', 0, 0, 0, NULL, '@btmaint:{"v":2,"sz":1,"tup":1}');
+CALL set_payload('e_quote', 0, 0, 0,
                  'quote '' backslash \ percent %s newline'
                  || E'\n' || 'second line of the human note');
-CALL set_payload('e_long', 0, 0, repeat('L', 8000));
-COMMENT ON INDEX e_mid IS '@btmaint:{"v":1,"sz":1,"tup":1} and text after it';
+CALL set_payload('e_long', 0, 0, 0, repeat('L', 8000));
+COMMENT ON INDEX e_mid IS '@btmaint:{"v":2,"sz":1,"tup":1,"itup":1} and text after it';
 -- COMMENT takes a string literal, never an expression, so the two-marker case
 -- is written as one literal with an embedded newline.
-COMMENT ON INDEX e_two IS E'@btmaint:{"v":1,"sz":1,"tup":1}\n@btmaint:{"v":1,"sz":2,"tup":2}';
+COMMENT ON INDEX e_two IS E'@btmaint:{"v":2,"sz":1,"tup":1,"itup":1}\n@btmaint:{"v":2,"sz":2,"tup":2,"itup":2}';
 SELECT ecase_add('absent payload', 'e_none', 'parse', 'no comment at all');
 SELECT ecase_add('user comment only', 'e_user', 'parse', 'human text, no marker');
 SELECT ecase_add('empty sz', 'e_bad1', 'parse', 'malformed JSON');
@@ -5185,8 +6139,10 @@ SELECT ecase_add('wrong format version', 'e_bad2', 'parse', 'v = 9');
 SELECT ecase_add('non-numeric sz', 'e_bad3', 'parse', 'quoted string');
 SELECT ecase_add('truncated payload', 'e_bad4', 'parse', 'no closing brace');
 SELECT ecase_add('marker without JSON', 'e_bad5', 'parse', 'free text');
-SELECT ecase_add('missing sz key', 'e_bad6', 'parse', 'tup only');
+SELECT ecase_add('missing sz key', 'e_bad6', 'parse', 'tup and itup only');
 SELECT ecase_add('32-digit sz', 'e_bad7', 'parse', 'longer than the regex bound');
+SELECT ecase_add('v1 payload, no index count', 'e_bad8', 'parse', 'the migration case');
+SELECT ecase_add('missing itup key', 'e_bad9', 'parse', 'v2 shape, key absent');
 SELECT ecase_add('quoting round trip', 'e_quote', 'parse', 'quote, backslash, percent, newline');
 SELECT ecase_add('8000-character note', 'e_long', 'parse', 'toasted description');
 SELECT ecase_add('marker mid-string', 'e_mid', 'parse', 'text after the payload');
@@ -5225,16 +6181,38 @@ UPDATE pg_index SET indisvalid = false
  WHERE indexrelid = 'e_inv_k'::regclass;    -- disposable catalog forgery
 SELECT ecase_add('invalid index', 'e_inv_k', 'filter', 'forged indisvalid = false');
 
+-- Both "nothing has counted this" fixtures get a readable baseline first, so
+-- that the gate they disable is a gate that would otherwise have an opinion,
+-- and the reason appears in notes instead of the row reading 'initialize'.
 CREATE TABLE e_unk AS SELECT i::int AS k FROM generate_series(1, 200000) i;
 ANALYZE e_unk;
 CREATE INDEX e_unk_k ON e_unk (k);
-UPDATE pg_class SET reltuples = -1 WHERE relname = 'e_unk';  -- disposable forgery
+CREATE TABLE e_iunk AS SELECT i::int AS k FROM generate_series(1, 200000) i;
+ANALYZE e_iunk;
+CREATE INDEX e_iunk_k ON e_iunk (k);
+DO $eu$
+DECLARE sz numeric; tup numeric; itup numeric;
+BEGIN
+  sz  := pg_relation_size('e_unk_k'::regclass);
+  SELECT reltuples::numeric INTO tup  FROM pg_class WHERE relname = 'e_unk';
+  SELECT reltuples::numeric INTO itup FROM pg_class WHERE relname = 'e_unk_k';
+  CALL set_payload('e_unk_k', sz, tup, itup);
+  sz  := pg_relation_size('e_iunk_k'::regclass);
+  SELECT reltuples::numeric INTO tup  FROM pg_class WHERE relname = 'e_iunk';
+  SELECT reltuples::numeric INTO itup FROM pg_class WHERE relname = 'e_iunk_k';
+  CALL set_payload('e_iunk_k', sz, tup, itup);
+END $eu$;
+UPDATE pg_class SET reltuples = -1 WHERE relname = 'e_unk';     -- disposable forgery
+UPDATE pg_class SET reltuples = -1 WHERE relname = 'e_iunk_k';  -- disposable forgery
 SELECT ecase_add('table reltuples unknown', 'e_unk_k', 'filter', 'forged reltuples = -1');
+SELECT ecase_add('index reltuples unknown', 'e_iunk_k', 'filter', 'forged index reltuples = -1');
 
 -- --------------------------------------------------------- gate boundaries ---
--- One 200,000-row table, six indexes, six forged baselines.  The index size is
--- read back and the baseline is set so that the ratio is exactly on, or just
--- under, each threshold.
+-- One 200,000-row table, ten indexes, ten forged baselines.  The index size
+-- and both entry counts are read back and the baseline is set so that the
+-- ratio is exactly on, or just under, each of the three thresholds.  Only one
+-- input is moved per fixture; the other two are set to the current value so
+-- they cannot fire.
 CREATE TABLE e_gate AS SELECT i::int AS k FROM generate_series(1, 200000) i;
 ANALYZE e_gate;
 CREATE INDEX e_g_size_on  ON e_gate (k);
@@ -5243,33 +6221,49 @@ CREATE INDEX e_g_up_on    ON e_gate ((k + 2));
 CREATE INDEX e_g_up_off   ON e_gate ((k + 3));
 CREATE INDEX e_g_dn_on    ON e_gate ((k + 4));
 CREATE INDEX e_g_dn_off   ON e_gate ((k + 5));
+CREATE INDEX e_g_iup_on   ON e_gate ((k + 6));
+CREATE INDEX e_g_iup_off  ON e_gate ((k + 7));
+CREATE INDEX e_g_idn_on   ON e_gate ((k + 8));
+CREATE INDEX e_g_idn_off  ON e_gate ((k + 9));
 DO $eg$
-DECLARE sz numeric; tup numeric;
+DECLARE sz numeric; tup numeric; itup numeric;
 BEGIN
   sz  := pg_relation_size('e_g_size_on'::regclass);
   tup := (SELECT reltuples::numeric FROM pg_class WHERE relname = 'e_gate');
+  -- every index here is non-partial on the same table, so CREATE INDEX wrote
+  -- the same entry count into all ten of them
+  itup := (SELECT reltuples::numeric FROM pg_class WHERE relname = 'e_g_size_on');
   -- size gate: current / baseline >= 1.20 fires
-  CALL set_payload('e_g_size_on',  floor(sz / 1.20),   tup);
-  CALL set_payload('e_g_size_off', ceil(sz / 1.20) + 1, tup);
-  -- tuple gate: |current - baseline| >= 0.20 * baseline fires
-  CALL set_payload('e_g_up_on',  sz, floor(tup / 1.20));
-  CALL set_payload('e_g_up_off', sz, ceil(tup / 1.1999) + 1);
-  CALL set_payload('e_g_dn_on',  sz, ceil(tup / 0.80));
-  CALL set_payload('e_g_dn_off', sz, floor(tup / 0.8001) - 1);
+  CALL set_payload('e_g_size_on',  floor(sz / 1.20),    tup, itup);
+  CALL set_payload('e_g_size_off', ceil(sz / 1.20) + 1, tup, itup);
+  -- table tuple gate: |current - baseline| >= 0.20 * baseline fires
+  CALL set_payload('e_g_up_on',  sz, floor(tup / 1.20),        itup);
+  CALL set_payload('e_g_up_off', sz, ceil(tup / 1.1999) + 1,   itup);
+  CALL set_payload('e_g_dn_on',  sz, ceil(tup / 0.80),         itup);
+  CALL set_payload('e_g_dn_off', sz, floor(tup / 0.8001) - 1,  itup);
+  -- index tuple gate: the same arithmetic on the index's own entry count
+  CALL set_payload('e_g_iup_on',  sz, tup, floor(itup / 1.20));
+  CALL set_payload('e_g_iup_off', sz, tup, ceil(itup / 1.1999) + 1);
+  CALL set_payload('e_g_idn_on',  sz, tup, ceil(itup / 0.80));
+  CALL set_payload('e_g_idn_off', sz, tup, floor(itup / 0.8001) - 1);
 END $eg$;
 SELECT ecase_add('size ratio exactly 1.20', 'e_g_size_on', 'gate', 'must measure');
 SELECT ecase_add('size ratio just under 1.20', 'e_g_size_off', 'gate', 'must skip');
-SELECT ecase_add('tuples up by 20%', 'e_g_up_on', 'gate', 'must measure');
-SELECT ecase_add('tuples up by just under 20%', 'e_g_up_off', 'gate', 'must skip');
-SELECT ecase_add('tuples down by 20%', 'e_g_dn_on', 'gate', 'must measure');
-SELECT ecase_add('tuples down by just under 20%', 'e_g_dn_off', 'gate', 'must skip');
+SELECT ecase_add('table tuples up by 20%', 'e_g_up_on', 'gate', 'must measure');
+SELECT ecase_add('table tuples up by just under 20%', 'e_g_up_off', 'gate', 'must skip');
+SELECT ecase_add('table tuples down by 20%', 'e_g_dn_on', 'gate', 'must measure');
+SELECT ecase_add('table tuples down by just under 20%', 'e_g_dn_off', 'gate', 'must skip');
+SELECT ecase_add('index tuples up by 20%', 'e_g_iup_on', 'gate', 'must measure');
+SELECT ecase_add('index tuples up by just under 20%', 'e_g_iup_off', 'gate', 'must skip');
+SELECT ecase_add('index tuples down by 20%', 'e_g_idn_on', 'gate', 'must measure');
+SELECT ecase_add('index tuples down by just under 20%', 'e_g_idn_off', 'gate', 'must skip');
 
 -- ------------------------------------------------- the 40 % decision curve ---
 -- Nine 500,000-row tables, one index each, drained by a known fraction and
 -- vacuumed, with a baseline that makes the tuple gate fire everywhere.  The
 -- curve is wasted_pct against the fraction deleted, and the action it produces.
 DO $dc$
-DECLARE f int; sz numeric; tup numeric;
+DECLARE f int; sz numeric; tup numeric; itup numeric;
 BEGIN
   FOR f IN SELECT unnest(ARRAY[10, 20, 30, 40, 50, 60, 70, 80, 90]) LOOP
     EXECUTE format('CREATE TABLE e_del%s AS SELECT i::int AS k
@@ -5277,11 +6271,13 @@ BEGIN
     EXECUTE format('ANALYZE e_del%s', f);
     EXECUTE format('CREATE INDEX e_del%s_k ON e_del%s (k)', f, f);
     -- the as-built baseline, stored the way a first run would store it.  A
-    -- CALL argument cannot be a subquery, so both values are read first.
+    -- CALL argument cannot be a subquery, so all three values are read first.
     sz := pg_relation_size(format('e_del%s_k', f)::regclass);
     SELECT reltuples::numeric INTO tup FROM pg_class
       WHERE relname = format('e_del%s', f);
-    CALL set_payload(format('e_del%s_k', f), sz, tup);
+    SELECT reltuples::numeric INTO itup FROM pg_class
+      WHERE relname = format('e_del%s_k', f);
+    CALL set_payload(format('e_del%s_k', f), sz, tup, itup);
     EXECUTE format('SELECT ecase_add(''%s%% of the rows deleted'', ''e_del%s_k'',
                                      ''curve'', ''vacuumed, not reindexed'')', f, f);
   END LOOP;
@@ -5431,6 +6427,40 @@ stage_facts() {
   q suite 'INSERT INTO zz_rt SELECT i FROM generate_series(1,2000) i' > /dev/null
   q suite 'REINDEX INDEX zz_rt_k' > /dev/null
   fact reltuples_after_reindex "$(s suite "SELECT reltuples FROM pg_class WHERE relname='zz_rt'")"
+  # The index's own reltuples, which is the third gate input: who writes it,
+  # what each writer writes, and what a partial index gets.  A plain index and
+  # a partial index on the same 10,000-row table, where the predicate selects
+  # exactly one row in five.
+  fact autovacuum_analyze_threshold "$(s suite 'SHOW autovacuum_analyze_threshold')"
+  fact autovacuum_analyze_scale_factor "$(s suite 'SHOW autovacuum_analyze_scale_factor')"
+  q suite 'DROP TABLE IF EXISTS zz_it' > /dev/null 2>&1
+  q suite 'CREATE TABLE zz_it AS SELECT i::int AS k, (i % 5 = 0) AS hot
+             FROM generate_series(1,10000) i' > /dev/null
+  q suite 'CREATE INDEX zz_it_all ON zz_it (k)' > /dev/null
+  q suite 'CREATE INDEX zz_it_part ON zz_it (k) WHERE hot' > /dev/null
+  local ir
+  ir() { s suite "SELECT reltuples FROM pg_class WHERE relname='$1'"; }
+  fact idx_reltuples_after_build "plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'ANALYZE zz_it' > /dev/null
+  fact idx_reltuples_after_analyze \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'DELETE FROM zz_it WHERE hot AND k % 50 <> 0' > /dev/null
+  q suite 'VACUUM zz_it' > /dev/null
+  fact idx_reltuples_after_vacuum \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'ANALYZE zz_it' > /dev/null
+  fact idx_reltuples_after_analyze2 \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  # A VACUUM with nothing to delete is cleanup-only, and an index AM that
+  # reports an estimated count leaves pg_class alone: the count can therefore
+  # be older than the last VACUUM.
+  q suite 'UPDATE zz_it SET k = k + 100000 WHERE k % 1000 = 0' > /dev/null
+  q suite 'VACUUM zz_it' > /dev/null
+  fact idx_reltuples_after_small_vacuum \
+    "table=$(ir zz_it) plain=$(ir zz_it_all) partial=$(ir zz_it_part)"
+  q suite 'REINDEX INDEX zz_it_part' > /dev/null
+  fact idx_reltuples_after_reindex "partial=$(ir zz_it_part)"
+  q suite 'DROP TABLE IF EXISTS zz_it' > /dev/null 2>&1
   # Transaction control inside DO, which the apply block needs for its COMMIT,
   # and the two commands that cannot be reached from inside one.
   fact commit_inside_do \
@@ -5452,8 +6482,9 @@ stage_facts() {
 }
 
 # ---------------------------------------------------------------- suite ------
-# The ported numbered suite, in six steps: build, baseline, churn, decide, act,
-# oracle.  Steps 2 and 5 run the page's apply block exactly as filed.
+# The ported numbered suite, in eight steps: build, baseline, churn,
+# auto-analyze, forge, decide, act, oracle.  Steps 2 and 7 run the page's apply
+# block exactly as filed.
 stage_suite() {
   say "the ported numbered suite: tests 1-17, 18-91 and controls 92-121"
   q suite 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public' > /dev/null
@@ -5489,6 +6520,44 @@ stage_suite() {
     || { tail -5 "$OUT/suite_churn.log" >&2; die "churn failed"; }
   [ "$have13" = yes ] && f suite "$SQLD/churn_v13.sql" >> "$OUT/suite_churn.log" 2>&1
   [ "$haveicu" = yes ] && f suite "$SQLD/churn_icu.sql" >> "$OUT/suite_churn.log" 2>&1
+
+  # The mandatory-test rule: a fixture that moved more than 10 % of a table's
+  # heap tuples gets an ANALYZE, because autovacuum would have run one.  The
+  # churn ran in psql processes that have now exited, so their statistics are
+  # flushed; one second of grace covers the collector interval of the older
+  # server, whose reader also waits for a fresh file.
+  say "simulated auto-analyze: the engine's own threshold on its own counters"
+  sleep 1
+  f suite "$SQLD/autoanalyze.sql" > "$OUT/autoanalyze.log" 2>&1 \
+    || { tail -5 "$OUT/autoanalyze.log" >&2; die "simulated auto-analyze failed"; }
+  t suite "SELECT /* wiki_btmaint_autoanalyze_report */ tbl, reltuples, mods,
+                  threshold, mod_pct, would_autoanalyze
+             FROM autoanl ORDER BY would_autoanalyze DESC, mods DESC, tbl" \
+    > "$OUT/autoanalyze.txt" 2>&1
+  { printf 'tables considered  %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl')"
+    printf 'analyzed           %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl WHERE would_autoanalyze')"
+    printf 'left alone         %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl WHERE NOT would_autoanalyze')"
+    printf 'counters reset     %s of %s\n' \
+      "$(s suite 'SELECT count(*) FROM autoanl_after WHERE mods = 0')" \
+      "$(s suite 'SELECT count(*) FROM autoanl_after')"
+    printf 'mod_pct of those analyzed, min/median/max %s\n' \
+      "$(s suite "SELECT min(mod_pct) || ' / ' ||
+                         percentile_disc(0.5) WITHIN GROUP (ORDER BY mod_pct) || ' / ' ||
+                         max(mod_pct) FROM autoanl WHERE would_autoanalyze")"
+    printf 'largest mod_pct left alone %s\n' \
+      "$(s suite "SELECT COALESCE(max(mod_pct)::text, 'none')
+                    FROM autoanl WHERE NOT would_autoanalyze")"; } \
+    >> "$OUT/autoanalyze.txt"
+  [ "$(s suite 'SELECT count(*) FROM autoanl WHERE would_autoanalyze')" -gt 0 ] \
+    || die "no table crossed the auto-analyze threshold: the churn counters are not visible"
+  tail -6 "$OUT/autoanalyze.txt" >&2
+
+  say "forge: the catalog forgeries an ANALYZE would have overwritten"
+  f suite "$SQLD/forge.sql" > "$OUT/forge.log" 2>&1 || die "forge failed"
+  cat "$OUT/forge.log" >&2
   q suite 'CALL take_snap($$churned$$)' || die "snapshot churned failed"
 
   say "decide: the filed report statement, as filed and through the one-edit view"
@@ -5536,6 +6605,17 @@ stage_edge() {
     || { tail -5 "$OUT/edge_build.log" >&2; die "edge fixtures failed"; }
   f edge "$SQLD/edge_churn.sql" > "$OUT/edge_churn.log" 2>&1 \
     || { tail -5 "$OUT/edge_churn.log" >&2; die "edge churn failed"; }
+  # The same >10 % rule, and then the forgeries an ANALYZE would have repaired.
+  sleep 1
+  f edge "$SQLD/edge_autoanalyze.sql" > "$OUT/edge_autoanalyze.log" 2>&1 \
+    || { tail -5 "$OUT/edge_autoanalyze.log" >&2; die "edge auto-analyze failed"; }
+  f edge "$SQLD/edge_forge.sql" > "$OUT/edge_forge.log" 2>&1 \
+    || die "edge forge failed"
+  t edge "SELECT /* wiki_btmaint_eautoanalyze_report */ tbl, reltuples, mods,
+                 threshold, mod_pct, would_autoanalyze
+            FROM eautoanl ORDER BY would_autoanalyze DESC, mods DESC, tbl" \
+    > "$OUT/edge_autoanalyze.txt" 2>&1
+  cat "$OUT/edge_forge.log" >> "$OUT/edge_autoanalyze.txt"
   f edge "$SQLD/plan_view.sql" || die "plan_v in edge failed"
 
   # What the filed statement decides, and what the raw pgstatindex call does to
@@ -5544,29 +6624,30 @@ stage_edge() {
   f edge /dev/stdin <<'SQL' || die "edge plan failed"
 CREATE TABLE eplan AS
 SELECT e.name, e.idx, e.kind, e.note, v.action, v.baseline, v.wasted_pct,
-       v.size_ratio, v.tuple_ratio_now, v.notes, v.comment_command,
-       (v.index_name IS NOT NULL) AS is_candidate
+       v.size_ratio, v.tuple_ratio_now, v.idx_tuple_ratio_now, v.notes,
+       v.comment_command, (v.index_name IS NOT NULL) AS is_candidate
   FROM ecase e LEFT JOIN plan_v v ON v.index_name = e.idx;
 SQL
   t edge "SELECT /* wiki_btmaint_edge_parse */ name, idx, action, baseline, notes
             FROM eplan WHERE kind = 'parse' ORDER BY idx" > "$OUT/edge_parse.txt" 2>&1
-  t edge "SELECT /* wiki_btmaint_edge_filter */ name, idx, is_candidate, action
+  t edge "SELECT /* wiki_btmaint_edge_filter */ name, idx, is_candidate, action, notes
             FROM eplan WHERE kind = 'filter' ORDER BY idx" > "$OUT/edge_filter.txt" 2>&1
   t edge "SELECT /* wiki_btmaint_edge_gate */ e.name, e.idx, p.action,
-                 pg_relation_size(e.idx::regclass) AS cur_bytes,
-                 substring(obj_description(e.idx::regclass, 'pg_class')
-                           from '\"sz\":([0-9]+)')::numeric AS base_bytes,
                  round(pg_relation_size(e.idx::regclass)
                        / substring(obj_description(e.idx::regclass, 'pg_class')
                                    from '\"sz\":([0-9]+)')::numeric, 6) AS size_ratio,
-                 substring(obj_description(e.idx::regclass, 'pg_class')
-                           from '\"tup\":([0-9]+)')::numeric AS base_tuples,
                  round((SELECT t.reltuples::numeric FROM pg_class c
                           JOIN pg_index x ON x.indexrelid = c.oid
                           JOIN pg_class t ON t.oid = x.indrelid
                          WHERE c.oid = e.idx::regclass)
                        / substring(obj_description(e.idx::regclass, 'pg_class')
-                                   from '\"tup\":([0-9]+)')::numeric, 6) AS tuple_ratio
+                                   from '\"tup\":([0-9]+)')::numeric, 6) AS tuple_ratio,
+                 round((SELECT c.reltuples::numeric FROM pg_class c
+                         WHERE c.oid = e.idx::regclass)
+                       / substring(obj_description(e.idx::regclass, 'pg_class')
+                                   from '\"itup\":([0-9]+)')::numeric, 6)
+                     AS idx_tuple_ratio,
+                 p.notes
             FROM ecase e JOIN eplan p ON p.idx = e.idx
            WHERE e.kind = 'gate' ORDER BY e.idx" > "$OUT/edge_gate.txt" 2>&1
   t edge "SELECT /* wiki_btmaint_edge_curve */ name, idx, action, wasted_pct
@@ -5608,8 +6689,8 @@ CREATE TABLE e_surv AS SELECT i::int AS k FROM generate_series(1, 200000) i;
 ANALYZE e_surv;
 CREATE INDEX e_surv_a ON e_surv (k);
 CREATE INDEX e_surv_b ON e_surv ((k + 1));
-COMMENT ON INDEX e_surv_a IS E'human note\n@btmaint:{"v":1,"sz":1,"tup":2}';
-COMMENT ON INDEX e_surv_b IS E'human note\n@btmaint:{"v":1,"sz":1,"tup":2}';
+COMMENT ON INDEX e_surv_a IS E'human note\n@btmaint:{"v":2,"sz":1,"tup":2,"itup":3}';
+COMMENT ON INDEX e_surv_b IS E'human note\n@btmaint:{"v":2,"sz":1,"tup":2,"itup":3}';
 SQL
   printf 'before      a=%s b=%s\n' \
     "$(s edge "SELECT md5(obj_description('e_surv_a'::regclass,'pg_class'))")" \
@@ -5777,14 +6858,25 @@ stage_cost() {
     -c 'EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM plan_v' 2>&1 \
     | grep -m 1 -E 'Buffers: shared' | sed 's/^ */  total /' >> "$OUT/cost.txt"
   printf 'fully gated state (every stored sz halved)\n' >> "$OUT/cost.txt"
+  # Only the size input is forged: both tuple counts are written at their
+  # current values, so the fully gated reading isolates one gate rather than
+  # three, and the worst case it measures is still every gated index read end
+  # to end.
   f suite /dev/stdin > /dev/null 2>&1 <<'SQL'
 DO $fg$
 DECLARE r record;
 BEGIN
-  FOR r IN SELECT p.idx, pg_relation_size(p.idx::regclass) AS b FROM plan p LOOP
+  FOR r IN SELECT p.idx, pg_relation_size(p.idx::regclass) AS b,
+                  c.reltuples::numeric AS itup, t.reltuples::numeric AS tup
+             FROM plan p
+             JOIN pg_class c ON c.relname = p.idx AND c.relkind = 'i'
+             JOIN pg_index x ON x.indexrelid = c.oid
+             JOIN pg_class t ON t.oid = x.indrelid LOOP
     EXECUTE format('COMMENT /* wiki_btmaint_cost_forgery */ ON INDEX %I IS %L',
-                   r.idx, '@btmaint:{"v":1,"sz":' || (r.b / 2)::bigint
-                          || ',"tup":1,"at":"2026-01-01T00:00:00+00"}');
+                   r.idx, '@btmaint:{"v":2,"sz":' || (r.b / 2)::bigint
+                          || ',"tup":' || round(GREATEST(r.tup, -1))
+                          || ',"itup":' || round(GREATEST(r.itup, -1))
+                          || ',"at":"2026-01-01T00:00:00+00"}');
   END LOOP;
 END $fg$;
 SQL
@@ -5809,7 +6901,8 @@ stage_score() {
   say "score"
   t suite "SELECT /* wiki_btmaint_verdict_rows */ num, leg, grp, idx, action,
                   wasted_pct, actual_pct, applied_pct, verdict, lost_by,
-                  expected_stage, taken_stage, want_stage, size_ratio, tuple_ratio
+                  expected_stage, taken_stage, two_gate_stage, want_stage,
+                  size_ratio, tuple_ratio, idx_tuple_ratio
              FROM verdicts ORDER BY num, leg" > "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_verdict_counts */ verdict, count(*)
              FROM verdicts GROUP BY 1 ORDER BY 2 DESC" >> "$OUT/verdicts.txt" 2>&1
@@ -5863,15 +6956,49 @@ stage_score() {
                   count(*) FILTER (WHERE sz_reported = sz_written) AS sz_agrees,
                   count(*) FILTER (WHERE sz_written = bytes_applied) AS sz_is_current
              FROM verdicts GROUP BY action ORDER BY action" >> "$OUT/verdicts.txt" 2>&1
-  t suite "SELECT /* wiki_btmaint_alt_gate */
-                  count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE') AS false_negatives,
-                  count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE'
-                                     AND idx_gate_would_fire) AS caught_by_index_gate,
-                  count(*) FILTER (WHERE action = 'skip' AND idx_gate_would_fire
-                                     AND actual_pct < 50) AS extra_measurements
+  # Which gate opened each measured fixture, and what the third one changed.
+  t suite "SELECT /* wiki_btmaint_gate_attribution */
+                  count(*) FILTER (WHERE taken_stage = 'measure') AS measured,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND size_gate_fires) AS by_size,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND tbl_gate_fires) AS by_table_tuples,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND idx_gate_fires) AS by_index_tuples,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND idx_gate_fires AND NOT size_gate_fires
+                                     AND NOT tbl_gate_fires) AS index_gate_only,
+                  count(*) FILTER (WHERE taken_stage = 'measure'
+                                     AND NOT size_gate_fires AND NOT tbl_gate_fires
+                                     AND NOT idx_gate_fires) AS no_gate
+             FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_two_gate_delta */
+                  count(*) AS fixtures,
+                  count(*) FILTER (WHERE two_gate_stage = taken_stage) AS same_as_two_gate,
+                  count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                     AND taken_stage = 'measure') AS newly_measured,
+                  count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                     AND taken_stage = 'measure'
+                                     AND actual_pct >= 50) AS newly_measured_bloated,
+                  count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                     AND taken_stage = 'measure'
+                                     AND actual_pct < 50) AS newly_measured_healthy,
+                  count(*) FILTER (WHERE two_gate_stage = 'measure'
+                                     AND taken_stage <> 'measure') AS lost_measurements
+             FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_newly_measured */ num, leg, idx, action,
+                  wasted_pct, actual_pct, verdict, idx_tuple_ratio, req
+             FROM verdicts WHERE two_gate_stage = 'skip' AND taken_stage = 'measure'
+            ORDER BY actual_pct DESC" > "$OUT/newly_measured.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_itup_stored */
+                  count(*) AS fixtures,
+                  count(*) FILTER (WHERE itup_stored_matches) AS itup_matches_catalog,
+                  count(*) FILTER (WHERE base_idx_tuples IS NULL) AS itup_missing,
+                  count(*) FILTER (WHERE itup_written IS NOT NULL) AS itup_written_back
              FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_lost_detail */ num, leg, idx, actual_pct,
-                  size_ratio, tuple_ratio, idx_tuple_ratio, idx_gate_would_fire, req
+                  size_ratio, tuple_ratio, idx_tuple_ratio,
+                  size_gate_fires, tbl_gate_fires, idx_gate_fires, req
              FROM verdicts WHERE lost_by IS NOT NULL
             ORDER BY actual_pct DESC" >> "$OUT/lost.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_payload_health */
@@ -5922,19 +7049,47 @@ SELECT '  payload with=' || count(*) FILTER (WHERE payload IS NOT NULL) ||
        ' no_marker='     || count(*) FILTER (WHERE cmt !~ '@btmaint:')
   FROM snap WHERE phase = 'applied';
 SELECT '  false negatives=' || count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE') ||
-       ' of which an index-entry gate would catch=' ||
-       count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE' AND idx_gate_would_fire)
+       ' of which the index tuple gate opened=' ||
+       count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE' AND idx_gate_fires)
   FROM verdicts;
+SELECT '  measured=' || count(*) FILTER (WHERE taken_stage = 'measure') ||
+       ' by size='   || count(*) FILTER (WHERE taken_stage = 'measure' AND size_gate_fires) ||
+       ' by table='  || count(*) FILTER (WHERE taken_stage = 'measure' AND tbl_gate_fires) ||
+       ' by index='  || count(*) FILTER (WHERE taken_stage = 'measure' AND idx_gate_fires) ||
+       ' index only='|| count(*) FILTER (WHERE taken_stage = 'measure' AND idx_gate_fires
+                                          AND NOT size_gate_fires AND NOT tbl_gate_fires)
+  FROM verdicts;
+SELECT '  versus the two-gate form: same=' ||
+       count(*) FILTER (WHERE two_gate_stage = taken_stage) ||
+       ' newly measured=' || count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                                AND taken_stage = 'measure') ||
+       ' of those bloated=' || count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                                 AND taken_stage = 'measure'
+                                                 AND actual_pct >= 50) ||
+       ' healthy=' || count(*) FILTER (WHERE two_gate_stage = 'skip'
+                                        AND taken_stage = 'measure'
+                                        AND actual_pct < 50)
+  FROM verdicts;
+SELECT '  itup stored = catalog count: ' ||
+       count(*) FILTER (WHERE itup_stored_matches) || ' of ' || count(*)
+  FROM verdicts;
+SELECT '  simulated auto-analyze: ' ||
+       count(*) FILTER (WHERE would_autoanalyze) || ' of ' || count(*) ||
+       ' tables analyzed, largest left alone ' ||
+       COALESCE(max(mod_pct) FILTER (WHERE NOT would_autoanalyze)::text, 'none') || ' %'
+  FROM autoanl;
 SQL
   { printf '1. texts\n'; cat "$OUT/hashes.txt" 2>/dev/null
     printf '2. engine checks\n'; cat "$OUT/checks.txt" 2>/dev/null
     printf '3. fixture groups\n'; cat "$OUT/suite_groups.txt" 2>/dev/null
     printf '4. counters\n'; sed 's/^/   /' "$OUT/counters.txt" 2>/dev/null
     printf '5. cost\n'; sed 's/^/   /' "$OUT/cost.txt" 2>/dev/null
+    printf '5a. simulated auto-analyze\n'
+    sed 's/^/   /' "$OUT/autoanalyze.txt" 2>/dev/null
     printf '6. edge groups\n'
     for fl in edge_parse edge_filter edge_gate edge_curve edge_refusals \
               edge_survival edge_priv edge_lock edge_dryrun edge_idempotence \
-              edge_written edge_dump; do
+              edge_written edge_dump edge_autoanalyze; do
       printf '   --- %s\n' "$fl"; sed 's/^/   /' "$OUT/$fl.txt" 2>/dev/null
     done
     printf '7. facts\n'; sed 's/^/   /' "$OUT/facts.txt" 2>/dev/null
@@ -6048,7 +7203,29 @@ main "$@"
   a set-returning function materialized into a tuplestore, and the qualification
   applied to the rows it produced.
 - `src/backend/commands/vacuum.c` and `src/backend/commands/analyze.c`:
-  `vac_update_relstats` as the writer VACUUM and ANALYZE share.
+  `vac_update_relstats` as the writer VACUUM and ANALYZE share, its `relpages`
+  and `reltuples` assignments, `do_analyze_rel`'s per-index `vac_update_relstats`
+  loop and its `ceil(tupleFract * totalrows)`, the `tupleFract = 1.0`
+  initialization, `compute_index_stats`'s "no columns to analyze and not partial"
+  skip, and the `numindexrows / numrows` fraction it computes for a partial index.
+- `src/backend/access/heap/vacuumlazy.c`: `update_relstats_all_indexes` and its
+  `estimated_count` skip, `lazy_cleanup_all_indexes`'s
+  `scanned_pages < rel_pages` test, `BYPASS_THRESHOLD_PAGES` and the
+  `lazy_vacuum` bypass decision.
+- `src/backend/access/nbtree/nbtree.c`: `btvacuumcleanup`'s cleanup-only branch
+  and its `estimated_count = true`, the heap-count clamp, and `btvacuumpage`'s two
+  ways of counting (`nhtidslive` with a callback, items per page without).
+- `src/backend/postmaster/autovacuum.c`: `relation_needs_vacanalyze`'s
+  `anl_base_thresh`/`anl_scale_factor` resolution and the
+  `doanalyze = (anltuples > anlthresh)` test the mandatory tests now simulate.
+- `src/backend/utils/activity/pgstat_relation.c` and
+  `src/backend/utils/activity/pgstat.c`: `pgstat_report_analyze`'s
+  `mod_since_analyze = 0` reset, the pending-stats flush that adds
+  `changed_tuples` to the same counter, and `PGSTAT_MIN_INTERVAL`.
+- `src/backend/catalog/system_views.sql`: `pg_stat_all_tables`'s
+  `n_mod_since_analyze` column.
+- `doc/src/sgml/config.sgml`: the two autovacuum analyze parameters, their
+  defaults and their per-table overrides.
 - `doc/src/sgml/ref/comment.sgml` and `doc/src/sgml/ref/reindex.sgml`: the
   one-comment-per-object rule, the `SHARE UPDATE EXCLUSIVE` lock, the
   owner-only rule, and `REINDEX`'s `MAINTAIN` requirement.
@@ -6074,9 +7251,15 @@ main "$@"
 | A comment is one string per object, keyed by OID, replaced whole | [pg_description.h#FormData](../../../../raw/postgres-17/src/include/catalog/pg_description.h#L44-L57), [comment.c#CreateComments](../../../../raw/postgres-17/src/backend/commands/comment.c#L133-L171), [comment.sgml#replaces](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml#L89-L93) |
 | `COMMENT ON INDEX` takes `ShareUpdateExclusiveLock` and requires ownership | [comment.c#CommentObject](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L78), [objectaddress.c#check_object_ownership](../../../../raw/postgres-17/src/backend/catalog/objectaddress.c#L2387-L2400), [comment.sgml#lock](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml#L95-L98); measured `ShareUpdateExclusiveLock on e_none` and `must be owner of index e_none` |
 | The comment text is a literal, never an expression | [gram.y#comment_text](../../../../raw/postgres-17/src/backend/parser/gram.y#L7219-L7222); measured `syntax error at or near "||"` |
-| A concurrent rebuild moves the comment to the new index | [index.c#index_concurrently_swap-comment](../../../../raw/postgres-17/src/backend/catalog/index.c#L1740-L1784); measured OID 17438 -> 17440 with the comment md5 unchanged |
-| A rebuild refreshes the table's `reltuples` from its own heap scan | [index.c#index_build-update-stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L3129-L3134), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2789-L2812); measured 1000 after `CREATE INDEX` and 2000 after `REINDEX` |
+| A concurrent rebuild moves the comment to the new index | [index.c#index_concurrently_swap-comment](../../../../raw/postgres-17/src/backend/catalog/index.c#L1740-L1784); measured OID 18147 -> 18149 with the comment md5 unchanged |
+| A rebuild refreshes both `reltuples` values from its own scans | [index.c#index_build-update-stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L3129-L3134), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2788-L2812); measured 1000 after `CREATE INDEX` and 2000 after `REINDEX` on the table, 2000 then 200 on a partial index |
 | `reltuples = -1` means uncounted from v14 | [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66); measured `-1` on 17.11 and `0` on 12.2 for the same sequence |
+| ANALYZE writes an index's `reltuples` as `ceil(tupleFract * totalrows)`, with the fraction refined only for an index with statistics columns or a predicate | [analyze.c#same-for-indexes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663), [analyze.c#tupleFract-init](../../../../raw/postgres-17/src/backend/commands/analyze.c#L443-L449), [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L827-L863), [analyze.c#tupleFract-from-sample](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953); measured 2000 for a partial index on a 10,000-row table, and 10000 for the plain index beside it, on both servers |
+| VACUUM writes an index's `reltuples` only when the AM's count is not estimated, and `btvacuumcleanup` marks a cleanup-only count estimated | [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099), [vacuumlazy.c#lazy_cleanup_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2349-L2360), [nbtree.c#btvacuumcleanup-estimated](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L874-L892), [nbtree.c#btvacuumpage-counting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1345-L1362); measured 200 after a drain plus `VACUUM`, and unchanged after a 10-row `UPDATE` plus `VACUUM` |
+| A VACUUM skips index vacuuming when under 2 % of heap pages hold dead items | [vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89), [vacuumlazy.c#lazy_vacuum-bypass](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1940) |
+| Autovacuum analyzes when `n_mod_since_analyze` exceeds `50 + 0.1 * reltuples` at the defaults, which is the rule the mandatory tests simulate | [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3060-L3096), [autovacuum.c#anl-thresholds](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3005-L3018), [guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3367-L3375), [guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3906-L3914), [config.sgml#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L8832-L8850); both defaults read back as 50 and 0.1 on each server, and the census analyzed 77 of 99 tables on 17.11 with the boundary at 9.8 % and 11.1 % |
+| `mod_since_analyze` is reset by ANALYZE and added to by a later flush, so it can outlive the ANALYZE that reset it | [pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338), [pgstat_relation.c#flush-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L845-L860), [pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L110-L122), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L655); measured as `e_del80` reading 400,000 mods after its own `ANALYZE` while `e_del90` read 0 |
+| The counter the census reads is `pg_stat_all_tables.n_mod_since_analyze` | [system_views.sql#n_mod_since_analyze](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L689) |
 | `REINDEX INDEX` needs `MAINTAIN` on the table in v17, and takes `AccessExclusiveLock` on the index with `ShareLock` on the table | [indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2905-L2912), [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2822-L2829), [index.c#reindex_index-locks](../../../../raw/postgres-17/src/backend/catalog/index.c#L3600-L3612), [reindex.sgml#MAINTAIN](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L300-L316); measured `permission denied for index` then accepted after `GRANT MAINTAIN`, while `COMMENT` stayed refused |
 | `REINDEX CONCURRENTLY` cannot run from a `DO` block | [indexcmds.c#ExecReindex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2736-L2738); measured `REINDEX CONCURRENTLY cannot be executed from a function` on both servers |
 | A set-returning function in `FROM` runs before its qualification | [nodeFunctionscan.c#FunctionNext](../../../../raw/postgres-17/src/backend/executor/nodeFunctionscan.c#L59-L112), [execScan.c#ExecScan](../../../../raw/postgres-17/src/backend/executor/execScan.c#L164-L205); measured 57,964 buffer reads in a settled database before the repair, 0 after |
@@ -6087,43 +7270,62 @@ main "$@"
 
 ## Open Questions
 
-1. **The gate the brief specifies cannot see a partial index draining.** 21 of 140
-   fixtures on 17.11 and 21 of 122 on 12.2 are false negatives, all partial, and
-   18 of them on each server would be caught by comparing the *index's* own
-   `pg_class.reltuples` instead of the table's. That change is outside the brief
-   and unmeasured as a gate; what it costs in extra measurements on healthy
-   indexes is unknown.
-2. **Three fixtures are invisible to any catalog-only gate.** `p113a`, `p65` and
-   `p67` moved or deleted rows without a following `VACUUM` or `ANALYZE`, so
-   neither count had changed when the heuristic looked, while a rebuild would have
-   returned 89.1 % to 100.0 %. A time-based fallback ("measure anything not
-   measured in N days") would catch them and is not part of the brief.
-3. **The baseline ratchets upward on every `update`.** An index measured at 35 %
+1. **Four false negatives remain, and the measurement is what loses them.**
+   `p113a`, `p113c`, `p65` and `p67` are opened by the index-count gate on both
+   servers and then read 0.0 % to 0.1 % wasted, because their dead index entries
+   were never vacuumed away and `pgstatindex` reports a dense file. A fourth
+   input would be needed - the stored entry count against the leaf-page capacity
+   the file implies, or `n_dead_tup` on the table - and neither is in the brief or
+   measured here.
+2. **The third gate can fire on sampling noise.** ANALYZE estimates a partial
+   index's entry count from the same sample it uses for column statistics, so a
+   small or skewed subset can move the stored count without the index moving:
+   `p120` was measured at `idx_tuple_ratio` 0.1941 on 17.11 while the same fixture
+   read 1.0000 on 12.2. One extra `pgstatindex()` call is the cost each time, and
+   how often it happens as selectivity and `default_statistics_target` vary is
+   unmeasured.
+3. **The v1-to-v2 migration is measured only as a single comment write.** Every
+   index carrying an old payload re-initializes on the first run, which is one
+   write and no measurement per index; a database where that first run overlaps a
+   real maintenance window was not constructed, and neither was a mixed database
+   holding both payload versions.
+4. **The baseline ratchets upward on every `update`.** An index measured at 35 %
    wasted is not rebuilt and its baseline is reset to the larger size, so the next
    20 % is counted from there. The page measures the single-step behaviour; the
    multi-run drift over many cycles is not measured.
-4. **A stale-high baseline from a restored dump.** `pg_dump` carries the payload,
+5. **A stale-high baseline from a restored dump.** `pg_dump` carries the payload,
    so restoring an old dump restores an old baseline. Rule 3 handles the shrink
    direction; the case where a restored baseline is *lower* than reality was not
    constructed.
-5. **The 13, 14, 15 and 16 majors were not run.** The compatibility claim rests on
+6. **The 13, 14, 15 and 16 majors were not run.** The compatibility claim rests on
    two measured legs plus the feature facts those legs discovered. Nothing here
    proves the texts parse on 13 through 16, although no construct they use was
    introduced or removed between 12 and 17.
-6. **One platform, one block size.** Both legs ran on Linux x86_64 at
+7. **One platform, one block size.** Both legs ran on Linux x86_64 at
    `database_block_size` 8192 and `max_data_alignment` 8. The two page-layout
    constants in the text (24 and 16) are derived from that layout.
-7. **The uniform 90 % drain is this page's invention.** 74 of the ported fixtures
+8. **The uniform 90 % drain is this page's invention.** 74 of the ported fixtures
    had no churn of their own, so they were drained by heap block number to give
    the heuristic an "after" state. That is a faithful stress for a density-based
    decision but it is not the fixture the sibling page filed, and a differently
    shaped drain could move the `skip`/`measure` boundary for those rows.
-8. **`max_reindex` defaults to 1000 in the filed text.** The published run let it
-   rebuild 84 indexes in one invocation, one transaction per index. A production
+9. **`max_reindex` defaults to 1000 in the filed text.** The published run let it
+   rebuild 103 indexes in one invocation, one transaction per index. A production
    setting of 1 is recommended in the text's own comment but was not the setting
    measured.
-9. **No concurrency test.** Two overlapping runs, and a run racing a
-   `DROP INDEX`, are unmeasured; the lock modes are known but the outcomes are not.
+10. **No concurrency test.** Two overlapping runs, and a run racing a
+    `DROP INDEX`, are unmeasured; the lock modes are known but the outcomes are
+    not.
+11. **The simulated auto-analyze over-triggers, by construction.** Because a
+    backend's pending statistics can be flushed after the `ANALYZE` that reset
+    the counter, the census analyzes some tables that were just analyzed. That is
+    the safe direction for making counts fresh, but it means the suite's
+    "77 of 99 analyzed" is an upper bound on what an autovacuum launcher would
+    have done, not an equality.
+12. **The census is a single pass, not a loop.** A real launcher re-checks every
+    `autovacuum_naptime`, so a fixture could be analyzed, churned again and
+    analyzed again before a scheduled heuristic run. The suite analyzes once,
+    between the churn and the decision.
 
 ## Source References
 
@@ -6148,6 +7350,13 @@ main "$@"
 - [execScan.c](../../../../raw/postgres-17/src/backend/executor/execScan.c)
 - [vacuum.c](../../../../raw/postgres-17/src/backend/commands/vacuum.c)
 - [analyze.c](../../../../raw/postgres-17/src/backend/commands/analyze.c)
+- [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c)
+- [nbtree.c](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c)
+- [autovacuum.c](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c)
+- [pgstat_relation.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c)
+- [pgstat.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c)
+- [system_views.sql](../../../../raw/postgres-17/src/backend/catalog/system_views.sql)
+- [config.sgml](../../../../raw/postgres-17/doc/src/sgml/config.sgml)
 - [comment.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml)
 - [reindex.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml)
 
