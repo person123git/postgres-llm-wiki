@@ -23,6 +23,10 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - Use network only for `scripts/bootstrap_venv` or user-requested source fetches.
 - Do not use `WIKI_ALLOW_SYSTEM_PYTHON=1` in normal work.
 - Keep generated artifacts, caches, and the venv under `.wiki-runtime/`.
+- Run every subagent on the orchestrator's model. A subagent inherits the model of the agent that launched it. This covers foreground and background subagents, read-only exploration runs, implementation runs, and any agent those subagents launch in turn.
+- If exact inheritance is unsupported, use the most capable available model of the same family, and disclose the substitution before the subagent starts: name the orchestrator's model, the substitute, and why exact inheritance failed.
+- Disclose and proceed when the substitute is equal or more capable. Stop and get the user's approval when it is weaker than the orchestrator's model.
+- If no same-family model is available, do not substitute across families. Report it and ask, or keep the work in the orchestrator.
 - Stop every service you started for wiki processing or document generation before your final response, whether the work succeeded, failed, or was abandoned mid-run. This covers PostgreSQL postmasters, standbys and replicas, connection poolers, background `psql` sessions, watchers, and any other daemon.
 - Shut a cluster down cleanly with `pg_ctl -D <datadir> -m fast stop`, then confirm the teardown: no `postmaster.pid` in the data directory, no matching process in `pgrep -a postgres`, and the socket directory and port free.
 - Delete the sandbox you created under `.wiki-runtime/tmp/<name>/` once it is stopped, unless the user asked to keep it. If the user asked to keep it, leave it stopped, name the retained path on the page or in the log entry, and say how to restart it.

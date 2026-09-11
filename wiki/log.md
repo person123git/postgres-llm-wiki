@@ -2,6 +2,47 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] restructure | mandatory model inheritance for subagents
+
+- Added subagent model rules to `AGENTS.md`. A subagent runs on the model of
+  the agent that launched it. A substitution is allowed only inside the same
+  model family, must take the most capable available member of that family,
+  and must be disclosed before the subagent starts.
+- **Prompt hygiene first.** The original read `add to agents.md a new mandatory
+  rule : Subagents MUST inherit the orchestrator's model. If exact inheritance
+  is unsupported, use the most capable available model of the same family and
+  disclose the substitution before proceeding.`; the asker chose "correct and
+  proceed", so the corrections are `agents.md` -> `AGENTS.md`, the space before
+  the colon, and the capitalized leading verb: *Add to AGENTS.md a new mandatory
+  rule: Subagents MUST inherit the orchestrator's model. If exact inheritance is
+  unsupported, use the most capable available model of the same family and
+  disclose the substitution before proceeding.* Three scoping answers were taken
+  before drafting: **bullets in an existing rule** rather than a new top-level
+  `## MANDATORY` section, **approval only on a downgrade** rather than approval
+  for every substitution, and **no bookkeeping change**, so no rule now requires
+  `wiki/log.md` or a page to record which model ran a subagent.
+- **Why the rule exists.** Every other mandatory rule here assumes the agent
+  doing the reading can hold the whole evidence envelope: `MANDATORY Deep
+  Inquiry` wants callers, callees, structs, generated headers, error paths and
+  tests read together, and `MANDATORY Citations` wants a claim-to-source map
+  behind every sentence. Delegating that reading to a weaker model moves the
+  weakest link into the evidence itself, where the orchestrator sees a summary
+  and cannot tell a checked citation from a plausible one.
+- **Four bullets at the end of `MANDATORY Environment Isolation`**, placed
+  before the teardown block so that block stays contiguous: a subagent inherits
+  the launching agent's model, covering foreground and background subagents,
+  read-only exploration runs, implementation runs and any agent those subagents
+  launch in turn; where exact inheritance is unsupported, the substitute stays
+  in the same family, is the most capable available member, and is disclosed
+  before the subagent starts by naming the orchestrator's model, the substitute
+  and why exact inheritance failed; an equal-or-more-capable substitute is
+  disclosed and proceeds, while a weaker one stops for the user's approval; and
+  with no same-family model available, cross-family substitution is out — report
+  it and ask, or keep the work in the orchestrator.
+- No wiki page content changed and no service was started for this change, so
+  there is nothing to tear down. `.wiki-runtime/venv/bin/python
+  scripts/wiki_lint`: **0 errors, 0 warnings**.
+
 ## [2026-09-10] review v12 | physical index statistics page: full citation re-read plus a published measurement script
 
 - Reviewed [Physical Index Statistics, Tuple Counts, and Bytes per Tuple in
