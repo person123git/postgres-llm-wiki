@@ -2,6 +2,106 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] review v17 | estimator page hands the mandatory suite to the concept page, both legs re-scored
+
+- Revised [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#the-mandatory-suite-re-scored-under-the-shared-protocol)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). The page no longer defines
+  the mandatory suite: [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) does, and
+  both legs were re-run against it.
+- **Prompt hygiene first.** The asker chose "correct and restate". The original
+  read `follow agents.md, in postgresql 17, for question: # Testing the
+  PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17 (unverified),
+  replace the mandatory test by tests on common-concept: # Mandatory B-Tree
+  Bloat Tests (unverified), keep the link with the common concept.`; the
+  corrections are `agents.md` -> AGENTS.md, lowercase `postgresql`, `for
+  question:` without an article, a stray `#` before each of the two titles, the
+  `(unverified)` hint treated as part of both titles, `the mandatory test` for
+  the whole suite of tests, `replace ... by` for `replace ... with`,
+  `on common-concept:` for "on the common concept page", and `keep the link with`
+  for "keep the link to". Filed verbatim as the thirteenth prompt on the page.
+- Three scoping answers were taken before any edit: the prose replacement is
+  **`Mandatory test review` only**; the page's obligations are **re-scoped** into
+  the concept page's families, phases and bands with the earlier results labelled
+  as the page's older one-shot form; and the asker chose to **run both legs**.
+- **Consumer edit, kept narrow.** `Mandatory test review` now opens with "The
+  suite is not defined here", links the concept page, and keeps only what is
+  page-local: a six-row obligations table in the concept page's families, the two
+  obligations the run met for the first time, and the three deviations that are
+  this page's own - the 50 % decision threshold the harness adds to an estimator
+  that only reports a percentage, rule 1's cut made by an event trigger instead
+  of by splitting each recipe into two files, and family 1 keeping its metapage
+  oracle beside the rebuild. The concept page was **not edited**.
+- **Both scripts were edited in place and re-run end to end.** A shared harness
+  is now written once and installed in every scored database: a `plan` table with
+  a `want_stage` prediction column filed before the run, a `snap` table holding
+  the `built` and `churned` phases, an `assert_built()` contract pass that
+  evaluates each fixture's counting query while it is still as built, and a
+  `verdicts` view carrying the shared four bands, `taken_stage`,
+  `expected_stage`, `lost_by` and the page's older bands side by side. A new
+  `churn` stage per leg runs rule 2's uniform drain, rule 3's census and the
+  catalog forgeries in that order, and the 28 gate fixtures are filed as plan
+  rows so family 1 runs the same five phases. Scripts re-extracted from the page
+  and parsed with `bash -n`: 2,648 and 1,048 lines.
+- **Results.** 17.11: `make check` 225 of 225 plus 8, 1 and 3; 140 fixtures
+  scored; 101 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 35
+  `FALSE NEGATIVE`; 112 and 28 baselines; 0 build-contract failures; 0 gate
+  disagreements; 44 want misses; 45 of 112 and 28 of 28 rebuild decisions
+  returning a mean 81.0 % and 88.4 %. 12.2: 192 of 192 plus 5, 1 and 2; the exact
+  filed text executes unmodified with `transform_edits=0`; 19 fixtures, 17 `PASS`,
+  2 `FALSE NEGATIVE`, 10 rebuilds at a mean 87.6 %, and all 19 reading
+  `equalimage = ineligible` because that server registers B-tree support
+  functions `1,2,3` only and rejects `deduplicate_items`. **0 unexpected server
+  errors on either leg**, both deliberate errors seen once each.
+- **The finding: not one false negative is a threshold loss.** 23 of the 35 were
+  withheld by an exclusion term, 8 fell under the 1 MB report filter and 4
+  carried a caveat the reading rule refuses to promote, on files a rebuild
+  emptied by a mean 83.5 %, 86.3 % and 100.0 %; `expected_stage`, recomputed from
+  the harness's own internals, agreed with the statement on all 140. The four
+  critical false positives (`f84` 94.2 %, `f85` 70.9 %, `i103` 84.1 %, `x109`
+  62.5 %, each against 0.0 %) are the four rows a reader would have acted on.
+  Scoring the decision rather than the number is what exposes this: the older
+  bands read 91 `PASS` / 12 critical / 6 false negatives on the same rows, 8 of
+  the 12 on rows the report never shows, so the page's earlier "eight false
+  negatives" was a scoring artifact.
+- **Four script defects found and repaired before the numbers were taken**: the
+  gate stage could not run twice, because `DROP OPERATOR CLASS` leaves the
+  operator family `CREATE OPERATOR CLASS` implicitly created and the next run
+  died on `pg_amproc_fam_proc_index`; `gate_res` read every index in its schema,
+  including the harness's own primary keys, and `bt_page_items(idx, 1)` raises on
+  an empty one; the drain's `ANALYZE` reset `mod_since_analyze` before its own
+  `DELETE` counts published, so the census analyzed 46 tables instead of 17; and
+  on 12.2 the drain left `n_live_tup` at 0 beside a catalog count of 50,172,
+  which only the census's `ANALYZE` repairs, so the publication wait had to move
+  after the census - that one alone had cost three false negatives.
+- Page edits: the thirteenth prompt under `## Question`; a new Answer lead
+  paragraph; a rewritten `Mandatory test review`; a new
+  `The mandatory suite, re-scored under the shared protocol` with six `####`
+  subsections; item 1 and item 6 of `What still needs to be tested` updated; the
+  `Mandatory suite and the current statement` open question rewritten around the
+  39 standing failures and a new `What the shared re-score leaves open` filed
+  beside it; the measurement-script usage tables, both stage tables, the stage
+  order rows, three new rules in the rules table and the output file map brought
+  in line with the edited scripts; one Context Reviewed bullet and five Evidence
+  Map rows added; two Contents entries. Every fenced `sql` block, the source pin
+  and both verification fields are unchanged; the four block hashes still match.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0
+  errors and 0 warnings**; all 75 distinct page-internal anchors resolve
+  against the page's 97 headings and all 66 Contents entries match the heading
+  order; all four fenced `sql` blocks still hash to their recorded baselines; both script blocks parse. Updated
+  `wiki/index.md`, `wiki/v17/index.md`, the v17 coverage cell and a dated note in
+  `wiki/versions.md`. 39 failures remain open and unfixed, so agent verification
+  stays `not yet`.
+- Teardown: both servers were stopped by their own `stop` stages with
+  `pg_ctl -m fast -w stop`, each confirming no `postmaster.pid`, no postgres
+  process on its data directory and an empty socket directory; the
+  `.wiki-runtime/tmp/btree-suite/` sandbox was deleted by the 17 leg's `clean`
+  stage, `pgrep -a postgres` reports nothing and ports 55437 and 55412 are free.
+  Both pinned checkouts stayed read-only and clean at their pins.
+
 ## [2026-09-11] concept v17 | mandatory B-tree bloat tests, the wiki's first common concept page
 
 - Filed [Mandatory B-Tree Bloat Tests
