@@ -2,6 +2,120 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] answer v17 | COMMENT-stored baseline B-tree maintenance heuristic, 12 through 17
+
+- Filed [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for
+  PostgreSQL 12 Through 17
+  (unverified)](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), with the
+  12 leg measured against `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+- **Prompt hygiene first.** The original read `follow agents.md, in postgresql
+  17, question Create a PostgreSQL btree index-maintenance heuristic compatible
+  with versions **12 through 17**. ... add all mandatory test from question
+  Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified) .`; the asker chose "correct and restate" (`agents.md` ->
+  `AGENTS.md`, lowercase `postgresql`, `btree` -> `B-tree`, the missing colon
+  after `question`, `all mandatory test` -> `all mandatory tests from the
+  question`, and the space before the closing full stop), then chose to **port
+  the full numbered suite**, to **build and measure both version legs**, and to
+  keep the page in v17 while linking the v12 pages instead of citing another
+  version's source.
+- **The deliverable is two texts, one gate.** A read-only plan statement and a
+  top-level `DO` block that commits once per index. Their CTE pipeline, from
+  `WITH params AS (` through the end of `staged`, is byte-identical in both -
+  100 lines, SHA-256 `62225bce…`, checked by the scripts on every run - so the
+  gate is defined once. The only persistent state is a **72-byte `@btmaint:`
+  payload** appended to the index's own comment, parsed by regex rather than a
+  `jsonb` cast because `pg_input_is_valid()` exists on 17 and not on 12
+  (measured, 1 `pg_proc` row against 0) and one raised error would abort the
+  whole report.
+- **Both texts execute unmodified on 12.2**, which the 12 leg proves in its own
+  `exact` stage before any fixture exists: exit 0, two baselines written, the
+  human note preserved, and a second run a no-op.
+- **The sibling page's whole mandatory suite is ported** - tests 1-17, 18-91 and
+  controls 92-121 - recipe by recipe, with two deliberate deviations: each recipe
+  is split so the heuristic can store an as-built baseline before the churn, and
+  the 74 shape fixtures with no churn of their own get a uniform 90 % heap-block
+  drain, while the 25 fixtures whose point is that a fresh index must not be
+  touched stay untouched. `pg_stat_force_next_flush()` is dropped everywhere,
+  because this heuristic reads `pg_class.reltuples` and never a cumulative view -
+  which is also why one fixture text runs on both servers.
+- **Scored against a measured `REINDEX INDEX`**: 140 fixtures on 17.11 and 122 on
+  12.2 (18 skipped on 12 for support function 4, `deduplicate_items` and ICU);
+  119 and 101 `PASS`; **0 false positives** of either severity; **140 of 140 and
+  122 of 122** gate decisions equal to the same arithmetic recomputed
+  independently from the stored baseline; 8 of 8 false-positive constructions
+  left alone at a measured 0.0 % reclaim; 84 rebuilds at a mean 87.1 % reclaim;
+  and payload health 140 of 140 and 122 of 122 readable afterwards.
+- **The one structural finding: the specified gate cannot see a partial index
+  draining.** All **21 false negatives on each server** are partial indexes, in
+  three families - the subset drained to zero while the table kept every row
+  (`tuple_ratio` 1.0000, `idx_tuple_ratio` 0.0000, 98.9-100.0 % reclaimable); the
+  table moving 15-19 % while the index lost 75-95 %, which includes the sibling
+  page's own `b92`-`b95` calibration controls at exactly 18 %, two points under
+  the gate; and three where no writer had updated any count. A gate on the
+  **index's own** `reltuples` would catch **18 of the 21 on both servers**; the
+  other three are invisible to any catalog-only gate. That is a property of the
+  inputs the question specifies, so it is reported and quantified rather than
+  silently fixed, and filed as the first open question.
+- **Two defects the suite found were repaired in the filed texts** before any
+  number was taken. The cost stage caught the first: `LEFT JOIN LATERAL (SELECT
+  * FROM pgstatindex(...) WHERE stage = 'measure')` reads correctly and does not
+  gate, because a set-returning function in `FROM` is materialized and then
+  filtered, so a *settled* database read 57,964 buffers; making the gated rows
+  the lateral's input relation took that to **0 data-page reads**. The edge
+  stage caught the second: the payload stripper matched only a well-formed
+  `{...}`, so `@btmaint:{"v":1,"sz":1` and `@btmaint:not json at all` survived
+  as if they were human text (95 and 97 bytes where a clean initialize writes
+  72); two ordered passes now remove a well-formed payload first and only then
+  any leftover marker to end of line, which keeps `e_mid`'s trailing sentence.
+- **Also measured**: both gate boundaries to six decimals (1.200000 fires,
+  1.199999 skips; tuples 1.200005 and 0.800000 fire, 1.199890 and 0.800106 do
+  not); a nine-point decision curve **identical on both servers** reading
+  `0.888 x fraction deleted`, which places the 40 % threshold at **45.0 % of
+  entries deleted**; `wasted_pct` under-estimating the rebuild by a mean 8.4
+  points over 90 measured fixtures (min -0.1, max 19.5, 88 within 15, 2
+  over-estimates), and 7.9 over 73 on 12.2; comment survival across `REINDEX
+  INDEX` (OID unchanged) and `REINDEX INDEX CONCURRENTLY` (17438 -> 17440,
+  comment md5 unchanged); `reltuples` refreshed by the rebuild itself (`-1`,
+  1000 after `CREATE INDEX`, 2000 after `REINDEX` on 17.11; `0` where 17 reads
+  `-1` on 12.2); `ShareUpdateExclusiveLock` read from `pg_locks` for the comment
+  write; the v17 privilege split in which a `MAINTAIN` grantee may rebuild but is
+  still refused the comment (`must be owner of index`), while 12.2 refuses both
+  and calls `MAINTAIN` an `unrecognized privilege type`; `ALTER INDEX ... OWNER
+  TO` warning and doing nothing, so index and table owners never diverge; six
+  `pgstatindex` refusals behind the candidate filter, including the one real
+  cross-version difference, an invalid index that 17.11 refuses and **12.2
+  answers with a row**; 13 comment-parsing shapes; three consecutive runs of
+  which the second and third write nothing; a dry run that leaves every
+  `pg_description` md5 unchanged; `pg_dump` carrying all 13 payloads; and a cost
+  profile of 21.3-32.6 ms with zero data-page reads settled against
+  108.4-128.3 ms and 452 MB read fully gated.
+- Page structure: `## Contents` with 41 entries, `## Question` carrying the
+  corrected prompt and the correction note, an inline `## Answer` of 27
+  sections, a mandatory `## Measurement Script` section with an eight-item usage
+  table, a per-stage table, the apply scope of every cluster setting, a last-run
+  record and **both leg scripts published in full**, then `## Context Reviewed`,
+  `## Evidence Map`, nine `## Open Questions`, `## Source References` and
+  `## Navigation`.
+- Validation: 70 source citations over 22 files, every one resolving in bounds
+  inside `raw/postgres-17/`; all 41 Contents anchors matching their headings in
+  document order with no dangling page-internal anchor; both fenced SQL blocks
+  re-extracted from the filed page and hashing to `4a3d970d…` and `86e0ae3d…`,
+  the two hashes the scripts check; `.wiki-runtime/venv/bin/python
+  scripts/wiki_lint` reporting 0 errors and 0 warnings. Updated `wiki/index.md`,
+  `wiki/v17/index.md`, the v17 coverage cell and a dated note in
+  `wiki/versions.md`. Agent verification stays `not yet`: nine open questions
+  remain, the largest being the unmeasured index-entry gate variant and the four
+  intermediate majors that were not run.
+- Teardown: both servers stopped with `pg_ctl -m fast -w stop` by the scripts'
+  own `stop` stage, each confirming no `postmaster.pid`, no matching process and
+  an empty socket directory, and the 12 GB sandbox
+  `.wiki-runtime/tmp/btmaint/` deleted by `clean`. One process note: earlier in
+  the session a data directory was deleted while its postmaster was still
+  running, which left a stale socket lock file and cost one failed start; the
+  final runs stop first.
+
 ## [2026-09-11] restructure | mandatory model inheritance for subagents
 
 - Added subagent model rules to `AGENTS.md`. A subagent runs on the model of
