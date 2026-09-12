@@ -2,6 +2,101 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-12] review v17 | re-sync the pgstatindex bloat page to the narrowed mandatory suite and re-run both legs
+
+- Re-synced [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL
+  12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md#what-the-re-sync-to-the-narrowed-suite-changed)
+  to [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) as that page
+  stands after its narrowing to **115 numbered tests**, at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c`, and **re-ran both legs end to end
+  from their pins**.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17, for question:  B-Tree Bloat and Wasted Space From pgstatindex Alone, on
+  PostgreSQL 12 and 17 (unverified) , update test from the common-concepts and
+  re-run the tests.`; it had `agents.md` for AGENTS.md, lowercase `postgresql`,
+  a double space after `question:`, a space before a comma, `update test` for a
+  whole suite of tests, and `the common-concepts` for "the common concept page".
+  The asker chose **correct and restate**, then chose **narrowing plus a full
+  re-sync** over the narrowing alone, **a full run of both legs** including
+  `make check`, and **re-deriving** the retired-fixture claims from the new run
+  rather than keeping them as current numbers.
+- **The port lost ten indexes.** `sql` block 4 no longer builds 65, 67, 69, 106,
+  117 or 121 (all three legs: `nz_k`, `nzb_k`, `i_trunc`), nor legs 113a and
+  113c; the numbers are retired, not reused, and each removal carries a comment
+  saying which maintenance command that fixture withheld. Block 4's `want_stage`
+  arithmetic lost the three branches those fixtures needed. **Two other drifts
+  were found and fixed**: block 5's comment still claimed rule 2's drain costs
+  every leaf an entry, where the concept page now says volume against
+  distribution; and block 6 gained the family 6 check the narrowed page
+  requires, printing each fixture's counted population beside its
+  `pg_class.reltuples` so an unknown `-1` cannot be read later as a measured
+  zero. Blocks 4, 5 and 6 re-hash to `66eca4f7585f…`, `d2664e8881a9…` and
+  `5a68ed03e502…`, and both leg scripts' constants moved with them; the filed
+  statement (`9d2e3a2c73c8…`), the harness and family 1 are untouched. The rest
+  of the re-check — rule 2's exempt list, rule 3's effective-value arithmetic and
+  publication points, the four bands, `expected_stage`/`want_stage`, the feature
+  gates, the forgery ordering — matched the concept page with nothing to change.
+- **Both legs, built and checked before a fixture existed**: 17.11 passed
+  `make check` 225 of 225 plus `pgstattuple` 1 of 1; 12.2 passed 192 of 192 plus
+  1 of 1. Scored population **131 fixtures on 17.11 and 116 on 12.2**, with 0
+  and 15 skips: 14 feature gates, plus **test 120's precondition, met on 17.11
+  and unmet on 12.2** where `p120` read `reltuples = 10002` and the fixture was
+  recorded and scored from nothing — the first time the two legs have disagreed
+  on that fixture.
+- **Scoring: 0 `CRITICAL FALSE POSITIVE` and 0 `FALSE POSITIVE` again**, 106 and
+  111 `PASS`, and **every one of the 25 and 5 false negatives carries
+  `lost_by = size filter`**, so the filter-free score is `PASS` on **131 of 131
+  and 116 of 116**. The page says plainly that this is the suite narrowing and
+  not the reading improving: the four fixtures that used to defeat it with the
+  filter off were the retired `p65`, `p67`, `p113a` and `p113c`, and their loss
+  is filed as an open question, beside a second new one — nothing pins the row
+  count `VACUUM` writes now that 69, 106, 117 and 121 are gone.
+- Also measured: worst under-estimate improves from `−100.1` to **`−9.8`** on
+  `b93`/`b95`, identically on both legs; within 1.0 point on 95 of 131 and 97 of
+  116; `expected_stage` agrees on **131 of 131 and 116 of 116**; 0
+  build-contract failures and **0 failed post-churn shape assertions** over six
+  shapes; rule 3's census falls to **8 of 89 tables on both legs** from 17 of 99,
+  which is nine of the ten retired tables having been tables it analyzed;
+  `b94t`/`b95t` still decide on their own 100 and 610,000 against the cluster's
+  41,050; the `compare` stage re-derives both `Follow-up` equivalence tables with
+  **0 differing rows in both directions** over 371 and 351 indexes, the
+  alert-era text equal to its successor byte for byte once field 14 is cut; the
+  filed text executed unmodified on both, 115 and 123 rows; cost is 216.3 ms and
+  199.6 ms for ~1.0 GB read; 15 and 14 server errors, every one asked for by a
+  stage, 0 `FATAL`.
+- Page changes: the corrected fifth prompt under `## Question`; the obligations
+  table, the headline table, the five-phase table, the census paragraph and the
+  shape table rebuilt on the new run; `#### The four the reading gets wrong, on
+  both majors` replaced by `#### The blind spot the suite stopped building`,
+  which keeps the four retired readings labelled as 2026-09-13 history and adds
+  `p113b`'s vacuumed counterpart at 99.9 % against 100.0 %; the size-filter,
+  accuracy, side-by-side and `What it gets wrong` sections re-derived; a new
+  `#### What the re-sync to the narrowed suite changed`; `The last run`,
+  `Prerequisites`, the cost, privilege and race numbers, nine Evidence Map rows
+  and the Contents refreshed. Front matter, the original prompts and `sql`
+  blocks 1 to 3 are unchanged.
+- Validation: `scripts/wiki_lint` reports **0 errors and 0 warnings**; all six
+  `sql` blocks re-hash to the constants the scripts carry; both published
+  scripts are byte-identical to the ones that ran. Updated `wiki/index.md`,
+  `wiki/v17/index.md`, the v17 coverage cell and a dated note in
+  `wiki/versions.md`. **Agent verification stays `not yet`**: three claims on
+  the page are now source readings the current fixtures do not exercise (the
+  index-vacuum bypass, the unvacuumed blind spot the narrowing removed, and the
+  unlogged-on-a-standby filter) and one is a cross-version attribution this
+  page's evidence base cannot settle.
+- Teardown: both servers stopped with `pg_ctl -m fast -w stop` by the scripts'
+  own stages, with no `postmaster.pid`, no matching process and an empty socket
+  directory confirmed on each, and the sandbox `.wiki-runtime/tmp/pgsi`
+  deleted. The concept page was read and **not edited**, per the read-only rule
+  for common concept documents; the one change it needs, exempting test 11b from
+  the drain, remains an open question on the question page.
+- Note on dates: this entry's run is the later of the two most recent, even
+  though the entry below it for this page is filed under 2026-09-13. That label
+  is a day ahead of the repository's own clock — its commit is dated
+  2026-09-12 — and the page and the coverage note both say so.
+
 ## [2026-09-12] concept v17 | mandatory B-tree bloat tests: the eight withheld-maintenance fixtures removed
 
 - Narrowed [Mandatory B-Tree Bloat Tests
