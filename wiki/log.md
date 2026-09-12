@@ -2,6 +2,72 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-12] concept v17 | mandatory B-tree bloat tests: the eight withheld-maintenance fixtures removed
+
+- Narrowed [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c`. Source-only work: **no server
+  was started, nothing was measured, and no sandbox was created**.
+- **Prompt hygiene first**: the request read `follow agents.md , in postgresql
+  17, for  common-concept: # Mandatory B-Tree Bloat Tests (unverified) , remove
+  all tests that involves no vacum and/or no analyze.`; it had `vacum` for
+  vacuum, `involves` for involve, `agents.md` for AGENTS.md, lowercase
+  `postgresql`, and stray spacing. The asker chose **correct the typos**, so the
+  request as executed reads: *follow AGENTS.md; in PostgreSQL 17, for the
+  common-concept page "Mandatory B-Tree Bloat Tests (unverified)", remove all
+  tests that involve no vacuum and/or no analyze.*
+- **Scope was settled before drafting**, because the page supported three
+  readings: the eight fixtures it names as withholding maintenance; those plus
+  every missing-or-stale-statistics fixture; or every fixture whose recipe runs
+  neither step, which would also take family 3 and the drain-exempt controls.
+  The asker chose the **eight named withholders**, and chose to **keep the
+  numbers with gaps** rather than renumber, so past runs stay comparable fixture
+  by fixture.
+- **Removed**: 65, 67, 113a and 113c, which skipped the `VACUUM` after entries
+  left the index; 69, 106, 117 and 121, which ran the `VACUUM` and skipped the
+  following `ANALYZE`. Six numbered tests and two legs, taking the suite from
+  **121 numbered tests to 115**. Family 2 now reads 18 to 77 less 65, 67 and 69
+  and its churn row lists 64, 66 and 68; family 5 reads 92 to 112 less 106 and
+  its expression controls start at 107; family 6 reads 113 to 120 less 117 and
+  keeps only `p113b` of test 113. Fixture 121's `TRUNCATE` leg took the
+  `tablecmds.c#truncate-relfilenumber` citation with it, dropped from
+  `## Source References` and from `## Context Reviewed`.
+- **Consequences recorded, not hidden.** Three sections that described the
+  removed shapes as coverage now name them as absences: `What the suite does not
+  cover` leads with "No fixture builds a dead-but-not-vacuumed index" and keeps
+  the four bypass conditions, because a `VACUUM` the suite *did* run can still
+  decline to remove entries; the `VACUUM` interaction bullet lists the eight
+  retirements and gains a third boundary; and `Why It Exists` no longer claims
+  all four `reltuples` writers have a family 6 fixture, since **three do** and
+  `VACUUM` no longer does. Two Open Questions carry the loss: the unvacuumed
+  blind spot is no longer built at all, so a method that misreads a
+  not-yet-vacuumed index passes this suite; and nothing pins the count
+  `update_relstats_all_indexes` writes, which a run can now reach only when rule
+  3's census declines to analyze a table. A new named limit records the retired
+  numbers, states that they are not reused, and draws the boundary the removal
+  actually drew - the **skipped maintenance command**, not the misleading
+  statistic - so 64, 83, 85, 97, 98, 108, 110 to 112 and 118 stay in the suite.
+- **Bookkeeping**: `wiki/v17/index.md` and `wiki/index.md` updated to 115 tests
+  with a paragraph on what the narrowing costs; `wiki/versions.md` gained a
+  2026-09-12 coverage note and its v17 row now reads 115 numbered tests.
+- **Consumers re-read and not edited**, per the concept-page read-only rule.
+  All three port and score the removed fixtures - 17 references in
+  [btree-bloat-with-pgstatindex](v17/questions/indexing/btree-bloat-with-pgstatindex.md),
+  16 in
+  [btree-index-bloat-core-sql-only](v17/questions/indexing/btree-index-bloat-core-sql-only.md),
+  33 in
+  [btree-comment-baseline-maintenance-heuristic](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md),
+  which additionally states that all 121 numbered tests are ported. Each needs
+  its own task; none was touched here.
+- `scripts/wiki_lint` reports **0 errors and 0 warnings**. **Agent verification
+  stays `not yet`**: the page's engine claims were not re-verified in this pass,
+  only the two citations reused in the new Open Question
+  (`vacuumlazy.c#L3073-L3096`, `nbtree.c#L884-L894`), both of which resolve and
+  support their labels.
+- **Teardown**: nothing to stop. No postmaster, standby, pooler, watcher or
+  background `psql` was started for this work, and no `.wiki-runtime/tmp/`
+  sandbox was created or deleted.
+
 ## [2026-09-13] review v17 | pgstatindex bloat page: six suite-port defects fixed, both legs re-run
 
 - Reviewed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL
