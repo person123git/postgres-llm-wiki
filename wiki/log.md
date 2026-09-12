@@ -2,6 +2,161 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-12] review v17 | mandatory B-tree bloat tests: eight reported defects confirmed and fixed
+
+- Revised [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). This ran as its own
+  concept-page task with the user's go-ahead, per `MANDATORY File Or Change A
+  Common Concept Document`; no other document was touched as part of it.
+- **Prompt hygiene first.** The asker chose "correct them silently". The
+  original read `follow agents.md , in postgresql 17, for  common-concept: #
+  Mandatory B-Tree Bloat Tests (unverified) fix these issues :` followed by eight
+  numbered issues. Corrections applied: `agents.md` -> AGENTS.md, lowercase
+  `postgresql` -> PostgreSQL, the space before the comma in `agents.md ,`, the
+  double space in `for  common-concept`, the space before the colon in `fix
+  these issues :`, and the eight issues' bare `raw/postgres-17/...#L42-L58`
+  paths restated in the mandatory `[label](../../../raw/postgres-17/...)`
+  inline-link form. The eight issue texts themselves were kept as written. A
+  concept page has no `## Question` section, so nothing on the page restates the
+  prompt.
+- **All eight reported defects were verified against the pin before any edit.
+  Every one was real.** Source-only review; no server was started, nothing was
+  measured, and no service or sandbox existed to tear down.
+- **1. Rule 3's threshold precedence.** The rule equated the threshold with the
+  cluster GUCs. `relation_needs_vacanalyze` takes
+  `relopts->analyze_scale_factor` and `relopts->analyze_threshold` whenever they
+  are `>= 0` and the GUC only otherwise
+  ([autovacuum.c#L3011-L3017](../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3011-L3017)).
+  Rule 3 now defines the effective values in a six-row table: those two, the
+  `AutoVacOpts` member of `StdRdOptions` filled by `extract_autovac_opts`, the
+  negative-`reltuples` clamp at
+  [L3065-L3072](../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3065-L3072),
+  the strictly-greater comparison at
+  [L3095](../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3095), and the
+  `autovacuum_enabled = false` short circuit. Fixtures 94 and 95 are named as
+  the fixtures that override at 100/0 and 200000/1.
+- **2. Statistics publication.** Sequential phases do not guarantee that
+  `n_mod_since_analyze` includes the preceding writes. Pending counts reach the
+  shared entry only through `pgstat_report_stat`, which runs between
+  transactions and, unforced, at most once per 1000 ms `PGSTAT_MIN_INTERVAL`
+  ([pgstat.c#L117-L122](../raw/postgres-17/src/backend/utils/activity/pgstat.c#L117-L122),
+  [pgstat.c#L636-L665](../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L665)),
+  and only such a flush increases the counter
+  ([pgstat_relation.c#L857-L860](../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L857-L860)),
+  while `pgstat_report_analyze` zeroes it and states in its own comment that it
+  forgets changes committed while the `ANALYZE` ran
+  ([pgstat_relation.c#L331-L337](../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337)).
+  Rule 3 now requires publication at two points, names the two failure
+  orderings, and names the mechanisms: `pg_stat_force_next_flush()`,
+  `stats_fetch_consistency` (`PGC_USERSET`, default `cache`) and
+  `pg_stat_clear_snapshot()`, with `stats.sql` cited as the engine's own use of
+  the sequence.
+- **3. REINDEX does not always leave an exact count.**
+  `RelationSetNewRelfilenumber` writes `relpages = 0` and `reltuples = -1` and
+  makes it visible before the build
+  ([relcache.c#L3943-L3960](../raw/postgres-17/src/backend/utils/cache/relcache.c#L3943-L3960),
+  [relcache.c#L3967-L3973](../raw/postgres-17/src/backend/utils/cache/relcache.c#L3967-L3973)),
+  and `index_update_stats` turns a build count of zero back into `-1`, which
+  also suppresses the `relpages` update
+  ([index.c#L2825-L2842](../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842));
+  a new relation starts the same way
+  ([heap.c#L1004-L1016](../raw/postgres-17/src/backend/catalog/heap.c#L1004-L1016)).
+  The oracle section records the exception and family 6 now has to distinguish
+  an empty population from an unknown count on 113a-c, 115, 116, 118 and 121's
+  `nzb_k`.
+- **4. The drain's every-leaf guarantee is gone.** A sorted build loads leaves in
+  key order
+  ([nbtsort.c#L4-L15](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L4-L15),
+  [nbtsort.c#L1130-L1136](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1130-L1136)),
+  so selecting survivors by heap block establishes nothing about their spread
+  across index pages. Rule 2 now states volume against distribution in a
+  three-row table - what is guaranteed is that about nine tenths of live heap
+  tuples go, that `btvacuumscan` visits every block from `BTREE_METAPAGE + 1` to
+  the relation length
+  ([nbtree.c#L1016-L1041](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1016-L1041)),
+  and that emptied pages become `deleted_pages` - and requires a per-fixture
+  assertion where the distribution is the point.
+- **5. Test 120 must assert its miss.** `acquire_sample_rows` seeds its block
+  sampler from the global PRNG and keeps rows by reservoir sampling
+  ([analyze.c#L1185-L1194](../raw/postgres-17/src/backend/commands/analyze.c#L1185-L1194)),
+  so the miss is probable, not certain. The fixture now requires a post-census
+  assertion that the partial index's own `reltuples` reads 0; a run that finds a
+  non-zero estimate records an unmet fixture precondition and may not credit the
+  fixture as covered.
+- **6. Family 1 gained test 11b**, the off-to-on `deduplicate_items` transition
+  control the suite never had: built off, switched on with `ALTER INDEX`, no
+  further inserts. It is a different condition from test 11 because the insert
+  gate and the build gate read the option at different times
+  ([nbtinsert.c#L2774-L2782](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2774-L2782),
+  [nbtsort.c#L1147-L1152](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1147-L1152)),
+  and the reloption's own comment says it applies only to later inserts, which
+  is why turning it on needs only `ShareUpdateExclusiveLock`
+  ([reloptions.c#L159-L168](../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L168)).
+  Numbered `11b` rather than `18` so no existing fixture number moves and the
+  family-2 range stays intact, following the page's own `113a-c`/`p50b`
+  precedent. This is the gap the 2026-09-11 `pgstatindex` run measured as
+  `i_dedup_off` at 69.1 % reclaimable against a reported −0.3 %.
+- **7. Two engine claims narrowed.** The `DEBUG1` deduplication verdict is not a
+  complete oracle: the `INCLUDE` refusal returns before the logging block
+  ([nbtutils.c#L5144-L5147](../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147)),
+  and the message is emitted only when the caller asks - `_bt_leafbuild` passes
+  `true`
+  ([nbtsort.c#L559-L563](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L559-L563)),
+  `btbuildempty` passes `false`
+  ([nbtree.c#L158-L167](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L158-L167)),
+  and those are the only two callers in the tree. The 2 % page fraction is one
+  of four bypass conditions, beside `consider_bypass_optimization`,
+  `rel_pages > 0` and a 32 MB dead-item cap, with index cleanup still running
+  when the bypass applies
+  ([vacuumlazy.c#L1899-L1934](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1934),
+  [vacuumlazy.c#L1936-L1957](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1936-L1957)).
+- **8. Resolving citations re-anchored, and the missing context added.** The
+  REINDEX citation moved from `index.c#L3583-L3600`, which is the signature and
+  locals, to
+  [index.c#L3781-L3789](../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789),
+  the actual suppress / new-relfilenode / `index_build` calls, joined by
+  `index_build`'s two `index_update_stats` calls at
+  [L3126-L3138](../raw/postgres-17/src/backend/catalog/index.c#L3126-L3138) and
+  `ReindexIndex`'s dispatch at
+  [indexcmds.c#L2838-L2849](../raw/postgres-17/src/backend/commands/indexcmds.c#L2838-L2849);
+  `btbulkdelete` moved from `L821-L832` to `L820-L843` and `btvacuumscan` from
+  its signature to its block loop. Three new `###` subsections under `## Where It
+  Appears in Source` supply the caller/callee, generated-header and shipped-test
+  context AGENTS.md requires: eight caller-to-callee boundaries; the generated
+  files fixtures depend on (`Gen_fmgrtab.pl`'s `fmgr_builtins` table, which is
+  what makes tests 14 and 16 resolve by `prosrc` rather than by name, and
+  `genbki.pl`'s catalog headers); and a nine-row shipped-test table whose last
+  row is an explicit absence - `pg_regress` adds only
+  `log_autovacuum_min_duration = 0` to the temporary instance
+  ([pg_regress.c#L2392-L2404](../raw/postgres-17/src/test/regress/pg_regress.c#L2392-L2404)),
+  and no shipped test asserts a launcher analyze decision, a bypass decision, or
+  the value of `n_mod_since_analyze`.
+- Contents, Related Structures and Functions, Interactions, Context Reviewed,
+  Evidence Map and Source References were all updated to match; the Evidence Map
+  grew from 15 to 30 rows and Source References from 64 to 111 entries. Five new
+  Open Questions name what the fixes could not close: no shared per-fixture
+  drain-distribution assertion, 11b's expected reclaim not being derivable, no
+  way to prove the second publication point worked, and the reloption precedence
+  covering only the analyze half of `relation_needs_vacanalyze`.
+- **Consumer pages re-read, not edited**, per the concept-page read-only rule.
+  All three censuses -
+  [btree-bloat-with-pgstatindex](v17/questions/indexing/btree-bloat-with-pgstatindex.md),
+  [btree-index-bloat-core-sql-only](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  and
+  [btree-comment-baseline-maintenance-heuristic](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  - compute the threshold from `current_setting('autovacuum_analyze_threshold')`
+  and `current_setting('autovacuum_analyze_scale_factor')` for every table, with
+  no reloption override, so all three now contradict the corrected rule 3 on
+  fixtures 94 and 95. The core-SQL page's *statement under test* does implement
+  the precedence through `pg_options_to_table`; its census does not. Each page
+  needs its own task.
+- `verified_by_agent` stays `not yet`: the page now states requirements no run
+  has yet satisfied, and `verified: false` is untouched, being human-only.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors and 0
+  warnings. Nothing was started, so nothing needed stopping; no sandbox was
+  created.
+
 ## [2026-09-11] review v17 | pgstatindex bloat page scores the shared mandatory suite, both legs re-run
 
 - Revised [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL

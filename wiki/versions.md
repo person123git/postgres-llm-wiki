@@ -14,6 +14,75 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-12: Revised [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) against
+  **eight reported defects, every one confirmed in the pin**
+  `786db8dcf168bd9df8f55047337525ac19118b1c`, source-only and with no server
+  started. **Rule 3 stopped equating the auto-analyze threshold with the cluster
+  GUCs**: it now defines the effective per-table values -
+  `relopts->analyze_threshold` and `relopts->analyze_scale_factor` whenever they
+  are `>= 0`, the GUC only otherwise, read out of the `AutoVacOpts` member of
+  `StdRdOptions` by `extract_autovac_opts` - plus the negative-`reltuples`
+  clamp, the strictly-greater comparison and the `autovacuum_enabled` short
+  circuit, in a six-row table. That is exactly what **fixtures 94 and 95
+  override** at 100/0 and 200000/1. Rule 3 also gained a **two-point
+  statistics-publication requirement**, because sequential phases do not put
+  churn into `n_mod_since_analyze`: pending counts reach the shared entry only
+  through a `pgstat_report_stat` flush, unforced at most once per 1000 ms
+  `PGSTAT_MIN_INTERVAL`, while `pgstat_report_analyze` zeroes the counter and
+  says in its own comment that it forgets changes committed during the
+  `ANALYZE`; `pg_stat_force_next_flush()`, `stats_fetch_consistency` (default
+  `cache`, `PGC_USERSET`) and `pg_stat_clear_snapshot()` are named as the
+  mechanisms, with `stats.sql` cited as the engine's own use of the sequence.
+  **The oracle section now records that a rebuilt or freshly built empty index
+  keeps `reltuples = -1`, not `0`** - `RelationSetNewRelfilenumber` writes the
+  sentinel and `index_update_stats` preserves it when the build count is zero,
+  which also suppresses the `relpages` update - so family 6 must distinguish an
+  empty population from an unknown count on 113a-c, 115, 116, 118 and 121's
+  `nzb_k`. **Rule 2's drain lost its every-leaf guarantee**: a sorted build makes
+  leaf order key order, so the spread follows each fixture's key-to-heap
+  correlation, and the rule now states volume against distribution in a table
+  and requires a per-fixture assertion where the distribution is the point.
+  **Test 120 must assert its intended zero estimate after the census**, since
+  `acquire_sample_rows` seeds its block sampler from the global PRNG; an
+  unmet precondition is recorded instead of credited coverage. **Family 1 gained
+  test 11b**, the off-to-on `deduplicate_items` transition control the suite
+  never had - built off, switched on with `ALTER INDEX`, no further inserts -
+  which is a different condition from test 11 because the insert gate and the
+  build gate read the option at different times; this is the `i_dedup_off` gap
+  the 2026-09-11 `pgstatindex` run measured at **69.1 % reclaimable against a
+  reported −0.3 %**. Two engine claims were narrowed: the `DEBUG1` deduplication
+  verdict is **not** a complete oracle (the `INCLUDE` refusal returns before the
+  log line, and only `_bt_leafbuild` passes `debugmessage = true` while
+  `btbuildempty` passes false - the only two callers in the tree), and the 2 %
+  index-vacuum bypass is **one of four conditions**, beside
+  `consider_bypass_optimization`, `rel_pages > 0` and a 32 MB dead-item cap,
+  with index cleanup still running when it applies. Finally, the
+  **resolving-only citations were re-anchored**: the REINDEX range moved from
+  `index.c#L3583-L3600`, which is signature and locals, to `#L3781-L3789`, the
+  actual suppress / new-relfilenode / `index_build` calls, joined by
+  `index_build`'s two `index_update_stats` calls and `ReindexIndex`'s dispatch;
+  `btbulkdelete` and `btvacuumscan` likewise moved to bodies that contain the
+  work. Three new `###` subsections supply the context AGENTS.md requires:
+  eight caller-to-callee boundaries, the generated files fixtures depend on
+  (`Gen_fmgrtab.pl`'s `fmgr_builtins` table behind tests 14 and 16,
+  `genbki.pl`'s catalog headers), and a nine-row shipped-test table whose last
+  row is an **explicit absence** - `pg_regress` adds only
+  `log_autovacuum_min_duration = 0`, and no shipped test asserts a launcher
+  analyze decision, a bypass decision, or the value of `n_mod_since_analyze`.
+  The page is source-only, so no measurement was run and none was added; five
+  new Open Questions name what the fixes could not close. `scripts/wiki_lint`
+  reports 0 errors and 0 warnings. **Agent verification stays `not yet`**, and
+  the three consumer pages were re-read but **not edited**, per the concept-page
+  read-only rule: all three censuses on
+  [btree-bloat-with-pgstatindex](v17/questions/indexing/btree-bloat-with-pgstatindex.md),
+  [btree-index-bloat-core-sql-only](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  and
+  [btree-comment-baseline-maintenance-heuristic](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  read `current_setting('autovacuum_analyze_threshold')` for every table and so
+  now contradict the corrected rule 3 on fixtures 94 and 95; each needs its own
+  task.
+
 - 2026-09-11: Replaced the fixture suite of [B-Tree Bloat and Wasted Space From
   pgstatindex Alone, on PostgreSQL 12 and 17
   (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md#the-mandatory-suite-scored-on-both-majors)
