@@ -2,6 +2,100 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-12] answer v17 | remove the size prefilter from the pgstatindex bloat statement and re-run both legs
+
+- Removed the `-- skip anything smaller` size prefilter from the statement on
+  [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`, and **re-ran both
+  legs end to end from their pins**, builds and regression suites included:
+  17.11 passed `make check` 225 of 225 plus `pgstattuple` 1 of 1, 12.2 passed
+  192 of 192 plus 1 of 1.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17, for question:  B-Tree Bloat and Wasted Space From pgstatindex Alone,
+  remove skip anything smaller filter from the statement.`; it had `agents.md`
+  for AGENTS.md, lowercase `postgresql`, a double space after `question:`, the
+  page title without its `, on PostgreSQL 12 and 17` suffix, and `remove skip
+  anything smaller filter` with no article and no quotation marks. The asker
+  chose "correct and restate", then scoped four things: **the whole predicate
+  goes**, `min_index_bytes` and the `pg_relation_size` call together, shield
+  included; **both legs run end to end** so every number is re-derived; the
+  filter sections are **rewritten in place** with no history section; and the
+  concept page is read, not edited.
+- **The statement is three lines and 178 bytes shorter** — `sql` block 1 is now
+  `3d4507a54b38…`, 123 lines and 5,976 bytes — and `pgstatindex` is the only
+  function it measures with. `cand` lost its `CROSS JOIN params p` with the
+  predicate, so it opens no relation at all. It printed **367 rows on 17.11 and
+  347 on 12.2** where the superseded text printed 115 and 123, the catalog's and
+  TOAST's own indexes included.
+- **The suite is passed outright**: `PASS` on **131 of 131** and **116 of 116**,
+  with 0 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE` and **0 `FALSE
+  NEGATIVE`** on either leg, 0 build-contract failures, 0 failed post-churn
+  shape assertions, `expected_stage` agreeing 131 of 131 and 116 of 116, and
+  `want_stage` hit 128 and 113 with the same three near-threshold misses. Every
+  fixture is printed, `taken_stage` equals `taken_nofilter` on all of them, and
+  `lost_by` is empty on both legs. **The clean sheet is the report, not the
+  reading**: the 25 and 5 false negatives were rows the prefilter withheld (31
+  and 7 fixtures sit under 1 MB), and the four fixtures that defeated the
+  reading itself are retired by the concept page's narrowing, which stays an
+  open question. Accuracy is unchanged: 95 and 97 within one point, 127 and 113
+  within five, worst over-estimate `+10.0` and `+6.3`, worst under-estimate
+  `−9.8` on `b93`/`b95`.
+- **What the removal cost, all measured.** Six interleaved runs of the filed
+  text against the fillfactor-era one: 201.6-220.4 ms against 189.8-207.1 ms on
+  17.11, 187.4-215.5 against 179.2-206.8 on 12.2, for 256 and 228 more indexes;
+  the `read` counts are the ones the filtered text produced in the previous run
+  and the difference is about 3,000 and 1,000 buffer hits, because a size
+  prefilter removes the small indexes by definition. The plan lost two `CTE
+  Scan` nodes: `params` is singly referenced now, so `SS_process_ctes` inlines
+  it. Small-index artefacts reach the reader unmarked — `c_one_idx` at 44.6 %
+  wasted that no rebuild returns, `c_zero_idx` at `0.0` against a measured
+  50.0 % — and both are filed as open questions. **The concurrent-drop shield
+  went with the call**: a `DROP INDEX` that commits during the report now aborts
+  it, `could not open relation with OID …` with 0 rows against 373 and 353, and
+  the second window — the one three earlier sweeps never reproduced — aborted
+  at the **first** 5 ms delay on both legs. The page's advice changed with it:
+  one dropped index now loses the whole report.
+- **Two new pieces of measurement infrastructure.** The 12 leg gained a
+  `crossleg` stage, so the cross-major comparison is script output for the first
+  time: 290 keys printed by both legs, 191 rows identical field for field, 99
+  differing, 77 and 57 keys unique to one leg, all broken down by schema — and
+  in the two fixture schemas, 42 of 138 shared keys differ, three of them the
+  harness's own bookkeeping indexes and **all 39 others with fewer leaf pages on
+  17.11**. The `compare` stage's row check became a set comparison, because the
+  filed text is no longer expected to print the same rows as the texts it
+  superseded: **0 of the 123 and 115 superseded rows are missing** from the
+  filed output on the 12 untouched fields, and 228 and 256 rows are new.
+- **One finding worth naming**: the report now covers indexes its own reader
+  writes to. The `decide` stage read 369 and 349 candidates against 367 and 347
+  printed rows, the two extra being `report_filed_pkey` and its TOAST index,
+  created between the two readings; on 12.2 that also moved
+  `pg_catalog.pg_depend_depender_index` from 10.3 % to 7.7 % between them. Filed
+  as an open question, since nothing bounds it.
+- Page edits: the corrected sixth prompt under `## Question`; `sql` block 1;
+  `sql` block 2's harness comments and `lost_by`'s third class, now `not
+  printed`; `sql` block 4's prediction comment; both leg scripts (hash
+  constants, `texts`/`decide`/`compare`/`race` comments and metrics, the new
+  `crossleg` stage and its dispatcher entries); and the prose of `The
+  statement`, `How to read the output`, both `Follow-up` sections, `Why every
+  candidate filter is there`, `NaN is the trap`, `Mandatory test review`, the
+  scoring section and its five subsections, `What it gets wrong`, `What it costs
+  to run`, `Locking, timeouts, and the concurrent-drop race`, `How this was
+  measured`, `The last run`, `Context Reviewed`, `Evidence Map` and `Open
+  Questions`. The `Every loss is the report's own size filter` subsection is
+  deleted, with its Contents entry. One new citation,
+  `subselect.c#SS_process_ctes`, for the CTE inlining.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0
+  errors and 0 warnings**. Both servers were stopped by the scripts' own stages
+  with no `postmaster.pid`, no matching process and an empty socket directory
+  confirmed, and the sandbox deleted. Updated `wiki/index.md`,
+  `wiki/v17/index.md`, the v17 coverage cell and a dated note in
+  `wiki/versions.md`. **Agent verification stays `not yet`**: three claims on
+  the page are source readings the current fixtures do not exercise (the
+  index-vacuum bypass, the retired unvacuumed blind spot, the unlogged-on-a-
+  standby filter) and one is a cross-version attribution this evidence base
+  cannot settle. The concept page was read and **not edited**.
+
 ## [2026-09-12] review v17 | re-sync the pgstatindex bloat page to the narrowed mandatory suite and re-run both legs
 
 - Re-synced [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL
