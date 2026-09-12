@@ -2,6 +2,110 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-13] review v17 | pgstatindex bloat page: six suite-port defects fixed, both legs re-run
+
+- Reviewed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL
+  12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`, claim by claim, and
+  against [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) as that page
+  stood after its 2026-09-12 revision.
+- **Prompt hygiene first**: the original read `follow agents.md, in postgresql
+  17, review  question:  B-Tree Bloat and Wasted Space From pgstatindex Alone,
+  on PostgreSQL 12 and 17 (unverified)`; it had `agents.md` for AGENTS.md,
+  lowercase `postgresql`, and two double spaces. The asker chose "correct and
+  restate", then chose a **full claim-by-claim review**, **building both servers
+  and re-measuring**, and **repair in place**.
+- **Environment.** 17.11 and 12.2 built out of tree under
+  `.wiki-runtime/tmp/pgsi/` from their own pins, the 12 leg `--with-icu` with
+  `CFLAGS="-O2 -g -DTRUE=1 -DFALSE=0"`. `make check` **225 of 225** plus
+  `pgstattuple` **1 of 1** on 17.11; **192 of 192** plus **1 of 1** on 12.2.
+  Isolated clusters on ports 55417 and 55412, `--locale=C --encoding=UTF8`,
+  `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `block_size`
+  8192, `max_data_alignment` 8, Linux x86_64. Both legs were run end to end
+  four times as the repairs landed; the filed numbers are the last run's.
+- **Citations.** Every source citation on the page was re-read against the
+  checkout: 81 distinct ranges over 31 files before the edits, every one
+  resolving, in bounds and inside `raw/postgres-17/`. Four were re-anchored
+  because they landed on a signature and locals rather than on the behavior
+  they were cited for: `btbulkdelete` `#L821-L832` -> `#L820-L843` (the body
+  that calls `btvacuumscan`), `_bt_dedup_pass` `#L56-L70` -> `#L33-L56` (the
+  doc comment that describes the pass), `index_update_stats` `#L2810-L2830` ->
+  `#L2809-L2842` (which now contains the `reltuples = -1` hack), and the bypass
+  citation split into conditions and consequences. Eleven new citations were
+  added for the repaired claims.
+- **Six defects in the suite port, every one confirmed in the pin and fixed in
+  the page's own `sql` blocks.** (1) Rule 3's census read
+  `current_setting('autovacuum_analyze_threshold')` for every table, where
+  `relation_needs_vacanalyze` takes each analyze parameter from the table's own
+  reloption whenever it is non-negative; **fixtures 94 and 95 both decided the
+  wrong way**, and corrected, `b94t` is analyzed at a threshold of 100 and
+  `b95t` left alone at 610,000 against the cluster's 41,050. (2) The churn had
+  **one publication point where rule 3 needs two**: on 12.2 the drain's deletes
+  reached `mod_since_analyze` only after its own `ANALYZE` had zeroed the
+  counter, so the census analyzed **31 tables in one run and 51 in the
+  2026-09-11 run** against 17.11's 17; `wiki_flush()` now forces the flush where
+  SQL can and waits out the publish interval where it cannot, and **both legs
+  censused 17 of 99**. (3) Family 1 lacked **test 11b**, the off-to-on
+  `deduplicate_items` control the concept page added on 2026-09-12; it is now
+  built and scored (**141 fixtures on 17.11**, 127 on 12.2 with **14** skips),
+  and it passes at a `−6.3`-point under-estimate because rule 2's drain loosens
+  it before the statement reads it. (4) **Test 120's precondition was assumed**;
+  it is now asserted after the census, and the assertion earned its keep - met
+  on both legs in the filed run, **unmet on 17.11 an hour earlier** where
+  `p120` read `reltuples = 10031` against a true 2,000 and the fixture was
+  recorded as an unmet precondition and scored from nothing. (5) Rule 2's drain
+  was described as losing entries from every leaf, where **its guarantee is
+  volume, not distribution**; the harness now records the post-churn shape per
+  fixture as one of six and asserts it where the prediction depends on it, with
+  **0 assertions failed on either leg**. (6) The **2 % index-vacuum bypass was
+  named as the condition** when it is one of four, and index cleanup still runs
+  when it applies.
+- **Three claims narrowed under measurement, not fixed.** The 14 cross-major
+  differences are **not** all deduplication: `p68` carries a counted 50,000
+  distinct keys over 50,000 predicate rows and still reads 8792 kB against
+  11 MB, which the v17 tree's hinted bottom-up deletion pass explains and no
+  release attribution on this page can. The `i_ff10` sample row under `How to
+  read the output` came from the retired 1,000,000-row population (41 MB and
+  5,264 leaves, not 206 MB and 26,316). And the `written=832`/`written=874` ring
+  counters are absent from these plans entirely, because nothing had dirtied the
+  pages the report reads.
+- **The page's largest standing gap is closed.** A new `compare` stage recovers
+  both superseded statement texts from their own commits (`cbbbd16` and
+  `0dbabb6`), hash-checks them, runs them, and re-derives the two `Follow-up`
+  output-equivalence tables on the population this run builds: **0 differing
+  rows in both directions on both legs**, over 385 and 365 indexes, with the
+  alert-era output equal to its successor byte for byte once field 14 is cut and
+  the twelve untouched fields identical across the fillfactor rebase. The first
+  draft of the stage reported 29 and 30 differing rows; that was the stage's own
+  fault - materializing each text in turn creates and drops a relation, which
+  grows the catalog's own indexes, and those are candidates too - and the
+  comparison now reads both texts inside one query.
+- **Scoring after the repairs**, both legs: **0 `CRITICAL FALSE POSITIVE` and 0
+  `FALSE POSITIVE`**, 112 and 118 `PASS`, 29 and 9 `FALSE NEGATIVE` of which
+  only the same four are the reading's (`p65`, `p67`, `p113a`, `p113c`),
+  `expected_stage` agreeing on **141 of 141 and 127 of 127**, 0 build-contract
+  failures, 100 and 103 estimates within 1.0 point and 133 and 120 within 5.0,
+  worst over-estimate `+10.0` and `+6.3`, and 15 and 14 logged errors every one
+  of which a stage asked for.
+- Bookkeeping: updated `wiki/index.md`, `wiki/v17/index.md` and the
+  `wiki/versions.md` coverage note, with a new `#### What the 2026-09-13 review
+  repaired` subsection on the page itself. `.wiki-runtime/venv/bin/python
+  scripts/wiki_lint` reports **0 errors and 0 warnings**.
+- **Teardown**: the 12 leg was stopped by its own `stop` stage and the 17 leg's
+  `clean` stage stopped its server and deleted `.wiki-runtime/tmp/pgsi/`; both
+  reported no `postmaster.pid`, no matching process and an empty socket
+  directory, and `pgrep -a postgres` is empty. The three unrelated sandboxes
+  under `.wiki-runtime/tmp/` predate this session and were left alone.
+- **Agent verification stays `not yet`.** Two claims on the page are source
+  readings no fixture exercises - the four bypass conditions and the
+  unlogged-during-recovery filter - and one is a cross-version attribution this
+  page's evidence base cannot settle. The concept page was read and **not
+  edited**, per the read-only rule; the change it needs, exempting test 11b from
+  rule 2's drain or giving it an undrained twin, is filed as an open question on
+  the question page and needs its own task.
+
 ## [2026-09-12] review v17 | mandatory B-tree bloat tests: eight reported defects confirmed and fixed
 
 - Revised [Mandatory B-Tree Bloat Tests

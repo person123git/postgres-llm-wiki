@@ -14,6 +14,66 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-13: Reviewed [B-Tree Bloat and Wasted Space From pgstatindex Alone,
+  on PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md#what-the-2026-09-13-review-repaired)
+  claim by claim against the pin `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  against [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) as that page
+  stood after its 2026-09-12 revision, then **rebuilt both servers and re-ran
+  both legs end to end**, four times in all while the repairs landed. 17.11
+  passed `make check` 225 of 225 plus `pgstattuple` 1 of 1; 12.2 passed 192 of
+  192 plus 1 of 1. **Every filed source citation resolves and supports its
+  label**, and every measured claim reproduced except the ones listed below.
+  **Six defects in the suite port, all confirmed and fixed in the page's own
+  `sql` blocks**: rule 3's census read `current_setting('autovacuum_analyze_
+  threshold')` for every table where `relation_needs_vacanalyze` reads the
+  table's own reloption whenever it is non-negative, so fixtures **94 and 95
+  both decided the wrong way** - corrected, `b94t` is analyzed at a threshold of
+  100 and `b95t` left alone at 610,000 against the cluster's 41,050; the churn
+  had **one publication point where rule 3 needs two**, so on 12.2 the drain's
+  deletes reached `mod_since_analyze` after its own `ANALYZE` had zeroed it and
+  the census analyzed 31 tables in one run and 51 in the 2026-09-11 run against
+  17.11's 17 - `wiki_flush()` now forces the flush where SQL can and waits out
+  the publish interval where it cannot, and **both legs censused 17 of 99**;
+  family 1 lacked the **11b off-to-on `deduplicate_items` control** the concept
+  page added on 2026-09-12, now built and scored (**141 fixtures on 17.11**,
+  127 on 12.2 with 14 skips) and passing at a `−6.3`-point under-estimate
+  because rule 2's drain loosens it first; **test 120's probabilistic
+  precondition was assumed**, and is now asserted after the census - met on
+  both legs in the filed run and **unmet on 17.11 an hour earlier**, where
+  `p120` read `reltuples = 10031` and the fixture was recorded as an unmet
+  precondition and scored from nothing; rule 2's drain was described as losing
+  entries from every leaf when **its guarantee is volume, not distribution**,
+  now asserted per fixture as one of six post-churn shapes with **0 assertions
+  failed**; and the **2 % index-vacuum bypass was named as the condition when it
+  is one of four**. **Three claims were narrowed under measurement**: the 14
+  cross-major differences are not all deduplication, because `p68` carries a
+  counted 50,000 distinct keys over 50,000 predicate rows and still differs
+  (the hinted bottom-up deletion pass is the v17 mechanism, and the release that
+  introduced it is not citable here); the `i_ff10` sample row under `How to read
+  the output` came from the retired 1,000,000-row population (41 MB and 5,264
+  leaves, not 206 MB and 26,316); and the `written=832`/`written=874` ring
+  counters do not appear in these plans at all. **The page's largest standing
+  gap is closed**: a new `compare` stage recovers both superseded statement
+  texts from their own commits, hash-checks them, and re-derives the two
+  `Follow-up` output-equivalence tables on the current population - **0
+  differing rows in both directions on both legs**, 385 and 365 indexes, with
+  the alert-era output equal to its successor byte for byte once field 14 is
+  cut. Scoring after the repairs: **0 `CRITICAL FALSE POSITIVE` and 0 `FALSE
+  POSITIVE`**, 112 and 118 `PASS`, 29 and 9 `FALSE NEGATIVE` of which only four
+  are the reading's, `expected_stage` agreeing on 141 of 141 and 127 of 127, and
+  0 build-contract failures. Both servers were stopped by the scripts' own
+  stages with no `postmaster.pid`, no matching process and an empty socket
+  directory confirmed, and the sandbox deleted. `scripts/wiki_lint` reports 0
+  errors and 0 warnings. **Agent verification stays `not yet`**: two claims on
+  the page are source readings no fixture exercises (the bypass conditions and
+  the unlogged-on-a-standby filter) and one is a cross-version attribution this
+  page's evidence base cannot settle. The concept page was **read and not
+  edited**, per the read-only rule; the one change it needs - exempting test 11b
+  from the drain, or giving it an undrained twin - is filed as an open question
+  on the question page.
+
 - 2026-09-12: Revised [Mandatory B-Tree Bloat Tests
   (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) against
   **eight reported defects, every one confirmed in the pin**
