@@ -9996,3 +9996,23 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   and remain filed as open; no answer claim depends on them. `verified: false`
   untouched. `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors
   and 0 warnings.
+
+## [2026-09-12] cleanup v17 | remove explicit deduplication controls from mandatory tests
+
+- Removed tests 11, 11b and 38 from [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md), following
+  the user-approved corrected instruction. The suite now has 113 numbered
+  tests; retired numbers are not reused. Eligibility fixtures remain.
+- Removed the transition requirement, its open question and evidence-map row,
+  the retired reloption feature gate, and the on/off regression-test listing.
+  Updated family ranges, the structures table, concept boundary and summaries.
+- Re-read the matching v17 reloption and build/insert gates at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c`. Verification fields are unchanged.
+- Reviewed the three consumer pages: the core-SQL estimator, COMMENT-baseline
+  heuristic and pgstatindex page still contain retired fixtures or coverage
+  descriptions. Recorded the mismatch under Open Questions; consumer scripts
+  and historical results remain unchanged under the concept-only workflow.
+- No server or other service was started, and no measurement was run.
+- Validation: git diff --check passes. Wiki lint retains the pre-edit nine
+  errors and two warnings, all concerning v12/v14/v18/v19 checkout or citation
+  issues; this edit adds no lint issue.
