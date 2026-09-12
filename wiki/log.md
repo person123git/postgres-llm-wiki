@@ -2,6 +2,125 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-11] review v17 | pgstatindex bloat page scores the shared mandatory suite, both legs re-run
+
+- Revised [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL
+  12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md#the-mandatory-suite-scored-on-both-majors)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). The page's own 32-fixture
+  set is retired as the scored population; [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) now supplies
+  the fixtures, and both legs were rebuilt and re-run against it end to end.
+- **Prompt hygiene first.** The asker chose "correct and restate". The original
+  read `follow agents.md, in postgresql 17, for question:  B-Tree Bloat and
+  Wasted Space From pgstatindex Alone, on PostgreSQL 12 and 17 (unverified),
+  replace the mandatory test by tests on common-concept: # Mandatory B-Tree
+  Bloat Tests (unverified), keep the link with the common concept.`; the
+  corrections are `agents.md` -> AGENTS.md, lowercase `postgresql`, a double
+  space after `question:`, a stray `#` before the concept page's title, the
+  `(unverified)` hint treated as part of both titles, `the mandatory test` for a
+  whole suite of tests, `replace ... by` for `replace ... with`, `on
+  common-concept:` for "on the common concept page", and `keep the link with`
+  for "keep the link to". Filed verbatim as the fifth prompt on the page.
+- Four scoping answers were taken before any edit: the concept page's suite
+  **replaces the fixture suite the two leg scripts build** (this page, unlike the
+  estimator page, never had a `Mandatory test review` section - its tests *were*
+  the `bl` fixtures); **both legs run end to end**; the numbers the `bl` suite
+  produced are **replaced**, so the shared suite's scoring is the page's only
+  acceptance evidence; and the concept page is read-only here.
+- **The suite is filed as page data, not duplicated per script.** `sql` blocks 2
+  to 6 are new: the harness (plan with a filed `want_stage`, build-contract
+  check, two snapshots, the `ddl_command_end` baseline trigger that makes rule
+  1's cut, the oracle procedure, and a verdict view carrying the shared four
+  bands plus `taken_nofilter`, `expected_stage` and `lost_by`), family 1's 28
+  gate fixtures, families 2 to 6's 112, rule 2's drain, and rule 3's census with
+  the forgeries last. Both leg scripts extract all six blocks from the page and
+  refuse to run unless each hashes to the constant filed in the script, so the
+  two majors run the same suite. Every gated fixture is built through
+  `fixture()`, which files a plan row or a skip row carrying the server's own
+  message.
+- **Both scripts were rewritten around it and re-run.** Eighteen stages per leg
+  now: `suite` builds the shared fixtures into a recreated `public` schema,
+  `churn` runs the drain in one session and the census in another (before
+  PostgreSQL 15 a backend's pending statistics publish when it exits), `report`
+  runs the filed text as filed and loads the rows it printed back as
+  `report_filed`, `decide` materializes the same text over every index with the
+  size prefilter at 0, `score` is the oracle, and a new `guard` stage gives the
+  `bl` guard fixtures their own `REINDEX INDEX` so every number about them is
+  measured. The 12 leg is now built `--with-icu` (five suite fixtures need ICU
+  collations) with `CFLAGS="-O2 -g -DTRUE=1 -DFALSE=0"`.
+- **Results.** 17.11: `make check` **225 of 225** plus `pgstattuple` 1 of 1; 140
+  fixtures, 0 skipped, 140 baselines, 0 build-contract failures; **111 `PASS`, 0
+  `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 29 `FALSE NEGATIVE`**, and 136
+  `PASS` with the report's own 1 MB filter set aside; 75 rebuild decisions
+  returning a mean 89.1 %. 12.2: **192 of 192** plus 1 of 1; 127 fixtures, **13
+  skipped** with the server's own messages (four `deduplicate_items`, nine
+  support-function-4 operator classes); **118 `PASS`, 0 false positives, 9
+  `FALSE NEGATIVE`**, 123 with the filter set aside; 82 rebuilds at a mean
+  88.9 %. **0 unexpected server errors on either leg** (15 and 14 logged, each
+  raised by a stage that asked for it).
+- **The finding: a physical reading makes no false positive, and only four
+  reading failures exist.** All eight of family 3 pass on both legs, including
+  `f84`'s forged index `reltuples` and `f85`'s stale table statistics, which the
+  wiki's catalog-only estimator reports as critical false positives on the same
+  fixtures - this statement reads neither column. The four losses are the same on
+  both majors and are one failure mode: `p65`, `p67`, `p113a` and `p113c`, where
+  entries left the index with no `VACUUM`, reported at `0.0` and `−0.1` against a
+  measured 89.1 % and 100.0 %. That is exactly the limit the concept page names
+  for any density method, now measured. Every other loss - 25 on 17.11 and 5 on
+  12.2 - is a row the 1 MB `min_index_bytes` filter never prints, and 23 of the
+  25 were within 3.4 points of the truth.
+- Also newly measured: 100 of 140 and 103 of 127 estimates within 1.0 point of
+  the oracle, 133 and 120 within 5.0, worst over-estimate `+10.0` and `+6.3`;
+  `expected_stage`, recomputed in the harness from its own `pgstatindex` call,
+  agreeing with the statement on **140 of 140 and 127 of 127**; the filed text
+  agreeing with the harness view on every row both print; rule 3 analyzing 17 of
+  99 tables on 17.11 and 51 of 99 on 12.2 - a `pg_stat_force_next_flush()`
+  publication difference that moves nothing here; 96 of the 110 shared report
+  rows identical across majors with all 14 differences carrying duplicate keys;
+  `index_size = pg_relation_size` for 382 of 382 and 363 of 363; ~1.4 GB read per
+  run at 227 ms and 242 ms over 385 and 366 B-tree indexes; and, from the new
+  `guard` stage, `i_dedup_off` at **69.1 % reclaimable against a reported
+  `−0.3 %`**, the page's largest miss.
+- **One gap is reported, not fixed**: the shared suite has no fixture built with
+  `deduplicate_items = off` and then switched on, which is the `pg_upgrade` shape
+  behind that `−69.4`-point miss. Family 1 leaves the option off, so those
+  fixtures pass. Closing it is a change to the concept page, which only its own
+  task may make; it is filed under the question page's `## Open Questions` and
+  named here.
+- Page edits: the fifth prompt under `## Question`; new `Mandatory test review`,
+  `The mandatory suite, scored on both majors` (six `####` subsections) and
+  `What it gets wrong, measured` sections replacing `Accuracy against REINDEX
+  INDEX`, `The three shapes it gets wrong`, `Everything the two servers agreed
+  on` and `Re-measured from a published script`; a rewritten `How this was
+  measured`; refreshed numbers in `The statement`, `How to read the output`,
+  `NaN is the trap`, `What one pgstatindex call actually measures`, `Why every
+  candidate filter is there`, the fillfactor follow-up's four-fixture and
+  residual tables, `Deduplication changes the input`, `What it costs to run`,
+  `Privileges` and `Locking, timeouts, and the concurrent-drop race`; a
+  rewritten `## Measurement Script` section with five new `sql` blocks, two
+  rewritten `sh` blocks and a new `The last run`; four new Context Reviewed
+  bullets, six new Evidence Map rows, and a rewritten `## Open Questions`.
+  The statement itself - `sql` block 1 - is unchanged and still hashes to
+  `9d2e3a2c73c8…`.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0
+  errors and 0 warnings**; all 201 raw citation links (81 distinct ranges) resolve
+  in bounds inside `raw/postgres-17/` with no cross-version link; all 36 Contents
+  entries match the heading order and every page-internal anchor resolves; both
+  `sh` blocks round-trip out of the page and parse with `bash -n`; all six `sql`
+  blocks hash to the constants the scripts check. Updated `wiki/index.md`,
+  `wiki/v17/index.md`, the v17 coverage cell and a dated note in
+  `wiki/versions.md`. Agent verification stays `not yet`: the two `Follow-up`
+  sections' output-equivalence tables were measured on the retired fixture
+  population and the filed scripts do not reproduce them.
+- Teardown: both servers were stopped by their own `stop` stages with
+  `pg_ctl -m fast -w stop`, each confirming no `postmaster.pid`, no postgres
+  process on its data directory and an empty socket directory; the
+  `.wiki-runtime/tmp/pgsi/` sandbox was deleted by the 17 leg's `clean` stage,
+  `pgrep -a postgres` reports nothing and ports 55417 and 55412 are free. Both
+  pinned checkouts stayed read-only and clean at their pins.
+
 ## [2026-09-11] review v17 | estimator page hands the mandatory suite to the concept page, both legs re-scored
 
 - Revised [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
