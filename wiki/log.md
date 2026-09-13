@@ -257,7 +257,7 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
   background `psql` was started for this work, and no `.wiki-runtime/tmp/`
   sandbox was created or deleted.
 
-## [2026-09-13] review v17 | pgstatindex bloat page: six suite-port defects fixed, both legs re-run
+## [2026-09-12] review v17 | pgstatindex bloat page: six suite-port defects fixed, both legs re-run
 
 - Reviewed [B-Tree Bloat and Wasted Space From pgstatindex Alone, on PostgreSQL
   12 and 17
@@ -10107,3 +10107,86 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - **Teardown**: nothing to stop. No postmaster, standby, pooler, watcher or
   background `psql` was started for this work, and no `.wiki-runtime/tmp/`
   sandbox was created or deleted.
+
+## [2026-09-13] review v17 | pgstatindex bloat page: reviewed, then re-ported to the maintenance assumption and re-run on both legs
+
+- Reviewed and revised [B-Tree Bloat and Wasted Space From pgstatindex Alone, on
+  PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) at
+  unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- **Prompt hygiene**: two prompts, `follow agents.md, in postgresql 17 , review
+  question: # B-Tree Bloat and Wasted Space From pgstatindex Alone, on
+  PostgreSQL 12 and 17 (unverified), do not fix anything just list fixes and
+  plan.` and then `execute plan`. The defects were `agents.md` for AGENTS.md,
+  lowercase `postgresql`, a space before the comma, a stray `#`, the
+  `(unverified)` hint inside the title, a comma splice, and a missing article.
+  The asker chose **correct and restate**, recorded under the page's
+  `## Question`.
+- **The review changed nothing.** Five read-only subagents on the orchestrator's
+  model checked the fixture blocks against the concept page, the two leg
+  scripts and their hash constants, both halves of the Answer's citations, and
+  the bookkeeping sections. They found that the port still built the retired
+  tests 11, 11b and 38, that nine churned recipes lacked the maintenance step
+  the concept page added on 2026-09-13, and a list of source-only, script and
+  bookkeeping defects. The fixes and plan went to the asker in the conversation.
+- **The plan, executed.** `sql` block 3 lost tests 11 and 11b, block 4 lost test
+  38 and gained `VACUUM` then `ANALYZE` after the churn of 64, 66, 92, 93, 94,
+  95, 98, 115, 118 and 119, block 5 lost `pd38`, and the comments of blocks 2, 5
+  and 6 now describe the maintenance assumption. 66, 115 and 119 were treated
+  as churned by reading rule 1 with the assumption's first part; the concept
+  page names only the other six outright, and the page's Question note says so.
+  Both scripts gained per-call `statement_timeout` and `lock_timeout` through
+  `PGOPTIONS`, kept out of `make check` because `pg_regress` keeps an inherited
+  value; tags on the report, decide and guard statements; failure marking and
+  `ON_ERROR_STOP` in the timing loop; a `plan_lines` count that excludes the
+  lines above the plan; and corrected header comments. All five changed block
+  hashes moved in both scripts.
+- **Both legs re-run end to end from an empty sandbox** on Darwin arm64 with
+  `JOBS=5`, concurrently, with `ICU_CFLAGS` and `ICU_LIBS` exported because the
+  host has no `pkg-config`. 17.11 passed `make check` 225 of 225 plus
+  `pgstattuple` 1 of 1, and 12.2 passed 192 of 192 plus 1 of 1. The 17 leg took
+  5 minutes 25 seconds and the 12 leg 12 minutes 27 seconds.
+- **Results.** `PASS` on **125 of 125** on 17.11 and **117 of 117** on 12.2, with
+  0 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE` and 0 `FALSE NEGATIVE`. Skips
+  were 1 on 17.11, test 120's unmet precondition at `reltuples = 6643`, and 9 on
+  12.2, all for B-tree support function 4. Within one point of the oracle: 92
+  and 100. Worst under-estimate `-4.1` on `p32`, where it was `-9.8`: `b93` and
+  `b95` now read 89.1 % against 89.1 %, because the maintenance `VACUUM` removes
+  the dead index entries their counted `UPDATE` left. Rule 3's census analyzed
+  only `f85t` and `x108t`, 2 of 88 tables, on both legs. The filed statement
+  printed 362 and 347 rows. The server logs held 17 and 16 errors, every one
+  requested by a stage.
+- **Source-only fixes**: the `REL_17_0` tag claim, which the tagless checkout
+  cannot support; three PostgreSQL 12 claims stated from v17 evidence, now
+  measured or moved to Open Questions; external release dates removed; new
+  citations for `NaN` ordering, `MATERIALIZED`, the invalid index a failed
+  concurrent build leaves, `relation_open`, the schema `USAGE` check, `written=`,
+  `BAS_BULKREAD` and `btm_allequalimage` after `pg_upgrade`; a corrected leaf
+  split description; and a wrong claim about the metapage version of upgraded
+  indexes replaced.
+- **Structure and bookkeeping**: the Contents block no longer lists fourth-level
+  headings; `## Source References` was regenerated from the body's 109 distinct
+  ranges over 47 files, all in bounds; the concept page was added to
+  Navigation; the history subsections were relabelled to their commit dates;
+  and a new subsection records what the maintenance assumption changed.
+  `wiki/index.md` and `wiki/v17/index.md` carry a rewritten entry, and
+  `wiki/versions.md` a rewritten v17 cell passage and a dated coverage note.
+  This log's heading for the earlier review was relabelled from 2026-09-13 to
+  2026-09-12, its commit date. That entry and its neighbours still sit near the
+  top of the file rather than in date order, which this change did not fix.
+- **Not changed**: the concept page, read and not edited, per the read-only rule.
+  The core-SQL estimator and COMMENT-baseline heuristic pages have the same two
+  gaps against the concept page and need their own tasks.
+- **Validation**: `scripts/wiki_lint` reports the host's standing 9 errors and 2
+  warnings, all on v12, v14, v18 and v19 checkouts or citations, none on the
+  pages this change touched. All six `sql` block hashes were re-checked after
+  the last edit. **Agent verification stays `not yet`**.
+- **Teardown**: the 12 leg's `clean` stage and then the 17 leg's stopped both
+  servers with `pg_ctl -m fast -w stop`, confirmed no `postmaster.pid`, no
+  postgres process and an empty socket directory, and deleted
+  `.wiki-runtime/tmp/pgsi/`. The extracted scripts and run logs under
+  `.wiki-runtime/tmp/` were deleted afterwards. No postgres process remained,
+  and ports 55417 and 55412 were free. The two pre-existing sandboxes
+  `btree-suite-scripts` and `mandatory-btree-concept-fix-20260912` were not
+  created by this work and were left untouched.
