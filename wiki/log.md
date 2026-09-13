@@ -10016,3 +10016,94 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Validation: git diff --check passes. Wiki lint retains the pre-edit nine
   errors and two warnings, all concerning v12/v14/v18/v19 checkout or citation
   issues; this edit adds no lint issue.
+
+## [2026-09-13] concept v17 | mandatory B-tree bloat tests: the maintenance assumption
+
+- Revised [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c`. Source-only work: **no server
+  was started, nothing was measured, and no sandbox was created**.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17 , for common-concept: # Mandatory B-Tree Bloat Tests, add assumption that
+  all test should assume and simulate normal autovacuum and autoanalyze will
+  run for all tables, so no extreme test that have no vacuum or no analyse
+  performed for a table.`; it had `all test should` for all tests should, `no
+  analyse performed` for no analyze performed, `that have no vacuum` for that
+  has no vacuum, lowercase `postgresql`, `agents.md` for AGENTS.md and stray
+  spacing. The asker chose **correct and restate**, so the request as executed
+  reads: *follow AGENTS.md; in PostgreSQL 17, for the common-concept page
+  "Mandatory B-Tree Bloat Tests", add the assumption that all tests assume and
+  simulate normal autovacuum and auto-analyze running for every table, so there
+  is no extreme test with no vacuum or no analyze performed on a table.*
+- **Scope was settled before drafting.** Offered an assumption plus a
+  VACUUM-after-churn rule, the same plus a vacuum-side threshold census, or a
+  bare statement, the asker answered in their own words: `a test can hava
+  autovacuum disable for a table ,but after churn a vacuum analyze should be
+  called manually to simulate a normal database operation.` Read, with the
+  same typo correction, as: a fixture may disable autovacuum for a table, but
+  after its churn it must run `VACUUM ANALYZE` by hand. That reading is
+  unconditional - the maintenance runs whether or not the launcher's thresholds
+  were crossed - and the page says so rather than dressing it as a simulation
+  of the launcher's verdicts.
+- **Added** a `### The maintenance assumption` subsection under `## How It
+  Works`, between the five phases and rule 1, listed in `## Contents`: the
+  three-part rule (`VACUUM ANALYZE` on every table the churn touched before the
+  decide phase; `autovacuum = off` and the `autovacuum_enabled` reloption stop
+  the launcher but exempt nothing; no fixture may leave churn unmaintained),
+  why a foreground `VACUUM ANALYZE` is a faithful stand-in
+  (`autovacuum_do_vac_analyze` calls the same `vacuum()` as `ExecVacuum`, which
+  vacuums before it analyzes, so `ANALYZE` is the last writer of `reltuples`),
+  the launcher's three verdict formulas with their v17 defaults, effective
+  per-table values, reloption lock level, counters and documentation - recorded
+  so that the difference from the assumption is visible, not applied - and the
+  publication point the step inherits from rule 3.
+- **Re-threaded the rest of the page** to follow from the assumption: a
+  Definition sentence; a fifth `## Why It Exists` paragraph; the phase table's
+  churn row and the launcher-off-for-isolation sentence; rule 2's drain now
+  ends on the maintenance `VACUUM ANALYZE` and its exempt list is stated to
+  carry only its build-phase `ANALYZE`; rule 3 is re-led as the launcher's
+  analyze verdict recomputed for the tables no churn touched, its first
+  publication point moved before the maintenance step, the 94/95 override
+  sentence and `What the rule costs` updated; family 5's 92-95 and 98 rows and
+  family 6's 118 and 119 rows say what the step does to them; forgeries run
+  after both the step and the census; the two withheld-maintenance limits, the
+  VACUUM and ANALYZE interaction bullets, two source-map rows, a
+  caller/callee row, four structure rows, two Context Reviewed bullets and
+  five Evidence Map rows were added or reworded.
+- **Cost recorded, not hidden**, in four Open Questions: the vacuum side is
+  assumed rather than simulated; fixtures 92 to 95 no longer isolate the
+  analyze threshold, since all four are analyzed after their changes; 118 and
+  119 now name one state, because the `VACUUM ANALYZE` after 118's 50,000
+  arrivals is the `ANALYZE` 119 added, and that state is one the launcher would
+  have left (50,000 changes on a million rows is under the 100,050 threshold);
+  and the reloption precedence for the vacuum parameters is recorded and
+  applied nowhere. No fixture was retired or renumbered; those calls are the
+  asker's.
+- **New citations**, all from `raw/postgres-17/` at the pin and each read in
+  full: `autovacuum.c` L3074-L3075, L3093-L3094, L3120-L3147, L3235-L3241;
+  `vacuum.c` L450-L451, L479-L481, L618-L650; `guc_tables.c` L3339-L3348,
+  L3349-L3357, L3358-L3366, L3886-L3894, L3896-L3904; `reloptions.c`
+  L105-L113, L225-L233, L234-L242, L399-L407, L408-L416;
+  `pgstat_relation.c` L233-L246; `system_views.sql` L688 and L690;
+  `maintenance.sgml` L853-L885 and L899-L952. The `autovacuum` GUC default of
+  `true` was re-read at L1450-L1457.
+- **Bookkeeping**: `wiki/v17/index.md` and `wiki/index.md` concept entries and
+  the `wiki/versions.md` v17 row gained a 2026-09-13 sentence on the
+  assumption and its cost.
+- **Consumers re-read and not edited**, per the concept-page read-only rule.
+  All three run `autovacuum = off` clusters with rule 3's census and describe
+  it as the suite's only maintenance simulation; none states the assumption or
+  runs `VACUUM ANALYZE` after every churn as a rule.
+  [btree-bloat-with-pgstatindex](v17/questions/indexing/btree-bloat-with-pgstatindex.md)
+  builds none of the retired withheld-maintenance fixtures;
+  [btree-index-bloat-core-sql-only](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  still builds 7 of them and
+  [btree-comment-baseline-maintenance-heuristic](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  14, which the assumption now forbids outright. Each needs its own task.
+- `scripts/wiki_lint` reports the pre-edit **9 errors and 2 warnings**, all on
+  v12, v14, v18 and v19 checkouts or citations; this edit adds none.
+  **Agent verification stays `not yet`**: only the citations added or reused
+  in this pass were checked against the pin.
+- **Teardown**: nothing to stop. No postmaster, standby, pooler, watcher or
+  background `psql` was started for this work, and no `.wiki-runtime/tmp/`
+  sandbox was created or deleted.
