@@ -2,6 +2,89 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-14] answer v17 | remove both report filters from the core-SQL estimator and re-run both legs
+
+- Removed the report-side cutoffs from the statement on [Testing the PostgreSQL
+  12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) - the
+  `actual_bytes > 1024 * 1024` predicate and the `LIMIT 20` - at unchanged pins
+  `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, and **re-ran both legs end to end
+  from their pins**. `NOT suppress_row` is now the only report filter the text
+  carries.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17, review question: # Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method
+  on PostgreSQL 17 (unverified)` and then, after a line break, `, remove size
+  filter from the recommended statement`; it had `agents.md` for AGENTS.md,
+  lowercase `postgresql`, `review question:` without an article, a stray `#`
+  before the title, the `(unverified)` hint inside the title, a line break and
+  comma splicing the second request onto the title, `remove size filter` without
+  the article, and no sentence capitalisation or terminal period. The asker chose
+  **correct and restate**, recorded under the page's `## Question` as the
+  fifteenth prompt.
+- **Scope settled in three answers before drafting**: remove **both** cutoffs,
+  not only the size predicate; **keep** the probe generator's own
+  `pg_relation_size` filter and record that the two texts no longer match; and
+  **re-run both legs end to end** from their pins.
+- **Statement.** `sql` block 1's tail is now `WHERE NOT suppress_row` and a
+  terminated `ORDER BY`. `BASE1` moved from `646df923…` to `4de245c5…`, and the
+  reconstructed pre-2026-09-10 text moved with it, from `8acd531b…` to
+  `152f4172…`; both baselines were re-derived, both scripts carry them, and the
+  12 leg reproduced the second one and still found 12.2 refusing that text.
+- **Scripts, edited in place.** `harness_view` now handles two tails, so the
+  superseded text with its 1 MB filter and `LIMIT 20` still installs beside the
+  current one; `over_1mb` is demoted from a decision term to an observation in
+  both `verdicts` views and the `lost_by` size arm is gone; the `want_stage`
+  predictions were left exactly as the re-port filed them, so the change in
+  `want_miss` is a measurement. Six read-only summaries were added - the printed
+  row counts of both exact texts, the report split on the 1 MB boundary, the
+  under-1 MB listing, the accuracy line, the `lost_by`/`withheld_by`
+  breakdowns, the three worst under-reads, and what each decision was worth - so
+  every number filed comes from the scripts. Both were re-extracted with their
+  own `md_block` logic and parsed with `bash -n` (2,411 and 1,077 lines).
+- **Both legs built and run on Linux x86_64** (Ubuntu 24.04, gcc 13.3.0, ICU
+  74.2, 22 cores) at `JOBS=10`, concurrently: 17.11 passed `make check` All 225
+  plus 8, 1 and 3, and 12.2 All 192 plus 5, 1 and 2. `build check` took 1 min
+  45 s and 1 min 37 s. All three text hashes matched.
+- **Result: the score improves by five fixtures, and it is earned.** 17.11 reads
+  **96 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 26 `FALSE
+  NEGATIVE`** over 126 fixtures against 91/4/0/31 for the same fixtures with the
+  filter in place; 12.2 is unchanged at **11 `PASS` and 2 `FALSE NEGATIVE`**,
+  because no fixture on that leg is under 1 MB. The report a reader sees is
+  **68 rows against the superseded text's 20**, 45 of them 1 MB or smaller, and
+  **19 rows on 12.2** with 6 that small.
+- **And it exposes two misses the filter had been hiding.** Only 10 of the 31
+  under-1 MB fixtures became visible - 21 were already withheld by an exclusion
+  term - five of those now rebuild and repay 83.3 % to 87.9 %, while **`p31` and
+  `f91` are the page's first `lost_by = threshold` rows**: both read about
+  `-237 %` where a rebuild gave back 79.2 % and 89.2 %. The earlier "not one
+  false negative is a threshold loss" headline was therefore an artefact of the
+  filter, and both rows are filed under Open Questions as the clearest candidate
+  for the next revision. `expected_stage` still agrees on all 101 numbered rows,
+  `gate_disagrees` and `contract_failures` are 0, the four critical false
+  positives are unchanged and all over 1 MB, family 1 still passes 25 of 25, and
+  cost did not move: 64.5 to 75.2 ms against the superseded text's 46.8 to
+  54.7 ms.
+- **Page.** The Answer lead, `Reading the output`, the harness-edit description,
+  the protocol's step 3 and pass criteria, the rules table, the stage and file
+  tables, the scored-row column list, the clean-run table, the suite results,
+  the deduplication gate and five Open Questions were rewritten; the run report
+  is now `What the filter removal measured`, replacing `What the 2026-09-14
+  re-port measured`, and `Where the 31 false negatives were lost` lost its count
+  from the heading. `Context Reviewed` gained the run.
+- **Teardown**: both servers were stopped with `pg_ctl -m fast -w stop` by their
+  own `stop` stages, each confirming no `postmaster.pid`, no postgres process and
+  an empty socket directory; the 12 leg's `clean` then removed its four
+  directories and the 17 leg's `clean` deleted the sandbox, after which `pgrep -a
+  postgres` was empty and ports 55437 and 55412 were free. Nothing outside
+  `.wiki-runtime/tmp/btree-nofilter/` was written, and both pinned checkouts
+  stayed read-only and clean.
+- `scripts/wiki_lint` reports 0 errors and 0 warnings. `verified_by_agent` stays
+  `not yet`: the two threshold losses are an unfixed defect, and the coverage the
+  re-port removed is still missing. The concept page was read and **not edited**.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md`
+  updated with the removal and its measurements.
+
 ## [2026-09-14] answer v17 | re-port the core-SQL estimator to the mandatory suite, drop every page-local fixture, and re-run both legs
 
 - Re-ported [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on

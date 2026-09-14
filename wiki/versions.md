@@ -14,6 +14,39 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-14: Removed **both report-side cutoffs** from the statement on
+  [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-filter-removal-measured) -
+  the `actual_bytes > 1024 * 1024` predicate and the `LIMIT 20` - at unchanged
+  pins `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, and **re-ran both legs end to end
+  from their pins on Linux x86_64**, `make check` included: 17.11 passed 225 of
+  225 plus 8, 1 and 3 for `pageinspect`, `pgstattuple` and `amcheck`, and 12.2
+  passed 192 of 192 plus 5, 1 and 2. `NOT suppress_row` is now the statement's
+  only report filter, so on the settled fixture database it prints **68 rows
+  where the superseded text prints 20**, 45 of them 1 MB or smaller, and **19
+  rows on 12.2** with 6 that small. The score improves by five fixtures:
+  **96 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE` and 26
+  `FALSE NEGATIVE`** over 126 fixtures on 17.11 against 91/4/0/31 before, and an
+  unchanged **11 `PASS` with 2 `FALSE NEGATIVE`** on 12.2, where **no fixture is
+  under 1 MB**. Only **10 of the 31 under-1 MB fixtures became visible** - the
+  other 21 were already withheld by an exclusion term - five of them now rebuild
+  and repay 83.3 % to 87.9 %, and **two are the page's first threshold losses**:
+  `p31` and `f91` read about `-237 %` where a rebuild gave back 79.2 % and
+  89.2 %, so the earlier "not one false negative is a threshold loss" headline
+  was an artefact of the filter that hid them, and both are filed as the
+  clearest candidate for the next revision. The four critical false positives
+  are unchanged and all over 1 MB, `expected_stage` still agrees on all 101
+  numbered rows, cost did not move (64.5 to 75.2 ms), and family 1 still passes
+  25 of 25. Both scripts were edited in place - new `BASE1`/`BASEPRE`
+  baselines, a `harness_view` that handles both statement tails, `over_1mb`
+  demoted to an observation, and six read-only summaries added - and the probe
+  generator kept its own 1 MB filter at the asker's direction, which is filed as
+  an open question. `scripts/wiki_lint` reports 0 errors and 0 warnings, both
+  servers were stopped by their own `stop` stages with teardown confirmed and
+  the sandbox deleted, and **agent verification stays `not yet`**. The concept
+  page was read and **not edited**.
+
 - 2026-09-14: Re-ported [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method
   on PostgreSQL 17
   (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md#what-the-2026-09-14-re-port-measured)

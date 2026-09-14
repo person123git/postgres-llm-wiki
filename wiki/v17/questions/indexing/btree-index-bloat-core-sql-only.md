@@ -38,7 +38,7 @@ verified_by_agent: not yet
   - [The PostgreSQL 17 suite script](#the-postgresql-17-suite-script)
   - [The PostgreSQL 12 leg script](#the-postgresql-12-leg-script)
   - [Reading the results of a run](#reading-the-results-of-a-run)
-  - [What the 2026-09-14 re-port measured](#what-the-2026-09-14-re-port-measured)
+  - [What the filter removal measured](#what-the-filter-removal-measured)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -314,46 +314,92 @@ retired are dropped and every remaining churn ends on `VACUUM ANALYZE`; **both
 legs re-run end to end** from their pins; **remove every page-local fixture**,
 which took the geometry, calibration and acceptance stages; and **delete the
 claims** those fixtures backed rather than keep them as history. The work is
-filed under [Mandatory test review](#mandatory-test-review),
+filed under [Mandatory test review](#mandatory-test-review) and
+[The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol);
+its own run report was superseded the same day by the fifteenth prompt's run,
+under [What the filter removal measured](#what-the-filter-removal-measured).
+
+Fifteenth prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, review the question "Testing the
+> PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17", and remove the
+> size filter from the recommended statement.
+
+The original read `follow agents.md, in postgresql 17, review question: #
+Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
+(unverified)` and then, after a line break, `, remove size filter from the
+recommended statement`: `agents.md` for AGENTS.md, lowercase `postgresql`,
+`review question:` without an article, a stray `#` before the title, the
+`(unverified)` title hint treated as part of the title, a line break and a
+comma splicing the second request onto the end of the title, `remove size
+filter` without the article, and no sentence capitalisation or terminal
+period. The asker then settled the scope in three answers: remove **both**
+report-side cutoffs, the `actual_bytes > 1024 * 1024` predicate and the
+`LIMIT 20`, so `NOT suppress_row` is the statement's only remaining report
+filter; **keep** the probe generator's own `pg_relation_size` filter and record
+that the two no longer match; and **re-run both legs end to end** from their
+pins. The work is filed under
+[The current recommended statement](#the-current-recommended-statement),
+[Reading the output](#reading-the-output),
 [The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol)
-and [What the 2026-09-14 re-port measured](#what-the-2026-09-14-re-port-measured).
+and [What the filter removal measured](#what-the-filter-removal-measured).
 
 ## Answer
 
-**Both legs were re-run from their pins on 2026-09-14, against the mandatory
-suite as that suite now stands, and every fixture it retired is gone from this
-page.** The scored population is 126 fixtures on 17.11 - 25 in the
-deduplication gate and 101 numbered - and 13 on 12.2, where the exact filed
-text still runs unmodified. Under the four verdict bands of
-[Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md):
-**91 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE` and 31
-`FALSE NEGATIVE`** on 17.11, and **11 `PASS`, 0 false positives of either
-severity and 2 `FALSE NEGATIVE`** on 12.2. The statement text is unchanged: all
-three SHA-256 baselines matched, so the text scored is the text filed.
+**The statement's two report-side cutoffs are gone, and both legs were re-run
+from their pins to score the text without them.** `NOT suppress_row` is the
+only report filter left: the `actual_bytes > 1024 * 1024` predicate and the
+`LIMIT 20` came out on 2026-09-14. On the settled 17.11 fixture database of
+314 B-tree indexes the filed text prints **68 rows where the superseded text
+prints 20**, and **45 of those 68 are 1 MB or smaller**, so two thirds of what
+a reader now sees is what the predicate used to withhold. On 12.2 it prints
+**19 rows, 6 of them 1 MB or smaller**, a report the old `LIMIT 20` would never
+have cut.
+[The current recommended statement](#the-current-recommended-statement),
+[What the filter removal measured](#what-the-filter-removal-measured).
+
+**The score improves by five fixtures, and the improvement is earned rather
+than defined.** The scored population is unchanged - 126 fixtures on 17.11, 25
+in the deduplication gate and 101 numbered, and 13 on 12.2 - and under the four
+verdict bands of
+[Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md)
+17.11 reads **96 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE` and 26
+`FALSE NEGATIVE`**, against 91/4/0/31 for the same fixtures with the filter in
+place. The five rows that moved are `p19`, `p22`, `p34`, `p36` and `p42`,
+between 240 KiB and 936 KiB, each now printed, decided and repaid: a measured
+`REINDEX INDEX` gave back 83.3 % to 87.9 %. 12.2 is unchanged at **11 `PASS`, 0
+false positives of either severity and 2 `FALSE NEGATIVE`**, because **no
+fixture on that leg is under 1 MB** - the smallest is 276 blocks. All three
+SHA-256 baselines matched the new text, so the text scored is the text filed.
 [The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol).
 
-**What the re-port changed is the fixture set, not the reading.** Eleven
-numbered fixtures left the 17 leg - test 11's three `deduplicate_items = off`
-gate legs, 38, 65, 67, 69, 106, 117, 121's three recipes and legs 113a and
-113c - and three left the 12 leg, because the concept page retired those
-numbers as explicit deduplication controls or as withheld-maintenance shapes.
-Ten recipes that keep churn of their own now end on `VACUUM` then `ANALYZE`,
-which is that page's maintenance assumption: 64, 66, 92, 93, 94, 95, 98, 115,
-118 and 119. Rule 3's census shows the effect - it analyzed **2 of 86 tables**,
-`f85t` and `x108t`, the only two that no churn touched and that were past the
-threshold, and found **84 tables at zero modified rows**.
-[Mandatory test review](#mandatory-test-review).
+**The removal also exposed two misses the filter had been hiding, and they are
+the first threshold losses this page has recorded.** `p31` at 192 KiB and `f91`
+at 296 KiB are now printed and still declined, because their floor reading is
+about `-237 %` - the model predicts a *larger* rebuild - while the oracle gave
+back 79.2 % and 89.2 %. The headline "not one false negative is a threshold
+loss", true of every run since 2026-09-11, was therefore an artefact of the
+filter: it was withholding the two rows whose arithmetic is wrong. The 26
+misses are now **23 rows an exclusion term withheld** (mean reclaim 83.5 %),
+**2 lost to the threshold** (84.2 %) and **1 carrying a caveat** the reading
+rule refuses to promote (100.0 %). `expected_stage`, recomputed from the
+internals rather than from the reported percentage, still agrees with the
+decision on all 101 fixtures. The four rows a reader would have acted on and
+got nothing back are unchanged: `f84` at 94.2 %, `f85` at 71.0 %, `i103` at
+84.1 % and `x109` at 62.5 %, each against a measured 0.0 %.
+[Where the false negatives were lost](#where-the-false-negatives-were-lost).
 
-**Not one false negative is a threshold loss, and the statement's own
-arithmetic agreed with its output on all 101 fixtures.** `expected_stage`,
-recomputed from the internals rather than from the reported percentage, matched
-the decision 101 times, and `lost_by = threshold` is empty. The 31 misses are
-22 rows an exclusion term withheld (mean reclaim 83.3 %), 8 under the 1 MB
-report filter (86.3 %) and 1 carrying a caveat the reading rule refuses to
-promote (100.0 %). The four rows a reader would have acted on and got nothing
-back are `f84` at 94.2 %, `f85` at 70.8 %, `i103` at 84.1 % and `x109` at
-62.5 %, each against a measured 0.0 %.
-[Where the 31 false negatives were lost](#where-the-31-false-negatives-were-lost).
+**The fixture set is the one the 2026-09-14 re-port left.** Eleven numbered
+fixtures left the 17 leg - test 11's three `deduplicate_items = off` gate legs,
+38, 65, 67, 69, 106, 117, 121's three recipes and legs 113a and 113c - and
+three left the 12 leg, because the concept page retired those numbers as
+explicit deduplication controls or as withheld-maintenance shapes. Ten recipes
+that keep churn of their own end on `VACUUM` then `ANALYZE`, which is that
+page's maintenance assumption: 64, 66, 92, 93, 94, 95, 98, 115, 118 and 119.
+Rule 3's census reproduced its effect on this run too - it analyzed **2 of 86
+tables**, `f85t` and `x108t`, the only two that no churn touched and that were
+past the threshold, and found **84 tables at zero modified rows**.
+[Mandatory test review](#mandatory-test-review).
 
 **The page-local fixtures are gone too, and so are the claims they backed.**
 The geometry cells, the calibration ladder by insertion pattern and the whole
@@ -364,9 +410,10 @@ removed at the asker's direction together with the sections that reported their
 numbers, so this page no longer states a measured `0 bytes` on ten fresh
 builds, 78 of 78 geometry cells, a seven-pattern calibration, a `-2625.6 %`
 compression reading or a `-60.1 %` mixed-width reading. What the statement's
-remaining error looks like is now whatever the suite measures: on this run the
-worst over-estimate is `+97.1` on `f78` and the worst under-estimate
-`-3362.1` on `f88`, with 59 of 101 fixtures within one point of the oracle.
+remaining error looks like is now whatever the suite measures, on the
+`wasted_space_pct_floor` column the harness scores: worst over-estimate
+`+94.2` on `f84`, worst under-estimate `-3259.4` on `f88`, and 57 of 101
+fixtures within one point of the oracle.
 [Reproducing the measurements](#reproducing-the-measurements),
 [What remains unimplemented](#what-remains-unimplemented).
 
@@ -387,11 +434,12 @@ refuses `WITH (deduplicate_items = off)`.
 [pg_proc.dat#row_to_json](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L8975-L8977),
 [jsonfuncs.c#json_object_field_text](../../../../raw/postgres-17/src/backend/utils/adt/jsonfuncs.c#L881-L895).
 
-Treat the output as candidate information all the same. The model reads
-estimated row counts, widths and NULL fractions out of the catalogs, so it
-models an index it cannot see; the four critical false positives above, the 22
-withheld rows and the gate's two under-credits are what that costs on the
-fixtures the suite defines. See [Open Questions](#open-questions).
+Treat the output as candidate information all the same, and the wider report as
+more of it rather than better of it. The model reads estimated row counts,
+widths and NULL fractions out of the catalogs, so it models an index it cannot
+see; the four critical false positives above, the 36 withheld rows, the two
+`-237 %` threshold losses and the gate's two under-credits are what that costs
+on the fixtures the suite defines. See [Open Questions](#open-questions).
 
 Both servers were built out of tree from their pins and checked before a
 fixture existed: 17.11 passed `make check` **225 of 225** plus 8, 1 and 3 for
@@ -410,6 +458,17 @@ filed before 2026-09-08; that text is superseded, and it survives only as the
 attribution. The tag moves from
 `wiki_btree_wasted_space_sweep_12_17` to `wiki_btree_wasted_space_sweep_r2` so a
 log or `pg_stat_statements` row identifies which model produced a reading.
+
+**Both report-side cutoffs came out on 2026-09-14**: the
+`actual_bytes > 1024 * 1024` predicate and the `LIMIT 20`. `NOT suppress_row`
+is the only report filter left, so the statement prints every candidate index
+whose model it is willing to stand behind, and nothing is withheld for being
+small or for ranking low. What that changed, measured on both legs, is under
+[What the filter removal measured](#what-the-filter-removal-measured); the
+model, the caveats and the exclusion terms are untouched. The companion probe
+generator under [Validation probes](#validation-probes) kept its own
+`pg_relation_size` filter, so the two texts no longer cover the same
+candidates; see [Open Questions](#partial-index-populations-and-zero-counts).
 
 Run the two timeout settings with the query in a dedicated session. They set
 `statement_timeout` to 30 seconds and `lock_timeout` to 2 seconds. Both are
@@ -888,9 +947,8 @@ SELECT schemaname, tablename, indexname,
        fsm_bytes > 0                                    AS fsm_written_since_build,
        server_version_num
   FROM modelled
- WHERE actual_bytes > 1024 * 1024 AND NOT suppress_row
- ORDER BY (actual_bytes - floor_blocks * bs) DESC NULLS FIRST
- LIMIT 20;
+ WHERE NOT suppress_row
+ ORDER BY (actual_bytes - floor_blocks * bs) DESC NULLS FIRST;
 ```
 
 ### Reading the output
@@ -914,7 +972,7 @@ cast to `bigint`.
 | `wasted_space_pct_floor` | Signed percentage difference from `floor_blocks`, the model without deduplication credit. Row-count and width uncertainty still apply. |
 | `wasted_space` | Formatted signed `actual_bytes - expected_blocks * bs`; a negative value means the model predicts a larger rebuild. |
 | `wasted_space_bytes` | The same signed difference as `numeric`, unformatted and unrounded to a unit. |
-| `caveats` | Visible qualifications assembled by the query. A filtered-out index has no output row or explanation. |
+| `caveats` | Visible qualifications assembled by the query. A suppressed index has no output row and no explanation; since 2026-09-14 that is the only reason an index is missing. |
 | `equalimage` | `recognized`, `ineligible` or `unknown`; see [Deduplication eligibility](#deduplication-eligibility). Only `recognized` earns deduplication credit. |
 | `reltuples_writer` | `analyze`, `vacuum` or `build`, from the later of the table's ANALYZE and VACUUM timestamps. It names the likely last writer of the index's `reltuples`, not a proof. |
 | `key_groups`, `tids_per_tuple` | Modelled distinct groups and posting-list occupancy. A TID is a heap tuple identifier. |
@@ -947,11 +1005,26 @@ gap between the two percentages identifies dependence on the duplication estimat
 [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975),
 [system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275).
 
-The report keeps indexes larger than `1024 * 1024` bytes, excludes `suppress_row`,
-orders by the signed floor-model byte difference with NULLs first, and returns at
-most 20 rows. An absent index can therefore be below the size cutoff, suppressed,
-or outside the top 20. Do not interpret absence as a clean bill of health.
-[The current recommended statement](#the-current-recommended-statement).
+The report excludes `suppress_row` and orders by the signed floor-model byte
+difference with NULLs first. It filters on nothing else since 2026-09-14, so an
+absent index is a suppressed index and `withheld_by` in a scored run names the
+term that withheld it; there is no longer a size cutoff or a top-20 cut to look
+for. Absence is still not a clean bill of health, because a suppressed row
+carries no explanation in the report itself.
+[The current recommended statement](#the-current-recommended-statement),
+[What the filter removal measured](#what-the-filter-removal-measured).
+
+Reading small indexes is now the reader's job rather than the statement's. The
+percentage is scale-free: on the 2026-09-14 fixture database 31 suite fixtures
+sit under 1 MB and the removal made **10 of them visible**, the other 21 being
+withheld by an exclusion term whatever their size. Of those 10, five are past
+the rebuild threshold with a measured `REINDEX INDEX` repaying 83.3 % to
+87.9 %; two - `p31` at 192 KiB and `f91` at 296 KiB - carry a floor reading of
+about `-237 %` over a rebuild that gave back 79.2 % and 89.2 %; and `p120`
+reads 87.5 % on 64 KiB where a rebuild gave back nothing. Pair the percentage
+with `wasted_space_bytes` before acting: `p19` reads 83.3 % on a 240 KiB index,
+which is 200 KiB of waste.
+[What the filter removal measured](#what-the-filter-removal-measured).
 
 The index free space map (FSM) stores whether pages are free or used.
 `GetFreeIndexPage` marks a returned page used through `RecordUsedIndexPage`.
@@ -1239,6 +1312,12 @@ it chose that index once a sequential scan was disabled.
 [nodeSubplan.c#ExecScanSubPlan-EXISTS](../../../../raw/postgres-17/src/backend/executor/nodeSubplan.c#L293-L296),
 [indxpath.c#check_index_predicates](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3244-L3350).
 
+The generator keeps its own `pg_relation_size(c.oid) > 1024 * 1024` filter,
+which the report gave up on 2026-09-14. That was the asker's decision, and it
+leaves the generator narrower than the statement it validates: the rows most in
+need of a population probe are the small ones the report now prints. See
+[Open Questions](#partial-index-populations-and-zero-counts).
+
 A `groups` probe is emitted only for an index that would pass the deduplication
 gate with a recognized support function. The build groups adjacent sorted tuples
 by `_bt_keep_natts_fast`, which compares binary images and treats two NULLs as
@@ -1320,7 +1399,11 @@ group probe counted 5,000 groups against the model's estimate of 4,997.
 `pg_relation_size` takes and releases `AccessShareLock` on each relation. It returns
 NULL if a relation has disappeared, and the file-size loop can raise a file-access
 error. These calls inspect file lengths; they do not provide a single physical
-snapshot of all indexes and statistics in the report.
+snapshot of all indexes and statistics in the report. Since 2026-09-14 the
+statement measures every candidate rather than only those over 1 MB, so it makes
+that call for more relations and holds each lock for the same instant as before;
+the exposure to a relation disappearing mid-report is wider by the same
+proportion as the candidate set, on the same mechanism.
 [dbsize.c#calculate_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L301-L371).
 
 No contrib extension is needed by the recommended statement or by the probe
@@ -1463,6 +1546,11 @@ returns before the message.
 [nbtutils.c#_bt_allequalimage-debug](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5172-L5180),
 [nbtutils.c#_bt_allequalimage-INCLUDE](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5144-L5147).
 
+**The 2026-09-14 filter removal changed nothing in this group.** Every gate
+index is at least 421 blocks, so `under_1mb` is 0 and all 25 rows were already
+printed; the group's verdicts, oracles and readings are identical to the
+re-port's.
+
 The readings themselves are unchanged from the earlier runs of the same shapes:
 `i_multi_bad` is the maximum at 28.8 %, the minimum is `-320.0 %` on
 `i_multi_ok` and `i2_ok`, and the three deterministic `text` fixtures read
@@ -1533,9 +1621,13 @@ AND coalesce((row_to_json(se) ->> 'inherited')::boolean,
 
 Nothing else about the statement moved, and the page proves that rather than
 asserting it: the `extstat` stage rebuilds the previous text from the filed one
-by undoing exactly this edit, and the reconstruction hashes to
-`8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd`, the SHA-256
-the previous text was filed under.
+by undoing exactly this edit, and both scripts check the reconstruction against
+a recorded baseline. That baseline is
+`152f4172f1ee1dfd86467e525bfe37babba92a5ad036358bed0d17aa4b10594a` since the
+2026-09-14 filter removal, and was
+`8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd` - the SHA-256
+the previous text was filed under - while the report still carried its filter,
+because the reconstruction is derived from whatever the current text is.
 [The PostgreSQL 17 suite script](#the-postgresql-17-suite-script).
 
 #### Why naming the column cannot work in one text
@@ -1605,7 +1697,7 @@ and therefore under-report bloat. The two passes the fixtures store, whole-key
 
 | Fixture | Own pass | Inherited pass |
 |---|---|---|
-| `xpar`, low-cardinality child | 20 | 3,492 |
+| `xpar`, low-cardinality child | 20 | 3,486 |
 | `xpar2`, the same with 60 % of the parent deleted and vacuumed | 8 | 1,404 |
 | `xpar3`, high-cardinality child | 20 | 28,610 |
 | `xflat`, no children | 20 | none written |
@@ -1615,15 +1707,17 @@ the correct input in every row of that table. Scored:
 
 | Fixture | Measured `REINDEX` | Filed text | Previous text | Widened text | `key_groups`, filed vs widened |
 |---|---|---|---|---|---|
-| `xpar_ab` | 0.0 | 0.8 | 0.8 | **2.3** | 20 vs 3,492 |
+| `xpar_ab` | 0.0 | 0.8 | 0.8 | **2.7** | 20 vs 3,486 |
 | `xpar2_ab` | 59.7 | 59.7 | 59.7 | **60.1** | 8 vs 1,404 |
 | `xpar3_ab` | 0.0 | 0.8 | 0.8 | **-33.7** | 20 vs 28,610 |
 | `xflat_ab` | 0.0 | 0.8 | 0.8 | 0.8 | 20 vs 20 |
 
-Those are the 2026-09-14 readings; the equivalence check beside them returned
-**0 rows in both directions in all three fixture databases** - 28 rows in
-`gate`, 104 in `suite` and 4 in `xstat`, with the `extstat` CTE feeding 3 rows
-in `suite` and 4 in `xstat`.
+Those are the 2026-09-14 filter-removal run's readings; the equivalence check
+beside them returned **0 rows in both directions in all three fixture
+databases** - 28 rows in `gate`, 104 in `suite` and 4 in `xstat`, with the
+`extstat` CTE feeding 3 rows in `suite` and 4 in `xstat`. Removing the report
+filter cannot move this comparison: all three texts are read through views that
+drop it.
 
 Three findings, and the third is the reason this section reports a range rather
 than a headline:
@@ -1633,16 +1727,16 @@ than a headline:
 2. **The widened text differs on every inheritance parent and on none of the
    controls**, always in the under-reporting direction.
 3. **The size of that error depends on the shape, not on the size of the
-   `key_groups` error.** A 175x wrong group count moves the reading by 1.5
+   `key_groups` error.** A 174x wrong group count moves the reading by 1.9
    points on `xpar_ab`, because a posting list's TID payload dominates the
    index either way; the same fixture with a high-cardinality child moves it
    34.5 points, because there the widened estimate crosses the boundary at
    which the model stops crediting deduplication at all and prices singleton
-   tuples. The inherited estimate is also sample-dependent — three runs of the
-   same `xpar` fixture read 3,500, 3,481 and 3,498 — so the widened text's
-   error is not reproducible to the decimal, while the filed text's 0.8 is: the
-   2026-09-14 run read 3,492 where three earlier runs read 3,500, 3,481 and
-   3,498, and the filed text still read 0.8.
+   tuples. The inherited estimate is also sample-dependent, so the widened
+   text's error is not reproducible to the decimal while the filed text's 0.8
+   is: five runs of the same `xpar` fixture read 3,500, 3,481, 3,498, 3,492 and
+   3,486, moving the widened reading between 2.3 and 2.7, and the filed text
+   read 0.8 every time.
    [analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1894).
 
 The `wspf` floor column reads `-219.8` on all three fresh fixtures under all
@@ -1654,13 +1748,17 @@ an effect of this change; see
 
 `row_to_json(se)` serialises a whole `pg_stats_ext` row, including the
 `most_common_vals` arrays the view's lateral already builds, once per candidate
-join. Six interleaved runs of the two exact texts on the `suite` database of
-2026-09-14, 314 B-tree indexes over 64,098 blocks and three
-extended-statistics objects, measured 67.9 to 72.5 ms for the filed text
-against 62.2 to 75.6 ms for the previous one, with the ranges overlapping and
-the slowest run of the twelve belonging to the previous text. On this database
-the difference is inside the noise; a database with many large `pg_mcv_list`
-objects would be the place to re-measure it.
+join. Six interleaved runs of the two exact texts on the `suite` database of the
+**2026-09-14 re-port run** - 314 B-tree indexes over 64,098 blocks and three
+extended-statistics objects, with the statement still carrying its 1 MB filter
+and `LIMIT 20` - measured 67.9 to 72.5 ms for the text as it then stood against
+62.2 to 75.6 ms for the previous one, with the ranges overlapping and the
+slowest run of the twelve belonging to the previous text. On this database the
+difference is inside the noise; a database with many large `pg_mcv_list` objects
+would be the place to re-measure it. The filter-removal run of the same day
+re-ran the stage and wrote its own pairs to `out/extstat.txt`; the removal
+changed the statement's own cost by nothing measurable, which
+[What it cost](#what-it-cost) reports from the `cost` stage's six pairs.
 [system_views.sql#pg_stats_ext](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L301-L307).
 
 #### What the fix does not change
@@ -1669,9 +1767,11 @@ The two `pg_stats` joins still name `inherited` directly, and deliberately:
 `pg_stats` projects it from `pg_statistic.stainherit` on this version, the 12
 leg executes those joins as filed, and the refusal was only ever raised against
 `pg_stats_ext`. Changing them would add cost and risk for nothing measured. The
-statement tag also stays `wiki_btree_wasted_space_sweep_r2`, because the model
-is unchanged and the two texts are measurably identical here; what identifies
-the new text is its SHA-256 baseline, `646df923…`, which both scripts check.
+statement tag also stays `wiki_btree_wasted_space_sweep_r2`, through this fix
+and through the 2026-09-14 filter removal, because the model is unchanged in
+both; what identifies a revision of the text is its SHA-256 baseline, which the
+filter removal moved from `646df923…` to `4de245c5…` and which both scripts
+check before use.
 [system_views.sql#pg_stats-inherited](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L194).
 
 ### Reproducing the measurements
@@ -1696,18 +1796,20 @@ Both statement texts are installed as views with three edits and nothing else:
 delete the two `SET` lines, project the internals the scorer reads immediately
 before `FROM modelled` — the projection needs a comma appended to
 `server_version_num`, or the first added name silently becomes its alias — and
-drop the `WHERE actual_bytes > 1024 * 1024 AND NOT suppress_row`, the `ORDER BY`
-and the `LIMIT 20`. Privilege cases must run the filed text rather than a view,
-because a view executes with its owner's privileges and would hide exactly the
-effect under test.
+drop the report's own filtering and ordering. That last edit covers two tails:
+the current text's `WHERE NOT suppress_row` plus its terminated `ORDER BY`, and
+the superseded text's `WHERE actual_bytes > 1024 * 1024 AND NOT suppress_row`,
+`ORDER BY` and `LIMIT 20`. Privilege cases must run the filed text rather than a
+view, because a view executes with its owner's privileges and would hide exactly
+the effect under test.
 [The current recommended statement](#the-current-recommended-statement),
 [system_views.sql#pg_stats-visibility](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L268-L275).
 
 ### What remains unimplemented
 
-- A per-attribute diagnostic projection that reports every input's provenance
-  before the size and top-20 filters. The caveat strings name the condition, but
-  not which attribute produced it.
+- A per-attribute diagnostic projection that reports every input's provenance.
+  The caveat strings name the condition, but not which attribute produced it,
+  and the `suppress_row` terms withhold the row without saying which one fired.
 - A capacity model for indexes whose key width varies across groups. One
   averaged width cannot represent an index whose groups have different base
   tuple sizes, because the posting capacity follows the tuple size through
@@ -1759,15 +1861,15 @@ renumbered: **101 numbered fixtures and 25 gate fixtures on the 17 leg**, where
 the 2026-09-11 run scored 112 and 28, and **13 on the 12 leg** where it scored
 19.
 
-Obligations, restated in the shared suite's families, as the 2026-09-14 run
-left them:
+Obligations, restated in the shared suite's families, as the 2026-09-14 filter
+removal left them:
 
 | Family | Fixtures here | State for the recommended statement |
 |---|---|---|
 | 1, the deduplication gate | 25 indexes on two 500,000-row tables in the `gate` database | **run and passed**, 25 of 25 `PASS`, 0 over-credit, 2 under-credits ([the gate, scored](#the-deduplication-gate-scored-against-the-current-statement)) |
-| 2, partial indexes | tests 18-77 less the retired 38, 65, 67 and 69: 60 indexes | **run**: 36 `PASS`, 24 `FALSE NEGATIVE`, none of them a threshold loss |
+| 2, partial indexes | tests 18-77 less the retired 38, 65, 67 and 69: 60 indexes | **run**: 41 `PASS`, 19 `FALSE NEGATIVE`, 18 of them withheld and one the `p31` threshold loss |
 | 3, false-positive constructions | tests 78-85, eight fresh indexes, none churned | **run**: 6 `PASS`, 2 `CRITICAL FALSE POSITIVE` (`f84`, `f85`) |
-| 4, false-negative constructions | tests 86-91 | **run**: 1 `PASS`, 5 `FALSE NEGATIVE` |
+| 4, false-negative constructions | tests 86-91 | **run**: 1 `PASS`, 5 `FALSE NEGATIVE`, one of them the `f91` threshold loss |
 | 5, the change A-D controls | tests 92-112 less the retired 106: 20 indexes | **run**: 17 `PASS`, 2 `CRITICAL FALSE POSITIVE` (`i103`, `x109`), 1 `FALSE NEGATIVE` |
 | 6, the drained queue and zero counts | tests 113-120 less the retired 117, keeping only leg b of 113: 7 indexes | **run**: 6 `PASS`, 1 `FALSE NEGATIVE`, lost to one caveat |
 
@@ -1777,10 +1879,12 @@ not the suite's:
 - **The decision rule is this harness's.** The shared bands score a decision,
   and this statement is an estimator that reports a percentage rather than
   deciding. The harness turns it into a decision with the page's own published
-  reading rule - a row must be reported, over the 1 MB report filter and free of
-  the five caveats [Reading the output](#reading-the-output) refuses to promote -
-  plus a 50 % threshold on `wasted_space_pct_floor` that is a harness choice and
-  appears nowhere in the statement.
+  reading rule - a row must be reported and free of the five caveats
+  [Reading the output](#reading-the-output) refuses to promote - plus a 50 %
+  threshold on `wasted_space_pct_floor` that is a harness choice and appears
+  nowhere in the statement. Size left that rule on 2026-09-14 with the
+  statement's own 1 MB predicate; `over_1mb` survives in the `verdicts` view as
+  an observation and decides nothing.
 - **Rule 1's cut is made by an event trigger.** Rather than splitting each recipe
   into a build file and a churn file, the harness takes the baseline from a
   `ddl_command_end` trigger on `CREATE INDEX`, so a recipe whose churn follows in
@@ -1807,8 +1911,12 @@ the last writer of every `reltuples` on the table.
 
 The text being scored is identified by hash rather than by prose: the two
 fenced SQL blocks on this page and the superseded text extracted from revision
-`f2d73b4` hashed to `646df923…`, `bfa7721f…` and `bffd166e…` on 2026-09-14, all
-three matching the baselines the scripts carry.
+`f2d73b4` hashed to `4de245c5…`, `bfa7721f…` and `bffd166e…` on the
+2026-09-14 filter-removal run, all three matching the baselines the scripts
+carry. The estimator's baseline moved from `646df923…` with the removal, and
+the reconstructed pre-2026-09-10 text moved with it, from `8acd531b…` to
+`152f4172…`; the 12 leg reproduced that second hash and still found the pinned
+12.2 server refusing that text.
 
 The engine's own suites are not a test of this statement. `make check` runs the
 core regression tests against a temporary installation inside the build tree,
@@ -1823,14 +1931,14 @@ is the deduplication block of `btree_index.sql`.
 ### The mandatory suite, re-scored under the shared protocol
 
 **Every fixture the suite still defines has been run under its five phases and
-scored with its four bands, on both legs, and the headline of the earlier
-re-score survives the re-port: not one false negative is a threshold loss.** The
-statement's percentage is right on the rows it misses; what loses them is the
-report's own gating. On 17.11: **101 numbered fixtures, 66 `PASS`, 4
-`CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 31 `FALSE NEGATIVE`**, and **25
-gate fixtures, 25 `PASS`**. On 12.2, where the exact filed text runs unmodified:
-**13 fixtures, 11 `PASS`, 0 false positives of either severity, 2
-`FALSE NEGATIVE`**.
+scored with its four bands, on both legs, against the statement with no report
+filter but `NOT suppress_row`.** On 17.11: **101 numbered fixtures, 71 `PASS`,
+4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 26 `FALSE NEGATIVE`**, and
+**25 gate fixtures, 25 `PASS`**. On 12.2, where the exact filed text runs
+unmodified: **13 fixtures, 11 `PASS`, 0 false positives of either severity, 2
+`FALSE NEGATIVE`**. The 17 leg's five-fixture improvement and its two new
+threshold losses are both the filter removal's, and nothing else about the
+fixtures, the model or the bands changed between this run and the re-port's.
 
 Both servers were built out of tree from the pins and checked before a fixture
 existed: 17.11 passed `make check` 225 of 225 plus 8, 1 and 3 for `pageinspect`,
@@ -1851,7 +1959,7 @@ each.
 | baseline | 101 and 25 baselines, one per index, taken at the index build | 13 baselines |
 | churn | each fixture's own churn, now always followed by `VACUUM ANALYZE`; 36 `suite` tables and both `gate` tables drained nine heap blocks in ten | 5 tables drained; the rest kept their own churn |
 | decide | the filed text, unmodified, read through the three documented harness edits | the same text, 0 transformer edits |
-| oracle | a measured `REINDEX INDEX` on all 126; the statement called for one on 41 of the 101, and those gave back a mean **79.7 %** (0.0 to 98.9) | on all 13; the statement called for 9, which gave back a mean **89.9 %** (89.1 to 90.7) |
+| oracle | a measured `REINDEX INDEX` on all 126; the statement called for one on **45** of the 101, and those gave back a mean **81.2 %** (0.0 to 98.9), while the 56 it declined averaged 42.6 %; in `gate` it called for all 25, mean **88.2 %** (85.7 to 89.9) | on all 13; the statement called for 9, which gave back a mean **89.9 %** (89.1 to 90.7), against 60.1 % over the four it declined |
 
 **Rule 3's census is where the maintenance assumption shows.** In `suite` it
 censused 86 tables and analyzed **2** - `f85t` at 20.0 % of its estimated rows
@@ -1886,22 +1994,27 @@ for every index on it.
 [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2809-L2830),
 [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3582-L3600).
 
-#### Where the 31 false negatives were lost
+#### Where the false negatives were lost
 
-Every one of them was lost by a filter, not by the arithmetic: `expected_stage`,
-which recomputes the decision from the internals the harness projects rather
-than from the reported percentage, **agreed with the statement on all 101
-fixtures**, and `lost_by = threshold` is empty.
+**Two of them are now the arithmetic, and that is the removal's doing.** With
+the 1 MB predicate gone, its eight losses split: five became reported,
+alertable rebuild decisions and `PASS`, one is `p31` and one is `f91`, and
+those two are the first `lost_by = threshold` rows this page has ever recorded.
+`expected_stage`, which recomputes the decision from the internals the harness
+projects rather than from the reported percentage, still **agreed with the
+statement on all 101 fixtures**, so the two are not a disagreement between the
+statement and its own inputs; they are a model that reads `-237 %` where a
+rebuild gave back 79.2 % and 89.2 %.
 
 | Lost by | Count | Mean reclaim a rebuild gave back | Range |
 |---|---|---|---|
-| `withheld` by an exclusion term | 22 | 83.3 % | 60.0 to 90.7 |
-| the 1 MB report filter | 8 | 86.3 % | 79.2 to 89.2 |
+| `withheld` by an exclusion term | 23 | 83.5 % | 60.0 to 90.7 |
+| the 50 % threshold | **2** | 84.2 % | 79.2 to 89.2 |
 | a caveat the reading rule refuses to promote | 1 | 100.0 % | `p113b` alone |
-| the 50 % threshold | **0** | — | — |
+| a size or rank cutoff | **0** | — | the statement has none |
 
-35 rows were withheld in total, and every one of them names the term that
-withheld it: 25 by `A: duplicates from table statistics`, 5 by `C:
+36 rows were withheld in total, and every one of them names the term that
+withheld it: 26 by `A: duplicates from table statistics`, 5 by `C:
 variable-width INCLUDE`, 3 by `D: expression, no statistics row` and 2 by `A: no
 statistics row`, with `withheld_unexplained` at 0. The single caveat loss is the
 drained queue `p113b`, at `zero modelled rows: validate with a population probe`
@@ -1909,21 +2022,36 @@ on a file the rebuild emptied completely - the caveat working as designed and
 the decision being wrong anyway. Its population probe answered `false`, which
 is the correct answer for an empty subset.
 
+The 31 fixtures the removed predicate used to withhold read as follows, and the
+first row is the whole of the score's improvement. Only **10 of the 31 became
+visible**: the exclusion terms were already withholding the other 21, and size
+was never their reason.
+
+| What the 31 under-1 MB fixtures do now | Count | Which, and what the oracle said |
+|---|---|---|
+| printed for the first time, decided `rebuild`, all `PASS` | 5 | `p19` at 240 KiB reading 83.3 % against a measured 83.3 %, and `p22`, `p34`, `p36`, `p42` reading 65.5 to 68.1 % against 87.4 to 87.9 % |
+| printed for the first time, declined, and wrong to decline | 2 | `p31` at 192 KiB and `f91` at 296 KiB, the two threshold losses above |
+| printed for the first time, declined, and right to decline | 3 | `f88` at `-3218.9` against 40.5 %, `p116` at 0.0 % on an 8 KiB file, and `p120` at 87.5 % on 64 KiB against a measured 0.0 %, declined by the `zero modelled rows` caveat - the reading rule earning its keep |
+| still withheld by an exclusion term, so still invisible | 21 | 18 of them `FALSE NEGATIVE`, plus `f81`, `f82` and `i104`, which `PASS` because a withheld row is not a decision |
+
 The four critical false positives are the four rows a reader would have acted
 on, and each returned nothing:
 
 | Fixture | Reads | A rebuild gave back | Why |
 |---|---|---|---|
 | `f84` | 94.2 % | 0.0 % | the forged partial-index `reltuples` of 5,000 against a real 100,000 |
-| `f85` | 70.8 % | 0.0 % | table statistics that predate an `UPDATE` widening every subset row |
+| `f85` | 71.0 % | 0.0 % | table statistics that predate an `UPDATE` widening every subset row |
 | `i103` | 84.1 % | 0.0 % | a wide unique key inside the subset, which no statistic describes |
 | `x109` | 62.5 % | 0.0 % | `attstattarget = 0` on the key column; the caveat fires but is not one of the five the reading rule refuses |
 
-Accuracy, beside the decision: 59 of 101 readings are within one point of the
-oracle, the worst over-estimate is `+97.1` on `f78` and the worst under-estimate
-`-3362.1` on `f88`, whose subset is far narrower than the table average. The two
-next worst under-reads are `x111` at `-613.4` and `i104` at `-507.9`, both
-width-model cases rather than row-count ones.
+Accuracy, beside the decision, all three figures on
+`wasted_space_pct_floor`: 57 of 101 readings are within one point of the
+oracle, the worst over-estimate is `+94.2` on `f84` - the forged count above -
+and the worst under-estimate `-3259.4` on `f88`, whose subset is far narrower
+than the table average. The two next worst under-reads are `x111` at `-613.4`
+and `i104` at `-507.9`, both width-model cases rather than row-count ones.
+Removing the filter did not move any of these: it changed which rows the report
+prints, not what the model computes.
 
 #### The shared bands against the bands this page filed
 
@@ -1931,22 +2059,25 @@ Both scorings ran on the same 101 rows, and they disagree in both directions.
 
 | Scoring | `PASS` | `CRITICAL FALSE POSITIVE` | `FALSE POSITIVE` | `FALSE NEGATIVE` |
 |---|---|---|---|---|
-| shared bands, decision-based | 66 | 4 | 0 | 31 |
+| shared bands, decision-based | 71 | 4 | 0 | 26 |
+| the same bands with the 1 MB filter in place | 66 | 4 | 0 | 31 |
 | this page's older `verdict_floor` | 81 | 11 | 3 | 6 |
 | this page's older `verdict_point` | 82 | 12 | 4 | 3 |
 
-The older bands read a percentage and never asked whether the row was reported,
-so they count 11 and 12 critical false positives, most of them on rows the
-report never shows - among reported rows only 5 remain under either column -
-and 6 or 3 false negatives, because a withheld row was a separate column rather
-than a miss.
+The older two rows are unchanged by the removal, because they read a percentage
+and never asked whether the row was reported at all. That is also why they
+count 11 and 12 critical false positives, most of them on rows the report never
+shows - among reported rows only 5 remain under either column - and 6 or 3
+false negatives, because a withheld row was a separate column rather than a
+miss.
 
 `want_stage`, the per-fixture prediction filed in the script text before the
-run, was wrong 37 times on 101 and 4 times on 13, and it is left as filed. 34 of
-the 37 predicted a rebuild the statement declined, every one of them a withheld
-or filtered row; `p76` and `f88` predicted a rebuild that the statement declined
-and the oracle agreed with, and the four critical false positives are the
-reverse case.
+run, was wrong 33 times on 101 and 4 times on 13, and it is left as filed: the
+predictions are the re-port's, so the four-miss improvement is the removal's
+and not a re-prediction. 29 of the 33 predicted a rebuild the statement
+declined: 26 of those are the misses above, and three - `p73`, `p76` and `f88` -
+are declines the oracle agreed with. The remaining four are the reverse case,
+the critical false positives predicted `leave`.
 
 #### What the 12.2 leg adds
 
@@ -1961,23 +2092,35 @@ the feature gate the concept page names rather than a defect. Its two false
 negatives are one caveat loss (`p1005`, a drained queue at 100.0 %) and one
 withheld row (`w_inc`, a partial index with a variable-width `INCLUDE` column at
 90.7 %); 11 of the 13 readings are within one point of the oracle, the worst
-over-estimate being `+7.5` on `w_key`. The `extstat` comparison still holds on
-this server: the filed text and the widened one return identical rows in both
-directions over 20 rows read, while the pre-2026-09-10 text is still refused
-with `column se.inherited does not exist` at line 116.
+over-estimate `+7.5` on `w_key` and the worst under-estimate `-0.7`. The
+`extstat` comparison still holds on this server: the filed text and the widened
+one return identical rows in both directions over 20 rows read, while the
+pre-2026-09-10 text is still refused with `column se.inherited does not exist`
+at line 116.
+
+**This leg cannot exercise the filter removal, and says so with numbers.** Not
+one of its 13 fixtures is under 1 MB - the smallest index is 276 blocks - so
+the under-1 MB listing in `verdicts12.txt` is empty and every verdict is
+identical to the re-port's. What did change is the report a reader sees: the
+filed text prints **19 rows on the settled `leg12` database, 6 of them 1 MB or
+smaller**, where the same text with the old predicate would have printed 13.
+The `LIMIT 20` never bound here in either form.
 
 #### What it cost
 
 The two exact texts, six interleaved pairs on the settled 17.11 fixture database
-of 314 B-tree indexes over 64,098 blocks: the current text 65.0 to 78.1 ms, the
-superseded one 47.6 to 58.0 ms. The `EXCEPT` attribution, taken before the first
-rebuild, returned 27 rows in each direction, and the probe generator emitted and
-executed 63 statements in `suite`: 62 group probes and one population probe.
-Mean blocks per numbered fixture: 909 as built, 969 churned, 630 rebuilt, and
-**no fixture's index `reltuples` read `-1`**. Wall clock on this host, with both
-legs built concurrently at `JOBS=12` and `JOBS=8`: 2 min 9 s for the 17 leg's
-`build check` and 1 min 26 s for the rest of its stages, 2 min 11 s and 30 s for
-the 12 leg.
+of 314 B-tree indexes over 64,098 blocks: the current text 64.5 to 75.2 ms, the
+superseded one 46.8 to 54.7 ms. **The removal did not measurably change that**:
+the same text with the filter and the `LIMIT` read 65.0 to 78.1 ms on the same
+host and the same fixture shape on the run before it, while printing 20 rows
+instead of 68. The `EXCEPT` attribution, taken before the first rebuild,
+returned 25 rows in each direction, and the probe generator emitted and executed
+63 statements in `suite`: 62 group probes and one population probe. **No
+fixture scored `UNMEASURED`**, so no index's `reltuples` reached the model as
+the `-1` sentinel. Wall clock on this host, with both legs built concurrently
+at `JOBS=10`: 1 min 45 s for the 17 leg's `build check` and about 1 min 45 s for
+the rest of its stages, 1 min 37 s and about 30 s for the 12 leg, read from the
+output files' modification times rather than from a timer in the scripts.
 
 ### What still needs to be tested
 
@@ -1988,7 +2131,7 @@ gaps the reviews found.
    under the five phases and four bands of
    [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md)
    and against the fixture set that page now defines: 126 fixtures on 17.11 and
-   13 on 12.2, with the results and the 35 standing failures under
+   13 on 12.2, with the results and the 30 standing failures under
    [The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol).
    What remains is not coverage but the remedy the contract asks for, filed
    under
@@ -1999,8 +2142,11 @@ gaps the reviews found.
 2. **Attribution of every moved row.** Done on every run, and the requirement
    stands: install the superseded text (`bffd166e…`) beside the current one and
    run `EXCEPT` in both directions over the columns both views project, on the
-   same fixture state, before any `REINDEX`. The 2026-09-14 run returned 27 rows
-   in each direction. A row that moves must be explained by one of the five
+   same fixture state, before any `REINDEX`. The 2026-09-14 filter-removal run
+   returned 25 rows in each direction, and the removal cannot move any of them:
+   both texts are read through views that drop the report's filtering, so the
+   comparison sees the models and not the reports. A row that moves must be
+   explained by one of the five
    changes named above; an unexplained move is a defect, and reading the halves
    apart - a moved number against a moved caveat string - is still done by hand.
 3. **ICU.** Measured on every run since 2026-09-09, now including the
@@ -2098,7 +2244,7 @@ Linux x86_64**, under the script text filed here and against the fixture set
 now defines.
 
 - The 17 leg backs
-  [What the 2026-09-14 re-port measured](#what-the-2026-09-14-re-port-measured),
+  [What the filter removal measured](#what-the-filter-removal-measured),
   [The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol),
   [The deduplication gate, scored against the current statement](#the-deduplication-gate-scored-against-the-current-statement),
   [The collation branch, measured with ICU](#the-collation-branch-measured-with-icu)
@@ -2121,7 +2267,7 @@ now defines.
 | Environment | 7 variables, all with defaults; see [what the scripts read from the environment](#what-the-scripts-read-from-the-environment) | 7 variables, all with defaults; same table |
 | Prerequisites | see [Prerequisites](#prerequisites) | the same, plus `-DTRUE=1 -DFALSE=0` in `EXTRA_CFLAGS` on a host whose ICU headers no longer define those macros |
 | Output | under `$SANDBOX/out`; **open `criteria.txt` first**, and see [Reading the results of a run](#reading-the-results-of-a-run) for the file map and the result tables. The build and check diagnostics are copied there too, so they survive the build tree | under the same `$SANDBOX/out`; **open `v12_facts.txt` first**, then `verdicts12.txt`; this leg's copies carry a `12` in the name |
-| Runtime | 3 min 35 s for a full run on the 2026-09-14 host at `JOBS=12` - 2 min 9 s of it `build check`, 1 min 26 s everything after it, so about 90 s from a built tree | 2 min 41 s for a full run at `JOBS=8`, 2 min 11 s of it `build check` and 30 s the rest. Both legs were built and run concurrently on a 22-core host; on fewer cores the two `build` stages dominate |
+| Runtime | about 3 min 30 s for a full run on the 2026-09-14 host at `JOBS=10` - 1 min 45 s of it `build check` and about the same for everything after it, so roughly 105 s from a built tree | about 2 min 10 s for a full run at `JOBS=10`, 1 min 37 s of it `build check` and about 30 s the rest. Both legs were built concurrently on a 22-core host; on fewer cores the two `build` stages dominate |
 | Cleanup | `bash btree_bloat_suite_v17.sh clean` stops the server cleanly with `pg_ctl -m fast -w stop`, confirms the teardown (no `postmaster.pid`, no postgres process on the data directory, an empty socket directory) and only then deletes `$SANDBOX`; `stop` does the first two and keeps everything. **`out/` is inside `$SANDBOX`, so copy it out before `clean`** — nothing else preserves a run's results | `bash btree_bloat_suite_v12.sh clean` stops the 12 server the same way and deletes only that leg's `build12`, `install12`, `data12` and `sock12`, because the 17 leg owns the shared `out/` and `sql/`. Run the 17 leg's `clean` last to remove the sandbox entirely |
 
 Save the two fenced blocks below as `btree_bloat_suite_v17.sh` and
@@ -2147,16 +2293,16 @@ have run. The default order is the order of this table.
 | `build` | configures the pinned checkout out of tree under `$SANDBOX/build17`, installs into `$SANDBOX/install17`, then builds and installs `pageinspect`, `pgstattuple` and `amcheck`; skips everything when the binary already exists. It copies `configure.log`, `make.log` and `install.log` into `out/` after every step, on the failure path too, because `clean` deletes the build tree; until the 2026-09-10 repair the copy ran only after a successful build | nothing |
 | `check` | `make check` plus the three contrib checks, one result line each into `out/checks.txt`, then copies every `check_*.log` into `out/` and any `regression.diffs` as `out/diffs_*.txt`; before 2026-09-10 a failed suite left only its one-line summary once the sandbox was gone | `build` |
 || `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below into `postgresql.conf`, writes the current line count of `out/server.log` to `out/server.log.mark` (the point from which the server-error check reads), starts on `PORT`, records `uname -sm`, `max_data_alignment` and `database_block_size` into `out/platform.txt`, and creates the three UTF8 databases `gate`, `suite` and `xstat` | `build` |
-| `texts` | extracts the two `sql` blocks of this page and the superseded text from `OLD_REV`, checks all three SHA-256 baselines, runs both exact texts as filed, installs the two harness views in `gate` and `suite`, and writes `sql/harness.sql`, the shared suite's plan, snapshot, result, scoring and verdict objects | `cluster` |
+| `texts` | extracts the two `sql` blocks of this page and the superseded text from `OLD_REV`, checks all three SHA-256 baselines, runs both exact texts as filed and records into `out/exact_rows.txt` how many rows each printed, installs the two harness views in `gate` and `suite`, and writes `sql/harness.sql`, the shared suite's plan, snapshot, result, scoring and verdict objects | `cluster` |
 | `gate` | installs the harness, builds family 1's 25 fixtures, files them as 25 plan rows, and reads the as-built gate table with `bt_metap().allequalimage` and the build's `DEBUG1` verdicts as oracles | `texts` |
 | `suite` | resets the `suite` schema, reinstalls the harness and both views, and runs the build phase of the 101 numbered fixtures: their baselines come from the harness event trigger on `CREATE INDEX`, each recipe that carries churn of its own ends on the maintenance `VACUUM ANALYZE`, and `assert_built()` records each fixture's population while it is still as built. It scores nothing | `texts` |
 | `churn` | phase 3, in the order the shared suite prescribes: rule 2's uniform drain over the 36 `suite` tables and both `gate` tables that have no churn of their own, each ending on `VACUUM` then `ANALYZE`, rule 3's census, which analyzes what a server with autovacuum on would still have analyzed, the catalog forgeries last so an `ANALYZE` cannot repair them, and a churned snapshot of every planned index. Writes `out/drain.txt`, `out/census.txt`, `out/census_gate.txt`, `out/forge.txt` and `out/snapshots.txt` | `suite`, `gate` |
 | `extstat` | rebuilds the two texts the portable `extstat` filter replaced — `est_pre`, which must hash to `BASEPRE`, and `est_wide` — runs both, then compares all three over every database and scores them on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat.txt`. It rebuilds indexes only in `xstat`, so the `suite` fixtures are still untouched when `attribution` runs | `texts`; it follows `suite` in the default order so that its equivalence counts and cost pairs see the populated `suite` database. Until 2026-09-10 it ran right after `texts`, where a fresh full run found `suite` empty |
 | `attribution` | `EXCEPT` in both directions between the two texts, taken before any rebuild | `suite` |
 | `probes` | runs the probe generator on `suite` and executes every statement it emits, still before any rebuild | `suite` |
-| `score` | phases 4 and 5, in `suite` and then in `gate`: `CALL score_all()` reads both views on the churned fixture, runs the measured `REINDEX INDEX` and re-reads the size, then writes `out/verdicts.txt` and `out/verdicts_gate.txt` with the shared bands per family, the `expected_stage`/`taken_stage`/`want_stage` agreement counts, every `lost_by` row, and the older `verdict_floor`/`verdict_point` counts beside them | `suite`, `churn` |
-| `cost` | six interleaved timings of the two exact texts, and the size of the database they ran against | `texts` |
-| `criteria` | the pass-criteria blocks into `out/criteria.txt`: block 2 is the shared suite's four bands and its phase counters for both databases, block 2b the older bands on the same rows, then block 7, which reads every `ERROR`, `FATAL` and `PANIC` line of `out/server.log` after the mark, allows the one error this suite provokes on purpose - the gate's `text_pattern_ops` refusal - only when the `STATEMENT:` line of the same log record carries the statement that provokes it, prints how often it was seen, and dies on anything left over | `check`, `texts`, `gate`, `churn`, `attribution`, `score` |
+| `score` | phases 4 and 5, in `suite` and then in `gate`: `CALL score_all()` reads both views on the churned fixture, runs the measured `REINDEX INDEX` and re-reads the size, then writes `out/verdicts.txt` and `out/verdicts_gate.txt` with the shared bands per family, the `expected_stage`/`taken_stage`/`want_stage` agreement counts, every `lost_by` row, one row per fixture under 1 MB with the decision and verdict it now gets, and the older `verdict_floor`/`verdict_point` counts beside them | `suite`, `churn` |
+| `cost` | six interleaved timings of the two exact texts, the size of the database they ran against, the row count each text printed on it, and the same row set split on the 1 MB boundary the removed predicate tested | `texts` |
+| `criteria` | the pass-criteria blocks into `out/criteria.txt`: block 2 is the shared suite's four bands and its phase counters for both databases, with the under-1 MB counts, the accuracy summary, one row per `lost_by` class, one per `withheld_by` term, the three worst under-reads and what each decision was worth; block 2b the older bands on the same rows; then block 7, which reads every `ERROR`, `FATAL` and `PANIC` line of `out/server.log` after the mark, allows the one error this suite provokes on purpose - the gate's `text_pattern_ops` refusal - only when the `STATEMENT:` line of the same log record carries the statement that provokes it, prints how often it was seen, and dies on anything left over. Every query it runs is read-only, so it can be re-run after the oracle pass | `check`, `texts`, `gate`, `churn`, `attribution`, `score` |
 | `report` | lists what landed in `out/` | nothing |
 | `stop` | stops the server with `pg_ctl -m fast -w stop`, so the checkpointer writes a shutdown checkpoint and the next start needs no recovery, then confirms the teardown: no `postmaster.pid`, no postgres process on the data directory, an empty socket directory. It dies rather than report a stop that did not happen. Until 2026-09-10 it used `-m immediate`, which skips the checkpoint and forces crash recovery on restart | `cluster` |
 | `clean` | `stop`, then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`; because `stop` dies on a failed teardown, `clean` never deletes a live cluster | nothing |
@@ -2168,14 +2314,14 @@ have run. The default order is the order of this table.
 | `build` | 12.2 out of tree under `$SANDBOX/build12` with `CFLAGS="$EXTRA_CFLAGS"`, plus the same three contrib modules; copies `configure.log`, `make.log` and `install.log` into `out/` as `configure12.log`, `make12.log` and `install12.log` after every step, on the failure path too | nothing |
 | `check` | the 12.2 core and contrib suites into `out/checks12.txt`, then copies each `check_*.log` into `out/` as `check12_*.log` and any `regression.diffs` as `diffs12_*.txt` | `build` |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, the same cluster settings without `log_min_messages`, the mark `out/server12.log.mark` written the same way, started on `PORT12`, and the `leg12` database | `build` |
-| `exact` | extracts `sql` block 1, checks its hash, runs the text **unmodified**, and records `exact_text=executes` or `exact_text=refused` plus the first error lines in `out/v12_facts.txt` | `cluster` |
+| `exact` | extracts `sql` block 1, checks its hash, runs the text **unmodified**, and records `exact_text=executes` or `exact_text=refused` plus the first error lines and the row count it printed in `out/v12_facts.txt`. The database is empty at this point, so that count is 0 by construction and the settled one comes from `report` | `cluster` |
 | `transform` | applies one recorded edit per refused construct, re-runs, writes `transform_edits`, and installs the harness view; it dies rather than guess when a construct is still refused | `exact` |
 | `facts` | records `server_version_num`, block size, alignment, whether `pg_stat_force_next_flush()` exists, the `pg_stats_ext` columns, the registered B-tree support-function numbers, and whether `WITH (deduplicate_items = off)` is accepted | `cluster` |
 | `fixtures` | builds the constructible subset, one writer session per step, polling `pg_stat_all_tables` for publication instead of forcing a flush; installs the same shared-suite harness, takes each baseline from its event trigger on `CREATE INDEX`, and records every fixture's as-built population and its filed `want_stage` | `transform` |
 | `churn` | phase 3 on this leg: rule 2's drain over the five shape tables that have no churn of their own, rule 3's census, a wait for the drained live counts to publish - which has to come *after* the census, because only an `ANALYZE` repairs an `n_live_tup` the drain left at zero - and the churned snapshot. Writes `out/drain12.txt`, `out/census12.txt` and `out/snapshots12.txt` | `fixtures` |
-| `score` | the same measured-`REINDEX INDEX` scoring under the shared bands, into `out/verdicts12.txt`, with the per-family counts, the stage-agreement totals and every `lost_by` row | `fixtures`, `churn` |
+| `score` | the same measured-`REINDEX INDEX` scoring under the shared bands, into `out/verdicts12.txt`, with the per-family counts, the stage-agreement totals, every `lost_by` row and one row per fixture under 1 MB - a listing that is empty on this leg, because none of its fixtures is that small | `fixtures`, `churn` |
 | `extstat` | rebuilds the text filed before the portable `extstat` filter, checks it against `BASEPRE`, records that this server still refuses it, then scores the filed text against the widened one on an inheritance parent, a bloated inheritance parent and a childless control, into `out/extstat12.txt` | `transform` |
-| `report` | rewrites the `server_errors` block at the end of `out/v12_facts.txt`, dropping the one an earlier run appended, with the same paired check against `out/server12.log` after its mark; the two errors this leg provokes on purpose are allowed from their own statements, anything left over kills the run; then prints the file | `facts` |
+| `report` | writes `out/v12_rows.txt`: the row count the filed text prints on the settled `leg12` database, that row set split on the 1 MB boundary, the accuracy summary and what each decision was worth. Then it rewrites the `server_errors` block at the end of `out/v12_facts.txt`, dropping the one an earlier run appended, with the same paired check against `out/server12.log` after its mark; the two errors this leg provokes on purpose are allowed from their own statements, anything left over kills the run; then prints the file | `facts`, and `score` for the two summaries |
 | `stop` | stops the 12 server with `pg_ctl -m fast -w stop` and confirms the same three teardown facts, dying on any of them; `-m immediate` until 2026-09-10 | `cluster` |
 | `clean` | `stop`, then deletes this leg's four directories after the same containment check | nothing |
 
@@ -2309,13 +2455,18 @@ decides how a later change is applied.
 **3. Statement texts.** Extract the estimator block from this page and the
 superseded block from the page's previous revision, verify both hashes, and
 install each as a view with the harness edits this page documents: drop the
-1 MB filter, the `ORDER BY` and the `LIMIT 20`; drop `AND NOT suppress_row` and
-project `suppress_row` instead; and project the internals the scorer reads
-(`expected_blocks`, `floor_blocks`, `actual_bytes`, `live_rows`, `slot`,
-`leaf_cap`, `nmax`, `dedup_applies`, `is_partial`, `equalimage_state`,
-`stats_row_missing`, `dedup_credited`, `stats_stale`). Run both exact texts
-once as filed, filter and `LIMIT` intact, to prove they execute. The 2026-09-14
-run reproduced all three hashes.
+report's filtering and ordering, project `suppress_row` instead of filtering on
+it, and project the internals the scorer reads (`expected_blocks`,
+`floor_blocks`, `actual_bytes`, `live_rows`, `slot`, `leaf_cap`, `nmax`,
+`dedup_applies`, `is_partial`, `equalimage_state`, `stats_row_missing`,
+`dedup_credited`, `stats_stale`). The two texts have different tails since
+2026-09-14 - the current one ends on `WHERE NOT suppress_row` and an `ORDER BY`
+line carrying the semicolon, the superseded one on the 1 MB filter, an
+unterminated `ORDER BY` and `LIMIT 20;` - so `harness_view` handles both and
+whichever line carries the semicolon emits it. Run each exact text once as
+filed to prove it executes, and record the row count it printed: on a settled
+database that count is the whole visible effect of the removal. The 2026-09-14
+filter-removal run reproduced all three hashes.
 
 Extraction is Bash only, using the same `md_block` helper the scripts define, so
 no `awk` and no `shasum` — the first is forbidden by `MANDATORY Measurement
@@ -2327,7 +2478,7 @@ digest tool both scripts use.
 # stage_texts does exactly this, for both blocks at once.
 page=wiki/v17/questions/indexing/btree-index-bloat-core-sql-only.md
 md_block sql 1 "$page" > est_r2.sql
-sha256sum est_r2.sql   # 646df923635182809f1a139e2f7f9367e94b6e0eaf79ed66fc37697a82d5d706
+sha256sum est_r2.sql   # 4de245c5a1fb442cda800c099b8801bc72abc0c87f170384490079135fb5241d
 git show "f2d73b4:$page" > old_page.md
 md_block sql 1 old_page.md > est_old.sql
 sha256sum est_old.sql  # bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
@@ -2427,6 +2578,10 @@ following hold:
   filed as residual false positives rather than passed silently.
 - Every `EXCEPT` row is attributed to one of the five changes.
 - Both exact texts execute as filed, and no row raises an error.
+- Report shape: the filed text prints every candidate the exclusion terms do
+  not withhold, and the run records how many of those rows are 1 MB or
+  smaller. A run that prints at most 20 rows, or none under 1 MB, has not
+  exercised the 2026-09-14 removal and must say so.
 - `make check` and the three contrib checks pass; both block hashes match;
   `scripts/wiki_lint` reports no new issue.
 
@@ -2453,14 +2608,15 @@ page.
 
 Fifteen rules hold in both scripts. Two were added by the measurement-script
 audit of 2026-09-09, three by the 2026-09-11 re-score against the shared suite,
-and one by the 2026-09-14 re-port.
+one by the 2026-09-14 re-port, and one was rewritten the same day by the filter
+removal.
 
 | Rule | How the scripts keep it |
 |---|---|
 | The pinned checkout stays read only | every artifact goes under `SANDBOX`, default `.wiki-runtime/tmp/btree-suite`, and the build is the VPATH form the documentation describes. [installation.sgml#VPATH](../../../../raw/postgres-17/doc/src/sgml/installation.sgml#L427-L432) |
 | The statement under test is never retyped | `md_block` extracts a fenced block from this Markdown file in pure Bash, and `git show` recovers the superseded text from revision `f2d73b4`; all five SHA-256 baselines are checked before use |
-| The exact filed text runs first | both texts execute with the 1 MB filter, the `ORDER BY` and the `LIMIT 20` intact, before any harness view exists |
-| Only the three documented edits are applied | `harness_view` drops the two `SET` lines, projects the internals the scorer reads, and drops the filter, the order and the limit. Nothing else is rewritten. [The current recommended statement](#the-current-recommended-statement) |
+| The exact filed text runs first | each text executes exactly as filed before any harness view exists - the current one with `NOT suppress_row` as its only filter and no `LIMIT`, the superseded one with its 1 MB filter and `LIMIT 20` - and the row count each printed is recorded |
+| Only the three documented edits are applied | `harness_view` drops the two `SET` lines, projects the internals the scorer reads, and drops the report's own filtering and ordering, from either tail. Nothing else is rewritten. [The current recommended statement](#the-current-recommended-statement) |
 | Statistics are published before they are read | `pg_stat_force_next_flush()` precedes every `ANALYZE` and `VACUUM` on the 17 leg, and no fixture is read inside the transaction that built it. [pgstat.c#pgstat_force_next_flush](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L700-L708), [pgstat_relation.c#pgstat_report_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L289-L337) |
 | Attribution and probes run before the first rebuild | the fixture stage only builds and plans, the churn stage only disturbs; `EXCEPT` and the probe generator run next; the scoring pass is the first thing that rebuilds an index. [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2804-L2829), [index.c#reindex_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3583-L3597) |
 | The suite is not redefined here | the families, the five phases, the three porting rules, the `REINDEX INDEX` oracle and the four verdict bands come from [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md); the scripts implement them and name every deviation under [Mandatory test review](#mandatory-test-review) |
@@ -2539,9 +2695,9 @@ need a UTF8 database, which is why every database is created
 
 Run it from the repository root. `bash btree_bloat_suite_v17.sh` runs every
 stage; `bash btree_bloat_suite_v17.sh clean` stops the server and deletes the
-sandbox. On the 2026-09-14 host the whole run took 3 min 35 s at `JOBS=12`, of
-which `build check` is 2 min 9 s; from a built tree, everything after it is
-about ninety seconds.
+sandbox. On the 2026-09-14 filter-removal host the whole run took about
+3 min 30 s at `JOBS=10`, of which `build check` is 1 min 45 s; from a built
+tree, everything after it is about the same again.
 
 ```bash
 #!/usr/bin/env bash
@@ -2600,12 +2756,14 @@ export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
 # SHA-256 baselines of the two fenced SQL blocks of the page, in page order.
 # The geometry and calibration blocks, hashed here until 2026-09-14, went with
 # the page-local stages that ran them.
-BASE1=646df923635182809f1a139e2f7f9367e94b6e0eaf79ed66fc37697a82d5d706  # estimator
+BASE1=4de245c5a1fb442cda800c099b8801bc72abc0c87f170384490079135fb5241d  # estimator
 BASE2=bfa7721f5edae40fd883b5bc0f0776e499716c48cfdbe10d191e95b9f8a3bb0d  # probes
 BASEOLD=bffd166e44a4e81c181df3d9a10bfb547a6dcaf7349c2cd055578f35050d1357
-# The estimator text as filed before the portable extstat filter of 2026-09-10.
-# The extstat stage rebuilds it from the current text and must reproduce this.
-BASEPRE=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
+# The estimator text as filed before the portable extstat filter of 2026-09-10,
+# rebuilt from the current text, so this baseline moves whenever the current
+# text does: it was 8acd531b7bcd2f2c until the report filter came out on
+# 2026-09-14.  The extstat stage rebuilds it and must reproduce this.
+BASEPRE=152f4172f1ee1dfd86467e525bfe37babba92a5ad036358bed0d17aa4b10594a
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -2637,7 +2795,14 @@ md_block() {
 
 # harness_view <sql-file> <view> <extra projection>: the three documented edits.
 # Drop the two SET lines, project the internals the scorer reads, and drop the
-# 1 MB filter, the suppress_row filter, the ORDER BY and the LIMIT.
+# report's own filtering and ordering.
+#
+# Two tails are handled, because this one function installs both texts.  The
+# current text ends on " WHERE NOT suppress_row" and an ORDER BY line that
+# carries the semicolon; its 1 MB filter and its LIMIT 20 came out on
+# 2026-09-14.  The superseded text still ends on the 1 MB filter, an
+# unterminated ORDER BY and " LIMIT 20;", so those arms stay.  Whichever line
+# carries the semicolon is the one that emits it.
 harness_view() {
   local file=$1 view=$2 extra=$3 line
   printf 'DROP VIEW IF EXISTS %s;\nCREATE VIEW %s AS\n' "$view" "$view"
@@ -2645,7 +2810,9 @@ harness_view() {
     case $line in
       "SET /* wiki_btree_wasted_space"*)     continue ;;
       "       server_version_num")           printf '       server_version_num,\n%s\n' "$extra"; continue ;;
+      " WHERE NOT suppress_row")             continue ;;
       " WHERE actual_bytes > 1024 * 1024"*)  continue ;;
+      " ORDER BY (actual_bytes"*';')         printf ';\n'; continue ;;
       " ORDER BY (actual_bytes"*)            continue ;;
       " LIMIT 20;")                          printf ';\n'; continue ;;
     esac
@@ -2803,14 +2970,17 @@ END $sc$;
 -- The verdict view.  actual is what the rebuild of the churned file really gave
 -- back and is the only oracle; verdict applies the shared suite's four bands to
 -- it.  taken_stage is the decision this statement's own published reading rule
--- reaches from its own output: a row that is suppressed, under the 1 MB filter
--- or carrying one of the five caveats the page refuses to promote is a 'leave'
--- whatever its percentage says.  expected_stage recomputes that decision from
--- the internals the harness projects instead of from the reported percentage,
--- so a statement that disagrees with its own inputs is visible.  The 50 %
--- rebuild threshold is this harness's, not the suite's; the page says so.
--- verdict_point and verdict_floor are the page's older bands, kept so the two
--- scorings can be compared on one row.
+-- reaches from its own output: a row that is suppressed or carries one of the
+-- five caveats the page refuses to promote is a 'leave' whatever its
+-- percentage says.  Since 2026-09-14 size is not part of that rule, because
+-- the statement no longer filters on it; over_1mb is kept as an observation of
+-- what the removed filter used to withhold, and is read by nothing that
+-- decides.  expected_stage recomputes the decision from the internals the
+-- harness projects instead of from the reported percentage, so a statement
+-- that disagrees with its own inputs is visible.  The 50 % rebuild threshold
+-- is this harness's, not the suite's; the page says so.  verdict_point and
+-- verdict_floor are the page's older bands, kept so the two scorings can be
+-- compared on one row.
 CREATE VIEW verdicts AS
 SELECT r.num, r.leg, p.grp, r.idx, r.req,
        s.blocks AS blocks_built, r.blocks_before, r.blocks_after, a.actual,
@@ -2823,7 +2993,6 @@ SELECT r.num, r.leg, p.grp, r.idx, r.req,
             ELSE 'PASS' END                                    AS verdict,
        CASE WHEN d.taken_stage = 'leave' AND a.actual >= 50
             THEN CASE WHEN NOT f.reported  THEN 'withheld'
-                      WHEN NOT f.over_1mb  THEN 'size filter'
                       WHEN NOT f.alertable THEN 'caveat'
                       WHEN r.wspf IS NULL  THEN 'unmeasured'
                       ELSE 'threshold' END END                 AS lost_by,
@@ -2852,15 +3021,16 @@ SELECT r.num, r.leg, p.grp, r.idx, r.req,
                (r.caveats IS NULL OR r.caveats !~
                 '(never analyzed|row-count sources disagree|statistics not visible|zero modelled rows|wide compressible key)')
                                                               AS alertable,
+               -- observation only: the size the removed 1 MB filter tested
                (r.size_before > 1024 * 1024)                  AS over_1mb) f
   CROSS JOIN LATERAL (
-        SELECT CASE WHEN f.reported AND f.alertable AND f.over_1mb
+        SELECT CASE WHEN f.reported AND f.alertable
                      AND r.wspf >= 50 THEN 'rebuild' ELSE 'leave' END AS taken_stage,
-               CASE WHEN f.reported AND f.alertable AND f.over_1mb
+               CASE WHEN f.reported AND f.alertable
                      AND r.wsp  >= 50 THEN 'rebuild' ELSE 'leave' END AS taken_point) d
   CROSS JOIN LATERAL (
         SELECT CASE WHEN r.suppress_row OR r.floor_blocks IS NULL
-                      OR NOT f.over_1mb OR NOT f.alertable        THEN 'leave'
+                      OR NOT f.alertable                          THEN 'leave'
                     WHEN round(100.0 * (r.size_before
                                         - r.floor_blocks * current_setting('block_size')::numeric)
                                / greatest(r.size_before, 1), 1) >= 50 THEN 'rebuild'
@@ -3007,7 +3177,12 @@ stage_texts() {
   done
   cat "$OUT/hashes.txt" >&2
 
-  # Both exact texts must execute as filed, filter and LIMIT intact.
+  # Both exact texts must execute exactly as filed: the current one with no
+  # report filter but NOT suppress_row and no LIMIT, the superseded one with
+  # its 1 MB filter and its LIMIT 20.  The printed row count is recorded for
+  # each, because that is the difference the removal of 2026-09-14 makes to a
+  # reader; the settled count is taken again by the cost stage, on a populated
+  # database.
   local db
   for db in suite; do
     f "$db" "$SQLD/est_r2.sql" > "$OUT/exact_r2_$db.txt" 2>&1 \
@@ -3015,6 +3190,10 @@ stage_texts() {
   done
   f suite "$SQLD/est_old.sql" > "$OUT/exact_old_suite.txt" 2>&1 \
     && note "exact superseded text runs on suite" || note "exact superseded text FAILED on suite"
+  { printf 'r2  %s\n'  "$(grep -E '^\([0-9]+ rows?\)$' "$OUT/exact_r2_suite.txt"  | tail -1)"
+    printf 'old %s\n' "$(grep -E '^\([0-9]+ rows?\)$' "$OUT/exact_old_suite.txt" | tail -1)"
+  } > "$OUT/exact_rows.txt"
+  cat "$OUT/exact_rows.txt" >&2
 
   harness_view "$SQLD/est_r2.sql"  est_r2  "$INTERNALS,
 $INTERNALS_R2" > "$SQLD/view_r2.sql"
@@ -4352,9 +4531,12 @@ SELECT plan_add(120, 'a 300-row sample missed a 2,000-row subset', 'p120',
 -- The shared suite's families, and the per-fixture prediction of what this
 -- statement's published reading rule will decide once the churn has run.  Both
 -- are filed here, in the script text, before the run, and want_stage is never
--- rewritten after one.  'rebuild' predicts a row that is reported, alertable,
--- over the 1 MB filter and over the harness threshold; 'leave' predicts any
--- other outcome, including a row the exclusion terms withhold.
+-- rewritten after one.  'rebuild' predicts a row that is reported, alertable
+-- and over the harness threshold; 'leave' predicts any other outcome,
+-- including a row the exclusion terms withhold.  Size is not a term any more:
+-- the statement's 1 MB filter came out on 2026-09-14, and these predictions
+-- are left exactly as the run before that filed them, so the change in
+-- want_miss is a measurement rather than a re-prediction.
 UPDATE /* wiki_btree_suite_families */ plan SET grp =
        CASE WHEN num BETWEEN 18 AND 77  THEN 'partial'
             WHEN num BETWEEN 78 AND 85  THEN 'falsepos'
@@ -4630,6 +4812,12 @@ SQL
     t "$db" "SELECT /* wiki_btree_verdict_want_miss */
                     num, leg, idx, want_stage, taken_stage, verdict, wspf, actual
                FROM verdicts WHERE want_stage <> taken_stage ORDER BY num, leg" >> "$out" 2>&1
+    # What the report filter removed on 2026-09-14 used to withhold: every
+    # fixture under 1 MB, with the decision and the verdict it now gets.
+    t "$db" "SELECT /* wiki_btree_verdict_under_1mb */
+                    num, leg, idx, blocks_before * 8 AS kib_before,
+                    wspf, actual, taken_stage, verdict
+               FROM verdicts WHERE NOT over_1mb ORDER BY num, leg" >> "$out" 2>&1
     # The page's older one-shot bands, on the same rows, for comparison.
     t "$db" "SELECT /* wiki_btree_verdict_floor_counts */
                     verdict_floor, count(*) FROM verdicts GROUP BY 1 ORDER BY 2 DESC" \
@@ -4666,6 +4854,24 @@ stage_cost() {
            sum(pg_relation_size(c.oid)) / 8192 || ' blocks'
              from pg_class c join pg_am a on a.oid = c.relam
             where a.amname = 'btree' and c.relkind = 'i'" >> "$OUT/cost.txt"
+  # How many rows each exact text prints on this settled database.  The
+  # current text has neither the 1 MB filter nor the LIMIT 20 the superseded
+  # one still carries, so the pair measures what the removal shows a reader.
+  f suite "$SQLD/est_r2.sql"  > "$OUT/exact_r2_settled.txt"  2>&1
+  f suite "$SQLD/est_old.sql" > "$OUT/exact_old_settled.txt" 2>&1
+  { printf 'settled r2  %s\n' \
+      "$(grep -E '^\([0-9]+ rows?\)$' "$OUT/exact_r2_settled.txt"  | tail -1)"
+    printf 'settled old %s\n' \
+      "$(grep -E '^\([0-9]+ rows?\)$' "$OUT/exact_old_settled.txt" | tail -1)"
+  } >> "$OUT/cost.txt"
+  # The same row set through the harness view, split on the size the removed
+  # predicate tested, so the share of the report that only exists because the
+  # filter is gone is a number this script produced.
+  s suite "select /* wiki_btree_cost_report_shape */
+                  count(*) || ' reported rows, ' ||
+                  count(*) filter (where actual_bytes <= 1024 * 1024) ||
+                  ' of them 1 MB or smaller'
+             from est_r2 where not suppress_row" >> "$OUT/cost.txt"
   cat "$OUT/cost.txt" >&2
 }
 
@@ -4777,8 +4983,37 @@ stage_criteria() {
                       count(*) FILTER (WHERE verdict = 'FALSE NEGATIVE')    AS fn,
                       count(*) FILTER (WHERE expected_stage <> taken_stage) AS gate_disagrees,
                       count(*) FILTER (WHERE want_stage <> taken_stage)     AS want_miss,
-                      count(*) FILTER (WHERE NOT contract_ok)               AS contract_failures
+                      count(*) FILTER (WHERE NOT contract_ok)               AS contract_failures,
+                      count(*) FILTER (WHERE NOT over_1mb)                  AS under_1mb,
+                      count(*) FILTER (WHERE NOT over_1mb
+                                         AND taken_stage = 'rebuild')       AS under_1mb_rebuild
                  FROM verdicts"
+      # Accuracy beside the decision, and one row per loss class with the
+      # reclaim a rebuild actually gave back.  Both are read-only, so this
+      # stage can be re-run after the oracle pass without disturbing it.
+      t "$db" "SELECT /* wiki_btree_criteria_accuracy */
+                      count(*) FILTER (WHERE wspf IS NOT NULL
+                                         AND abs(wspf - actual) <= 1)       AS within_one_point,
+                      round(max(wspf - actual), 1)                          AS worst_over,
+                      round(min(wspf - actual), 1)                          AS worst_under
+                 FROM verdicts"
+      t "$db" "SELECT /* wiki_btree_criteria_lost_classes */
+                      lost_by, count(*), round(avg(actual), 1) AS mean_reclaim,
+                      min(actual) AS min_reclaim, max(actual) AS max_reclaim
+                 FROM verdicts WHERE lost_by IS NOT NULL
+                GROUP BY 1 ORDER BY 2 DESC"
+      t "$db" "SELECT /* wiki_btree_criteria_decisions */
+                      taken_stage, count(*), round(avg(actual), 1) AS mean_reclaim,
+                      min(actual) AS min_reclaim, max(actual) AS max_reclaim
+                 FROM verdicts GROUP BY 1 ORDER BY 1"
+      t "$db" "SELECT /* wiki_btree_criteria_withheld_terms */
+                      withheld_by, count(*) FROM verdicts
+                WHERE NOT reported GROUP BY 1 ORDER BY 2 DESC"
+      t "$db" "SELECT /* wiki_btree_criteria_worst_reads */
+                      num, leg, idx, wspf, actual,
+                      round(wspf - actual, 1) AS delta
+                 FROM verdicts WHERE wspf IS NOT NULL
+                ORDER BY (wspf - actual) LIMIT 3"
       t "$db" "SELECT /* wiki_btree_criteria_phases */
                       (SELECT count(*) FROM snap WHERE phase = 'built')     AS baselines,
                       (SELECT count(*) FROM snap WHERE phase = 'churned')   AS churned,
@@ -4937,11 +5172,13 @@ OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"; SOCK="$SANDBOX/sock12"; BIN="$INST/bin"
 DB=leg12
 export PGPORT="$PORT12" PGHOST="$SOCK" PGDATABASE=postgres
 
-BASE1=646df923635182809f1a139e2f7f9367e94b6e0eaf79ed66fc37697a82d5d706
-# The estimator text as filed before the portable extstat filter of 2026-09-10.
-# The extstat stage rebuilds it from the current text, must reproduce this
-# hash, and must find this server refusing it.
-BASEPRE=8acd531b7bcd2f2ca679e65024d83bd61debcb4b75bb18f3834a368454d574fd
+BASE1=4de245c5a1fb442cda800c099b8801bc72abc0c87f170384490079135fb5241d
+# The estimator text as filed before the portable extstat filter of 2026-09-10,
+# rebuilt from the current text, so it moves whenever that text does: it was
+# 8acd531b7bcd2f2c until the report filter came out on 2026-09-14.  The extstat
+# stage rebuilds it, must reproduce this hash, and must find this server
+# refusing it.
+BASEPRE=152f4172f1ee1dfd86467e525bfe37babba92a5ad036358bed0d17aa4b10594a
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -4969,6 +5206,10 @@ md_block() {
   done < "$file"
 }
 
+# The same three edits as the 17 leg, and the same two tails: the current text
+# ends on " WHERE NOT suppress_row" and an ORDER BY line carrying the
+# semicolon, the text filed before 2026-09-14 on the 1 MB filter, an
+# unterminated ORDER BY and " LIMIT 20;".
 harness_view() {
   local file=$1 view=$2 extra=$3 line
   printf 'DROP VIEW IF EXISTS %s;\nCREATE VIEW %s AS\n' "$view" "$view"
@@ -4976,7 +5217,9 @@ harness_view() {
     case $line in
       "SET /* wiki_btree_wasted_space"*)     continue ;;
       "       server_version_num")           printf '       server_version_num,\n%s\n' "$extra"; continue ;;
+      " WHERE NOT suppress_row")             continue ;;
       " WHERE actual_bytes > 1024 * 1024"*)  continue ;;
+      " ORDER BY (actual_bytes"*';')         printf ';\n'; continue ;;
       " ORDER BY (actual_bytes"*)            continue ;;
       " LIMIT 20;")                          printf ';\n'; continue ;;
     esac
@@ -5111,6 +5354,12 @@ stage_exact() {
   if "$BIN/psql" -X -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/est_r2.sql" \
        > "$OUT/v12_exact.txt" 2>&1; then
     printf 'exact_text=executes\n' > "$OUT/v12_facts.txt"
+    # How many rows it printed here.  Since 2026-09-14 the text has neither
+    # the 1 MB filter nor the LIMIT 20, so this is every candidate index the
+    # exclusion terms did not withhold.
+    printf 'exact_rows=%s\n' \
+      "$(grep -E '^\([0-9]+ rows?\)$' "$OUT/v12_exact.txt" | tail -1)" \
+      >> "$OUT/v12_facts.txt"
     note "the exact text EXECUTES on 12.2"
   else
     printf 'exact_text=refused\n' > "$OUT/v12_facts.txt"
@@ -5289,10 +5538,12 @@ BEGIN
   END LOOP;
 END $sc$;
 -- The verdict view, scored by the shared mandatory suite's four bands on the
--- same decision rule as the 17 leg: a suppressed row, a row under the 1 MB
--- report filter and a row carrying one of the five caveats the page refuses to
--- promote are all 'leave', whatever the percentage says.  verdict_floor is the
--- older band set this page filed, kept on the same row for comparison.
+-- same decision rule as the 17 leg: a suppressed row and a row carrying one of
+-- the five caveats the page refuses to promote are both 'leave', whatever the
+-- percentage says.  Size left that rule on 2026-09-14 with the statement's
+-- 1 MB filter; over_1mb stays as an observation and decides nothing.
+-- verdict_floor is the older band set this page filed, kept on the same row
+-- for comparison.
 CREATE VIEW verdicts12 AS
 SELECT r.num, p.grp, r.idx, r.req, s.blocks AS blocks_built,
        r.blocks_before, r.blocks_after, a.actual, r.wsp, r.wspf,
@@ -5304,7 +5555,6 @@ SELECT r.num, p.grp, r.idx, r.req, s.blocks AS blocks_built,
             ELSE 'PASS' END                                   AS verdict,
        CASE WHEN d.taken_stage = 'leave' AND a.actual >= 50
             THEN CASE WHEN NOT f.reported  THEN 'withheld'
-                      WHEN NOT f.over_1mb  THEN 'size filter'
                       WHEN NOT f.alertable THEN 'caveat'
                       WHEN r.wspf IS NULL  THEN 'unmeasured'
                       ELSE 'threshold' END END                AS lost_by,
@@ -5332,12 +5582,13 @@ SELECT r.num, p.grp, r.idx, r.req, s.blocks AS blocks_built,
                (r.caveats IS NULL OR r.caveats !~
                 '(never analyzed|row-count sources disagree|statistics not visible|zero modelled rows|wide compressible key)')
                                                               AS alertable,
+               -- observation only: the size the removed 1 MB filter tested
                (r.size_before > 1024 * 1024)                  AS over_1mb) f
   CROSS JOIN LATERAL (
-        SELECT CASE WHEN f.reported AND f.alertable AND f.over_1mb
+        SELECT CASE WHEN f.reported AND f.alertable
                      AND r.wspf >= 50 THEN 'rebuild' ELSE 'leave' END AS taken_stage) d
   CROSS JOIN LATERAL (
-        SELECT CASE WHEN r.suppress_row OR NOT f.over_1mb OR NOT f.alertable THEN 'leave'
+        SELECT CASE WHEN r.suppress_row OR NOT f.alertable THEN 'leave'
                     WHEN r.wspf >= 50 THEN 'rebuild'
                     ELSE 'leave' END                                   AS expected_stage) x;
 SQL
@@ -5610,6 +5861,11 @@ SQL
             num, idx, lost_by, wspf, actual, caveats
        FROM verdicts12 WHERE lost_by IS NOT NULL ORDER BY num" \
     >> "$OUT/verdicts12.txt" 2>&1
+  t "SELECT /* wiki_btree_leg12_verdict_under_1mb */
+            num, idx, blocks_before * 8 AS kib_before, wspf, actual,
+            taken_stage, verdict
+       FROM verdicts12 WHERE NOT over_1mb ORDER BY num" \
+    >> "$OUT/verdicts12.txt" 2>&1
   t "SELECT /* wiki_btree_leg12_verdict_counts */
             verdict_floor, count(*) FROM verdicts12 GROUP BY 1 ORDER BY 2 DESC" \
     >> "$OUT/verdicts12.txt" 2>&1
@@ -5852,6 +6108,41 @@ stage_report() {
     printf '%s\n' "$line" >> "$OUT/v12_facts.tmp"
   done < "$OUT/v12_facts.txt"
   mv "$OUT/v12_facts.tmp" "$OUT/v12_facts.txt"
+  # What the filed text prints on this leg's settled database.  The exact stage
+  # runs before a fixture exists, so its own count is 0 by construction; this
+  # one is what a reader sees now that the 1 MB filter and the LIMIT 20 are
+  # gone.  It goes to its own file, overwritten on every run, so report stays
+  # idempotent.
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" -f "$SQLD/est_r2.sql" \
+    > "$OUT/v12_exact_settled.txt" 2>&1
+  { printf 'settled_rows=%s\n' \
+      "$(grep -E '^\([0-9]+ rows?\)$' "$OUT/v12_exact_settled.txt" | tail -1)"
+    printf 'settled_report_shape=%s\n' \
+      "$(s "select /* wiki_btree_leg12_report_shape */
+                   count(*) || ' reported rows, ' ||
+                   count(*) filter (where actual_bytes <= 1024 * 1024) ||
+                   ' of them 1 MB or smaller'
+              from est12 where not suppress_row")"
+    printf 'accuracy=%s\n' \
+      "$(s "select /* wiki_btree_leg12_accuracy */
+                   count(*) filter (where wspf is not null
+                                      and abs(wspf - actual) <= 1)
+                     || ' of ' || count(*) || ' within one point, worst over ' ||
+                   round(max(wspf - actual), 1) || ', worst under ' ||
+                   round(min(wspf - actual), 1)
+              from verdicts12")"
+    # What the decisions were worth here, read after the oracle pass.
+    printf 'decisions=%s\n' \
+      "$(s "select /* wiki_btree_leg12_decisions */
+                   string_agg(taken_stage || '=' || n ||
+                              ' mean ' || mean || ' (' || lo || ' to ' || hi || ')',
+                              '; ' order by taken_stage)
+              from (select taken_stage, count(*) AS n,
+                           round(avg(actual), 1) AS mean,
+                           min(actual) AS lo, max(actual) AS hi
+                      from verdicts12 group by 1) d")"
+  } > "$OUT/v12_rows.txt"
+  cat "$OUT/v12_rows.txt" >&2
   { printf 'server_errors\n'
     check_server_errors "$OUT/server12.log" "$OUT/server12.log.mark"; } >> "$OUT/v12_facts.txt" 2>&1
   cat "$OUT/v12_facts.txt" >&2
@@ -5925,7 +6216,7 @@ in the databases so they can be queried directly.
 
 | File | Holds |
 |---|---|
-| `criteria.txt` | the blocks, in order: the gate counters; the shared suite's four bands and phase counters for both databases; the older bands on the same rows as block 2b; every row whose modelled row count is zero; the size of the `EXCEPT` output; the exact-text runs; the build and hash checks; and the server-error check |
+| `criteria.txt` | the blocks, in order: the gate counters; the shared suite's four bands and phase counters for both databases, with the under-1 MB counts, the accuracy summary, the `lost_by` and `withheld_by` breakdowns, the three worst under-reads and what each decision was worth; the older bands on the same rows as block 2b; every row whose modelled row count is zero; the size of the `EXCEPT` output; the exact-text runs; the build and hash checks; and the server-error check |
 | `hashes.txt` | the three text hashes against their baselines. A `DIFFER` line means the page changed and every number below it is about a different statement |
 | `checks.txt`, `checks12.txt` | `make check` and the three contrib suites, per leg |
 | `configure*.log`, `make*.log`, `install*.log`, `check*_*.log`, `diffs*_*.txt` | the build and regression diagnostics, copied out of the build tree so they outlive it. A `12` in the name marks the 12 leg. `diffs*` exist only when a suite failed |
@@ -5937,8 +6228,9 @@ in the databases so they can be queried directly.
 | `drain12.txt`, `census12.txt`, `snapshots12.txt` | the same three for the 12 leg |
 | `attribution.txt` | the `EXCEPT` output in both directions, taken before the first rebuild |
 | `probes_gen_*.txt`, `probes_*.txt` | the probe statements the generator emitted, and the answer each returned |
-| `cost.txt` | six interleaved timings of the two exact texts, and the size of the database they ran against |
-| `v12_facts.txt`, `v12_exact.txt`, `verdicts12.txt` | the 12 leg: the discovered facts, the verbatim parse outcome, and the scored subset |
+| `cost.txt` | six interleaved timings of the two exact texts, the size of the database they ran against, the row count each printed on it, and that row set split on the 1 MB boundary the removed predicate tested |
+| `exact_rows.txt`, `exact_*_suite.txt`, `exact_*_settled.txt` | the row counts both exact texts printed, and their full output: once on the empty database at `texts`, once on the settled one at `cost`. The pair is the reader-visible effect of the 2026-09-14 filter removal |
+| `v12_facts.txt`, `v12_exact.txt`, `v12_rows.txt`, `verdicts12.txt` | the 12 leg: the discovered facts, the verbatim parse outcome, the settled report shape with its accuracy and decision summaries, and the scored subset |
 | `server.log`, `server12.log`, `gate_build.log` | server output, including the build's own `DEBUG1` deduplication verdicts |
 | `server.log.mark`, `server12.log.mark` | the line count of the matching log when `cluster` last started that server; the server-error check reads only the lines after it |
 
@@ -5968,6 +6260,7 @@ this order.
 | `reported` | false when an exclusion term withheld the row, so the report a reader runs would never show it |
 | `withheld_by` | which term did it: `A` for a missing statistics row or duplicates taken from table statistics, `B` for a table changed since its `ANALYZE`, `C` for a variable-width `INCLUDE`, `D` for a non-partial expression index with no statistics row. `unexplained` means the row is withheld by a term this harness does not know about, which is a defect in one of the two |
 | `alertable` | whether this page's own reading rule would let the row become a rebuild decision: true unless `caveats` contains `never analyzed`, `row-count sources disagree`, `statistics not visible`, `zero modelled rows` or `wide compressible key` |
+| `over_1mb` | **an observation, not a term**: whether the index was larger than 1 MB before the rebuild. The statement's own predicate on that size came out on 2026-09-14, so nothing in `taken_stage`, `taken_point` or `expected_stage` reads this column; it is here so a run can count what the old report would have withheld |
 | `contract_ok` | whether the fixture built what it intended. False is a **harness** fault, not an estimator result: the row's numbers describe a different fixture from the one the requirement names |
 | `verdict_point`, `verdict_floor` | the classification below, computed once per column |
 | `caveats`, `equalimage`, `modelled_rows`, `idx_reltuples`, `tids` | the statement's own explanation of the reading |
@@ -5996,7 +6289,8 @@ the one this page scores itself on.
 |---|---|
 | `hashes.txt` | three `match` lines |
 | `checks.txt` | four `=0` lines, `All 225` on the core suite |
-| Exact texts | two files under `out/exact_*`, neither containing `ERROR` |
+| Exact texts | four files under `out/exact_*`, none containing `ERROR`, and `cost.txt` showing the current text printing more rows than the superseded one on the settled database |
+| Report shape | `criteria.txt` block 2 reports a non-zero `under_1mb`, so the run exercised the 2026-09-14 removal at all |
 | Gate | `over_credit` 0, `metapage_disagreements` 0, `worst_reading` under 30 |
 | Numbered suite | `withheld_unexplained` 0, `contract_failures` 0, `gate_disagrees` 0 |
 | Census | every churned table at zero modified rows, so rule 3 analyzes only tables no churn touched |
@@ -6033,37 +6327,45 @@ gains `pre_text=`, `pre_text_note=` and `wide_text=` lines from the same stage;
 the note is there because `pre_text=refused` is the expected result and reads
 like a failure without it.
 
-### What the 2026-09-14 re-port measured
+### What the filter removal measured
 
-This is that reading applied to the run this revision files. Every number below
-is in
+This is that reading applied to the run this revision files, the first to score
+the statement without the `actual_bytes > 1024 * 1024` predicate and the
+`LIMIT 20`. Every number below is in
 [The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol),
-and this section is the reader's index into the files behind them.
+and this section is the reader's index into the files behind them. It replaces
+the run report of the 2026-09-14 re-port, whose fixture set this run re-used
+unchanged.
 
-| Check | 17 leg | 12 leg |
-|---|---|---|
-| `hashes.txt` | 3 `match` | block 1 matches `BASE1`, `est_pre` matches `BASEPRE` |
-| `checks.txt` | `All 225`, 8, 1, 3, all `=0` | `All 192`, 5, 1, 2, all `=0` |
-| Exact filed text | runs on `suite` as filed | **executes unmodified**, `transform_edits=0` |
-| Gate | 25 fixtures, `over_credit` 0, `metapage_disagreements` 0, `under_credits` 2, `worst_reading` 28.8 | 13 fixtures, all `ineligible`, none credited |
-| Numbered suite | 101 fixtures: 66 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 31 `FALSE NEGATIVE` | 13 fixtures: 11 `PASS`, 2 `FALSE NEGATIVE` |
-| `contract_failures`, `gate_disagrees`, `withheld_unexplained` | 0, 0, 0 | 0, 0, 0 |
-| Census | 86 censused, 2 analyzed, 84 at zero modified rows | 9 censused, 2 analyzed |
-| Probes | 63 emitted and executed, 62 group and 1 population (`p113b` -> `false`) | not run on this leg |
-| Attribution | 27 rows in each direction, before the first rebuild | not run on this leg |
-| `extstat` | 0 rows in both directions in all three databases, 136 rows read | filed text and widened text identical over 20 rows; the pre-fix text refused |
-| Server errors | `unexpected_server_errors=0`, the one allowed pair `seen 1` | `unexpected_server_errors=0`, both allowed pairs `seen 1` |
-| Runtime | 2 min 9 s `build check`, 1 min 26 s the rest | 2 min 11 s `build check`, 30 s the rest |
+| Fact | Value |
+|---|---|
+| Date | 2026-09-14, the removal of both report-side cutoffs. Both legs started at 10:17 local time from an empty sandbox, built concurrently at `JOBS=10` |
+| Host | `Linux x86_64`, Ubuntu 24.04, gcc 13.3.0, ICU 74.2, 22 cores, recorded into `out/platform.txt` with `max_data_alignment` 8 and `database_block_size` 8192 |
+| 17 leg | 17.11 built from `786db8dcf168bd9df8f55047337525ac19118b1c` with `--enable-debug --with-icu --with-readline --with-zlib`; `make check` **All 225**, plus `pageinspect` 8, `pgstattuple` 1 and `amcheck` 3, every stage `=0` |
+| 12 leg | 12.2 (`server_version_num` 120002) built from `45b88269a353ad93744772791feb6d01bc7e1e42` with the same flags plus `CFLAGS="-O2 -g -DTRUE=1 -DFALSE=0"`; `make check` **All 192**, plus 5, 1 and 2 |
+| Cluster | `initdb --locale=C --encoding=UTF8`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0`, ports 55437 and 55412 |
+| Statement text | `sql` block 1, 466 lines, SHA-256 `4de245c5a1fb442cda800c099b8801bc72abc0c87f170384490079135fb5241d`, executed unmodified on both servers |
+| Other texts checked | the probe generator `bfa7721f…`, the superseded text from `f2d73b4` `bffd166e…`, and the reconstructed pre-2026-09-10 text `152f4172…`, which the 12 leg rebuilt and that server still refuses |
+| Rows the filed text printed | **68** on the settled 17.11 `suite` database, 45 of them 1 MB or smaller, against **20** from the superseded text; **19** on `leg12`, 6 of them 1 MB or smaller |
+| Gate | 25 fixtures, 25 `PASS`, `over_credit` 0, `metapage_disagreements` 0, `under_credits` 2, `worst_reading` 28.8, `DEBUG1` 13 safe and 13 unsafe |
+| Numbered suite | 101 fixtures: **71 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 26 `FALSE NEGATIVE`**; the statement called for 45 rebuilds, which repaid a mean 81.2 %; 12.2: 13 fixtures, 11 `PASS`, 2 `FALSE NEGATIVE`, 9 rebuilds at a mean 89.9 % |
+| What the removal moved | 31 fixtures under 1 MB, 5 of them now rebuild decisions and `PASS`; 2 new `lost_by = threshold` rows; `want_miss` 33 against 37; no change at all on the 12 leg, where no fixture is that small |
+| `contract_failures`, `gate_disagrees`, `withheld_unexplained` | 0, 0, 0 on both legs |
+| Census | 86 censused, 2 analyzed, 84 at zero modified rows; 9 censused and 2 analyzed on the 12 leg |
+| Probes | 63 emitted and executed, 62 group and 1 population (`p113b` -> `false`) |
+| Attribution | 25 rows in each direction, taken before the first rebuild |
+| `extstat` | 0 rows in both directions in all three databases, 136 rows read; on the 12 leg the filed and widened texts are identical over 20 rows and the pre-fix text is refused at line 116 |
+| Cost | the filed text 64.5 to 75.2 ms over six interleaved pairs, the superseded one 46.8 to 54.7 ms, on 314 B-tree indexes over 64,098 blocks |
+| Server errors | `unexpected_server_errors=0` on both legs, the 17 leg's one allowed pair and the 12 leg's two each `seen 1` |
+| Stages run | the 17 leg's `build check cluster texts gate suite churn extstat attribution probes score cost criteria report`, then `cost` and `criteria report` again after two read-only summaries were added to the script; the 12 leg's `build check cluster exact transform facts fixtures churn score extstat report`, then `report` again for the same reason |
+| Runtime | 1 min 45 s `build check` and about 1 min 45 s for the rest on the 17 leg; 1 min 37 s and about 30 s on the 12 leg, read from the output files' modification times |
+| Teardown | both servers stopped with `pg_ctl -m fast -w stop` by the scripts' own `stop` stages, each confirming no `postmaster.pid`, no postgres process on its data directory and an empty socket directory, with `pgrep -a postgres` empty afterwards; the sandbox was then deleted |
 
 The things worth opening a file for, in this run: `out/criteria.txt` block 2 for
-the two band tables, `out/verdicts.txt` for the 31 `lost_by` rows and the 37
-missed predictions, `out/census.txt` for the two tables rule 3 still analyzed,
-and `out/extstat.txt` for the three-text scorecard on the inheritance parents.
-
-Teardown was the scripts' own: the 12 leg's `clean` stage stopped its server and
-deleted its four directories, the 17 leg's `clean` stopped its server and
-deleted the sandbox, and both confirmed no `postmaster.pid`, no postgres process
-on the data directory and an empty socket directory first.
+the bands, the accuracy line and the `lost_by` classes, `out/verdicts.txt` for
+the 26 `lost_by` rows, the 33 missed predictions and the 31 under-1 MB rows,
+`out/cost.txt` for the report shape, and `out/extstat.txt` for the three-text
+scorecard on the inheritance parents.
 
 ## Context Reviewed
 
@@ -6090,6 +6392,8 @@ on the data directory and an empty socket directory first.
 - Re-score against the shared mandatory suite on 2026-09-11, same pins, both legs built and run end to end: the concept page [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md) for the families, the five phases, the three porting rules, the oracle and the four bands, and this page's own reading rule for the decision the bands score; the engine paths each rule leans on, re-read against `raw/postgres-17/` — the autovacuum analyze threshold and its two GUCs (`autovacuum.c`, `guc_tables.c`), `n_mod_since_analyze` and its reset (`system_views.sql`, `pgstat_relation.c`), the item-pointer block id and the self item pointer the drain selects on (`itemptr.h`, `sysattr.h`), `btbulkdelete` and `_bt_pagedel` (`nbtree.c`, `nbtpage.c`), the index row count an `ANALYZE` and a build write (`analyze.c`, `index.c`), and `reindex_index` as the oracle (`index.c`); and the per-table analyze reloptions and their lock level (`reloptions.c`). Both scripts were edited in place — a shared harness with a plan, five-phase snapshots, an `assert_built()` contract pass, a `want_stage` prediction column and a `verdicts` view carrying the shared bands beside the older ones; a new `churn` stage per leg; 28 gate fixtures filed as plan rows; and four defect repairs — then re-extracted from this page with their own `md_block` logic and parsed with `bash -n` (2,648 and 1,048 lines). 17.11 was built out of tree under `.wiki-runtime/tmp/btree-suite/build17` with `--enable-debug --with-icu --with-readline --with-zlib` at `JOBS=16` and passed `make check` All 225 plus 8, 1 and 3; 12.2 was built the same way with `-DTRUE=1 -DFALSE=0` and passed All 192 plus 5, 1 and 2. Both clusters ran `--locale=C`, `--encoding=UTF8`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0` at the default `BLCKSZ` on `Linux x86_64` (Ubuntu 24.04, gcc 13.3.0, ICU 74.2). Both pinned checkouts stayed read-only and clean at their pins, both servers were stopped by their own `stop` stages with the teardown confirmed, and the sandbox was deleted, so reproducing any number means re-running the two filed scripts from the pins.
 
 - Re-port to the mandatory suite and full re-run on 2026-09-14, same pins, both legs built and run end to end: the concept page [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md) as it stands after its 2026-09-12 retirements and its 2026-09-13 maintenance assumption, read in full, and every fixture on this page checked against it; the vacuum-then-analyze order of `VACUUM ANALYZE` and the autovacuum worker's entry into the same routine (`vacuum.c`, `autovacuum.c`); rule 3's threshold arithmetic and the counter it reads (`autovacuum.c`, `guc_tables.c`, `system_views.sql`, `pgstat_relation.c`); and the `pg_stats_ext` inherited flag and its `row_to_json` read (`system_views.sql`, `pg_proc.dat`, `jsonfuncs.c`). Both scripts were edited in place - eleven retired fixtures dropped from the 17 leg and three from the 12 leg, the maintenance `VACUUM ANALYZE` added to ten recipes, the `geometry`, `calibration` and `acceptance` stages deleted with the `geo`, `cal` and `acc` databases, `BASE3`/`BASE4` and the two `sql` blocks they hashed removed, the expected-error list narrowed to one pair on the 17 leg, and the stage lists and usage tables brought into step - then re-extracted from this page with their own `md_block` logic and parsed with `bash -n` (2,332 and 1,021 lines). 17.11 was built out of tree under `.wiki-runtime/tmp/btree-suite/build17` with `--enable-debug --with-icu --with-readline --with-zlib` at `JOBS=12` and passed `make check` All 225 plus 8, 1 and 3; 12.2 was built the same way at `JOBS=8` with `-DTRUE=1 -DFALSE=0` and passed All 192 plus 5, 1 and 2. Both clusters ran `--locale=C`, `--encoding=UTF8`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0` at the default `BLCKSZ` on `Linux x86_64` (Ubuntu 24.04, gcc 13.3.0, ICU 74.2, pkg-config present). Both pinned checkouts stayed read-only and clean at their pins; both servers were stopped by the scripts' own `clean` stages with the teardown confirmed, and the sandbox was deleted.
+
+- Report-filter removal and full re-run on 2026-09-14, same pins, both legs built and run end to end: the statement's own projection and filters, the `pg_relation_size` size read and its missing-relation behaviour (`dbsize.c`), and the `suppress_row` terms that remain the only report filter; both leg scripts edited in place - the 1 MB predicate and the `LIMIT 20` removed from `sql` block 1, `harness_view` taught both tails so the superseded text still installs, `BASE1` re-baselined from `646df923…` to `4de245c5…` and `BASEPRE` with it from `8acd531b…` to `152f4172…`, `over_1mb` demoted from a decision term to an observation in both `verdicts` views, the `lost_by` size arm deleted, and six read-only summaries added: the printed row counts of both exact texts, the report split on the 1 MB boundary, the under-1 MB listing, the accuracy line, the `lost_by` and `withheld_by` breakdowns, the three worst under-reads and what each decision was worth - then re-extracted from this page with their own `md_block` logic and parsed with `bash -n` (2,411 and 1,077 lines). 17.11 was built out of tree under `.wiki-runtime/tmp/btree-nofilter/sb/build17` with `--enable-debug --with-icu --with-readline --with-zlib` at `JOBS=10` and passed `make check` All 225 plus 8, 1 and 3; 12.2 was built the same way with `-DTRUE=1 -DFALSE=0` and passed All 192 plus 5, 1 and 2. Both clusters ran `--locale=C`, `--encoding=UTF8`, `autovacuum = off`, `fsync = off`, `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `max_parallel_maintenance_workers = 0` at the default `BLCKSZ` on `Linux x86_64` (Ubuntu 24.04, gcc 13.3.0, ICU 74.2). The `cost`, `criteria` and 12-leg `report` stages were re-run after the summaries were added, which is why the filed `cost.txt` timings are the second set. Both pinned checkouts stayed read-only and clean at their pins; both servers were stopped by their own `stop` stages with the teardown confirmed, and the sandbox was deleted.
 
 ## Evidence Map
 
@@ -6137,31 +6441,48 @@ on the data directory and an empty socket directory first.
 
 ## Open Questions
 
-These are the limitations the 2026-09-14 re-port leaves, each with what measured
-it. The re-port itself removed coverage as well as fixtures, and the first two
-entries say so before anything else.
+These are the limitations the 2026-09-14 filter removal leaves, each with what
+measured it, on the fixture set the re-port of the same day left. The re-port
+removed coverage as well as fixtures, and the first two entries say so before
+anything else.
 
 ### The mandatory suite and the current statement
 
 The asker's 2026-08-18 contract says a statement that fails a mandatory test is
 corrected, not reported. The whole suite has been put to the current text again,
-so what is open is not coverage but **35 failures the 2026-09-14 run leaves
-standing**, and none of them has a candidate fix in the statement:
+so what is open is not coverage but **30 failures the 2026-09-14
+filter-removal run leaves standing**, and none of them has a candidate fix in
+the statement:
 
-- **31 false negatives, every one of them a filter loss.** 22 rows are withheld
-  by an exclusion term, 8 fall under the 1 MB report filter and 1 carries a
-  caveat the reading rule refuses to promote, on files a rebuild emptied by a
-  mean 83.3 %, 86.3 % and 100.0 %. The statement's own arithmetic is not at
-  fault: `expected_stage` agreed with it on all 101 fixtures and no miss is a
-  threshold loss. The remedy the contract asks for would mean relaxing one of
-  the three filters, and each of them exists because a measured false positive
-  put it there. That trade is unresolved and unmeasured.
+- **26 false negatives, and two of them are now the model rather than a
+  filter.** 23 rows are withheld by an exclusion term and 1 carries a caveat the
+  reading rule refuses to promote, on files a rebuild emptied by a mean 83.5 %
+  and 100.0 %; the remedy for those would mean relaxing a term that a measured
+  false positive put there, and that trade is still unresolved. The other two,
+  **`p31` and `f91`, are new and worse**: both are now printed, both read about
+  `-237 %` on `wasted_space_pct_floor`, and a rebuild gave back 79.2 % and
+  89.2 %. The 1 MB predicate had been hiding them, which is why every run since
+  2026-09-11 could say no miss was a threshold loss. `expected_stage` still
+  agrees with the statement on all 101 fixtures, so the defect is in the
+  arithmetic the two agree on: the model predicts a larger rebuild than the
+  current file for an index whose subset is narrow, and the floor column makes
+  that worse. **No fix is proposed here, and the two rows are the clearest
+  candidate for the next revision.**
 - **4 critical false positives**, all reported and alertable against a measured
   0.0 %: the forged partial count `f84` at 94.2 %, the stale-statistics
-  construction `f85` at 70.8 %, the wide-key partial index `i103` at 84.1 % and
+  construction `f85` at 71.0 %, the wide-key partial index `i103` at 84.1 % and
   the zero-statistics-target index `x109` at 62.5 %. The first two are family 3
   constructions the suite exists to catch; the last two were predicted and
-  reproduced.
+  reproduced. The removal did not add one: all four are over 1 MB.
+- **The wider report is not a measured improvement in precision.** It printed
+  68 rows instead of 20 on the fixture database, 45 of them 1 MB or smaller,
+  and no fixture measures how a reader triages that list. Of the 31 under-1 MB
+  fixtures only 10 became visible at all; the other 21 were already withheld by
+  an exclusion term. Among the 10, five were worth acting on - `p19` is 200 KiB
+  of waste on a 240 KiB index - while `p120` reads 87.5 % on 64 KiB where a
+  rebuild gave back nothing and is held back only by a caveat, and `f88` reads
+  `-3218.9 %`. Nothing on this page measures how often a reader acts on a row
+  like those anyway.
 
 [The mandatory suite, re-scored under the shared protocol](#the-mandatory-suite-re-scored-under-the-shared-protocol),
 [Mandatory test review](#mandatory-test-review),
@@ -6250,17 +6571,21 @@ NULL pattern or expression results over that subset, and an empty sample remains
 inconclusive about a subset that acquired rows after the last `ANALYZE`. The
 four partial-index suppression conditions still drop rows from the report rather
 than reporting them with a caveat, so a partial index with real savings can
-still be invisible: 22 of the 31 false negatives are exactly that. Neither gap
-is closed.
+still be invisible: 23 of the 26 false negatives are exactly that, and removing
+the size predicate did nothing for them, because size was never why they were
+withheld. Neither gap is closed.
 
-The probe's own reach is narrow. On 2026-09-14 the generator emitted one
-population probe, for `p113b`, and none for `p116` or `p120`, which also model
-zero rows: the generator carries the same
-`pg_relation_size(c.oid) > 1024 * 1024` filter as the report, and those two
-indexes are one and eight blocks. A subset small enough to be missed by the
-`ANALYZE` sample is also small enough to fall under the probe generator's own
-size filter, so the reading most in need of validation is the one least likely
-to get a probe.
+**The two texts no longer filter alike, and the asker chose that on purpose.**
+The report lost its `actual_bytes > 1024 * 1024` predicate on 2026-09-14; the
+probe generator kept its `pg_relation_size(c.oid) > 1024 * 1024`. So the
+generator is now the narrower of the two, and it is narrow exactly where
+validation matters most: on 2026-09-14 it emitted one population probe, for
+`p113b`, and none for `p116` or `p120`, which also model zero rows on files of
+one and eight blocks. A subset small enough to be missed by the `ANALYZE` sample
+is also small enough to fall under the generator's filter, so the reading most
+in need of validation is the one least likely to get a probe - and now that the
+report prints those rows, a reader is more likely to meet one. Removing the
+generator's filter is the obvious follow-up and is unmeasured.
 [analyze.c#sample-membership](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L975),
 [Validation probes](#validation-probes).
 
@@ -6303,9 +6628,11 @@ and 899.3 % modified.
 The 50 % threshold that turns this estimator into a decision is the harness's
 choice and appears nowhere in the filed text, so every band count on this page
 moves if the threshold moves, and no sensitivity curve has been measured around
-it. Nothing here covers mixed workloads, indexes under concurrent write load,
-bottom-up deletion reclaiming space between the reading and the rebuild, or
-whether a saving persists after the workload resumes. The insertion-pattern
+it. The filter removal widened the population that threshold now judges - 10
+more fixtures reach it, and two of them fail it - without changing the
+threshold itself. Nothing here covers mixed workloads, indexes under concurrent
+write load, bottom-up deletion reclaiming space between the reading and the
+rebuild, or whether a saving persists after the workload resumes. The insertion-pattern
 calibration that used to bound the first of those was removed on 2026-09-14.
 [nbtsplitloc.c#split-policy](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L278-L335).
 
@@ -6318,9 +6645,12 @@ three deterministic `text` gate fixtures read `-0.4 %` on the point estimate and
 `-319.1 %` on the floor, against a measured 0.0 %. The two rules therefore
 disagree on any index that deduplicates, and the reading guidance names
 `wasted_space_pct` with `equalimage` and `caveats` instead. The protocol records
-both columns and both verdicts - 66 `PASS` under the shared bands on the floor,
+both columns and both verdicts - 71 `PASS` under the shared bands on the floor,
 81 and 82 under the older floor and point bands - and which one carries the
-contract is the asker's decision.
+contract is the asker's decision. The filter removal sharpened the cost of that
+choice: both new threshold losses, `p31` and `f91`, read about `-237 %` on the
+floor, and the point column reads the same, so neither column would have
+rebuilt them.
 [Reading the output](#reading-the-output).
 
 ### Cross-version execution of the revised statement
