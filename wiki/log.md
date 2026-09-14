@@ -2,6 +2,106 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-14] answer v17 | re-port the COMMENT-baseline heuristic to the retired mandatory suite, drop every page-local fixture, and re-run both legs
+
+- Re-ported [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for
+  PostgreSQL 12 Through 17
+  (unverified)](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  to [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) as that page
+  stands after its 2026-09-12 retirements, at unchanged pins
+  `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, and **re-ran both legs end to end
+  from their pins**.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17, review question: # A COMMENT-Stored Baseline B-Tree Index-Maintenance
+  Heuristic for PostgreSQL 12 Through 17 (unverified)`, then after a line break
+  `, update tests based on the changes from common-concept, update or remove all
+  tests that aren't following # Mandatory B-Tree Bloat Tests (unverified)`; it
+  had `agents.md` for AGENTS.md, lowercase `postgresql`, `review question:`
+  without an article, a stray `#` before each of the two titles, the
+  `(unverified)` hint treated as part of both titles, a line break and comma
+  splicing the second instruction onto the title, `common-concept` for "the
+  common concept page", the contraction `aren't`, and no terminal period. The
+  asker chose **correct and restate**, recorded under the page's `## Question`
+  as the third prompt.
+- **Scope settled in four answers before drafting**: **retire only** - delete
+  the retired fixtures but do *not* add the concept page's maintenance `VACUUM
+  ANALYZE`; **re-run both legs** end to end; and **remove every page-local
+  fixture**, deleting the claims they backed.
+- **Fixtures.** Fourteen numbered fixture indexes left the 17 leg and ten the 12
+  leg, each deleted with its recipe rather than skipped: test 11's `i_dupoff`,
+  `i_text_off` and `i2_off`, plus `p38`, `p65`, `p67`, `p69`, `x106`, `p117`,
+  `p113a`, `p113c` and 121's `nz_k`, `nzb_k` and `i_trunc`. `churn_v13.sql` went
+  with test 38, its only content, and the 12 leg's skip list fell from 18
+  fixtures to 14. The scored population is **126 on 17.11 and 112 on 12.2**.
+- **Page-local stage deleted**, with everything it built: `stage_edge`, the four
+  `edge_*.sql` files, the `edge` database, the criteria file's edge section, and
+  the eleven edge-only entries in the expected-error list.
+- **Both legs built and run on Linux x86_64** (Ubuntu 24.04, gcc 13.3.0, ICU
+  74.2, 22 cores) at `JOBS=10`, concurrently: 17.11 passed `make check` All 225
+  plus 8, 1 and 3, and 12.2 All 192 plus 5, 1 and 2. A whole leg took about
+  2 min 30 s. All three text hashes matched, and **neither filed SQL text
+  changed**.
+- **Result: `PASS` on 126 of 126 and 112 of 112**, 0 `CRITICAL FALSE POSITIVE`,
+  0 `FALSE POSITIVE`, 0 `FALSE NEGATIVE`, `expected_stage` agreeing on every
+  fixture, 95 and 81 rebuilds at a mean 86.2 % and 87.1 % reclaim, 126 of 126
+  and 112 of 112 stored index counts equal to the catalog's, and accuracy of
+  `+7.7` and `+7.5` mean points with 100 of 104 and 85 of 89 within 15.
+- **The clean sheet is the suite narrowing, not the method improving**, and the
+  page says so: `p113a`, `p113c`, `p65` and `p67` were the previous run's four
+  false negatives and are exactly the retired dead-but-unvacuumed fixtures. A
+  new section, `The blind spot that left with its fixtures`, states that the
+  heuristic would still misread that shape and that the concept page files the
+  same consequence itself.
+- **Two findings from the run.** Fixture **120's precondition was unmet on both
+  legs** - its post-census index `reltuples` read 2,800 on 17.11 and 6,668 on
+  12.2 where the concept page requires 0, because rule 3's census re-analyzes
+  the table at the default statistics target and repairs the sampling miss the
+  fixture is built on - so the compliant score is 125 of 125 and 111 of 111 and
+  the scorer's `PASS` for it is filed as a harness defect. And
+  `check_server_errors` was **repaired**: its pattern looked for the severity
+  straight after the log time zone, which the default `%m [%p] ` prefix never
+  produces, so it had matched nothing and reported a clean log unconditionally.
+  It now reports 4 logged, 4 deliberate, 0 unexpected on 17.11 and 8, 8, 0 on
+  12.2.
+- **The maintenance assumption is deliberately not applied**, at the asker's
+  direction. Ten recipes still reach the decide phase with an unmaintained tail
+  (64, 66, 92 to 95, 98, 115, 118, 119), rule 3's census analyzes all but 119 of
+  them, and nothing vacuums them; the departure is stated in the answer, in both
+  script headers and under Open Questions.
+- **Claims deleted with their fixtures**: `Comment parsing and preservation` and
+  `Idempotence, dry runs and dumps` in full, the ten gate-boundary and two
+  forged-`-1` tables, the nine-point threshold curve and the 45.0 % calibration,
+  the four measured `pgstatindex` refusals, the `REINDEX` comment-survival
+  md5/OID table, the measured privilege matrix and the `pg_locks` reading, and
+  two rows of the version-local table. Each loss is named under Open Questions,
+  which was rewritten to 15 entries.
+- **Structure and bookkeeping**: `## Contents` regenerated, all 68 page-internal
+  anchors re-checked and resolving, and the six concept-page anchors checked
+  against that page's headings; `## Context Reviewed` gained the concept page,
+  the run and `tablecmds.c`; the Evidence Map's measured cells were demoted or
+  re-pointed and one row added; both scripts were re-extracted from the filed
+  page and diffed byte for byte against the text that ran (2,052 and 2,098
+  lines, both `bash -n` clean). `wiki/index.md`, `wiki/v17/index.md` and the
+  `wiki/versions.md` v17 row carry rewritten entries, and a dated coverage note
+  was added.
+- **Validation**: `scripts/wiki_lint` reports **0 errors and 0 warnings**.
+  **Agent verification stays `not yet`**: the page now carries source-only
+  readings where measurements used to be, fixture 120 is uncovered, and the
+  maintenance assumption is unapplied.
+- **Teardown**: the two legs share one sandbox, so the 12 leg's `stop` stage ran
+  first and the 17 leg's `clean` second, both using `pg_ctl -m fast -w stop` and
+  each confirming `database system is shut down`, no `postmaster.pid`, no
+  postgres process on its own data directory and an empty socket directory
+  before anything was deleted; `clean` then removed the shared sandbox
+  `.wiki-runtime/tmp/btmaint/` (9 GB), after which `pgrep -a postgres` was empty
+  and ports 55417 and 55412 were free. The working copies under
+  `.wiki-runtime/tmp/btmaint-review/` were deleted too.
+  The three pre-existing sandboxes `btmaint-work`, `btree-suite-scripts` and
+  `physidx-review`, and `reverted-scripts-20260914`, were not created by this
+  work and were left untouched.
+
 ## [2026-09-14] restructure | README: the LLM CLI prompt format for querying the wiki
 
 - Added `### Query the wiki with an LLM CLI harness` to `README.md`'s
