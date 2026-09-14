@@ -2,6 +2,105 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-14] answer v17 | re-port the core-SQL estimator to the mandatory suite, drop every page-local fixture, and re-run both legs
+
+- Re-ported [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) to
+  [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) as that page
+  stands after its 2026-09-12 retirements and its 2026-09-13 maintenance
+  assumption, at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, and **re-ran both legs end to end
+  from their pins**.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17, review question: # Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method
+  on PostgreSQL 17 (unverified), update tests based on the changes from
+  common-concept, update or remove all tests that aren't following # Mandatory
+  B-Tree Bloat Tests (unverified)`; it had `agents.md` for AGENTS.md, lowercase
+  `postgresql`, a stray `#` before each of the two titles, the `(unverified)`
+  hint treated as part of both titles, `common-concept` for "the common concept
+  page", the contraction `aren't`, and no terminal period. The asker chose
+  **correct and restate**, recorded under the page's `## Question` as the
+  fourteenth prompt.
+- **Scope settled in four answers before drafting**: **retire and maintain** in
+  the scripts; **both legs re-run end to end**; **remove every page-local
+  fixture**, which the asker confirmed meant the whole acceptance stage and not
+  only its fresh builds; and **delete the claims** those fixtures backed rather
+  than keep them as history.
+- **Fixtures.** Eleven numbered fixtures left the 17 leg - test 11's
+  `i_dupoff`, `i_text_off` and `i2_off`, plus `p38`, `p65`, `p67`, `p69`,
+  `x106`, `p117`, `p113a`, `p113c` and 121's `nz_k`, `nzb_k` and `i_trunc` -
+  and 1010 to 1012 left the 12 leg, each removal recorded in place in the
+  fixture text. Ten recipes that keep churn of their own now end on `VACUUM`
+  then `ANALYZE`: 64, 66, 92, 93, 94, 95, 98, 115, 118 and 119. 66, 115 and 119
+  were read as churned through rule 1, which cuts at the index build; the
+  concept page names the other six outright. `pd38` left the drain list, the
+  `want_stage` predictions lost their retired branches, and the gate banner,
+  the suite banner and both fixture headers say what the suite now defines.
+- **Page-local stages deleted**, with the databases, blocks and baselines that
+  served them: `stage_geometry`, `stage_calibration` and `stage_acceptance`; the
+  `geo`, `cal` and `acc` databases; `sql` blocks 3 and 4 and the `BASE3`/`BASE4`
+  hashes; the 12 leg's three fresh sorted builds; the probes stage's `acc` leg;
+  and the 17 leg's second expected-error pair, `bigint out of range`, which only
+  the retired `ovf` fixture could raise. The stage lists, usage tables,
+  prerequisites, file map and result-table map moved with them.
+- **Both legs run on Linux x86_64** (Ubuntu 24.04, gcc 13.3.0, ICU 74.2), built
+  concurrently at `JOBS=12` and `JOBS=8`: 17.11 passed `make check` **225 of
+  225** plus 8, 1 and 3, and 12.2 **192 of 192** plus 5, 1 and 2. The 17 leg
+  took 2 min 9 s for `build check` and 1 min 26 s for the rest; the 12 leg
+  2 min 11 s and 30 s. All three surviving text hashes matched.
+- **Results.** **126 fixtures scored on 17.11** - 25 in the gate, 101 numbered -
+  and **13 on 12.2**: **91 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE
+  POSITIVE`, 31 `FALSE NEGATIVE`** and **11 `PASS`, 0 false positives, 2 `FALSE
+  NEGATIVE`**. `expected_stage` agreed with the statement on all 101 numbered
+  rows and `lost_by = threshold` is empty: the 31 misses are 22 withheld, 8
+  under the 1 MB filter and 1 behind a caveat, at mean reclaims of 83.3 %,
+  86.3 % and 100.0 %. The four critical false positives are `f84` 94.2 %, `f85`
+  70.8 %, `i103` 84.1 % and `x109` 62.5 %, each against 0.0 %. Family 1 passed
+  25 of 25 with 0 over-credit and two conservative under-credits. 0
+  build-contract failures and 0 unexpected server errors on either leg.
+- **The maintenance assumption is visible in rule 3's census**: 86 tables
+  censused, **2 analyzed** (`f85t` at 20.0 %, `x108t` at 100.0 %) and **84 at
+  zero modified rows**, where the 2026-09-11 run analyzed 17 of 97.
+- **Claims deleted with their fixtures**: `Measured acceptance results` and its
+  six subsections, `Calibration by insertion pattern`, `Re-verified on a rebuilt
+  server`, `Expected verdicts under the current statement`, and the six older
+  run-report and script-audit sections. The Answer no longer states `0 bytes` on
+  ten fresh builds, 78 of 78 geometry cells, a seven-pattern calibration, a
+  `-2625.6 %` compression reading, a `-60.1 %` mixed-width reading or a
+  measured non-owner read; what replaces them is this run's accuracy - 59 of 101
+  within one point, worst over `+97.1` on `f78`, worst under `-3362.1` on `f88`.
+  Four Open Questions changed from measured to source-only, and a new one,
+  `What the re-port removed, and what that costs`, names the three coverage
+  losses, the non-owner gap among them.
+- **Structure and bookkeeping**: `## Contents` regenerated to 49 entries, all
+  145 page-internal anchors re-checked and resolving, `## Source References`
+  regenerated from the body as 238 distinct ranges over 88 files with every
+  range re-checked in bounds, a `## Context Reviewed` bullet and an Evidence Map
+  row added for the `vacuum()` order the maintenance step relies on, and both
+  scripts re-extracted from the filed page and diffed byte for byte against the
+  text that was run (2,332 and 1,021 lines, both `bash -n` clean).
+  `wiki/index.md`, `wiki/v17/index.md` and the `wiki/versions.md` v17 row carry
+  rewritten entries, and a dated coverage note was added.
+- **Known cosmetic debt**: the deleted sections leave dangling `#anchors` in
+  four older dated notes in `wiki/versions.md` and in earlier `wiki/log.md`
+  entries. Those are the record of what those passes filed, so they were left
+  as written; `scripts/wiki_lint` does not check `#`-anchor links.
+- **Validation**: `scripts/wiki_lint` reports **0 errors and 0 warnings**.
+  **Agent verification stays `not yet`**: the page now carries claims whose
+  fixtures no longer exist as source-only readings, and the 35 standing failures
+  are unremedied.
+- **Teardown**: the 12 leg's `clean` stage stopped its server and deleted its
+  build, install, data and socket directories; the 17 leg's `clean` stopped its
+  server and deleted `.wiki-runtime/tmp/btree-suite/`. Both stages confirmed no
+  `postmaster.pid`, no postgres process on the data directory and an empty
+  socket directory before deleting anything; `pgrep -a postgres` was empty
+  afterwards and ports 55437 and 55412 were free. The extraction copies under
+  `.wiki-runtime/tmp/btree-core-review/` were deleted too. The three
+  pre-existing sandboxes `btmaint-work`, `btree-suite-scripts` and
+  `physidx-review` were not created by this work and were left untouched.
+
 ## [2026-09-12] answer v17 | remove the size prefilter from the pgstatindex bloat statement and re-run both legs
 
 - Removed the `-- skip anything smaller` size prefilter from the statement on
