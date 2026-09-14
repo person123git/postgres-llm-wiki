@@ -52,9 +52,8 @@ wiki/
 requirements.txt             # Pinned Python deps for the project venv
 
 scripts/
-  bootstrap_venv             # creates .wiki-runtime/venv
-  recent_log                 # prints recent wiki/log.md entries
   wiki_lint                  # wiki health checks
+  repin_citations            # re-anchors citation line ranges after a repin
   wiki_tooling.py            # shared helpers for local scripts
 ```
 
@@ -238,8 +237,7 @@ Log entry headings use one of these forms:
 Use project-local scripts from the venv:
 
 ```bash
-scripts/recent_log --limit 20
-scripts/wiki_lint
+.wiki-runtime/venv/bin/python scripts/wiki_lint
 ```
 
 The lint pass checks broken links, orphan pages, missing source references, stale version pins, wrong-version citations, invalid verification fields, unverified title hints, and version landing pages missing links.
@@ -247,13 +245,13 @@ The lint pass checks broken links, orphan pages, missing source references, stal
 ## Environment Isolation
 
 - Run Python scripts from `.wiki-runtime/venv/`.
-- If the venv is missing, run `scripts/bootstrap_venv`.
+- If the venv is missing, create it with `python3 -m venv .wiki-runtime/venv`.
 - Pin new Python dependencies in `requirements.txt`.
 - Do not install Python packages globally, with `--user`, via `pipx`, or with `sudo`.
 - Read and write only inside this repository.
 - Treat `raw/postgres-NN/` checkouts as read-only evidence.
 - Keep generated artifacts, caches, and the venv under `.wiki-runtime/`.
-- Network access is allowed only for `scripts/bootstrap_venv` or source-fetch work the user explicitly requests.
+- Network access is allowed only for venv setup from `requirements.txt` or source-fetch work the user explicitly requests.
 
 ## Script Changes
 

@@ -17,11 +17,11 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - Read/write only `raw/`, `wiki/`, `.wiki-runtime/`, `scripts/`, `tests/`, `requirements.txt`, and top-level docs.
 - Treat `raw/postgres-NN/` checkouts as read-only evidence.
 - Run Python scripts from `.wiki-runtime/venv/`: activate it or call `.wiki-runtime/venv/bin/python scripts/<name>`.
-- If the venv is missing, run `scripts/bootstrap_venv`. Only that script may use host `python3`.
+- If the venv is missing, create it with `python3 -m venv .wiki-runtime/venv`. That command is the only permitted use of host `python3`.
 - Pin new Python deps in `requirements.txt`.
 - Do not install packages globally, with `--user`, via `pipx`, or with `sudo`.
 - Do not use `sudo`, host-path `chown`, or host-path `chmod`.
-- Use network only for `scripts/bootstrap_venv` or user-requested source fetches.
+- Use network only for venv setup from `requirements.txt` or user-requested source fetches.
 - Do not use `WIKI_ALLOW_SYSTEM_PYTHON=1` in normal work.
 - Keep generated artifacts, caches, and the venv under `.wiki-runtime/`.
 - Run every subagent on the orchestrator's model. A subagent inherits the model of the agent that launched it. This covers foreground and background subagents, read-only exploration runs, implementation runs, and any agent those subagents launch in turn.
@@ -544,8 +544,7 @@ Check broken links, orphan pages, missing source references, stale pins, wrong-v
 Use the project venv:
 
 ```bash
-scripts/recent_log --limit 20
-scripts/wiki_lint
+.wiki-runtime/venv/bin/python scripts/wiki_lint
 ```
 
 ## MANDATORY Version Control

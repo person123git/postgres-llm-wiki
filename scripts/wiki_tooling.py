@@ -159,7 +159,7 @@ def require_project_venv() -> None:
         venv_rel = expected.relative_to(REPO_ROOT).as_posix()
         die(
             "this script must run inside the project venv "
-            f"({venv_rel}). Bootstrap with `scripts/bootstrap_venv`, then re-run via "
+            f"({venv_rel}). Create it with `python3 -m venv {venv_rel}`, then re-run via "
             f"`{venv_rel}/bin/python scripts/<name>` or after `source {venv_rel}/bin/activate`. "
             "Set WIKI_ALLOW_SYSTEM_PYTHON=1 to bypass (not recommended)."
         )

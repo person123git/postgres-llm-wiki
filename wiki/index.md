@@ -171,7 +171,6 @@ This is the global catalog for the PostgreSQL engine wiki.
 
 ## Maintenance Tooling
 
-- `scripts/recent_log` - recent wiki activity.
 - `scripts/wiki_lint` - wiki health checks.
 
 ## Maintenance Notes

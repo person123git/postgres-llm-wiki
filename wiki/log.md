@@ -2,6 +2,92 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-14] restructure | README: the LLM CLI prompt format for querying the wiki
+
+- Added `### Query the wiki with an LLM CLI harness` to `README.md`'s
+  `## Getting Started`, placed between the reading steps and `### What a clone
+  does not carry` so the harness is introduced before the table that says the
+  harness fetches the pinned checkouts.
+- **Prompt hygiene first.** The request read `add to the readme that after
+  clone use a llm cli harness to query the wiki : using this format : follow
+  agents.md, in postgresql vNN, question: question goes here`; it had `readme`
+  for README.md, `after clone` missing a word, `a llm cli harness` for `an LLM
+  CLI harness`, a space before both colons, and no capitalisation or terminal
+  period. The asker chose **correct and proceed**: *Add to the README that
+  after cloning you query the wiki with an LLM CLI harness, using this format:
+  follow agents.md, in postgresql vNN, question: question goes here.*
+- **The published template is the clean form**, at the asker's direction:
+  `Follow AGENTS.md. In PostgreSQL vNN, question: <your question>`. The
+  as-typed line matches the filed record - 36 prompts quoted in this log open
+  with `follow agents.md, in postgresql` - but publishing it verbatim would
+  ship a template that trips `MANDATORY Prompt Hygiene` on every use, through
+  the lowercase `agents.md` and the missing terminal period, so the asker chose
+  the form that passes.
+- Five notes accompany the template, each taken from an existing rule rather
+  than from observed harness behaviour: `Follow AGENTS.md` binds the agent to
+  the mandatory rules, and naming it costs nothing where the harness already
+  loads it; an omitted version means the primary version plus a stated
+  assumption (`MANDATORY Version Awareness`); the deliverable is a
+  `type: question` page under `wiki/vNN/questions/<category>/` carrying the
+  prompt verbatim, an inline cited answer and `## Open Questions`, followed by
+  index and log bookkeeping (`MANDATORY Question Documents`, `MANDATORY
+  Question Categories`, `MANDATORY Bookkeeping`); a typo'd question costs a
+  hygiene round trip before drafting; and in a fresh clone the evidence base is
+  the first thing to ask for, because nothing can be cited off disk.
+- No wiki content page changed, no version pin moved, and no service was
+  started, so there is nothing to tear down.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**.
+
+## [2026-09-14] restructure | clone-ready Getting Started, and every live bootstrap_venv/recent_log reference removed
+
+- Rewrote `README.md`'s `## Getting Started` for a repo used as cloned, with
+  nothing to rebuild: `wiki/` is committed Markdown, so the steps are open the
+  clone in VS Code or any viewer that follows relative links, enter through
+  `wiki/index.md`, `wiki/versions.md` or a version landing page, and read
+  `AGENTS.md` before asking an agent to change a page.
+- **Prompt hygiene first.** The request read `follow agents.md, review readme.md
+  , getting started section and  change the readme to explain what is needed to
+  start using the wiki if the wiki is repo is cloned in the current state so no
+  need to rebuild the wiki`; it had `agents.md` for AGENTS.md, `readme.md` for
+  README.md twice, a space before the comma, a doubled space before `change`,
+  the duplicated `is` in `if the wiki is repo is cloned`, and no sentence
+  capitalisation or terminal period. The asker chose **correct and proceed**:
+  *Follow AGENTS.md. Review README.md's Getting Started section, and change the
+  README to explain what is needed to start using the wiki when the repo is
+  cloned in the current state, so the wiki does not need rebuilding.*
+- **What a clone does not carry** is now a table, because both gaps are
+  `.gitignore` entries rather than build steps. Without `raw/postgres-*/` every
+  citation link points at an absent file and `scripts/wiki_lint` reports
+  `missing source checkout for vNN` plus one broken-citation error per cited
+  range; without `.wiki-runtime/` the scripts refuse to run at all. At the
+  asker's direction the README says **the LLM harness fetches the checkouts**
+  and names no manual clone commands, and it states that each one must sit on
+  the exact `wiki/versions.md` commit, because lint compares `HEAD` to the pin
+  and cited line numbers are valid only there. The reading path itself needs
+  neither: only citation links and lint do.
+- Scope stayed inside `## Getting Started` on the asker's answer, so the stale
+  `## Supported Versions` table (no v14 row, and the v19, v18 and v17 pins
+  behind `wiki/versions.md`) and the stale `## Coverage Summary` counts were
+  left as they are.
+- **`scripts/bootstrap_venv` and `scripts/recent_log` do not exist** - both were
+  deleted in `5d4042d` - so at the asker's direction every live reference to
+  them is gone: the README step, `AGENTS.md` `MANDATORY Environment Isolation`
+  (venv creation is now `python3 -m venv .wiki-runtime/venv`, and that command
+  is the only permitted use of host `python3`) and its network bullet,
+  `MANDATORY Lint`'s command block, `postgresql-engine-wiki-plan.md`'s
+  `scripts/` tree, lint block and two environment bullets,
+  `requirements.txt`'s header comment, the `## Maintenance Tooling` lists in
+  `wiki/index.md` and `wiki/overview.md`, and the refusal message inside
+  `scripts/wiki_tooling.py`, which now points at `python3 -m venv
+  .wiki-runtime/venv` instead. The refusal path was re-run with host `python3`
+  to confirm the new text.
+- Historical records keep their mentions on purpose: this log's earlier entries
+  and `implementation-steps/phase-6-done-maintenance-tooling.md` record what was
+  true when they were written.
+- No wiki content page changed, no version pin moved, and no service was
+  started, so there is nothing to tear down.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**.
+
 ## [2026-09-14] answer v17 | remove both report filters from the core-SQL estimator and re-run both legs
 
 - Removed the report-side cutoffs from the statement on [Testing the PostgreSQL

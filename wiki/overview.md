@@ -21,7 +21,6 @@ Behavioral claims still need citations to matching raw source files or symbols u
 
 ## Maintenance Tooling
 
-- `scripts/recent_log` - recent entries from `wiki/log.md`.
 - `scripts/wiki_lint` - broken links, metadata drift, source-reference checks, and orphan warnings.
 
 ## Operating Principles
