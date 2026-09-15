@@ -2,6 +2,100 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] concept v17 | mandatory GIN bloat tests, protocol-scoped, extracted from the GIN contrib page
+
+- Filed [Mandatory GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), the wiki's **second**
+  `type: common-concept` page, and moved the protocol into it out of [Measuring
+  Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL
+  17 (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md).
+- **Prompt hygiene first.** The asker chose "correct and proceed". The original read
+  `follow agents.md, in postgresql 17, create a common-concept: Mandatory  gin bloat
+  test , extract the text from question: # Measuring Wasted and Reclaimable Bytes in
+  a GIN Index With Contrib Extensions on PostgreSQL 17 (unverified) .`; the
+  corrections are `follow` -> `Follow`, `agents.md` -> `AGENTS.md`, lowercase
+  `postgresql 17` -> `PostgreSQL 17`, `create a common-concept:` (the `type:` value
+  used as a noun with a colon) -> `create a common concept page`,
+  `Mandatory  gin bloat test` -> `Mandatory GIN Bloat Tests` (doubled space, `gin` ->
+  `GIN`, singular -> plural, matching the sibling page's title form), the space
+  before the comma after `test`, `extract the text from question:` -> `extract the
+  tests from the question:`, the stray `# ` heading marker pasted before the page
+  title, the `(unverified)` hint treated as part of the title, and the space before
+  the terminal period. No page restates the prompt, because a concept page has no
+  `## Question` section; the corrected form is recorded here instead.
+- Three scoping answers were taken before drafting. The concept boundary is
+  **protocol only** - the measurement protocol, the oracle and the reading rules,
+  with the fixture catalogue left on the question page - chosen over a whole-suite
+  page and over a `gin-index-bloat` engine-concept page; "extract" means **move and
+  link**, so the question page was edited in the same task; and fixture detail is
+  **catalogue-style tables only**, so no runnable SQL is on the concept page.
+- **What the page defines**, once, for every GIN waste claim in v17: the five phases
+  per fixture (build, baseline, churn ending in the settle step, decide under the
+  lock, and a measured `REINDEX INDEX` bracketed by `pg_relation_size(index,
+  'main')` as the only oracle); the settle step's five proof obligations; the run's
+  six settings with their contexts and apply scopes; the `SHARE ROW EXCLUSIVE`
+  measurement lock with its three source-derived rules; the declare-then-score rule,
+  under which every published column is filed as a lower bound, an upper bound or a
+  level *before* the run and a decision claim declares its own threshold because the
+  protocol fixes the oracle and not the threshold; the four mandatory cross-checks
+  with their directions and failure modes; the concurrency rules; eleven reading
+  rules; an eleven-row table of the behaviors a conforming run must reach; and six
+  named limits.
+- Because the page is protocol-scoped it carries **no fixture names, no recipes and
+  no SQL**, and - per the concept-page rules - **no measured number**: every result
+  the GIN programme has produced stayed on the question page, and all 356 citations
+  come from `raw/postgres-17/`, **90 distinct ranges over 45 files**, every one of
+  the 90 also listed under `## Source References` and none anywhere else. Seven
+  v17 behaviors anchor the seven
+  rule groups: the composite instrument forced by `pgstat_relation`'s GIN refusal,
+  `pgstatginindex`'s three metapage fields and the absent GIN verifier in `amcheck`
+  1.4; the entry tree never deleting a tuple; `GinPageIsRecyclable`'s horizon test
+  beside a `ginvacuumcleanup` that re-reads rather than truncates and a
+  `GinNewBuffer` that reuses inside the index; `PageGetFreeSpace` versus
+  `PageGetExactFreeSpace` on the two live page classes; `ginInsertCleanup` reaching
+  `ginEntryInsert` so a flush can allocate; the metapage counts having one writer
+  and `analyze_only` being a no-op outside an autovacuum worker; and
+  `get_raw_page_internal` releasing its `AccessShareLock` per call.
+- **Two defects came out of the extraction.** The superseded protocol paragraph
+  supported "a plain `REINDEX INDEX` takes `ShareLock` on the table" with
+  `indexcmds.c#L678-L679`, which is `DefineIndex`'s own lock line, not REINDEX's; the
+  concept page uses `RangeVarCallbackForReindexIndex` (`#L2857-L2872`) with
+  `ReindexIndex`'s dispatch beside it, and the mislabeled citation left the wiki with
+  that paragraph. And the "a free index page reads `MaxFSMRequestSize`" claim is now
+  *derived* - `RecordFreeIndexPage` records `BLCKSZ - 1`, `fsm_space_avail_to_cat`
+  maps that to category 255 and `fsm_space_cat_to_avail` returns `MaxFSMRequestSize`,
+  itself `BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData))` - instead of
+  asserted next to the value the FSM was told.
+- **Consumer edit, kept narrow.** On the question page: a new `## Answer` lead naming
+  the concept page and saying plainly that the page has not been re-scored under it;
+  a frame on `### The procedure`, `### Four cross-checks` and `### Reading rules`
+  stating that the protocol is defined on the concept page and what remains is
+  page-local; the 22-line "Why that mode and not a weaker one" paragraph in
+  `### The measurement protocol` replaced by a five-line pointer, which is the
+  material that actually moved; and a new open question 21 recording that every
+  number predates the protocol and was produced without its phase boundaries or its
+  `declared_kind` columns. **No measured number, no fenced block, no scoring table
+  and neither verification field was touched**, and the page's `## Contents` still
+  matches its headings because no section was added, removed or renamed. The concept
+  page was not edited afterwards.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors
+  and 0 warnings**; every citation range was read in the pinned checkout before
+  filing, and all 24 `## Contents` entries match the page's headings in document
+  order. `raw/postgres-17/` stayed read-only and clean at its pin.
+- **Rule deviation to disclose:** one bookkeeping edit to `wiki/index.md` was made
+  with host `python3` instead of the `.wiki-runtime/venv/` interpreter, which
+  `MANDATORY Environment Isolation` permits only for creating the venv. The edit
+  itself is a normal wiki edit and was verified; no package was installed and nothing
+  was written outside the repo. Later edits used the venv interpreter and the editor
+  tools.
+- No server, cluster or other service was started for this change, and nothing was
+  written under `.wiki-runtime/tmp/`, so there is nothing to tear down.
+- Bookkeeping: `wiki/v17/index.md` gained a second `## Common Concepts` bullet,
+  `wiki/index.md` a second entry in its `#### Common Concepts` group for PostgreSQL
+  17.11, and `wiki/versions.md` a dated note plus a clause on the v17 coverage cell.
+  Both pages keep `verified: false` and `verified_by_agent: not yet`.
+
 ## [2026-09-14] answer v17 | re-port the COMMENT-baseline heuristic to the retired mandatory suite, drop every page-local fixture, and re-run both legs
 
 - Re-ported [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for

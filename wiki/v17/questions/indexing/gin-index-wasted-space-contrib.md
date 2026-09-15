@@ -317,6 +317,16 @@ cited, and none of the 12.2 findings should be read as v12 source analysis.
 
 ## Answer
 
+[Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md) is
+where this wiki now defines the protocol a GIN waste claim is scored under: the five
+phases, the settle step and its proof obligations, the measurement lock, the
+`REINDEX INDEX` oracle, the four cross-checks and the reading rules. This page is a
+consumer of that page. The procedure, the four statements, the fixtures and every
+number below are page-local, and the sections that used to define the protocol here
+link it instead. The page has **not** been re-run against the concept page's phase
+boundaries or its declared-kind scoring columns; see
+[Open Questions](#open-questions).
+
 ### Short answer
 
 Build a **page census** from `pageinspect`, and report three separate quantities.
@@ -745,6 +755,12 @@ not waste — and the flush is not free, because merging appends to entry tuples
 allocates pages through `GinNewBuffer` when it has to.
 
 ### The procedure
+
+The protocol these six steps implement is not defined here. [Mandatory GIN Bloat
+Tests](../../common-concepts/mandatory-gin-bloat-tests.md) defines the phases, the
+settle step, the lock, the oracle, the cross-checks and the reading rules; what
+follows is this page's own instantiation, with the extension versions, the standby
+and bypass observations, and the statements that are local to it.
 
 1. **Install the three extensions.** `pageinspect` (1.12), `pgstattuple` (1.5) and
    `pg_freespacemap` (1.2) in this checkout
@@ -1501,28 +1517,11 @@ LOCK /* wiki_gin_waste_protocol */ TABLE myschema.mytable IN SHARE ROW EXCLUSIVE
 COMMIT;
 ```
 
-Why that mode and not a weaker one. The conflict table gives
-`ShareRowExclusiveLock` conflicts with `RowExclusiveLock`,
-`ShareUpdateExclusiveLock`, `ShareLock`, `ShareRowExclusiveLock`, `ExclusiveLock`
-and `AccessExclusiveLock`, and compatibility with `AccessShareLock` and
-`RowShareLock` only
-([lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L59-L104),
-[lockdefs.h:36-48](../../../../raw/postgres-17/src/include/storage/lockdefs.h#L36-L48),
-[mvcc.sgml#SHARE-ROW-EXCLUSIVE](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L1023-L1044)).
-`SHARE` is one step weaker and **not** enough: a plain `REINDEX INDEX` takes
-`ShareLock` on the table, which is self-compatible, so it would proceed and swap the
-index's storage under a running census
-([indexcmds.c:678-679](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L678-L679),
-[indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2860-L2872)).
-Nor can the census hold a lock on the index between page reads:
-`get_raw_page_internal` closes the relation *with* `AccessShareLock`, releasing it
-before the next call
-([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198)).
-The writers this has to exclude take `ShareUpdateExclusiveLock` for VACUUM and
-ANALYZE, `AccessExclusiveLock` for `VACUUM FULL`, and `ShareUpdateExclusiveLock`
-for `REINDEX CONCURRENTLY`
-([vacuum.c:2049-2056](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2049-L2056),
-[analyze.c:135-145](../../../../raw/postgres-17/src/backend/commands/analyze.c#L135-L145)).
+Why that mode and not a weaker one, which commands it excludes, why the census
+cannot hold a lock on the index between page reads, and what privilege the lock
+needs are defined under [The measurement
+lock](../../common-concepts/mandatory-gin-bloat-tests.md#the-measurement-lock). What
+follows is this page's measurement of that rule on its own fixtures.
 
 Measured on `t6_slack`, with `lock_timeout = '2s'` in the second session and the
 protocol lock held in the first:
@@ -2005,6 +2004,11 @@ a single index says almost nothing, because about half of it is the fill fractio
 any GIN build.
 
 ### Four cross-checks
+
+All four are required by [The four mandatory
+cross-checks](../../common-concepts/mandatory-gin-bloat-tests.md#the-four-mandatory-cross-checks),
+which defines what each one compares and in which direction it can fail. Below is
+the SQL this page runs for them, and what they read here.
 
 **FSM.** `pg_freespace` reports the recorded value per block
 ([pg_freespacemap.c#pg_freespace](../../../../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.c#L24-L50)),
@@ -3461,6 +3465,11 @@ set untouched on both servers, where the census has no such limiter.
 
 ### Reading rules
 
+The rules that bind any v17 GIN waste claim are defined under [The reading
+rules](../../common-concepts/mandatory-gin-bloat-tests.md#the-reading-rules). The
+list below is this page's own: the same rules as this page measured them, plus what
+its 12.2 leg added.
+
 - Report the three classes separately, and keep them beside `bloat_pct` rather than
   behind it. The single number is `waste + slack`, so it carries an entry tree's
   growth room: a never-churned index reads 48.05 and an empty one 49.80, both with
@@ -3912,7 +3921,8 @@ Entries 1 through 16 retain the earlier investigation's results and gaps; the
 closed entry 7 remains for continuity. Entries 17 through 19 were opened by the
 2026-09-05 plan review for work needed to implement and validate the revised
 procedure, and rewritten on 2026-09-08 once that work was done; entry 20 is new
-that day.
+that day. Entry 21 was opened on 2026-09-15, when the protocol moved to a common
+concept page.
 
 1. **The `ginVersion <> 2` path is still untested.** v17 always writes
    `GIN_CURRENT_VERSION = 2` ([ginutil.c:355-382](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L355-L382)),
@@ -4120,6 +4130,19 @@ that day.
     three known bound failures, which all reproduced. What is needed is either the
     exact recipes that produced the first corpus or a re-score of the extended
     table on recipes the page actually carries.
+
+21. **Nothing here has been re-scored under the shared protocol.** [Mandatory GIN
+    Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md) now defines the
+    protocol this page's procedure, lock, cross-checks and reading rules link to,
+    but every number above predates it and was produced without two things the
+    concept page makes mandatory: the five explicit phase boundaries, with a
+    recorded baseline taken while each index was still as built, and a
+    `declared_kind` filed per published column before the run. The page's two bound
+    claims are only *reported* as bounds after the fact, which is exactly the order
+    the concept page forbids. What is needed is a re-run that files the declarations
+    first and records a per-fixture baseline; until then the conformance claim on
+    this page is limited to "these are the same rules", not "this page was scored
+    against them".
 
 ## Source References
 
