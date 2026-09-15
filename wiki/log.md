@@ -10558,3 +10558,135 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   and ports 55417 and 55412 were free. The two pre-existing sandboxes
   `btree-suite-scripts` and `mandatory-btree-concept-fix-20260912` were not
   created by this work and were left untouched.
+
+## [2026-09-15] review v17 | deduplication-after-pg_upgrade page: reviewed, corrected, and re-measured on 17.11
+
+- Reviewed and revised [Checking Whether an Index Needs a Rebuild to Enable
+  Deduplication After pg_upgrade From PostgreSQL 12 to 17
+  (unverified)](v17/questions/indexing/btree-deduplication-after-pg-upgrade.md)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+- **Prompt hygiene**: the request read `follow agents.md, in postgresql 17 ,
+  review question: # Checking Whether an Index Needs a Rebuild to Enable
+  Deduplication After pg_upgrade From PostgreSQL 12 to 17 (unverified)`. The
+  defects were `agents.md` for AGENTS.md, lowercase `postgresql`, a space before
+  the comma, a stray `#`, and the `(unverified)` hint carried inside the title.
+  The asker chose **correct and restate**, and also chose the widest of three
+  scopes: **fix and re-measure**, rather than list-only or source-only. Both
+  choices are recorded under the page's `## Question`.
+- **Source review, ~50 citations re-read in `raw/postgres-17/`.** Every cited
+  range resolves and supports its claim. **Five defects found and fixed**, plus
+  three citation repairs:
+  1. The metapage-field repurposing was attributed to `9f3665fbfc3`. It belongs
+     to **`e5d8a999030`**, "Use full 64-bit XIDs in deleted nbtree pages", whose
+     message says the field "has been repurposed and renamed"; `9f3665fbfc3`
+     deprecated the neighbouring `btm_last_cleanup_num_heap_tuples`, dropped
+     `vacuum_cleanup_index_scale_factor` and cut an argument from
+     `_bt_set_cleanup_info()`. Both are `REL_14_0`; the history table now lists
+     four commits.
+  2. The relfilenode-snapshot fallback compared on the recorded index OID, which
+     **`REINDEX ... CONCURRENTLY` invalidates**: `index_concurrently_swap` moves
+     the name to the newly built index's `pg_class` row. Measured on a 190-row
+     baseline after 20 rebuilds, the OID join reported 170 unchanged, 3 moved and
+     **17 recorded OIDs that no longer exist** - the 17 concurrent rebuilds,
+     silently dropped - while the schema-and-name join reported all 20 movers.
+     The filed snapshot SQL now records `relnamespace` and the text says to join
+     on name.
+  3. The statistics claim ("the planner statistics describe the empty build")
+     was cited only to the completion banner. The reason is
+     `index_update_stats`'s `update_stats = reltuples >= 0 && !IsBinaryUpgrade`,
+     so the restore writes **no** statistics; measured 26 of 26 carried-over
+     indexes at `relpages = 0`, 25 at `reltuples = 0`, and the carried-over
+     `pg_largeobject_loid_pn_index` at **`reltuples = -1`**, which the old text
+     explicitly denied. `heap.c#AddNewRelationTuple` is cited for the sentinel.
+  4. The claim that "relfilenodes continued from the old cluster's `NextOID` of
+     24576" is **withdrawn**: the new cluster's control file read `NextOID`
+     **16449** immediately after the upgrade and later, and the first object
+     created afterwards got OID **16503**, adjacent to the carried-over band
+     16392-16441. The source fact (`pg_resetwal -o` with the old cluster's next
+     OID) is kept, the measurement is reported, and the mismatch is filed as the
+     page's first open question rather than explained away.
+  5. `i_inc` "lost six pages on rebuild" did not reproduce: on this run the
+     `INCLUDE` index rebuilt byte-identical. The claim and its open question are
+     replaced by the measurement and a note that the fixture differs.
+  Citation repairs: `nbtree.h#L124-L147` was labelled `#BTMetaPageData` though
+  the range is the comment above `BTREE_VERSION`; the "`text`, `varchar`, `char`
+  and `name` register `btvarstrequalimage`" sentence cited only the `text_ops`
+  lines, so `bpchar_ops` and the `varchar_ops` opclass row are now cited too, as
+  is `text_pattern_ops`'s `btequalimage`; and `system_functions.sql` is cited as
+  712-718 in both the body and the map, where the two disagreed.
+- **Two evidence-honesty additions.** `pgupgrade.sgml`'s promise that "all
+  failure, rebuild, and reindex cases will be reported" contradicts the measured
+  behaviour, so source wins in the body and the discrepancy is filed under Open
+  Questions. And the page now links [Mandatory B-Tree Bloat
+  Tests (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md),
+  stating plainly that its gate was scored against the metapage byte and the
+  engine's `DEBUG1` verdict on its own 17 shapes and **not** against that
+  suite's numbered fixtures, whose family 1 covers the same gate with custom
+  operator classes and impostor support functions. The concept page was read and
+  **not edited**.
+- **`## Measurement Script` added**, as the migration note requires once a
+  measured page is re-measured: one 1,126-line Bash-and-SQL script,
+  `dedup_upgrade_probe.sh`, published in full with purpose, invocation, all 16
+  stages, 12 environment variables, prerequisites, an output-file table, runtime
+  and cleanup. It builds both majors out of tree from their pins, runs
+  `make check`, resets its clusters, builds the disposable 12.2 fixtures, runs
+  one `pg_upgrade --copy`, compiles two `offsetof()` programs against each
+  build's own headers, and then measures the census, the probe, the privileges,
+  the gate, the curve, the twins, the churn, the rebuilds, the trap, the
+  flag-setting matrix, the fallback and the post-analyze priority order. The
+  filed text was verified byte-identical to the file that ran.
+- **Run, 2026-09-15 on `Linux x86_64`** (Ubuntu 24.04, gcc 13.3.0, ICU 74.2, 22
+  cores, `JOBS=20`), about 3 minutes from an empty sandbox: 17.11 `make check`
+  **All 225** plus `pageinspect` **All 8**; 12.2 **All 192**. **26 carried-over
+  index files, 26 of 26 digests identical**, OID and relfilenode preserved on
+  all; the 22 in `public` all at `pd_lower = 64`, version 4, flag false,
+  `num_delpages` 0; `pg_catalog` 122 of 124 true, the two exceptions being the
+  carried-over `pg_largeobject` index and the `float4`-keyed
+  `pg_enum_typid_sortorder_index`; `pg_toast` 40 of 43 true. The filed check
+  printed **189 rows**: 15 rebuild-for-deduplication, 5 unique-no-win, 6
+  not-safe, 1 `INCLUDE`, 162 no-rebuild - so **20 of the 26 flagged, 6 refused**.
+  `bt_metap()` agreed in **189 of 189** rows and **23 of 23** after the rebuilds.
+  The self-test read `72 | 72 | 4 | t`. Offsets: `btm_allequalimage` at struct
+  offset 40 and absolute byte **64**, `sizeof` 48 and `pd_lower` 72 on 17.11,
+  against `sizeof` 40 and `pd_lower` **64** for the 12.2 field set, with the v17
+  program refused by the 12.2 headers. Privileges: 3 permission-denied errors,
+  `pg_read_server_files` insufficient, the four-argument `GRANT EXECUTE`
+  sufficient, `/etc/hostname` refused. Gate: **17 of 17** shapes matched the
+  metapage, 9 with the flag set, the `INCLUDE` index silent. Rebuilds: **67.4 %
+  to 69.1 %** on eight duplicate-heavy indexes, **0.00 %** on the six refused
+  and on `i_uniq`, `i_uuid` and `i_empty`. Trap: 7,340,032 to **22,519,808**
+  bytes under `deduplicate_items = off` with the flag true and the engine still
+  logging "can safely use deduplication". Flag matrix: `REINDEX INDEX`,
+  `VACUUM FULL` and `CLUSTER` set it with one `DEBUG1` line each; `VACUUM
+  (INDEX_CLEANUP ON)` and `ALTER INDEX ... SET` set nothing. Curve **0.0 / 9.8 /
+  48.1 / 65.4 / 69.5 / 67.4 %**; twins equal **to the byte** before an update and
+  **48.5 % bloat over 69.1 % deduplication** after; churn **3.1x**;
+  `rows_per_key` 100,000.0 / 1000.0 / 100.0 / 1.0 / 9,986.7 / `NULL` after
+  `vacuumdb --all --analyze-in-stages`, which also cleared every `relpages = 0`.
+- **Script defects fixed during the run**, before the filed run: the `make check`
+  result lines were not matched on either major, the `offsetof()` programs failed
+  to link because `postgres.h` routes `printf` through `pg_printf`, the digest
+  census swept in ~60 catalog TOAST indexes the upgrade does not transfer, two
+  probe queries were wrong SQL (an unqualified `xmin`, an ambiguous
+  `text || "char"`), and the stages were not idempotent, which a new `reset`
+  stage fixes. Known limitation, recorded here: `stage_summary`'s `ERROR` count
+  reads an accumulated `server17.log`, so its 14 spans every run of the day; the
+  final run's own six errors are all requested by probe stages and no filed
+  number depends on that count.
+- **Bookkeeping**: `wiki/index.md` and `wiki/v17/index.md` carry rewritten
+  entries, and `wiki/versions.md` a dated coverage note. `verified:` untouched
+  and **agent verification stays `not yet`**, because one measurement disagrees
+  with the source reading it should confirm (the OID counter) and is filed as an
+  open question rather than resolved.
+- **Validation**: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports
+  **0 errors and 0 warnings**. The published script was diffed against the file
+  that ran: identical.
+- **Teardown**: the script's own `clean` stage stopped the 17.11 server with
+  `pg_ctl -m fast -w stop`, reported 0 matching postgres processes and no
+  surviving `postmaster.pid`, and deleted
+  `.wiki-runtime/tmp/pgdedup/` including both installs, both data directories,
+  the tablespace and all captured output. Confirmed afterwards: `pgrep -a
+  postgres` empty, the sandbox gone, ports 55312 and 55317 free. The four
+  pre-existing sandboxes under `.wiki-runtime/tmp/` were not created by this work
+  and were left untouched.
