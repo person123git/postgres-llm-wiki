@@ -2,6 +2,114 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] review v17 | GIN contrib waste page re-run under the mandatory GIN bloat tests, from one published script
+
+- Re-ran [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
+  Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) end to end
+  under [Mandatory GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). This is the consumer re-run
+  the 2026-09-15 concept-page entry said needed its own task.
+- **Prompt hygiene first.** The asker chose "correct and proceed". The original read
+  `follow agents.md, in postgresql 17, review question: # Measuring Wasted and
+  Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17
+  (unverified) , update tests based on the changes from common-concept, update or
+  remove all tests that aren't following # Mandatory GIN Bloat Tests (unverified)`;
+  the corrections are `agents.md` -> `AGENTS.md`, lowercase `postgresql` ->
+  `PostgreSQL`, `review question:` -> `review the question:`, the pasted `# `
+  heading marker before each of the two page titles, `from common-concept` -> `from
+  the common concept page`, `aren't following` -> `do not follow`, and sentence
+  capitalisation. The corrected form is restated verbatim on the page under
+  `## Question`.
+- **Four scoping answers were taken before any edit**: a full re-run with a
+  published measurement script rather than a paper re-port; tests that cannot be
+  made to conform are **removed**, not relabelled; **all three** missing coverage
+  fixtures added; sandbox deleted at the end.
+- **One script, `gin_waste_protocol.sh`, 1,872 lines of Bash and SQL**, filed in
+  full under a new `## Measurement Script` section (the page had none, and a
+  re-measurement is exactly when the migration note says to add one). Seventeen
+  stages: it builds 17.11 out of tree, runs `make check` and five contrib suites,
+  files **the declared kind of every published column at 11:38:28, one second
+  before the first fixture statement**, then build -> baseline -> churn (writes,
+  settle, maintenance, census) -> a decide pass inside one `SHARE ROW EXCLUSIVE`
+  transaction over every fixture table -> a measured `REINDEX INDEX` oracle per
+  fixture, plus cross-checks, probes, a standby, the budget sweep, four concurrency
+  cases, eight corruption shapes and a `clean` stage.
+- **Results, 19 scored fixtures.** Declared **upper bound** `bloat_pct`: **HELD 19
+  of 19**. Declared **lower bound** `whole_page_waste_pct`: **VIOLATED 2 of 19** —
+  `f2_pending_gin` 64.64 % dead against 58.05 % returned, and the new
+  `a1_analyze_gin` 52.69 % against 45.16 % — so the column is **demoted to a level**
+  in the page's reading rules, which is what the protocol requires of a violated
+  bound. 19 of 19 size brackets held; the FSM count stayed within the census on 25
+  of 25 indexes with `MaxFSMRequestSize` 8160 derived two independent ways; and the
+  metapage identity `n_data_pages = live data + (deleted − FSM-free)` came out
+  **exact on 25 of 25**, which is sharper than the two caveats the page used to
+  state separately.
+- **Three new coverage fixtures, all three of them productive.** The **maintenance
+  pair** shows a census taken after the writes and before the settle step reading
+  the *as-built* numbers to the byte (14.08 against the settled 54.55), and the
+  `ANALYZE` half of the maintenance step moving no page at all; a separate stale
+  fixture shows what it does move, `relpages` 4 -> 23 on a bare `ANALYZE` while the
+  metapage stays at 4. The **auto-analyze stand-in** (`ANALYZE` +
+  `gin_clean_pending_list()`) crosses the analyze verdict and neither vacuum verdict
+  by one row, flushes 49 pending pages into 49 dead ones, keeps `n_total_pages` 43
+  against a 93-block file, and is the run's second lower-bound violation. The
+  **simulated census** walks 102 tables, analyzes 10, declines a table sitting
+  **exactly** on its threshold (the strictly-greater test, measured), and reproduces
+  the publication hazard on purpose: `tc4_hazard` reads 10,500 modifications against
+  `tc2_declined`'s 500 after an identical load, because its build-phase `ANALYZE`
+  ran without `pg_stat_force_next_flush()`. That defect was found in my own first
+  attempt, where two of three census tables came out on the wrong side.
+- **Reproduction against the superseded corpus**: `f1` churned, `f2` built and
+  churned, `f4`, `f5`, `f6`, `f7` and all five churn-sweep sizes, dead-tuple counts
+  and model errors came out byte for byte and digit for digit. **One pair moved**:
+  `f3` and `f1`'s rebuild are 8,192 bytes larger (one entry page), they still equal
+  each other exactly, and the inferred cause - the protocol's build-phase settle
+  step changing where the churn lands - is filed as an open question rather than
+  claimed.
+- **Removals, as instructed.** `k1`-`k5`, `fh1`-`fh3`, `fg_flush`, `fa`/`fb`/`fz`,
+  `fw1`-`fw4`, `f10_race`, `f16_zero` and `fn_null` are gone, with four sections:
+  the two pass-by-pass acceptance records (folded into one), *Why a flush sometimes
+  grows the file*, *Why round five splits the entry tree*, *Two more bound
+  failures*, and the 12.2 corpus and eviction sections. The reason is uniform:
+  their recipes were one-line descriptions, so nothing on the page could re-run
+  them. Four findings went out with them and are recorded as open question 14. The
+  12.2 leg is kept as **statement portability only**, relabelled as outside a v17
+  protocol and not re-run.
+- **Validation.** 606 citations over 284 distinct ranges in 79 files, every range
+  read in the pinned checkout and every one in bounds; no cross-version citation;
+  the `## Contents` list matches all 47 `##`/`###` headings in document order and no
+  `#`-anchor is dangling. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0
+  errors, 0 warnings**. `raw/postgres-17/` stayed read-only at its pin.
+- **The concept page was read and not edited**, per `MANDATORY Common Concept
+  Documents`. Nothing in it needed a change: every rule the re-run exercised was
+  already there, and the two stand-in differences it says will stand did stand.
+- **Rule deviation to disclose:** one bulk edit to the measurement script was made
+  with host `python3` instead of the `.wiki-runtime/venv/` interpreter, which
+  `MANDATORY Environment Isolation` permits only for creating the venv. No package
+  was installed, nothing outside the repo was written, and every later scripted edit
+  used the venv interpreter.
+- **Teardown**: the script's `clean` stage stopped the 17.11 postmaster, confirmed
+  no `postmaster.pid` in the data directory and no sandbox `postgres` process in
+  `pgrep -a postgres`, and deleted `.wiki-runtime/tmp/ginw5/` entirely. The standby
+  the `standby` stage created was stopped and its data directory removed inside that
+  stage. No other service was started.
+- **Follow-up, same day:** asked to "link the common-concept to the document", I
+  added the concept page to the question page's `## Navigation` list, which is where
+  its sibling B-tree consumers carry theirs and the one place this page was missing
+  it; the body already linked it eight times. The reverse link was **not** added:
+  `MANDATORY Common Concept Documents` puts "a list of the pages that use the
+  concept" under what does not belong on a concept page, and says links run from
+  consumer to concept only. `wiki/v17/common-concepts/mandatory-gin-bloat-tests.md`
+  has no diff in this task.
+- Bookkeeping: the GIN entries in `wiki/index.md` and `wiki/v17/index.md` were
+  rewritten around the new run, `wiki/versions.md` gained a dated coverage note plus
+  a clause on the v17 coverage cell. `verified:` untouched and **agent verification
+  stays `not yet`**: the numbers are one run's, several of the page's older sections
+  were re-checked rather than re-measured, and the upper bound is "not refuted"
+  rather than held, because the corpus that used to break it was removed.
+
 ## [2026-09-15] concept v17 | mandatory GIN bloat tests take the B-tree page's autovacuum, VACUUM, ANALYZE and auto-analyze rules
 
 - Extended [Mandatory GIN Bloat Tests
