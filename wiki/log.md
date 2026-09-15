@@ -2,6 +2,130 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] review v17 | COMMENT-baseline GIN heuristic re-run under the mandatory GIN bloat tests, from one published script
+
+- Reviewed and re-ran [A COMMENT-Stored Baseline and Normalized Index Growth for Finding
+  GIN Indexes That Need REINDEX CONCURRENTLY in PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md)
+  end to end under [Mandatory GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). This is the **second** consumer page
+  brought onto the GIN protocol, after the contrib waste page earlier the same day.
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17, review question: # A COMMENT-Stored Baseline and
+  Normalized Index Growth for Finding GIN Indexes That Need REINDEX CONCURRENTLY in
+  PostgreSQL 17 (unverified), update tests based on the changes from common-concept, update
+  or remove all tests that aren't following # Mandatory GIN Bloat Tests (unverified)`; the
+  corrections are `agents.md` -> `AGENTS.md`, lowercase `postgresql` -> `PostgreSQL`,
+  `review question:` -> `review the question:`, the pasted `# ` heading marker before each
+  of the two page titles, the `(unverified)` hint treated as part of both titles,
+  `from common-concept` -> `from the common concept page`, `aren't following` -> `do not
+  follow`, and the missing terminal period. Both the original and the corrected form are
+  filed under the page's `## Question`, beside the first prompt's own corrections.
+- **Three scoping answers were taken before any edit**: a **full re-run with a published
+  measurement script** rather than a paper re-port; tests that cannot conform are **removed
+  with the claims they backed**, not relabelled; and **every coverage behavior the method
+  can reach** is added.
+- **One script, `gin_norm_protocol.sh`, 1,596 lines of Bash and SQL**, filed in full under a
+  new `## Measurement Script` section with purpose, invocation, 13 stages plus `reset`,
+  `start` and `clean`, 14 environment variables, prerequisites, an output-file table, a
+  runtime breakdown and cleanup. It builds 17.11 out of tree, runs `make check` and five
+  contrib suites, files **the declared kind of every published column three seconds before
+  the first fixture's baseline payload** (17:24:53Z against 17:24:56Z) and refuses to file
+  them once the fixture database exists, then runs build -> baseline -> churn (writes,
+  settle, maintenance) -> a `SHARE ROW EXCLUSIVE` decide pass -> a measured `REINDEX INDEX`
+  oracle for **24 scored fixtures** and one refusal fixture, with a 28-table analyze census,
+  23 page censuses, five probes, eleven edge cases, a verbatim lifecycle replay and a
+  three-way diff of the published SQL against the page. The filed text was verified
+  byte-identical to the file that ran (1,596 lines), and the three published statements
+  re-extracted from the page at **41 / 18 / 76 lines, 3 of 3 identical**.
+- **Run, 2026-09-15 on `Linux x86_64`** (Ubuntu 24.04 on a WSL2 kernel, gcc 13.3.0, 22
+  cores, `JOBS=20`), about 7 minutes from a built tree: `make check` **All 225** plus
+  **All 8 / 1 / 1 / 30 / 4**. Decision: **19 PASS, 1 FALSE POSITIVE, 0 FALSE NEGATIVE, 4
+  refusals**, one of which (`c11`, counter reset) hid a real 73.95 % candidate by design.
+  **The page's one declared bound failed**: `est_reclaimable`, filed as an upper bound,
+  **held 14 of 21 and was violated 7**, by −0.01 to −10.43 points, so it is **demoted to a
+  level** in the page's reading rules; its recomputation matched the statement's own
+  `pg_size_pretty` output on 24 of 24, so the demotion is about the model, not a reporting
+  bug. Invariants: `index_size_ratio >= 1` **24 of 24**, the fresh-build metapage identity
+  **25 of 25**, FSM **equal** to the census **23 of 23**, size bracket **23 of 23**,
+  `VACUUM VERBOSE` reusable **21 of 21**, and the general census identity **21 of 23** with
+  both exceptions the auto-analyze stand-ins, stale by construction.
+- **Five findings replace the retired programme.** A rebuild can make a GIN index bigger:
+  `p02` returned **−21.01 %** and both `fastupdate` twins rebuild to the same 17,883,136
+  bytes. The fresh-build curve is 6,938,624 / 12,599,296 / 22,339,584 / 59,613,184 /
+  82,264,064 / 245,768,192 bytes at 250k to 8M rows - **2.67x** across the posting-tree
+  conversion then **1.38x**, not the old "quadruples then adds zero bytes". The pending-list
+  high-water mark is enforced **during** the inserts at 514 pending pages, where
+  `nPendingPages * GIN_PAGE_FREESIZE` (8,160 B) passes the 4 MB limit, measured as 515
+  deleted and 515 FSM-free pages on `fastupdate = on` against 0 and 0 on its twin. A 64MB
+  build is **20.3 %** larger than a 256MB one (71,737,344 against 59,613,184), and the
+  metapage identity is exact on 9 probe builds, which **settles old open question 14**. And
+  the `n_mod_since_analyze` race reproduced on **4 of 4** `DELETE` + `VACUUM (ANALYZE)`
+  pairs (15,000 dead and 15,000 modified where the truth is 0), clean only after a 2 s
+  pause, with a capture inside the loading transaction recording `bti = 0` until
+  `pg_stat_force_next_flush()`.
+- **New coverage, all of it productive**: the maintenance pair, where the settle step moves
+  no bytes but the metapage goes 996 -> 2,381 pages and the `ANALYZE` half moves no page at
+  all; two auto-analyze stand-ins that pin the window in which such a table can be evaluated
+  to **1,001 rows at any table size** (`a01` refused at churn 0.1333, `a02` evaluated at
+  0.2017); a repeatable-read snapshot held across the settling `VACUUM`, whose three
+  `VACUUM VERBOSE` index lines read 0 deleted, then 60 deleted and 0 reusable, then 60
+  reusable - the protocol's "expect more than one VACUUM" in the engine's own words; a
+  `VACUUM (INDEX_CLEANUP OFF)` that printed **no index line at all** and left 90,000 dead
+  item identifiers; `k01`'s 3,001 entry-tree entries surviving every `VACUUM` and halving to
+  1,501 only on rebuild; six opclass and shape fixtures (`jsonb_path_ops`, `gin_trgm_ops`,
+  `btree_gin`, partial, two-column, expression); and a census that analyzed 1 of 28 tables,
+  declined one sitting **exactly** on its threshold and short-circuited one on
+  `autovacuum_enabled = false`.
+- **Removals, as instructed.** Cells `c07` (no `VACUUM`) and `c08` (no `VACUUM`, no
+  `ANALYZE`), the growth sweep's three unvacuumed rows and their shared 20,692,992-byte
+  plateau, the pre-settle `fastupdate` reading as a scored number, the whole 12-cell matrix,
+  and the `Test methodology` and `Re-verification on a second 17.11 build` sections are
+  gone, each with the claims it backed - including "quadruples between 1M and 2M", "32.8 %
+  larger at 64MB", "the race fired on 1 of 4", "`norm` 1.0049 over 20.39 % reclaimable" and
+  "`REINDEX` returned both indexes to exactly 16,474,112 bytes". Two ladder rungs are now
+  shown **unreachable** under the protocol: `no ANALYZE since baseline` cannot fire once the
+  maintenance step always analyzes, and `stats_lag` read 0.000 on all 24 fixtures for the
+  same reason.
+- **Script defects found and fixed during the run**, before the filed run: `relfilenode` is
+  `oid` and would not insert into a numeric column; the `make check` result grep was anchored
+  at `^` where pg_regress prints `# All N tests passed.`; a `round(double precision, integer)`
+  error in the census query; the `P1` report grouped by `phase, at` and printed blank lines;
+  `P5` could not show the capture race across sessions and now runs the load and the capture
+  in one transaction; the `pubsql` fixture overflowed `int4` in its key hash; the snapshot
+  fixture had no posting trees, so nothing was deleted to hold; and `c09`'s cross-check
+  census described its out-of-band rebuild while its metapage row described the churned
+  index. **And my own census build-phase `ANALYZE` originally ran before
+  `pg_stat_force_next_flush()`**, so the load's pending counts landed on the zeroed counter
+  and the exactly-on-threshold table read 11,050 instead of 1,050 - the protocol's first
+  publication point, failing exactly as documented. All are recorded on the page.
+- **Validation.** 184 citation links over 103 distinct ranges in 30 files, every range read
+  in the pinned checkout and every one in bounds; no cross-version citation; the
+  `## Contents` list matches all 50 `##`/`###` headings in document order with no dangling
+  anchor. `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**.
+  `raw/postgres-17/` stayed read-only at its pin.
+- **The concept page was read and not edited**, per `MANDATORY Common Concept Documents`.
+  Nothing in it needed a change: every rule this run exercised was already there, and the
+  two stand-in differences it says will stand did stand.
+- **Rule deviation to disclose:** one bulk edit to the measurement script was made with host
+  `python3` instead of the `.wiki-runtime/venv/` interpreter, which `MANDATORY Environment
+  Isolation` permits only for creating the venv. It was a `||` fallback that fired because
+  host `python3` exists; no package was installed, nothing outside the repo was written, and
+  every later scripted edit used the venv interpreter.
+- **Teardown**: the script's `clean` stage stopped the 17.11 postmaster with
+  `pg_ctl -m fast -w stop`, reported no `postmaster.pid` in the data directory, 0 matching
+  `postgres` processes and port 55417 free, and deleted `.wiki-runtime/tmp/ginnorm/`
+  entirely, including the build, the install, the data directory and all captured output. No
+  other service was started, and the four pre-existing sandboxes under `.wiki-runtime/tmp/`
+  were not created by this work and were left untouched.
+- Bookkeeping: the GIN-baseline entries in `wiki/index.md` and `wiki/v17/index.md` were
+  rewritten around the new run, and `wiki/versions.md` gained a dated coverage note plus a
+  rewritten clause in the v17 coverage cell. `verified:` untouched and **agent verification
+  was reset from `claude-opus-5-max 2026-08-27T15:31:08Z` to `not yet`**: the page's numbers
+  are one run's, its declared bound failed and was demoted rather than corrected, and 15
+  open questions stand.
+
 ## [2026-09-15] review v17 | GIN contrib waste page re-run under the mandatory GIN bloat tests, from one published script
 
 - Re-ran [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib
