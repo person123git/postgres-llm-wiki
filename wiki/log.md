@@ -2,6 +2,117 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] review v17 | COMMENT-baseline non-B-tree heuristic re-run under both bloat protocols, from one published script
+
+- Reviewed and re-ran [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
+  COMMENT-Stored Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)
+  end to end under **both** [Mandatory Non-B-Tree, Non-GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-non-btree-non-gin-bloat-tests.md) and
+  [Mandatory GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Third consumer page brought onto a
+  protocol, and the first to run under two at once: its 21 hash, GiST, SP-GiST and BRIN
+  fixtures under the non-B-tree page, its 10 GIN fixtures under the GIN page. This closes
+  the conformance gap the non-B-tree concept-page task recorded the same day.
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17, review question: # Detecting Inflated Non-B-Tree
+  Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17 (unverified),
+  update tests based on the changes from common-concept, update or remove all tests that
+  aren't following # Mandatory Non-B-Tree, Non-GIN Bloat Tests (unverified) and #
+  Mandatory GIN Bloat Tests (unverified).`; the corrections are `agents.md` ->
+  `AGENTS.md`, lowercase `postgresql` -> `PostgreSQL`, `review question:` -> `review the
+  question:`, the pasted `# ` heading marker before each of the three page titles, and
+  `from common-concept` -> `from the common concept pages`, because two concept pages
+  govern this one. Both forms are filed under the page's `## Question` beside the three
+  earlier prompts.
+- **Three scoping answers were taken before any edit**: a full re-run with a published
+  measurement script rather than a paper re-port; tests that cannot conform are removed
+  with the claims they backed; and every coverage behavior the method can reach is added.
+- **One script, `idxmaint_protocol.sh`, 2,364 lines of Bash and SQL**, filed in full
+  under a new `## Measurement Script` section with purpose, invocation, 12 stages plus
+  `reset`, `start` and `clean`, 13 environment variables, prerequisites, an output-file
+  table, a runtime breakdown and cleanup. `make check` **All 225** plus **All 8 / 1 / 1**
+  on `pageinspect`, `pgstattuple` and `pg_freespacemap`. The `declare` stage filed the
+  declared kind of every published column, the per-AM decision thresholds, nine
+  invariants and a 34-row coverage plan at **19:27:02Z**, into a database that did not
+  exist, and refuses to re-file once the fixture database does; the first baseline
+  payload carries **19:54:25Z**.
+- **31 scored fixtures** through build -> baseline -> churn (writes,
+  `pg_stat_force_next_flush()`, unmaintained census, maintenance step, maintained
+  census) -> a decide pass over every baselined index at once inside one transaction
+  holding `SHARE ROW EXCLUSIVE` on all 34 tables -> a measured `REINDEX INDEX` oracle at
+  `maintenance_work_mem = 256MB`. Nine stages, 13 minutes 27 seconds, 301 output files.
+- **Result: the decision was right on 30 of 31** - 0 false positives, 1 false negative,
+  14 flagged and every one repaying 37.6-85.7 %. **The one declared bound failed**:
+  `est_reclaim_pct`, filed as an upper bound, held on 19 and was violated on 12 by up to
+  11.94 points, so it is **demoted to a level**; seven of the twelve misses are rounding
+  and three are rows the method refused to decide, and the page says so rather than
+  re-declaring the bound with a tolerance. Accuracy survives as a level: within 1 point
+  on 22 of 29, within 5 on 25, worst over-estimate +19.66 on the hot-key hash fixture.
+- **Four findings about the gates rather than the model.** `VACUUM (INDEX_CLEANUP OFF)`
+  produced the only false negative, refusing a 36.94 %-reclaimable hash index on a
+  dead-tuple ratio the option itself created. **Both auto-analyze stand-ins make the
+  method refuse** - a plain `ANALYZE` on the four non-GIN AMs, `ANALYZE` plus
+  `gin_clean_pending_list()` on GIN - because `vacuum_count` never moves, at 11.11 % and
+  11.50 % reclaimable. All four no-churn fixtures are refused by the `ANALYZE` gate. And
+  the **BRIN arm is still unvalidated**: all four BRIN fixtures reclaimed 0 bytes and all
+  four were silenced by the 1 MB floor, while the mandatory maintenance step **grew**
+  three of them.
+- **New coverage and new mechanism results.** The maintenance pair on every fixture (7 of
+  31 moved; GIN by up to 39 % as pending pages merged). The BRIN summarization stand-in
+  on an `autosummarize` index whose work items nothing fulfilled, where three
+  desummarized ranges left exactly three orphaned line pointers. A hash rebuild shown to
+  be sized from the **heap's** estimate: forging the heap's `reltuples` to 100 made the
+  rebuild 4,775,936 bytes larger with the data untouched. A GIN rebuild shown
+  budget-dependent at 46,784,512 / 48,021,504 / 49,143,808 bytes for 4MB / 64MB / 256MB.
+  The discovery that **`brin_page_items` emits a row for an unused line pointer**, which
+  cost one census rewrite before the revmap-equals-summaries invariant held 13 of 13. And
+  `brinvacuumcleanup`'s `VERBOSE` `num_pages` shown to predate its own summarization, so
+  three BRIN `VERBOSE` lines disagree with the census by construction.
+- **Reproductions.** `brin_desummarize_range()` + `brin_summarize_range()` freed nothing
+  and then grew a churned `minmax_multi` index 71 % (114,688 -> 196,608, `REINDEX` back
+  to 114,688) on a fresh fixture on a fresh cluster - byte-identical to the previous
+  review's numbers. The `reltuples` table re-measured with the statements properly
+  separated: 400,000 GIN entries / 44 BRIN at build (23 serial, 45 and 103 parallel,
+  against 23 true summary tuples) / 22 ranges after `VACUUM`. A 34-table analyze census
+  that named exactly one table and **declined a table sitting exactly on its threshold**.
+  The instrument matrix measured refusal by refusal.
+- **Removals.** The 13-cell matrix `c00`-`c12`, the pre-`VACUUM` evaluation and every
+  claim from it, the six-run reproducibility claim, all 19 old probes, and the
+  `c12_partial` raw-ratio example - all removed with the claims they backed, because
+  their protocol evaluated the method on unmaintained churn, took no measurement lock,
+  ran no census, declared no bound and had no BRIN stand-in, and because the sandbox they
+  ran on was deleted on 2026-08-25. One known limitation is **retired**: a statement that
+  reports over the payload-carrying set cannot produce the `churn_state` mislabel on a
+  missing baseline. 17 open questions, led by the absent bound, the unvalidated BRIN arm,
+  two held-snapshot fixtures that never reached the deleted-but-not-recyclable state, and
+  a `brinvacuumcleanup` count one tuple short of `pageinspect`'s.
+- **Method changes forced by the protocols**, all filed on the page: the capture
+  statement is a generator that refreshes only stale baselines and refuses a
+  never-analyzed table; the evaluation statement reports over every baselined index at
+  once so that one verbatim text is scored; and a new `est_reclaim_pct` column exists to
+  be scored against the oracle. The `verify` stage re-extracted all three statements from
+  the page and diffed them against the files that ran: **3 of 3 identical**, at 81, 23 and
+  195 lines, and the fenced 2,364-line script is identical to the file that ran.
+- **One correction after the fact, disclosed on the page**: the `start` stage read
+  `max_data_alignment` from `pg_control_init()` under the wrong column name, so that one
+  settings line failed silently during the measuring stages. It was fixed, the `start`
+  stage re-run to produce the 8 the page reports, and the page says so in `The last run`.
+  No measured number depends on that line and no other line changed.
+- **Bookkeeping**: `wiki/index.md` and `wiki/v17/index.md` carry rewritten entries,
+  `wiki/versions.md` a dated coverage note plus a new clause on the v17 row. `verified:`
+  untouched and **agent verification stays `not yet`**, because the demoted bound and the
+  two unreached coverage behaviors are filed as open questions rather than resolved.
+- **Validation**: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors
+  and 0 warnings**, and all 50 in-page anchor targets resolve to a heading.
+- **Teardown**: the script's own `clean` stage stopped the 17.11 server with
+  `pg_ctl -m fast -w stop`, reported no surviving `postmaster.pid`, 0 matching postgres
+  processes and port 55427 free, and deleted `.wiki-runtime/tmp/idxnb/` including the
+  7.4 GB build, install, data directory and all captured output. The four pre-existing
+  sandboxes under `.wiki-runtime/tmp/` were not created by this work and were left
+  untouched.
+
 ## [2026-09-15] concept v17 | mandatory non-B-tree, non-GIN bloat tests, with the B-tree page's maintenance assumptions kept
 
 - Filed [Mandatory Non-B-Tree, Non-GIN Bloat Tests
