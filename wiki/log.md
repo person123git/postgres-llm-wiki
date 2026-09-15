@@ -2,6 +2,102 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] concept v17 | mandatory non-B-tree, non-GIN bloat tests, with the B-tree page's maintenance assumptions kept
+
+- Filed [Mandatory Non-B-Tree, Non-GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-non-btree-non-gin-bloat-tests.md), the
+  wiki's **third** common concept page, at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Asked for as a concept page for
+  "all indexes that aren't GIN or B-tree", using [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) as the reference and
+  **keeping its assumptions about autovacuum, VACUUM, ANALYZE and auto-analyze**. This
+  ran as its own task under `MANDATORY File Or Change A Common Concept Document`; no
+  other document was touched.
+- **Prompt hygiene first.** The request carried typos ("all index that aren't gin or
+  btree", "asumptions"), so drafting stopped and the asker chose the corrected wording
+  before any page text existed. Three scope questions were settled at the same time:
+  the four core AMs are scored **plus an admission rule for any non-core AM**; the page
+  is **protocol-only, like the GIN page**, not a numbered corpus like the B-tree page;
+  and the basename is `mandatory-non-btree-non-gin-bloat-tests`.
+- **Scope.** hash, GiST, SP-GiST and BRIN are scored through their own
+  `ambulkdelete`/`amvacuumcleanup` pairs. A fifth AM - `contrib/bloom`, or one installed
+  by `CREATE ACCESS METHOD ... TYPE INDEX` - is admitted when a run states four things:
+  the registered vacuum pair, the ANALYZE-only behavior, where reclaimed space is
+  recorded, and which instruments accept it. `contrib/bloom` is the worked example on
+  all four.
+- **The ported rules are binding, unchanged in substance.** `VACUUM ANALYZE` on every
+  table the churn touched before the decide phase; neither `autovacuum = off` nor a
+  per-table `autovacuum_enabled = false` exempts a table; no fixture may leave churn
+  unmaintained. The launcher's three verdicts are recorded with their defaults, their
+  five `PGC_SIGHUP` GUCs and the six `ShareUpdateExclusiveLock` reloptions, and
+  **deliberately not applied on the vacuum side**. The simulated census recomputes
+  `relation_needs_vacanalyze`'s strictly-greater analyze test per table from the
+  effective reloption-or-GUC values, with the negative-`reltuples` clamp, the
+  `autovacuum_enabled` short circuit, two publication points and a
+  `stats_fetch_consistency` read rule.
+- **Two findings make the port more than a copy.** First, **BRIN inverts the
+  maintenance assumption**: `brinbulkdelete` removes nothing and `brinvacuumcleanup`
+  summarizes *every* unsummarized range, so the mandatory maintenance step makes the
+  index bigger, a BRIN fixture must be measured on both sides of it, and any quantity
+  mixing summarized and unsummarized ranges is a level. Because the `autosummarize`
+  work item `brininsert` queues is fulfilled only by an autovacuum worker, such a
+  fixture runs a `brin_summarize_new_values()` or targeted `brin_summarize_range()`
+  stand-in, with three differences named - the queueing and its drop-on-full-queue
+  `LOG`, the `ShareUpdateExclusiveLock` the SQL path takes on **table and index**, and
+  the worker's userid and `search_path` switch. Unlike GIN's index-only pending-list
+  flush, that stand-in **is** excluded by the measurement lock, so this protocol has no
+  open lock hole. Second, **the auto-analyze stand-in here is a plain `ANALYZE`**: all
+  four AMs no-op in ANALYZE-only mode - GiST, SP-GiST and BRIN test `analyze_only`,
+  hash covers the case by returning NULL stats - which is the other half of the
+  `analyze_rel` comment that names GIN as the only core exception.
+- **Also filed, as protocol rather than prose.** A per-AM proof obligation that the
+  index work actually ran, covering the three ways index cleanup is skipped, the bypass
+  that keeps it, and the hash case where cleanup returns NULL so `VACUUM` prints **no**
+  index line and writes **no** index statistics. One oracle, a measured `REINDEX INDEX`
+  bracketed by `pg_relation_size(index, 'main')`, with the per-AM inputs it depends on:
+  a hash rebuild sized from the **heap's** estimated row count (so the maintenance step
+  moves the oracle, and a never-vacuumed small table is floored at ten pages), a GiST
+  build that is sorted, buffered or insert-driven with the sorted path ignoring
+  fillfactor, SP-GiST's fillfactor-derived target free space, and BRIN's
+  `pages_per_range`. A per-AM instrument matrix: `pgstattuple` accepts hash and GiST and
+  refuses SP-GiST and BRIN, `pgstathashindex` is the only AM-specific reader,
+  `pageinspect` decodes hash, GiST and BRIN and has **no SP-GiST function at all**, and
+  `amcheck` 1.4 verifies none of the four. Three different free-page registries - the
+  index FSM for GiST and SP-GiST, the graduated heap-style FSM for BRIN, and private
+  bitmap pages for hash - which is why the FSM cross-check is defined for three AMs and
+  not for hash. Six cross-checks, the concurrency rules, the reading rules, the
+  declare-then-score rule, and a coverage list of behaviors a run must reach.
+- **Citations.** 198 distinct source ranges, every one resolving and in bounds inside
+  `raw/postgres-17/`, and every one listed under `## Source References`. No citation
+  comes from another version, and no wiki page is cited as evidence; the B-tree and GIN
+  pages are linked for navigation only.
+- **Open questions: 13.** Led by the absent corpus and the incomparability of four AMs
+  under one protocol, then BRIN's summarization-versus-bloat ambiguity, the three
+  stand-in differences, SP-GiST's unverifiable page classes and non-independent
+  `pages_*` counters, hash's unestablished FSM behavior and sparse splitpoint file, the
+  hash `VACUUM`-written index count the mandatory `ANALYZE` always overwrites, GiST's
+  build-only fillfactor, the unsimulated vacuum side, the unprovable second publication
+  point, the excluded parallel-vacuum path, and the fact that **no filed run has ever
+  been produced under this protocol**.
+- **Consumer page re-read and not edited**, as the read-only rule requires: [Detecting
+  Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL
+  17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)
+  covers five AMs including GIN, and its own protocol **does** run `VACUUM (ANALYZE)`
+  after each churn, so it already satisfies the maintenance step's first part. It still
+  does not conform: it files a pre-`VACUUM` evaluation taken on unmaintained churn, runs
+  no census, takes no measurement lock, has no BRIN summarization stand-in, declares no
+  bound or level for its published columns, and its GIN cells belong to the GIN page
+  rather than to this one. That is its own task. Its measured BRIN result - desummarize
+  plus summarize growing a churned index 71 % - is consistent with this page's BRIN
+  finding.
+- Bookkeeping: `wiki/v17/index.md` lists the page under `## Common Concepts`,
+  `wiki/index.md` under `#### Common Concepts` for v17, and `wiki/versions.md` carries a
+  new Coverage Note plus a clause on the v17 row. `scripts/wiki_lint` reports 0 errors
+  and 0 warnings. No service was started for this work - the page is source-only and
+  `MANDATORY Measurement Script` does not apply to a concept page - so there is nothing
+  to tear down and no sandbox was created. `verified_by_agent` is `not yet`.
+
 ## [2026-09-15] review v17 | COMMENT-baseline GIN heuristic re-run under the mandatory GIN bloat tests, from one published script
 
 - Reviewed and re-ran [A COMMENT-Stored Baseline and Normalized Index Growth for Finding
