@@ -2,6 +2,115 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] concept v17 | mandatory GIN bloat tests take the B-tree page's autovacuum, VACUUM, ANALYZE and auto-analyze rules
+
+- Extended [Mandatory GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) with every maintenance rule of
+  [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md). This ran as its
+  own concept-page task with the user's go-ahead, per `MANDATORY File Or Change A
+  Common Concept Document`. Source-only work: **no server was started, nothing was
+  measured, and no sandbox was created**.
+- **Prompt hygiene first.** The asker chose "correct and proceed". The original read
+  `update # Mandatory GIN Bloat Tests (unverified) to use all these assumptions and
+  rules in relation to autovacuum and vacuum and analyze, autoanalyze.`; the
+  corrections are `update` -> `Update`, the stray `# ` heading marker pasted before
+  the page title, the `(unverified)` hint treated as part of the title, the
+  ungrammatical series `autovacuum and vacuum and analyze, autoanalyze` ->
+  `autovacuum, VACUUM, ANALYZE and auto-analyze`, `autoanalyze` -> `auto-analyze`
+  (the spelling both concept pages use), and `common-concept` read as "the common
+  concept page". No page restates the prompt, because a concept page has no
+  `## Question` section; the corrected form is recorded here instead.
+- **Four scoping answers were taken before any edit.** The port is a **full,
+  binding** one, not a record-only note, so a conforming run must now perform it;
+  the auto-analyze gap is closed with an **explicit flush in the stand-in** rather
+  than filed as a limitation; and the existing settle step **stays separate** with
+  the maintenance `ANALYZE` after it.
+- **What the page now fixes**, seven things rather than six. The churn phase ends in
+  a fixed order - the recipe's writes, the settle step, the maintenance step, then
+  the census - under a three-part **maintenance assumption**: `VACUUM ANALYZE` on
+  every table the churn touched before the decide phase; no exemption from
+  `autovacuum = off` or from a per-table `autovacuum_enabled = false`; and no
+  fixture allowed to leave churn unmaintained. The launcher's three verdicts are
+  **recorded and not applied** - `50 + 0.2 * reltuples` dead tuples,
+  `1000 + 0.2 * reltuples` inserts with the negative-base skip, and
+  `50 + 0.1 * reltuples` modifications - with their five `PGC_SIGHUP` GUCs, the
+  60 s naptime, the six `ShareUpdateExclusiveLock` reloptions and the three
+  `pg_stat_all_tables` counters. The **simulated auto-analyze census** recomputes
+  `relation_needs_vacanalyze`'s strictly-greater analyze test per table from the
+  effective reloption-or-GUC values, with the negative-`reltuples` clamp, the
+  `autovacuum_enabled` short circuit, the `AutoVacOpts`/`extract_autovac_opts`
+  provenance, two publication points (`pg_stat_force_next_flush()` before the
+  maintenance `ANALYZE` zeroes `mod_since_analyze`) and a
+  `stats_fetch_consistency`/`pg_stat_clear_snapshot()` read rule.
+- **The port is not a copy, and the reason is a v17 finding the sibling page has no
+  counterpart for.** `analyze_rel` enters ANALYZE-only index cleanup only when the
+  command is not a `VACUUM ANALYZE`, and the comment there names **GIN as the only
+  core index AM** that does not no-op in that mode
+  (`analyze.c#L694-L721`); `ginvacuumcleanup` then flushes the pending list through
+  `ginInsertCleanup` when, and only when, the caller is an autovacuum worker
+  (`ginvacuum.c#L709-L717`). So the B-tree page's justification - "a foreground
+  `VACUUM ANALYZE` is a faithful stand-in because an autovacuum worker runs no
+  private kind of maintenance" - is **false for GIN**, and the page says so. A
+  fixture modelling the auto-analyze-only state runs `ANALYZE` **plus**
+  `gin_clean_pending_list()`, with three differences named: `full_clean` true versus
+  false, which only a concurrent inserter can expose and which the protocol's own
+  no-concurrency rule therefore neutralises; an index `RowExclusiveLock` with
+  ownership, recovery, other-session-temp and invalid-index refusals versus the
+  worker's table `ShareUpdateExclusiveLock`; and neither path reaching
+  `ginUpdateStats`, so such a fixture carries **stale metapage counts by
+  construction**, may not claim the settle step, and drops from four cross-checks to
+  three.
+- Two smaller findings went in with it: the `ANALYZE` half **cannot un-settle** a
+  settled index, because the gate above keeps the GIN callback out of the
+  `VACUUM ANALYZE` path entirely, but it **does** rewrite the measured index's
+  `relpages` from a live `RelationGetNumberOfBlocks` and its `reltuples` from a
+  scaled estimate; and a settle-path flush passes `full_clean` as the negation of
+  "am I an autovacuum worker", so a foreground `VACUUM` cleans the whole pending
+  list where a worker's stops at the remembered tail.
+- **Validation.** Every range was read in the pinned checkout before it was cited.
+  The page carries **586 citations over 144 distinct ranges** (up from 356 over 90);
+  a scripted check confirms all 144 files exist with every line range in bounds, and
+  that the set of ranges used in the body is **exactly** the set listed under
+  `## Source References`, in both directions. All 27 `## Contents` entries match the
+  headings in document order, no `#`-anchor link is dangling, and the ten required
+  concept-page headings plus `## Context Reviewed` and `## Evidence Map` are intact.
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**.
+  `raw/postgres-17/` stayed read-only at its pin.
+- **Open questions went from 6 to 12.** The six new ones: the vacuum side is assumed
+  and never simulated; two of the stand-in's three differences stand, because
+  reaching the worker's path at all means letting the launcher run, which the
+  isolation rule forbids; an analyze-only fixture loses the metapage cross-check;
+  the census's second publication point cannot be proven; the count
+  `ginvacuumcleanup` reports - the heap tuple count, which the code itself calls
+  bogus for a partial index - is now always overwritten by the mandatory `ANALYZE`;
+  and no previously filed run was produced under either new rule.
+- **Consumer re-read and not edited**, per step 6 of the workflow.
+  [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on
+  PostgreSQL 17 (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md)
+  no longer conforms in three ways: its six-step procedure has no maintenance step,
+  it runs no census, and it has no auto-analyze-stand-in fixture. Its page-census
+  numbers would not move if the `ANALYZE` were added - an `ANALYZE` touches no GIN
+  page, and the census is bounded by a captured `pg_relation_size`, not by the
+  `relpages` its prose names - but three of the protocol's required behaviors are
+  now unreached. That re-run is its own task.
+- **The B-tree concept page was read and not edited**, per the read-only rule. One
+  imprecision in it turned up while porting and is reported rather than fixed: its
+  shipped-test row says `pg_regress` "adds only `log_autovacuum_min_duration = 0`"
+  to the temporary instance, where `pg_regress.c#L2392-L2404` appends six settings
+  and that is merely the only autovacuum-related one. The GIN page states the
+  narrow form. Fixing the sibling page needs its own task.
+- **Teardown**: nothing to stop. No postmaster, standby, pooler, watcher or
+  background `psql` was started for this work, and no `.wiki-runtime/tmp/` sandbox
+  was created or deleted.
+- Bookkeeping: the GIN entries in `wiki/v17/index.md` and `wiki/index.md` were
+  extended (and their "seven v17 behaviors" corrected to eight), `wiki/versions.md`
+  gained a dated coverage note plus a clause on the v17 coverage cell. `verified:`
+  untouched and **agent verification stays `not yet`**: the page's new claims are a
+  fresh source reading that has not been re-checked in a second pass, and nothing on
+  it has been exercised by a run.
+
 ## [2026-09-15] concept v17 | mandatory GIN bloat tests, protocol-scoped, extracted from the GIN contrib page
 
 - Filed [Mandatory GIN Bloat Tests
