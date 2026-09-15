@@ -2,6 +2,155 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-15] concept v17 | GIN bloat tests: a settled index is not a maintained one, and the rule that says so
+
+- Third and last of the approved tasks. Ported `### The maintenance must not be defeated` to
+  [Mandatory GIN Bloat Tests (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Same five forbidden states as
+  the other two pages; the GIN leg carries the sharpest consequence of the three and one extra
+  distinction the page needed.
+- **The GIN finding.** With the horizon pinned, `lazy_scan_heap` never enters `lazy_vacuum`, so
+  `ginbulkdelete` never runs - and `ginvacuumcleanup` then takes its `stats == NULL` branch,
+  flushes the pending list, walks every block from `GIN_ROOT_BLKNO` and rewrites the metapage
+  counters anyway. **Every proof the settle step demands is satisfied with not one dead entry
+  removed.** The failure is therefore not merely silent on GIN, it is reassuring, which is why the
+  rule adds an **entry-side proof obligation** beside the settle proof: the `VERBOSE` index line's
+  `num_pages`/`pages_deleted`/`pages_free`, or the census's own posting-tree counts.
+- **The distinction the page needed.** Point 4 of the settle step already tells a run to expect
+  more than one `VACUUM` before deleted pages count as free, because `GinPageIsRecyclable` refuses
+  this VACUUM's own delete xid. That lag is engine behaviour with nobody holding anything; a pinned
+  horizon is different in kind, since nothing is deleted for the lag to apply to. The rule says so
+  explicitly so the two are not conflated in a fixture report.
+- **Three declared exceptions, because this page requires two of them.** Its coverage list asks
+  for a snapshot held across the settling `VACUUM` and for a `VACUUM` whose index cleanup did not
+  run; both stay required, declared, and publishable only as held-horizon or changed-nothing
+  readings. The third is the `SHARE ROW EXCLUSIVE` measurement lock, which may not be held across
+  the settle step or the maintenance step.
+- Also updated: a ninth `## Why It Exists` property, `## Definition` from seven fixed things to
+  eight, a pointer from the maintenance assumption, six `## Evidence Map` rows, a `## Where It
+  Appears in Source` area row, a callers-and-callees row for the effectiveness boundary, a
+  `## Context Reviewed` bullet, a fourth VACUUM boundary under `## Interactions with Other
+  Concepts`, one new `## Open Question` (the proof is one-sided, and on GIN the settle proof cannot
+  stand in for it), and 24 new `## Source References` entries.
+- **Bookkeeping for all three tasks, done once here.** `wiki/v17/index.md` and `wiki/index.md`
+  both carry a new clause on each of the three `Common Concepts` entries, and `wiki/versions.md`
+  gained a Coverage Note plus a clause on the v17 row. `scripts/wiki_lint` reports 0 errors and
+  0 warnings across the whole wiki. All three pages are source-only, so `MANDATORY Measurement
+  Script` never applied: no server was started for any of the three tasks, nothing to tear down,
+  no sandbox created. `verified:` untouched and `verified_by_agent` stays `not yet` on all three.
+- **Left for the user, not done here.** No consumer page was edited, as the read-only rule
+  requires. Five filed pages score against these protocols - the core-SQL estimator, the
+  COMMENT-baseline B-tree heuristic, the `pgstatindex` bloat page, the GIN contrib waste page and
+  the COMMENT-baseline non-B-tree heuristic - and none has ever been checked against this rule.
+  Each needs its own task: their scripts would have to record the maintenance statement's
+  completion, the `dead but not yet removable` count and the horizon holders per fixture, and any
+  fixture that holds a snapshot across a maintenance step would have to declare it.
+
+## [2026-09-15] concept v17 | B-tree bloat tests: the same no-defeating-the-maintenance rule, ported to the reference page
+
+- Second of the three approved tasks. Ported `### The maintenance must not be defeated` to
+  [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) at unchanged pin
+  `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), the page the other two protocols took
+  their maintenance assumption from. Same five forbidden states, same reasons, same
+  citations; the differences are the ones this suite's own shape supplies.
+- **What is different here.** The suite is a numbered corpus rather than a protocol, so the
+  rule is anchored to it: the rule sits beside part 3 of the assumption and names the
+  retired fixtures 65, 67, 113a and 113c as the shape a defeated `VACUUM` reproduces
+  *without* a missing statement in the recipe. **No fixture is exempt today** - unlike the
+  non-B-tree and GIN pages, this suite requires no held-snapshot fixture and has no
+  measurement lock, so instead of an exceptions table the rule says a later fixture whose
+  point is a pinned horizon is filed as its own numbered test with the state declared. The
+  index-vacuum bypass is explicitly **not** such a state and stays under `### What the
+  suite does not cover`, whose bullet now says the bypass is one of two ways the state
+  survives a `VACUUM` the suite ran, the other being the horizon this rule forbids.
+- **The B-tree-specific finding.** A pinned horizon costs the drain twice. No entry is
+  removed, so `_bt_pagedel` empties nothing and the leaves stay as dense as the build left
+  them; and pages an earlier `VACUUM` did delete stay unusable, because
+  `_bt_pendingfsm_finalize` recomputes the horizon and then **stops at the first page**
+  `GlobalVisCheckRemovableFullXid` refuses - the same test `BTPageIsRecyclable` applies in
+  place - so `pgstatindex` keeps counting them as `deleted_pages`. That page-class trace is
+  filed as a fourth proof obligation, beside the completed statement, the `dead but not yet
+  removable` count and the `pg_stat_activity`/`pg_replication_slots` reads.
+- Also updated: a sixth `## Why It Exists` reason, a clause in `## Definition`, a fourth
+  VACUUM boundary under `## Interactions with Other Concepts`, six `## Evidence Map` rows
+  (including the B-tree recycling row), a `## Where It Appears in Source` area row, a
+  callers-and-callees row for the effectiveness boundary, a `## Context Reviewed` bullet,
+  one new `## Open Question` - the proof is one-sided, and the drain-exempt fixtures 70, 71,
+  family 3 and the listed controls have no churn and therefore no signal at all - and 21 new
+  `## Source References` entries, among them `nbtree.h#BTPageIsRecyclable`,
+  `nbtpage.c#pendingfsm-horizon` and the same three files the non-B-tree page gained.
+- Every new range read and bounds-checked in `raw/postgres-17/`; `scripts/wiki_lint` reports
+  0 errors and 0 warnings; no server started, nothing to tear down. `verified:` untouched,
+  `verified_by_agent` stays `not yet`. The four consumer pages that score against this suite
+  were **not** edited; they now have a rule they have never been checked against, which is
+  recorded in the third entry.
+
+## [2026-09-15] concept v17 | non-B-tree, non-GIN bloat tests: a fixture may not defeat the maintenance it issued
+
+- Reviewed [Mandatory Non-B-Tree, Non-GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-non-btree-non-gin-bloat-tests.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) against one question:
+  does the page mandate that a test must not create abnormal conditions in the database
+  engine that prevent autovacuum, `VACUUM`, `ANALYZE` or auto-analyze? **It did not.**
+  This is the first of three tasks the asker approved, one per protocol page; the B-tree
+  and GIN pages follow in their own entries.
+- **Prompt hygiene first.** The request carried grammatical errors ("check if document has
+  a mandatory enforcement on test that test should not cause abnormal scenarios on the db
+  engine that prevents autovacuum vacuum analyze or auto analyze"), so drafting stopped
+  and the asker chose the corrected wording before any page text existed: "review the
+  common-concept page ... and check whether it mandates that a test must not create
+  abnormal conditions in the database engine that prevent autovacuum, `VACUUM`, `ANALYZE`
+  or auto-analyze".
+- **The review finding.** The page enforced *issuing* the maintenance, never its *effect*.
+  Part 3 of the maintenance assumption forbade leaving churn unmaintained; part 2
+  explicitly permitted `autovacuum = off` and `autovacuum_enabled = false` as compensated
+  states; the per-AM "Proving the index work actually ran" table was the nearest thing and
+  is aimed at `INDEX_CLEANUP`, the failsafe and the bypass. Nothing covered a maintenance
+  statement that runs and cannot work, and the page went the other way twice: its coverage
+  list *requires* a GiST fixture holding a snapshot across the maintenance step and a
+  `VACUUM` whose index cleanup did not run, and its own `SHARE ROW EXCLUSIVE` measurement
+  lock excludes `VACUUM` and `ANALYZE` by design.
+- **Filed: `### The maintenance must not be defeated`**, a new `## How It Works`
+  subsection with five forbidden states, a four-row proof obligation and three declared
+  exceptions. Forbidden from the first churn statement to the end of the census: an open
+  transaction or held snapshot anywhere in the cluster, a prepared transaction, a
+  replication slot holding an `xmin`, a lock conflicting with `ShareUpdateExclusiveLock`
+  across the maintenance step, and a `statement_timeout`, `transaction_timeout` or
+  `lock_timeout` short enough to fire inside it. A disabled launcher is stated **not** to
+  be a defeat, and the rule does not ask a run to switch autovacuum back on.
+- **Why each state is a defeat, from the pinned tree.** `vacuum_get_cutoffs` takes
+  `OldestXmin` from `GetOldestNonRemovableTransactionId`; `ComputeXidHorizons` folds in
+  every backend's `xid`/`xmin` and takes the older of its answer and any slot's `xmin`,
+  skipping only `PROC_IN_VACUUM` and `PROC_IN_LOGICAL_DECODING`; a prepared transaction's
+  dummy `PGPROC` is what keeps its xid considered running; under a pinned horizon rows
+  stay `HEAPTUPLE_RECENTLY_DEAD` and are only counted, and `lazy_scan_heap` enters
+  `lazy_vacuum` only when dead TIDs were collected - so a successful `VACUUM` degenerates
+  into precisely the cleanup-only call the page's per-AM table already describes. On the
+  command side, a non-wraparound worker is given `VACOPT_SKIP_LOCKED` and gives up with
+  `lock not available`, a backend queued behind one sends it `SIGINT`, and the launcher and
+  worker both force `statement_timeout`, `transaction_timeout`, `lock_timeout` and
+  `idle_in_transaction_session_timeout` to `0` "to avoid letting these settings prevent
+  regular maintenance from being executed" - the engine's own words for this hazard.
+- **Also updated on the page**, so the new rule is not an orphan: an eleventh `## Why It
+  Exists` property ("a maintenance command can run to completion and still do nothing to
+  the index"), the `## Definition`'s count from nine fixed things to ten, a pointer from
+  the maintenance assumption, five `## Evidence Map` rows, a `## Where It Appears in
+  Source` area row for the removal horizon and the lock wait, a callers-and-callees row
+  for the effectiveness boundary, a `## Context Reviewed` bullet, a fourth VACUUM boundary
+  under `## Interactions with Other Concepts`, one new `## Open Question` (the
+  effectiveness proof is one-sided: a nonzero "dead but not yet removable" count proves a
+  pinned horizon, a zero count proves almost nothing, and `pg_stat_activity` and
+  `pg_replication_slots` are reads rather than interlocks), and 19 new `## Source
+  References` entries including three files the page had never cited - `procarray.c`,
+  `twophase.c` and `proc.c`.
+- Citations: every new range read and bounds-checked in `raw/postgres-17/` before filing;
+  no cross-version citation; no wiki page cited as evidence. `scripts/wiki_lint` reports
+  0 errors and 0 warnings. The page is source-only, so `MANDATORY Measurement Script`
+  does not apply and no server was started - nothing to tear down, no sandbox created.
+  `verified:` untouched and `verified_by_agent` stays `not yet`; the consumer pages were
+  not edited, and the conformance question they now face is noted in the third entry.
+
 ## [2026-09-15] review v17 | COMMENT-baseline non-B-tree heuristic re-run under both bloat protocols, from one published script
 
 - Reviewed and re-ran [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
