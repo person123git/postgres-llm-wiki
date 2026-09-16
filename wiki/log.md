@@ -2,6 +2,128 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-16] review v17 | COMMENT-baseline non-B-tree heuristic re-run under the no-defeating-the-maintenance rule
+
+- Reviewed and re-ran [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
+  COMMENT-Stored Baseline in PostgreSQL 17
+  (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md)
+  end to end at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11)
+  against `### The maintenance must not be defeated`, the rule
+  [Mandatory Non-B-Tree, Non-GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-non-btree-non-gin-bloat-tests.md) and
+  [Mandatory GIN Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) both gained on
+  2026-09-15 **after** this page's last run. The three concept-page entries of that
+  day named five consumer pages that had never been checked against it; this is the
+  **first** of them brought onto it.
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17, review : non-btree-index-inflation-comment-baseline.md`;
+  the corrections are `agents.md` -> `AGENTS.md`, lowercase `postgresql` ->
+  `PostgreSQL`, the space before the colon in `review :`, the bare filename replaced
+  by the page's own title, the lowercase sentence opening and the missing terminal
+  period. Both forms are filed under the page's `## Question` beside the three earlier
+  prompts, which now carries four.
+- **Two scoping answers were taken before any edit**: a full re-run under the new rule
+  rather than a paper audit, and the filed 2,364-line script **edited in place**
+  rather than replaced.
+- **The review's finding is that the page's two held-snapshot fixtures had never
+  pinned the horizon at all.** `g08` and `n10` opened their `REPEATABLE READ` snapshot
+  *after* the churn committed, so its `xmin` was already past the deleting xid and
+  those tuples were removable. The 2026-09-15 run had recorded both as "not reached"
+  and blamed the recipe shape, proposing a contiguous key band as the next attempt;
+  that was half the defect and **not the decisive half**. Fixed both ways - snapshot
+  opened **before** the churn, delete changed to a contiguous id band - and the
+  maintenance `VACUUM` now reports **240,000** and **960,000 tuples dead but not yet
+  removable** and deletes **no index page**: `pages: 2970 in total, 0 newly deleted, 0
+  currently deleted, 0 reusable` and `479 in total, 0 newly deleted, 0 currently
+  deleted, 0 reusable`. The `VACUUM` after release deletes **2,330 of 2,970** GiST
+  pages and **375 of 479** GIN posting-tree pages, both at FSM count **0**, which is
+  the deleted-but-not-recyclable behavior both protocols require. `n10` was also
+  rebuilt on three hot keys, because its old 600,000 distinct keys produced no posting
+  tree at all, and sized at 1,200,000 rows after a 300,000-row version landed at
+  1,024,000 bytes, under the method's own 1 MB floor.
+- **On GIN the defeat is reassuring rather than merely silent**, which is the GIN
+  page's own warning reproduced: under the held snapshot the metapage identity held
+  exactly (`meta(total=479, entry=1, data=477)` against `census(scanned=479, entry=1,
+  data=477, deleted=0)`) and the `VERBOSE` `num_pages` equalled the blocks scanned, so
+  **invariants I8 and I9 both passed on a `VACUUM` that removed not one entry**. Only
+  the `dead but not yet removable` count and the horizon read caught it.
+- **Four new invariants, filed before any fixture existed.** I10: `dead but not yet
+  removable` is 0 on **27 of 27** `VACUUM`s outside the declared exceptions. I11:
+  **33 of 33** maintenance logs carry no `skipping vacuum of`/`skipping analyze of`
+  line and no cancellation, with exactly one distinct timeout set across every step -
+  all four settable timeouts forced to `0`, which is what the autovacuum launcher and
+  worker do to themselves "to avoid letting these settings prevent regular maintenance
+  from being executed". I12: **0 overlaps** between 96 census lock intervals and 33
+  maintenance intervals. I13: **62 of 66** horizon readings entirely clean, the other
+  4 being the two declared snapshots named by pid and xmin, with **0** replication
+  slots and **0** prepared transactions in all 66. Five exceptions X1-X5 are declared
+  rather than satisfied, and the scored maintained state for `g08` and `n10` is now the
+  `settle2` census rather than the held-horizon one.
+- **Script changes, all in place**: a `horizon_probe` helper reading
+  `pg_stat_activity`, `pg_replication_slots` and `pg_prepared_xacts` on each side of
+  every maintenance step; a `run_maint` wrapper that forces the four timeouts to `0`
+  and records the maintenance interval; `lock_acquired`/`lock_released` per census; a
+  crosscheck pass that parses every maintenance log for its `dead but not yet
+  removable` count, skip lines and cancellations; a `declared_exception` table; a
+  `release_snapshot` that terminates the holder instead of waiting out a sleep; and a
+  `HOT_ROWS` environment variable. **2,364 -> 2,640 lines**, verified byte-identical to
+  the file that ran, with the three published statements re-extracted from the page at
+  81, 23 and 195 lines, **3 of 3 identical**.
+- **The scores are stable across the change.** 30 of 31 decisions right, 0 false
+  positives, 1 false negative (`h06`, `VACUUM (INDEX_CLEANUP OFF)`, 36.94 %
+  reclaimable), 14 flagged and each repaying 37.6-85.7 %. `est_reclaim_pct` **failed
+  again** as a declared upper bound - 19 held, 12 violated by up to 11.94 points - so
+  it stays demoted to a level; within 1 point of the oracle on 21 of 29 and within 5
+  on 25. **29 of 31 `(B, C, R)` triples are byte-identical to the 2026-09-15 run** on a
+  separate cluster from the same pin; the exceptions are `n10`, rebuilt on purpose, and
+  `g09`, whose churned file has now read 453,484,544 / 454,483,968 / 454,885,376 bytes
+  over three passes.
+- **Two passes were abandoned and contribute no number**, both recorded on the page:
+  the first when `n10` fell under the 1 MB floor, the second when the held-snapshot
+  fixtures still read 0 dead-but-not-removable, which is what exposed the ordering
+  defect. `reset` drops the declarations database as well as the fixture database, so
+  the declarations were re-filed at **12:27:26Z**, 88 seconds before the first baseline
+  payload at **12:28:54Z** and into a cluster with no fixture database; the `declare`
+  stage's guard refused twice during the review.
+- **Run, 2026-09-16, 12:27:26Z to 12:40:07Z on `Linux x86_64`** (Ubuntu 24.04 on a
+  WSL2 kernel, gcc 13.3.0, 22 cores, `JOBS=20`, `block_size` 8192,
+  `max_data_alignment` 8): `make check` **All 225** plus **All 8 / 1 / 1** on
+  `pageinspect`, `pgstattuple` and `pg_freespacemap`, 371 output files, 12 min 41 s
+  from a built tree.
+- **Open questions 17 -> 20.** The three new ones: the horizon proof is a pair of reads
+  beside the statement rather than an interlock around it, and is silent on the five
+  insert-only fixtures; whether a fixture that declares an exception should be scored
+  at all is a judgement this page made rather than derived; and forcing the timeouts to
+  `0` removes the hazard the rule names but leaves the cut-short maintenance state
+  unmeasured. Old question 4, the two unreached fixtures, is **closed by measurement**.
+- **Validation**: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors
+  and 0 warnings**; 250 citation links over 110 distinct ranges in 55 files all resolve
+  and are in bounds, none from another version; the `## Contents` list matches all 53
+  `##`/`###` headings in document order with no dangling anchor. `raw/postgres-17/`
+  stayed read-only at its pin.
+- **The concept pages were read and not edited**, per `MANDATORY Common Concept
+  Documents`. Nothing in either needed a change: every clause this run exercised was
+  already there, the three declared exceptions are the ones they declare, and the
+  one-sidedness the GIN page files as its own open question is exactly what this run
+  reproduced.
+- **Teardown**: the script's `clean` stage stopped the 17.11 postmaster with
+  `pg_ctl -m fast -w stop`, reported no `postmaster.pid` in the data directory, 0
+  matching `postgres` processes and port 55427 free, and deleted
+  `.wiki-runtime/tmp/idxnb/` entirely, including the 7.3 GB build, install, data
+  directory and all captured output. No other service was started, and the four
+  pre-existing sandboxes under `.wiki-runtime/tmp/` were not created by this work and
+  were left untouched.
+- Bookkeeping: `wiki/index.md` and `wiki/v17/index.md` carry rewritten entries, and
+  `wiki/versions.md` a dated coverage note plus a new clause on the v17 row.
+  `verified:` untouched and **agent verification stays `not yet`**, because the demoted
+  bound, the unvalidated BRIN arm and 20 open questions stand.
+- **Left for the user, not done here.** Four consumer pages still face this rule
+  unchecked: the core-SQL B-tree estimator, the COMMENT-baseline B-tree heuristic, the
+  `pgstatindex` bloat page and the GIN contrib waste page. Each needs its own task,
+  and the ordering defect found here - a snapshot opened after the churn commits pins
+  nothing - is worth checking on any of them that hold one.
+
 ## [2026-09-15] concept v17 | GIN bloat tests: a settled index is not a maintained one, and the rule that says so
 
 - Third and last of the approved tasks. Ported `### The maintenance must not be defeated` to
