@@ -12118,3 +12118,116 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
 - Updated global and v12 index summaries and the v12 coverage summary. This entry supersedes incorrect claims in the original filing summary; historical entries were retained.
 - Validation baseline from the read-only review: wiki_lint reports 9 existing errors and 2 warnings outside this page (missing v18/v19 pins, a v14 pin mismatch, six missing v18 source-reference instances, and dirty v12/v14 checkout warnings). Final validation reproduced exactly that baseline: no new lint findings. The revised page passed a separate check of all 421 source citation instances, local links, contents entries, preserved verification fields, SQL comment tags and git diff whitespace.
 - Environment: no PostgreSQL server, daemon, build or measurement sandbox was started; no service teardown was needed. Raw checkouts were not modified. No common-concept page was created or edited.
+
+## [2026-09-16] review v17 | pgstatindex bloat page: brought onto the no-defeat rule, re-verified and re-run on both legs
+
+- Reviewed and revised [B-Tree Bloat and Wasted Space From pgstatindex Alone, on
+  PostgreSQL 12 and 17
+  (unverified)](v17/questions/indexing/btree-bloat-with-pgstatindex.md) at
+  unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+- **Prompt hygiene**: the request read `follow agents.md, in postgresql 17,
+  review : btree-bloat-with-pgstatindex.md`. Five defects: `agents.md` for
+  AGENTS.md, lowercase `postgresql`, a space before the colon, a lowercase
+  sentence start, and the page named by its filename rather than by its title.
+  The asker chose **correct and restate**, **re-verify every citation and re-run
+  both legs** rather than a source-only or list-only pass, and **repair in
+  place**. All three are recorded under the page's `## Question`.
+- **What the review found that earlier passes could not.** The concept page
+  [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) gained
+  `### The maintenance must not be defeated` on 2026-09-15, after this page's
+  previous run; this page was **the last of that page's three consumers** still
+  outside the rule. Its maintenance step was two statements with no proof
+  attached, and its fixture, drain and census sessions ran at
+  `statement_timeout = '900s'` with a 2- or 5-second `lock_timeout`.
+- **Citations: nothing was wrong.** All **328 occurrences, 109 distinct ranges
+  over 47 files**, were re-read against the pin for bounds *and* content. Every
+  one resolves, lies inside its file and supports its label, so the pass
+  corrected no citation. It added 13 ranges for the new material, taking the
+  body to 254 occurrences over 122 ranges in 50 files, and `## Source
+  References` was regenerated from exactly that set.
+- **Four of the five suite `sql` blocks were repaired in place.** Block 2, the
+  harness, gained the `maint`, `horizon` and `pageclass` tables and
+  `maint_begin()`, `maint_end()`, `maint_after()` and `horizon_probe()`; none
+  of the three tables carries a primary key, because this page's statement
+  reports every B-tree index and a harness index would enter the report it is
+  scoring. Block 4's 33 maintenance statements and block 5's 38 drains each
+  became one `VACUUM (VERBOSE, ANALYZE)` between the brackets, with the three
+  timeouts that exist on both majors set to 0 in every maintenance session -
+  `transaction_timeout` is left to its default, since 12.2 has no such setting
+  and `maint_begin()` records it as `n/a`. Block 6 probes the horizon on both
+  sides of the census and reads the page classes of every planned index. Block
+  3, family 1, is unchanged. Fixture 85 keeps a bracketed `VACUUM (VERBOSE)`
+  with no `ANALYZE`, because stale statistics are the trap it builds.
+- **Both leg scripts** gained a per-leg `parse_verbose` (the 17 wording reads
+  the `tuples: … are dead but not yet removable` continuation line; the 12
+  wording reads the `INFO`/`DETAIL` pair, unanchored, because psql prefixes a
+  `-f` message with `psql:file:line:`), a `maint_proofs` that **dies rather than
+  score**, a `maint_skips` reading from a new maintenance mark the `suite` stage
+  writes, a split of stdout and stderr in `suite` and `churn`, a per-fixture
+  page-class table in the verdicts output, and a per-invocation run mark so the
+  error audit counts this run's errors. Every hash constant moved with the
+  blocks.
+- **Three defects were found by running it**, and fixed before the filed run:
+  the 12 leg's VERBOSE patterns were anchored at the start of the line and
+  matched nothing; `dead_after` read the counters before 12.2's collector had
+  applied the vacuum's report, which `maint_after()` now re-reads after the
+  census; and the skip-line check read from the cluster's run mark, so a re-run
+  inherited the `race` stage's deliberate lock-timeout cancellation.
+- **The filed run, 2026-09-16 on Linux x86_64** (Ubuntu 24.04, gcc 13.3.0, ICU
+  74.2, 22 cores, `JOBS=10`), one invocation per leg, both legs concurrent:
+  **2 minutes 42 seconds** for the 17 leg and **8 minutes 27 seconds** for the
+  12 leg, on trees built earlier the same day. 17.11 `make check` **All 225**
+  plus `pgstattuple` **All 1**; 12.2 **All 192** plus **All 1**.
+- **Nothing was defeated.** 67 maintenance statements per leg - 38 `drain`, 28
+  `fixture`, 1 `prebuild` - all completed; `dead but not yet removable` **0 on
+  every one**; 22,457,808 and 22,457,692 tuples removed; **73 of 73** horizon
+  probes clean on each leg; one timeout set per leg, four zeros on 17.11 and
+  three plus `n/a` on 12.2; **0** skip or cancellation lines; page classes
+  recorded for 126 and 117 indexes, 10,340 and 11,868 deleted pages.
+- **The score reproduces the 2026-09-13 run fixture for fixture**: `PASS` on
+  **126 of 126** on 17.11 and **117 of 117** on 12.2, 0 `CRITICAL FALSE
+  POSITIVE`, 0 `FALSE POSITIVE`, 0 `FALSE NEGATIVE`, the same three `want_stage`
+  misses (`p73`, `p76`, `f88`), worst over-estimate `+10.0` and `+6.3`, worst
+  under-estimate `−4.1` on both, `p32` again. The only movement is test 120's
+  probabilistic precondition, which held on both legs this time: the 17 leg
+  scores 126 rather than 125 and reads 93 rather than 92 within one point.
+- **Every other measured number was re-derived** and the page updated: 365 and
+  350 rows printed, 367 and 352 candidates, 134 and 129 `NaN` densities, the
+  `compare` stage's 369 and 354 indexes with 0 differing rows in either
+  direction, 29 and 25 clamped leaf terms, the residual table, the guard table,
+  the crossleg census (289 shared keys, 181 identical, 42 differing fixture
+  rows of which 40 are smaller on 17.11), the cost table (258.0 and 250.6 ms,
+  62 and 57 plan lines), the race timings and OIDs, and 17 and 16 logged
+  errors, every one requested by a stage.
+- **One honest new reading**: the report-versus-view check found one shared row
+  disagreeing on 17.11, `pg_toast.pg_toast_2618_index`, the TOAST index of
+  `pg_rewrite`, written by the harness view's own creation between the two
+  readings. No fixture disagreed on either leg. The page now says so instead of
+  claiming the two readings agreed on every row.
+- **Two open questions added**: the horizon probe is a read beside the
+  statement rather than an interlock, so proof 2 is the one the run dies on;
+  and the `bl` guard fixtures keep plain, unbracketed `VACUUM`s because they are
+  not suite fixtures, which is an argument rather than a measurement for the
+  set that carries this page's largest miss.
+- **Not changed**: the filed statement, `sql` block 1, still hashes to
+  `3d4507a54b38…` at 123 lines and 5,976 bytes and ran unmodified on both
+  majors; and the concept page was read in full and **not edited**, per the
+  read-only rule.
+- **Bookkeeping**: `wiki/index.md` and `wiki/v17/index.md` carry rewritten
+  entries, and `wiki/versions.md` a rewritten v17 passage plus a dated coverage
+  note. `verified:` untouched and **agent verification stays `not yet`**.
+- **Validation**: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0
+  errors and 0 warnings**. All 122 citation ranges were re-checked in bounds
+  after the edits. The published `sh` blocks were diffed against the two files
+  that ran and are identical, and all six `sql` blocks hash to the texts both
+  legs executed.
+- **Teardown**: the 12 leg's `clean` stage and then the 17 leg's stopped both
+  servers with `pg_ctl -m fast -w stop`, confirmed no `postmaster.pid`, no
+  postgres process and an empty socket directory each, and deleted
+  `.wiki-runtime/tmp/pgsi/`. Confirmed afterwards: `pgrep -a postgres` empty and
+  ports 55417 and 55412 free. The review's own scratch directory
+  `.wiki-runtime/tmp/pgsi-review/` was deleted too. The five pre-existing
+  sandboxes under `.wiki-runtime/tmp/` were not created by this work and were
+  left untouched.
