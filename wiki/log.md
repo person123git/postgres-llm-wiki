@@ -2,6 +2,97 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-16] review v12 | very large shared_buffers: nothing wrong, six things missing
+
+- Reviewed [Pros and Cons of a Very Large shared_buffers Such as 256 GB on a 1 TB RAM
+  System in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/very-large-shared-buffers.md) at
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2, tag `REL_12_2`,
+  clean worktree).
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 12, review question: # Pros and Cons of a Very Large shared_buffers Such as 256 GB on a 1 TB RAM System in PostgreSQL 12 (unverified)`;
+  the defects are `agents.md` -> `AGENTS.md`, lowercase `postgresql`, the lowercase
+  sentence opening, a stray Markdown `#` inside the sentence, the page-state hint
+  `(unverified)` carried into the prompt, and no terminal period. Both forms are filed
+  under the page's `## Question`, which now carries two prompts.
+- **Three further scoping answers were taken before any edit**: a **full claim-by-claim
+  re-verification** rather than a spot check; **stay source-only**, so no server was
+  built and no `## Measurement Script` was added; and **report the findings before
+  editing**, which was done, then "fix issues".
+- **The verification found no defect.** All **421** citation instances over **163**
+  distinct ranges in **55** files resolve, are in bounds, and match their labels;
+  `## Source References` was already exactly equal to the body's distinct set with no
+  orphans either way; all 17 `## Contents` anchors resolved; front-matter key order,
+  the `(unverified)` title and `verified:` were compliant; all 20 GUC contexts
+  re-checked in `guc.c`; and every conditional byte total, threshold and the 55,924
+  bgwriter floor reproduced, cast included. So this pass **added the omissions instead
+  of correcting claims**, taking the page to **188** ranges.
+- **The mapping hash is now derived, closing the page's own open question.**
+  `hash_estimate_size()` is arithmetic: `StrategyShmemSize()` asks for
+  `NBuffers + NUM_BUFFER_PARTITIONS` = 33,554,560 entries, `my_log2()` is a ceiling so
+  the bucket count is **2^26**, and the estimate is a 262,144-slot directory, 262,144
+  segments of `MAXALIGN(256 * 8)`, and elements in groups of `choose_nelem_alloc(24)` = 51
+  at 40 bytes: 2 MiB + 512 MiB + 1,280 MiB, about **1.75 GiB**. That makes the hash the
+  largest non-page consumer — bigger than the descriptors — and raises the overhead
+  beyond the pages from 4.375 GiB to about **6.13 GiB**.
+- **256 GiB is the wrong side of a power-of-two boundary.** 2^25 buffers plus the 128-entry
+  partition term lands 128 past 2^25, doubling the buckets to 2^26 and the segment array
+  from 256 MiB to 512 MiB. `shared_buffers = 33554304` (2^25 − 128) gives up one MiB of
+  cache and saves about **257 MiB** of shared memory. Filed with the caveat that
+  `hash_estimate_size()` documents default-parameter assumptions while `InitBufTable()`
+  passes `HASH_PARTITION`.
+- **A new con: the sync-request queue's own drain and compaction scale with `NBuffers`,**
+  both under `CheckpointerCommLock` exclusive. `AbsorbSyncRequests()` copies a full queue
+  with an ordinary `palloc` — **768 MiB** here — and
+  `CompactCheckpointerRequestQueue()` takes a 32 MiB `palloc0` plus a queue-sized local
+  hash (1 MiB directory, 256 MiB segments, ~1.5 GiB of 48-byte elements). Pro 5 previously
+  presented the `NBuffers`-sized queue as pure headroom.
+- **A new `### Hard limits above 256 GB` section** answers the "or more" half of the
+  question: the setting itself stops at `INT_MAX / 2` blocks = **8 TiB minus one block**;
+  autoprewarm's dump `palloc` exceeds `MaxAllocSize` from 53,687,092 blocks =
+  **409.6 GiB**; a full-queue drain does from 44,739,243 blocks = **341.3 GiB**. The last
+  two are `elog(ERROR)` in one process, not a refusal to start, and neither is tested.
+- **Four more additions.** `DROP_RELS_BSEARCH_THRESHOLD` = 20 means a 20-relation drop
+  costs up to **671,088,640** `RelFileNodeEquals()` comparisons in its single pass;
+  a both-forks truncation is **three** full-pool passes, because
+  `FreeSpaceMapTruncateRel()` and `visibilitymap_truncate()` each call `smgrtruncate()`;
+  the autoprewarm dump **recurs every 300 s** by default, so the page gained
+  `pg_prewarm.autoprewarm` (restart) and `pg_prewarm.autoprewarm_interval` (reload),
+  taking the settings table to **22** rows; and `smgrdounlinkfork()` is an
+  extension-only route into a full-pool pass with no in-core caller.
+- **Two observability corrections of emphasis.** `LogCheckpointEnd()` prints buffers
+  written as a share **of `NBuffers`** (`xlog.c:8442`, inside a range the page already
+  cited), so at 33,554,432 buffers a 100,000-page checkpoint reads about 0.3 % and the
+  field stops being useful at this size; and `buffers_alloc` excludes ring-recycled
+  buffers by design, which matters because `NBuffers / 4` decides how much traffic uses
+  a ring.
+- **Restored evidence the previous correction pass had dropped**: the tree's own
+  **`XXX currently it sequentially searches the buffer pool, should be changed to more
+  clever ways of searching`** above `DropRelFileNodeBuffers()` and
+  `FlushRelationBuffers()`. A census of every `NBuffers` loop in `bufmgr.c` also lets the
+  page state the five-function list is **closed** — the only others are
+  `PrintBufferDescs()` and `PrintPinnedBufs()` under `#ifdef NOT_USED` — and "some use
+  unlocked tag prechecks" became "all five".
+- Open questions went from 6 to **9**: the sync-queue numbers assume a queue that has
+  filled, and the array-size comment itself says `NBuffers` "may prove too large or
+  small"; the 671,088,640 figure is a comparison bound, not a timing, and the threshold's
+  comment calls 20 "rather a guess"; and whether one MiB of cache is worth 257 MiB of
+  shared memory is unmeasured.
+- Bookkeeping: `wiki/versions.md` said "**19 settings**" and "all **nine**
+  `NBuffers`-derived values" — both stale, and neither covered by the earlier
+  supersession note; the new coverage note supersedes them and the v12 row now reads 22.
+  `wiki/index.md` and `wiki/v12/index.md` summaries updated.
+- Validation: `scripts/wiki_lint` reports **0 errors and 0 warnings**; all 188 ranges
+  re-checked in bounds after the edits, `## Source References` regenerated from the body
+  so the two sets are still exactly equal, and all 18 `## Contents` anchors resolve.
+- Environment: no PostgreSQL server, daemon, build or measurement sandbox was started,
+  so nothing needed tearing down; the review's scratch directory under
+  `.wiki-runtime/tmp/` was deleted and pre-existing ones were left alone. Raw checkouts
+  unmodified. v12 still has no `common-concepts/` directory, so shared-buffer mapping,
+  clock-sweep replacement and buffer-access strategies remain explained inline and named
+  as proposed concept pages; no concept page was created or edited. Human `verified:`
+  untouched at false and **agent verification stays `not yet`**.
+
 ## [2026-09-16] review v17 | COMMENT-baseline B-tree heuristic: the maintenance applied, and proved not defeated
 
 - Reviewed and re-ran [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for
