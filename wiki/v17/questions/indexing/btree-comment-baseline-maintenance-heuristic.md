@@ -14,6 +14,7 @@ verified_by_agent: not yet
   - [Prompt corrections](#prompt-corrections)
   - [The follow-up prompt](#the-follow-up-prompt)
   - [The 2026-09-14 re-port prompt](#the-2026-09-14-re-port-prompt)
+  - [The 2026-09-16 review prompt](#the-2026-09-16-review-prompt)
 - [Answer](#answer)
   - [Verdict](#verdict)
   - [What is stored, and where](#what-is-stored-and-where)
@@ -33,12 +34,15 @@ verified_by_agent: not yet
   - [Locks, transactions and the two commands a DO block cannot reach](#locks-transactions-and-the-two-commands-a-do-block-cannot-reach)
   - [What it costs to run](#what-it-costs-to-run)
   - [What the 2026-09-14 re-port changed, and why](#what-the-2026-09-14-re-port-changed-and-why)
+  - [What the 2026-09-16 review changed, and why](#what-the-2026-09-16-review-changed-and-why)
   - [Two defects the first revision's suite found](#two-defects-the-first-revisions-suite-found)
   - [What is version-local between 12 and 17](#what-is-version-local-between-12-and-17)
   - [The ported mandatory suite](#the-ported-mandatory-suite)
+  - [The maintenance the suite now runs](#the-maintenance-the-suite-now-runs)
+  - [Proving the maintenance was not defeated](#proving-the-maintenance-was-not-defeated)
   - [Results on 17.11](#results-on-1711)
   - [Results on 12.2](#results-on-122)
-  - [Fixture 120's precondition was not met on either leg](#fixture-120s-precondition-was-not-met-on-either-leg)
+  - [Fixture 120's precondition, now asserted](#fixture-120s-precondition-now-asserted)
   - [Filed predictions against measured verdicts](#filed-predictions-against-measured-verdicts)
   - [Mandatory test review](#mandatory-test-review)
   - [What still needs to be tested](#what-still-needs-to-be-tested)
@@ -136,6 +140,22 @@ Update the tests based on the changes from the common concept page, and update
 or remove all tests that are not following
 [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md).
 
+### The 2026-09-16 review prompt
+
+Corrected the same way, again at the asker's request. The original wrote
+`agents.md` for `AGENTS.md`, lowercase `postgresql` for `PostgreSQL`, put a
+space before the colon in `review :` and two after it, named the page by its
+bare filename rather than its title, opened the sentence in lower case, and
+left off the terminal period. Four scoping answers were taken before any edit:
+**re-run both legs end to end** rather than audit the filed text; **adopt the
+concept page's maintenance step**, which the 2026-09-14 pass had deliberately
+skipped; **assert fixture 120's precondition** and score nothing from that
+fixture when it is unmet; and edit the two filed leg scripts **in place**. The
+corrected text:
+
+Follow `AGENTS.md`, in PostgreSQL 17. Review the question "A COMMENT-Stored
+Baseline B-Tree Index-Maintenance Heuristic for PostgreSQL 12 Through 17".
+
 ## Answer
 
 ### Verdict
@@ -149,34 +169,45 @@ survives `REINDEX INDEX CONCURRENTLY` because `index_concurrently_swap` moves th
 ([index.c#index_concurrently_swap-comment](../../../../raw/postgres-17/src/backend/catalog/index.c#L1740-L1784),
 [pg_description.h#FormData](../../../../raw/postgres-17/src/include/catalog/pg_description.h#L44-L57)).
 
-**The 2026-09-14 re-port scores the heuristic against the mandatory suite as the
-concept page now defines it, and the suite is passed outright on both servers.**
-Fourteen numbered fixtures left the 17 leg and ten left the 12 leg because
-[Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md)
-retired them; every page-local acceptance fixture was removed at the asker's
-direction; and both legs were rebuilt from their pins and re-run end to end,
-`make check` included:
+**The 2026-09-16 review is the first run of this page under the concept page's
+maintenance assumption in full, and under the newer rule that a fixture may not
+defeat the maintenance it issued.** The 2026-09-14 pass had skipped the
+maintenance step at the asker's direction, which this page recorded as a
+departure; that departure is now closed. Every churned table is vacuumed and
+analyzed before the method is asked anything, and the four proofs the rule asks
+for are recorded per table. Both legs were rebuilt from their pins and re-run end
+to end, `make check` included, and **neither filed text changed** — both SQL
+blocks still hash to their 2026-09-11 values.
 
-| Result | 17.11 | 12.2 | Previous run, 17.11 |
+| Result | 17.11 | 12.2 | 2026-09-14 run, 17.11 |
 |---|---|---|---|
-| Numbered fixtures scored | **126** | **112** | 140 |
-| Gate decision equal to the same arithmetic done independently | 126 of 126 | 112 of 112 | 140 of 140 |
-| `PASS` | **126** | **112** | 136 |
-| `FALSE NEGATIVE` | **0** | **0** | 4 |
+| Numbered fixtures built | **126** | **112** | 126 |
+| Scored, after the fixture-120 precondition check | **125** | **112** | 126, with 120 wrongly credited |
+| Gate decision equal to the same arithmetic done independently | 126 of 126 | 112 of 112 | 126 of 126 |
+| `PASS` | **125** | **112** | 126 |
+| `FALSE NEGATIVE` | **0** | **0** | 0 |
 | `CRITICAL FALSE POSITIVE`, `FALSE POSITIVE` | 0 | 0 | 0 |
-| Indexes rebuilt, and their mean measured reclaim | 95, 86.2 % | 81, 87.1 % | 103, 86.3 % |
+| `UNMET PRECONDITION`, scoring nothing | **1** | 0 | not checked |
+| Indexes rebuilt, and their mean measured reclaim | 95, 86.2 % | 81, 87.1 % | 95, 86.2 % |
 | Fresh indexes wrongly rebuilt (the eight false-positive constructions) | 0 of 8 | 0 of 8 | 0 of 8 |
-| Baselines readable after the run | 126 of 126 | 112 of 112 | 140 of 140 |
-| Stored index count equal to the catalog's at baseline time | 126 of 126 | 112 of 112 | 140 of 140 |
+| Stored index count equal to the catalog's at baseline time | 126 of 126 | 112 of 112 | 126 of 126 |
+| Tables maintained, and their `dead but not yet removable` count | 66, all **0** | 65, all **0** | no maintenance step |
+| Horizon probes entirely clean | 69 of 69 | 68 of 68 | not taken |
 
-**The clean sheet is not the heuristic improving.** The four false negatives the
-previous run reported were `p113a`, `p113c`, `p65` and `p67`, and the concept page
-has retired all four: each left dead index entries behind with no `VACUUM`, and
-withheld maintenance is no longer a fixture shape
-([Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md#what-the-suite-does-not-cover)).
-Neither filed text changed, `pgstatindex` still reports a dead-but-dense file as
-dense, and a database in that state would still be misread. What changed is that
-the suite no longer builds the state; see
+**The score did not move, and that is the finding.** Adding the maintenance step
+changed the state of ten recipes that used to reach the decide phase
+unmaintained, and changed no verdict: 95 rebuilds at the same 86.2 % mean reclaim
+on 17.11, 81 at 87.1 % on 12.2, no false negative and no false positive of either
+severity on either leg. What it did change is the readings on the four
+threshold-calibration controls, whose trailing `UPDATE` nobody had vacuumed:
+`b93` and `b95` used to under-read the oracle by 18.2 points and now under-read
+it by **9.4** (79.7 % against 89.1 %), because the dead entries their update left
+are now removed before `pgstatindex` counts pages.
+
+**The clean sheet is still not the heuristic improving.** The fixtures this
+method fails — a file whose entries are dead but physically present — left the
+suite on 2026-09-14 and have not come back; `pgstatindex` still reports such a
+file as dense. See
 [The blind spot that left with its fixtures](#the-blind-spot-that-left-with-its-fixtures).
 
 **The three gates still earn their place.** Of 104 measured fixtures on 17.11 the
@@ -185,16 +216,19 @@ index-count test fired on 103, the table-count test on 79 and the size test on 8
 genuinely bloated at a mean measured reclaim of 86.7 %, and not one measurement
 was lost. One fixture is opened by the size test alone — `p76`, bloated by
 updating an indexed key, whose file doubled at `size_ratio` 1.9964 while its entry
-count barely moved, `idx_tuple_ratio` 0.9860 — and no fixture on either leg is
-opened by the table count alone. The 12.2 leg agrees: 89 measured, 19 newly
-measured, 15 of them bloated.
+count barely moved, `idx_tuple_ratio` 0.9980 on 17.11 and 1.0000 on 12.2 — and no
+fixture on either leg
+is opened by the table count alone. The 12.2 leg agrees: 89 measured, 19 newly
+measured, 15 of them bloated at a mean 86.3 %.
 
-Where the gate fires, the reading is close: over the 104 measured fixtures on
+Where the gate fires, the reading is close: over the 103 scored measurements on
 17.11 `wasted_pct` under-estimates the reclaim a rebuild gave back by a mean of
-7.7 points (min `-5.9`, max `+19.5`), **100 of 104 within 15 points**, and 8
+7.6 points (min `-2.0`, max `+19.5`), **101 of 103 within 15 points**, and 7
 over-estimates. The worst under-read is `p55`, the fillfactor-70 fixture, at
-69.9 % against a measured 89.4 %; the worst over-read is `p120` at 5.9 % against
-0.0 %.
+69.9 % against a measured 89.4 %; the worst over-read is `f88` at 42.5 % against
+40.5 %, so **no scored fixture over-states waste by more than 2.0 points**. The
+104th measurement is `p120`, which reads 5.9 % against 0.0 % and scores nothing,
+because its precondition was not met on this leg.
 
 ### What is stored, and where
 
@@ -999,41 +1033,56 @@ which the flush adds to and `pgstat_report_analyze` resets
 ([pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338),
 [pgstat_relation.c#flush-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L845-L860)).
 
-What that decided, per leg, on the 2026-09-14 run:
+What that decided, per leg, on the 2026-09-16 run, with the maintenance step now
+in front of the census:
 
 | | 17.11 | 12.2 |
 |---|---|---|
 | Fixture tables considered | 88 | 87 |
-| Analyzed, because the churn crossed the threshold | **66** | **45** |
-| Left alone | 22 | 42 |
-| Counter back to zero afterwards | 66 of 66 | 45 of 45 |
-| Smallest modified share analyzed | **11.1 %** | **11.1 %** |
-| Largest modified share left alone | **5.3 %** | **9.8 %** |
+| Analyzed, because the counter still read past the threshold | **12** | **4** |
+| Left alone | 76 | 83 |
+| Counter back to zero afterwards | 12 of 12 | 4 of 4 |
+| Smallest modified share analyzed | **99.7 %** | **20.0 %** |
+| Largest modified share left alone | **0.0 %** | **0.0 %** |
+| Analyzed on the 2026-09-14 run, before the maintenance step existed | 66 | 45 |
 
-The lower boundary is the rule itself, measured on both legs: `pb73` moved 50,000
-of 450,000 rows, 11.1 %, and was analyzed. The step also records the counter after
-the fact, which is how the run proves the `ANALYZE` really fired rather than
-reporting an intention.
+The census no longer decides the churned tables, because the maintenance step
+analyzed them first: not one of the tables it still analyzes was churned. They
+are the tables whose build-phase writes reached the shared statistics entry
+*after* their build-phase `ANALYZE` reset the counter — `q120` at 99.7 %, `f85t`
+at 120.0 % (its build-phase `UPDATE` of 100,000 rows counted twice over),
+`f79t`, `f80t`, `f82t` and `f84t` at 100.0 %, the three `INCLUDE` controls
+`i101t`, `i103t` and `i105t`, `np` and `pb`, and `x108t`, which no recipe ever
+analyzes. The 12.2 leg analyzes four of the same shapes, the smallest of them
+`f85t` at 20.0 %. The recheck then re-reads the counter from a new session a
+second later, which is how the run proves the `ANALYZE` fired rather than
+reporting an intention: **12 of 12 and 4 of 4 back to zero**.
 
 Two honest caveats about the census, both visible in its own output:
 
-- **It can analyze a table that was analyzed moments earlier, and it can miss one
-  that was not.** A backend flushes pending table statistics at most once per
-  `PGSTAT_MIN_INTERVAL`, 1000 ms
+- **The counter it reads can be a lap behind.** A backend flushes pending table
+  statistics at most once per `PGSTAT_MIN_INTERVAL`, 1000 ms
   ([pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L110-L122),
   [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L655)),
-  so a `DELETE`, `VACUUM`, `ANALYZE` sequence in one session can reset
-  `mod_since_analyze` to zero and *then* have the delete's own modification count
-  added to it, or land the other way round. The two legs disagree on exactly one
-  table because of it: `f88t` moved 17,778 of 182,222 rows and reads 9.8 % on
-  12.2, just under the threshold, while on 17.11 the same fixture reads **0.0 %**,
-  its own `ANALYZE` having reset a counter that was already published. That is why
-  the largest share left alone differs between the two legs above, and it is a
-  property of the counter, not of the fixture.
-- **It repaired several fixtures whose point was a stale count.** That is what
-  "apply the rule everywhere" means, and the affected fixtures are named in
-  [The ported mandatory suite](#the-ported-mandatory-suite). Fixture 84's catalog
-  forgery is written after the census, so it survives it.
+  and `pgstat_report_analyze` zeroes it while forgetting anything committed
+  during the `ANALYZE`
+  ([pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338)).
+  That is why 12 tables with no churn at all still read 99.7 % to 120 %
+  modified: their `CREATE TABLE AS` or `UPDATE` counts were published after
+  their own `ANALYZE`. The census applies the engine's own test to whatever the counter
+  says, which is what rule 3 requires, and this page reports the consequence
+  rather than tuning it away. The same staleness is why the recheck runs in its
+  own session a second later: read immediately, a 12 server's collector file
+  still describes the state from before the `ANALYZE`, and an earlier pass of
+  this review duly reported "0 of 6 counters reset" on a census that had just
+  reset six.
+- **It still re-analyzes five of the eight false-positive fixtures** on 17.11,
+  and two on 12.2. Their
+  point is misleading *statistics*, and a second `ANALYZE` at the default target
+  recomputes them; the fixtures survive as shapes because none of them is
+  measured anyway - all seven skipped fixtures stay skipped, and the eighth is
+  fixture 84, whose catalog forgery is written after the census so that no
+  `ANALYZE` can repair it.
 
 ### How wasted space is computed
 
@@ -1079,22 +1128,23 @@ acceptance fixtures, removed on 2026-09-14, so the page no longer measures where
 the threshold lands; the formula above is a reading of the filed text and of
 `pgstatindex`, and the calibration behind the 40 % choice is filed under
 [Open Questions](#open-questions). What the numbered suite still gives is the
-scatter around it: 104 measured fixtures on 17.11, mean error `+7.7` points
-against the rebuild oracle, 100 of them within 15.
+scatter around it: 103 scored measurements on 17.11, mean error `+7.6` points
+against the rebuild oracle, 101 of them within 15.
 
 ### What the gate can and cannot see
 
 The index-count gate is what makes the difference on a partial index, and the
 numbered suite still measures that. Recomputing the two-gate form on the same
 fixtures, **20 of 126 on 17.11 and 19 of 112 on 12.2 are measured that two gates
-would have skipped**, and 15 of them on each leg are genuinely reclaimable:
+would have skipped**, and 15 of them on each leg are genuinely reclaimable, at a
+mean measured reclaim of 86.7 % and 86.3 %:
 
 | Family the two-gate form would lose | Fixtures | Why | `idx_tuple_ratio` | Outcome now |
 |---|---|---|---|---|
-| The subset drained, the table did not | `p113b`, `p114` | `tuple_ratio` 1.0000 on both | 0.0000, 0.0105 | rebuilt at 100.0 % and 98.9 % measured reclaim |
-| The table moved 15-19 %, the index lost 75-95 % | `p73`-`p75`, `p77`, `f86`-`f91`, `i100`, `b92`-`b95` | the table's count moved 18 %, two points under the gate | 0.0466 to 0.5402 | all measured; all rebuilt, 40.5 % to 94.2 % |
-| The subset shrank by a quarter | `p72` | the same arithmetic, smaller | 0.7600 | measured, 22.2 % wasted, correctly left alone |
-| A forged or resampled count | `f84`, `p120` | 84's forged index count, 120's resampled partial estimate | 0.0500, - | measured, 0.1 % and 5.9 % wasted, both left alone |
+| The subset drained, the table did not | `p113b`, `p114` | `tuple_ratio` 1.0000 on both | 0.0000, 0.0103 | rebuilt at 100.0 % and 98.9 % measured reclaim |
+| The table moved 15-19 %, the index lost 75-95 % | `p73`-`p75`, `p77`, `f86`-`f91`, `i100`, `b92`-`b95` | the table's count moved 18 %, two points under the gate | 0.0484 to 0.5664 | all measured; all rebuilt, 40.5 % to 94.2 % |
+| The subset shrank by a quarter | `p72` | the same arithmetic, smaller | 0.7478 | measured, 22.2 % wasted, correctly left alone |
+| A forged or resampled count | `f84`, `p120` | 84's forged index count, 120's resampled partial estimate | 0.0500, - | measured, 0.1 % and 5.9 % wasted, both left alone; 120 scores nothing on this leg |
 
 The second family is the sharpest illustration of why the table's count is the
 wrong input: deleting 90 % of a subset that is 20 % of the table moves the
@@ -1246,25 +1296,28 @@ Three refusals shape step 2's design, all measured identically on 12.2 and 17.11
 
 ### What it costs to run
 
-Measured six times in each state on a database holding 129 B-tree indexes and
-521 MB of index files on 17.11, 115 indexes and 534 MB on 12.2. The gated state
+Measured six times in each state on a database holding 133 B-tree indexes and
+521 MB of index files on 17.11, 119 indexes and 534 MB on 12.2. The gated state
 is forged by halving every stored `sz` while leaving both counts current, so it
 isolates one gate and reads every gated index end to end:
 
 | State | Gated indexes | Wall time, six runs | Buffers |
 |---|---|---|---|
-| Settled, 17.11 | 0 of 129 | 19.7 - 21.3 ms | 3,226 hit, 0 read |
-| Every baseline halved, 17.11 | 126 of 129 | 107.1 - 124.3 ms | 15,739 hit, 54,442 read |
-| Settled, 12.2 | 0 of 115 | 18.0 - 18.7 ms | 2,257 hit, 0 read |
-| Every baseline halved, 12.2 | 112 of 115 | 98.0 - 122.7 ms | 14,274 hit, 56,371 read |
+| Settled, 17.11 | 0 of 133 | 27.5 - 35.8 ms | 3,305 hit, 0 read |
+| Every baseline halved, 17.11 | 126 of 133 | 153.8 - 179.4 ms | 15,810 hit, 54,442 read |
+| Settled, 12.2 | 0 of 119 | 22.4 - 25.5 ms | 2,333 hit, 0 read |
+| Every baseline halved, 12.2 | 112 of 119 | 121.9 - 157.9 ms | 14,350 hit, 56,371 read |
 
 The third gate costs no data-page reads, which is the structural point: it reads
 one more column from a `pg_class` row the statement already has. The settled
-readings are **0 reads** on both servers, at 3,226 buffer hits on 17.11 and 2,257
-on 12.2 for a sweep of 129 and 115 indexes. The fully gated state touches about
+readings are **0 reads** on both servers, at 3,305 buffer hits on 17.11 and 2,333
+on 12.2 for a sweep of 133 and 119 indexes - seven of them the harness's own
+primary keys, which is four more than the 2026-09-14 run swept because this
+revision added four bookkeeping tables. The fully gated state touches about
 70,000 buffers on each leg, and the hit/read split moves between runs with what
-shared buffers already held. `pgstatindex` reads every page of
-every index it is called on, through a `BAS_BULKREAD` strategy ring
+shared buffers already held; the wall times are higher than the 2026-09-14 run's
+because the two legs were measured while sharing 22 cores. `pgstatindex` reads
+every page of every index it is called on, through a `BAS_BULKREAD` strategy ring
 ([pgstatindex.c#bstrategy](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L215-L222),
 [pgstatindex.c#scan-loop](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L278-L331)).
 A scheduled run in a healthy database is therefore a catalog query, and the
@@ -1285,6 +1338,41 @@ before running. Everything below is a change to the tests or to the page.
 | `check_server_errors` repaired | both leg scripts | its pattern looked for the severity straight after the log time zone, which the default `%m [%p] ` prefix never produces, so it matched nothing and reported a clean log unconditionally |
 | The allowed-error list rewritten, and the matched-line count reported | both leg scripts | with the acceptance fixtures gone the deliberate errors are only the `stage_facts` probes and the two feature-gated fixture files; printing the total makes a check that matches nothing visible |
 | Every claim backed by a removed fixture deleted or demoted to source | this page | a measurement whose fixture no longer exists is not a measurement |
+
+### What the 2026-09-16 review changed, and why
+
+**Neither filed text changed again.** Both SQL blocks hash to the same SHA-256
+values as on 2026-09-11, and both leg scripts re-check that before running.
+Everything below is a change to the tests, to the harness, or to this page.
+
+| Change | Where | Why |
+|---|---|---|
+| A maintenance step: `VACUUM (VERBOSE, ANALYZE)` on every table the churn touched, between the churn and the census | both leg scripts | the concept page's maintenance assumption, which the 2026-09-14 pass did not apply |
+| The churned-table set computed from `pg_stat_all_tables` write counters taken before and after the churn phase | both leg scripts | "the tables its churn touched" has to be the engine's record, not a list a new fixture can fall out of |
+| The uniform drain's own `VACUUM` and `ANALYZE` removed from the churn file | both leg scripts | they were the maintenance; it now happens in one place where its timeouts, horizon and output are recorded |
+| A horizon probe before every maintenance statement and around the census, reading `pg_stat_activity`, `pg_replication_slots` and `pg_prepared_xacts` | both leg scripts | proof 3 of the no-defeat rule |
+| The `VERBOSE` output parsed per table into a recorded `dead but not yet removable` count, with a version-local parse on each leg | both leg scripts | proof 2, and the 12 server words it differently |
+| `pgstatindex` page classes recorded for every fixture index after the maintenance | both leg scripts | proof 4, the visible trace of what the maintenance did |
+| Every session that issues a `VACUUM` or an `ANALYZE` forces its timeouts to 0, and the settings in force are recorded | both leg scripts | the fifth forbidden state; the previous run's churn sessions ran at `lock_timeout = '5s'` |
+| A run that finds a defeated maintenance now **fails** instead of scoring | both leg scripts | the rule says such a fixture is repaired and re-run, not scored |
+| Fixture 120's precondition asserted, and an `UNMET PRECONDITION` verdict that every scored count excludes | both leg scripts | the concept page's own requirement for that fixture, which the previous run did not check |
+| A publication invariant that excludes tables a recipe analyzed itself | both leg scripts | its first form failed the run on nine tables whose own recipe had consumed the counter legitimately; see below |
+| `stage_check` creates its output directory | both leg scripts | starting from a built tree skipped `stage_build`'s `mkdir`, so a `check` run wrote every result into a directory that did not exist and reported an empty check section |
+| The harness gained `churn_seen`, `maint`, `horizon`, `pageclass` and `precond`, and the verdict view gained `scored`, `maintained` and the proof columns | both leg scripts | so that every number above is a row someone can re-read, not a line in a log |
+
+**The publication invariant is the one place this review had to change its own
+mind.** The first form failed any maintained table whose `n_mod_since_analyze`
+was zero, on the theory that the churn had not been published. It fired on six
+tables on 17.11 and nine on 12.2 — `pc68`, `pb76`, `np99t`, `q113b`, `q114`,
+`f90t` and friends — and every one of them was a recipe that runs its own
+`VACUUM` and `ANALYZE` after its own writes, so the counter had been published
+and then consumed, exactly as `pgstat_report_analyze` does
+([pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338)).
+Membership of the maintained set is itself the publication proof, because that
+set comes from write counters only a flush can move; what the check now adds is
+the narrower case of a table with neither a published counter nor an `ANALYZE`
+of its own. **23 tables on each leg** are in the recipe-analyzed class, and the
+invariant passes on both.
 
 ### Two defects the first revision's suite found
 
@@ -1395,32 +1483,116 @@ Tests 11 and 38 were the only fixtures on either leg that needed the
 `deduplicate_items` reloption, so the 12 leg's skip list is down from 18 fixtures
 to 14: nine for B-tree support function 4 and five for ICU.
 
-**The departure from the shared definition, stated plainly.** The concept page's
+**The departure the previous run recorded is closed.** The concept page's
 [maintenance assumption](../../common-concepts/mandatory-btree-bloat-tests.md#the-maintenance-assumption)
 requires every fixture to run `VACUUM ANALYZE` on the tables its churn touched
-before the decide phase. **This run does not do that**, at the asker's direction:
-the retirements were applied and the churn recipes were left as they are. Ten
-recipes therefore still reach the decide phase with an unmaintained tail — 64, 66,
-92 to 95, 98, 115, 118 and 119 — and only rule 3's census can analyze them, which
-on 17.11 it does for all but 119, whose 50,000 inserts into a 1,050,000-row table
-are 4.8 % and under the threshold. **No fixture on either leg is vacuumed by the
-suite unless its own recipe vacuums it.** The suite as run is therefore the concept
-page's fixture *set* under the concept page's rules 1 to 3, without its
-maintenance step; see [Open Questions](#open-questions).
+before the decide phase, and the 2026-09-14 pass did not do it. This run does:
+see [The maintenance the suite now runs](#the-maintenance-the-suite-now-runs).
+The ten recipes that used to reach the decide phase with an unmaintained tail —
+64, 66, 92 to 95, 98, 115, 118 and 119 — are maintained like every other churned
+fixture, and the suite as run is now the concept page's fixture *set* under its
+rules 1 to 3 **and** its maintenance assumption, with the no-defeat rule proved
+rather than assumed.
 
 Rule 3 still costs coverage, and the cost is named here rather than hidden. Every
-surviving fixture whose point was a stale count had its table analyzed, with the
-measured modified share in brackets: 64 `stale statistics after inserts into the
-subset` (140 %), 85 `stale table statistics` (120 %), 98 `plain index, stale row
-counts after 300,000 inserts` (160 %) and 115 `index built on an analysed empty
-table, then loaded`. Those fixtures now test the heuristic against *fresh*
-statistics, which is what a production server with autovacuum on would give it.
-One stale-count shape survives by forgery — fixture 84's partial-index count,
-written after the census, which no `ANALYZE` can repair — and two survive on their
-own: `p119` inserted 50,000 rows into a 1,050,000-row table (4.8 %) and `pb72`
-deleted 25,000 of 475,000 (5.3 %), both under the 10 % rule and both left alone.
-The two forged `reltuples = -1` fixtures that used to cover the unknown-count
-shape were page-local and are gone.
+surviving fixture whose point was a stale count is now analyzed by the
+maintenance step itself, not by the census: 64 `stale statistics after inserts
+into the subset`, 85 `stale table statistics`, 98 `plain index, stale row counts
+after 300,000 inserts` and 115 `index built on an analysed empty table, then
+loaded`. Those fixtures test the heuristic against *fresh* statistics, which is
+what a production server with autovacuum on would give it. One stale-count shape
+survives by forgery — fixture 84's partial-index count, written after the census,
+which no `ANALYZE` can repair — and one survives on its own: `pb72` deleted
+25,000 of 475,000 rows and is vacuumed, but its 5.3 % modification share stays
+under rule 3's threshold, so the maintenance `ANALYZE` is the only thing that
+re-reads it. The two forged `reltuples = -1` fixtures that used to cover the
+unknown-count shape were page-local and are gone.
+
+### The maintenance the suite now runs
+
+One step, between the churn and the census, on every table the churn touched.
+Three properties matter, and each is a decision this page made rather than
+inherited:
+
+| Property | What the step does | Why |
+|---|---|---|
+| Which tables | every table whose `n_tup_ins`, `n_tup_upd` or `n_tup_del` moved across the churn phase, read from `pg_stat_all_tables` before the first churn statement and after the last ([system_views.sql#n_tup_del](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L680-L682)) | the concept page says "the tables it touched are the ones whose rows it inserted, deleted or updated"; taking that from the engine's own counters means a fixture added later cannot fall out of a hand-written list. **66 tables on 17.11, 65 on 12.2**, of 88 and 87 fixture tables |
+| Which statement | `VACUUM (VERBOSE, ANALYZE)` per table, one statement at a time, because `VACUUM` cannot run inside a transaction block | `VACUUM ANALYZE` leaves `ANALYZE` as the last writer of every `reltuples` on the table, which is what the concept page's assumption credits; `VERBOSE` is what makes proof 2 below a number rather than a hope |
+| Which tables are left alone | every table with no churn: the whole of family 3, the fresh controls, 70 and 71 | an extra `ANALYZE` would repair the deliberately stale statistics those fixtures exist to build, and an extra `VACUUM` would disturb a deliberately fresh index. The concept page says so too: a fixture with no churn carries its build-phase `ANALYZE` into the decide phase |
+
+What the step removed, measured: **18,066,916 dead tuples over 66 tables** on
+17.11 and **17,617,051 over 65** on 12.2, the largest single statement being
+`pt1` at 899,915 tuples in 0.41 s. The step takes **6.4 s** end to end on the 17
+leg and **6.9 s** on the 12 leg.
+The uniform 90 % drain no longer carries its own `VACUUM` and `ANALYZE`: those
+were the maintenance, and the maintenance now happens here, where its timeouts,
+its horizon and its output are recorded.
+
+**Rule 3's census is now what the concept page says it should be**, a decision
+about the tables no churn touched: 14 of 88 tables on 17.11 and 6 of 87 on 12.2,
+down from 66 and 45 when the census was the only thing analyzing anything. Every
+table it still analyzes is a table whose build-phase inserts were published to
+the shared statistics entry *after* its build-phase `ANALYZE` had reset the
+counter — including seven of the eight family-3 fixtures and control 108, whose
+table is never analyzed by its recipe at all. That is the publication hazard the
+concept page describes, and the census applying the engine's own test to it is
+the behavior the rule asks for, not a defect in the fixtures.
+
+### Proving the maintenance was not defeated
+
+The concept page's
+[no-defeat rule](../../common-concepts/mandatory-btree-bloat-tests.md#the-maintenance-must-not-be-defeated)
+forbids five states from the first churn statement to the end of the census, and
+asks a run to record four proofs per fixture. This is the first run of this page
+against it. All four are recorded, and the run fails rather than publishes a
+number if any of them comes out wrong:
+
+| Proof | How it is taken | 17.11 | 12.2 |
+|---|---|---|---|
+| The statement completed, and no skip line names the table | every maintenance statement is timed with `clock_timestamp()` on both sides, and the server log is searched for `skipping vacuum of`, `skipping analyze of` and cancellations ([vacuum.c#skip-lock-not-available](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L828-L860)) | 66 of 66 completed, **0** skip or cancellation lines | 65 of 65, **0** |
+| `VACUUM (VERBOSE)`'s `tuples: ... are dead but not yet removable` count | parsed out of the server's own message text per table ([vacuumlazy.c#verbose-tuples-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L659-L663)) | **0 on all 66**, and `n_dead_tup` 0 on all 66 afterwards | **0 on all 65** |
+| The horizon holders at that moment | `pg_stat_activity`'s `xact_start` and `backend_xmin`, `pg_replication_slots`' `xmin`/`catalog_xmin` and `pg_prepared_xacts`, read immediately before each statement and once after the census ([system_views.sql#pg_stat_activity-xmin](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L877-L885), [system_views.sql#pg_replication_slots-xmin](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1006-L1017), [system_views.sql#pg_prepared_xacts](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L421-L427)) | **69 of 69 probes entirely clean**: 0 other backends with an xmin or an open transaction, 0 slots, 0 prepared transactions | **68 of 68** |
+| The page classes the maintenance left | `pgstatindex` over every fixture index after the step ([pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L295-L320)) | 29 of 126 indexes hold deleted pages, **10,340** deleted and 0 half-dead | 32 of 112, **11,868** and 0 |
+
+The fifth forbidden state is a timeout short enough to fire inside the
+maintenance statement. Every session that issues a `VACUUM` or an `ANALYZE` —
+the churn file, the maintenance step and the census — now sets its timeouts to
+zero, which is exactly what the autovacuum launcher and worker do to themselves
+"to avoid letting these settings prevent regular maintenance from being
+executed"
+([autovacuum.c#worker-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470),
+[autovacuum.c#launcher-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L518-L526)).
+The settings in force are recorded per statement rather than assumed, and both
+legs report exactly one distinct set: `statement_timeout=0 lock_timeout=0
+transaction_timeout=0 idle_in_transaction_session_timeout=0` on 17.11, and the
+same without `transaction_timeout` on 12.2, where that GUC does not exist
+([guc_tables.c#transaction_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2644-L2653)).
+All four are `PGC_USERSET`, so session scope, no reload and no restart.
+
+Why each state would matter here, from the pinned tree: `VACUUM` takes its
+removal horizon from `GetOldestNonRemovableTransactionId`
+([vacuum.c#vacuum_get_cutoffs-OldestXmin](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1109-L1122)),
+which folds in every backend's `xmin` and every replication slot's
+([procarray.c#ComputeXidHorizons-backend-xmin](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1792-L1815),
+[procarray.c#slot-horizons](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1896-L1902));
+a prepared transaction keeps its xid running through a dummy `PGPROC`
+([twophase.c#dummy-pgproc](../../../../raw/postgres-17/src/backend/access/transam/twophase.c#L24-L26));
+and index vacuuming is entered only when dead TIDs were collected, so under a
+pinned horizon `btbulkdelete` never runs at all
+([vacuumlazy.c#lazy_vacuum-gate](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1047-L1052)).
+For this heuristic that failure would be invisible in the worst way: the leaves
+would stay as dense as the build left them, and `wasted_pct` would read near
+zero on a file a rebuild empties.
+
+Two limits of these proofs, stated rather than glossed. The horizon reading is a
+pair of reads beside the statement, not an interlock around it — the concept page
+files the same one-sidedness as its own open question — and `VERBOSE` output has
+to be parsed out of message text, which is version-local: 17.11 prints `tuples: X
+removed, Y remain, Z are dead but not yet removable` while 12.2 prints `Z dead
+row versions cannot be removed yet`, so each leg script carries its own parse.
+`client_min_messages = warning` does not hide either, because `INFO` is sent to
+the client whatever that setting says
+([elog.c#should_output_to_client](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L249-L264)).
 
 `pg_stat_force_next_flush()` is still not called anywhere, unlike the original
 recipes, because this heuristic reads `pg_class.reltuples` and never a cumulative
@@ -1442,19 +1614,20 @@ the suite.
 
 ### Results on 17.11
 
-126 fixtures, 129 B-tree indexes swept (the three extra are the harness's own
+126 fixtures, 133 B-tree indexes swept (the seven extra are the harness's own
 primary keys), `make check` 225 of 225 with `pgstattuple` 1, `pageinspect` 8 and
 `amcheck` 3, and **0 unexpected server errors out of 4 logged**, all four
-deliberate probes from `stage_facts`.
+deliberate probes from `stage_facts`. **0 skip or cancellation lines** in the
+log, which is proof 1 of the no-defeat rule.
 
-| Group | Fixtures | Rebuilt | Updated | Skipped | Refreshed | False negatives | Mean `wasted_pct` | Mean actual |
-|---|---|---|---|---|---|---|---|---|
-| `gate` (1-17) | 25 | 25 | 0 | 0 | 0 | 0 | 78.4 | 88.2 |
-| `partial` (18-77) | 60 | 55 | 3 | 2 | 0 | 0 | 74.1 | 79.6 |
-| `falsepos` (78-85) | 8 | 0 | 1 | 7 | 0 | 0 | 0.1 | 0.0 |
-| `falseneg` (86-91) | 6 | 6 | 0 | 0 | 0 | 0 | 73.5 | 73.0 |
-| `control` (92-112) | 20 | 7 | 1 | 12 | 0 | 0 | 69.0 | 31.5 |
-| `zero` (113-120) | 7 | 2 | 4 | 1 | 0 | 0 | 32.3 | 28.4 |
+| Group | Fixtures | Maintained | Rebuilt | Updated | Skipped | Refreshed | False negatives | Mean `wasted_pct` | Mean actual |
+|---|---|---|---|---|---|---|---|---|---|
+| `gate` (1-17) | 25 | 25 | 25 | 0 | 0 | 0 | 0 | 78.4 | 88.2 |
+| `partial` (18-77) | 60 | 58 | 55 | 3 | 2 | 0 | 0 | 74.1 | 79.6 |
+| `falsepos` (78-85) | 8 | 0 | 0 | 1 | 7 | 0 | 0 | 0.1 | 0.0 |
+| `falseneg` (86-91) | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 73.5 | 73.0 |
+| `control` (92-112) | 20 | 8 | 7 | 1 | 12 | 0 | 0 | 71.2 | 31.5 |
+| `zero` (113-120) | 7 | 5 | 2 | 4 | 1 | 0 | 0 | 32.3 | 28.4 |
 
 - All 25 surviving deduplication-gate shapes were measured and rebuilt after the
   90 % drain, and every one was right to rebuild: mean reclaim 88.2 %. The
@@ -1467,14 +1640,18 @@ deliberate probes from `stage_facts`.
 - The eight false-positive constructions - predicate-conditioned width, NULL,
   `n_distinct` and MCV mismatches, a missing statistics row, a forged partial
   `reltuples`, stale table statistics - are **not rebuilt**, and a rebuild of each
-  would have returned 0.0 %. Seven are skipped outright. The eighth is fixture 84,
-  whose forged index count of 5,000 against a real 100,000 opens the gate: it is
-  measured, reads 0.1 % wasted, and is left alone. One wasted `pgstatindex()` call
-  is the whole price of a forged count.
-- Accuracy of the decision input against the oracle, over the 104 measured
-  fixtures: mean error `+7.7` points (the reading under-estimates), min `-5.9`,
-  max `+19.5`, 100 of 104 within 15 points, 8 over-estimates. The worst
-  under-reads are `p55` at fillfactor 70 (`+19.5`) and `b93`/`b95` (`+18.2`).
+  would have returned 0.0 %. **None of the eight is maintained**, because none
+  has churn, so their statistics are the ones their recipes built. Seven are
+  skipped outright. The eighth is fixture 84, whose forged index count of 5,000
+  against a real 100,000 opens the gate: it is measured, reads 0.1 % wasted, and
+  is left alone. One wasted `pgstatindex()` call is the whole price of a forged
+  count.
+- Accuracy of the decision input against the oracle, over the 103 scored
+  measurements: mean error `+7.6` points (the reading under-estimates), min
+  `-2.0`, max `+19.5`, 101 of 103 within 15 points, 7 over-estimates. The worst
+  under-read is `p55` at fillfactor 70 (`+19.5`); `b93`/`b95`, which used to
+  under-read by `+18.2`, now read `+9.4` because the maintenance step removes
+  the dead entries their trailing `UPDATE` left behind.
 - Which gate opened each measurement: size 8, table count 79, index count 103, and
   20 measured by the index count alone. One fixture, `p76`, is opened by the size
   test alone. No fixture is opened by the table count alone, and no measured
@@ -1486,50 +1663,64 @@ deliberate probes from `stage_facts`.
 ### Results on 12.2
 
 112 fixtures (14 skipped for the missing features listed above: nine for B-tree
-support function 4, five for ICU), 115 indexes swept, `make check` 192 of 192 with
+support function 4, five for ICU), 119 indexes swept, `make check` 192 of 192 with
 `pgstattuple` 1, `pageinspect` 5 and `amcheck` 2, and **0 unexpected server errors
 out of 8 logged**, the extra four being the feature refusals this server gives.
+**0 skip or cancellation lines** here too.
 
-| Group | Fixtures | Rebuilt | Updated | Skipped | Refreshed | False negatives | Mean `wasted_pct` | Mean actual |
-|---|---|---|---|---|---|---|---|---|
-| `gate` | 13 | 13 | 0 | 0 | 0 | 0 | 80.1 | 89.9 |
-| `partial` | 58 | 53 | 3 | 2 | 0 | 0 | 75.5 | 80.7 |
-| `falsepos` | 8 | 0 | 1 | 7 | 0 | 0 | 0.1 | 0.0 |
-| `falseneg` | 6 | 6 | 0 | 0 | 0 | 0 | 72.1 | 72.5 |
-| `control` | 20 | 7 | 1 | 12 | 0 | 0 | 69.0 | 31.5 |
-| `zero` | 7 | 2 | 3 | 2 | 0 | 0 | 37.6 | 28.4 |
+| Group | Fixtures | Maintained | Rebuilt | Updated | Skipped | Refreshed | False negatives | Mean `wasted_pct` | Mean actual |
+|---|---|---|---|---|---|---|---|---|---|
+| `gate` | 13 | 13 | 13 | 0 | 0 | 0 | 0 | 80.1 | 89.9 |
+| `partial` | 58 | 56 | 53 | 3 | 2 | 0 | 0 | 75.5 | 80.7 |
+| `falsepos` | 8 | 0 | 0 | 1 | 7 | 0 | 0 | 0.1 | 0.0 |
+| `falseneg` | 6 | 6 | 6 | 0 | 0 | 0 | 0 | 72.1 | 72.5 |
+| `control` | 20 | 8 | 7 | 1 | 12 | 0 | 0 | 71.2 | 31.5 |
+| `zero` | 7 | 5 | 2 | 3 | 2 | 0 | 0 | 37.6 | 28.4 |
 
 The two servers agree on every structural result: `PASS` on every scored fixture,
 0 gate disagreements, 19 newly measured of which 15 bloated at a mean 86.3 %
 reclaim, 112 of 112 stored index counts equal to the catalog's, and an accuracy
-profile inside a point of the 17 leg's (89 measured, mean error `+7.5`, min
-`-0.3`, max `+19.5`, 85 of 89 within 15, 5 over-estimates). The gate attribution
-has the same shape: size 8, table count 65, index count 87, 19 by the index count
-alone. Two fixtures are opened by the size test alone here rather than one - `p76`
-as on 17.11, and `p118`, whose empty partial index grew 139-fold when 50,000 rows
-arrived while its estimated entry count stayed at 0 on this leg.
+profile inside a point of the 17 leg's (89 measured, mean error `+7.4`, min
+`-0.3`, max `+19.5`, 87 of 89 within 15, 5 over-estimates). The gate attribution
+has the same shape: size 8, table count 65, index count 88, 19 by the index count
+alone, and `p76` the only fixture opened by the size test alone. The one place
+the legs differ is fixture 120, whose precondition held here and not on 17.11;
+see [Fixture 120's precondition, now asserted](#fixture-120s-precondition-now-asserted).
 
-### Fixture 120's precondition was not met on either leg
+`p118` is no longer opened by the size test alone on this leg, which is a
+maintenance-step consequence worth naming: its 50,000 inserts are churn, so the
+step analyzes `q118`, and the partial index's estimated entry count moves from 0
+to 50,000 - an increase from zero, which the filed text treats as a fire. Before
+the maintenance step this leg left that count at 0 and only the 139-fold size
+change opened the measurement.
+
+### Fixture 120's precondition, now asserted
 
 The concept page makes test 120 the suite's one probabilistic fixture and puts a
 precondition on it: after the census the partial index's own `reltuples` must read
 0, and "a run that finds a non-zero estimate records an unmet fixture precondition
 for 120 and scores nothing from it"
 ([Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md#family-6-the-drained-queue-and-zero-row-counts)).
-This run finds a non-zero estimate on both legs, for two different reasons:
+**The 2026-09-14 run never checked it and counted a `PASS` on both legs.** That
+is fixed: the run now reads the estimate after the census, records it, and the
+verdict view reports `UNMET PRECONDITION` for a fixture whose state did not
+arrive, which every scored count then excludes.
 
-| Leg | Count at baseline, after `ANALYZE` at `default_statistics_target = 1` | Count after rule 3's census | Why |
+| Leg, this run | Estimate after the census | Verdict | What the method did |
 |---|---|---|---|
-| 17.11 | **0** | **2,800** | the 300-row sample did miss the subset, and then the census re-analyzed the table at the default target, whose 30,000-row sample found it |
-| 12.2 | **6,668** | 6,668 | the 300-row sample happened to catch two subset rows, so the fixture never reached its state |
+| 17.11 | **1,600** | **UNMET PRECONDITION**, scores nothing | the low-target sample caught subset rows, so the state never arrived; the heuristic measured the index, read 5.9 % wasted and left it alone |
+| 12.2 | **0** | scored | the 300-row sample missed the subset, the fixture reached its state, and the heuristic correctly **skipped** the index - the prediction filed for it |
 
-So the fixture is **not covered on this run**, and the page does not credit it: the
-compliant score is 125 of 125 on 17.11 and 111 of 111 on 12.2, with 120 recorded
-as an unmet precondition. The scorer counted it as a `PASS` on both legs, which is
-a harness defect filed under [Open Questions](#open-questions). The 17.11 row is
-also the sharper finding of the two: **rule 3's census repairs the very miss
-fixture 120 is built on**, because the census analyzes at the cluster's
-`default_statistics_target` and the fixture's own `ANALYZE` ran at 1.
+The fixture is genuinely probabilistic, and this review watched it move: over the
+five complete passes it took, the post-census estimate read **2,034, 1,667, 0,
+1,800 and 1,600** on 17.11 and **0, 13,335, 3,334, 0 and 0** on 12.2, from
+identical fixture text on the same pins, so the state arrived on **4 of 10
+fixture builds**. **That is the argument for asserting the precondition rather
+than scoring the fixture**:
+with the check in place a run either measures the state the concept page defines
+or says it did not have it, and the previous run's `PASS` was neither. The scored
+totals on the published pass are therefore 125 of 126 on 17.11 and 112 of 112 on
+12.2.
 
 ### Filed predictions against measured verdicts
 
@@ -1545,10 +1736,13 @@ existed. Nothing predicted `measure` was skipped.
 | `skip`, measured `reindex` | `p29`, `p113b`, `p114` | 77.6 % to 99.9 % wasted, 87.4 % to 100.0 % actually reclaimed - correct rebuilds |
 | `skip`, measured `update` | `f84`, `p118`, `p119`, `p120` | 0.1 % to 5.9 % wasted against a 0.0 % oracle - healthy indexes correctly left alone, at one `pgstatindex()` call each |
 
-The 12.2 leg is the same list without `p120`, which that leg skipped, and `p29`
-reads 79.2 % wasted against 89.6 % reclaimed there. Four of the seven misses are
-the price of the third gate: a forged count, two empty-subset indexes that filled
-up, and one resampled estimate, each costing a single measurement and no rebuild.
+The 12.2 leg is the same list without `p120`, which that leg skipped because its
+subset estimate really was 0, and `p29` reads 79.2 % wasted against 89.6 %
+reclaimed there rather than 77.6 % against 87.4 %. Four of the seven misses on
+17.11 are the price of the third gate: a forged count, two empty-subset indexes
+that filled up and one resampled estimate, each costing a single measurement and
+no rebuild. `p120`'s miss is also the one that scores nothing, because its
+precondition failed on that leg.
 
 ### Mandatory test review
 
@@ -1565,9 +1759,10 @@ engine behavior it targets are on the concept page.
 | False-positive constructions | 78-85 | 8 freshly built indexes that must not be touched | run, 8 of 8 left un-rebuilt (7 skipped, 1 measured and updated) | the same |
 | False-negative constructions | 86-91 | 6 genuinely bloated, vacuumed and analysed | run, 6 of 6 `PASS`, all rebuilt | the same |
 | Change A-D controls | 92-112, less 106 | threshold calibration 92-95, non-partial 96-99, `INCLUDE` 100-105, expression statistics 107-112 | run, 20 of 20 `PASS` | the same |
-| Drained queue and change E | 113b, 114-120 | one 1,000,000-row table per state, `reltuples = 0` shapes | run, 7 `PASS`, but 120's precondition unmet | the same, and 120 skipped |
-| Simulated auto-analyze | rule 3 | every fixture table, gated on the engine's own threshold | run, 66 of 88 analyzed, smallest analyzed 11.1 % | run, 45 of 87 analyzed, same boundary |
-| The maintenance assumption | the concept page's own | **not applied**, at the asker's direction | departure recorded | departure recorded |
+| Drained queue and change E | 113b, 114-120 | one 1,000,000-row table per state, `reltuples = 0` shapes | run, 6 of 6 `PASS`, 120 an unmet precondition scoring nothing | run, 7 of 7 `PASS` with 120's precondition met |
+| Simulated auto-analyze | rule 3 | every fixture table, gated on the engine's own threshold | run, 12 of 88 analyzed, all of them tables no churn touched, 12 of 12 counters reset | run, 4 of 87 analyzed, same reason, 4 of 4 reset |
+| The maintenance assumption | the concept page's own | **applied**: 66 tables vacuumed and analyzed after their churn, 18,066,916 dead tuples removed | **applied**: 65 tables, 17,617,051 removed |
+| The maintenance must not be defeated | the concept page's own | **proved**, four proofs per table: 66 of 66 completed, all at `dead but not yet removable` 0, 69 of 69 horizon probes clean, 0 skip lines, one timeout set of four zeros | **proved**: 65 of 65, 68 of 68 probes, 0 skip lines, three zeros |
 | Engine regression | `make check` plus `pgstattuple`, `pageinspect`, `amcheck` | temporary installation in the build tree | 225, 1, 8, 3 - all passed | 192, 1, 5, 2 - all passed |
 | Repository checks | `scripts/wiki_lint`, block hashes, pipeline identity, Contents anchors | this repository | pass | pass |
 
@@ -1575,13 +1770,17 @@ The contract the suite sets is that a statement failing a mandatory test is
 corrected, not merely reported. Two defects were found and corrected in the filed
 texts of the first revision; see
 [Two defects the first revision's suite found](#two-defects-the-first-revisions-suite-found).
-**This pass corrects nothing in either text, because nothing in the surviving
-suite failed.** That is a weaker statement than it looks: the four failures the
-previous run reported were retired rather than fixed, and this page says so in
+**This pass corrects nothing in either text either, because nothing in the
+surviving suite failed — including under the maintenance the previous pass had
+withheld.** That is a stronger statement than the 2026-09-14 one and still not a
+clean bill of health: the fixtures this method fails were retired rather than
+fixed, and this page says so in
 [The blind spot that left with its fixtures](#the-blind-spot-that-left-with-its-fixtures)
-instead of claiming credit for them. The one defect this pass did fix is in the
-harness, not the method: `check_server_errors` could not match a logged error at
-all.
+instead of claiming credit for them. The three defects this pass fixed are all in
+the harness: the missing fixture-120 precondition check, a publication invariant
+that mistook a recipe's own `ANALYZE` for an unpublished counter, and a `check`
+stage that wrote its results into a directory that did not exist yet; see
+[What the 2026-09-16 review changed, and why](#what-the-2026-09-16-review-changed-and-why).
 
 ### What still needs to be tested
 
@@ -1611,12 +1810,21 @@ all.
    filter has never been exercised on a real standby, and no part of the heuristic
    can write a comment there.
 9. **How often sampling noise opens the third gate.** Fixture 120 is the only
-   fixture that touches it, and its precondition was unmet on both legs. No
-   fixture family sweeps subset selectivity against `default_statistics_target`.
-10. **A run with autovacuum actually on.** The tests simulate the auto-analyze;
-    they do not let the launcher do it, and they do not simulate the launcher's
-    vacuum verdict at all.
-11. **Everything the removed acceptance fixtures used to cover**, listed in
+   fixture that touches it, and its state arrived on three of the eight
+   fixture builds this review watched. No fixture family sweeps subset
+   selectivity against `default_statistics_target`, which is what would turn
+   that coin-flip into a curve.
+10. **A run with autovacuum actually on.** The tests now run the maintenance the
+    launcher would have run, and they still do not let the launcher run it: the
+    `VACUUM ANALYZE` is issued at a fixed point rather than when the launcher's
+    thresholds would have fired, and the vacuum verdict is not simulated at all.
+    The concept page says a run may not claim otherwise.
+11. **A fixture whose point is a defeated maintenance.** The no-defeat rule is
+    proved negatively here - nothing pinned the horizon, so nothing was
+    defeated. Whether this heuristic reads a genuinely pinned-horizon database
+    as clean is exactly the blind spot under item 1, and no numbered fixture
+    builds that state today.
+12. **Everything the removed acceptance fixtures used to cover**, listed in
     [Open Questions](#open-questions): comment parsing and preservation, the
     candidate filters, the gate boundaries, the unknown-count states, the
     threshold curve, comment survival across both `REINDEX` forms, privileges,
@@ -1630,14 +1838,14 @@ this page.
 
 | Item | This suite |
 |---|---|
-| Purpose | Build the pinned checkout, run the engine regression suites, start an isolated cluster, take this page's two texts out of this page, port every numbered fixture the mandatory suite still defines, store an as-built baseline in every index comment, churn each fixture, simulate the auto-analyze the churn would have triggered, apply the catalog forgery an `ANALYZE` would have repaired, run the heuristic, score every decision against a measured `REINDEX INDEX`, and time the statement in a settled and in a fully gated database. Every figure in [Verdict](#verdict) through [What still needs to be tested](#what-still-needs-to-be-tested) is one of its outputs, except where the text says a measurement was removed with the page-local fixtures on 2026-09-14. |
+| Purpose | Build the pinned checkout, run the engine regression suites, start an isolated cluster, take this page's two texts out of this page, port every numbered fixture the mandatory suite still defines, store an as-built baseline in every index comment, churn each fixture, **maintain every table the churn touched and prove the maintenance was not defeated**, simulate the auto-analyze the churn would have triggered, **assert the preconditions the shared definition puts on a fixture**, apply the catalog forgery an `ANALYZE` would have repaired, record the page classes the maintenance left, run the heuristic, score every decision against a measured `REINDEX INDEX`, and time the statement in a settled and in a fully gated database. Every figure in [Verdict](#verdict) through [What still needs to be tested](#what-still-needs-to-be-tested) is one of its outputs, except where the text says a measurement was removed with the page-local fixtures on 2026-09-14. |
 | Invocation | From the repository root: `bash btmaint_suite_v17.sh` and `bash btmaint_suite_v12.sh`. Selected stages: `bash btmaint_suite_v17.sh suite score`. |
-| Stages | 17 leg: `build check cluster sql texts facts suite cost score criteria report`, in that default order, plus `stop` and `clean`. The 12 leg inserts `exact` between `texts` and `facts`. The simulated auto-analyze and the forgery are steps inside `suite`, not stages of their own, because a decision taken without them would be a decision on statistics no production server would have had. |
+| Stages | 17 leg: `build check cluster sql texts facts suite cost score criteria report`, in that default order, plus `stop` and `clean`. The 12 leg inserts `exact` between `texts` and `facts`. The churn census, the maintenance step, the simulated auto-analyze, the precondition check, the forgery and the page-class read are steps inside `suite`, not stages of their own, because a decision taken without any of them would be a decision on a state no production server would have had. |
 | Environment | `WIKI_ROOT` (default `$PWD`), `PAGE` (default this page), `SRC` (default `raw/postgres-17` or `raw/postgres-12`), `SANDBOX` (default `.wiki-runtime/tmp/btmaint`), `PORT` (55417 / 55412), `JOBS` (8). |
 | Prerequisites | A C toolchain, `make`, and the two pinned checkouts. The 17 leg configures `--with-icu`, the 12 leg `--without-icu`. `pgstattuple` is installed from the same build. No installed PostgreSQL is used. |
-| Output | Everything under `$SANDBOX/out` (17) and `$SANDBOX/out12` (12). Read `criteria.txt` first; then `counters.txt`, `verdicts.txt`, `want_miss.txt`, `newly_measured.txt`, `lost.txt`, `disagree.txt`, `autoanalyze.txt`, `cost.txt`, `facts.txt`, and `server_errors_all.txt`. |
-| Runtime | Both legs were run concurrently on 22 cores at `JOBS=10` each, with `fsync = off` in the sandbox cluster, and timed from their own log files: `build` and `check` together took 1 min 15 s on the 17 leg and 1 min 08 s on the 12 leg, and `cluster` through `report` 1 min 18 s and 1 min 09 s. A whole leg is therefore about 2 min 30 s from a cold checkout and about 1 min 20 s from a built tree. The shared sandbox holds about 9 GB, most of it the two data directories. |
-| Cleanup | `bash btmaint_suite_v17.sh clean` and `bash btmaint_suite_v12.sh clean`: each stops its own server with `pg_ctl -m fast -w stop`, confirms no `postmaster.pid`, no matching process and an empty socket directory, and only then deletes the sandbox. Both were run before this page was filed. |
+| Output | Everything under `$SANDBOX/out` (17) and `$SANDBOX/out12` (12). Read `criteria.txt` first; then `counters.txt`, `verdicts.txt`, `maintenance.txt`, `maint_proofs.txt`, `precond.txt`, `pageclass.txt`, `want_miss.txt`, `newly_measured.txt`, `lost.txt`, `disagree.txt`, `autoanalyze.txt`, `cost.txt`, `facts.txt`, `maint_skips.txt` and `server_errors_all.txt`. |
+| Runtime | Both legs were run concurrently on 22 cores at `JOBS=10` each, with `fsync = off` in the sandbox cluster: the published pass ran from 14:21:32Z to 14:25:43Z on the 17 leg and from 20 s later to 14:25:55Z on the 12 leg, **4 min 11 s and 4 min 03 s** from an empty sandbox, `configure`, `make`, `make check` and the three contrib suites included. From a built tree a leg is about 2 min 15 s. The maintenance step itself is 6.4 s and 6.9 s. The shared sandbox holds about 9 GB, most of it the two data directories. |
+| Cleanup | **Stop both legs first, then clean once**: `bash btmaint_suite_v17.sh stop`, `bash btmaint_suite_v12.sh stop`, then `bash btmaint_suite_v17.sh clean`. Each `stop` uses `pg_ctl -m fast -w stop` and confirms no `postmaster.pid`, no matching process and an empty socket directory; `clean` refuses to delete anything outside `.wiki-runtime/tmp/` and then removes the sandbox. The order matters because **the two legs share `$SANDBOX`**: `clean` on either leg deletes the other leg's data directory and binaries as well, so running it while the other server is up pulls the rug out from under a live postmaster. An earlier teardown in this review learned that; see [Open Questions](#open-questions). |
 
 ### How to use the two leg scripts
 
@@ -1663,9 +1871,9 @@ pipeline lines  118
 pipeline identical yes
 ```
 
-Both legs printed those eight lines on the 2026-09-14 run, unchanged from
-2026-09-11: neither text was edited, and the shared pipeline is byte-identical in
-the two of them.
+Both legs printed those eight lines on the 2026-09-16 run, unchanged from
+2026-09-14 and from 2026-09-11: neither text was edited, and the shared pipeline
+is byte-identical in the two of them.
 
 `stage_texts` also builds the one harness object the suite needs from step 1: a
 view over the filed statement, with exactly one documented edit - the two `SET`
@@ -1680,14 +1888,14 @@ decisions without re-typing them.
 | `build` | Configures and builds the pinned checkout out of tree, installs it plus `pgstattuple`, `pageinspect` and `amcheck` under `$SANDBOX/inst/NN`. Skipped if the binary is already there. |
 | `check` | `make check` and the three contrib suites, with the pass counts and any `regression.diffs` copied where `clean` will not delete them. |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, writes the cluster settings, starts the server, records `version()` and `pg_control_init()`, creates the `suite` database with `pgstattuple`. Idempotent. |
-| `sql` | Writes every SQL file the suite uses: the harness, the fixture build and churn files, the PostgreSQL 13 and ICU fixture files, the simulated auto-analyze census, and the forgery file. |
+| `sql` | Writes every SQL file the suite uses: the harness, the fixture build and churn files, the PostgreSQL 13 and ICU fixture files, the two-phase churn census, the maintenance step and its post-read, the simulated auto-analyze and its recheck, the precondition check, the page-class read, and the forgery file. |
 | `texts` | Extracts, hashes and line-counts the two texts, checks that their shared pipeline region is byte-identical, and builds the one-edit view. |
 | `exact` (12 leg) | Executes both filed texts verbatim on this server before any fixture exists, and records the outcome, the comment written, and what a second run does. |
 | `facts` | Discovers every version-local fact the texts depend on, on the running server, including who writes an index's `reltuples` and the two auto-analyze defaults. |
-| `suite` | Builds the numbered fixtures, runs the filed apply block to store as-built baselines, churns, **runs the simulated auto-analyze and then fixture 84's catalog forgery**, records the filed report's decisions, runs the filed apply block again to act, then rebuilds every fixture as the oracle. It dies rather than continue if no table crossed the auto-analyze threshold, because that would mean the churn counters were invisible. |
+| `suite` | Builds the numbered fixtures, runs the filed apply block to store as-built baselines, records the write counters, churns, **maintains every table the churn touched and checks the four no-defeat proofs**, runs the simulated auto-analyze and its recheck, **asserts fixture 120's precondition**, applies fixture 84's catalog forgery, records the page classes, records the filed report's decisions, runs the filed apply block again to act, then rebuilds every fixture as the oracle. It dies rather than score if a maintenance statement did not complete, kept dead tuples the horizon still covered, has no `VERBOSE` count, or ran while any probe found an xmin holder, a slot or a prepared transaction. |
 | `cost` | Settles the database with one apply run, times the filed report six times and reads its buffer counts, then halves every stored `sz`, leaving both counts current, so the size gate alone fires everywhere, and repeats. |
-| `score` | Writes the verdict rows, the verdict and action counts, the per-group table, the accuracy row, the gate-agreement row, the per-gate attribution, the two-gate counterfactual, the newly-measured detail, the stored-index-count check, the lost-fixture detail, and the payload-health row. |
-| `criteria` | Collects the pass criteria into one file and audits the server log for any error the suite did not deliberately provoke, reporting the matched, deliberate and unexpected counts separately. |
+| `score` | Writes the verdict rows, the verdict and action counts, the per-group table, the accuracy row, the gate-agreement row, the per-gate attribution, the two-gate counterfactual, the newly-measured detail, the stored-index-count check, the lost-fixture detail, the payload-health row, the per-fixture and per-table maintenance detail with its page classes, the horizon readings, and the precondition rows. |
+| `criteria` | Collects the pass criteria into one file, audits the server log for any error the suite did not deliberately provoke, reporting the matched, deliberate and unexpected counts separately, and counts the log's maintenance skip and cancellation lines. |
 | `report` | Lists the output directory. |
 | `stop` | `pg_ctl -m fast -w stop`, then confirms the teardown and dies rather than report a stop that did not happen. |
 | `clean` | `stop`, then refuses to delete anything outside `.wiki-runtime/tmp/` before removing the sandbox. |
@@ -1731,18 +1939,20 @@ repair exactly the state that fixture exists to create.
 
 | Item | 17 leg | 12 leg |
 |---|---|---|
-| Date | 2026-09-14 | 2026-09-14 |
+| Date | 2026-09-16 | 2026-09-16 |
+| Wall clock | 14:21:32Z to 14:25:43Z, cluster up at 14:23:50Z | started 20 s later, cluster up at 14:24:05Z, finished 14:25:55Z |
 | Server version | 17.11 | 12.2 |
 | Pin | `786db8dcf168bd9df8f55047337525ac19118b1c` | `45b88269a353ad93744772791feb6d01bc7e1e42` |
 | `database_block_size` | 8192 | 8192 |
 | `max_data_alignment` | 8 | 8 |
-| Platform | Linux x86_64, Ubuntu 24.04, gcc 13.3.0, ICU 74.2, 22 cores | Linux x86_64, Ubuntu 24.04, gcc 13.3.0 |
+| Platform | Linux x86_64, Ubuntu 24.04 on a WSL2 kernel, gcc 13.3.0, ICU 74.2, 22 cores, `JOBS=10` | Linux x86_64, Ubuntu 24.04 on a WSL2 kernel, gcc 13.3.0, 22 cores, `JOBS=10` |
 | Locale, encoding | C, UTF8 | C, UTF8 |
 | `autovacuum_analyze_threshold`, `autovacuum_analyze_scale_factor` | 50, 0.1 | 50, 0.1 |
 | Engine tests | 225 core, `pgstattuple` 1, `pageinspect` 8, `amcheck` 3 | 192 core, `pgstattuple` 1, `pageinspect` 5, `amcheck` 2 |
 | Logged server errors, deliberate, unexpected | 4, 4, **0** | 8, 8, **0** |
+| Maintenance skip or cancellation lines | **0** | **0** |
 | Text hashes | `93b64e2d…` report, `7427d62d…` apply | the same two |
-| Script SHA-256 | `ebe6183f0a112796741e3c6d8877c52f17c695d8ff668cbb6baeda15e4389ecf` | `4287e1f82204246cc198d2c5dfb854d4eac112ab78d3c5f3bc9bbe9616cd2fd4` |
+| Script SHA-256 | `311d9f25a3fa76b6a88c5be3e27d5ba5ccdd6adda4a67454b231af4f82010c3f` | `d942054276d8131b6736ad02cfb3b5a2c1dc7e54c2dacf02cff25e40249d7230` |
 
 Every figure on this page comes from that pair of runs, both taken in one pass
 from `build` to `report` with the script text published below, extracted from this
@@ -1750,6 +1960,21 @@ page by fence order and diffed byte for byte against what was run. Both servers
 were then stopped by the scripts' own `stop` stage and the 9 GB sandbox deleted by
 `clean`, with no `postmaster.pid`, no matching process and an empty socket
 directory confirmed for each.
+
+**Run-to-run stability, on two clusters built from the same pins.** This review
+took five complete passes, and the published one agrees almost exactly with an
+earlier pass run on a separate cluster: of the per-fixture
+`(number, index, action, wasted_pct, actual_pct)` tuples, **125 of 126 are
+identical on 17.11 and 112 of 112 on 12.2**. The single exception is `p120`,
+whose subset estimate is a sampling outcome rather than a fixture constant; see
+[Fixture 120's precondition, now asserted](#fixture-120s-precondition-now-asserted).
+The earlier passes contribute no published number: the first stopped in the
+maintenance step when the publication invariant fired on nine recipe-analyzed
+tables, two more were superseded by the `check`-stage and census-recheck
+repairs, and the fourth was superseded when a stale comment in the fixture
+build file - still claiming the maintenance assumption was not applied - was
+corrected, which is why the script published below is the one that produced
+these numbers rather than a later edit of it.
 
 ### The PostgreSQL 17 leg script
 
@@ -1766,24 +1991,48 @@ directory confirmed for each.
 # "Mandatory B-Tree Bloat Tests" still defines (tests 1-17, 18-91 and controls
 # 92-120, less the retired 11, 38, 65, 67, 69, 106, 117, 121 and legs 113a and
 # 113c), stores an as-built baseline in each index comment, churns each
-# fixture, simulates the auto-analyze that churn would have triggered on a
-# server with autovacuum on, runs the heuristic, and scores every decision
-# against a measured REINDEX INDEX.
+# fixture, maintains every table the churn touched, simulates the auto-analyze
+# that churn would have triggered on a server with autovacuum on, runs the
+# heuristic, and scores every decision against a measured REINDEX INDEX.
 #
-# One departure from the shared definition is deliberate and is not silently
-# absorbed: its maintenance assumption, which would run VACUUM ANALYZE after
-# every churn, is NOT applied here.  A recipe that churns without maintenance
-# of its own reaches the decide phase that way, and only the rule 3 census
-# below can analyze it.
+# The shared definition's maintenance assumption is applied in full as of the
+# 2026-09-16 revision: the maintenance step inside stage_suite runs
+# VACUUM (VERBOSE, ANALYZE) on every table the churn inserted, updated or
+# deleted a row in - the set comes from
+# the engine's own pg_stat_all_tables counters across the churn phase, not
+# from a hand-written list - and it runs before the rule 3 census and the
+# decide phase.  A table no churn touched is not maintained, because draining or
+# re-analyzing a deliberately fresh or deliberately stale fixture would destroy
+# the shape it exists to build.
+#
+# The same revision carries out the shared definition's newer rule, "the
+# maintenance must not be defeated".  Four proofs are recorded per maintained
+# table: that the statement ran to completion with no skip line naming the
+# table, its VERBOSE "dead but not yet removable" count, the horizon holders
+# read from pg_stat_activity, pg_replication_slots and pg_prepared_xacts
+# immediately before it, and the index page classes after it.  Every session
+# that issues a VACUUM or an ANALYZE forces statement_timeout, lock_timeout,
+# transaction_timeout and idle_in_transaction_session_timeout to 0, which is
+# what the autovacuum launcher and worker do to themselves for this exact
+# reason, and the timeouts in force are recorded rather than assumed.
+#
+# Fixture 120's precondition is asserted rather than assumed: the shared
+# definition says a run that finds a non-zero post-census estimate for its
+# partial index scores nothing from the fixture, so the precondition step
+# records the observed estimate and the scorer reports that fixture as UNMET
+# PRECONDITION and excludes it from every scored count.
 #
 # The simulated auto-analyze is the mandatory-test rule that any fixture moving
 # more than 10 % of a table's heap tuples must ANALYZE it.  It is not
-# hand-annotated per fixture: stage_autoanalyze reads the engine's own
+# hand-annotated per fixture: the census reads the engine's own
 # n_mod_since_analyze counter and applies the engine's own threshold,
 # autovacuum_analyze_threshold + autovacuum_analyze_scale_factor * reltuples
 # (50 + 0.1 * reltuples at the defaults), so the tables it analyzes are exactly
 # the tables an autovacuum launcher would have analyzed.  Every table it
 # considered, with its counter, its threshold and the verdict, is recorded.
+# With the maintenance step in front of it the census now finds every churned
+# table freshly analyzed, so what it decides is the tables no churn touched -
+# which is what the shared definition says it should decide.
 #
 # The pinned checkout is read only: everything this script writes lives under
 # $SANDBOX (default .wiki-runtime/tmp/btmaint).
@@ -1824,6 +2073,8 @@ die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 # without it a failed statement inside a -f script leaves the exit status 0.
 q()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }        # command
 f()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -f "$2"; }        # file
+# fv() is f() with one psql variable, for the two-phase churn census.
+fv() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -v "$2" -d "$1" -f "$3"; }
 s()  { "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }    # scalar
 t()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off \
                    -d "$1" -c "$2"; }                                 # table
@@ -1854,6 +2105,33 @@ md_block() {
       n=$((n + 1)); inb=1
     fi
   done < "$file"
+}
+
+# parse_verbose <log> : turn the maintenance step's VACUUM (VERBOSE) output
+# into one UPDATE per maintained table, so that each statement's own "dead but
+# not yet removable" count is a recorded number rather than a line in a log.
+# A 17 server prints
+#   INFO:  finished vacuuming "db.schema.tbl": index scans: N
+#   tuples: X removed, Y remain, Z are dead but not yet removable
+# as one message, so the table name is carried from the header line to the
+# tuples line.  Bash case patterns and parameter expansion only: no awk, no
+# perl.
+parse_verbose() {
+  local log=$1 line cur="" rest removed remain dead
+  while IFS= read -r line; do
+    case $line in
+      *'finished vacuuming "'*)
+        rest=${line#*finished vacuuming \"}; rest=${rest%%\"*}; cur=${rest##*.} ;;
+      'tuples: '*' are dead but not yet removable'*)
+        [ -n "$cur" ] || continue
+        rest=${line#tuples: };    removed=${rest%% removed,*}
+        rest=${rest#* removed, }; remain=${rest%% remain,*}
+        rest=${rest#* remain, };  dead=${rest%% are dead*}
+        printf "UPDATE /* wiki_btmaint_maint_verbose */ maint SET removed = %s, remain = %s, dead_not_removable = %s WHERE tbl = '%s';\n" \
+               "$removed" "$remain" "$dead" "$cur"
+        cur="" ;;
+    esac
+  done < "$log"
 }
 
 # plan_view <report-text> : the one documented edit.  Drop the two SET lines,
@@ -1897,6 +2175,11 @@ stage_build() {
 # ---------------------------------------------------------------- check ------
 stage_check() {
   say "engine regression suites"
+  # $OUT is created here rather than assumed: stage_build returns early when
+  # the binary is already there, so a run that starts from a built tree would
+  # otherwise write every check result into a directory that does not exist and
+  # report an empty check section.
+  mkdir -p "$OUT"
   : > "$OUT/checks.txt"
   ( cd "$BUILD" && make -s check > check_core.log 2>&1 )
   printf 'core=%s %s\n' "$?" \
@@ -1987,6 +2270,11 @@ SET /* wiki_btmaint_harness_lock_timeout */ lock_timeout = '5s';
 DROP TABLE IF EXISTS plan CASCADE;
 DROP TABLE IF EXISTS snap CASCADE;
 DROP TABLE IF EXISTS truth CASCADE;
+DROP TABLE IF EXISTS churn_seen CASCADE;
+DROP TABLE IF EXISTS maint CASCADE;
+DROP TABLE IF EXISTS horizon CASCADE;
+DROP TABLE IF EXISTS pageclass CASCADE;
+DROP TABLE IF EXISTS precond CASCADE;
 DROP VIEW IF EXISTS verdicts CASCADE;
 
 -- One row per numbered fixture index.
@@ -2015,6 +2303,77 @@ CREATE OR REPLACE FUNCTION plan_add(n int, g text, r text, i text,
 RETURNS void LANGUAGE sql AS
 $$ INSERT INTO plan(num, leg, grp, req, idx, want_stage, note)
    VALUES (n, lg, g, r, i, w, nt) $$;
+
+-- The write counters of every fixture table, recorded before the first churn
+-- statement and again after the last, so that "the tables the churn touched"
+-- is the engine's own record rather than a hand-written list.  The maintenance
+-- assumption of the shared definition is then applied to exactly the tables
+-- whose insert, update or delete counter moved.
+CREATE TABLE churn_seen(phase text, tbl text, ins numeric, upd numeric,
+                        del numeric, mods numeric, dead numeric,
+                        last_analyze timestamptz,
+                        PRIMARY KEY (phase, tbl));
+
+-- One row per maintenance statement: the VACUUM (VERBOSE, ANALYZE) that the
+-- assumption credits with maintaining the churn, and the proofs the no-defeat
+-- rule asks for.  dead_not_removable is the VERBOSE line's own count, parsed
+-- out of the server's message text; a non-zero value on a churned table means
+-- a horizon was pinned and the fixture is repaired rather than scored.
+CREATE TABLE maint(tbl text PRIMARY KEY, ord int, ins numeric, upd numeric,
+                   del numeric, mods_before numeric, dead_before numeric,
+                   analyzed_in_churn bool,
+                   started timestamptz, ended timestamptz,
+                   removed numeric, remain numeric, dead_not_removable numeric,
+                   mods_after numeric, dead_after numeric, timeouts text);
+
+-- The horizon holders, read immediately before each maintenance statement and
+-- once after the census.  These are reads beside the statement, not an
+-- interlock around it, which is the limitation the shared definition records
+-- against itself.
+CREATE TABLE horizon(step text, tbl text, at timestamptz, xmin_holders int,
+                     open_xacts int, slots int, slot_xmins int, prepared int,
+                     detail text);
+
+-- The page classes of every fixture index after the maintenance step: the
+-- deleted and half-dead pages a drain leaves behind, which is the visible
+-- trace of a horizon that did or did not move.
+CREATE TABLE pageclass(idx text PRIMARY KEY, leaf_pages numeric,
+                       empty_pages numeric, deleted_pages numeric,
+                       avg_leaf_density numeric, index_size numeric);
+
+-- Preconditions the shared definition puts on a numbered fixture.  A fixture
+-- whose precondition is not met scores nothing: the verdict view reports it as
+-- UNMET PRECONDITION and every scored count excludes it.
+CREATE TABLE precond(num int, leg text DEFAULT '', requirement text,
+                     observed text, met bool, PRIMARY KEY (num, leg));
+
+-- horizon_probe records who could be holding back a removal horizon at the
+-- moment it is called: any other backend with a transaction open or an xmin
+-- published, any replication slot, and any prepared transaction.  VACUUM's
+-- OldestXmin folds in exactly those, so a clean reading on both sides of a
+-- maintenance statement is the evidence that nothing pinned the horizon while
+-- it ran.  The probe's own backend is excluded by pid: it is the session
+-- issuing the maintenance, and its INSERT commits before the VACUUM begins.
+CREATE OR REPLACE FUNCTION horizon_probe(p_step text, p_tbl text)
+RETURNS void LANGUAGE sql AS $hp$
+INSERT INTO horizon(step, tbl, at, xmin_holders, open_xacts, slots,
+                    slot_xmins, prepared, detail)
+SELECT p_step, p_tbl, clock_timestamp(),
+       (SELECT count(*) FROM pg_stat_activity a
+         WHERE a.pid <> pg_backend_pid() AND a.backend_xmin IS NOT NULL),
+       (SELECT count(*) FROM pg_stat_activity a
+         WHERE a.pid <> pg_backend_pid() AND a.xact_start IS NOT NULL),
+       (SELECT count(*) FROM pg_replication_slots),
+       (SELECT count(*) FROM pg_replication_slots s
+         WHERE s.xmin IS NOT NULL OR s.catalog_xmin IS NOT NULL),
+       (SELECT count(*) FROM pg_prepared_xacts),
+       (SELECT COALESCE(string_agg(a.pid || ':' || COALESCE(a.state, '?')
+                                   || ':xmin=' || COALESCE(a.backend_xmin::text, '-'),
+                                   ', ' ORDER BY a.pid), 'none')
+          FROM pg_stat_activity a
+         WHERE a.pid <> pg_backend_pid()
+           AND (a.backend_xmin IS NOT NULL OR a.xact_start IS NOT NULL))
+$hp$;
 
 -- take_snap records, for every planned index, the facts the heuristic reads:
 -- the file size, the table's estimated tuple count, and the baseline stored in
@@ -2058,6 +2417,16 @@ END $gt$;
 -- from the recorded baseline, independently of the filed text.
 CREATE OR REPLACE VIEW verdicts AS
 SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
+       ct.relname                                            AS tbl,
+       -- A fixture whose shared-definition precondition was not met scores
+       -- nothing; every count below that says "scored" filters on this.
+       (pc.met IS DISTINCT FROM false)                        AS scored,
+       pc.observed                                            AS precond_observed,
+       -- The maintenance the assumption credits, and the no-defeat proofs.
+       (m.tbl IS NOT NULL)                                    AS maintained,
+       m.dead_not_removable, m.removed AS maint_removed,
+       m.dead_after, m.mods_before, m.mods_after, m.timeouts,
+       q.deleted_pages, q.empty_pages, q.avg_leaf_density AS density_after_maint,
        t.action, t.baseline, t.wasted_pct, t.reindexed_by_heuristic,
        bu.bytes AS bytes_built, ic.bytes AS bytes_init,
        t.bytes_churned, t.bytes_applied, t.bytes_fresh,
@@ -2126,8 +2495,11 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
             ELSE 'skip' END                                      AS two_gate_stage,
        CASE WHEN t.action IN ('reindex', 'update') THEN 'measure'
             ELSE t.action END                                    AS taken_stage,
-       -- The rebuild oracle against the 40 % decision.
-       CASE WHEN t.action IS NULL                                THEN 'ABSENT'
+       -- The rebuild oracle against the 40 % decision.  A fixture whose
+       -- precondition was not met is reported and not scored, which is what
+       -- the shared definition requires of test 120.
+       CASE WHEN pc.met = false                                  THEN 'UNMET PRECONDITION'
+            WHEN t.action IS NULL                                THEN 'ABSENT'
             WHEN t.action = 'reindex'
              AND round(100.0 * (t.bytes_churned - t.bytes_fresh)
                        / GREATEST(t.bytes_churned, 1), 1) < 10    THEN 'CRITICAL FALSE POSITIVE'
@@ -2152,7 +2524,16 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
   LEFT JOIN truth t ON t.idx = p.idx
   LEFT JOIN snap bu ON bu.phase = 'built'   AND bu.idx = p.idx
   LEFT JOIN snap ic ON ic.phase = 'init'    AND ic.idx = p.idx
-  LEFT JOIN snap ch ON ch.phase = 'churned' AND ch.idx = p.idx;
+  LEFT JOIN snap ch ON ch.phase = 'churned' AND ch.idx = p.idx
+  -- The fixture's table, so that the maintenance row can be joined to it.  A
+  -- plain REINDEX keeps the index's pg_class row, so these names still resolve
+  -- after the oracle has rebuilt every fixture.
+  LEFT JOIN pg_class ci ON ci.relname = p.idx AND ci.relkind = 'i'
+  LEFT JOIN pg_index xi ON xi.indexrelid = ci.oid
+  LEFT JOIN pg_class ct ON ct.oid = xi.indrelid
+  LEFT JOIN maint m     ON m.tbl = ct.relname
+  LEFT JOIN pageclass q ON q.idx = p.idx
+  LEFT JOIN precond pc  ON pc.num = p.num AND pc.leg = p.leg;
 HARNESS
   cat > "$SQLD/fixtures_build.sql" <<'FIXTURES_BUILD'
 -- The numbered suite, build phase: every fixture up to and including the
@@ -2170,14 +2551,14 @@ HARNESS
 -- 11, 38, 65, 67, 69, 106, 117 and 121, and legs 113a and 113c.  Retired
 -- numbers are not reused and their recipes are gone from this file.
 --
--- Three deviations, all deliberate: pg_stat_force_next_flush() is not called,
+-- Two deviations, both deliberate: pg_stat_force_next_flush() is not called,
 -- because this heuristic reads pg_class.reltuples and never a cumulative
--- statistics view; the support-function-4 and ICU fixtures live in their own
--- files, because those features do not exist in every server this text has to
--- run on; and the shared definition's maintenance assumption is NOT applied,
--- so a recipe that churns without a VACUUM or an ANALYZE of its own still
--- reaches the decide phase that way, with only the rule 3 census below
--- deciding whether to analyze it.
+-- statistics view; and the support-function-4 and ICU fixtures live in their
+-- own files, because those features do not exist in every server this text has
+-- to run on.  The shared definition's maintenance assumption is applied, but
+-- not here: this file ends at each CREATE INDEX, the churn file carries the
+-- writes, and the maintenance step that follows it vacuums and analyzes every
+-- table those writes touched.
 SET /* wiki_btmaint_fixtures_client_min_messages */ client_min_messages = warning;
 SET /* wiki_btmaint_fixtures_statement_timeout */ statement_timeout = '900s';
 SET /* wiki_btmaint_fixtures_lock_timeout */ lock_timeout = '5s';
@@ -2984,10 +3365,25 @@ FIXTURES_ICU
 -- The fixtures whose whole point is that a fresh index must not be touched are
 -- deliberately left alone: 70-71, 78-85, 96-97, 101-105, 108-112, 116 and 120.
 --
+-- The maintenance the assumption credits is NOT here: the drain below deletes
+-- and stops, and every churned table is vacuumed and analyzed by the
+-- maintenance step that follows this file, in a session whose timeouts are all
+-- zero and whose VERBOSE output is captured.  A recipe's own VACUUM or ANALYZE
+-- stays where the numbered fixture put it, because that is the recipe.
+--
+-- All four settable timeouts are zero for the same reason the autovacuum
+-- launcher and worker set them to zero on themselves: this file issues
+-- maintenance statements, and a timeout firing inside one would leave a
+-- fixture neither churned nor maintained, which the shared definition's
+-- no-defeat rule forbids.  The trade-off is that a runaway statement here has
+-- no guard but the run's own supervision.
+--
 -- Disposable fixtures, in the sandbox cluster's suite database only.
 SET /* wiki_btmaint_churn_client_min_messages */ client_min_messages = warning;
-SET /* wiki_btmaint_churn_statement_timeout */ statement_timeout = '900s';
-SET /* wiki_btmaint_churn_lock_timeout */ lock_timeout = '5s';
+SET /* wiki_btmaint_churn_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_churn_lock_timeout */ lock_timeout = 0;
+SET /* wiki_btmaint_churn_transaction_timeout */ transaction_timeout = 0;
+SET /* wiki_btmaint_churn_idle_timeout */ idle_in_transaction_session_timeout = 0;
 
 -- ---------------------------------------------------------- recipe churn ----
 -- 64: stale statistics after inserts into the subset.
@@ -3111,10 +3507,13 @@ INSERT INTO q119 SELECT 1000000 + i, 'pending' FROM generate_series(1, 50000) i;
 ANALYZE q119;
 
 -- ------------------------------------------------------- the uniform drain ---
--- 90 % of the heap blocks of every shape fixture that has no churn of its own,
--- then VACUUM and ANALYZE, so that the index has empty and deleted pages the
--- gate can see and a rebuild can give back.  The commands are generated and
--- executed one at a time because VACUUM cannot run inside a transaction block.
+-- 90 % of the heap blocks of every shape fixture that has no churn of its own.
+-- The maintenance VACUUM and ANALYZE that turn those dead entries into empty
+-- and deleted index pages are no longer here: they are the maintenance step
+-- that runs after this file, over every table these deletes touched, with its
+-- timeouts at zero and its VERBOSE output recorded.  The deletes are still
+-- generated and executed one statement at a time, because the drain predicate
+-- has to be applied per table.
 SELECT /* wiki_btmaint_drain_generator */ format(st.tmpl, tb.name)
   FROM (VALUES (1, 't'), (2, 't2'), (3, 'pt1'), (4, 'pd22'), (5, 'pd23'),
                (6, 'pd24'), (7, 'pd25'), (8, 'pd26'), (9, 'pd27'), (10, 'pd28'),
@@ -3126,25 +3525,184 @@ SELECT /* wiki_btmaint_drain_generator */ format(st.tmpl, tb.name)
                (31, 'pe48b'), (32, 'pe49'), (33, 'pe49b'), (34, 'pe50'),
                (35, 'pe50b'), (36, 'pf'), (37, 'ps')) tb(n, name)
  CROSS JOIN (VALUES
-        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0'),
-        (2, 'VACUUM /* wiki_btmaint_drain */ %I'),
-        (3, 'ANALYZE /* wiki_btmaint_drain */ %I')) st(k, tmpl)
+        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0')) st(k, tmpl)
  ORDER BY tb.n, st.k
 \gexec
 FIXTURES_CHURN
   cat > "$SQLD/churn_icu.sql" <<'CHURN_ICU'
 -- Churn phase for the ICU fixtures, drained like the other shape fixtures.
+-- The maintenance VACUUM ANALYZE is the maintenance step's, not this file's.
 -- Disposable, suite database of the sandbox cluster only.
 SET /* wiki_btmaint_churnicu_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_churnicu_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_churnicu_lock_timeout */ lock_timeout = 0;
 SELECT /* wiki_btmaint_drainicu_generator */ format(st.tmpl, tb.name)
   FROM (VALUES (1, 'pc51')) tb(n, name)
  CROSS JOIN (VALUES
-        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0'),
-        (2, 'VACUUM /* wiki_btmaint_drain */ %I'),
-        (3, 'ANALYZE /* wiki_btmaint_drain */ %I')) st(k, tmpl)
+        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0')) st(k, tmpl)
  ORDER BY tb.n, st.k
 \gexec
 CHURN_ICU
+  cat > "$SQLD/churn_seen.sql" <<'CHURN_SEEN'
+-- Every fixture table's write counters at one point in the run, recorded once
+-- before the first churn statement and once after the last.  Run with
+-- -v phase=before and -v phase=after.  The difference is what defines "the
+-- tables the churn touched", which is the set the maintenance assumption
+-- applies to; using the engine's own counters keeps the set out of a
+-- hand-written list that a new fixture could silently fall out of.
+SET /* wiki_btmaint_churnseen_client_min_messages */ client_min_messages = warning;
+DELETE FROM churn_seen WHERE phase = :'phase';
+INSERT /* wiki_btmaint_churn_seen */ INTO churn_seen(phase, tbl, ins, upd, del,
+                                                    mods, dead, last_analyze)
+SELECT :'phase', c.relname, st.n_tup_ins, st.n_tup_upd, st.n_tup_del,
+       st.n_mod_since_analyze, st.n_dead_tup, st.last_analyze
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public'
+   AND c.relkind = 'r'
+   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after',
+                         'churn_seen', 'maint', 'horizon', 'pageclass',
+                         'precond');
+SELECT /* wiki_btmaint_churn_seen_count */
+       :'phase' || ': ' || count(*) || ' tables recorded'
+  FROM churn_seen WHERE phase = :'phase';
+CHURN_SEEN
+  cat > "$SQLD/maint.sql" <<'MAINT'
+-- The maintenance step: the VACUUM ANALYZE the shared definition's maintenance
+-- assumption requires after every churn, on every table the churn touched, and
+-- the four proofs its no-defeat rule asks for.
+--
+-- The table set is computed, not listed: a table is maintained when its
+-- insert, update or delete counter moved across the churn phase.  A fixture
+-- with no churn is therefore not touched here, which matters - an extra
+-- ANALYZE would repair the deliberately stale statistics of family 3 and of
+-- controls 108 to 112, and an extra VACUUM would change a deliberately fresh
+-- index.  Those fixtures carry their build-phase ANALYZE into the decide phase
+-- instead, exactly as the shared definition says they do.
+--
+-- All four settable timeouts are zero, which is what the autovacuum launcher
+-- and worker do to themselves so that these settings cannot stop regular
+-- maintenance.  The values in force are recorded per row rather than assumed.
+-- VERBOSE is on so that each statement's own "dead but not yet removable"
+-- count is in the output; INFO messages reach the client whatever
+-- client_min_messages says.
+-- Disposable fixtures, suite database of the sandbox cluster only.
+SET /* wiki_btmaint_maint_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_maint_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_maint_lock_timeout */ lock_timeout = 0;
+SET /* wiki_btmaint_maint_transaction_timeout */ transaction_timeout = 0;
+SET /* wiki_btmaint_maint_idle_timeout */ idle_in_transaction_session_timeout = 0;
+
+DELETE FROM maint;
+INSERT /* wiki_btmaint_maint_rows */ INTO maint
+       (tbl, ord, ins, upd, del, mods_before, dead_before, analyzed_in_churn,
+        timeouts)
+SELECT a.tbl,
+       row_number() OVER (ORDER BY a.tbl)::int,
+       a.ins - b.ins, a.upd - b.upd, a.del - b.del, a.mods, a.dead,
+       -- A recipe that analyzed its own table after its own writes leaves the
+       -- modification counter at zero legitimately: the churn was published
+       -- and then consumed.  Recording which tables those are is what keeps a
+       -- zero counter from being read as a churn that never reached the
+       -- statistics entry at all.
+       (a.last_analyze IS NOT NULL
+        AND (b.last_analyze IS NULL OR a.last_analyze > b.last_analyze)),
+       'statement_timeout=' || current_setting('statement_timeout') ||
+       ' lock_timeout=' || current_setting('lock_timeout') ||
+       ' transaction_timeout=' || current_setting('transaction_timeout') ||
+       ' idle_in_transaction_session_timeout='
+         || current_setting('idle_in_transaction_session_timeout')
+  FROM churn_seen a
+  JOIN churn_seen b ON b.tbl = a.tbl AND b.phase = 'before'
+ WHERE a.phase = 'after'
+   AND (a.ins - b.ins) + (a.upd - b.upd) + (a.del - b.del) > 0;
+
+SELECT /* wiki_btmaint_maint_planned */ count(*) || ' tables to maintain, '
+       || count(*) FILTER (WHERE analyzed_in_churn)
+       || ' already analyzed by their own recipe, '
+       || count(*) FILTER (WHERE COALESCE(mods_before, 0) = 0
+                             AND NOT analyzed_in_churn)
+       || ' with an unpublished churn counter'
+  FROM maint;
+
+-- One probe, one start stamp, one VACUUM (VERBOSE, ANALYZE) and one end stamp
+-- per table, generated and executed one statement at a time because VACUUM
+-- cannot run inside a transaction block.
+SELECT /* wiki_btmaint_maint_generator */ format(st.tmpl, m.tbl)
+  FROM maint m
+ CROSS JOIN (VALUES
+        (1, 'SELECT /* wiki_btmaint_horizon_before */ horizon_probe(''maint'', %1$L)'),
+        (2, 'UPDATE /* wiki_btmaint_maint_start */ maint SET started = clock_timestamp() WHERE tbl = %1$L'),
+        (3, 'VACUUM /* wiki_btmaint_maint */ (VERBOSE, ANALYZE) %1$I'),
+        (4, 'UPDATE /* wiki_btmaint_maint_end */ maint SET ended = clock_timestamp() WHERE tbl = %1$L')
+       ) st(k, tmpl)
+ ORDER BY m.ord, st.k
+\gexec
+MAINT
+  cat > "$SQLD/maint_after.sql" <<'MAINT_AFTER'
+-- What the maintenance left behind, read from a new session a second later so
+-- that a 12 server's statistics collector has published the VACUUM and the
+-- ANALYZE.  dead_after is the dead-tuple count the engine reports for the
+-- table; mods_after is the modification counter the ANALYZE half reset.
+SET /* wiki_btmaint_maintafter_client_min_messages */ client_min_messages = warning;
+UPDATE /* wiki_btmaint_maint_after */ maint m
+   SET mods_after = st.n_mod_since_analyze,
+       dead_after = st.n_dead_tup
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public' AND c.relname = m.tbl;
+SELECT /* wiki_btmaint_horizon_after_maint */ horizon_probe('post-maint', NULL);
+SELECT /* wiki_btmaint_maint_summary */
+       'maintained ' || count(*) || ' tables, '
+       || count(*) FILTER (WHERE ended IS NOT NULL) || ' completed, '
+       || count(*) FILTER (WHERE COALESCE(dead_after, 0) > 0)
+       || ' still holding dead tuples, '
+       || count(*) FILTER (WHERE COALESCE(mods_after, 0) > 0)
+       || ' with a non-zero modification counter'
+  FROM maint;
+MAINT_AFTER
+  cat > "$SQLD/precond.sql" <<'PRECOND'
+-- The preconditions the shared definition puts on a numbered fixture, checked
+-- after the census rather than assumed.  Test 120 is the suite's one
+-- probabilistic fixture: its point is a 300-row sample that missed a 2,000-row
+-- subset, so its partial index's own reltuples must still read 0 when the
+-- method is asked.  A run that finds a non-zero estimate scores nothing from
+-- the fixture, which is what the shared definition says, and what the previous
+-- run of this page counted as a PASS.
+SET /* wiki_btmaint_precond_client_min_messages */ client_min_messages = warning;
+DELETE FROM precond;
+INSERT /* wiki_btmaint_precond_120 */ INTO precond(num, leg, requirement, observed, met)
+SELECT 120, '', 'post-census reltuples of p120 must be 0',
+       'p120 reltuples = ' || c.reltuples::text, (c.reltuples = 0)
+  FROM pg_class c WHERE c.relname = 'p120';
+SELECT /* wiki_btmaint_precond_report */
+       num || ': ' || requirement || ' -> ' || observed ||
+       ' (' || CASE WHEN met THEN 'met' ELSE 'NOT MET, scores nothing' END || ')'
+  FROM precond ORDER BY num, leg;
+PRECOND
+  cat > "$SQLD/pageclass.sql" <<'PAGECLASS'
+-- The page classes of every fixture index after the maintenance step.  Deleted
+-- and half-dead pages are the visible trace of what the maintenance did, and a
+-- drained fixture whose index has neither is the shape a defeated VACUUM
+-- leaves behind.  Read-only: pgstatindex opens every page of every index it is
+-- called on and writes nothing, so the decide phase that follows sees exactly
+-- the state the maintenance left.
+SET /* wiki_btmaint_pageclass_client_min_messages */ client_min_messages = warning;
+DELETE FROM pageclass;
+INSERT /* wiki_btmaint_pageclass */ INTO pageclass
+       (idx, leaf_pages, empty_pages, deleted_pages, avg_leaf_density, index_size)
+SELECT p.idx, m.leaf_pages, m.empty_pages, m.deleted_pages,
+       CASE WHEN m.avg_leaf_density = 'NaN'::float8 THEN NULL
+            ELSE round(m.avg_leaf_density::numeric, 2) END,
+       m.index_size
+  FROM plan p, LATERAL pgstatindex(p.idx::regclass) m;
+SELECT /* wiki_btmaint_pageclass_report */
+       count(*) || ' indexes read, '
+       || count(*) FILTER (WHERE deleted_pages > 0) || ' with deleted pages, '
+       || count(*) FILTER (WHERE empty_pages > 0) || ' with half-dead pages, '
+       || COALESCE(sum(deleted_pages), 0) || ' deleted pages in total'
+  FROM pageclass;
+PAGECLASS
   cat > "$SQLD/autoanalyze.sql" <<'AUTOANALYZE'
 -- The simulated auto-analyze, and the mandatory-test rule behind it: a fixture
 -- that changes more than 10 % of a table's heap tuples must ANALYZE it, because
@@ -3161,10 +3719,24 @@ CHURN_ICU
 -- Both counter states are recorded: autoanl holds what the churn left behind,
 -- autoanl_after holds the same counters once the ANALYZEs have run, which is
 -- how the run proves the simulation actually fired.
+--
+-- With the maintenance step in front of it, this census finds every churned
+-- table freshly analyzed, so the tables it decides are the ones no churn
+-- touched - a table whose build left it past the threshold, such as the
+-- never-analysed table of control 108.  It is also the recheck that the
+-- maintenance step's counters were published in the right order.
+--
+-- The census issues ANALYZE, which is a maintenance command, so its timeouts
+-- are zero for the same reason the maintenance step's are, and it probes the
+-- horizon on both sides of itself.
 -- Disposable fixtures, suite database of the sandbox cluster only.
 SET /* wiki_btmaint_autoanl_client_min_messages */ client_min_messages = warning;
-SET /* wiki_btmaint_autoanl_statement_timeout */ statement_timeout = '900s';
-SET /* wiki_btmaint_autoanl_lock_timeout */ lock_timeout = '5s';
+SET /* wiki_btmaint_autoanl_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_autoanl_lock_timeout */ lock_timeout = 0;
+SET /* wiki_btmaint_autoanl_transaction_timeout */ transaction_timeout = 0;
+SET /* wiki_btmaint_autoanl_idle_timeout */ idle_in_transaction_session_timeout = 0;
+
+SELECT /* wiki_btmaint_horizon_before_census */ horizon_probe('census-before', NULL);
 
 DROP TABLE IF EXISTS autoanl;
 DROP TABLE IF EXISTS autoanl_after;
@@ -3186,13 +3758,26 @@ SELECT /* wiki_btmaint_autoanalyze_census */
   JOIN pg_class c ON c.oid = st.relid
  WHERE st.schemaname = 'public'
    AND c.relkind = 'r'
-   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after');
+   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after',
+                         'churn_seen', 'maint', 'horizon', 'pageclass',
+                         'precond');
 
 SELECT /* wiki_btmaint_autoanalyze_generator */
        format('ANALYZE /* wiki_btmaint_autoanalyze */ %I', tbl)
   FROM autoanl WHERE would_autoanalyze ORDER BY tbl
 \gexec
 
+AUTOANALYZE
+  cat > "$SQLD/autoanalyze_after.sql" <<'AUTOANALYZE_AFTER'
+-- The census's own recheck, in a session of its own a second later.  The delay
+-- is not cosmetic: this file has to be able to see the counters the census's
+-- ANALYZEs reset, and on a 12 server the statistics a reader sees come from a
+-- collector file that is written at most every half second, so a recheck run
+-- immediately after the ANALYZE reads the state from before it.  A run that
+-- reports "0 of 6 counters reset" is reporting that staleness, not a census
+-- that did nothing.
+SET /* wiki_btmaint_autoanlafter_client_min_messages */ client_min_messages = warning;
+DROP TABLE IF EXISTS autoanl_after;
 CREATE TABLE autoanl_after AS
 SELECT /* wiki_btmaint_autoanalyze_recheck */
        c.relname AS tbl, st.n_mod_since_analyze::numeric AS mods,
@@ -3201,7 +3786,9 @@ SELECT /* wiki_btmaint_autoanalyze_recheck */
   JOIN pg_class c ON c.oid = st.relid
  WHERE st.schemaname = 'public' AND c.relkind = 'r'
    AND c.relname IN (SELECT tbl FROM autoanl WHERE would_autoanalyze);
-AUTOANALYZE
+
+SELECT /* wiki_btmaint_horizon_after_census */ horizon_probe('census-after', NULL);
+AUTOANALYZE_AFTER
   cat > "$SQLD/forge.sql" <<'FORGE'
 -- The numbered suite's catalog forgeries, applied after the simulated
 -- auto-analyze so that an ANALYZE cannot overwrite them.  Fixture 84 is a
@@ -3358,10 +3945,88 @@ stage_facts() {
   cat "$OUT/facts.txt" >&2
 }
 
+# ----------------------------------------------- the no-defeat proofs --------
+# The shared definition's rule "the maintenance must not be defeated" says a
+# fixture may not carry a state into its maintenance VACUUM ANALYZE that would
+# have stopped a real server's autovacuum from doing the work the assumption
+# credits it with, and that a fixture which did is repaired and re-run rather
+# than scored.  This function is that rule, enforced: it fails the run instead
+# of publishing a number taken under a defeated maintenance.
+#
+# Four proofs, per maintained table:
+#   1. the statement completed, and no skip line in the server log names it;
+#   2. its VERBOSE "dead but not yet removable" count is zero;
+#   3. no other backend held a transaction or an xmin, no replication slot
+#      held one and no prepared transaction existed when it started;
+#   4. the index page classes it left behind, recorded for the report.
+# The publication check comes with them: a table whose churn counter was still
+# unpublished when its ANALYZE ran would have had its churn forgotten.
+suite_maint_proofs() {
+  local n bad
+  n=$(s suite 'SELECT count(*) FROM maint')
+  [ "$n" -gt 0 ] || die "the maintenance step maintained no table at all"
+  bad=$(s suite 'SELECT count(*) FROM maint WHERE ended IS NULL')
+  [ "$bad" = 0 ] || die "$bad maintenance statements did not complete"
+  bad=$(s suite 'SELECT count(*) FROM maint WHERE dead_not_removable IS NULL')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT tbl FROM maint WHERE dead_not_removable IS NULL ORDER BY tbl' >&2
+         die "$bad maintained tables have no VERBOSE count: proof 2 is missing"; }
+  # Membership of the maintained set is itself the publication proof: the set
+  # comes from write counters that only a flush can move.  What this check adds
+  # is the one case a zero modification counter could otherwise hide - a churn
+  # that never reached the statistics entry - by excluding the tables whose own
+  # recipe analyzed them after their own writes and consumed the counter.
+  bad=$(s suite 'SELECT count(*) FROM maint
+                  WHERE COALESCE(mods_before, 0) = 0 AND NOT analyzed_in_churn')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT tbl, ins, upd, del, mods_before, analyzed_in_churn
+                    FROM maint
+                   WHERE COALESCE(mods_before, 0) = 0 AND NOT analyzed_in_churn
+                   ORDER BY tbl' >&2
+         die "$bad churned tables reached their ANALYZE with an unpublished counter"; }
+  bad=$(s suite 'SELECT count(*) FROM maint WHERE dead_not_removable > 0')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT tbl, removed, remain, dead_not_removable, dead_after
+                    FROM maint WHERE dead_not_removable > 0
+                   ORDER BY dead_not_removable DESC' >&2
+         die "$bad maintained tables kept dead tuples the horizon still covered: the maintenance was defeated, repair the fixture and re-run"; }
+  bad=$(s suite 'SELECT count(*) FROM horizon
+                  WHERE xmin_holders > 0 OR open_xacts > 0
+                     OR slots > 0 OR prepared > 0')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT step, tbl, xmin_holders, open_xacts, slots, prepared, detail
+                    FROM horizon
+                   WHERE xmin_holders > 0 OR open_xacts > 0
+                      OR slots > 0 OR prepared > 0 ORDER BY at' >&2
+         die "$bad horizon probes found a holder: the maintenance ran with a pinned horizon"; }
+  { printf 'maintained tables        %s\n' "$n"
+    printf 'statements completed     %s\n' \
+      "$(s suite 'SELECT count(*) FROM maint WHERE ended IS NOT NULL')"
+    printf 'analyzed by own recipe   %s, all with a published churn counter\n' \
+      "$(s suite 'SELECT count(*) FROM maint WHERE analyzed_in_churn')"
+    printf 'dead but not removable   max %s over %s tables\n' \
+      "$(s suite 'SELECT COALESCE(max(dead_not_removable), -1) FROM maint')" "$n"
+    printf 'dead tuples left behind  max %s\n' \
+      "$(s suite 'SELECT COALESCE(max(dead_after), -1) FROM maint')"
+    printf 'tuples removed           %s over %s tables\n' \
+      "$(s suite 'SELECT COALESCE(sum(removed), 0) FROM maint')" "$n"
+    printf 'horizon probes clean     %s of %s\n' \
+      "$(s suite 'SELECT count(*) FROM horizon
+                   WHERE xmin_holders = 0 AND open_xacts = 0
+                     AND slots = 0 AND prepared = 0')" \
+      "$(s suite 'SELECT count(*) FROM horizon')"
+    printf 'distinct timeout sets    %s: %s\n' \
+      "$(s suite 'SELECT count(DISTINCT timeouts) FROM maint')" \
+      "$(s suite 'SELECT DISTINCT timeouts FROM maint')"; } \
+    > "$OUT/maint_proofs.txt"
+  cat "$OUT/maint_proofs.txt" >&2
+}
+
 # ---------------------------------------------------------------- suite ------
-# The ported numbered suite, in eight steps: build, baseline, churn,
-# auto-analyze, forge, decide, act, oracle.  Steps 2 and 7 run the page's apply
-# block exactly as filed.
+# The ported numbered suite, in eleven steps: build, baseline, churn,
+# maintenance, auto-analyze, preconditions, forge, page classes, decide, act,
+# oracle.  The baseline and act steps run the page's apply block exactly as
+# filed.
 stage_suite() {
   say "the ported numbered suite: tests 1-17, 18-91 and controls 92-120"
   q suite 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public' > /dev/null
@@ -3392,6 +4057,10 @@ stage_suite() {
   tail -1 "$OUT/apply_init.log" >&2
   q suite 'CALL take_snap($$init$$)' || die "snapshot init failed"
 
+  # The write counters before the first churn statement.  Their movement across
+  # the churn phase is what defines the tables the maintenance step maintains.
+  fv suite phase=before "$SQLD/churn_seen.sql" >&2 || die "churn census (before) failed"
+
   say "churn"
   f suite "$SQLD/fixtures_churn.sql" > "$OUT/suite_churn.log" 2>&1 \
     || { tail -5 "$OUT/suite_churn.log" >&2; die "churn failed"; }
@@ -3400,15 +4069,41 @@ stage_suite() {
   # now that the deduplicate_items fixtures are retired.
   [ "$haveicu" = yes ] && f suite "$SQLD/churn_icu.sql" >> "$OUT/suite_churn.log" 2>&1
 
-  # The mandatory-test rule: a fixture that moved more than 10 % of a table's
-  # heap tuples gets an ANALYZE, because autovacuum would have run one.  The
+  # The maintenance assumption of the shared definition: VACUUM ANALYZE on
+  # every table the churn touched, before the census and the decide phase.  The
   # churn ran in psql processes that have now exited, so their statistics are
   # flushed; one second of grace covers the collector interval of the older
   # server, whose reader also waits for a fresh file.
-  say "simulated auto-analyze: the engine's own threshold on its own counters"
   sleep 1
+  fv suite phase=after "$SQLD/churn_seen.sql" >&2 || die "churn census (after) failed"
+  say "maintenance: VACUUM (VERBOSE, ANALYZE) on every churned table"
+  f suite "$SQLD/maint.sql" > "$OUT/maint.log" 2> "$OUT/maint_verbose.log" \
+    || { tail -5 "$OUT/maint_verbose.log" >&2; die "maintenance step failed"; }
+  note "$(head -2 "$OUT/maint.log" | tail -1)"
+  # Proof 2 of the no-defeat rule: each statement's own VERBOSE counts, parsed
+  # out of the message text and stored per table.
+  parse_verbose "$OUT/maint_verbose.log" > "$SQLD/maint_verbose.sql"
+  [ -s "$SQLD/maint_verbose.sql" ] \
+    || die "the VACUUM VERBOSE output produced no tuples line: the proof is missing"
+  f suite "$SQLD/maint_verbose.sql" > /dev/null || die "recording the VERBOSE counts failed"
+  sleep 1
+  f suite "$SQLD/maint_after.sql" >&2 || die "post-maintenance read failed"
+  suite_maint_proofs
+
+  # Rule 3 of the shared definition: a fixture that moved more than 10 % of a
+  # table's heap tuples gets an ANALYZE, because autovacuum would have run one.
+  # With the maintenance step in front of it the census finds every churned
+  # table freshly analyzed, so what it decides now is the tables no churn
+  # touched, and it doubles as the recheck that the counters were published in
+  # the right order.
+  say "simulated auto-analyze: the engine's own threshold on its own counters"
   f suite "$SQLD/autoanalyze.sql" > "$OUT/autoanalyze.log" 2>&1 \
     || { tail -5 "$OUT/autoanalyze.log" >&2; die "simulated auto-analyze failed"; }
+  # The recheck waits a second and reads from a new session, so that it can see
+  # the counters the census just reset on either server.
+  sleep 1
+  f suite "$SQLD/autoanalyze_after.sql" >> "$OUT/autoanalyze.log" 2>&1 \
+    || { tail -5 "$OUT/autoanalyze.log" >&2; die "census recheck failed"; }
   t suite "SELECT /* wiki_btmaint_autoanalyze_report */ tbl, reltuples, mods,
                   threshold, mod_pct, would_autoanalyze
              FROM autoanl ORDER BY would_autoanalyze DESC, mods DESC, tbl" \
@@ -3430,13 +4125,27 @@ stage_suite() {
       "$(s suite "SELECT COALESCE(max(mod_pct)::text, 'none')
                     FROM autoanl WHERE NOT would_autoanalyze")"; } \
     >> "$OUT/autoanalyze.txt"
-  [ "$(s suite 'SELECT count(*) FROM autoanl WHERE would_autoanalyze')" -gt 0 ] \
-    || die "no table crossed the auto-analyze threshold: the churn counters are not visible"
+  # The guard the old "no table crossed the threshold" check was really making
+  # - that the churn counters were visible at all - now lives in
+  # suite_maint_proofs, which fails when a maintained table reached its VACUUM
+  # ANALYZE with an unpublished counter.  A census that analyzes nothing is a
+  # legitimate outcome once every churned table has just been analyzed, so it
+  # is reported rather than fatal.
   tail -6 "$OUT/autoanalyze.txt" >&2
+
+  say "preconditions: what the shared definition requires of a numbered fixture"
+  f suite "$SQLD/precond.sql" > "$OUT/precond.txt" 2>&1 || die "precondition check failed"
+  cat "$OUT/precond.txt" >&2
 
   say "forge: the catalog forgeries an ANALYZE would have overwritten"
   f suite "$SQLD/forge.sql" > "$OUT/forge.log" 2>&1 || die "forge failed"
   cat "$OUT/forge.log" >&2
+
+  # Proof 4 of the no-defeat rule: the page classes the maintenance left in
+  # every fixture index.  Read-only, so the decide phase sees the same state.
+  say "page classes: what the maintenance left in each index"
+  f suite "$SQLD/pageclass.sql" > "$OUT/pageclass.txt" 2>&1 || die "page-class read failed"
+  tail -1 "$OUT/pageclass.txt" >&2
   q suite 'CALL take_snap($$churned$$)' || die "snapshot churned failed"
 
   say "decide: the filed report statement, as filed and through the one-edit view"
@@ -3553,6 +4262,7 @@ stage_score() {
              FROM verdicts GROUP BY 1 ORDER BY 2 DESC" >> "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_group_counts */ grp,
                   count(*) AS fixtures,
+                  count(*) FILTER (WHERE NOT scored) AS unscored,
                   count(*) FILTER (WHERE action = 'reindex') AS reindexed,
                   count(*) FILTER (WHERE action = 'update')  AS updated,
                   count(*) FILTER (WHERE action = 'skip')    AS skipped,
@@ -3568,7 +4278,8 @@ stage_score() {
                   round(max(actual_pct - wasted_pct), 1)  AS max_error,
                   count(*) FILTER (WHERE abs(actual_pct - wasted_pct) <= 15) AS within_15,
                   count(*) FILTER (WHERE wasted_pct > actual_pct) AS over_estimates
-             FROM verdicts WHERE wasted_pct IS NOT NULL" >> "$OUT/verdicts.txt" 2>&1
+             FROM verdicts WHERE wasted_pct IS NOT NULL AND scored" \
+    >> "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_action_counts */ action, count(*),
                   round(avg(actual_pct), 1) AS avg_actual
              FROM verdicts GROUP BY 1 ORDER BY 2 DESC" >> "$OUT/verdicts.txt" 2>&1
@@ -3652,6 +4363,54 @@ stage_score() {
                   count(*) FILTER (WHERE base_bytes IS NULL) AS unparseable,
                   count(*) FILTER (WHERE cmt !~ '@btmaint:') AS no_marker
              FROM snap WHERE phase = 'applied'" >> "$OUT/verdicts.txt" 2>&1
+  # The maintenance assumption and the no-defeat rule, fixture by fixture and
+  # then per table, so that a reader can see which fixture was maintained, what
+  # its VACUUM removed, what it could not remove, and the page classes left in
+  # the index the method was then asked about.
+  t suite "SELECT /* wiki_btmaint_maint_by_fixture */ num, leg, idx, tbl,
+                  maintained, maint_removed, dead_not_removable, dead_after,
+                  deleted_pages, empty_pages, density_after_maint,
+                  wasted_pct, actual_pct, verdict
+             FROM verdicts ORDER BY num, leg" > "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_maint_by_table */ ord, tbl, ins, upd, del,
+                  mods_before, analyzed_in_churn, dead_before, removed, remain,
+                  dead_not_removable, mods_after, dead_after,
+                  round(extract(epoch FROM ended - started)::numeric, 2) AS secs
+             FROM maint ORDER BY ord" >> "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_maint_aggregate */
+                  count(*) AS maintained_tables,
+                  count(*) FILTER (WHERE ended IS NOT NULL) AS completed,
+                  count(*) FILTER (WHERE dead_not_removable = 0) AS horizon_clean,
+                  count(*) FILTER (WHERE dead_not_removable > 0) AS horizon_pinned,
+                  COALESCE(sum(removed), 0) AS tuples_removed,
+                  COALESCE(max(dead_after), 0) AS max_dead_left,
+                  count(DISTINCT timeouts) AS timeout_sets
+             FROM maint" >> "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_horizon_rows */ step, tbl, xmin_holders,
+                  open_xacts, slots, slot_xmins, prepared, detail
+             FROM horizon
+            WHERE xmin_holders > 0 OR open_xacts > 0 OR slots > 0
+               OR prepared > 0 OR tbl IS NULL
+            ORDER BY at" >> "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_pageclass_by_group */ grp,
+                  count(*) AS fixtures,
+                  count(*) FILTER (WHERE maintained) AS maintained,
+                  count(*) FILTER (WHERE deleted_pages > 0) AS with_deleted_pages,
+                  COALESCE(sum(deleted_pages), 0) AS deleted_pages,
+                  COALESCE(sum(empty_pages), 0) AS empty_pages,
+                  round(avg(density_after_maint), 1) AS avg_density
+             FROM verdicts GROUP BY grp ORDER BY grp" >> "$OUT/maintenance.txt" 2>&1
+  # The precondition the shared definition puts on a numbered fixture, and what
+  # this run observed.  A fixture reported here scores nothing.
+  t suite "SELECT /* wiki_btmaint_precond_rows */ p.num, p.leg, p.requirement,
+                  p.observed, p.met
+             FROM precond p ORDER BY p.num, p.leg" >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_scored */ count(*) AS fixtures,
+                  count(*) FILTER (WHERE scored) AS scored,
+                  count(*) FILTER (WHERE NOT scored) AS unmet_precondition,
+                  count(*) FILTER (WHERE scored AND verdict = 'PASS') AS pass,
+                  count(*) FILTER (WHERE maintained) AS maintained
+             FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
   tail -40 "$OUT/verdicts.txt" >&2
 }
 
@@ -3680,6 +4439,24 @@ check_server_errors() {
   printf 'logged errors: %s, deliberate: %s, unexpected: %s\n' \
     "$total" "$((total - UNEXPECTED_ERRORS))" "$UNEXPECTED_ERRORS"
   [ "$UNEXPECTED_ERRORS" -gt 0 ] && head -5 "$OUT/server_errors.txt"
+  return 0
+}
+
+# Proof 1 of the no-defeat rule, from the log side: a maintenance command that
+# was skipped for want of the lock, or cancelled part-done, says so in the
+# server log.  A foreground VACUUM without SKIP_LOCKED waits rather than
+# skipping, and nothing in this suite holds a conflicting lock, so the expected
+# count is zero on both counts; the check exists because a zero it never looked
+# for would prove nothing.
+MAINT_SKIPS=0
+check_maintenance_skips() {
+  local log=$1
+  [ -f "$log" ] || { note "no server log"; return 0; }
+  grep -E 'skipping vacuum of|skipping analyze of|canceling statement due to|canceling autovacuum task' \
+    "$log" > "$OUT/maint_skips.txt"
+  MAINT_SKIPS=$(grep -c '' "$OUT/maint_skips.txt")
+  printf 'maintenance skip or cancellation lines: %s\n' "$MAINT_SKIPS"
+  [ "$MAINT_SKIPS" -gt 0 ] && head -5 "$OUT/maint_skips.txt"
   return 0
 }
 
@@ -3732,6 +4509,34 @@ SELECT '  simulated auto-analyze: ' ||
        ' tables analyzed, largest left alone ' ||
        COALESCE(max(mod_pct) FILTER (WHERE NOT would_autoanalyze)::text, 'none') || ' %'
   FROM autoanl;
+SELECT '  scored=' || count(*) FILTER (WHERE scored) ||
+       ' unmet precondition=' || count(*) FILTER (WHERE NOT scored) ||
+       ' maintained=' || count(*) FILTER (WHERE maintained) ||
+       ' of ' || count(*)
+  FROM verdicts;
+SELECT '  maintenance: ' || count(*) || ' tables, ' ||
+       count(*) FILTER (WHERE ended IS NOT NULL) || ' completed, ' ||
+       count(*) FILTER (WHERE dead_not_removable = 0) ||
+       ' with nothing dead but not yet removable, ' ||
+       count(*) FILTER (WHERE COALESCE(dead_after, 0) = 0) ||
+       ' with no dead tuple left, timeout sets=' || count(DISTINCT timeouts)
+  FROM maint;
+SELECT '  timeouts in force during maintenance: ' || timeouts
+  FROM maint GROUP BY timeouts ORDER BY timeouts;
+SELECT '  horizon probes: ' || count(*) || ' taken, ' ||
+       count(*) FILTER (WHERE xmin_holders = 0 AND open_xacts = 0
+                          AND slots = 0 AND prepared = 0) || ' entirely clean, ' ||
+       COALESCE(sum(slots), 0) || ' replication slots, ' ||
+       COALESCE(sum(prepared), 0) || ' prepared transactions seen'
+  FROM horizon;
+SELECT '  page classes after maintenance: ' ||
+       count(*) FILTER (WHERE deleted_pages > 0) || ' of ' || count(*) ||
+       ' indexes hold deleted pages, ' || COALESCE(sum(deleted_pages), 0) ||
+       ' deleted and ' || COALESCE(sum(empty_pages), 0) || ' half-dead in total'
+  FROM pageclass;
+SELECT '  precondition ' || num || ': ' || observed || ' -> ' ||
+       CASE WHEN met THEN 'met' ELSE 'NOT MET, scores nothing' END
+  FROM precond ORDER BY num, leg;
 SQL
   { printf '1. texts\n'; cat "$OUT/hashes.txt" 2>/dev/null
     printf '2. engine checks\n'; cat "$OUT/checks.txt" 2>/dev/null
@@ -3740,9 +4545,13 @@ SQL
     printf '5. cost\n'; sed 's/^/   /' "$OUT/cost.txt" 2>/dev/null
     printf '5a. simulated auto-analyze\n'
     sed 's/^/   /' "$OUT/autoanalyze.txt" 2>/dev/null
+    printf '5b. the maintenance and the no-defeat proofs\n'
+    sed 's/^/   /' "$OUT/maint_proofs.txt" 2>/dev/null
     printf '6. facts\n'; sed 's/^/   /' "$OUT/facts.txt" 2>/dev/null
   } > "$OUT/criteria.txt" 2>&1
-  { printf '7. server errors\n'; check_server_errors "$OUT/server.log"; } >> "$OUT/criteria.txt" 2>&1
+  { printf '7. server errors\n'; check_server_errors "$OUT/server.log"
+    printf '8. maintenance skips and cancellations\n'
+    check_maintenance_skips "$OUT/server.log"; } >> "$OUT/criteria.txt" 2>&1
   tail -60 "$OUT/criteria.txt" >&2
   note "full criteria in $OUT/criteria.txt"
 }
@@ -3833,24 +4642,50 @@ main "$@"
 # "Mandatory B-Tree Bloat Tests" still defines (tests 1-17, 18-91 and controls
 # 92-120, less the retired 11, 38, 65, 67, 69, 106, 117, 121 and legs 113a and
 # 113c), stores an as-built baseline in each index comment, churns each
-# fixture, simulates the auto-analyze that churn would have triggered on a
-# server with autovacuum on, runs the heuristic, and scores every decision
-# against a measured REINDEX INDEX.
+# fixture, maintains every table the churn touched, simulates the auto-analyze
+# that churn would have triggered on a server with autovacuum on, runs the
+# heuristic, and scores every decision against a measured REINDEX INDEX.
 #
-# One departure from the shared definition is deliberate and is not silently
-# absorbed: its maintenance assumption, which would run VACUUM ANALYZE after
-# every churn, is NOT applied here.  A recipe that churns without maintenance
-# of its own reaches the decide phase that way, and only the rule 3 census
-# below can analyze it.
+# The shared definition's maintenance assumption is applied in full as of the
+# 2026-09-16 revision: the maintenance step inside stage_suite runs
+# VACUUM (VERBOSE, ANALYZE) on every table the churn inserted, updated or
+# deleted a row in - the set comes from
+# the engine's own pg_stat_all_tables counters across the churn phase, not
+# from a hand-written list - and it runs before the rule 3 census and the
+# decide phase.  A table no churn touched is not maintained, because draining or
+# re-analyzing a deliberately fresh or deliberately stale fixture would destroy
+# the shape it exists to build.
+#
+# The same revision carries out the shared definition's newer rule, "the
+# maintenance must not be defeated".  Four proofs are recorded per maintained
+# table: that the statement ran to completion with no skip line naming the
+# table, the count of dead row versions its VERBOSE output says cannot be
+# removed yet - this server's wording for the same number - the horizon holders
+# read from pg_stat_activity, pg_replication_slots and pg_prepared_xacts
+# immediately before it, and the index page classes after it.  Every session
+# that issues a VACUUM or an ANALYZE forces statement_timeout, lock_timeout and
+# idle_in_transaction_session_timeout to 0, which is what the autovacuum
+# launcher and worker do to themselves for this exact reason; this server has
+# no transaction_timeout to force, that GUC arriving in PostgreSQL 17.  The
+# timeouts in force are recorded rather than assumed.
+#
+# Fixture 120's precondition is asserted rather than assumed: the shared
+# definition says a run that finds a non-zero post-census estimate for its
+# partial index scores nothing from the fixture, so the precondition step
+# records the observed estimate and the scorer reports that fixture as UNMET
+# PRECONDITION and excludes it from every scored count.
 #
 # The simulated auto-analyze is the mandatory-test rule that any fixture moving
 # more than 10 % of a table's heap tuples must ANALYZE it.  It is not
-# hand-annotated per fixture: stage_autoanalyze reads the engine's own
+# hand-annotated per fixture: the census reads the engine's own
 # n_mod_since_analyze counter and applies the engine's own threshold,
 # autovacuum_analyze_threshold + autovacuum_analyze_scale_factor * reltuples
 # (50 + 0.1 * reltuples at the defaults), so the tables it analyzes are exactly
 # the tables an autovacuum launcher would have analyzed.  Every table it
 # considered, with its counter, its threshold and the verdict, is recorded.
+# With the maintenance step in front of it the census now finds every churned
+# table freshly analyzed, so what it decides is the tables no churn touched -
+# which is what the shared definition says it should decide.
 #
 # The pinned checkout is read only: everything this script writes lives under
 # $SANDBOX (default .wiki-runtime/tmp/btmaint).
@@ -3891,6 +4726,8 @@ die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 # without it a failed statement inside a -f script leaves the exit status 0.
 q()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }        # command
 f()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$1" -f "$2"; }        # file
+# fv() is f() with one psql variable, for the two-phase churn census.
+fv() { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -v "$2" -d "$1" -f "$3"; }
 s()  { "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }    # scalar
 t()  { "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -P pager=off \
                    -d "$1" -c "$2"; }                                 # table
@@ -3921,6 +4758,34 @@ md_block() {
       n=$((n + 1)); inb=1
     fi
   done < "$file"
+}
+
+# parse_verbose <log> : turn the maintenance step's VACUUM (VERBOSE) output
+# into one UPDATE per maintained table, so that each statement's own count of
+# rows it could not remove is a recorded number rather than a line in a log.
+# This server words the same fact differently from a 17 server, and puts it in
+# two messages rather than one:
+#   INFO:  "tbl": found X removable, Y nonremovable row versions in A out of B pages
+#   DETAIL:  Z dead row versions cannot be removed yet, oldest xmin: N
+# so the table name is carried from the INFO line to the DETAIL line that
+# follows it.  Bash case patterns and parameter expansion only: no awk, no
+# perl.
+parse_verbose() {
+  local log=$1 line cur="" rest removed remain dead
+  while IFS= read -r line; do
+    case $line in
+      *'": found '*' removable, '*' nonremovable row versions in '*)
+        rest=${line#*\"}; cur=${rest%%\"*}
+        rest=${line#*: found };   removed=${rest%% removable,*}
+        rest=${rest#* removable, }; remain=${rest%% nonremovable*} ;;
+      *' dead row versions cannot be removed yet'*)
+        [ -n "$cur" ] || continue
+        rest=${line#*DETAIL:  }; dead=${rest%% dead row versions*}
+        printf "UPDATE /* wiki_btmaint_maint_verbose */ maint SET removed = %s, remain = %s, dead_not_removable = %s WHERE tbl = '%s';\n" \
+               "$removed" "$remain" "$dead" "$cur"
+        cur="" ;;
+    esac
+  done < "$log"
 }
 
 # plan_view <report-text> : the one documented edit.  Drop the two SET lines,
@@ -3964,6 +4829,11 @@ stage_build() {
 # ---------------------------------------------------------------- check ------
 stage_check() {
   say "engine regression suites"
+  # $OUT is created here rather than assumed: stage_build returns early when
+  # the binary is already there, so a run that starts from a built tree would
+  # otherwise write every check result into a directory that does not exist and
+  # report an empty check section.
+  mkdir -p "$OUT"
   : > "$OUT/checks.txt"
   ( cd "$BUILD" && make -s check > check_core.log 2>&1 )
   printf 'core=%s %s\n' "$?" \
@@ -4054,6 +4924,11 @@ SET /* wiki_btmaint_harness_lock_timeout */ lock_timeout = '5s';
 DROP TABLE IF EXISTS plan CASCADE;
 DROP TABLE IF EXISTS snap CASCADE;
 DROP TABLE IF EXISTS truth CASCADE;
+DROP TABLE IF EXISTS churn_seen CASCADE;
+DROP TABLE IF EXISTS maint CASCADE;
+DROP TABLE IF EXISTS horizon CASCADE;
+DROP TABLE IF EXISTS pageclass CASCADE;
+DROP TABLE IF EXISTS precond CASCADE;
 DROP VIEW IF EXISTS verdicts CASCADE;
 
 -- One row per numbered fixture index.
@@ -4082,6 +4957,77 @@ CREATE OR REPLACE FUNCTION plan_add(n int, g text, r text, i text,
 RETURNS void LANGUAGE sql AS
 $$ INSERT INTO plan(num, leg, grp, req, idx, want_stage, note)
    VALUES (n, lg, g, r, i, w, nt) $$;
+
+-- The write counters of every fixture table, recorded before the first churn
+-- statement and again after the last, so that "the tables the churn touched"
+-- is the engine's own record rather than a hand-written list.  The maintenance
+-- assumption of the shared definition is then applied to exactly the tables
+-- whose insert, update or delete counter moved.
+CREATE TABLE churn_seen(phase text, tbl text, ins numeric, upd numeric,
+                        del numeric, mods numeric, dead numeric,
+                        last_analyze timestamptz,
+                        PRIMARY KEY (phase, tbl));
+
+-- One row per maintenance statement: the VACUUM (VERBOSE, ANALYZE) that the
+-- assumption credits with maintaining the churn, and the proofs the no-defeat
+-- rule asks for.  dead_not_removable is the VERBOSE line's own count, parsed
+-- out of the server's message text; a non-zero value on a churned table means
+-- a horizon was pinned and the fixture is repaired rather than scored.
+CREATE TABLE maint(tbl text PRIMARY KEY, ord int, ins numeric, upd numeric,
+                   del numeric, mods_before numeric, dead_before numeric,
+                   analyzed_in_churn bool,
+                   started timestamptz, ended timestamptz,
+                   removed numeric, remain numeric, dead_not_removable numeric,
+                   mods_after numeric, dead_after numeric, timeouts text);
+
+-- The horizon holders, read immediately before each maintenance statement and
+-- once after the census.  These are reads beside the statement, not an
+-- interlock around it, which is the limitation the shared definition records
+-- against itself.
+CREATE TABLE horizon(step text, tbl text, at timestamptz, xmin_holders int,
+                     open_xacts int, slots int, slot_xmins int, prepared int,
+                     detail text);
+
+-- The page classes of every fixture index after the maintenance step: the
+-- deleted and half-dead pages a drain leaves behind, which is the visible
+-- trace of a horizon that did or did not move.
+CREATE TABLE pageclass(idx text PRIMARY KEY, leaf_pages numeric,
+                       empty_pages numeric, deleted_pages numeric,
+                       avg_leaf_density numeric, index_size numeric);
+
+-- Preconditions the shared definition puts on a numbered fixture.  A fixture
+-- whose precondition is not met scores nothing: the verdict view reports it as
+-- UNMET PRECONDITION and every scored count excludes it.
+CREATE TABLE precond(num int, leg text DEFAULT '', requirement text,
+                     observed text, met bool, PRIMARY KEY (num, leg));
+
+-- horizon_probe records who could be holding back a removal horizon at the
+-- moment it is called: any other backend with a transaction open or an xmin
+-- published, any replication slot, and any prepared transaction.  VACUUM's
+-- OldestXmin folds in exactly those, so a clean reading on both sides of a
+-- maintenance statement is the evidence that nothing pinned the horizon while
+-- it ran.  The probe's own backend is excluded by pid: it is the session
+-- issuing the maintenance, and its INSERT commits before the VACUUM begins.
+CREATE OR REPLACE FUNCTION horizon_probe(p_step text, p_tbl text)
+RETURNS void LANGUAGE sql AS $hp$
+INSERT INTO horizon(step, tbl, at, xmin_holders, open_xacts, slots,
+                    slot_xmins, prepared, detail)
+SELECT p_step, p_tbl, clock_timestamp(),
+       (SELECT count(*) FROM pg_stat_activity a
+         WHERE a.pid <> pg_backend_pid() AND a.backend_xmin IS NOT NULL),
+       (SELECT count(*) FROM pg_stat_activity a
+         WHERE a.pid <> pg_backend_pid() AND a.xact_start IS NOT NULL),
+       (SELECT count(*) FROM pg_replication_slots),
+       (SELECT count(*) FROM pg_replication_slots s
+         WHERE s.xmin IS NOT NULL OR s.catalog_xmin IS NOT NULL),
+       (SELECT count(*) FROM pg_prepared_xacts),
+       (SELECT COALESCE(string_agg(a.pid || ':' || COALESCE(a.state, '?')
+                                   || ':xmin=' || COALESCE(a.backend_xmin::text, '-'),
+                                   ', ' ORDER BY a.pid), 'none')
+          FROM pg_stat_activity a
+         WHERE a.pid <> pg_backend_pid()
+           AND (a.backend_xmin IS NOT NULL OR a.xact_start IS NOT NULL))
+$hp$;
 
 -- take_snap records, for every planned index, the facts the heuristic reads:
 -- the file size, the table's estimated tuple count, and the baseline stored in
@@ -4125,6 +5071,16 @@ END $gt$;
 -- from the recorded baseline, independently of the filed text.
 CREATE OR REPLACE VIEW verdicts AS
 SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
+       ct.relname                                            AS tbl,
+       -- A fixture whose shared-definition precondition was not met scores
+       -- nothing; every count below that says "scored" filters on this.
+       (pc.met IS DISTINCT FROM false)                        AS scored,
+       pc.observed                                            AS precond_observed,
+       -- The maintenance the assumption credits, and the no-defeat proofs.
+       (m.tbl IS NOT NULL)                                    AS maintained,
+       m.dead_not_removable, m.removed AS maint_removed,
+       m.dead_after, m.mods_before, m.mods_after, m.timeouts,
+       q.deleted_pages, q.empty_pages, q.avg_leaf_density AS density_after_maint,
        t.action, t.baseline, t.wasted_pct, t.reindexed_by_heuristic,
        bu.bytes AS bytes_built, ic.bytes AS bytes_init,
        t.bytes_churned, t.bytes_applied, t.bytes_fresh,
@@ -4193,8 +5149,11 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
             ELSE 'skip' END                                      AS two_gate_stage,
        CASE WHEN t.action IN ('reindex', 'update') THEN 'measure'
             ELSE t.action END                                    AS taken_stage,
-       -- The rebuild oracle against the 40 % decision.
-       CASE WHEN t.action IS NULL                                THEN 'ABSENT'
+       -- The rebuild oracle against the 40 % decision.  A fixture whose
+       -- precondition was not met is reported and not scored, which is what
+       -- the shared definition requires of test 120.
+       CASE WHEN pc.met = false                                  THEN 'UNMET PRECONDITION'
+            WHEN t.action IS NULL                                THEN 'ABSENT'
             WHEN t.action = 'reindex'
              AND round(100.0 * (t.bytes_churned - t.bytes_fresh)
                        / GREATEST(t.bytes_churned, 1), 1) < 10    THEN 'CRITICAL FALSE POSITIVE'
@@ -4219,7 +5178,16 @@ SELECT p.num, p.leg, p.grp, p.idx, p.req, p.want_stage,
   LEFT JOIN truth t ON t.idx = p.idx
   LEFT JOIN snap bu ON bu.phase = 'built'   AND bu.idx = p.idx
   LEFT JOIN snap ic ON ic.phase = 'init'    AND ic.idx = p.idx
-  LEFT JOIN snap ch ON ch.phase = 'churned' AND ch.idx = p.idx;
+  LEFT JOIN snap ch ON ch.phase = 'churned' AND ch.idx = p.idx
+  -- The fixture's table, so that the maintenance row can be joined to it.  A
+  -- plain REINDEX keeps the index's pg_class row, so these names still resolve
+  -- after the oracle has rebuilt every fixture.
+  LEFT JOIN pg_class ci ON ci.relname = p.idx AND ci.relkind = 'i'
+  LEFT JOIN pg_index xi ON xi.indexrelid = ci.oid
+  LEFT JOIN pg_class ct ON ct.oid = xi.indrelid
+  LEFT JOIN maint m     ON m.tbl = ct.relname
+  LEFT JOIN pageclass q ON q.idx = p.idx
+  LEFT JOIN precond pc  ON pc.num = p.num AND pc.leg = p.leg;
 HARNESS
   cat > "$SQLD/fixtures_build.sql" <<'FIXTURES_BUILD'
 -- The numbered suite, build phase: every fixture up to and including the
@@ -4237,14 +5205,14 @@ HARNESS
 -- 11, 38, 65, 67, 69, 106, 117 and 121, and legs 113a and 113c.  Retired
 -- numbers are not reused and their recipes are gone from this file.
 --
--- Three deviations, all deliberate: pg_stat_force_next_flush() is not called,
+-- Two deviations, both deliberate: pg_stat_force_next_flush() is not called,
 -- because this heuristic reads pg_class.reltuples and never a cumulative
--- statistics view; the support-function-4 and ICU fixtures live in their own
--- files, because those features do not exist in every server this text has to
--- run on; and the shared definition's maintenance assumption is NOT applied,
--- so a recipe that churns without a VACUUM or an ANALYZE of its own still
--- reaches the decide phase that way, with only the rule 3 census below
--- deciding whether to analyze it.
+-- statistics view; and the support-function-4 and ICU fixtures live in their
+-- own files, because those features do not exist in every server this text has
+-- to run on.  The shared definition's maintenance assumption is applied, but
+-- not here: this file ends at each CREATE INDEX, the churn file carries the
+-- writes, and the maintenance step that follows it vacuums and analyzes every
+-- table those writes touched.
 SET /* wiki_btmaint_fixtures_client_min_messages */ client_min_messages = warning;
 SET /* wiki_btmaint_fixtures_statement_timeout */ statement_timeout = '900s';
 SET /* wiki_btmaint_fixtures_lock_timeout */ lock_timeout = '5s';
@@ -5051,10 +6019,25 @@ FIXTURES_ICU
 -- The fixtures whose whole point is that a fresh index must not be touched are
 -- deliberately left alone: 70-71, 78-85, 96-97, 101-105, 108-112, 116 and 120.
 --
+-- The maintenance the assumption credits is NOT here: the drain below deletes
+-- and stops, and every churned table is vacuumed and analyzed by the
+-- maintenance step that follows this file, in a session whose timeouts are all
+-- zero and whose VERBOSE output is captured.  A recipe's own VACUUM or ANALYZE
+-- stays where the numbered fixture put it, because that is the recipe.
+--
+-- Every settable timeout this server has is zero, for the same reason the
+-- autovacuum launcher and worker set them to zero on themselves: this file
+-- issues maintenance statements, and a timeout firing inside one would leave a
+-- fixture neither churned nor maintained, which the shared definition's
+-- no-defeat rule forbids.  There are three here rather than four, because
+-- transaction_timeout arrived in PostgreSQL 17.  The trade-off is that a
+-- runaway statement here has no guard but the run's own supervision.
+--
 -- Disposable fixtures, in the sandbox cluster's suite database only.
 SET /* wiki_btmaint_churn_client_min_messages */ client_min_messages = warning;
-SET /* wiki_btmaint_churn_statement_timeout */ statement_timeout = '900s';
-SET /* wiki_btmaint_churn_lock_timeout */ lock_timeout = '5s';
+SET /* wiki_btmaint_churn_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_churn_lock_timeout */ lock_timeout = 0;
+SET /* wiki_btmaint_churn_idle_timeout */ idle_in_transaction_session_timeout = 0;
 
 -- ---------------------------------------------------------- recipe churn ----
 -- 64: stale statistics after inserts into the subset.
@@ -5178,10 +6161,13 @@ INSERT INTO q119 SELECT 1000000 + i, 'pending' FROM generate_series(1, 50000) i;
 ANALYZE q119;
 
 -- ------------------------------------------------------- the uniform drain ---
--- 90 % of the heap blocks of every shape fixture that has no churn of its own,
--- then VACUUM and ANALYZE, so that the index has empty and deleted pages the
--- gate can see and a rebuild can give back.  The commands are generated and
--- executed one at a time because VACUUM cannot run inside a transaction block.
+-- 90 % of the heap blocks of every shape fixture that has no churn of its own.
+-- The maintenance VACUUM and ANALYZE that turn those dead entries into empty
+-- and deleted index pages are no longer here: they are the maintenance step
+-- that runs after this file, over every table these deletes touched, with its
+-- timeouts at zero and its VERBOSE output recorded.  The deletes are still
+-- generated and executed one statement at a time, because the drain predicate
+-- has to be applied per table.
 SELECT /* wiki_btmaint_drain_generator */ format(st.tmpl, tb.name)
   FROM (VALUES (1, 't'), (2, 't2'), (3, 'pt1'), (4, 'pd22'), (5, 'pd23'),
                (6, 'pd24'), (7, 'pd25'), (8, 'pd26'), (9, 'pd27'), (10, 'pd28'),
@@ -5193,25 +6179,183 @@ SELECT /* wiki_btmaint_drain_generator */ format(st.tmpl, tb.name)
                (31, 'pe48b'), (32, 'pe49'), (33, 'pe49b'), (34, 'pe50'),
                (35, 'pe50b'), (36, 'pf'), (37, 'ps')) tb(n, name)
  CROSS JOIN (VALUES
-        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0'),
-        (2, 'VACUUM /* wiki_btmaint_drain */ %I'),
-        (3, 'ANALYZE /* wiki_btmaint_drain */ %I')) st(k, tmpl)
+        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0')) st(k, tmpl)
  ORDER BY tb.n, st.k
 \gexec
 FIXTURES_CHURN
   cat > "$SQLD/churn_icu.sql" <<'CHURN_ICU'
 -- Churn phase for the ICU fixtures, drained like the other shape fixtures.
+-- The maintenance VACUUM ANALYZE is the maintenance step's, not this file's.
 -- Disposable, suite database of the sandbox cluster only.
 SET /* wiki_btmaint_churnicu_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_churnicu_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_churnicu_lock_timeout */ lock_timeout = 0;
 SELECT /* wiki_btmaint_drainicu_generator */ format(st.tmpl, tb.name)
   FROM (VALUES (1, 'pc51')) tb(n, name)
  CROSS JOIN (VALUES
-        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0'),
-        (2, 'VACUUM /* wiki_btmaint_drain */ %I'),
-        (3, 'ANALYZE /* wiki_btmaint_drain */ %I')) st(k, tmpl)
+        (1, 'DELETE /* wiki_btmaint_drain */ FROM %I WHERE ((ctid::text::point)[0])::int %% 10 <> 0')) st(k, tmpl)
  ORDER BY tb.n, st.k
 \gexec
 CHURN_ICU
+  cat > "$SQLD/churn_seen.sql" <<'CHURN_SEEN'
+-- Every fixture table's write counters at one point in the run, recorded once
+-- before the first churn statement and once after the last.  Run with
+-- -v phase=before and -v phase=after.  The difference is what defines "the
+-- tables the churn touched", which is the set the maintenance assumption
+-- applies to; using the engine's own counters keeps the set out of a
+-- hand-written list that a new fixture could silently fall out of.
+SET /* wiki_btmaint_churnseen_client_min_messages */ client_min_messages = warning;
+DELETE FROM churn_seen WHERE phase = :'phase';
+INSERT /* wiki_btmaint_churn_seen */ INTO churn_seen(phase, tbl, ins, upd, del,
+                                                    mods, dead, last_analyze)
+SELECT :'phase', c.relname, st.n_tup_ins, st.n_tup_upd, st.n_tup_del,
+       st.n_mod_since_analyze, st.n_dead_tup, st.last_analyze
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public'
+   AND c.relkind = 'r'
+   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after',
+                         'churn_seen', 'maint', 'horizon', 'pageclass',
+                         'precond');
+SELECT /* wiki_btmaint_churn_seen_count */
+       :'phase' || ': ' || count(*) || ' tables recorded'
+  FROM churn_seen WHERE phase = :'phase';
+CHURN_SEEN
+  cat > "$SQLD/maint.sql" <<'MAINT'
+-- The maintenance step: the VACUUM ANALYZE the shared definition's maintenance
+-- assumption requires after every churn, on every table the churn touched, and
+-- the four proofs its no-defeat rule asks for.
+--
+-- The table set is computed, not listed: a table is maintained when its
+-- insert, update or delete counter moved across the churn phase.  A fixture
+-- with no churn is therefore not touched here, which matters - an extra
+-- ANALYZE would repair the deliberately stale statistics of family 3 and of
+-- controls 108 to 112, and an extra VACUUM would change a deliberately fresh
+-- index.  Those fixtures carry their build-phase ANALYZE into the decide phase
+-- instead, exactly as the shared definition says they do.
+--
+-- Every settable timeout this server has is zero, which is what the autovacuum
+-- launcher and worker do to themselves so that these settings cannot stop
+-- regular maintenance.  There are three rather than four: transaction_timeout
+-- arrived in PostgreSQL 17.  The values in force are recorded per row rather
+-- than assumed.  VERBOSE is on so that each statement's own count of dead row
+-- versions that cannot be removed yet is in the output; INFO messages reach
+-- the client whatever client_min_messages says.
+-- Disposable fixtures, suite database of the sandbox cluster only.
+SET /* wiki_btmaint_maint_client_min_messages */ client_min_messages = warning;
+SET /* wiki_btmaint_maint_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_maint_lock_timeout */ lock_timeout = 0;
+SET /* wiki_btmaint_maint_idle_timeout */ idle_in_transaction_session_timeout = 0;
+
+DELETE FROM maint;
+INSERT /* wiki_btmaint_maint_rows */ INTO maint
+       (tbl, ord, ins, upd, del, mods_before, dead_before, analyzed_in_churn,
+        timeouts)
+SELECT a.tbl,
+       row_number() OVER (ORDER BY a.tbl)::int,
+       a.ins - b.ins, a.upd - b.upd, a.del - b.del, a.mods, a.dead,
+       -- A recipe that analyzed its own table after its own writes leaves the
+       -- modification counter at zero legitimately: the churn was published
+       -- and then consumed.  Recording which tables those are is what keeps a
+       -- zero counter from being read as a churn that never reached the
+       -- statistics entry at all.
+       (a.last_analyze IS NOT NULL
+        AND (b.last_analyze IS NULL OR a.last_analyze > b.last_analyze)),
+       'statement_timeout=' || current_setting('statement_timeout') ||
+       ' lock_timeout=' || current_setting('lock_timeout') ||
+       ' idle_in_transaction_session_timeout='
+         || current_setting('idle_in_transaction_session_timeout')
+  FROM churn_seen a
+  JOIN churn_seen b ON b.tbl = a.tbl AND b.phase = 'before'
+ WHERE a.phase = 'after'
+   AND (a.ins - b.ins) + (a.upd - b.upd) + (a.del - b.del) > 0;
+
+SELECT /* wiki_btmaint_maint_planned */ count(*) || ' tables to maintain, '
+       || count(*) FILTER (WHERE analyzed_in_churn)
+       || ' already analyzed by their own recipe, '
+       || count(*) FILTER (WHERE COALESCE(mods_before, 0) = 0
+                             AND NOT analyzed_in_churn)
+       || ' with an unpublished churn counter'
+  FROM maint;
+
+-- One probe, one start stamp, one VACUUM (VERBOSE, ANALYZE) and one end stamp
+-- per table, generated and executed one statement at a time because VACUUM
+-- cannot run inside a transaction block.
+SELECT /* wiki_btmaint_maint_generator */ format(st.tmpl, m.tbl)
+  FROM maint m
+ CROSS JOIN (VALUES
+        (1, 'SELECT /* wiki_btmaint_horizon_before */ horizon_probe(''maint'', %1$L)'),
+        (2, 'UPDATE /* wiki_btmaint_maint_start */ maint SET started = clock_timestamp() WHERE tbl = %1$L'),
+        (3, 'VACUUM /* wiki_btmaint_maint */ (VERBOSE, ANALYZE) %1$I'),
+        (4, 'UPDATE /* wiki_btmaint_maint_end */ maint SET ended = clock_timestamp() WHERE tbl = %1$L')
+       ) st(k, tmpl)
+ ORDER BY m.ord, st.k
+\gexec
+MAINT
+  cat > "$SQLD/maint_after.sql" <<'MAINT_AFTER'
+-- What the maintenance left behind, read from a new session a second later so
+-- that a 12 server's statistics collector has published the VACUUM and the
+-- ANALYZE.  dead_after is the dead-tuple count the engine reports for the
+-- table; mods_after is the modification counter the ANALYZE half reset.
+SET /* wiki_btmaint_maintafter_client_min_messages */ client_min_messages = warning;
+UPDATE /* wiki_btmaint_maint_after */ maint m
+   SET mods_after = st.n_mod_since_analyze,
+       dead_after = st.n_dead_tup
+  FROM pg_stat_all_tables st
+  JOIN pg_class c ON c.oid = st.relid
+ WHERE st.schemaname = 'public' AND c.relname = m.tbl;
+SELECT /* wiki_btmaint_horizon_after_maint */ horizon_probe('post-maint', NULL);
+SELECT /* wiki_btmaint_maint_summary */
+       'maintained ' || count(*) || ' tables, '
+       || count(*) FILTER (WHERE ended IS NOT NULL) || ' completed, '
+       || count(*) FILTER (WHERE COALESCE(dead_after, 0) > 0)
+       || ' still holding dead tuples, '
+       || count(*) FILTER (WHERE COALESCE(mods_after, 0) > 0)
+       || ' with a non-zero modification counter'
+  FROM maint;
+MAINT_AFTER
+  cat > "$SQLD/precond.sql" <<'PRECOND'
+-- The preconditions the shared definition puts on a numbered fixture, checked
+-- after the census rather than assumed.  Test 120 is the suite's one
+-- probabilistic fixture: its point is a 300-row sample that missed a 2,000-row
+-- subset, so its partial index's own reltuples must still read 0 when the
+-- method is asked.  A run that finds a non-zero estimate scores nothing from
+-- the fixture, which is what the shared definition says, and what the previous
+-- run of this page counted as a PASS.
+SET /* wiki_btmaint_precond_client_min_messages */ client_min_messages = warning;
+DELETE FROM precond;
+INSERT /* wiki_btmaint_precond_120 */ INTO precond(num, leg, requirement, observed, met)
+SELECT 120, '', 'post-census reltuples of p120 must be 0',
+       'p120 reltuples = ' || c.reltuples::text, (c.reltuples = 0)
+  FROM pg_class c WHERE c.relname = 'p120';
+SELECT /* wiki_btmaint_precond_report */
+       num || ': ' || requirement || ' -> ' || observed ||
+       ' (' || CASE WHEN met THEN 'met' ELSE 'NOT MET, scores nothing' END || ')'
+  FROM precond ORDER BY num, leg;
+PRECOND
+  cat > "$SQLD/pageclass.sql" <<'PAGECLASS'
+-- The page classes of every fixture index after the maintenance step.  Deleted
+-- and half-dead pages are the visible trace of what the maintenance did, and a
+-- drained fixture whose index has neither is the shape a defeated VACUUM
+-- leaves behind.  Read-only: pgstatindex opens every page of every index it is
+-- called on and writes nothing, so the decide phase that follows sees exactly
+-- the state the maintenance left.
+SET /* wiki_btmaint_pageclass_client_min_messages */ client_min_messages = warning;
+DELETE FROM pageclass;
+INSERT /* wiki_btmaint_pageclass */ INTO pageclass
+       (idx, leaf_pages, empty_pages, deleted_pages, avg_leaf_density, index_size)
+SELECT p.idx, m.leaf_pages, m.empty_pages, m.deleted_pages,
+       CASE WHEN m.avg_leaf_density = 'NaN'::float8 THEN NULL
+            ELSE round(m.avg_leaf_density::numeric, 2) END,
+       m.index_size
+  FROM plan p, LATERAL pgstatindex(p.idx::regclass) m;
+SELECT /* wiki_btmaint_pageclass_report */
+       count(*) || ' indexes read, '
+       || count(*) FILTER (WHERE deleted_pages > 0) || ' with deleted pages, '
+       || count(*) FILTER (WHERE empty_pages > 0) || ' with half-dead pages, '
+       || COALESCE(sum(deleted_pages), 0) || ' deleted pages in total'
+  FROM pageclass;
+PAGECLASS
   cat > "$SQLD/autoanalyze.sql" <<'AUTOANALYZE'
 -- The simulated auto-analyze, and the mandatory-test rule behind it: a fixture
 -- that changes more than 10 % of a table's heap tuples must ANALYZE it, because
@@ -5228,10 +6372,23 @@ CHURN_ICU
 -- Both counter states are recorded: autoanl holds what the churn left behind,
 -- autoanl_after holds the same counters once the ANALYZEs have run, which is
 -- how the run proves the simulation actually fired.
+--
+-- With the maintenance step in front of it, this census finds every churned
+-- table freshly analyzed, so the tables it decides are the ones no churn
+-- touched - a table whose build left it past the threshold, such as the
+-- never-analysed table of control 108.  It is also the recheck that the
+-- maintenance step's counters were published in the right order.
+--
+-- The census issues ANALYZE, which is a maintenance command, so its timeouts
+-- are zero for the same reason the maintenance step's are, and it probes the
+-- horizon on both sides of itself.
 -- Disposable fixtures, suite database of the sandbox cluster only.
 SET /* wiki_btmaint_autoanl_client_min_messages */ client_min_messages = warning;
-SET /* wiki_btmaint_autoanl_statement_timeout */ statement_timeout = '900s';
-SET /* wiki_btmaint_autoanl_lock_timeout */ lock_timeout = '5s';
+SET /* wiki_btmaint_autoanl_statement_timeout */ statement_timeout = 0;
+SET /* wiki_btmaint_autoanl_lock_timeout */ lock_timeout = 0;
+SET /* wiki_btmaint_autoanl_idle_timeout */ idle_in_transaction_session_timeout = 0;
+
+SELECT /* wiki_btmaint_horizon_before_census */ horizon_probe('census-before', NULL);
 
 DROP TABLE IF EXISTS autoanl;
 DROP TABLE IF EXISTS autoanl_after;
@@ -5253,13 +6410,26 @@ SELECT /* wiki_btmaint_autoanalyze_census */
   JOIN pg_class c ON c.oid = st.relid
  WHERE st.schemaname = 'public'
    AND c.relkind = 'r'
-   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after');
+   AND c.relname NOT IN ('plan', 'snap', 'truth', 'autoanl', 'autoanl_after',
+                         'churn_seen', 'maint', 'horizon', 'pageclass',
+                         'precond');
 
 SELECT /* wiki_btmaint_autoanalyze_generator */
        format('ANALYZE /* wiki_btmaint_autoanalyze */ %I', tbl)
   FROM autoanl WHERE would_autoanalyze ORDER BY tbl
 \gexec
 
+AUTOANALYZE
+  cat > "$SQLD/autoanalyze_after.sql" <<'AUTOANALYZE_AFTER'
+-- The census's own recheck, in a session of its own a second later.  The delay
+-- is not cosmetic: this file has to be able to see the counters the census's
+-- ANALYZEs reset, and on this server the statistics a reader sees come from a
+-- collector file that is written at most every half second, so a recheck run
+-- immediately after the ANALYZE reads the state from before it.  A run that
+-- reports "0 of 6 counters reset" is reporting that staleness, not a census
+-- that did nothing.
+SET /* wiki_btmaint_autoanlafter_client_min_messages */ client_min_messages = warning;
+DROP TABLE IF EXISTS autoanl_after;
 CREATE TABLE autoanl_after AS
 SELECT /* wiki_btmaint_autoanalyze_recheck */
        c.relname AS tbl, st.n_mod_since_analyze::numeric AS mods,
@@ -5268,7 +6438,9 @@ SELECT /* wiki_btmaint_autoanalyze_recheck */
   JOIN pg_class c ON c.oid = st.relid
  WHERE st.schemaname = 'public' AND c.relkind = 'r'
    AND c.relname IN (SELECT tbl FROM autoanl WHERE would_autoanalyze);
-AUTOANALYZE
+
+SELECT /* wiki_btmaint_horizon_after_census */ horizon_probe('census-after', NULL);
+AUTOANALYZE_AFTER
   cat > "$SQLD/forge.sql" <<'FORGE'
 -- The numbered suite's catalog forgeries, applied after the simulated
 -- auto-analyze so that an ANALYZE cannot overwrite them.  Fixture 84 is a
@@ -5461,10 +6633,88 @@ stage_facts() {
   cat "$OUT/facts.txt" >&2
 }
 
+# ----------------------------------------------- the no-defeat proofs --------
+# The shared definition's rule "the maintenance must not be defeated" says a
+# fixture may not carry a state into its maintenance VACUUM ANALYZE that would
+# have stopped a real server's autovacuum from doing the work the assumption
+# credits it with, and that a fixture which did is repaired and re-run rather
+# than scored.  This function is that rule, enforced: it fails the run instead
+# of publishing a number taken under a defeated maintenance.
+#
+# Four proofs, per maintained table:
+#   1. the statement completed, and no skip line in the server log names it;
+#   2. its VERBOSE "dead but not yet removable" count is zero;
+#   3. no other backend held a transaction or an xmin, no replication slot
+#      held one and no prepared transaction existed when it started;
+#   4. the index page classes it left behind, recorded for the report.
+# The publication check comes with them: a table whose churn counter was still
+# unpublished when its ANALYZE ran would have had its churn forgotten.
+suite_maint_proofs() {
+  local n bad
+  n=$(s suite 'SELECT count(*) FROM maint')
+  [ "$n" -gt 0 ] || die "the maintenance step maintained no table at all"
+  bad=$(s suite 'SELECT count(*) FROM maint WHERE ended IS NULL')
+  [ "$bad" = 0 ] || die "$bad maintenance statements did not complete"
+  bad=$(s suite 'SELECT count(*) FROM maint WHERE dead_not_removable IS NULL')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT tbl FROM maint WHERE dead_not_removable IS NULL ORDER BY tbl' >&2
+         die "$bad maintained tables have no VERBOSE count: proof 2 is missing"; }
+  # Membership of the maintained set is itself the publication proof: the set
+  # comes from write counters that only a flush can move.  What this check adds
+  # is the one case a zero modification counter could otherwise hide - a churn
+  # that never reached the statistics entry - by excluding the tables whose own
+  # recipe analyzed them after their own writes and consumed the counter.
+  bad=$(s suite 'SELECT count(*) FROM maint
+                  WHERE COALESCE(mods_before, 0) = 0 AND NOT analyzed_in_churn')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT tbl, ins, upd, del, mods_before, analyzed_in_churn
+                    FROM maint
+                   WHERE COALESCE(mods_before, 0) = 0 AND NOT analyzed_in_churn
+                   ORDER BY tbl' >&2
+         die "$bad churned tables reached their ANALYZE with an unpublished counter"; }
+  bad=$(s suite 'SELECT count(*) FROM maint WHERE dead_not_removable > 0')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT tbl, removed, remain, dead_not_removable, dead_after
+                    FROM maint WHERE dead_not_removable > 0
+                   ORDER BY dead_not_removable DESC' >&2
+         die "$bad maintained tables kept dead tuples the horizon still covered: the maintenance was defeated, repair the fixture and re-run"; }
+  bad=$(s suite 'SELECT count(*) FROM horizon
+                  WHERE xmin_holders > 0 OR open_xacts > 0
+                     OR slots > 0 OR prepared > 0')
+  [ "$bad" = 0 ] \
+    || { t suite 'SELECT step, tbl, xmin_holders, open_xacts, slots, prepared, detail
+                    FROM horizon
+                   WHERE xmin_holders > 0 OR open_xacts > 0
+                      OR slots > 0 OR prepared > 0 ORDER BY at' >&2
+         die "$bad horizon probes found a holder: the maintenance ran with a pinned horizon"; }
+  { printf 'maintained tables        %s\n' "$n"
+    printf 'statements completed     %s\n' \
+      "$(s suite 'SELECT count(*) FROM maint WHERE ended IS NOT NULL')"
+    printf 'analyzed by own recipe   %s, all with a published churn counter\n' \
+      "$(s suite 'SELECT count(*) FROM maint WHERE analyzed_in_churn')"
+    printf 'dead but not removable   max %s over %s tables\n' \
+      "$(s suite 'SELECT COALESCE(max(dead_not_removable), -1) FROM maint')" "$n"
+    printf 'dead tuples left behind  max %s\n' \
+      "$(s suite 'SELECT COALESCE(max(dead_after), -1) FROM maint')"
+    printf 'tuples removed           %s over %s tables\n' \
+      "$(s suite 'SELECT COALESCE(sum(removed), 0) FROM maint')" "$n"
+    printf 'horizon probes clean     %s of %s\n' \
+      "$(s suite 'SELECT count(*) FROM horizon
+                   WHERE xmin_holders = 0 AND open_xacts = 0
+                     AND slots = 0 AND prepared = 0')" \
+      "$(s suite 'SELECT count(*) FROM horizon')"
+    printf 'distinct timeout sets    %s: %s\n' \
+      "$(s suite 'SELECT count(DISTINCT timeouts) FROM maint')" \
+      "$(s suite 'SELECT DISTINCT timeouts FROM maint')"; } \
+    > "$OUT/maint_proofs.txt"
+  cat "$OUT/maint_proofs.txt" >&2
+}
+
 # ---------------------------------------------------------------- suite ------
-# The ported numbered suite, in eight steps: build, baseline, churn,
-# auto-analyze, forge, decide, act, oracle.  Steps 2 and 7 run the page's apply
-# block exactly as filed.
+# The ported numbered suite, in eleven steps: build, baseline, churn,
+# maintenance, auto-analyze, preconditions, forge, page classes, decide, act,
+# oracle.  The baseline and act steps run the page's apply block exactly as
+# filed.
 stage_suite() {
   say "the ported numbered suite: tests 1-17, 18-91 and controls 92-120"
   q suite 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public' > /dev/null
@@ -5495,6 +6745,10 @@ stage_suite() {
   tail -1 "$OUT/apply_init.log" >&2
   q suite 'CALL take_snap($$init$$)' || die "snapshot init failed"
 
+  # The write counters before the first churn statement.  Their movement across
+  # the churn phase is what defines the tables the maintenance step maintains.
+  fv suite phase=before "$SQLD/churn_seen.sql" >&2 || die "churn census (before) failed"
+
   say "churn"
   f suite "$SQLD/fixtures_churn.sql" > "$OUT/suite_churn.log" 2>&1 \
     || { tail -5 "$OUT/suite_churn.log" >&2; die "churn failed"; }
@@ -5503,15 +6757,41 @@ stage_suite() {
   # now that the deduplicate_items fixtures are retired.
   [ "$haveicu" = yes ] && f suite "$SQLD/churn_icu.sql" >> "$OUT/suite_churn.log" 2>&1
 
-  # The mandatory-test rule: a fixture that moved more than 10 % of a table's
-  # heap tuples gets an ANALYZE, because autovacuum would have run one.  The
+  # The maintenance assumption of the shared definition: VACUUM ANALYZE on
+  # every table the churn touched, before the census and the decide phase.  The
   # churn ran in psql processes that have now exited, so their statistics are
   # flushed; one second of grace covers the collector interval of the older
   # server, whose reader also waits for a fresh file.
-  say "simulated auto-analyze: the engine's own threshold on its own counters"
   sleep 1
+  fv suite phase=after "$SQLD/churn_seen.sql" >&2 || die "churn census (after) failed"
+  say "maintenance: VACUUM (VERBOSE, ANALYZE) on every churned table"
+  f suite "$SQLD/maint.sql" > "$OUT/maint.log" 2> "$OUT/maint_verbose.log" \
+    || { tail -5 "$OUT/maint_verbose.log" >&2; die "maintenance step failed"; }
+  note "$(head -2 "$OUT/maint.log" | tail -1)"
+  # Proof 2 of the no-defeat rule: each statement's own VERBOSE counts, parsed
+  # out of the message text and stored per table.
+  parse_verbose "$OUT/maint_verbose.log" > "$SQLD/maint_verbose.sql"
+  [ -s "$SQLD/maint_verbose.sql" ] \
+    || die "the VACUUM VERBOSE output produced no tuples line: the proof is missing"
+  f suite "$SQLD/maint_verbose.sql" > /dev/null || die "recording the VERBOSE counts failed"
+  sleep 1
+  f suite "$SQLD/maint_after.sql" >&2 || die "post-maintenance read failed"
+  suite_maint_proofs
+
+  # Rule 3 of the shared definition: a fixture that moved more than 10 % of a
+  # table's heap tuples gets an ANALYZE, because autovacuum would have run one.
+  # With the maintenance step in front of it the census finds every churned
+  # table freshly analyzed, so what it decides now is the tables no churn
+  # touched, and it doubles as the recheck that the counters were published in
+  # the right order.
+  say "simulated auto-analyze: the engine's own threshold on its own counters"
   f suite "$SQLD/autoanalyze.sql" > "$OUT/autoanalyze.log" 2>&1 \
     || { tail -5 "$OUT/autoanalyze.log" >&2; die "simulated auto-analyze failed"; }
+  # The recheck waits a second and reads from a new session, so that it can see
+  # the counters the census just reset on either server.
+  sleep 1
+  f suite "$SQLD/autoanalyze_after.sql" >> "$OUT/autoanalyze.log" 2>&1 \
+    || { tail -5 "$OUT/autoanalyze.log" >&2; die "census recheck failed"; }
   t suite "SELECT /* wiki_btmaint_autoanalyze_report */ tbl, reltuples, mods,
                   threshold, mod_pct, would_autoanalyze
              FROM autoanl ORDER BY would_autoanalyze DESC, mods DESC, tbl" \
@@ -5533,13 +6813,27 @@ stage_suite() {
       "$(s suite "SELECT COALESCE(max(mod_pct)::text, 'none')
                     FROM autoanl WHERE NOT would_autoanalyze")"; } \
     >> "$OUT/autoanalyze.txt"
-  [ "$(s suite 'SELECT count(*) FROM autoanl WHERE would_autoanalyze')" -gt 0 ] \
-    || die "no table crossed the auto-analyze threshold: the churn counters are not visible"
+  # The guard the old "no table crossed the threshold" check was really making
+  # - that the churn counters were visible at all - now lives in
+  # suite_maint_proofs, which fails when a maintained table reached its VACUUM
+  # ANALYZE with an unpublished counter.  A census that analyzes nothing is a
+  # legitimate outcome once every churned table has just been analyzed, so it
+  # is reported rather than fatal.
   tail -6 "$OUT/autoanalyze.txt" >&2
+
+  say "preconditions: what the shared definition requires of a numbered fixture"
+  f suite "$SQLD/precond.sql" > "$OUT/precond.txt" 2>&1 || die "precondition check failed"
+  cat "$OUT/precond.txt" >&2
 
   say "forge: the catalog forgeries an ANALYZE would have overwritten"
   f suite "$SQLD/forge.sql" > "$OUT/forge.log" 2>&1 || die "forge failed"
   cat "$OUT/forge.log" >&2
+
+  # Proof 4 of the no-defeat rule: the page classes the maintenance left in
+  # every fixture index.  Read-only, so the decide phase sees the same state.
+  say "page classes: what the maintenance left in each index"
+  f suite "$SQLD/pageclass.sql" > "$OUT/pageclass.txt" 2>&1 || die "page-class read failed"
+  tail -1 "$OUT/pageclass.txt" >&2
   q suite 'CALL take_snap($$churned$$)' || die "snapshot churned failed"
 
   say "decide: the filed report statement, as filed and through the one-edit view"
@@ -5656,6 +6950,7 @@ stage_score() {
              FROM verdicts GROUP BY 1 ORDER BY 2 DESC" >> "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_group_counts */ grp,
                   count(*) AS fixtures,
+                  count(*) FILTER (WHERE NOT scored) AS unscored,
                   count(*) FILTER (WHERE action = 'reindex') AS reindexed,
                   count(*) FILTER (WHERE action = 'update')  AS updated,
                   count(*) FILTER (WHERE action = 'skip')    AS skipped,
@@ -5671,7 +6966,8 @@ stage_score() {
                   round(max(actual_pct - wasted_pct), 1)  AS max_error,
                   count(*) FILTER (WHERE abs(actual_pct - wasted_pct) <= 15) AS within_15,
                   count(*) FILTER (WHERE wasted_pct > actual_pct) AS over_estimates
-             FROM verdicts WHERE wasted_pct IS NOT NULL" >> "$OUT/verdicts.txt" 2>&1
+             FROM verdicts WHERE wasted_pct IS NOT NULL AND scored" \
+    >> "$OUT/verdicts.txt" 2>&1
   t suite "SELECT /* wiki_btmaint_action_counts */ action, count(*),
                   round(avg(actual_pct), 1) AS avg_actual
              FROM verdicts GROUP BY 1 ORDER BY 2 DESC" >> "$OUT/verdicts.txt" 2>&1
@@ -5755,6 +7051,54 @@ stage_score() {
                   count(*) FILTER (WHERE base_bytes IS NULL) AS unparseable,
                   count(*) FILTER (WHERE cmt !~ '@btmaint:') AS no_marker
              FROM snap WHERE phase = 'applied'" >> "$OUT/verdicts.txt" 2>&1
+  # The maintenance assumption and the no-defeat rule, fixture by fixture and
+  # then per table, so that a reader can see which fixture was maintained, what
+  # its VACUUM removed, what it could not remove, and the page classes left in
+  # the index the method was then asked about.
+  t suite "SELECT /* wiki_btmaint_maint_by_fixture */ num, leg, idx, tbl,
+                  maintained, maint_removed, dead_not_removable, dead_after,
+                  deleted_pages, empty_pages, density_after_maint,
+                  wasted_pct, actual_pct, verdict
+             FROM verdicts ORDER BY num, leg" > "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_maint_by_table */ ord, tbl, ins, upd, del,
+                  mods_before, analyzed_in_churn, dead_before, removed, remain,
+                  dead_not_removable, mods_after, dead_after,
+                  round(extract(epoch FROM ended - started)::numeric, 2) AS secs
+             FROM maint ORDER BY ord" >> "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_maint_aggregate */
+                  count(*) AS maintained_tables,
+                  count(*) FILTER (WHERE ended IS NOT NULL) AS completed,
+                  count(*) FILTER (WHERE dead_not_removable = 0) AS horizon_clean,
+                  count(*) FILTER (WHERE dead_not_removable > 0) AS horizon_pinned,
+                  COALESCE(sum(removed), 0) AS tuples_removed,
+                  COALESCE(max(dead_after), 0) AS max_dead_left,
+                  count(DISTINCT timeouts) AS timeout_sets
+             FROM maint" >> "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_horizon_rows */ step, tbl, xmin_holders,
+                  open_xacts, slots, slot_xmins, prepared, detail
+             FROM horizon
+            WHERE xmin_holders > 0 OR open_xacts > 0 OR slots > 0
+               OR prepared > 0 OR tbl IS NULL
+            ORDER BY at" >> "$OUT/maintenance.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_pageclass_by_group */ grp,
+                  count(*) AS fixtures,
+                  count(*) FILTER (WHERE maintained) AS maintained,
+                  count(*) FILTER (WHERE deleted_pages > 0) AS with_deleted_pages,
+                  COALESCE(sum(deleted_pages), 0) AS deleted_pages,
+                  COALESCE(sum(empty_pages), 0) AS empty_pages,
+                  round(avg(density_after_maint), 1) AS avg_density
+             FROM verdicts GROUP BY grp ORDER BY grp" >> "$OUT/maintenance.txt" 2>&1
+  # The precondition the shared definition puts on a numbered fixture, and what
+  # this run observed.  A fixture reported here scores nothing.
+  t suite "SELECT /* wiki_btmaint_precond_rows */ p.num, p.leg, p.requirement,
+                  p.observed, p.met
+             FROM precond p ORDER BY p.num, p.leg" >> "$OUT/verdicts.txt" 2>&1
+  t suite "SELECT /* wiki_btmaint_scored */ count(*) AS fixtures,
+                  count(*) FILTER (WHERE scored) AS scored,
+                  count(*) FILTER (WHERE NOT scored) AS unmet_precondition,
+                  count(*) FILTER (WHERE scored AND verdict = 'PASS') AS pass,
+                  count(*) FILTER (WHERE maintained) AS maintained
+             FROM verdicts" >> "$OUT/verdicts.txt" 2>&1
   tail -40 "$OUT/verdicts.txt" >&2
 }
 
@@ -5783,6 +7127,24 @@ check_server_errors() {
   printf 'logged errors: %s, deliberate: %s, unexpected: %s\n' \
     "$total" "$((total - UNEXPECTED_ERRORS))" "$UNEXPECTED_ERRORS"
   [ "$UNEXPECTED_ERRORS" -gt 0 ] && head -5 "$OUT/server_errors.txt"
+  return 0
+}
+
+# Proof 1 of the no-defeat rule, from the log side: a maintenance command that
+# was skipped for want of the lock, or cancelled part-done, says so in the
+# server log.  A foreground VACUUM without SKIP_LOCKED waits rather than
+# skipping, and nothing in this suite holds a conflicting lock, so the expected
+# count is zero on both counts; the check exists because a zero it never looked
+# for would prove nothing.
+MAINT_SKIPS=0
+check_maintenance_skips() {
+  local log=$1
+  [ -f "$log" ] || { note "no server log"; return 0; }
+  grep -E 'skipping vacuum of|skipping analyze of|canceling statement due to|canceling autovacuum task' \
+    "$log" > "$OUT/maint_skips.txt"
+  MAINT_SKIPS=$(grep -c '' "$OUT/maint_skips.txt")
+  printf 'maintenance skip or cancellation lines: %s\n' "$MAINT_SKIPS"
+  [ "$MAINT_SKIPS" -gt 0 ] && head -5 "$OUT/maint_skips.txt"
   return 0
 }
 
@@ -5835,6 +7197,34 @@ SELECT '  simulated auto-analyze: ' ||
        ' tables analyzed, largest left alone ' ||
        COALESCE(max(mod_pct) FILTER (WHERE NOT would_autoanalyze)::text, 'none') || ' %'
   FROM autoanl;
+SELECT '  scored=' || count(*) FILTER (WHERE scored) ||
+       ' unmet precondition=' || count(*) FILTER (WHERE NOT scored) ||
+       ' maintained=' || count(*) FILTER (WHERE maintained) ||
+       ' of ' || count(*)
+  FROM verdicts;
+SELECT '  maintenance: ' || count(*) || ' tables, ' ||
+       count(*) FILTER (WHERE ended IS NOT NULL) || ' completed, ' ||
+       count(*) FILTER (WHERE dead_not_removable = 0) ||
+       ' with nothing dead but not yet removable, ' ||
+       count(*) FILTER (WHERE COALESCE(dead_after, 0) = 0) ||
+       ' with no dead tuple left, timeout sets=' || count(DISTINCT timeouts)
+  FROM maint;
+SELECT '  timeouts in force during maintenance: ' || timeouts
+  FROM maint GROUP BY timeouts ORDER BY timeouts;
+SELECT '  horizon probes: ' || count(*) || ' taken, ' ||
+       count(*) FILTER (WHERE xmin_holders = 0 AND open_xacts = 0
+                          AND slots = 0 AND prepared = 0) || ' entirely clean, ' ||
+       COALESCE(sum(slots), 0) || ' replication slots, ' ||
+       COALESCE(sum(prepared), 0) || ' prepared transactions seen'
+  FROM horizon;
+SELECT '  page classes after maintenance: ' ||
+       count(*) FILTER (WHERE deleted_pages > 0) || ' of ' || count(*) ||
+       ' indexes hold deleted pages, ' || COALESCE(sum(deleted_pages), 0) ||
+       ' deleted and ' || COALESCE(sum(empty_pages), 0) || ' half-dead in total'
+  FROM pageclass;
+SELECT '  precondition ' || num || ': ' || observed || ' -> ' ||
+       CASE WHEN met THEN 'met' ELSE 'NOT MET, scores nothing' END
+  FROM precond ORDER BY num, leg;
 SQL
   { printf '1. texts\n'; cat "$OUT/hashes.txt" 2>/dev/null
     printf '2. engine checks\n'; cat "$OUT/checks.txt" 2>/dev/null
@@ -5843,9 +7233,13 @@ SQL
     printf '5. cost\n'; sed 's/^/   /' "$OUT/cost.txt" 2>/dev/null
     printf '5a. simulated auto-analyze\n'
     sed 's/^/   /' "$OUT/autoanalyze.txt" 2>/dev/null
+    printf '5b. the maintenance and the no-defeat proofs\n'
+    sed 's/^/   /' "$OUT/maint_proofs.txt" 2>/dev/null
     printf '6. facts\n'; sed 's/^/   /' "$OUT/facts.txt" 2>/dev/null
   } > "$OUT/criteria.txt" 2>&1
-  { printf '7. server errors\n'; check_server_errors "$OUT/server.log"; } >> "$OUT/criteria.txt" 2>&1
+  { printf '7. server errors\n'; check_server_errors "$OUT/server.log"
+    printf '8. maintenance skips and cancellations\n'
+    check_maintenance_skips "$OUT/server.log"; } >> "$OUT/criteria.txt" 2>&1
   tail -60 "$OUT/criteria.txt" >&2
   note "full criteria in $OUT/criteria.txt"
 }
@@ -5968,7 +7362,32 @@ main "$@"
   ways of counting (`nhtidslive` with a callback, items per page without).
 - `src/backend/postmaster/autovacuum.c`: `relation_needs_vacanalyze`'s
   `anl_base_thresh`/`anl_scale_factor` resolution and the
-  `doanalyze = (anltuples > anlthresh)` test the mandatory tests now simulate.
+  `doanalyze = (anltuples > anlthresh)` test the mandatory tests now simulate,
+  the launcher's and the worker's four `SetConfigOption(..., "0", ...)` timeout
+  overrides and the comment that explains them, and the `VACOPT_SKIP_LOCKED`
+  a non-wraparound worker is given.
+- `src/backend/commands/vacuum.c`: `vacuum_get_cutoffs`'s `OldestXmin` from
+  `GetOldestNonRemovableTransactionId`, and the four `skipping vacuum of` /
+  `skipping analyze of` messages a skipped maintenance command logs.
+- `src/backend/storage/ipc/procarray.c`: `ComputeXidHorizons`'s fold of every
+  backend's `xid` and `xmin`, its `PROC_IN_VACUUM`/`PROC_IN_LOGICAL_DECODING`
+  exemption, and the replication-slot `xmin` it takes the older of.
+- `src/backend/access/transam/twophase.c`: the dummy `PGPROC` that keeps a
+  prepared transaction's xid considered running.
+- `src/backend/access/heap/vacuumlazy.c`: the `VERBOSE` summary buffer,
+  including the `tuples: ... are dead but not yet removable` line this run
+  parses, and the `dead_items_info->num_items > 0` gate that decides whether
+  index vacuuming runs at all.
+- `src/backend/utils/error/elog.c`: `should_output_to_client`'s
+  `elevel == INFO` clause, which is why `client_min_messages = warning` does not
+  hide `VACUUM (VERBOSE)` output.
+- `src/backend/catalog/system_views.sql`: the `n_tup_ins`/`n_tup_upd`/`n_tup_del`
+  and `last_analyze` columns of `pg_stat_all_tables`, `pg_stat_activity`'s
+  `xact_start` and `backend_xmin`, `pg_replication_slots`' `xmin` and
+  `catalog_xmin`, and `pg_prepared_xacts`.
+- `src/backend/utils/misc/guc_tables.c`: `transaction_timeout` and
+  `idle_in_transaction_session_timeout` beside the two this page already cited,
+  all four `PGC_USERSET`.
 - `src/backend/utils/activity/pgstat_relation.c` and
   `src/backend/utils/activity/pgstat.c`: `pgstat_report_analyze`'s
   `mod_since_analyze = 0` reset, the pending-stats flush that adds
@@ -5983,17 +7402,26 @@ main "$@"
 - `src/backend/commands/tablecmds.c`: `ATExecChangeOwner`'s index branch, which
   warns and does nothing rather than changing an index's owner.
 - [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md)
-  as it stands after the 2026-09-12 retirements and the 2026-09-13 maintenance
-  assumption: the fixture set, the five phases, rules 1 to 3, the oracle and the
-  four verdict bands, family 6's treatment of test 120, the retirement list under
-  `What the suite does not cover`, and the `VACUUM` boundary under
-  `Interactions with Other Concepts`. Read as the definition this page ports; not
-  edited.
-- The 2026-09-14 re-port run itself: both legs rebuilt from their pins and run
-  end to end on Linux x86_64, `make check` and the three contrib suites included,
-  with the fourteen retired fixtures removed, the page-local acceptance stage
-  deleted, and the repaired server-error check reporting 4 and 8 logged errors,
-  all deliberate.
+  as it stands after the 2026-09-12 retirements, the 2026-09-13 maintenance
+  assumption and the 2026-09-15 rule `The maintenance must not be defeated`: the
+  fixture set, the five phases, the assumption's three parts, the no-defeat
+  rule's five forbidden states, four proof obligations and "no fixture is exempt
+  today", rules 1 to 3 including rule 2's drain guarantees and rule 3's two
+  publication points, the oracle and the four verdict bands, family 6's
+  treatment of test 120, the retirement list under `What the suite does not
+  cover`, and the `VACUUM` boundaries under `Interactions with Other Concepts`.
+  Read as the definition this page ports; **not edited**, as
+  `MANDATORY Common Concept Documents` requires.
+- The 2026-09-16 review run itself: both legs rebuilt from their pins and run
+  end to end on Linux x86_64, `make check` and the three contrib suites
+  included, with the maintenance step applied, the four no-defeat proofs
+  recorded, fixture 120's precondition asserted, and 4 and 8 logged errors, all
+  deliberate. Two earlier passes of the same review, one stopped by its own
+  publication invariant and one superseded by two harness repairs, were read for
+  what they showed and are not a source of published numbers.
+- The 2026-09-14 re-port run, for the numbers this page compares against: 126
+  and 112 fixtures, 95 and 81 rebuilds, the `+18.2` under-read on `b93`/`b95`,
+  and 66 and 45 census decisions.
 - The sibling pages this one reuses or contrasts with:
   [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on PostgreSQL 17
   (unverified)](btree-index-bloat-core-sql-only.md), which ports the same suite to
@@ -6024,8 +7452,13 @@ main "$@"
 | ANALYZE writes an index's `reltuples` as `ceil(tupleFract * totalrows)`, with the fraction refined only for an index with statistics columns or a predicate | [analyze.c#same-for-indexes](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663), [analyze.c#tupleFract-init](../../../../raw/postgres-17/src/backend/commands/analyze.c#L443-L449), [analyze.c#compute_index_stats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L827-L863), [analyze.c#tupleFract-from-sample](../../../../raw/postgres-17/src/backend/commands/analyze.c#L948-L953); measured 2000 for a partial index on a 10,000-row table, and 10000 for the plain index beside it, on both servers |
 | VACUUM writes an index's `reltuples` only when the AM's count is not estimated, and `btvacuumcleanup` marks a cleanup-only count estimated | [vacuumlazy.c#update_relstats_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3069-L3099), [vacuumlazy.c#lazy_cleanup_all_indexes](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2349-L2360), [nbtree.c#btvacuumcleanup-estimated](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L874-L892), [nbtree.c#btvacuumpage-counting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L1345-L1362); measured 200 after a drain plus `VACUUM`, and unchanged after a 10-row `UPDATE` plus `VACUUM` |
 | A VACUUM skips index vacuuming when under 2 % of heap pages hold dead items | [vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89), [vacuumlazy.c#lazy_vacuum-bypass](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1940) |
-| Autovacuum analyzes when `n_mod_since_analyze` exceeds `50 + 0.1 * reltuples` at the defaults, which is the rule the mandatory tests simulate | [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3060-L3096), [autovacuum.c#anl-thresholds](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3005-L3018), [guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3367-L3375), [guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3906-L3914), [config.sgml#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L8832-L8850); both defaults read back as 50 and 0.1 on each server, and the census analyzed 66 of 88 tables on 17.11 and 45 of 87 on 12.2, the smallest analyzed share being 11.1 % on both |
-| `mod_since_analyze` is reset by ANALYZE and added to by a later flush, so it can outlive the ANALYZE that reset it | [pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338), [pgstat_relation.c#flush-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L845-L860), [pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L110-L122), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L655); measured as `f88t` reading 9.8 % modified on 12.2 and 0.0 % on 17.11 after the same recipe |
+| Autovacuum analyzes when `n_mod_since_analyze` exceeds `50 + 0.1 * reltuples` at the defaults, which is the rule the mandatory tests simulate | [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3060-L3096), [autovacuum.c#anl-thresholds](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3005-L3018), [guc_tables.c#autovacuum_analyze_threshold](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3367-L3375), [guc_tables.c#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3906-L3914), [config.sgml#autovacuum_analyze_scale_factor](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L8832-L8850); both defaults read back as 50 and 0.1 on each server, and with the maintenance step in front of it the census analyzed 12 of 88 tables on 17.11 and 4 of 87 on 12.2, every one of them a table no churn touched |
+| A maintenance `VACUUM` removes nothing the removal horizon still covers, and index vacuuming is entered only when dead TIDs were collected, so a pinned horizon leaves the dense-leaf, dead-entry shape this method misreads | [vacuum.c#vacuum_get_cutoffs-OldestXmin](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1109-L1122), [procarray.c#ComputeXidHorizons-backend-xmin](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1792-L1815), [procarray.c#slot-horizons](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1896-L1902), [twophase.c#dummy-pgproc](../../../../raw/postgres-17/src/backend/access/transam/twophase.c#L24-L26), [vacuumlazy.c#lazy_vacuum-gate](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1047-L1052); measured as `dead but not yet removable` 0 on all 66 maintained tables on 17.11 and all 65 on 12.2, with 69 and 68 horizon probes entirely clean |
+| `VACUUM (VERBOSE)` reports that count in its own output, and a client sees it whatever `client_min_messages` says | [vacuumlazy.c#verbose-tuples-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L659-L663), [elog.c#should_output_to_client](../../../../raw/postgres-17/src/backend/utils/error/elog.c#L249-L264); parsed per table on both legs, with 12.2's `dead row versions cannot be removed yet` wording handled by its own parse |
+| A maintenance command that could not take its lock, or was cancelled, says so in the log; a foreground `VACUUM` without `SKIP_LOCKED` waits instead | [vacuum.c#skip-lock-not-available](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L828-L860), [autovacuum.c#skip-locked](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L2825-L2830); measured 0 such lines on both legs |
+| An autovacuum launcher and worker force `statement_timeout`, `transaction_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout` to 0 so that these settings cannot prevent maintenance, and all four are session-scoped | [autovacuum.c#launcher-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L518-L526), [autovacuum.c#worker-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470), [guc_tables.c#statement_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2612-L2620), [guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2623-L2631), [guc_tables.c#idle_in_transaction_session_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2633-L2642), [guc_tables.c#transaction_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2644-L2653); every maintenance statement on 17.11 ran under exactly one recorded set of four zeros, and on 12.2 under three, that server having no `transaction_timeout` |
+| The tables a churn touched are the ones whose insert, update or delete counters moved, and the horizon holders are readable from three catalog views | [system_views.sql#n_tup_del](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L680-L682), [system_views.sql#last_analyze](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L693), [system_views.sql#pg_stat_activity-xmin](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L877-L885), [system_views.sql#pg_replication_slots-xmin](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1006-L1017), [system_views.sql#pg_prepared_xacts](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L421-L427); 66 tables of 88 on 17.11 and 65 of 87 on 12.2, 23 of them on each leg already analyzed by their own recipe |
+| `mod_since_analyze` is reset by ANALYZE and added to by a later flush, so it can outlive the ANALYZE that reset it | [pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L328-L338), [pgstat_relation.c#flush-mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L845-L860), [pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L110-L122), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L636-L655); measured on the 2026-09-14 run as `f88t` reading 9.8 % modified on 12.2 and 0.0 % on 17.11 after the same recipe, and on 2026-09-16 as 12 unchurned tables reading 99.7 % to 120 % modified because their build-phase writes were published after their build-phase `ANALYZE` |
 | The counter the census reads is `pg_stat_all_tables.n_mod_since_analyze` | [system_views.sql#n_mod_since_analyze](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L689) |
 | `REINDEX INDEX` needs `MAINTAIN` on the table in v17, and takes `AccessExclusiveLock` on the index with `ShareLock` on the table | [indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2905-L2912), [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2822-L2829), [index.c#reindex_index-locks](../../../../raw/postgres-17/src/backend/catalog/index.c#L3600-L3612), [reindex.sgml#MAINTAIN](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L300-L316); the role that measured `permission denied for index`, then acceptance after `GRANT MAINTAIN` while `COMMENT` stayed refused, was removed on 2026-09-14; `stage_facts` still measures that the privilege name exists on 17.11 and not on 12.2 |
 | `REINDEX CONCURRENTLY` cannot run from a `DO` block | [indexcmds.c#ExecReindex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2736-L2738); measured `REINDEX CONCURRENTLY cannot be executed from a function` on both servers |
@@ -6038,30 +7471,32 @@ main "$@"
 ## Open Questions
 
 1. **The suite no longer contains the fixtures this heuristic fails.** `p113a`,
-   `p113c`, `p65` and `p67` were the four `FALSE NEGATIVE` rows of the previous
+   `p113c`, `p65` and `p67` were the four `FALSE NEGATIVE` rows of the 2026-09-11
    run, and the concept page has retired all four. The heuristic is unchanged and
    would still read 0.0 % to 0.1 % wasted on a dead-but-unvacuumed file, so the
-   `PASS` on 126 of 126 is a clean sheet against a suite that stopped asking. The
+   `PASS` on 125 of 126 is a clean sheet against a suite that stopped asking. The
    fourth input that would fix it - the stored entry count against the leaf-page
    capacity the file implies, or `n_dead_tup` on the table - is still not in the
-   brief and still not implemented.
+   brief and still not implemented. **The no-defeat rule sharpens this rather
+   than settling it**: the rule keeps the suite from building that state by
+   accident, and a production server can still reach it under a held snapshot or
+   the index-vacuum bypass, where this method would read the file as dense.
 
-2. **The concept page's maintenance assumption is not applied here.** At the
-   asker's direction this pass retired fixtures without adding the `VACUUM
-   ANALYZE` the concept page now requires after every churn, so ten recipes still
-   reach the decide phase with an unmaintained tail: 64, 66, 92 to 95, 98, 115,
-   118 and 119. Rule 3's census analyzes all but 119 of them on 17.11, but nothing
-   vacuums them. A run that added the maintenance step would score a different
-   population, and until it is run this page cannot claim to follow the concept
-   page in full.
+2. **The horizon proof is a pair of reads, not an interlock.** Each maintenance
+   statement is preceded by one read of `pg_stat_activity`,
+   `pg_replication_slots` and `pg_prepared_xacts`, and the run also reads the
+   statement's own `dead but not yet removable` count afterwards. A holder that
+   appeared and vanished between the probe and the statement would be invisible
+   to the first check, and only the `VERBOSE` count would catch it. The concept
+   page files the same one-sidedness against itself; this page inherits it.
 
-3. **Fixture 120 is not covered on either leg, and the scorer credited it
-   anyway.** Its precondition is a post-census index `reltuples` of 0; the run
-   measured 2,800 on 17.11 and 6,668 on 12.2, so the concept page's rule is that
-   it scores nothing. The harness has no precondition check and counted a `PASS`
-   on both legs. Two fixes are possible - assert the precondition and record the
-   fixture as skipped, or exempt `q120` from rule 3's census so the low-target
-   sample survives - and neither is implemented.
+3. **Fixture 120's state is a coin flip, and the page now says so instead of
+   scoring it.** Its precondition held on 4 of the 10 fixture builds this review
+   watched, so the suite's one probabilistic fixture contributes a score on some
+   runs and an `UNMET PRECONDITION` on others. The concept page's other
+   option - exempting `q120` from rule 3's census so the low-target sample
+   survives - is not implemented here, because that would change the shared
+   definition's fixture rather than this page's harness.
 
 4. **What the removal of the page-local fixtures cost.** The whole acceptance
    stage is gone, and with it every measurement of the heuristic's own surface.
@@ -6127,9 +7562,39 @@ main "$@"
 15. **The simulated auto-analyze over-triggers, and can under-trigger.** A
     backend's pending statistics can be flushed after the `ANALYZE` that reset the
     counter, or before it, so the census's verdict for a given fixture is not
-    reproducible between legs: `f88t` read 9.8 % on 12.2 and 0.0 % on 17.11. The
-    census is also a single pass, where a real launcher re-checks every
-    `autovacuum_naptime`.
+    reproducible between legs: `f88t` read 9.8 % on 12.2 and 0.0 % on 17.11 on
+    the 2026-09-14 run, and on 2026-09-16 twelve unchurned tables read 99.7 % to
+    120 % modified. The census is also a single pass, where a real launcher
+    re-checks every `autovacuum_naptime`.
+
+16. **Forcing the timeouts to zero removes a hazard and leaves a state
+    unmeasured.** Every session that issues a `VACUUM` or an `ANALYZE` now runs
+    with all its timeouts at 0, which is what the rule asks for and what an
+    autovacuum worker does to itself. What no fixture measures is the state the
+    rule forbids: a maintenance statement cut short part-done. The churn file
+    also lost its `statement_timeout` guard in the process, so a runaway churn
+    statement there would now hang rather than fail.
+
+17. **The maintained set is derived from counters, which is a choice with an
+    edge.** A table whose churn inserted and deleted the same rows inside one
+    statement, or whose writes were rolled back, still moves
+    `n_tup_ins`/`n_tup_del` and would be maintained; a table churned only by a
+    `TRUNCATE` would not be, because `TRUNCATE` moves no tuple counter. No
+    current fixture is in either class, and the run does not check for one.
+
+18. **`clean` is not leg-local, which an earlier teardown in this review found
+    the hard way.** Both legs share `$SANDBOX`, so `bash btmaint_suite_v17.sh
+    clean` stops the 17 server, confirms that stop, and then deletes the whole
+    sandbox - including the 12 leg's data directory and binaries. Cleaning up a
+    superseded pass that way left the 12 postmaster unstopped by `pg_ctl`: it
+    died with its files, and nothing survived, but that shutdown was not a clean
+    one. The published pass was torn down in the order the Cleanup row now
+    gives - `stop` on each leg, both confirmed with `database system is shut
+    down`, no `postmaster.pid`, no matching process and an empty socket
+    directory, and only then one `clean` - so the sandbox this page's numbers
+    came from was deleted with nothing running in it. Making `clean` refuse
+    while the other leg's cluster is up is a script change for the next run, not
+    a retrofit to the text that produced these numbers.
 
 ## Source References
 
@@ -6160,6 +7625,9 @@ main "$@"
 - [autovacuum.c](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c)
 - [pgstat_relation.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c)
 - [pgstat.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c)
+- [procarray.c](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c)
+- [twophase.c](../../../../raw/postgres-17/src/backend/access/transam/twophase.c)
+- [elog.c](../../../../raw/postgres-17/src/backend/utils/error/elog.c)
 - [system_views.sql](../../../../raw/postgres-17/src/backend/catalog/system_views.sql)
 - [config.sgml](../../../../raw/postgres-17/doc/src/sgml/config.sgml)
 - [comment.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml)

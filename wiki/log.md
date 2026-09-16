@@ -2,6 +2,150 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-16] review v17 | COMMENT-baseline B-tree heuristic: the maintenance applied, and proved not defeated
+
+- Reviewed and re-ran [A COMMENT-Stored Baseline B-Tree Index-Maintenance Heuristic for
+  PostgreSQL 12 Through 17
+  (unverified)](v17/questions/indexing/btree-comment-baseline-maintenance-heuristic.md)
+  end to end on both legs at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c`
+  (17.11) and `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). It is the **second
+  consumer page** brought onto `### The maintenance must not be defeated`, the rule
+  [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md) gained on 2026-09-15,
+  and the **first** brought onto that page's maintenance assumption in full.
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17, review :  btree-comment-baseline-maintenance-heuristic.md`;
+  the corrections are `agents.md` -> `AGENTS.md`, lowercase `postgresql` ->
+  `PostgreSQL`, the space before the colon and the two after it, the bare filename
+  replaced by the page's own title, the lowercase sentence opening and the missing
+  terminal period. Both forms are filed under the page's `## Question`, which now
+  carries four prompts.
+- **Four scoping answers were taken before any edit**: re-run both legs end to end
+  rather than audit; **adopt the maintenance step** the 2026-09-14 pass had skipped at
+  the previous asker's direction; **assert fixture 120's precondition** and score
+  nothing from it when unmet; and edit the two filed leg scripts **in place**.
+- **The departure this page had recorded since 2026-09-14 is closed.** A maintenance
+  step now runs `VACUUM (VERBOSE, ANALYZE)` on every table the churn touched, between
+  the churn and rule 3's census. The table set is computed from the engine's own
+  `pg_stat_all_tables` write counters rather than listed - **66 tables on 17.11, 65 on
+  12.2**, removing **18,066,916** and **17,617,051** dead tuples in 6.4 s and 6.9 s -
+  and every churn-free table is deliberately left alone, because an extra `ANALYZE`
+  would repair the very statistics family 3 and controls 108-112 exist to mislead with.
+  The uniform drain's own `VACUUM` and `ANALYZE` moved into that step, where the
+  timeouts, the horizon and the output are recorded.
+- **The rule's four proofs, recorded per table and enforced.** Every statement
+  completed; **`dead but not yet removable` is 0 on all 66 and all 65**, with
+  `n_dead_tup` 0 afterwards; **69 of 69 and 68 of 68 horizon probes are entirely
+  clean**, 0 other backends holding an xmin or a transaction, **0** replication slots,
+  **0** prepared transactions; **0** `skipping vacuum of`/`skipping analyze of` or
+  cancellation lines in either log; and the page classes left behind are **10,340** and
+  **11,868** deleted pages with 0 half-dead. The fifth forbidden state went too: every
+  session that issues a `VACUUM` or an `ANALYZE` now forces `statement_timeout`,
+  `lock_timeout`, `transaction_timeout` and `idle_in_transaction_session_timeout` to
+  **0**, which is what the launcher and worker do to themselves, where the previous
+  run's churn sessions ran at `lock_timeout = '5s'`. The run **fails instead of
+  scoring** if any proof comes out wrong.
+- **Neither filed text changed and the score did not move.** Both SQL blocks still hash
+  to their 2026-09-11 values (`93b64e2d…`, `7427d62d…`). **125 of 126 `PASS` on 17.11
+  with 1 `UNMET PRECONDITION`, 112 of 112 on 12.2**; 0 false negatives, 0 false
+  positives of either severity, 0 gate disagreements, 95 and 81 rebuilds at a mean
+  86.2 % and 87.1 % reclaim, 126 of 126 and 112 of 112 stored index counts equal to the
+  catalog's. What the maintenance changed is the four threshold-calibration controls
+  whose trailing `UPDATE` nobody had vacuumed: **`b93`/`b95` under-read the oracle by
+  9.4 points instead of 18.2**, and the accuracy profile is `+7.6` mean over 103 scored
+  measurements (101 within 15, worst `+19.5`, worst over-read 2.0).
+- **Fixture 120's precondition is asserted rather than assumed**, which is what the
+  concept page always required and what the previous run counted a `PASS` for anyway.
+  Over the five complete passes of this review the post-census estimate read **2,034 /
+  1,667 / 0 / 1,800 / 1,600** on 17.11 and **0 / 13,335 / 3,334 / 0 / 0** on 12.2: the
+  state arrived on **4 of 10 fixture builds**, so the fixture contributes a score on
+  some runs and an `UNMET PRECONDITION` on others, and the page files that as a coin
+  flip rather than a result.
+- **Three harness defects found and fixed.** The missing precondition check; a
+  publication invariant whose first form failed the run on six and nine tables whose own
+  recipe had legitimately consumed the modification counter (**23 per leg** are in that
+  class, and membership of the maintained set is itself the publication proof); and a
+  `check` stage that wrote every regression result into a directory that did not exist
+  when a run started from a built tree, which is why one pass reported an empty check
+  section. A fourth repair is the 12 leg's census recheck, which read the collector's
+  pre-`ANALYZE` file and reported "0 of 6 counters reset" on a census that had just
+  reset six; it now runs in its own session a second later and reads **12 of 12** and
+  **4 of 4**.
+- **Rule 3's census is now what the concept page says it should be**: 12 of 88 tables on
+  17.11 and 4 of 87 on 12.2, every one of them a table no churn touched, whose
+  build-phase writes were published after its build-phase `ANALYZE` reset the counter,
+  with 12 of 12 and 4 of 4 counters verified reset from a later session. It was 66 and
+  45 when the census was the only thing analyzing anything.
+- **Run, 2026-09-16, 14:21:32Z to 14:25:43Z and 14:25:55Z on `Linux x86_64`** (Ubuntu
+  24.04 on a WSL2 kernel, gcc 13.3.0, 22 cores, `JOBS=10`, `block_size` 8192,
+  `max_data_alignment` 8, both legs built from an empty sandbox in 4 min 11 s and
+  4 min 03 s): `make check` **All 225** plus `pgstattuple` 1, `pageinspect` 8 and
+  `amcheck` 3 on 17.11, **All 192** plus 1, 5 and 2 on 12.2; 4 and 8 logged server
+  errors, all deliberate, 0 unexpected. **125 of 126 and 112 of 112** per-fixture
+  `(number, index, action, wasted_pct, actual_pct)` tuples are identical to an earlier
+  complete pass on a separate cluster from the same pins; the exception is `p120`. Five
+  complete passes were taken in all: the first attempt stopped on its own publication
+  invariant, two were superseded by the `check`-stage and census-recheck repairs, and
+  one by the correction of a stale comment in the fixture build file, so that the script
+  published on the page is the one that produced the filed numbers.
+- **Script changes, all in place.** Both filed leg scripts grew from 2,052 and 2,098
+  lines to **2,636 and 2,683** (SHA-256 `311d9f25…` and `d9420542…`): a two-phase churn
+  census, the maintenance step and its
+  post-read, a `horizon_probe` function, a per-table `VERBOSE` parse in bash with a
+  version-local pattern on each leg, a precondition file, a page-class read, five new
+  harness tables (`churn_seen`, `maint`, `horizon`, `pageclass`, `precond`), new verdict
+  columns (`scored`, `maintained`, the proof columns) and an `UNMET PRECONDITION`
+  verdict that every scored count excludes. Both published blocks were re-extracted from
+  the page and verified **byte-identical** to the files that ran.
+- **Open questions 15 -> 18.** The new ones: the horizon proof is a pair of reads rather
+  than an interlock around the statement; forcing the timeouts to 0 removes the hazard
+  the rule names but leaves the cut-short maintenance state unmeasured, and the churn
+  file lost its `statement_timeout` guard with it; the maintained set is derived from
+  tuple counters, which a `TRUNCATE` would not move; and `clean` is not leg-local, which
+  the teardown below demonstrated. Old questions 2 and 3 - the unapplied maintenance
+  assumption and the uncredited fixture-120 precondition - are **closed by this run**.
+- **Validation**: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports **0 errors
+  and 0 warnings**; 193 citation links over 82 distinct ranges in 34 files all resolve
+  and are in bounds, none from another version; the `## Contents` list matches all 49
+  `##`/`###` headings in document order with no dangling anchor. `raw/postgres-17/` and
+  `raw/postgres-12/` stayed read-only at their pins.
+- **The concept page was read and not edited**, per `MANDATORY Common Concept
+  Documents`. Nothing in it needed a change: the assumption's three parts, the
+  no-defeat rule's five states and four proof obligations, and "no fixture is exempt
+  today" all applied as written, and the one-sidedness the page files against itself is
+  exactly what this run reproduced.
+- **Teardown**: both legs were stopped first with their own `stop` stage -
+  `pg_ctl -m fast -w stop`, `database system is shut down` in each log, no
+  `postmaster.pid`, no matching `postgres` process and an empty socket directory
+  confirmed for each - and only then was `clean` run once, deleting
+  `.wiki-runtime/tmp/btmaint/` entirely: both builds, both installs, both data
+  directories and all captured output. `pgrep -a postgres` now returns nothing and the
+  sandbox path no longer exists. **That order is a finding of its own**: the two legs
+  share `$SANDBOX`, so cleaning one leg deletes the other leg's cluster, and tearing
+  down a superseded pass that way left the 12 postmaster unstopped by `pg_ctl` - it died
+  with its files rather than shutting down cleanly. The page's Cleanup row now documents
+  the order and the trap is filed as its eighteenth open question; teaching `clean` to
+  refuse while the other leg is up is a script change for the next run, not a retrofit
+  to the text that produced these numbers. No other service was started; the four
+  pre-existing sandboxes under `.wiki-runtime/tmp/` were not created by this work and
+  were left untouched. One working directory is retained deliberately:
+  `.wiki-runtime/tmp/btmaint-review/` (6.9 MB, no server, no data directory) holds the
+  two leg scripts as they ran, the published pass's output files under `published/`,
+  three superseded passes for the run-to-run comparison, and the two small helper
+  scripts that extract a fenced block and check the page's citations and Contents
+  anchors. Delete it with `rm -rf .wiki-runtime/tmp/btmaint-review` when the next
+  review no longer needs the comparison.
+- Bookkeeping: `wiki/index.md` and `wiki/v17/index.md` carry rewritten entries, and
+  `wiki/versions.md` a dated coverage note plus a rewritten clause on the v17 row.
+  `verified:` untouched and **agent verification stays `not yet`**, because the retired
+  blind-spot fixtures, the demoted fixture 120 and 18 open questions stand.
+- **Left for the user, not done here.** Three consumer pages still face the no-defeat
+  rule unchecked: the core-SQL B-tree estimator, the `pgstatindex` bloat page and the
+  GIN contrib waste page. Each needs its own task. Two findings from this one are worth
+  carrying over: a zero modification counter can mean a recipe analyzed itself rather
+  than a churn that never published, and a `VACUUM (VERBOSE)` parse has to be
+  version-local because 12 and 17 word the same count differently.
+
 ## [2026-09-16] review v17 | COMMENT-baseline non-B-tree heuristic re-run under the no-defeating-the-maintenance rule
 
 - Reviewed and re-ran [Detecting Inflated Non-B-Tree Indexes From Catalogs and a
