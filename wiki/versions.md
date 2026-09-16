@@ -14,6 +14,43 @@ This page indexes the PostgreSQL versions covered by the wiki.
 
 ## Coverage Notes
 
+- 2026-09-16: Reviewed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17 (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md)
+  end to end at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, as the **third consumer page brought
+  onto** [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md)'s
+  **`### The maintenance must not be defeated`**, a rule that page gained after this
+  page's previous run. **All 717 citations (238 distinct ranges over 88 files) were
+  re-read against the pin and every one is in bounds and supports its label**, so the
+  pass corrected no citation. Both scripts were repaired in place: the 33 maintenance
+  statements of the 17 leg's fixture file, its two drains, the 12 leg's three fixture
+  statements, its drain and its `extstat` fixture each became one
+  `VACUUM (VERBOSE, ANALYZE)` between `maint_begin()` and `maint_end()`, in a session
+  with all four settable timeouts at `0` (three on 12.2, which has no
+  `transaction_timeout`), with new `maint`, `horizon` and `pageclass` tables, a Bash
+  `VERBOSE` parse per server, a skip-line check, a page-class read and a proofs check
+  that **dies rather than score**. Both legs were rebuilt from their pins and run once
+  each from a fresh `initdb` (`make check` All 225 plus 8, 1 and 3; All 192 plus 5, 1
+  and 2). **Nothing was defeated**: 68 maintenance statements on 17.11 and 9 on 12.2,
+  all completed, **`dead but not yet removable` 0 on every one**, 76 of 76 and 11 of 11
+  horizon probes clean, 0 skip or cancellation lines, one timeout set per leg, and
+  9,626 + 714 + 15,794 deleted index pages recorded. The report shape reproduces the
+  2026-09-14 filing to the row - **68 rows against the superseded text's 20, 45 of them
+  1 MB or smaller, and 19 on 12.2** - which required removing the proof tables' primary
+  keys, since a harness index in `public` enters the report under test and took it to
+  70. The score moves by one fixture, **97/4/0/25 against 96/4/0/26**, and the mover is
+  the `ANALYZE` sample: `p41` crossed the deduplication-credit boundary that had
+  withheld it and repaid 75.2 % against a reading of 74.4 % in both runs, while its
+  `ndistinct`-carrying twin `p45` stayed withheld. One repair improved the 12 leg
+  outright: rule 3's census now analyzes **0 of 9** tables rather than 2, because the
+  bracketed maintenance restores the publication order rule 3 requires on a server with
+  no `pg_stat_force_next_flush()`. Two Markdown table rows with a stray leading pipe
+  were repaired. `scripts/wiki_lint` reports 0 errors and 0 warnings; the published
+  script blocks are byte-identical to the files that ran; both servers were stopped and
+  the sandbox deleted, with no `postmaster.pid`, no `postgres` process and both ports
+  free; human `verified:` is untouched and agent verification stays `not yet`.
+
 - 2026-09-16: Reviewed and re-ran [Measuring Wasted and Reclaimable Bytes in a GIN
   Index With Contrib Extensions on PostgreSQL 17
   (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) at

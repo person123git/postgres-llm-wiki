@@ -2,6 +2,101 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-16] review v17 | core-SQL estimator brought onto the no-defeating-the-maintenance rule, both legs re-run
+
+- Reviewed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on
+  PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) end
+  to end at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` and
+  `45b88269a353ad93744772791feb6d01bc7e1e42`, as the **third consumer page
+  brought onto** [Mandatory B-Tree Bloat Tests
+  (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md)'s rule
+  **`### The maintenance must not be defeated`**, which that page gained on
+  2026-09-15, after this page's last run.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql
+  17, review :  btree-index-bloat-core-sql-only.md`; it had `agents.md` for
+  AGENTS.md, lowercase `postgresql`, a space before the colon, a double space
+  after it, the file name in place of the page title, and no sentence
+  capitalisation or terminal period. The asker chose **correct and restate**,
+  recorded under the page's `## Question` as the sixteenth prompt, and then
+  settled the scope in three answers: **everything** - every citation re-read,
+  the rule applied, both legs re-run - and **repair in place**.
+- **Citations**: all **717** links (238 distinct ranges over 88 files) re-read
+  against the pin. **Every one is in bounds and supports its label**, and every
+  page-relative prefix is correct, so this pass corrected no citation. The page
+  now carries 776 after the rule's own evidence was added.
+- **Scripts, repaired in place.** The 33 maintenance statements of the 17 leg's
+  fixture file, its two drains, the 12 leg's three fixture statements, its drain
+  and its `extstat` fixture each became one `VACUUM (VERBOSE, ANALYZE)` between
+  `maint_begin()` and `maint_end()`, in a session with `statement_timeout`,
+  `lock_timeout`, `transaction_timeout` and
+  `idle_in_transaction_session_timeout` at `0` - three on 12.2, which has no
+  `transaction_timeout`. The harness gained `maint`, `horizon` and `pageclass`
+  plus `horizon_probe()`, `maint_begin()`, `maint_end()` and, on the 12 leg,
+  `maint_after()`; both legs gained a Bash `parse_verbose` for their own
+  server's message wording, a proofs check that **dies rather than score**, a
+  skip-and-cancellation check over the server log, a `pgstatindex` page-class
+  read, `criteria.txt` block 8, and per-fixture maintenance columns in both
+  verdict views. Fixture 85 keeps its `VACUUM` without `ANALYZE`, bracketed and
+  labelled `prebuild`, because stale statistics are its point.
+- **One repair the rule forced that had nothing to do with it**: the three proof
+  tables must carry **no primary key**, because the estimator's candidate set is
+  every B-tree index outside the system schemas, and with the keys in place the
+  report under test printed **70 rows instead of 68**. Removing them restored
+  the 2026-09-14 report shape exactly.
+- **Both legs built and re-run on Linux x86_64** (Ubuntu 24.04, gcc 13.3.0, ICU
+  74.2, 22 cores) at `JOBS=10`, each once from a fresh `initdb`: 17.11 passed
+  `make check` All 225 plus 8, 1 and 3; 12.2 All 192 plus 5, 1 and 2. All three
+  SHA-256 baselines matched, and the estimator text is untouched by this pass.
+- **Result: nothing was defeated.** 17.11 ran **68 maintenance statements** (65
+  `suite`, 2 `gate`, 1 `xstat`), all completed, **`dead but not yet removable` 0
+  on every one** with `n_dead_tup` 0 afterwards, **76 of 76 horizon probes
+  entirely clean**, **0 skip or cancellation lines**, one timeout set of four
+  zeros, and 22.6 million tuples removed; 12.2 ran **9**, all clean, **11 of 11
+  probes**, three zeros. Page classes after the maintenance: 9,626 deleted pages
+  over 28 of 101 `suite` indexes, 714 in `gate`, 15,794 over 5 of 13 on 12.2.
+- **The score moves by one fixture, and the sample moved it.** 17.11 reads
+  **97 `PASS`, 4 `CRITICAL FALSE POSITIVE`, 0 `FALSE POSITIVE`, 25 `FALSE
+  NEGATIVE`** over 126 fixtures against 96/4/0/26 on 2026-09-14; the mover is
+  `p41`, whose deduplication-credit suppression turns on a sampled
+  `n_distinct`, printed and repaid 75.2 % against 74.4 % in both of this pass's
+  17 runs. Its near-twin `p45`, the same shape with an `ndistinct` object,
+  stayed withheld on every run. 12.2 is unchanged at 11 `PASS` and 2 `FALSE
+  NEGATIVE`. The report shape, the gate's 25 of 25, the `extstat` scorecard, the
+  4 critical false positives, the 2 threshold losses, `expected_stage` on all
+  101 rows, `withheld_unexplained` 0 and the 63 probes all reproduced.
+- **One repair produced a real improvement on the 12 leg**: rule 3's census now
+  analyzes **0 of 9** tables rather than 2 at 896.6 % and 899.3 %, because each
+  bracketed statement runs in its own session after the drain's has exited, so
+  the `DELETE` counts reach the statistics entry before the `ANALYZE` half
+  resets them - the publication order the concept page's rule 3 requires, on a
+  server with no `pg_stat_force_next_flush()`.
+- **Page.** New `### The maintenance, proved not defeated` section with the
+  rule, the nine script changes, the per-leg proof table and three limits;
+  the Answer lead, `Mandatory test review`, the suite results, the false-negative
+  breakdown, the bands table, the 12-leg section, the cost section, the gate,
+  the collation branch, the `extstat` section, the usage information, the
+  protocol's step 4 and pass criteria, the rules table (fifteen rules to
+  sixteen), the reading guide and seven Open Questions were rewritten; the run
+  report is now `What the no-defeat re-run measured`. New open question: what the
+  proofs leave open - the probe is not an interlock, no fixture pins a horizon,
+  and the proof tables cost three TOAST index files. **Two Markdown table rows
+  whose stray leading pipe shifted every column were repaired** as well.
+- **Teardown**: both servers stopped with `pg_ctl -m fast -w stop` by their own
+  `stop` stages, each confirming no `postmaster.pid`, no postgres process on its
+  data directory and an empty socket directory; `pgrep -a postgres` empty and
+  ports 55437 and 55412 free afterwards; the sandbox
+  `.wiki-runtime/tmp/btree-maint/` deleted. Nothing outside it was written, and
+  both pinned checkouts stayed read-only and clean at their pins.
+- `scripts/wiki_lint` reports 0 errors and 0 warnings; the published script
+  blocks are byte-identical to the 2,843-line and 1,357-line files that ran, and
+  both parse with `bash -n`. `verified_by_agent` stays `not yet`: the two
+  threshold losses are an unfixed defect, fixture 120's precondition is still
+  unasserted here, and the coverage the 2026-09-14 re-port removed is still
+  missing. The concept page was read and **not edited**.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md`
+  updated with the review and its measurements.
+
 ## [2026-09-16] review v17 | GIN contrib waste page: every scored cell reproduced, eight filed items corrected
 
 - Reviewed and re-ran [Measuring Wasted and Reclaimable Bytes in a GIN Index With
