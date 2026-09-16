@@ -11747,3 +11747,84 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   postgres` empty, the sandbox gone, ports 55312 and 55317 free. The four
   pre-existing sandboxes under `.wiki-runtime/tmp/` were not created by this work
   and were left untouched.
+
+## [2026-09-16] answer v12 | pros and cons of a very large shared_buffers on a 1 TB host
+
+- Filed [Pros and Cons of a Very Large shared_buffers Such as 256 GB on a 1 TB RAM
+  System in PostgreSQL 12
+  (unverified)](v12/questions/storage-and-vacuum/very-large-shared-buffers.md) at
+  unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2, tag `REL_12_2`).
+- **Prompt hygiene**: the request read `follow agents.md, in postgresql 12, question :
+  what are the pros and cons of having a very large shared buffers like 256GB or more
+  on a system with more than 1TB of RAM.` Seven defects: `agents.md` for AGENTS.md,
+  lowercase `postgresql`, a space before the colon, `a very large shared buffers` for
+  the GUC `shared_buffers`, `256GB`/`1TB` missing the space before the unit, a lowercase
+  sentence start, and a terminating period on a question. The asker chose **correct and
+  restate**, **source-only evidence with no measured numbers**, and **v12-only framing**
+  with no reference to controls that exist in other majors. All three are recorded under
+  the page's `## Question`.
+- **Category**: `storage-and-vacuum`, by rule 1 (the question is about the buffer
+  manager, which that category names) and confirmed by rule 2 (most citations are
+  `src/backend/storage/buffer/`).
+- **Answer spine**: 256 GB is legal - `PGC_POSTMASTER`, floor 16 blocks, ceiling
+  `INT_MAX / 2` because the code "sometimes multiplies the number of shared buffers by
+  two without checking for overflow" - and inside the shipped docs' 25 %-of-RAM starting
+  point with their 40 % caution. At the default block size it is **33,554,432 buffers**,
+  2,048x the 128 MB `initdb` default, and v12 has several O(`NBuffers`) paths whose cost
+  tracks the pool while the work does not.
+- **Six pros, each cited**: the hit path pins under a shared partition lock and returns
+  before `smgr`, while a miss reaches `smgrread` -> `FileRead` -> `pg_pread`; a dirty
+  victim is written by the *requesting* backend after `FlushBuffer` forces WAL to the
+  page LSN, which is exactly `buffers_backend`/`buffers_backend_fsync`; `BufferSync()`
+  writes only what was dirty at checkpoint start, so a repeatedly dirtied page is written
+  once; `usage_count` up to `BM_MAX_USAGE_COUNT` protects hot pages; the
+  `Min(NBuffers / 8, ring_size)` clamp stops shrinking the strategy rings; and the
+  `NBuffers`-sized fsync queue effectively never fills.
+- **Thirteen cons, each cited**: no direct I/O for data files - the tree's only
+  `PG_O_DIRECT` use is WAL in `get_sync_bit()` - so hot pages sit in RAM twice;
+  `BufferSync()` takes a header spinlock on all 33.5 M buffers per checkpoint before
+  `qsort`; the five "find all buffers of X" functions carry the tree's own **`XXX
+  currently it sequentially searches the buffer pool`** comment, with a filed table
+  mapping each to the commands that reach it (`DROP` via `smgrdounlink`/`smgrdounlinkall`,
+  VACUUM truncation via `RelationTruncate` and its `smgr_redo` replay, `ALTER TABLE ...
+  SET TABLESPACE`, `heap_sync`, `CREATE`/`DROP DATABASE`); the clock sweep's own stated
+  bound of `BM_MAX_USAGE_COUNT + 1` complete passes, with `trycounter` reset on every
+  decrement; `bgwriter_lru_maxpages` capping background cleaning at 100 pages per
+  `bgwriter_delay` regardless of pool size against a `NBuffers / (120000 / delay)`
+  coverage target of about 55,900 buffers per round; RAM committed away from `work_mem`
+  and the OS cache; page-table and huge-page operations; serial descriptor init plus a
+  shutdown checkpoint plus a cold cache on restart; `pg_buffercache`'s one
+  `BufferCachePagesRec` per buffer under `MemoryContextAllocHuge`;
+  `CompactCheckpointerRequestQueue` scanning an `NBuffers`-long queue under an exclusive
+  LWLock; fixed 128 mapping partitions and one `buffer_strategy_lock`; and no NUMA
+  placement anywhere in the tree.
+- **The finding most likely to surprise an operator**: the bulk-read strategy and
+  synchronized scans engage only above **`NBuffers / 4`**, which at this size is
+  **64 GiB**, so the buffer ring's anti-cache-flood protection is withdrawn from every
+  smaller sequential scan and two concurrent scans of the same table stop sharing reads.
+- Also filed: the per-buffer shared-memory table (page 8192, descriptor 64, I/O lock 32,
+  sort slot 20, fsync slot 24, plus the mapping entry), all nine `NBuffers`-derived
+  values, what the pool does **not** buy (temp tables, VACUUM's 256 kB ring, planner
+  costing which reads `effective_cache_size` and never `NBuffers`, the CLOG and
+  commit-timestamp SLRUs which cap at 512 MB and 128 MB of `shared_buffers`, and the
+  segment-capped `wal_buffers`), **19 settings with exact restart/reload/session
+  scopes**, three catalog-verified monitoring statements with session-scoped
+  `statement_timeout` and `lock_timeout`, and a decision guide that reasons only from
+  the filed mechanisms.
+- **Eight open questions**, led by: the per-buffer byte totals are arithmetic on the
+  struct definitions for a 64-bit build with 4-byte enums, not a reading from a server;
+  `LWLOCK_MINIMAL_SIZE` is conditional; the dynahash overhead of the mapping table was
+  not derived; **no test in the checkout exercises a large pool**, the only settings
+  found being `shared_buffers = 128kB` in `016_min_consistency.pl` and `1MB` in
+  `PostgresNode.pm`; and whether 256 GB is a net win cannot be settled from source.
+- **Concept layer**: v12 has no `wiki/v12/common-concepts/` directory, so the buffer
+  manager, the clock sweep and buffer access strategies are explained inline on the
+  consumer page and named as proposed concept pages in the response and under the page's
+  `## Open Questions`. No concept page was created or edited.
+- **Bookkeeping**: entries added to `wiki/index.md` under v12 Storage and Vacuum and to
+  `wiki/v12/index.md`, plus a clause on the v12 row and a dated note in
+  `wiki/versions.md`. `verified:` untouched and **agent verification stays `not yet`**.
+- **Validation**: `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors and
+  0 warnings.
+- **Teardown**: nothing was built, started or written outside `wiki/`. No server, no
+  sandbox, no background process; `.wiki-runtime/tmp/` was not touched.
