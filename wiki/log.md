@@ -11828,3 +11828,17 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   0 warnings.
 - **Teardown**: nothing was built, started or written outside `wiki/`. No server, no
   sandbox, no background process; `.wiki-runtime/tmp/` was not touched.
+
+
+## [2026-09-16] review v12 | correct very large shared_buffers analysis
+
+- Request: `fix all issues.` following the source review of the very-large-shared-buffers question.
+- Revised [the question and inline answer](v12/questions/storage-and-vacuum/very-large-shared-buffers.md) against PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Preserved the approved question, original scope, human verification field and unverified title.
+- Corrected allocation structure counts, conditional ABI arithmetic, binary memory units, initdb trials, platform defaults and startup-failure qualifications.
+- Removed guaranteed cache residency, exactly-once checkpoint writes, an always-successful sync queue, a universal six-sweep allocation bound, and automatic performance conclusions from pool size.
+- Corrected pin/usage semantics, dirty-candidate sorting, checkpoint pacing, backend data-file sync versus WAL flush, temporary-buffer statistics, I/O timing scope and counter-reset guidance.
+- Distinguished primary CREATE DATABASE checkpoints, create replay, DROP DATABASE, database moves, heap/index copies and transactional delete batching. Qualified local-buffer branches and truncation fork work.
+- Added pg_buffercache temporary-allocation cost, autoprewarm ordinary-palloc limits, generated-header/catalog context and explicit workload/build/test gaps. No measurements were run; numeric examples are conditional source arithmetic.
+- Updated global and v12 index summaries and the v12 coverage summary. This entry supersedes incorrect claims in the original filing summary; historical entries were retained.
+- Validation baseline from the read-only review: wiki_lint reports 9 existing errors and 2 warnings outside this page (missing v18/v19 pins, a v14 pin mismatch, six missing v18 source-reference instances, and dirty v12/v14 checkout warnings). Final validation reproduced exactly that baseline: no new lint findings. The revised page passed a separate check of all 421 source citation instances, local links, contents entries, preserved verification fields, SQL comment tags and git diff whitespace.
+- Environment: no PostgreSQL server, daemon, build or measurement sandbox was started; no service teardown was needed. Raw checkouts were not modified. No common-concept page was created or edited.

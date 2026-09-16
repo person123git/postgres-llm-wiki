@@ -18,6 +18,7 @@ verified_by_agent: not yet
   - [Cons](#cons)
   - [Thresholds that move when NBuffers is huge](#thresholds-that-move-when-nbuffers-is-huge)
   - [What a big pool does not buy](#what-a-big-pool-does-not-buy)
+  - [Structures, build inputs and extension boundaries](#structures-build-inputs-and-extension-boundaries)
   - [Settings that move with it, and their apply scope](#settings-that-move-with-it-and-their-apply-scope)
   - [What to look at before and after the change](#what-to-look-at-before-and-after-the-change)
   - [Decision guide](#decision-guide)
@@ -37,157 +38,153 @@ Prompt note, per `MANDATORY Prompt Hygiene`: the original request read `follow a
 
 ### Short answer
 
-256 GB is a legal setting and not an absurd one: v12 accepts up to `INT_MAX / 2` blocks, and the shipped documentation names 25 % of RAM as a starting point and 40 % as the point past which a larger pool is unlikely to beat a smaller one ([guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163), [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1495-L1528)). The real question is not whether the engine will start; it is that several v12 code paths are O(`NBuffers`), so their cost rises exactly in proportion to the pool while the work they do stays the same.
+**256 GB is within PostgreSQL 12's configuration range, but source alone cannot establish that it is the best size for a 1 TB machine.** The same-checkout documentation suggests 25% of memory as a starting point for a dedicated database server and cautions that more than 40% is unlikely to outperform a smaller allocation. These are general recommendations, not a benchmark of a 1 TB host. A valid setting can still fail at startup if the shared-memory allocation fails. [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1488-L1531) [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590)
 
-At the default 8 kB block size, 256 GB is 33,554,432 buffers: 2,048 times the 128 MB `initdb` default and 32 times an 8 GB pool. That multiplier lands on the checkpoint scan, the clock sweep, and every "find all buffers of this relation" walk.
+PostgreSQL's memory units are binary: `shared_buffers = '256GB'` means 256 GiB. With the default 8192-byte `BLCKSZ`, that is **33,554,432 buffers**. It is 25% of 1 TiB, not 25% of a decimal terabyte. These are arithmetic conversions, not measurements. [guc.c#memory_unit_conversion_table](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L788-L818) [configure.in#blocksize](../../../../raw/postgres-12/configure.in#L247-L277)
 
-| | Mechanism | Where it comes from |
-|---|---|---|
-| Pro | A hit costs a hash probe and a pin, no syscall | [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1020-L1057) |
-| Pro | Fewer evictions means fewer foreground writes and WAL flushes | [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1088-L1157) |
-| Pro | Repeatedly dirtied pages are written once per checkpoint | [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1812-L1857) |
-| Con | Checkpoint scan and sort walk every buffer | [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1828-L1871) |
-| Con | Drop, truncate and flush paths walk every buffer | [bufmgr.c#DropRelFileNodeBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2919-L2971) |
-| Con | Victim search can need six full passes of the pool | [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77) |
-| Con | The anti-cache-flooding threshold is `NBuffers / 4` | [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L252) |
-| Con | Background writer output is capped independently of pool size | [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2274-L2300) |
+The potential benefit is retaining useful pages and avoiding repeated reads or dirty evictions. The costs include reserved memory, larger full-pool scans, and a higher threshold for using the bulk-read ring. Source establishes these mechanisms; it does not establish their net effect or a proportional increase in elapsed time. [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1065-L1165) [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1828-L1871) [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L265)
 
 ### What 256 GB of shared_buffers actually allocates
 
-`shared_buffers` is `PGC_POSTMASTER`, measured in `BLCKSZ` blocks, with a floor of 16 blocks and a ceiling of `INT_MAX / 2` blocks, because the code "sometimes multiplies the number of shared buffers by two without checking for overflow" ([guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163)). Changing it needs a **restart**. The shipped default is 1024 blocks in the C table; `initdb` overwrites it by probing downward from 16384 blocks, that is 128 MB, and writing the largest value a trial postmaster accepts ([initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L947-L967), [initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1018-L1050)).
+`shared_buffers` is a `PGC_POSTMASTER` setting: changing it requires a **restart**. Its range is 16 through `INT_MAX / 2` blocks. The C default is 1024 blocks; `initdb` instead tries candidate sizes starting at 128 MiB, scales its 8192-byte trial units to the configured `BLCKSZ`, and tests them with a bootstrap backend. It may select a smaller value. [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) [initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L947-L967) [initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1018-L1050)
 
-The number you write is the page bytes only. `BufferShmemSize()` adds four more per-buffer arrays on top of `NBuffers * BLCKSZ`: the descriptors, the freelist and buffer-table structures, the I/O locks, and the checkpoint sort array ([buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193)). The checkpointer separately sizes its fsync request queue at `NBuffers` entries ([checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L902), [checkpointer.c:928](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L928)).
+The setting covers page storage. `BufferShmemSize()` also includes three arrays—buffer descriptors, I/O locks and checkpoint sort slots—plus the mapping hash and strategy control structure. The freelist uses `BufferDesc.freeNext`; it is not another per-buffer array. The checkpointer separately reserves `NBuffers` request slots. Other subsystems and extensions add to the main shared-memory request. [buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193) [buf_internals.h#BufferDesc](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L135-L190) [freelist.c#StrategyShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L453-L465) [checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L902) [ipci.c#CreateSharedMemoryAndSemaphores](../../../../raw/postgres-12/src/backend/storage/ipc/ipci.c#L94-L166)
 
-| Per buffer | Structure | Bytes on a 64-bit build | Source |
+The following sizes are **conditional layout arithmetic**, not values measured from a build. They assume 8192-byte blocks, 8-byte pointers, 4-byte `int`, OID, block-number and enum fields, the ordinary alignment implied by those types, `sizeof(BufferDesc) <= 64`, and `sizeof(LWLock) <= 32`. A debug build or different ABI can invalidate the assumptions. The definitions, including the conditional lock padding, are the evidence for the calculation. [buf_internals.h#BufferDescPadded](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L192-L218) [lwlock.h#LWLock](../../../../raw/postgres-12/src/include/storage/lwlock.h#L32-L41) [lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88) [buf_internals.h#BufferTag](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L91-L96)
+
+| Allocation | Assumed bytes per slot | Derived total at 256 GiB | Source |
 |---|---|---|---|
-| Page | `BLCKSZ` | 8192 | [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L81-L83) |
-| Descriptor | `BufferDescPadded` | 64 | [buf_internals.h#BufferDescPadded](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L192-L218) |
-| I/O lock | `LWLockMinimallyPadded` | 32 | [lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88) |
-| Checkpoint sort slot | `CkptSortItem` | 20 | [buf_internals.h#CkptSortItem](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L283-L298) |
-| Fsync queue slot | `CheckpointerRequest` | 24 | [sync.h#FileTag](../../../../raw/postgres-12/src/include/storage/sync.h#L45-L51), [checkpointer.c#CheckpointerRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L108-L113) |
-| Mapping entry | `BufferLookupEnt`, sized for `NBuffers + 128` entries | 24 plus dynahash overhead | [buf_table.c#BufTableShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_table.c#L28-L45), [freelist.c#StrategyShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L453-L465) |
+| Page | 8192 | 256 GiB | [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L81-L83) |
+| `BufferDescPadded` | 64 | 2 GiB | [buf_internals.h#BufferDescPadded](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L192-L218) |
+| `LWLockMinimallyPadded` | 32 | 1 GiB | [lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88) |
+| `CkptSortItem` | 20 | 640 MiB | [buf_internals.h#CkptSortItem](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L283-L298) |
+| `CheckpointerRequest` | 24 | 768 MiB | [sync.h#FileTag](../../../../raw/postgres-12/src/include/storage/sync.h#L45-L51) [checkpointer.c#CheckpointerRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L109-L113) |
+| Mapping hash | `BufferLookupEnt` is 24 under these assumptions, plus hash overhead | sized for `NBuffers + 128` entries; not estimated here | [buf_table.c#BufTableShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_table.c#L28-L45) [freelist.c#StrategyShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L453-L465) [lwlock.h#NUM_BUFFER_PARTITIONS](../../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L126) |
 
-Multiplying those fixed struct sizes by 33,554,432 buffers gives roughly 2 GiB of descriptors, 1 GiB of I/O locks, 640 MiB of checkpoint sort slots and 768 MiB of fsync queue, that is about **4.4 GiB above the nominal 256 GiB before the mapping hash table is counted**. Those totals are arithmetic on the struct definitions, not a reading from a running server; see [Open Questions](#open-questions).
+The four listed non-page arrays therefore add **4.375 GiB**, before the hash table, padding and other shared-memory consumers. This total follows from the preceding conditional sizes and allocation formulas; it is not the size of the complete server mapping. [buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193) [checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L902) [ipci.c#CreateSharedMemoryAndSemaphores](../../../../raw/postgres-12/src/backend/storage/ipc/ipci.c#L94-L166)
 
-The whole request is mapped in one call. With the default `shared_memory_type = mmap`, `CreateAnonymousSegment()` issues a single `mmap`, retries without `MAP_HUGETLB` when `huge_pages = try` fails, and raises a FATAL error whose hint names `shared_buffers` when the kernel refuses ([sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590), [sysv_shmem.c#PGSharedMemoryCreate](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L624-L657), [guc.c#shared_memory_type](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4429-L4437)). Then every descriptor is initialized in a serial loop before the postmaster accepts connections ([buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L111-L144)).
+On non-Windows builds without `EXEC_BACKEND`, the default main shared-memory implementation is `mmap`; other builds have different defaults. That path obtains one successful anonymous mapping, potentially after a failed huge-page attempt when `huge_pages = try`. Failure is fatal; the hint naming `shared_buffers` specifically accompanies `ENOMEM`. Initialization loops over the descriptors before the new pool can be used. [pg_shmem.h#DEFAULT_SHARED_MEMORY_TYPE](../../../../raw/postgres-12/src/include/storage/pg_shmem.h#L72-L78) [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590) [sysv_shmem.c#PGSharedMemoryCreate](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L624-L657) [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L111-L144)
 
 ### Pros
 
-**A hit is a hash probe and a pin.** `BufferAlloc()` computes the tag hash, takes the mapping partition lock in shared mode, finds the buffer id, pins it, and returns; `ReadBuffer_common()` counts `shared_blks_hit` and returns before it reaches the storage manager ([bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1020-L1057), [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796)). A miss instead calls `smgrread()` ([bufmgr.c:897](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897)), which reaches the kernel through `FileRead()` and `pg_pread()` ([md.c:596](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L596), [fd.c:1881](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1881)). A bigger pool converts more of the second shape into the first, including the OS-cache hits that still cost a syscall and a page copy.
+**Useful cache hits avoid a data-file read.** For an ordinary existing-page read, `BufferAlloc()` looks up a tag, takes a shared mapping lock and pins the buffer. A valid hit returns before `smgrread()`. A found but invalid buffer can require I/O coordination, and lock acquisition can wait, so “no syscall” is too strong. On a miss, the storage path reaches `FileRead()` and `pg_pread()`. A larger pool can turn misses into hits when the workload reuses pages that the smaller pool evicted. [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1057) [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796) [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L889-L924) [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L590-L600) [fd.c#FileRead](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1875-L1885)
 
-**Fewer evictions, so fewer writes on the query path.** When the clock sweep hands back a dirty victim, the *requesting backend* writes it, and `FlushBuffer()` first forces WAL up to the page LSN for permanent relations ([bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1088-L1157), [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2717-L2762)). Those events are exactly `buffers_backend` and `buffers_backend_fsync` in `pg_stat_bgwriter` ([system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947)). A pool large enough to hold the write working set removes that work from user queries.
+**Fewer dirty evictions can reduce work in user backends.** A backend may flush a dirty victim before reusing it. For permanent pages, `FlushBuffer()` calls `XLogFlush()` to ensure WAL is durable through the page's LSN. That call can return immediately when the required WAL is already flushed. Keeping useful pages longer can reduce this work; fitting a working set does not guarantee zero backend writes. [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1065-L1165) [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2671-L2788) [xlog.c#XLogFlush](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2797-L2818)
 
-**Write coalescing across a checkpoint interval.** `BufferSync()` marks the buffers that were dirty when the checkpoint began and writes only those; a page dirtied a thousand times between two checkpoints is written once ([bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1812-L1857)). The larger the pool, the longer a hot page can stay dirty in memory rather than being evicted and re-read.
+**Repeated modifications can share a later write.** Several changes to a page while it remains dirty can be included in one later flush. This is an opportunity for write coalescing, not an exactly-once-per-checkpoint guarantee. Backend eviction and background cleaning can write pages between checkpoints. Checkpoint selection marks eligible dirty buffers, then rechecks their checkpoint flags before writing; another writer can clear a flag, and later modifications can dirty the page again. [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1803-L1857) [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1976-L1997) [bufmgr.c#SyncOneBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2354-L2411) [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2774-L2788)
 
-**Hot pages resist eviction.** Each pin raises `usage_count` up to `BM_MAX_USAGE_COUNT`, which is 5, and the sweep must decrement it to zero before the buffer can be taken ([buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L315-L357)).
+**Frequently reused pages have eviction protection.** On a backend's first private pin, a normal access can increment the shared usage count up to five; a strategy access only raises zero to one. Repeated pins already held by that backend do not increment it again. The replacement sweep decrements a nonzero count before reuse. These rules apply at smaller pool sizes too. [bufmgr.c#PinBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1578-L1638) [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77) [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L315-L357)
 
-**Access-strategy rings reach their intended size.** Ring sizes are clamped by `Min(NBuffers / 8, ring_size)`, so a small pool shrinks the 256 kB bulk-read and vacuum rings and the 16 MB bulk-write ring; at 33.5 M buffers the clamp never binds ([freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588)).
-
-**The fsync request queue effectively never fills.** Its capacity is `NBuffers`, and a full queue is what forces a backend to perform its own fsync ([checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1107-L1160)).
-
-**Large scans can actually be cached.** The bulk-read strategy and synchronized scanning engage only above `NBuffers / 4` blocks, so with a very large pool, mid-sized tables are read with the default strategy and stay resident ([heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L252)). This is the same fact as the fourth con below; whether it helps or hurts depends on whether you want those pages kept.
+**A larger request queue can absorb more pending sync requests.** The checkpointer's capacity equals `NBuffers`, but requests can contain duplicates and there is no guarantee it will never fill. A full queue triggers compaction that scans its requests while holding the communication lock exclusively; if forwarding still fails, or the checkpointer is unavailable, the data-file path can synchronize the file in the backend. [checkpointer.c#CheckpointerShmemInit](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L914-L931) [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1086-L1160) [checkpointer.c#CompactCheckpointerRequestQueue](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1178-L1272) [md.c#register_dirty_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L893-L912)
 
 ### Cons
 
-**Double buffering.** v12 reads and writes data files through the kernel page cache: `mdread()`/`mdwrite()` go to `FileRead()`/`FileWrite()` and then to `pg_pread()`/`pg_pwrite()` ([md.c:596](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L596), [md.c:666](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L666), [fd.c:1881](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1881), [fd.c:1963](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1963)). The only `PG_O_DIRECT` use in the tree is for WAL files, gated on `!XLogIsNeeded()`, that is `wal_level = minimal`, and never in the walreceiver ([xlogdefs.h#PG_O_DIRECT](../../../../raw/postgres-12/src/include/access/xlogdefs.h#L60-L74), [xlog.c#get_sync_bit](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10019-L10035), [xlog.h#XLogIsNeeded](../../../../raw/postgres-12/src/include/access/xlog.h#L181)). A page that is hot in `shared_buffers` therefore tends to occupy RAM twice, which is the mechanism behind the documentation's warning that more than 40 % of RAM is unlikely to beat a smaller setting ([config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1510-L1523)).
+**Memory competes with other consumers and may duplicate the OS cache.** Data files use buffered reads and writes, so PostgreSQL and the operating system can retain copies of the same page. This does not mean every hot page necessarily consumes memory twice. Leave room for other allocations and the OS cache; the documentation's memory-pressure guidance includes reducing `shared_buffers` or `work_mem`. `shared_buffers` needs a restart; `work_mem` is session/transaction scoped. [md.c#mdopen](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L450) [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L590-L600) [md.c#mdwrite](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L660-L670) [fd.c#FileRead](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1875-L1885) [fd.c#FileWrite](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1958-L1968) [runtime.sgml#linux-memory-overcommit](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1448-L1476) [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) [guc.c#work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2230-L2241)
 
-**Every checkpoint scans the whole pool.** `BufferSync()` takes the header spinlock on each of `NBuffers` buffers to test `BM_DIRTY`, then `qsort`s the collected entries before writing ([bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1828-L1871)). At 33.5 M buffers that is 33.5 M spinlock acquisitions per checkpoint even if nothing is dirty. `CheckPointBuffers()` then runs the fsync phase ([bufmgr.c#CheckPointBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2580-L2593)), and the write phase is paced against `checkpoint_completion_target` ([checkpointer.c#CheckpointWriteDelay](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L648-L715), [checkpointer.c#IsCheckpointOnSchedule](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L717-L745)). A larger pool means a larger maximum dirty set to flush inside one interval, which is why the documentation ties a larger `shared_buffers` to a larger `max_wal_size` ([config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1518-L1522)).
+**A buffer checkpoint scans the full pool, then sorts only its dirty candidates.** Each invocation of `BufferSync()` examines `NBuffers` headers, even if it ultimately finds no pages to write. It normally selects dirty permanent buffers; shutdown, end-of-recovery or `CHECKPOINT_FLUSH_ALL` can widen selection. It sorts `num_to_scan`, not all `NBuffers`, and skips the sort when that count is zero. At this pool size the full scan examines 33,554,432 headers by construction; its elapsed time is unmeasured. [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1774-L1871)
 
-**Drop, truncate and flush are linear scans, and the source says so.** `DropRelFileNodeBuffers()` carries the comment "XXX currently it sequentially searches the buffer pool", and so does `FlushRelationBuffers()` ([bufmgr.c#DropRelFileNodeBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2919-L2971), [bufmgr.c#FlushRelationBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3183-L3271)). The same shape appears in `DropRelFileNodesAllBuffers()`, `DropDatabaseBuffers()` and `FlushDatabaseBuffers()` ([bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2982-L3072), [bufmgr.c#DropDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3085-L3113), [bufmgr.c#FlushDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3288-L3325)). The user-visible operations that reach them:
+Checkpoint write pacing occurs later; it does not spread out that initial scan. Immediate checkpoints and shutdown can bypass delays. More buffers permit a larger dirty set but do not require one. The documentation says larger pools usually need a corresponding `max_wal_size` increase to spread writes over time; treat that as a workload-dependent tuning consideration, with **reload** scope. [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2018-L2035) [bufmgr.c#CheckPointBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2580-L2590) [checkpointer.c#CheckpointWriteDelay](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L648-L715) [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1510-L1528) [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564)
 
-| Operation | Path | Source |
+**Several maintenance paths scan all shared-buffer descriptors.** Relation and database invalidation or flush routines use full-pool searches. Unlike the checkpoint scan, some use unlocked tag prechecks before locking a candidate. Temporary-relation branches use local buffers. [bufmgr.c#DropRelFileNodeBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2925-L2971) [bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2982-L3072) [bufmgr.c#DropDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3085-L3113) [bufmgr.c#FlushRelationBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3190-L3271) [bufmgr.c#FlushDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3288-L3325)
+
+| Caller or operation | Relevant path and qualification | Source |
 |---|---|---|
-| Relation or fork unlink, for example `DROP TABLE` | `smgrdounlink`, `smgrdounlinkall`, `smgrdounlinkfork` | [smgr.c:390](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L390), [smgr.c:463](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L463), [smgr.c:523](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L523) |
-| Heap truncation by VACUUM, and index truncation | `RelationTruncate` to `smgrtruncate` | [storage.c:294](../../../../raw/postgres-12/src/backend/catalog/storage.c#L294), [smgr.c:652](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L652), [vacuumlazy.c:1965](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1965) |
-| Truncation replay on a standby or after a crash | `smgr_redo` | [storage.c:621](../../../../raw/postgres-12/src/backend/catalog/storage.c#L621) |
-| `ALTER TABLE ... SET TABLESPACE` | `FlushRelationBuffers` before the file copy | [tablecmds.c:12778](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12778) |
-| `heap_sync` after a WAL-skipping bulk load | `FlushRelationBuffers` for heap and TOAST | [heapam.c#heap_sync](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8937-L8960) |
-| `CREATE DATABASE`, `DROP DATABASE`, and their redo | `FlushDatabaseBuffers`, `DropDatabaseBuffers` | [dbcommands.c:942](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L942), [dbcommands.c:1228](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L1228), [dbcommands.c:2134](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L2134) |
+| Relation deletion | Pending transactional deletes are batched through `smgrdounlinkall()` and `DropRelFileNodesAllBuffers()`; several partitions dropped in one transaction need not cause one scan per partition | [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L399-L460) [smgr.c#smgrdounlinkall](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L433-L463) |
+| Relation truncation, including VACUUM truncation | `RelationTruncate()` reaches `smgrtruncate()`; separate main, FSM or VM fork work can produce additional invalidation scans | [storage.c#RelationTruncate](../../../../raw/postgres-12/src/backend/catalog/storage.c#L230-L295) [smgr.c#smgrtruncate](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L646-L669) [vacuumlazy.c#lazy_truncate_heap](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1950-L1974) |
+| Truncation WAL replay | `smgr_redo()` reaches truncation paths | [storage.c#smgr_redo](../../../../raw/postgres-12/src/backend/catalog/storage.c#L575-L629) |
+| Tablespace file copy | Heap copy uses the table AM's `FlushRelationBuffers()` call; index copy has a separate call | [heapam_handler.c#heapam_relation_copy_data](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L636-L660) [tablecmds.c#index_copy_data](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12764-L12791) |
+| `heap_sync()` | Flushes heap and possible TOAST buffers for permanent relations | [heapam.c#heap_sync](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8923-L8960) |
+| `CREATE DATABASE` on the primary | Requests an immediate forced checkpoint with `CHECKPOINT_FLUSH_ALL` before copying | [dbcommands.c#createdb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L574-L585) |
+| `CREATE DATABASE` replay | Calls `FlushDatabaseBuffers()` on the source database | [dbcommands.c#dbase_redo](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L2130-L2141) |
+| `DROP DATABASE` | Invalidates database buffers, including during replay | [dbcommands.c#dropdb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L937-L942) [dbcommands.c#dbase_redo](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L2143-L2173) |
+| `ALTER DATABASE ... SET TABLESPACE` | Forces a checkpoint, then drops cached database buffers before moving files; this is the caller at line 1228 | [dbcommands.c#movedb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L1200-L1228) |
 
-A schema with many partitions makes this worse in the obvious way: dropping or truncating *n* relations one at a time is *n* walks of 33.5 M buffers, and only the batched `DropRelFileNodesAllBuffers()` amortizes them into one walk ([bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3017-L3069)).
+**Replacement work is workload-dependent.** `StrategyGetBuffer()` tries a strategy ring before the freelist and clock sweep. The sweep uses a shared atomic clock hand, tests pins and usage counts, and can examine many buffers. The header's “five plus one cycles” discussion describes aging usage counts in the simplified case; it is not a wall-clock bound or a concurrency-safe upper bound on one allocation. Other backends can change usage counts, and `BufferAlloc()` can reject a candidate and retry. The pinned-buffer error occurs after `NBuffers` pinned observations without a usage-count decrement resetting the counter; it is not a simultaneous snapshot of all pins. [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L200-L217) [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L268-L357) [freelist.c#ClockSweepTick](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L112-L168) [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1065-L1165)
 
-**Victim search degrades when the pool finally fills.** Until the freelist empties, allocation is cheap ([freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L268-L313)). After that, every allocation runs the clock sweep, and the header comment states the bound plainly: "it can take as many as `BM_MAX_USAGE_COUNT` + 1 complete cycles of clock sweeps to find a free buffer" ([buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77)). With 33.5 M buffers that worst case is about 201 M buffer-header lock-and-test operations for one allocation, and the `trycounter` that guards the loop is reset on every usage-count decrement, so only a run of `NBuffers` consecutively pinned buffers ends it with `no unpinned buffers available` ([freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L315-L357)). A very large pool also delays the first sweep, so usage counts have longer to saturate at 5 before any decay begins.
+**Background cleaning has both fixed and pool-dependent controls.** The default write cap is 100 pages per round and the normal delay is 200 ms; the cap does not grow automatically with `NBuffers`. The scan estimate does depend on allocation history and buffer density, and its minimum term is `NBuffers / (120000 / bgwriter_delay)`. That term is 55,924 buffers at this size and default delay after the floating-point calculation is cast to an integer. It is not a promise to write that many pages or finish a pool pass in 120 seconds: the writer skips pinned/recently used buffers, can hit its write cap, and can hibernate. Source does not establish that the defaults are inadequate for every 256 GiB pool. [guc.c#bgwriter_lru_maxpages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2738-L2746) [guc.c#bgwriter_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2727-L2736) [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2040-L2336) [bufmgr.c#SyncOneBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2354-L2411) [bgwriter.c#BackgroundWriterMain](../../../../raw/postgres-12/src/backend/postmaster/bgwriter.c#L327-L373)
 
-**The background writer does not scale with the pool.** Per round it writes at most `bgwriter_lru_maxpages`, default 100, and sleeps `bgwriter_delay`, default 200 ms ([bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2274-L2300), [guc.c#bgwriter_lru_maxpages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2738-L2746), [guc.c#bgwriter_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2727-L2736)). Its idle "cover the pool in 120 s" floor, `min_scan_buffers = NBuffers / (120000 / bgwriter_delay)`, is added to the reusable-buffer estimate that ends the scan loop, so at 33.5 M buffers and the default delay a round keeps scanning until it has found about 55,900 further reusable buffers, unless it laps the sweep first or stops at the 100-page write cap ([bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2239-L2258)). The defaults were not chosen for a pool this size; leaving them alone pushes cleaning onto backends and onto the checkpoint.
+**Startup and cache warming have distinct costs.** A newly initialized pool has invalid descriptors; its initialization loop grows with `NBuffers`. This is not a mandatory read of 256 GiB of data at startup. Subsequent requests fill the pages they need, and a miss can be served from the OS cache. `pg_prewarm` can explicitly load pages; autoprewarm saves identifiers used to reload them, not page contents. This does not establish that promotion of an already-running standby starts with an empty pool. [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L111-L144) [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796) [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L590-L600) [pg_prewarm.c#pg_prewarm](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L185-L199) [autoprewarm.c#autoprewarm](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L1-L24) [autoprewarm.c#apw_dump_now](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L644-L650)
 
-**Memory committed here is not available elsewhere.** The pool is reserved at startup for the life of the postmaster. `work_mem` is per operation, `maintenance_work_mem` is per maintenance operation, and both are `PGC_USERSET`, so their true peak scales with concurrency ([guc.c#work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2230-L2241), [guc.c#maintenance_work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2252)). The documentation's OOM guidance names lowering `shared_buffers` and `work_mem`, or reducing `max_connections` in favour of external pooling, as the responses to memory pressure ([runtime.sgml#linux-memory-overcommit](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1448-L1476)).
+**Contrib inspection and warming add allocation limits.** `pg_buffercache` allocates `NBuffers * sizeof(BufferCachePagesRec)` with `MemoryContextAllocHuge()` and visits every buffer before returning its rows. Under a 32-byte record layout, the temporary array alone is 1 GiB at this pool size; a SQL `LIMIT` does not avoid that initial collection. It obtains per-buffer consistency, not a single consistent snapshot across the whole pool. [pg_buffercache_pages.c#BufferCachePagesRec](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L26-L44) [pg_buffercache_pages.c#pg_buffercache_pages](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176)
 
-**Page-table overhead and huge-page operations.** The documentation states that huge pages reduce page tables and memory-management CPU time, "particularly when using large values of `shared_buffers`" ([runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1535-L1541)). Getting them is an operational task: size `vm.nr_hugepages` from the segment size, possibly set `vm.hugetlb_shm_group` and `ulimit -l`, and accept that `huge_pages = on` refuses to start when they are unavailable ([runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1542-L1594), [config.sgml#huge_pages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1540-L1561)). The failure paths are explicit in the allocator ([sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L535-L586), [sysv_shmem.c#PGSharedMemoryCreate](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L634-L640)).
+Autoprewarm instead uses ordinary `palloc(NBuffers * sizeof(BlockInfoRecord))` before filtering valid buffers. Under the 20-byte record layout assumed above, this is 640 MiB at 256 GiB and 1280 MiB at 512 GiB. The latter exceeds `MaxAllocSize` (1 GiB minus one byte), so that dump allocation raises an error even if few buffers contain useful pages. These are conditional source calculations, not reproduced runtime results. [autoprewarm.c#BlockInfoRecord](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L58-L65) [autoprewarm.c#apw_dump_now](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L559-L620) [memutils.h#MaxAllocSize](../../../../raw/postgres-12/src/include/utils/memutils.h#L24-L46) [mcxt.c#palloc](../../../../raw/postgres-12/src/backend/utils/mmgr/mcxt.c#L924-L938)
 
-**Restart and failover cost.** Every descriptor is initialized serially at startup ([buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L111-L144)), a shutdown checkpoint must flush all dirty buffers including unlogged ones ([bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1803-L1810)), and after restart the pool is cold. The contrib `pg_prewarm` module can reload it, either explicitly or from a periodic dump of the buffer contents ([pg_prewarm.c#pg_prewarm](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L185-L200), [autoprewarm.c](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L1-L24)), but re-reading 256 GB is itself the restart cost.
+**A bigger pool does not add mapping-lock partitions or solve every contention problem.** There are 128 mapping partitions. Replacement can lock two different partitions, or just one when old and new tags share a partition. The clock hand uses an atomic operation; the strategy spinlock is used for such tasks as wrap accounting and freelist access, not for every clock tick. A larger pool could reduce replacement-related lock traffic by avoiding misses, so unchanged partition count alone does not prove unchanged contention. [lwlock.h#NUM_BUFFER_PARTITIONS](../../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L126) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1169-L1212) [freelist.c#ClockSweepTick](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L112-L168) [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L268-L313)
 
-**Introspection gets expensive.** `pg_buffercache` allocates `sizeof(BufferCachePagesRec) * NBuffers` in backend-local memory with `MemoryContextAllocHuge()` and takes a header lock on every buffer ([pg_buffercache_pages.c](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176)). At 33.5 M buffers that is a multi-hundred-megabyte local allocation and 33.5 M lock-unlock pairs per call.
-
-**A full fsync queue becomes expensive to compact.** The queue rarely fills, but when it does, `CompactCheckpointerRequestQueue()` pallocs one `bool` per request and builds a hash over all of them while `CheckpointerCommLock` is held exclusively; the array is `NBuffers` long ([checkpointer.c#CompactCheckpointerRequestQueue](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1178-L1268)).
-
-**Contention is not reduced by size.** The mapping table is split into a fixed `NUM_BUFFER_PARTITIONS = 128` partitions regardless of `NBuffers` ([lwlock.h:107-126](../../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L126), [buf_internals.h#BufMappingPartitionLock](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L121-L133)), an eviction takes two partition locks in exclusive mode ([bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1169-L1212)), and `buffer_strategy_lock` remains one system-wide spinlock ([freelist.c#BufferStrategyControl](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L26-L61)). A workload bottlenecked on one hot page or on mapping-lock contention gains nothing from more buffers.
-
-**No NUMA placement.** The segment is created with a single plain `mmap` and the tree contains no memory-policy call, so page placement across sockets is left entirely to the kernel ([sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590)). A 1 TB host is almost certainly multi-socket, and v12 has no lever for this.
+**Huge pages and memory placement need platform-specific validation.** The anonymous allocation path can request explicit huge pages, with fallback controlled by `huge_pages`; changing that GUC requires restart. The pinned documentation describes supported platforms and distinguishes explicit huge pages from transparent huge pages. The cited allocation path does not set a NUMA node policy; topology, launch policy and actual placement are outside this source-only assessment. A 1 TB capacity alone does not establish a multi-socket topology. [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590) [config.sgml#huge_pages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1533-L1590) [guc.c#huge_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4470-L4478)
 
 ### Thresholds that move when NBuffers is huge
 
-Several unrelated subsystems derive their sizing from `NBuffers`. Setting 256 GB changes all of them at once, which is the part most easily missed.
+For eligible non-local heap scans, `initscan()` enables the bulk-read ring only when table size is **strictly greater than `NBuffers / 4`**, and only when the caller permits the strategy. Synchronized scanning additionally requires its flag and GUC. At 256 GiB, the boundary is 64 GiB: a table exactly at the boundary does not qualify. Below it, normal replacement can retain useful pages or allow one-pass scans to displace other pages; residency is not guaranteed. [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L300)
 
-| Derived value | Formula | At 33,554,432 buffers | Source |
+Synchronized scanning coordinates starting positions; disabling that coordination does not prevent shared-buffer hits. Parallel scans also have their own shared scan state, so the synchronized-scan size test should not be described as disabling parallel worker coordination. [syncscan.c#synchronized-scans](../../../../raw/postgres-12/src/backend/access/heap/syncscan.c#L6-L32) [tableam.c#table_block_parallelscan_initialize](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L370-L385) [tableam.c#table_block_parallelscan_startblock_init](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L403-L430) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1057)
+
+| Mechanism | Formula or ceiling | Meaning at this size | Source |
 |---|---|---|---|
-| Bulk-read strategy and synchronized scan threshold | `rs_nblocks > NBuffers / 4` | 64 GiB; smaller tables use the default strategy | [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L252) |
-| Parallel seq-scan sync-scan decision | `phs_nblocks > NBuffers / 4` | same 64 GiB threshold | [tableam.c#table_block_parallelscan_initialize](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L370-L385) |
-| Access-strategy ring clamp | `Min(NBuffers / 8, ring_size)` | never binds | [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L547-L577) |
-| Auto-tuned `wal_buffers` | `NBuffers / 32`, capped at one WAL segment, floor 8 | capped, so 16 MB at the default segment size | [xlog.c#XLOGChooseNumBuffers](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4861-L4873) |
-| CLOG SLRU buffers | `Min(128, Max(4, NBuffers / 512))` | capped at 128, already reached at 512 MB | [clog.c#CLOGShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/clog.c#L670-L679) |
-| commit timestamp SLRU buffers | `Min(16, Max(4, NBuffers / 1024))` | capped at 16, already reached at 128 MB | [commit_ts.c#CommitTsShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/commit_ts.c#L465-L473) |
-| Checkpointer fsync queue length | `NBuffers` | 33.5 M slots, about 768 MiB | [checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L902) |
-| Hash index build sort threshold | `Min(maintenance_work_mem / BLCKSZ, NBuffers)` | `maintenance_work_mem` decides | [hash.c#hashbuild](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L140-L158) |
-| Checkpoint log percentage | `ckpt_bufs_written * 100 / NBuffers` | small percentages even for huge write volumes | [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442) |
-
-The first row deserves emphasis. The buffer-ring strategy exists precisely so that a large one-pass scan does not blow out the cache ([README#Buffer Ring Replacement Strategy](../../../../raw/postgres-12/src/backend/storage/buffer/README#L208-L249)). Raising `shared_buffers` to 256 GB raises the bar for that protection to 64 GiB, so a one-off sequential scan of, say, a 50 GB table now runs with the default strategy and can evict a large part of the working set. It also stops qualifying for synchronized scans, so two concurrent scans of the same table no longer share their reads ([heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L252)).
+| Bulk-read and synchronized-scan eligibility | table blocks `> NBuffers / 4`, with caller flags and relevant GUC | boundary 64 GiB, strictly exceeded | [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L300) |
+| Strategy-ring clamp | `Min(NBuffers / 8, requested_ring_size)` | 256 KiB read/vacuum rings and 16 MiB write ring already reach full size at pools of 2 MiB and 128 MiB respectively; this is not a special 256 GiB benefit | [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588) |
+| Hash-index build sort threshold for non-temp relations | `Min((maintenance_work_mem * 1024L) / BLCKSZ, NBuffers)` | the smaller term controls; sorting is selected when the initial bucket count reaches the threshold; temp relations use `NLocBuffer` | [hash.c#hashbuild](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L138-L158) |
+| Transaction-status cache | `Min(128, Max(4, NBuffers / 512))` | capped at 128 buffers from a 512 MiB pool with 8 KiB blocks | [clog.c#CLOGShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/clog.c#L675-L679) |
+| Commit-timestamp cache | `Min(16, Max(4, NBuffers / 1024))` | capped at 16 buffers from a 128 MiB pool with 8 KiB blocks | [commit_ts.c#CommitTsShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/commit_ts.c#L469-L473) |
+| Automatic WAL buffers | starts at `NBuffers / 32`, capped by one WAL segment expressed in WAL blocks, with a floor of 8 | does not continue growing with a very large pool | [xlog.c#XLOGChooseNumBuffers](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4850-L4873) |
 
 ### What a big pool does not buy
 
-- **Temporary tables.** They use session-local buffers governed by `temp_buffers`, not the shared pool ([config.sgml#temp_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1592-L1612), [guc.c#temp_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2165-L2174), [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L732-L742)).
-- **VACUUM reads.** Both manual and auto vacuum allocate a `BAS_VACUUM` ring and reuse it; the ring is 256 kB and does not grow with the pool, since `NBuffers` only ever clamps it downward ([vacuum.c:296](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L296), [autovacuum.c:2288](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2288), [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L559-L577)).
-- **Planner cost estimates.** The planner never reads `NBuffers`; the comment at the top of `costsize.c` says so explicitly, and the cache assumption comes from `effective_cache_size`, a `PGC_USERSET` GUC defaulting to 524288 blocks ([costsize.c](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L22-L25), [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117), [cost.h#DEFAULT_EFFECTIVE_CACHE_SIZE](../../../../raw/postgres-12/src/include/optimizer/cost.h#L32)). Growing the pool without revisiting `effective_cache_size` leaves plans unchanged.
-- **SLRU caches beyond modest sizes.** CLOG reaches its 128-buffer cap at 512 MB of `shared_buffers`, and commit timestamps reach their 16-buffer cap at 128 MB ([clog.c#CLOGShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/clog.c#L670-L679), [commit_ts.c#CommitTsShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/commit_ts.c#L465-L473)).
-- **WAL buffering.** `wal_buffers = -1` is capped at one WAL segment, so it stops growing far below 256 GB ([xlog.c#XLOGChooseNumBuffers](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4861-L4873)).
+- **Shared storage for temporary tables:** their pages use session-local buffers and `temp_buffers`. [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L732-L742) [config.sgml#temp_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1592-L1612)
+- **A proportionately larger VACUUM ring:** manual vacuum and autovacuum obtain `BAS_VACUUM`, whose maximum size is fixed. VACUUM can still benefit from pages already in shared buffers: cache lookup precedes replacement-strategy selection. [vacuum.c#vacuum](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L292-L299) [autovacuum.c#do_autovacuum](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2288) [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1057)
+- **An automatically larger planner cache assumption:** `index_pages_fetched()` uses `effective_cache_size`; increasing `shared_buffers` does not itself change that GUC. This does not guarantee identical plans if other planner inputs change. `effective_cache_size` is session/transaction scoped. [costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L825-L877) [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117)
+
+### Structures, build inputs and extension boundaries
+
+`BufferTag` identifies a relation, fork and block. A `BufferDesc` combines that tag with shared state carrying reference count, usage count and flags, plus a content lock and freelist link. Header-state protection, content protection, mapping lookup and I/O coordination are distinct boundaries. A strategy ring holds references to shared buffers; it is not a separate page cache. `FileTag` identifies the files handled by the checkpointer's request queue. [buf_internals.h#BufferTag](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L91-L96) [buf_internals.h#buffer-state](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L30-L77) [buf_internals.h#BufferDesc](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L135-L190) [freelist.c#BufferAccessStrategyData](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L67-L97) [sync.h#FileTag](../../../../raw/postgres-12/src/include/storage/sync.h#L45-L51) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1057)
+
+`configure` generates `pg_config.h`, including the configured block size and pointer-size macro used by padding definitions; `c.h` includes that header. The buffer-manager objects build together, while named lightweight-lock definitions are generated from `lwlocknames.txt`. Therefore the raw struct declarations do not establish a universal compiled layout. [configure.in#blocksize](../../../../raw/postgres-12/configure.in#L247-L277) [configure.in#AC_CONFIG_HEADERS](../../../../raw/postgres-12/configure.in#L2473-L2477) [pg_config.h.in#BLCKSZ](../../../../raw/postgres-12/src/include/pg_config.h.in#L39-L43) [pg_config.h.in#SIZEOF_VOID_P](../../../../raw/postgres-12/src/include/pg_config.h.in#L879) [c.h#configuration-headers](../../../../raw/postgres-12/src/include/c.h#L54-L55) [Makefile#OBJS](../../../../raw/postgres-12/src/backend/storage/buffer/Makefile#L15) [Makefile#lwlocknames](../../../../raw/postgres-12/src/backend/storage/lmgr/Makefile#L29-L33)
+
+The SQL below uses installed system views and catalog-declared functions. `pg_proc.dat` is a catalog-generation input and `system_views.sql` is installed by the catalog build. Generic `SET` grammar reaches `ExecSetVariableStmt()` through utility dispatch. The contrib modules inspected above directly use buffer internals, so their allocation costs must be assessed separately from the core pool. [Makefile#catalog-generation](../../../../raw/postgres-12/src/backend/catalog/Makefile#L60-L89) [Makefile#install-data](../../../../raw/postgres-12/src/backend/catalog/Makefile#L106-L109) [gram.y#VariableSetStmt](../../../../raw/postgres-12/src/backend/parser/gram.y#L1402-L1421) [utility.c#VariableSetStmt](../../../../raw/postgres-12/src/backend/tcop/utility.c#L684-L685) [autoprewarm.c#apw_dump_now](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L559-L620) [pg_buffercache_pages.c#pg_buffercache_pages](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176)
 
 ### Settings that move with it, and their apply scope
 
-Apply scope follows the GUC context: `postmaster` needs a restart, `sighup` needs a reload, `userset` applies per session or transaction.
+Apply scope follows the GUC context: `postmaster` needs a restart, `sighup` needs a reload, `user`/`PGC_USERSET` applies per session or transaction; `superuser`/`PGC_SUSET` has that scope but requires superuser privilege. The source contexts are cited per row; `SET LOCAL` is handled by `ExecSetVariableStmt()` ([guc.c#ExecSetVariableStmt](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L8100-L8124)).
 
 | Setting | Context | Apply scope | Why it matters here | Source |
 |---|---|---|---|---|
 | `shared_buffers` | `PGC_POSTMASTER` | restart | the setting itself | [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) |
 | `huge_pages` | `PGC_POSTMASTER` | restart | page-table overhead for a 256 GB mapping | [guc.c#huge_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4470-L4478) |
-| `shared_memory_type` | `PGC_POSTMASTER` | restart | selects the `mmap` or SysV path used to obtain the segment | [guc.c#shared_memory_type](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4429-L4437) |
-| `wal_buffers` | `PGC_POSTMASTER` | restart | auto-tuning is capped, so set it explicitly if you want more | [guc.c#wal_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2602-L2611) |
+| `shared_memory_type` | `PGC_POSTMASTER` | restart | selects the main shared-memory implementation supported by the build | [guc.c#shared_memory_type](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4429-L4437) |
+| `wal_buffers` | `PGC_POSTMASTER` | restart | automatic sizing is capped; the cap alone is not evidence that more is needed | [guc.c#wal_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2602-L2611) |
 | `max_wal_size` | `PGC_SIGHUP` | reload | the documentation ties it to a larger `shared_buffers` | [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564) |
-| `checkpoint_timeout` | `PGC_SIGHUP` | reload | sets how much dirty data can accumulate per checkpoint | [guc.c#checkpoint_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2566-L2575) |
+| `checkpoint_timeout` | `PGC_SIGHUP` | reload | maximum interval between automatic checkpoints | [guc.c#checkpoint_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2566-L2575) |
 | `checkpoint_completion_target` | `PGC_SIGHUP` | reload | spreads the write phase | [guc.c#checkpoint_completion_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3413-L3421) |
-| `checkpoint_flush_after` | `PGC_SIGHUP` | reload | paces writeback requests during the checkpoint | [guc.c#checkpoint_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2591-L2600) |
-| `bgwriter_lru_maxpages` | `PGC_SIGHUP` | reload | the 100-page cap is the main brake on background cleaning | [guc.c#bgwriter_lru_maxpages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2738-L2746) |
+| `checkpoint_flush_after` | `PGC_SIGHUP` | reload | batches writeback requests during the checkpoint | [guc.c#checkpoint_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2591-L2600) |
+| `bgwriter_lru_maxpages` | `PGC_SIGHUP` | reload | caps pages written per round, default 100 | [guc.c#bgwriter_lru_maxpages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2738-L2746) |
 | `bgwriter_lru_multiplier` | `PGC_SIGHUP` | reload | scales the lookahead estimate | [guc.c#bgwriter_lru_multiplier](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3351-L3359) |
-| `bgwriter_delay` | `PGC_SIGHUP` | reload | sets rounds per second and the idle pool-coverage pace | [guc.c#bgwriter_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2727-L2736) |
-| `bgwriter_flush_after` | `PGC_SIGHUP` | reload | writeback pacing for background writes | [guc.c#bgwriter_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2748-L2757) |
-| `log_checkpoints` | `PGC_SIGHUP` | reload | the only built-in per-checkpoint timing record | [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225) |
-| `backend_flush_after` | `PGC_USERSET` | session or transaction | writeback pacing for backend-issued writes | [guc.c#backend_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2777-L2786) |
+| `bgwriter_delay` | `PGC_SIGHUP` | reload | sets the normal delay and affects the scan floor; hibernation can extend the delay | [guc.c#bgwriter_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2727-L2736) |
+| `bgwriter_flush_after` | `PGC_SIGHUP` | reload | writeback batching for background writes | [guc.c#bgwriter_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2748-L2757) |
+| `log_checkpoints` | `PGC_SIGHUP` | reload | records individual checkpoint timings | [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225) |
+| `backend_flush_after` | `PGC_USERSET` | session or transaction | writeback batching for backend-issued writes | [guc.c#backend_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2777-L2786) |
 | `effective_cache_size` | `PGC_USERSET` | session or transaction | the planner's cache assumption, independent of `NBuffers` | [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117) |
-| `synchronize_seqscans` | `PGC_USERSET` | session or transaction | already disabled below the `NBuffers / 4` table-size threshold | [guc.c#synchronize_seqscans](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1732-L1740) |
+| `synchronize_seqscans` | `PGC_USERSET` | session or transaction | scan eligibility also requires table blocks strictly above `NBuffers / 4` | [guc.c#synchronize_seqscans](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1732-L1740) |
 | `temp_buffers` | `PGC_USERSET` | session, before first temp-table use | temp tables never use the shared pool | [guc.c#temp_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2165-L2174) |
 | `work_mem` | `PGC_USERSET` | session or transaction | competes for the RAM the pool did not take | [guc.c#work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2230-L2241) |
-| `maintenance_work_mem` | `PGC_USERSET` | session or transaction | same, and it decides the hash-build sort threshold | [guc.c#maintenance_work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2252) |
+| `maintenance_work_mem` | `PGC_USERSET` | session or transaction | competes for memory and supplies one term of the hash-build sort threshold | [guc.c#maintenance_work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2252) |
+| `track_io_timing` | `PGC_SUSET` | superuser session or transaction | enables I/O timing in the processes doing the work; default off | [guc.c#track_io_timing](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1401-L1409) |
 
 ### What to look at before and after the change
 
-v12 exposes the relevant counters in `pg_stat_bgwriter` and `pg_stat_database`, and the per-checkpoint timings in the log ([system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947), [system_views.sql#pg_stat_database](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L856-L882), [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442)). Note the boundary: `blks_hit` counts shared-buffer hits only, so a page served from the OS cache is counted as `blks_read` even though no disk head moved.
+Compare counter deltas over equivalent workloads, not lifetime totals or hit ratio alone. `pg_stat_bgwriter` exposes writer and checkpoint counters; `pg_stat_database` exposes block counts and timing. Record `stats_reset`, allow for collection lag, and avoid a long-lived transaction that reuses a statistics snapshot. Individual checkpoint log lines add write/sync/total durations. [system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947) [system_views.sql#pg_stat_database](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L856-L882) [monitoring.sgml#statistics-collection](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L229-L260) [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442)
 
-All three statements below are verified against this checkout's catalogs and functions, and both timeouts are session-scoped, so they expire with the session.
+`buffers_backend` is broader than dirty-victim writes: relation extension also registers dirty segments. **`buffers_backend_fsync` counts backend data-file sync fallback, not WAL flushes.** Neither counter isolates the benefit of a larger cache. [md.c#mdextend](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L373-L422) [md.c#register_dirty_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L893-L912) [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1107-L1160)
+
+The database block counts include counted accesses to local temporary-table buffers as well as shared buffers. `blks_read` does not establish physical device I/O: a data-file read may be served by the OS cache. I/O timing is off by default and must be enabled in the workload processes to make the timing columns useful; enabling it only in a monitoring session does not instrument other sessions. The reported times are milliseconds. [bufmgr.c#ReadBufferExtended](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L640-L669) [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L732-L796) [pgstat.h#pgstat_count_buffer_read](../../../../raw/postgres-12/src/include/pgstat.h#L1384-L1397) [pgstat.c#pgstat_initstats](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1751-L1784) [pgstat.c#pgstat_recv_tabstat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6001-L6005) [fd.c#FileRead](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1875-L1885) [guc.c#track_io_timing](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1401-L1409) [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2764-L2769) [pgstatfuncs.c#pg_stat_get_db_blk_read_time](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1569-L1597)
+
+The following SQL was checked against the pinned source, not executed in this review. Both timeout settings below are session-scoped (`PGC_USERSET`); `SET LOCAL` would restrict them to a transaction. [guc.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2397) [guc.c#ExecSetVariableStmt](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L8100-L8124)
 
 ```sql
-SET statement_timeout = '30s';
-SET lock_timeout = '5s';
+SET /* wiki_v12_monitor_statement_timeout */ statement_timeout = '30s';
+SET /* wiki_v12_monitor_lock_timeout */ lock_timeout = '5s';
 ```
 
-Who is doing the writing, and how often backends had to write or fsync for themselves:
+Writer and checkpoint counters, including the reset boundary: [system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947)
 
 ```sql
 SELECT /* wiki_v12_shared_buffers_writers */
@@ -205,22 +202,23 @@ SELECT /* wiki_v12_shared_buffers_writers */
 FROM pg_stat_bgwriter;
 ```
 
-Shared-buffer hit ratio per database, remembering that misses may still be OS-cache hits:
+Database buffer hit percentage, including local-buffer activity and possible OS-cache hits on reads. The numeric cast and two-argument `round` are catalog-declared: [pg_proc.dat#numeric](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L4292-L4294) [pg_proc.dat#round](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L4130-L4132) [system_views.sql#pg_stat_database](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L856-L882) [bufmgr.c#ReadBufferExtended](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L640-L669) [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L732-L796)
 
 ```sql
 SELECT /* wiki_v12_shared_buffer_hit_ratio */
        datname,
        blks_hit,
        blks_read,
-       round(100.0 * blks_hit / nullif(blks_hit + blks_read, 0), 2) AS hit_pct,
+       round(100.0 * blks_hit / nullif(blks_hit::numeric + blks_read, 0), 2) AS hit_pct,
        blk_read_time,
-       blk_write_time
+       blk_write_time,
+       stats_reset
 FROM pg_stat_database
 WHERE datname IS NOT NULL
-ORDER BY blks_hit + blks_read DESC;
+ORDER BY blks_hit::numeric + blks_read DESC;
 ```
 
-The derived thresholds this page describes, computed from the running configuration:
+Configured pool size and arithmetic thresholds; a heap scan must **exceed** the reported bulk-read boundary and satisfy the eligibility flags: [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L300) [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588) [clog.c#CLOGShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/clog.c#L675-L679) [commit_ts.c#CommitTsShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/commit_ts.c#L469-L473)
 
 ```sql
 SELECT /* wiki_v12_nbuffers_derived_thresholds */
@@ -235,150 +233,219 @@ WHERE sb.name = 'shared_buffers'
   AND bs.name = 'block_size';
 ```
 
-`pg_settings` is a view over `pg_show_all_settings()`, whose output columns include `name`, `setting`, `unit` and `context`, and `shared_buffers` reports in blocks because of its `GUC_UNIT_BLOCKS` flag ([system_views.sql#pg_settings](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L512-L513), [pg_proc.dat#pg_show_all_settings](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5770-L5775), [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2155-L2159)). `block_size` is a `PGC_INTERNAL` preset that reports `BLCKSZ` in bytes ([guc.c#block_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2888)), and `pg_size_pretty(bigint)` exists in this checkout ([pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6897-L6899)).
+`pg_settings` wraps `pg_show_all_settings()`. `shared_buffers` is reported in blocks, `block_size` reports `BLCKSZ` in bytes and has internal, non-settable context, and `pg_size_pretty(bigint)` is catalog-declared. [system_views.sql#pg_settings](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L512-L513) [pg_proc.dat#pg_show_all_settings](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5770-L5775) [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) [guc.c#block_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2888) [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6897-L6899)
 
-There is no catalog view of shared-memory allocations in this tree, so the only way to see what the postmaster actually mapped is from the operating system; the huge-pages procedure in the documentation does exactly that with `pmap` on the pid in `postmaster.pid` ([runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1542-L1566)). Use `pg_buffercache` sparingly at this size, for the reasons in [Cons](#cons).
+For actual mapping size, the pinned documentation gives an OS-level procedure using the postmaster PID. Use `pg_buffercache` with awareness of its up-front allocation and scan cost. [runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1542-L1566) [pg_buffercache_pages.c#pg_buffercache_pages](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176)
 
 ### Decision guide
 
-Reasoning from the mechanisms above, not from measurements on this hardware class:
+Treat 256 GiB as a candidate to compare with a smaller pool. The strongest reason to keep it is a measured reduction in repeated reads or foreground dirty-victim work that improves the workload's throughput or latency. Source identifies those opportunities, but no such comparison was run for this page. [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1065-L1165)
 
-**A very large pool is defensible when** the hot working set is larger than a moderate pool but fits in 256 GB, the workload re-dirties the same pages many times per checkpoint interval so write coalescing pays, the write path is otherwise dominated by `buffers_backend`, and the operational profile is stable: few `DROP`/`TRUNCATE`/`SET TABLESPACE` operations, infrequent restarts, huge pages configured, and checkpoint and background-writer settings tuned away from their defaults.
+Include memory headroom, checkpoint duration, maintenance-operation latency and restart preparation in that comparison. Repeated independent relation invalidations and the initial checkpoint scan warrant particular attention because their searches cover the pool; transactional delete batching can reduce the number of searches. [runtime.sgml#linux-memory-overcommit](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1448-L1476) [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1828-L1871) [bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2982-L3072) [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L399-L460) [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L111-L144)
 
-**It is a poor trade when** any of the following hold, each for a reason established above: the working set is far larger than any pool you can afford, so you are paying double buffering for a low hit rate; the schema has many partitions or the workload creates and drops many relations, so the O(`NBuffers`) walks run constantly; mid-sized table scans are common and you were relying on the bulk-read ring to protect the cache, which now needs a 64 GiB table to engage; the bottleneck is contention on a hot page or on mapping partitions, which more buffers do not relieve; or the server also needs the RAM for `work_mem`-hungry queries and the OS cache.
-
-**Whatever you choose**, move `shared_buffers` in steps rather than to 256 GB in one jump, since each step needs a restart anyway, and re-check the `pg_stat_bgwriter` counters and `log_checkpoints` lines at each step. The engine gives no feedback that a pool is too large; it only shows up as checkpoint and eviction behaviour in those counters.
+A staged comparison is a recommendation, not a source-proven optimum. Schedule a **restart** for each `shared_buffers` change. Enable `log_checkpoints` with a **reload** if individual checkpoint records are needed. Change other controls only when the observed workload supports it; neither explicit huge pages nor departing from every background-writer default is a prerequisite established by this source review. [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225) [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442) [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590) [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2040-L2336)
 
 ## Context Reviewed
 
-- Buffer manager core: `src/backend/storage/buffer/bufmgr.c`, `buf_init.c`, `freelist.c`, `buf_table.c`, `localbuf.c` headers, and `src/backend/storage/buffer/README`.
-- Buffer structures and partitioning: `src/include/storage/buf_internals.h`, `src/include/storage/buf.h`, `src/include/storage/lwlock.h`.
-- Shared memory sizing and creation: `src/backend/storage/ipc/ipci.c`, `src/backend/port/sysv_shmem.c`.
-- Checkpointer and background writer: `src/backend/postmaster/checkpointer.c`, `src/backend/access/transam/xlog.c` checkpoint logging and `XLOGChooseNumBuffers`.
-- Every non-buffer reader of `NBuffers` in the backend: `clog.c`, `commit_ts.c`, `hash.c`, `heapam.c`, `tableam.c`, `costsize.c`, `postmaster.c`, `globals.c`, `guc.c`.
-- Full-pool scan callers: `src/backend/storage/smgr/smgr.c`, `src/backend/catalog/storage.c`, `src/backend/commands/tablecmds.c`, `src/backend/commands/dbcommands.c`, `src/backend/access/heap/heapam.c`, `src/backend/access/heap/vacuumlazy.c`, `src/backend/access/heap/heapam_handler.c`.
-- Storage manager I/O path: `src/backend/storage/smgr/md.c`, `src/backend/storage/file/fd.c`, `src/include/access/xlogdefs.h`.
-- GUC definitions and defaults: `src/backend/utils/misc/guc.c`, `src/include/optimizer/cost.h`, `src/bin/initdb/initdb.c`.
-- Catalogs and views: `src/backend/catalog/system_views.sql`, `src/include/catalog/pg_proc.dat`.
-- Contrib boundary: `contrib/pg_buffercache/pg_buffercache_pages.c`, `contrib/pg_prewarm/pg_prewarm.c`, `contrib/pg_prewarm/autoprewarm.c`.
-- Documentation in the same checkout: `doc/src/sgml/config.sgml`, `doc/src/sgml/runtime.sgml`.
-- Tests: searched `src/test` and `contrib` for `shared_buffers`. The only uses are a 128 kB setting in one recovery TAP test and the 1 MB default in the TAP harness; there is no test that exercises a large pool. See [Open Questions](#open-questions).
+- Target: PostgreSQL 12.2, pin `45b88269a353ad93744772791feb6d01bc7e1e42`; all behavioral evidence comes from that checkout.
+- Concepts: shared-buffer mapping, pinning, replacement, strategy rings, dirty-page writes, checkpoints, file sync requests and cache statistics. No PostgreSQL 12 common-concept pages are available for these concepts; none were created or modified.
+- Core normal/error paths: buffer lookup and invalid-buffer coordination; dirty-victim retries; usage-count aging and pinned-buffer error; checkpoint candidate selection, concurrent writes and pacing; queue-full compaction and backend file-sync fallback.
+- Caller boundaries: storage-manager unlink/truncate, batched pending deletes, VACUUM truncation, heap/index tablespace copies, database creation/drop/move and WAL replay.
+- Struct/build boundaries: buffer descriptors and tags, strategy rings, request records, generated configuration/lock headers, catalog generation and generic SET dispatch.
+- Contrib: `pg_buffercache`, `pg_prewarm`, autoprewarm and ordinary versus huge memory allocation.
+- Monitoring: catalog/view definitions, counter producers, collector aggregation, timing GUC and statistics snapshot documentation.
+- Tests: inspected `src/test` and `contrib` references to `shared_buffers`; no large-pool case was found in that search. The cited recovery test uses 128 kB; the TAP harness uses 1 MB in its `allows_streaming` branch. [016_min_consistency.pl#shared_buffers](../../../../raw/postgres-12/src/test/recovery/t/016_min_consistency.pl#L46-L54) [PostgresNode.pm#allows_streaming](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L462-L479)
+- Review scope: source-only. No server, benchmark or measurement script was run; numeric examples are explicitly conditional source arithmetic.
 
 ## Evidence Map
 
-| Claim | Evidence |
+| Claim group | Primary evidence |
 |---|---|
-| Restart required; range is 16 to `INT_MAX / 2` blocks | [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) |
-| 25 % starting point, 40 % caution, larger pool wants larger `max_wal_size` | [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1510-L1528) |
-| `initdb` probes down from 16384 blocks | [initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L947-L967) |
-| Four per-buffer arrays beyond the page bytes, plus the `NBuffers`-sized fsync queue | [buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193), [checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L902) |
-| Descriptor is 64 bytes, I/O lock 32, sort slot 20, request slot 24 | [buf_internals.h#BufferDescPadded](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L192-L218), [lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88), [buf_internals.h#CkptSortItem](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L283-L298), [sync.h#FileTag](../../../../raw/postgres-12/src/include/storage/sync.h#L45-L51) |
-| Single `mmap`, huge-page fallback, FATAL hint names `shared_buffers` | [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590) |
-| Hit path returns before the storage manager | [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796), [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1020-L1057) |
-| Miss path reaches the kernel through buffered `pread` | [bufmgr.c:897](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897), [md.c:596](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L596), [fd.c:1881](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1881) |
-| Backends write dirty victims and flush WAL first | [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1088-L1157), [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2717-L2762) |
-| Checkpoint marks, sorts, then writes the dirty set | [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1812-L1871) |
-| Up to `BM_MAX_USAGE_COUNT + 1` full sweeps for one victim | [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L315-L357) |
-| Background writer cap and pool-coverage pace | [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2239-L2300) |
-| Five full-pool scan functions and their callers | [bufmgr.c#DropRelFileNodeBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2919-L2971), [smgr.c:390](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L390), [storage.c:294](../../../../raw/postgres-12/src/backend/catalog/storage.c#L294), [tablecmds.c:12778](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12778), [dbcommands.c:942](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L942) |
-| `NBuffers / 4` governs bulk-read strategy and sync scans | [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L252), [tableam.c#table_block_parallelscan_initialize](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L370-L385) |
-| Ring purpose and sizes | [README#Buffer Ring Replacement Strategy](../../../../raw/postgres-12/src/backend/storage/buffer/README#L208-L249), [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588) |
-| Partition count is fixed at 128 | [lwlock.h:107-126](../../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L126) |
-| Planner uses `effective_cache_size`, not `NBuffers` | [costsize.c](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L22-L25), [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117) |
-| Observability counters and checkpoint log line | [system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947), [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442) |
+| Configuration, startup failure and extra allocation | [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163) [buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193) [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590) |
+| Cache hits, eviction and durability boundary | [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1165) [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2671-L2788) [xlog.c#XLogFlush](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2797-L2818) |
+| Full checkpoint scan versus candidate-only sort | [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1774-L1871) [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1976-L2035) |
+| DDL scans and transactional batching | [bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2982-L3072) [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L399-L460) [dbcommands.c#createdb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L574-L585) [dbcommands.c#movedb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L1200-L1228) |
+| Replacement and background-writer limits | [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L200-L357) [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2040-L2336) |
+| Ring and scan eligibility thresholds | [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588) [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L300) |
+| Contrib allocation limits | [pg_buffercache_pages.c#pg_buffercache_pages](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176) [autoprewarm.c#apw_dump_now](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L559-L620) [memutils.h#MaxAllocSize](../../../../raw/postgres-12/src/include/utils/memutils.h#L24-L46) |
+| Backend sync counter semantics | [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1107-L1160) [md.c#register_dirty_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L893-L912) |
+| Database counters and timing | [bufmgr.c#ReadBufferExtended](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L640-L669) [pgstat.c#pgstat_recv_tabstat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6001-L6005) [pgstatfuncs.c#pg_stat_get_db_blk_read_time](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1569-L1597) |
+| Generated build/catalog inputs | [configure.in#AC_CONFIG_HEADERS](../../../../raw/postgres-12/configure.in#L2473-L2477) [Makefile#lwlocknames](../../../../raw/postgres-12/src/backend/storage/lmgr/Makefile#L29-L33) [Makefile#catalog-generation](../../../../raw/postgres-12/src/backend/catalog/Makefile#L60-L89) |
 
 ## Open Questions
 
-- The per-buffer byte figures and the derived totals of roughly 2 GiB, 1 GiB, 640 MiB and 768 MiB are arithmetic on the struct definitions for a 64-bit build with 8 kB blocks and 4-byte enums. They were not confirmed against a running server, and this page reports no measured number by design, per the scope the asker chose. `CkptSortItem` and `CheckpointerRequest` in particular depend on the compiler's enum width and padding.
-- `LWLOCK_MINIMAL_SIZE` is `sizeof(LWLock) <= 32 ? 32 : 64`, and the header comment says 32 "on basically all common platforms" ([lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88)). A `LOCK_DEBUG` build adds fields to `LWLock` and could change it.
-- The buffer-mapping hash table size goes through `hash_estimate_size()` ([buf_table.c#BufTableShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_table.c#L38-L45)); its dynahash bucket and segment overhead at 33.5 M entries was not derived here.
-- No test in this checkout exercises a large `shared_buffers`. The only test settings found are `shared_buffers = 128kB` in [016_min_consistency.pl:52](../../../../raw/postgres-12/src/test/recovery/t/016_min_consistency.pl#L52) and `shared_buffers = 1MB` in [PostgresNode.pm:475](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L475). The O(`NBuffers`) behaviour described here is therefore read from the code, with no upstream regression coverage at scale.
-- Whether a 256 GB pool is a net win for a given workload cannot be settled from source. The mechanisms are cited; the outcome depends on working-set size, write locality, and storage, none of which this page measures.
-- The clock-sweep worst case of six full passes is the bound the header comment states; how often it is approached in practice on a pool this size is not established by any code path or test here.
-- NUMA placement is left to the kernel, since no memory-policy call exists in this tree. What that costs on a multi-socket 1 TB host is outside what the source can answer.
-- v12 has no catalog-level view of shared-memory allocations, so the "what did the postmaster actually map" check is an operating-system procedure ([runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1542-L1566)), not a SQL one.
-- This version has no `wiki/v12/common-concepts/` page for the buffer manager, the clock sweep, or buffer access strategies, so those concepts are explained inline here rather than linked. The concept pages should be filed as their own task.
+- No workload or host measurements establish the best pool size, scan latency, write savings, memory headroom, huge-page availability or NUMA placement. The 25% recommendation is not a 1 TB benchmark.
+- The byte totals depend on the stated ABI and build assumptions. Mapping-hash overhead and the complete main-segment size were not calculated. The contrib array examples, including the autoprewarm allocation error at 512 GiB under a 20-byte record layout, were not reproduced on a built server.
+- No large-pool regression case was found in the inspected test search. Small configured pools in the recovery test and conditional TAP setup do not validate behavior or performance at this scale. [016_min_consistency.pl#shared_buffers](../../../../raw/postgres-12/src/test/recovery/t/016_min_consistency.pl#L46-L54) [PostgresNode.pm#allows_streaming](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L462-L479)
+- No frequency or latency bound for clock-sweep retries is established here. Concurrent pins, usage changes and candidate rejection prevent treating the header's simplified cycle discussion as a universal allocation bound. [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77) [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L315-L357) [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1065-L1165)
+- Shared-buffer mapping, clock-sweep replacement and buffer-access strategies lack version-local common-concept pages. They would be useful separate tasks; this question review does not create them.
+- `verified: false` remains human-controlled. `verified_by_agent: not yet` is retained while the stated build and workload validation gaps remain.
 
 ## Source References
 
 - [guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2150-L2163)
-- [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L67-L152)
-- [buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193)
-- [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L200-L358)
-- [freelist.c#StrategyShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L453-L465)
-- [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588)
-- [buf_table.c#BufTableShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_table.c#L28-L45)
-- [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77)
-- [buf_internals.h#BufMappingPartitionLock](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L121-L133)
-- [buf_internals.h#BufferDescPadded](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L192-L218)
-- [buf_internals.h#CkptSortItem](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L283-L298)
-- [lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88)
-- [lwlock.h:107-126](../../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L126)
-- [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L704-L915)
-- [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1212)
-- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1774-L2038)
-- [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2040-L2336)
-- [bufmgr.c#CheckPointBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2574-L2593)
-- [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2668-L2785)
-- [bufmgr.c#DropRelFileNodeBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2899-L2971)
-- [bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2973-L3072)
-- [bufmgr.c#DropDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3074-L3113)
-- [bufmgr.c#FlushRelationBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3183-L3271)
-- [bufmgr.c#FlushDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3273-L3325)
-- [README#Buffer Ring Replacement Strategy](../../../../raw/postgres-12/src/backend/storage/buffer/README#L208-L249)
-- [checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L932)
-- [checkpointer.c#CheckpointWriteDelay](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L648-L715)
-- [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1086-L1160)
-- [checkpointer.c#CompactCheckpointerRequestQueue](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1162-L1268)
-- [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L521-L590)
-- [sysv_shmem.c#PGSharedMemoryCreate](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L609-L657)
-- [ipci.c#CreateSharedMemoryAndSemaphores](../../../../raw/postgres-12/src/backend/storage/ipc/ipci.c#L94-L160)
-- [xlog.c#XLOGChooseNumBuffers](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4850-L4873)
-- [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442)
-- [xlog.c#get_sync_bit](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10019-L10035)
-- [xlogdefs.h#PG_O_DIRECT](../../../../raw/postgres-12/src/include/access/xlogdefs.h#L60-L74)
-- [xlog.h#XLogIsNeeded](../../../../raw/postgres-12/src/include/access/xlog.h#L181)
-- [clog.c#CLOGShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/clog.c#L670-L679)
-- [commit_ts.c#CommitTsShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/commit_ts.c#L465-L473)
-- [hash.c#hashbuild](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L140-L158)
-- [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L225-L260)
-- [heapam.c#heap_sync](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8937-L8960)
-- [heapam_handler.c:649](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L649)
-- [tableam.c#table_block_parallelscan_initialize](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L370-L385)
-- [vacuumlazy.c:1965](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1965)
-- [vacuum.c:296](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L296)
-- [autovacuum.c:2288](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2288)
-- [smgr.c#smgrdounlink](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L375-L395)
-- [smgr.c#smgrtruncate](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L640-L660)
-- [storage.c#RelationTruncate](../../../../raw/postgres-12/src/backend/catalog/storage.c#L223-L300)
-- [storage.c#smgr_redo](../../../../raw/postgres-12/src/backend/catalog/storage.c#L610-L625)
-- [tablecmds.c:12778](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12770-L12780)
-- [dbcommands.c:942](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L942)
-- [dbcommands.c:1228](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L1228)
-- [dbcommands.c:2134](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L2134)
-- [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L590-L600)
-- [md.c#mdwrite](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L660-L670)
-- [fd.c#FileRead](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1875-L1885)
-- [fd.c#FileWrite](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1958-L1968)
-- [costsize.c](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L22-L25)
-- [cost.h#DEFAULT_EFFECTIVE_CACHE_SIZE](../../../../raw/postgres-12/src/include/optimizer/cost.h#L32)
-- [system_views.sql#pg_settings](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L512-L513)
-- [system_views.sql#pg_stat_database](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L856-L882)
-- [system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947)
-- [pg_proc.dat#pg_show_all_settings](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5770-L5775)
-- [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6897-L6899)
+- [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1488-L1531)
+- [sysv_shmem.c#CreateAnonymousSegment](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L528-L590)
+- [guc.c#memory_unit_conversion_table](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L788-L818)
+- [configure.in#blocksize](../../../../raw/postgres-12/configure.in#L247-L277)
+- [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L743-L796)
+- [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1065-L1165)
+- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1828-L1871)
+- [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L265)
 - [initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L947-L967)
 - [initdb.c#test_config_settings](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1018-L1050)
-- [pg_buffercache_pages.c](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176)
-- [pg_prewarm.c#pg_prewarm](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L185-L200)
-- [autoprewarm.c](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L1-L24)
-- [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1488-L1531)
-- [config.sgml#huge_pages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1533-L1590)
-- [config.sgml#temp_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1592-L1612)
+- [buf_init.c#BufferShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L160-L193)
+- [buf_internals.h#BufferDesc](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L135-L190)
+- [freelist.c#StrategyShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L453-L465)
+- [checkpointer.c#CheckpointerShmemSize](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L889-L902)
+- [ipci.c#CreateSharedMemoryAndSemaphores](../../../../raw/postgres-12/src/backend/storage/ipc/ipci.c#L94-L166)
+- [buf_internals.h#BufferDescPadded](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L192-L218)
+- [lwlock.h#LWLock](../../../../raw/postgres-12/src/include/storage/lwlock.h#L32-L41)
+- [lwlock.h#LWLOCK_MINIMAL_SIZE](../../../../raw/postgres-12/src/include/storage/lwlock.h#L61-L88)
+- [buf_internals.h#BufferTag](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L91-L96)
+- [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L81-L83)
+- [buf_internals.h#CkptSortItem](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L283-L298)
+- [sync.h#FileTag](../../../../raw/postgres-12/src/include/storage/sync.h#L45-L51)
+- [checkpointer.c#CheckpointerRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L109-L113)
+- [buf_table.c#BufTableShmemSize](../../../../raw/postgres-12/src/backend/storage/buffer/buf_table.c#L28-L45)
+- [lwlock.h#NUM_BUFFER_PARTITIONS](../../../../raw/postgres-12/src/include/storage/lwlock.h#L107-L126)
+- [pg_shmem.h#DEFAULT_SHARED_MEMORY_TYPE](../../../../raw/postgres-12/src/include/storage/pg_shmem.h#L72-L78)
+- [sysv_shmem.c#PGSharedMemoryCreate](../../../../raw/postgres-12/src/backend/port/sysv_shmem.c#L624-L657)
+- [buf_init.c#InitBufferPool](../../../../raw/postgres-12/src/backend/storage/buffer/buf_init.c#L111-L144)
+- [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1057)
+- [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L889-L924)
+- [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L590-L600)
+- [fd.c#FileRead](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1875-L1885)
+- [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2671-L2788)
+- [xlog.c#XLogFlush](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2797-L2818)
+- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1803-L1857)
+- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1976-L1997)
+- [bufmgr.c#SyncOneBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2354-L2411)
+- [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2774-L2788)
+- [bufmgr.c#PinBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1578-L1638)
+- [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L69-L77)
+- [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L315-L357)
+- [checkpointer.c#CheckpointerShmemInit](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L914-L931)
+- [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1086-L1160)
+- [checkpointer.c#CompactCheckpointerRequestQueue](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1178-L1272)
+- [md.c#register_dirty_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L893-L912)
+- [md.c#mdopen](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L450)
+- [md.c#mdwrite](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L660-L670)
+- [fd.c#FileWrite](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1958-L1968)
 - [runtime.sgml#linux-memory-overcommit](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1448-L1476)
-- [runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1532-L1602)
-- [016_min_consistency.pl:52](../../../../raw/postgres-12/src/test/recovery/t/016_min_consistency.pl#L52)
-- [PostgresNode.pm:475](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L475)
+- [guc.c#work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2230-L2241)
+- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1774-L1871)
+- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2018-L2035)
+- [bufmgr.c#CheckPointBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2580-L2590)
+- [checkpointer.c#CheckpointWriteDelay](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L648-L715)
+- [config.sgml#shared_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1510-L1528)
+- [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564)
+- [bufmgr.c#DropRelFileNodeBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2925-L2971)
+- [bufmgr.c#DropRelFileNodesAllBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2982-L3072)
+- [bufmgr.c#DropDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3085-L3113)
+- [bufmgr.c#FlushRelationBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3190-L3271)
+- [bufmgr.c#FlushDatabaseBuffers](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3288-L3325)
+- [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L399-L460)
+- [smgr.c#smgrdounlinkall](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L433-L463)
+- [storage.c#RelationTruncate](../../../../raw/postgres-12/src/backend/catalog/storage.c#L230-L295)
+- [smgr.c#smgrtruncate](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L646-L669)
+- [vacuumlazy.c#lazy_truncate_heap](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1950-L1974)
+- [storage.c#smgr_redo](../../../../raw/postgres-12/src/backend/catalog/storage.c#L575-L629)
+- [heapam_handler.c#heapam_relation_copy_data](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L636-L660)
+- [tablecmds.c#index_copy_data](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12764-L12791)
+- [heapam.c#heap_sync](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L8923-L8960)
+- [dbcommands.c#createdb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L574-L585)
+- [dbcommands.c#dbase_redo](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L2130-L2141)
+- [dbcommands.c#dropdb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L937-L942)
+- [dbcommands.c#dbase_redo](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L2143-L2173)
+- [dbcommands.c#movedb](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L1200-L1228)
+- [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L200-L217)
+- [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L268-L357)
+- [freelist.c#ClockSweepTick](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L112-L168)
+- [guc.c#bgwriter_lru_maxpages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2738-L2746)
+- [guc.c#bgwriter_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2727-L2736)
+- [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2040-L2336)
+- [bgwriter.c#BackgroundWriterMain](../../../../raw/postgres-12/src/backend/postmaster/bgwriter.c#L327-L373)
+- [pg_prewarm.c#pg_prewarm](../../../../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L185-L199)
+- [autoprewarm.c#autoprewarm](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L1-L24)
+- [autoprewarm.c#apw_dump_now](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L644-L650)
+- [pg_buffercache_pages.c#BufferCachePagesRec](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L26-L44)
+- [pg_buffercache_pages.c#pg_buffercache_pages](../../../../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L126-L176)
+- [autoprewarm.c#BlockInfoRecord](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L58-L65)
+- [autoprewarm.c#apw_dump_now](../../../../raw/postgres-12/contrib/pg_prewarm/autoprewarm.c#L559-L620)
+- [memutils.h#MaxAllocSize](../../../../raw/postgres-12/src/include/utils/memutils.h#L24-L46)
+- [mcxt.c#palloc](../../../../raw/postgres-12/src/backend/utils/mmgr/mcxt.c#L924-L938)
+- [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1169-L1212)
+- [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L268-L313)
+- [config.sgml#huge_pages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1533-L1590)
+- [guc.c#huge_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4470-L4478)
+- [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L233-L300)
+- [syncscan.c#synchronized-scans](../../../../raw/postgres-12/src/backend/access/heap/syncscan.c#L6-L32)
+- [tableam.c#table_block_parallelscan_initialize](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L370-L385)
+- [tableam.c#table_block_parallelscan_startblock_init](../../../../raw/postgres-12/src/backend/access/table/tableam.c#L403-L430)
+- [freelist.c#GetAccessStrategy](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L541-L588)
+- [hash.c#hashbuild](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L138-L158)
+- [clog.c#CLOGShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/clog.c#L675-L679)
+- [commit_ts.c#CommitTsShmemBuffers](../../../../raw/postgres-12/src/backend/access/transam/commit_ts.c#L469-L473)
+- [xlog.c#XLOGChooseNumBuffers](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4850-L4873)
+- [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L732-L742)
+- [config.sgml#temp_buffers](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L1592-L1612)
+- [vacuum.c#vacuum](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L292-L299)
+- [autovacuum.c#do_autovacuum](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2288)
+- [costsize.c#index_pages_fetched](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L825-L877)
+- [guc.c#effective_cache_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3107-L3117)
+- [buf_internals.h#buffer-state](../../../../raw/postgres-12/src/include/storage/buf_internals.h#L30-L77)
+- [freelist.c#BufferAccessStrategyData](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L67-L97)
+- [configure.in#AC_CONFIG_HEADERS](../../../../raw/postgres-12/configure.in#L2473-L2477)
+- [pg_config.h.in#BLCKSZ](../../../../raw/postgres-12/src/include/pg_config.h.in#L39-L43)
+- [pg_config.h.in#SIZEOF_VOID_P](../../../../raw/postgres-12/src/include/pg_config.h.in#L879)
+- [c.h#configuration-headers](../../../../raw/postgres-12/src/include/c.h#L54-L55)
+- [Makefile#OBJS](../../../../raw/postgres-12/src/backend/storage/buffer/Makefile#L15)
+- [Makefile#lwlocknames](../../../../raw/postgres-12/src/backend/storage/lmgr/Makefile#L29-L33)
+- [Makefile#catalog-generation](../../../../raw/postgres-12/src/backend/catalog/Makefile#L60-L89)
+- [Makefile#install-data](../../../../raw/postgres-12/src/backend/catalog/Makefile#L106-L109)
+- [gram.y#VariableSetStmt](../../../../raw/postgres-12/src/backend/parser/gram.y#L1402-L1421)
+- [utility.c#VariableSetStmt](../../../../raw/postgres-12/src/backend/tcop/utility.c#L684-L685)
+- [guc.c#ExecSetVariableStmt](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L8100-L8124)
+- [guc.c#shared_memory_type](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4429-L4437)
+- [guc.c#wal_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2602-L2611)
+- [guc.c#checkpoint_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2566-L2575)
+- [guc.c#checkpoint_completion_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3413-L3421)
+- [guc.c#checkpoint_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2591-L2600)
+- [guc.c#bgwriter_lru_multiplier](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3351-L3359)
+- [guc.c#bgwriter_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2748-L2757)
+- [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225)
+- [guc.c#backend_flush_after](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2777-L2786)
+- [guc.c#synchronize_seqscans](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1732-L1740)
+- [guc.c#temp_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2165-L2174)
+- [guc.c#maintenance_work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2243-L2252)
+- [guc.c#track_io_timing](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1401-L1409)
+- [system_views.sql#pg_stat_bgwriter](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L935-L947)
+- [system_views.sql#pg_stat_database](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L856-L882)
+- [monitoring.sgml#statistics-collection](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L229-L260)
+- [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8435-L8442)
+- [md.c#mdextend](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L373-L422)
+- [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1107-L1160)
+- [bufmgr.c#ReadBufferExtended](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L640-L669)
+- [bufmgr.c#ReadBuffer_common](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L732-L796)
+- [pgstat.h#pgstat_count_buffer_read](../../../../raw/postgres-12/src/include/pgstat.h#L1384-L1397)
+- [pgstat.c#pgstat_initstats](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1751-L1784)
+- [pgstat.c#pgstat_recv_tabstat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6001-L6005)
+- [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2764-L2769)
+- [pgstatfuncs.c#pg_stat_get_db_blk_read_time](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1569-L1597)
+- [guc.c#statement_timeout-and-lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2397)
+- [pg_proc.dat#numeric](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L4292-L4294)
+- [pg_proc.dat#round](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L4130-L4132)
+- [system_views.sql#pg_settings](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L512-L513)
+- [pg_proc.dat#pg_show_all_settings](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L5770-L5775)
+- [guc.c#block_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2879-L2888)
+- [pg_proc.dat#pg_size_pretty](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6897-L6899)
+- [runtime.sgml#linux-huge-pages](../../../../raw/postgres-12/doc/src/sgml/runtime.sgml#L1542-L1566)
+- [016_min_consistency.pl#shared_buffers](../../../../raw/postgres-12/src/test/recovery/t/016_min_consistency.pl#L46-L54)
+- [PostgresNode.pm#allows_streaming](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L462-L479)
+- [bufmgr.c#BufferAlloc](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L994-L1165)
+- [bufmgr.c#BufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1976-L2035)
+- [freelist.c#StrategyGetBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/freelist.c#L200-L357)
 
 ## Navigation
 
