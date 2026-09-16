@@ -2,6 +2,96 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-16] review v17 | GIN contrib waste page: every scored cell reproduced, eight filed items corrected
+
+- Reviewed and re-ran [Measuring Wasted and Reclaimable Bytes in a GIN Index With
+  Contrib Extensions on PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11, clean worktree).
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17, review :  gin-index-wasted-space-contrib.md`;
+  the corrections are `agents.md` -> AGENTS.md, lowercase `postgresql` ->
+  `PostgreSQL`, the space before the colon and the two after it, the missing sentence
+  capitalisation and terminal period, and the page named by filename rather than
+  title. The corrected form is restated verbatim on the page as the ninth follow-up
+  prompt.
+- **Four scoping answers were taken before any edit**: source re-verification **plus**
+  a re-run of the page's published script (not a paper review, not an open-questions
+  pass); corrections **in place**; sandbox deleted at the end.
+- **Citations.** All **605** citations the page carried at review time - **284**
+  distinct file-and-line ranges over **79** files - were dumped out of
+  `raw/postgres-17/` and read against the claim each one backs. **Every range is in
+  bounds, none crosses a version, and every one supports its claim.** The page's two
+  repo-wide greps were re-run: `pages_deleted` is incremented in exactly two places
+  under `src/backend/access/gin/`, and `RelationTruncate`/`smgrtruncate` have zero
+  hits there. The page now carries 607 citations over 283 ranges.
+- **Two full runs.** 17.11 was rebuilt out of tree and the whole default stage order
+  ran twice, the second time with the one script change this review made. `make
+  check` **All 225**; `pageinspect` All 8, `pgstattuple` All 1, `pg_freespacemap`
+  All 1, `btree_gin` All 30, `pg_trgm` All 4. `block_size` 8192, `MAXALIGN` 8,
+  checksums off, `MaxFSMRequestSize` 8160 derived and measured two ways.
+- **Everything scored reproduced.** The 27-index page census, every byte and
+  percentage column, all 19 `truth_pct` values and rebuilt sizes, the 19 payload-model
+  errors, the baseline phase, the `f2` pending-list lifecycle (268 -> 758 -> 318
+  blocks), the `f5`/`f8` horizon sequences, the 102-table simulated census with
+  `tc4_hazard` at 10,500 against `tc2_declined`'s 500, the privilege and refusal
+  matrices, the standby, all eight corruption shapes and the layout probe came out
+  **identical to the 2026-09-15 filing** - on two freshly initdb'd clusters. Verdicts
+  stand: **19 of 19 upper bound, 17 of 19 lower, 0 bracket failures, 25 of 25 FSM
+  checks, 25 of 25 `n_data_pages` identities**.
+- **Eight filed items did not survive, all corrected in place.** (1) The metapage
+  entry-page cross-check is **24 of 27, not 25**: `l1_lock_gin` reads 9 against 34
+  after its pending list is flushed with no VACUUM behind it, a third stale-metapage
+  index beside `a1_analyze_gin` and `c1_analyzed_gin`; `n_total_pages = blocks` is
+  likewise 24 of 27. (2) The `0 / 0 / 0` VACUUM line the page gave `f5` belongs to
+  `f8_horizon`; `f5`'s own second VACUUM reads `0 / 0 / 768 reusable`, as the page's
+  horizon table already said. (3) The standby census quoted `f6_slack_gin ok
+  blocks=482` for a fixture that is 898 blocks. (4) The FSM shortfall list of four
+  fixtures was described as five. (5) Four timing figures moved: the decide lock is
+  **172 ms** (was 190), the queued VACUUM waited **3395 ms** (was 3425), the cost
+  columns are 119.0/119.7/119.6, 10.0 and 6.8 ms, and `gin_clean_pending_list()`
+  went through the lock in 4 ms. (6) A `PageAddItem` was credited to
+  `entryPreparePage`; it is in `entryExecPlaceToPage`, in the body and in
+  `## Source References`. (7) `pgstatginindex_internal` was cited at both
+  `L507-L576` and `L507-L577`. (8) Two Markdown defects: a `###` heading with no
+  blank line before it, and an Evidence Map row split across two lines so it
+  rendered as two malformed rows.
+- **One script change, and it closes a rule violation rather than a claim.** The
+  *after `REINDEX`* entry-tuple column was published without any stage that produces
+  it, which `MANDATORY Measurement Script` forbids. The probe's SQL moved into a
+  shared writer and a **`probe_after`** stage now runs it again after the oracle, so
+  `dead_entry_tuples` is `before − after` on the same index. It returned the filed
+  counts exactly (50,028 on `f1`, 1 on `f7`, 1 on `g0`, 100,010 on `g100`, 148,691 on
+  `f11`) and added seven measured rows the page now prints. Because the script
+  changed, the whole programme was re-run from a wiped cluster afterwards, and the
+  published fenced block is **byte-identical** (md5 `ba4775ed720e3eed…`) to the file
+  that produced the filed numbers.
+- **What the review deliberately did not do**: no second `BLCKSZ`, no 12.x leg (the
+  12.2 section stays statement portability, outside the protocol), no
+  `statement_timeout` cancellation, no new fixture families. Concurrency case D is
+  named as the one row that does not repeat - 34 censuses / 21 distinct readings on
+  the first pass, 33 / 20 on the second - and new **open question 21** records that
+  run-to-run stability is measured on one machine and one kernel only.
+- **Validation.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0
+  warnings**. 607 citations over 283 ranges in 79 files all resolve and are in
+  bounds; the `## Contents` list matches all 47 `##`/`###` headings in document order
+  with no dangling anchor; `raw/postgres-17/` stayed read-only at its pin.
+- **The concept page was read and not edited.** [Mandatory GIN Bloat
+  Tests](v17/common-concepts/mandatory-gin-bloat-tests.md) needed no change: every
+  rule the re-run exercised is already in it, and the corrections are this page's own
+  arithmetic and attribution, not the protocol's.
+- **Teardown**: the script's `clean` stage stopped the 17.11 postmaster, confirmed no
+  `postmaster.pid` in the data directory and no `postgres` process in `pgrep -a
+  postgres`, and deleted `.wiki-runtime/tmp/ginw5/` entirely; ports 55417 and 55418
+  are free. The standby the `standby` stage created was stopped and removed inside
+  that stage. The review's own scratch directory `.wiki-runtime/tmp/ginreview/` was
+  deleted too. No cluster this session did not create was touched.
+- Bookkeeping: the GIN entries in `wiki/index.md` and `wiki/v17/index.md` were
+  updated, `wiki/versions.md` gained a dated coverage note and its v17 coverage cell
+  was amended. `verified:` untouched and **agent verification stays `not yet`**: the
+  corpus is one machine's, several older sections were re-checked rather than
+  re-measured, and the upper bound is still "not refuted" rather than held.
+
 ## [2026-09-16] review v12 | very large shared_buffers: nothing wrong, six things missing
 
 - Reviewed [Pros and Cons of a Very Large shared_buffers Such as 256 GB on a 1 TB RAM

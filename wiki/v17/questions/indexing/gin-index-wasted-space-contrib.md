@@ -343,6 +343,39 @@ run, and the script that produced it is filed in full under
 sections were **removed** because they cannot be re-run from anything this page
 carries; see [What this pass removed, and why](#what-this-pass-removed-and-why).
 
+Ninth follow-up prompt, corrected and restated with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, review the question: Measuring Wasted and
+> Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17
+> (unverified).
+
+The original read `follow agents.md, in postgresql 17, review :
+gin-index-wasted-space-contrib.md`: `agents.md` for AGENTS.md, lowercase
+`postgresql`, a space before the colon and two after it, no sentence
+capitalisation or terminal period, and the page named by its filename rather
+than its title. Four scoping answers were taken before any edit: the scope is
+**source re-verification plus a re-run of the page's published script**, not a
+paper review; defects are **corrected in place**; and the sandbox is deleted once
+the page is filed.
+
+What this pass did: re-read all **605** source citations the page carried at review
+time (**284** distinct file-and-line ranges over **79** files; **607 over 283** when
+this pass finished) against the pin, then rebuilt
+17.11 out of tree and ran the published script end to end **twice** - once as
+published, once after the one script change this review made. **Every scored
+number reproduced**: the 19-fixture page census, byte and percentage tables, the
+oracle, the payload model, the baseline phase, the pending-list lifecycle, the
+horizon sequence, the simulated census, the privilege, refusal, standby and
+corruption cases all came out identical to the filed text, and the two runs
+agreed with each other. Eight filed items did not survive, and they are the
+edits below: a miscounted metapage cross-check, an f8 VACUUM sequence attributed
+to `f5`, a standby block count from a different fixture, a shortfall list of four
+described as five, four timing figures, and a `PageAddItem` credited to
+`entryPreparePage`. The script change closes a `MANDATORY Measurement Script`
+hole rather than a claim: the *after `REINDEX`* entry-tuple column was published
+without a stage that produces it, so the probe now runs a second pass after the
+oracle (`probe_after`), and it returns the filed dead-key counts exactly.
+
 Version scope, stated once: this page may cite only `raw/postgres-17/`, so every
 12.2 statement below rests on exact-pin execution against a 12.2 server built from
 this repo's v12 pin, plus this checkout's own commit history. No v12 source file is
@@ -362,7 +395,7 @@ consumer of that page. The procedure, the four statements, the fixtures and ever
 number below are page-local, and the sections that used to define the protocol here
 link it instead.
 
-**Every number on this page was produced under that protocol on 2026-09-15**, by the
+**Every number on this page was produced under that protocol on 2026-09-16**, by the
 one script filed under [Measurement Script](#measurement-script): declarations filed
 first, then build, baseline, churn ending in settle → maintenance → census, a decide
 pass under one `SHARE ROW EXCLUSIVE` transaction, and a measured rebuild. The two
@@ -370,6 +403,14 @@ headline results are that the page's **upper-bound** claim held on 19 of 19 scor
 fixtures and its **lower-bound** claim failed on 2 of 19 - so `whole_page_waste_pct`
 is demoted to a level in [Reading rules](#reading-rules), which is what the
 protocol's declare-then-score rule requires of a violated bound.
+
+That run is the second full pass over the same pin. Every scored fixture came out
+**identical to the 2026-09-15 numbers** - the same page classes, the same slack
+bytes, the same `truth_pct`, the same two violations - which is the strongest
+reproduction claim this page can make: two clusters, built from scratch from one
+checkout, agreeing cell for cell. What is *not* stable between runs is timing:
+the concurrency cases, the lock-timeout cancellations and the elapsed-time columns
+move by a few milliseconds and, in the writer case, by a census or two.
 
 ### Short answer
 
@@ -402,7 +443,7 @@ never-churned control reads **48.09** while `REINDEX` returns **nothing**, and a
 index on an empty table reads **49.80**. See
 [The bloat percentage column](#the-bloat-percentage-column).
 
-**Scored on 2026-09-15 under [Mandatory GIN Bloat
+**Scored on 2026-09-16 under [Mandatory GIN Bloat
 Tests](../../common-concepts/mandatory-gin-bloat-tests.md)**, on an isolated 17.11
 server, with the declared kind of every column filed before the first fixture
 existed and `REINDEX INDEX` as the oracle over **19 fixtures**:
@@ -570,7 +611,7 @@ superuser requirement in raw-page readers are correctly identified. The
 own superuser checks. Keep the `OFFSET 0` page-read boundary: the planner rejects
 pull-up of a subquery with an offset or a volatile target list
 ([pgstattuple.c#pgstat_relation](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L260-L296),
-[pgstatindex.c#pgstatginindex_internal](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L507-L576),
+[pgstatindex.c#pgstatginindex_internal](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L507-L577),
 [pgstattuple--1.4--1.5.sql:49-57](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L49-L57),
 [rawpage.c:150-173](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L150-L173),
 [prepjointree.c:1689-1701](../../../../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1689-L1701),
@@ -848,8 +889,9 @@ step, ran no census, and declared nothing before it scored.
    cluster answered `ERROR: cannot execute VACUUM during recovery`,
    `ERROR: recovery is in progress` for `gin_clean_pending_list` and
    `ERROR: cannot execute ANALYZE during recovery`, while every census function
-   kept working (`f6_slack_gin ok blocks=482`, `pgstatginindex` `2|0|0`) — so a
-   standby census reads whatever state replay has produced.
+   kept working (`f5_deleted_gin ok blocks=898`, `f6_slack_gin ok blocks=898`,
+   `pgstatginindex` `2|0|0`) — so a standby census reads whatever state replay has
+   produced.
    For this step, require completed index cleanup: `INDEX_CLEANUP OFF` disables
    the callback, and the failsafe can disable it even when cleanup was requested
    ([vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401),
@@ -885,9 +927,12 @@ step, ran no census, and declared nothing before it scored.
 
 The protocol's declare-then-score rule says every published column is filed as a
 lower bound, an upper bound or a level *before* the run. This run's `declare` stage
-wrote the table below into the fixture database at **11:38:28**, and the first
-fixture statement ran at 11:38:29, so the declaration cannot have been written
-around the results.
+wrote the table below into the fixture database at **14:17:54.267**, the `fixtures`
+stage started only after that stage returned, and the first census of a fixture ran
+at **14:18:09.165** - fifteen seconds later - so the declaration cannot have been
+written around the results. The claim column below is the `claim` text the stage
+filed, shortened where a cell would not fit; the artefact is
+`out/00-declarations.txt`.
 
 | Column | Declared kind | The claim that was scored |
 |---|---|---|
@@ -1030,10 +1075,11 @@ Design points that are not cosmetic:
 
 - **`OFFSET 0` keeps the page read single.** `get_raw_page` is volatile and the
   subquery is not flattened, so the page is fetched once and the same value feeds
-  both LATERAL calls. Measured with `EXPLAIN (ANALYZE, BUFFERS)` on a 1235-block
-  index: this form reports **1234** shared hits, the naive form that calls
-  `get_raw_page` inside each function reports **2468** — exactly twice, one read
-  per function call.
+  both LATERAL calls. Measured with `EXPLAIN (ANALYZE, BUFFERS)` on the 1,236-block
+  `f3_fresh_gin`: this form reports **1265** shared hits, the naive form that calls
+  `get_raw_page` inside each function reports **2499** — one read per block against
+  two, plus the same catalog reads either way. See
+  [Cost of the census](#cost-of-the-census).
 - **A NULL result means `PageIsNew`, which tests `pd_upper == 0`.** This is not
   a check that every byte is zero
   ([bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234)).
@@ -1065,11 +1111,12 @@ Design points that are not cosmetic:
   including rows assigned by the fallback `ELSE`. Equality does not prove correct
   classification or an unchanged index; the raw reader locks one page at a time
   ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198)).
-  It held on all 8 selected GIN indexes in the historical sandbox. Entry-tree
-  *internal* pages are the class that makes the
+  It held on **27 of 27** censused indexes in this run, as it has in every run this
+  page records. Entry-tree *internal* pages are the class that makes the
   `ELSE` arm necessary: their flags word is 0, so `gin_page_opaque_info` returns
-  an empty array rather than a NULL row, and each of the three rebuilt `tsvector`
-  fixtures held exactly 6 of them beside 1193 entry leaves.
+  an empty array rather than a NULL row, and they are the difference between the
+  census's `entry_pages` and the probe's `entry_leaf_pages` — on `f3_fresh_gin`,
+  1,200 entry pages are 1,194 leaves plus 6 internal ones.
 
 ### The guarded census statement
 
@@ -1521,8 +1568,8 @@ failed. On the two metapage corruptions below it reads
 Agreement, measured when the revision was filed on 2026-09-08 over eight rebuilt
 fixtures in two independently built databases: **240 of 240 cells identical** to the
 guarded statement, 208 of 208 shared cells identical to the baseline statement, and
-240 of 240 identical between the two databases. The 2026-09-15 run scored the
-derived text alone, so it has no new cell-for-cell comparison to add; what it does
+240 of 240 identical between the two databases. Every run since has scored the
+derived text alone, so none has a new cell-for-cell comparison to add; what they do
 add is the eight corruption shapes, where the derived text survived all seven
 SQL-visible patches in one multi-index report and the baseline text cannot
 ([Adversarial and acceptance cases](#adversarial-and-acceptance-cases)). Its cost
@@ -1589,7 +1636,7 @@ Four things to note about it.
 - **`malformed_pages` catches a corrupted `pd_lower` that the census absorbs
   silently.** With one entry page's `pd_lower` patched up by one byte, the census
   still says `ok` and reports one byte less entry slack than its untouched twin —
-  25,659 against 25,660 on the 2026-09-15 pair — and the published probe returns
+  25,659 against 25,660 on the 2026-09-16 pair — and the published probe returns
   byte-identical output. The derived probe reports `malformed_pages 1`.
 - **The counter is restricted to entry-class pages on purpose.** On posting-tree
   pages `pd_lower` is a data-area offset, not a line-pointer count: compressed
@@ -1599,12 +1646,14 @@ Four things to note about it.
   [ginblock.h#PostingItem](../../../../raw/postgres-17/src/include/access/ginblock.h#L182-L188)). An
   unrestricted test flagged 15 pages on `f1_churn_gin`, 44 on `f2_pending_gin`, 64
   on `f5_deleted_gin` and 192 on `f6_slack_gin`, every one a healthy data page with
-  residue 2; restricted to `{leaf}` and `{}` it read `malformed_pages` 0 on all 19
-  scored fixtures of the 2026-09-15 run, and 1 on the one index whose `pd_lower`
+  residue 2 — measured in the 2026-09-08 pass with an unrestricted variant of the
+  probe, which the published script deliberately does not carry. The restriction to
+  `{leaf}` and `{}` is what the script runs, and it read `malformed_pages` 0 on all
+  19 scored fixtures of the 2026-09-16 run, and 1 on the one index whose `pd_lower`
   was patched.
 - **Every published column is unchanged.** The derived probe reproduced all four
   columns of the published probe exactly when the revision was filed, and it is the
-  text the 2026-09-15 run used on all 19 scored fixtures: `entry_leaf_tuples`
+  text the 2026-09-16 run used on all 19 scored fixtures: `entry_leaf_tuples`
   100,056 on `f1_churn_gin` and 50,028 on `f3_fresh_gin`, the same two numbers the
   published probe read in every earlier run of those fixtures.
 
@@ -1641,16 +1690,16 @@ first:
 
 | Second session ran | Result |
 |---|---|
-| `INSERT INTO tl_lock VALUES (-1, '{1}')` | blocked, cancelled at **2005 ms** |
+| `INSERT INTO tl_lock VALUES (-1, '{1}')` | blocked, cancelled at **2006 ms** |
 | `VACUUM tl_lock` | blocked, **2006 ms** |
-| `ANALYZE tl_lock` | blocked, **2005 ms** |
+| `ANALYZE tl_lock` | blocked, **2006 ms** |
 | `REINDEX INDEX l1_lock_gin` | blocked, **2005 ms** |
 | `REINDEX INDEX CONCURRENTLY l1_lock_gin` | blocked, **2005 ms** |
-| `VACUUM FULL tl_lock` | blocked, **2005 ms** |
-| `DROP INDEX l1_lock_gin` | blocked, **2006 ms** |
+| `VACUUM FULL tl_lock` | blocked, **2006 ms** |
+| `DROP INDEX l1_lock_gin` | blocked, **2005 ms** |
 | `CLUSTER tl_lock USING tl_lock_pkey` | blocked, **2005 ms** |
 | `SELECT count(*) FROM tl_lock` | **succeeded**, 6 ms, 20,000 rows |
-| `SELECT gin_clean_pending_list('l1_lock_gin')` | **succeeded**, 6 ms |
+| `SELECT gin_clean_pending_list('l1_lock_gin')` | **succeeded**, 4 ms, returning 0 |
 
 Every cancellation reported `canceling statement due to lock timeout`. The lock
 experiment runs on its own fixture rather than on a scored one, because one of the
@@ -1664,7 +1713,7 @@ vacuumed yet:
 | Loop | Censuses | What they read |
 |---|---|---|
 | no lock, censuses back to back across one VACUUM of `tr_race` | 5 during the VACUUM, 3 after | the 5 read **five different** deleted-page counts between 0 and 768 on a file that stayed at 898 blocks, and 4 of the 5 were flagged `vacuum or analyze in progress`; the 3 after read `ok, 768` |
-| protocol lock held on `tr2_race`, its VACUUM queued behind | 20 | **20 of 20 identical**, `ok` with 0 deleted pages. The queued VACUUM waited **3425 ms**, then reported `898 in total, 768 newly deleted, 768 currently deleted, 0 reusable`, and the next census read 768 |
+| protocol lock held on `tr2_race`, its VACUUM queued behind | 20 | **20 of 20 identical**, `ok` with 0 deleted pages. The queued VACUUM waited **3395 ms**, then reported `898 in total, 768 newly deleted, 768 currently deleted, 0 reusable`, and the next census read 768 |
 
 That is the difference between detecting a mixed-instant reading and not producing
 one, and the queued VACUUM shows the protocol delays maintenance rather than
@@ -1697,7 +1746,7 @@ on a production box it is a matter of not running it
 
 Two costs to weigh before using it. The lock blocks every writer on the table for
 the whole census — this run's locked decide pass over 28 GIN indexes and 15,201
-blocks held `ShareRowExclusiveLock` on every table in the database for **190 ms**,
+blocks held `ShareRowExclusiveLock` on every table in the database for **172 ms**,
 but the census is one buffer read per block, so a multi-GB index is a different
 proposition — so `lock_timeout` and a maintenance window matter. And the privilege
 is not `SELECT`: `LockTableAclCheck` accepts `MAINTAIN`, `UPDATE`, `DELETE` or
@@ -1713,7 +1762,7 @@ practice the census already needs superuser for its raw reads, so this binds onl
 One section replaces the two earlier pass-by-pass records, because the cases that
 survived the re-port were re-run and the ones that could not be re-run are gone; see
 [What this pass removed, and why](#what-this-pass-removed-and-why). Every result
-below is from the 2026-09-15 run described under
+below is from the 2026-09-16 run described under
 [Measurement Script](#measurement-script), and the statement under test is the
 derived census unless a row says otherwise.
 
@@ -1736,7 +1785,7 @@ metapage fields
 | `s5_gin` | two all-zero blocks appended | 9 blocks, `new_pages` 2, waste **22.22%**, `bloat_pct` 57.03, status `metapage page counts predate the file length` |
 | `s6_gin` | block 0 `pd_upper` and `pd_special` both 8184 -> 8176 | `metapage unreadable; metapage special area 16 bytes, expected 8` |
 | `s7_gin` | block 1 `pd_lower` +1 | **`ok`**, and one byte less entry slack than its twin (25,659 against 25,660) — no signal at all from the census |
-| `s8_gin` | block 0 `pd_special` 8184 -> 8168, `pd_upper` left at 8184 | `ERROR: invalid page in block 0 of relation base/17536/18552` — the read never reaches any SQL guard, and it takes the whole multi-index report with it |
+| `s8_gin` | block 0 `pd_special` 8184 -> 8168, `pd_upper` left at 8184 | `ERROR: invalid page in block 0 of relation base/17536/18557` — the read never reaches any SQL guard, and it takes the whole multi-index report with it. The path is a database OID and a relfilenode, so it is the one literal in this table that moves between runs |
 
 Three things follow. The derived statement **survived all seven SQL-visible patches
 in one multi-index report**, which is the difference the guards buy: the baseline
@@ -1801,6 +1850,7 @@ excludes it, `get_raw_page` refuses with
 `cannot access temporary indexes of other sessions`, and `pg_freespace` answers
 anyway with 2 rows. The session's own temporary index is excluded by the
 `relpersistence` filter and readable by `get_raw_page`.
+
 ### The bloat percentage column
 
 `bloat_pct` is the added derived column — dead pages plus live-page
@@ -1886,7 +1936,7 @@ All four are required by [The four mandatory
 cross-checks](../../common-concepts/mandatory-gin-bloat-tests.md#the-four-mandatory-cross-checks),
 which defines what each one compares and in which direction it can fail. Below is
 the SQL this page runs for them, and what they read on the 25 censused indexes of
-the 2026-09-15 run.
+the 2026-09-16 run.
 
 **FSM.** `pg_freespace` reports the recorded value per block
 ([pg_freespacemap.c#pg_freespace](../../../../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.c#L24-L50)),
@@ -1926,7 +1976,7 @@ one-directional and behaved that way: `fsm_free_pages <= deleted + new` held **2
 25**, with exact equality on the ten fixtures whose deleted pages had become
 recyclable — `f2` 490/490, `f5` 768/768, `f8` 768/768, `f9c` 352/352, `f15` 197/197,
 `a1` 49/49, `f7` 66 of 144, `g25` 46/46, `g50` 39/39, `g75` 45/45, `g100` 39/39 —
-and a deliberate shortfall on the five whose pages were deleted but not yet
+and a deliberate shortfall on the four whose pages were deleted but not yet
 recyclable: `f1` 14 deleted against 0 free, `f12` 282 against 0, `f14` 14 against 0,
 `g0` 46 against 0.
 
@@ -1943,7 +1993,7 @@ The guarded and derived statements take this second reading themselves and print
 as `blocks_after_census`, flagging any difference in `status`. Under the protocol
 lock it held on **19 of 19** scored fixtures, and the oracle's before-size equalled
 the decide census's `main_fork_bytes` on 19 of 19 as well, which is the same bracket
-one step wider. Without the lock it is the check that earns its place: 12 of 34
+one step wider. Without the lock it is the check that earns its place: 11 of 33
 censuses taken under a writer stream were flagged `size changed during scan`; see
 [Concurrency](#concurrency-a-census-of-a-busy-index-is-a-mixed-instant-reading).
 
@@ -1957,11 +2007,15 @@ index "f5_deleted_gin": pages: 898 in total, 0 newly deleted, 0 currently delete
 ```
 
 Its `reusable` number agreed with the FSM count on **every** fixture that produced a
-line — `f2` 490, `f15` 197, `f7` 66, `g25` 46, `g50` 39, `g75` 45, `g100` 39, and 0
-where the FSM held nothing — which is expected, because both come from
+line — `f5` 768, `f2` 490, `f15` 197, `f7` 66, `g25` 46, `g50` 39, `g75` 45, `g100`
+39, and 0 where the FSM held nothing — which is expected, because both come from
 `ginvacuumcleanup`'s own `totFreePages`. It agrees only for the VACUUM that produced
-the state: `f5`'s three settle VACUUMs printed `768 newly deleted, 768 currently
-deleted, 0 reusable`, then `0 / 0 / 0`, then `0 / 0 / 768 reusable`, and its B-tree
+the state: `f5`'s settle sequence printed `768 newly deleted, 768 currently deleted,
+0 reusable`, then `0 / 0 / 768 reusable` from the VACUUM that followed the three
+burned transaction ids, and the same line twice more; the `0 / 0 / 0` shape belongs
+to `f8_horizon`, whose second VACUUM finds nothing recyclable because a snapshot is
+still held ([Deleted pages need the horizon to move before they
+count](#deleted-pages-need-the-horizon-to-move-before-they-count)). `f5`'s B-tree
 sibling on the same table printed `551 in total, 0 newly deleted, 520 currently
 deleted, 520 reusable` — the shape GIN never prints, because GIN increments
 `pages_deleted` only for pages it deleted in this run.
@@ -1969,11 +2023,15 @@ deleted, 520 reusable` — the shape GIN never prints, because GIN increments
 **Metapage page-type counts.** After a VACUUM, `n_entry_pages` and `n_data_pages`
 are `ginvacuumcleanup`'s own census
 ([ginvacuum.c:766-789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L766-L789)), so they must
-match the SQL census of live pages. `n_entry_pages` matched **25 of 27** censused
-indexes; the two that did not are the two whose metapage is stale by construction,
-and both are off by exactly one page — the auto-analyze stand-in `a1_analyze_gin`
-(42 against 43) and the census table `c1_analyzed_gin` (5 against 6), each of which
-grew after its last cleanup.
+match the SQL census of live pages. `n_entry_pages` matched **24 of 27** censused
+indexes, and all three misses are indexes whose metapage is stale by construction —
+each grew, or had its pending list flushed, after its last cleanup. Two are off by
+exactly one page: the auto-analyze stand-in `a1_analyze_gin` (42 against 43) and the
+census table `c1_analyzed_gin` (5 against 6). The third is the lock fixture
+`l1_lock_gin` (**9 against 34**), whose 293 pending pages were flushed by
+`gin_clean_pending_list()` with no VACUUM after it; that is the same mechanism as
+`a1`, at a size where it is impossible to miss. The 2026-09-15 filing counted two
+misses and 25 agreements; this run counts three and 24, on both of its passes.
 
 The data-page bucket needs both of the code's caveats, and together they make an
 exact identity rather than a rule of thumb. `GinPageIsRecyclable` is tested before
@@ -1991,8 +2049,9 @@ That held on **25 of 25** indexes: plain agreement where nothing was deleted (`f
 (`f1` 63 + 14 = 77, `f12` 1401 + 282 = 1683, `f14` 63 + 14 = 77, `g0` 87 + 46 =
 133), and the partial case where some were (`f7` 111 + 144 − 66 = 189). A live
 `list` page is counted in no bucket at all, which is why `n_total_pages` can exceed
-`1 + n_entry_pages + n_data_pages`; `n_total_pages = blocks` on 25 of 27, failing
-only on the same two stale-metapage indexes (43 against 93, and 6 against 7).
+`1 + n_entry_pages + n_data_pages`; `n_total_pages = blocks` on **24 of 27**, failing
+only on the same three stale-metapage indexes (43 against 93, 6 against 7, and 10
+against 328).
 
 ### The fixtures
 
@@ -2366,8 +2425,8 @@ exactly 57,344 bytes, or seven blocks.
 ### Counting entry tuples, and what that fixes
 
 The census can detect the failure case after all, because `pd_lower` counts line
-pointers. GIN entry pages are ordinary item-pointer pages — `entryPreparePage` and
-`entrySplitPage` place tuples with `PageAddItem`
+pointers. GIN entry pages are ordinary item-pointer pages — `entryExecPlaceToPage`
+and `entrySplitPage` place tuples with `PageAddItem`
 ([ginentrypage.c:561-568](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L561-L568),
 [ginentrypage.c:683-691](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L683-L691)) — so
 on an entry page `pd_lower` is `SizeOfPageHeaderData + nitems * sizeof(ItemIdData)`
@@ -2418,15 +2477,33 @@ downlinks over 6 internal pages against 1,194 leaves, which is a root of 5 plus
 1,194.
 
 Subtract the live key count and you have the dead-key population that the payload
-model trips over. It separates the two churn shapes exactly:
+model trips over. Since 2026-09-16 the *after* column is a second probe pass rather
+than a remembered number: the `probe_after` stage runs the same text again once the
+oracle has rebuilt every scored index, so `dead_entry_tuples` is
+`before − after` on the same index ([the script](#the-script), artefact
+`out/18-entry-tuple-probe-after.txt`). It separates the two churn shapes exactly:
 
 | Index | entry tuples before | after `REINDEX` | dead | model error |
 |---|---|---|---|---|
 | `f1_churn_gin` (term set replaced) | 100,056 | 50,028 | **50,028** | +19.94% |
 | `f7_reupdate_gin` (same terms rewritten) | 50,030 | 50,029 | **1** | +0.07% |
 | `g0_gin` (0% of keys replaced) | 100,011 | 100,010 | **1** | +0.09% |
+| `g25_gin` | 125,020 | 100,019 | **25,001** | +12.62% |
+| `g50_gin` | 150,020 | 100,019 | **50,001** | +25.16% |
+| `g75_gin` | 175,020 | 100,019 | **75,001** | +37.69% |
 | `g100_gin` (100% replaced) | 200,020 | 100,010 | **100,010** | +50.19% |
 | `f11_json_gin` (`jsonb_path_ops`, every key replaced) | 297,385 | 148,694 | **148,691** | +45.58% |
+| `f13_btgin_gin` (`btree_gin`, every value moved) | 40,022 | 20,011 | **20,011** | +33.89% |
+| `f14_multi_gin` (multicolumn, both keys replaced) | 102,056 | 51,028 | **51,028** | +31.31% |
+| `f15_partial_gin` (partial, keys and predicate rewritten) | 555 | 368 | **187** | +2.24% |
+| `f12_trgm_gin` (`gin_trgm_ops`, trigram sources replaced) | 1,359 | 1,329 | **30** | +1.90% |
+
+The other seven scored fixtures read **0 dead entry tuples** — `a1`, `f2`, `f3`,
+`f4`, `f5`, `f6` and `m1`, none of which retires a key — and the model's error on
+them runs from −0.16% to +3.12%. `f15` and `f12` are the two that break the
+correlation in the other direction: a large dead share of a *small* key population
+costs the model almost nothing, because the error is linear in dead **tuples**, not
+in the dead fraction.
 
 What the probe does **not** buy is a corrected prediction: a dead key's tuple is
 just the key with an empty posting list while a live key's carries its TIDs, so
@@ -2600,9 +2677,15 @@ with its `status` column:
 | Case | Censuses during the work | Flagged | What they read |
 |---|---|---|---|
 | A: one VACUUM deleting 768 posting-tree pages of an 898-block index | 5 | 4 of 5, `vacuum or analyze in progress` | **five different** deleted-page counts between 0 and 768 on a file that never changed size |
-| B: the same deletions with the protocol lock held | 20 | 0 of 20 | **20 of 20 identical**; the VACUUM waited 3425 ms and ran after `COMMIT` |
+| B: the same deletions with the protocol lock held | 20 | 0 of 20 | **20 of 20 identical**; the VACUUM waited 3395 ms and ran after `COMMIT` |
 | C: `REINDEX INDEX CONCURRENTLY` | 3 | 2 of 3, `index build in progress` | 898 blocks with 768 deleted, then the swapped-in 98-block index with 0 deleted; no error, and no census straddled the swap |
-| D: a writer stream into a `fastupdate` index | 34 | **34 of 34** | the file grew 53 → 662 blocks, 21 distinct deleted-page readings; 12 censuses were flagged `size changed during scan`, 30 `pending count disagrees with metapage`, and all 34 `metapage page counts predate the file length` |
+| D: a writer stream into a `fastupdate` index | 33 | **33 of 33** | the file grew 59 → 662 blocks, 20 distinct deleted-page readings; 11 censuses were flagged `size changed during scan`, 29 `pending count disagrees with metapage`, and all 33 `metapage page counts predate the file length` |
+
+Case D is the one row of the four that does not repeat: the writer stream races the
+census loop, so how many censuses land and what they see is a property of the
+machine. The first of this review's two passes read 34 censuses, 21 distinct
+deleted-page readings and a 58-block start; the second read the 33, 20 and 59 above.
+Cases A, B and C came out identical on both passes.
 
 Case A is the one the page used to call undetectable by every cross-check, and the
 progress views do catch it whenever the VACUUM is running at either end of the scan
@@ -2633,20 +2716,22 @@ Measured on the run's own database, `shared_buffers = 256MB`, everything warm:
 
 | What | Buffers | Elapsed |
 |---|---|---|
-| the whole database: 28 GIN indexes, 15,201 blocks | `shared hit=15816` | 126.7 / 162.4 / 124.6 ms over three runs |
-| one 1,236-block index, single-read form | `shared hit=1265` | 11.8 ms |
-| the same index, naive form calling `get_raw_page` inside each function | `shared hit=2499` | 8.2 ms |
+| the whole database: 28 GIN indexes, 15,201 blocks | `shared hit=15816` | 119.0 / 119.7 / 119.6 ms over three runs |
+| one 1,236-block index, single-read form | `shared hit=1265` | 10.0 ms |
+| the same index, naive form calling `get_raw_page` inside each function | `shared hit=2499` | 6.8 ms |
 
 The buffer count is the point of the `OFFSET 0` subquery: 1,265 against 2,499 is one
 read per block against two, and 15,816 over a 15,201-block corpus is one read per
-block plus the catalog. What it is **not** is a time saving — on a fully cached
-index the naive form was the faster of the two here, because it trades a second
-buffer pin for a simpler plan. Choose the single-read form for the I/O, not for the
-latency.
+block plus the catalog. All three buffer counts are the same on every run this page
+records; the elapsed times are not, and moved by up to 35% between this review's two
+passes. What the single-read form is **not** is a time saving — on a fully cached
+index the naive form was the faster of the two on both passes, because it trades a
+second buffer pin for a simpler plan. Choose the single-read form for the I/O, not
+for the latency.
 
 Two costs the run did not re-measure, and they are not the same thing. The first is
 the write-blocking cost of the protocol lock, which is measured in
-[The measurement protocol](#the-measurement-protocol): 190 ms for this
+[The measurement protocol](#the-measurement-protocol): 172 ms for this
 15,201-block corpus, and one buffer read per block on anything larger. The second is
 what a census does to a production cache: this pass did not re-run the
 `pg_buffercache` experiment the page used to carry, because it was a synthetic
@@ -2685,7 +2770,7 @@ help: the check is not an ACL. By contrast `pgstatginindex` dropped its
 `gin_clean_pending_list` requires ownership, "comparable to privileges needed for
 VACUUM" ([ginfast.c:1061-1064](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1061-L1064)).
 
-Verified on 2026-09-15 with a role holding only `pg_stat_scan_tables` and `USAGE` on
+Verified on 2026-09-16 with a role holding only `pg_stat_scan_tables` and `USAGE` on
 the schema: on `f6_slack_gin`, `pgstatginindex` returned `2 | 0 | 0` and
 `pg_freespace` returned all **898** rows, while `get_raw_page` returned
 `ERROR: must be superuser to use raw page functions` at the census's first read.
@@ -2695,7 +2780,7 @@ constant but not the census.
 
 ### Refusals, silent answers, and other traps
 
-Every row of this table is a source claim with a citation; the rows the 2026-09-15
+Every row of this table is a source claim with a citation; the rows the 2026-09-16
 run re-executed are `pgstattuple` on a valid GIN index, `pgstatginindex` and
 `gin_clean_pending_list` on an invalid one, both temporary cases and the recovery
 refusals, and they answered exactly as filed. The partitioned-index and
@@ -2737,7 +2822,7 @@ Also worth knowing: an index whose `indisvalid` is false is still fully readable
 `get_raw_page`, which has no validity check. The census statement filters those
 indexes out to keep its results interpretable, but dropping `AND x.indisvalid`
 makes it the only working way to size the waste in a failed
-`CREATE INDEX CONCURRENTLY` leftover — re-verified on 2026-09-15 against
+`CREATE INDEX CONCURRENTLY` leftover — re-verified on 2026-09-16 against
 `tinv_bad`, left `indisvalid` false, `indisready` false and `indislive` true by a
 concurrent build whose expression divided by zero: the census returned no row for
 it, `pgstatginindex` refused with `index "tinv_bad" is not valid`,
@@ -2755,10 +2840,10 @@ it, `pgstatginindex` refused with `index "tinv_bad" is not valid`,
 `lock_timeout = '2s'` was exercised ten times in this run, from the other side of
 the protocol lock: every one of the eight conflicting commands was cancelled between
 **2005 and 2006 ms** with `canceling statement due to lock timeout`, while
-`SELECT count(*)` and `gin_clean_pending_list()` went through in 6 ms
+`SELECT count(*)` went through in 6 ms and `gin_clean_pending_list()` in 4 ms
 ([The measurement protocol](#the-measurement-protocol)). With `lock_timeout = 0` the
 same kind of wait is a wait and not an error: the queued VACUUM of the race fixture
-sat for **3425 ms** behind a census transaction and then ran normally. The
+sat for **3395 ms** behind a census transaction and then ran normally. The
 `statement_timeout` leg — cancelling a census mid-scan rather than mid-wait — was
 not re-run in this pass.
 
@@ -2768,7 +2853,7 @@ not re-run in this pass.
 protocol is a PostgreSQL 17 protocol, so nothing here is a scored GIN waste claim:
 what follows is *statement portability*, measured in the two-major pass of
 2026-09-11 against a 12.2 server built from this repo's v12 pin, and **not re-run**
-by the 2026-09-15 protocol run. Every per-fixture 12.2 number the page used to carry
+by the 2026-09-16 protocol run, nor by the 2026-09-15 one. Every per-fixture 12.2 number the page used to carry
 was scored against the superseded corpus and is gone with it; what is kept below is
 the part that is about the statements rather than about the fixtures.
 
@@ -2902,7 +2987,7 @@ everything whose recipe now lives in [the script](#the-script).
 The rules that bind any v17 GIN waste claim are defined under [The reading
 rules](../../common-concepts/mandatory-gin-bloat-tests.md#the-reading-rules). The
 list below is this page's own: the same rules as this page measured them on
-2026-09-15, with two changes the run forced.
+2026-09-16, with the two changes the 2026-09-15 run forced and this run reproduced.
 
 - **`whole_page_waste_pct` is a level, not a lower bound.** This is the change. The
   run declared it a lower bound and it failed on 2 of 19 fixtures — `f2_pending_gin`
@@ -2954,7 +3039,7 @@ list below is this page's own: the same rules as this page measured them on
   between two censuses in the same locked transaction
   ([The measurement protocol](#the-measurement-protocol)).
 - **Read a busy index twice, and re-read `pg_relation_size` after the census.** The
-  bracket caught 12 of 34 censuses taken under a writer stream; the progress views
+  bracket caught 11 of 33 censuses taken under a writer stream; the progress views
   caught 4 of the 5 that overlapped a VACUUM and 2 of the 3 that overlapped a
   concurrent rebuild. A maintenance command that starts and finishes between the two
   progress reads is still invisible.
@@ -3008,11 +3093,11 @@ toolchain, a shell and this page.
 |---|---|
 | Purpose | Builds PostgreSQL 17.11 out of tree from this repository's pinned checkout and runs this page's whole GIN waste programme under the five phases of [Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md): the filed declarations, 19 scored fixtures and 6 coverage fixtures, the simulated auto-analyze census, the locked decide pass, a measured `REINDEX INDEX` oracle per fixture, the four cross-checks, the entry-tuple and layout probes, eight corruption shapes, four concurrency cases, a physical standby, and the privilege, refusal, timeout, budget-sweep and cost cases |
 | Invocation | `bash .wiki-runtime/tmp/ginw5/gin_waste_protocol.sh [stage ...]`, run from the repository root. With no arguments it runs every stage except `clean`. Extract the fenced script below to that path first |
-| Stages | Default order: `build check init declare fixtures coverage census decide crosscheck probe standby oracle score sweep race corrupt report`. `build` configures and installs out of tree and skips when the binary exists; `check` runs `make check` plus the five contrib suites this page uses; `init` initdbs, writes the four cluster settings and creates the three databases and five extensions; `declare` files the declared kind of every published column **before any fixture exists**; `fixtures` runs the build phase, the baseline census, then the churn phase (writes, settle, maintenance) and the late baseline; `coverage` runs the held-snapshot, disabled-cleanup, stale-catalog, privilege, refusal, measurement-lock and pending-list-hole cases; `census` recomputes the launcher's analyze verdict for every table and analyzes the ones it names; `decide` takes `SHARE ROW EXCLUSIVE` on every fixture table in one transaction and censuses inside it; `crosscheck` runs the FSM, metapage and identity checks; `probe` runs the entry-tuple probe per fixture and the layout probe once; `standby` takes a `pg_basebackup` replica and tries the three refusals on it; `oracle` rebuilds each scored index between two `pg_relation_size` readings; `score` joins the declarations to the oracle and prints the verdicts; `sweep` rebuilds one index at three memory budgets and measures the census's cost; `race` runs the four concurrency cases in their own database; `corrupt` patches eight index files with the server stopped, in two cycles; `report` collects everything into `out/summary.txt`. `clean` is not in the default order and must be run last |
+| Stages | Default order: `build check init declare fixtures coverage census decide crosscheck probe standby oracle probe_after score sweep race corrupt report`. `build` configures and installs out of tree and skips when the binary exists; `check` runs `make check` plus the five contrib suites this page uses; `init` initdbs, writes the four cluster settings and creates the three databases and five extensions; `declare` files the declared kind of every published column **before any fixture exists**; `fixtures` runs the build phase, the baseline census, then the churn phase (writes, settle, maintenance) and the late baseline; `coverage` runs the held-snapshot, disabled-cleanup, stale-catalog, privilege, refusal, measurement-lock and pending-list-hole cases; `census` recomputes the launcher's analyze verdict for every table and analyzes the ones it names; `decide` takes `SHARE ROW EXCLUSIVE` on every fixture table in one transaction and censuses inside it; `crosscheck` runs the FSM, metapage and identity checks; `probe` runs the entry-tuple probe per fixture and the layout probe once; `standby` takes a `pg_basebackup` replica and tries the three refusals on it; `oracle` rebuilds each scored index between two `pg_relation_size` readings; `probe_after` runs the entry-tuple probe a second time on the rebuilt indexes, so the dead-key population is `before − after` rather than a remembered number; `score` joins the declarations to the oracle and prints the verdicts; `sweep` rebuilds one index at three memory budgets and measures the census's cost; `race` runs the four concurrency cases in their own database; `corrupt` patches eight index files with the server stopped, in two cycles; `report` collects everything into `out/summary.txt`. `clean` is not in the default order and must be run last |
 | Environment | `REPO` (`$PWD`), `SRC17` (`$REPO/raw/postgres-17`), `SANDBOX` (`$REPO/.wiki-runtime/tmp/ginw5`), `JOBS` (`8`), `PORT` (`55417`, and the standby takes `PORT + 1`), `ROWS` (`200000`), `MWM` (`64MB`), `STMT_TIMEOUT` (`600s`), `LOCK_TIMEOUT` (`2s`), `RACE_LOOPS` (`40`) |
 | Prerequisites | See [Prerequisites](#prerequisites) |
 | Output | Everything lands under `$SANDBOX/out/`; see [Where the results land](#where-the-results-land). Read `out/summary.txt` first |
-| Runtime | About 13 minutes from an empty sandbox on the recorded host: 83 s for the build, 55 s for the six regression suites, 67 s for the fixtures, 33 s for the coverage cases, under a second each for the census, decide, crosscheck and probe stages, 10 s for the oracle, 5 s for score and sweep, 7 s for the race cases — and **8.5 minutes for the standby stage**, nearly all of it `pg_basebackup -X stream` copying the cluster. Skip `standby` and a re-run from a built tree is about 3 minutes |
+| Runtime | About 12.5 minutes from an empty sandbox on the recorded host: 56 s for the build, 22 s for the six regression suites, 65 s for the fixtures, 34 s for the coverage cases, under a second each for the census, decide, crosscheck and probe stages, 9 s for the oracle, under a second for `probe_after` and `score`, 5 s for the sweep, 7 s for the race cases — and **8.5 minutes for the standby stage**, nearly all of it `pg_basebackup -X stream` copying the cluster. Skip `standby` and a re-run from a built tree is about 2.5 minutes |
 | Cleanup | `bash gin_waste_protocol.sh clean` stops the standby if one is still present, stops the primary, reports whether any `postmaster.pid` or matching `postgres` process survived, and deletes the whole sandbox |
 
 ### Prerequisites
@@ -3045,6 +3130,7 @@ toolchain, a shell and this page.
 | `05-oracle.txt`, `06-score.txt`, `07-payload-model.txt` | the rebuild results, the scored bounds with their verdicts, and the payload/fill predictions |
 | `08-crosscheck-fsm.txt`, `09-crosscheck-metapage.txt`, `10-crosscheck-verbose.txt` | the three cross-checks that are not the size bracket, including the `n_data_pages` identity and every `VACUUM VERBOSE` index line the run printed |
 | `11-entry-tuple-probe.txt`, `12-layout-probe.txt` | the per-fixture entry-tuple counts, and the four page-format constants measured on the build |
+| `18-entry-tuple-probe-after.txt` | the same probe on the rebuilt indexes, with `dead_entry_tuples` as the difference |
 | `13-coverage.txt` | the held snapshot, disabled cleanup, stale catalog row, privileges, refusals, the ten locked commands and the pending-list hole |
 | `14-race.txt`, `15-corrupt.txt`, `16-standby.txt`, `17-sweep.txt` | the four concurrency cases, the eight corruption shapes, the standby refusals, and the budget sweep with the cost measurements |
 | `checks.txt`, `check_*.log` | the six regression suites and their logs |
@@ -3056,20 +3142,23 @@ toolchain, a shell and this page.
 
 | Fact | Value |
 |---|---|
-| Date | 2026-09-15, the re-run that scored this page under the protocol |
-| Host | `Linux x86_64`, gcc 13.3.0, 22 cores, `JOBS=20` for the build |
+| Date | 2026-09-16, the review re-run; the whole default order, twice |
+| Host | `Linux x86_64` (WSL2 kernel 6.18), gcc 13.3.0, 22 cores, `JOBS=20` for the build |
 | Server | 17.11 from `786db8dcf168bd9df8f55047337525ac19118b1c`, `--enable-debug --without-icu --without-readline --without-zlib` |
 | Regression | `make check` **All 225 tests passed**; `pageinspect` **All 8**, `pgstattuple` **All 1**, `pg_freespacemap` **All 1**, `btree_gin` **All 30**, `pg_trgm` **All 4** ([regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59)) |
 | Platform facts | `block_size` 8192, `max_data_alignment` 8, `data_page_checksum_version` 0, `MaxFSMRequestSize` 8160 derived and measured two ways |
 | Cluster | `initdb --locale=C --encoding=UTF8`; `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`, `max_wal_size = 2GB`, `wal_level = replica` set in `postgresql.conf` before the first start; port 55417, socket and data directory inside the sandbox |
 | Extensions | `pageinspect` 1.12, `pgstattuple` 1.5, `pg_freespacemap` 1.2, `btree_gin` 1.3, `pg_trgm` 1.6 |
-| Declarations | filed at 11:38:28, before the first fixture statement at 11:38:29 |
+| Declarations | filed at 14:17:54.267; the first fixture census ran at 14:18:09.165 |
 | Corpus | 19 scored fixtures, 6 coverage fixtures, 28 GIN indexes over 15,201 blocks in the scored database, plus 3 in the race database and 8 in the corruption database |
-| Result | 17 lower-bound HELD / 2 VIOLATED, 19 upper-bound HELD, 0 size-bracket failures, 25 of 25 FSM checks within the census, 25 of 25 `n_data_pages` identities exact |
+| Result | 17 lower-bound HELD / 2 VIOLATED, 19 upper-bound HELD, 0 size-bracket failures, 25 of 25 FSM checks within the census, 25 of 25 `n_data_pages` identities exact, 24 of 27 metapage entry-page counts |
+| Reproduction | the two passes of 2026-09-16 and the 2026-09-15 pass agree on every scored cell; only the timing figures and concurrency case D move |
 | Teardown | the `clean` stage stopped the server and deleted the sandbox; see the log entry for the confirmation |
 
-The numbers on this page and the script text below come from that one run. If the
-script is edited afterwards, re-run it before changing any number.
+The numbers on this page and the script text below come from the second of those two
+passes, which is the one the script text below produced; the first differs from it
+only in the `probe_after` stage, which it did not have. If the script is edited
+afterwards, re-run it before changing any number.
 
 ### The script
 
@@ -4278,12 +4367,14 @@ stage_crosscheck() {
   cat "$OUT/10-crosscheck-verbose.txt"
 }
 
-stage_probe() {
-  p "$DB" -q -c "DELETE FROM wiki.probe" || die
+# The entry-tuple probe's text, written once and used by both probe stages:
+# "probe" fills wiki.probe before the rebuild, "probe_after" fills
+# wiki.probe_after after it.  :tbl is the destination, substituted by psql.
+write_probe_sql() {
   cat >"$SQLD/70_probe.sql" <<'SQL'
 SET /* wiki_gin_entry_probe_guards */ statement_timeout = '600s';
 SET /* wiki_gin_entry_probe_guards */ lock_timeout = '2s';
-INSERT INTO wiki.probe
+INSERT INTO :tbl
 WITH /* wiki_gin_entry_probe_derived */ ctl AS (
     SELECT database_block_size::bigint                          AS bs,
            24::bigint                                           AS hdr,
@@ -4316,10 +4407,15 @@ SELECT :'fx', :'idx',
        count(*) FILTER (WHERE flags IS NULL)                           AS undecoded_pages
 FROM pages;
 SQL
+}
+
+stage_probe() {
+  p "$DB" -q -c "DELETE FROM wiki.probe" || die
+  write_probe_sql
   local fx idx
   while IFS='|' read -r fx idx; do
     [ -z "$fx" ] && continue
-    p "$DB" -q -v fx="$fx" -v idx="$idx" -f "$SQLD/70_probe.sql" || die "probe failed for $idx"
+    p "$DB" -q -v tbl=wiki.probe -v fx="$fx" -v idx="$idx" -f "$SQLD/70_probe.sql" || die "probe failed for $idx"
   done < <(q "$DB" "SELECT fixture || '|' || idx FROM wiki.fixture WHERE scored ORDER BY fixture")
   p "$DB" -c "SELECT /* wiki_gin_probe */ fixture, entry_leaf_pages, entry_leaf_tuples,
                      entry_leaf_tuple_bytes, internal_downlinks, malformed_pages, undecoded_pages
@@ -4372,6 +4468,30 @@ SELECT c.bs AS block_size, c.al AS max_data_alignment, e.hdr AS page_header_byte
        ], NULL), '; '), ''), 'ok') AS status
 FROM ctl c CROSS JOIN e CROSS JOIN one o;
 SQL
+}
+
+# The same probe again, after the oracle has rebuilt every scored index, so the
+# dead-key population is measured rather than inferred: entry tuples before the
+# rebuild minus entry tuples after it.  Runs after "oracle" in the default
+# order, and needs wiki.probe to have been filled by the probe stage.
+stage_probe_after() {
+  write_probe_sql
+  p "$DB" -q -c "CREATE TABLE IF NOT EXISTS wiki.probe_after (LIKE wiki.probe);
+                 DELETE FROM wiki.probe_after" || die
+  local fx idx
+  while IFS='|' read -r fx idx; do
+    [ -z "$fx" ] && continue
+    p "$DB" -q -v tbl=wiki.probe_after -v fx="$fx" -v idx="$idx" -f "$SQLD/70_probe.sql" \
+      || die "probe_after failed for $idx"
+  done < <(q "$DB" "SELECT fixture || '|' || idx FROM wiki.fixture WHERE scored ORDER BY fixture")
+  p "$DB" -c "SELECT /* wiki_gin_probe_after */ b.fixture,
+                     b.entry_leaf_tuples AS tuples_before,
+                     a.entry_leaf_tuples AS tuples_after,
+                     b.entry_leaf_tuples - a.entry_leaf_tuples AS dead_entry_tuples,
+                     a.entry_leaf_pages  AS entry_leaf_pages_after,
+                     a.malformed_pages, a.undecoded_pages
+              FROM wiki.probe b JOIN wiki.probe_after a USING (fixture)
+              ORDER BY b.fixture" | tee "$OUT/18-entry-tuple-probe-after.txt"
 }
 
 # ------------------------------------------------------------ coverage stage
@@ -4933,13 +5053,13 @@ stage_clean() {
 
 # ------------------------------------------------------------------ dispatch
 
-DEFAULT_STAGES="build check init declare fixtures coverage census decide crosscheck probe standby oracle score sweep race corrupt report"
+DEFAULT_STAGES="build check init declare fixtures coverage census decide crosscheck probe standby oracle probe_after score sweep race corrupt report"
 STAGES="${*:-$DEFAULT_STAGES}"
 mkdir -p "$OUT" "$SQLD" 2>/dev/null
 note "stages: $STAGES"
 for st in $STAGES; do
   case "$st" in
-    build|check|init|declare|fixtures|coverage|census|decide|crosscheck|probe|oracle|score|sweep|race|corrupt|standby|report|clean)
+    build|check|init|declare|fixtures|coverage|census|decide|crosscheck|probe|probe_after|oracle|score|sweep|race|corrupt|standby|report|clean)
       note "--- stage $st"
       "stage_$st" || die "stage $st failed" ;;
     *) die "unknown stage: $st" ;;
@@ -4950,6 +5070,21 @@ note "done: $STAGES"
 
 ## Context Reviewed
 
+- **2026-09-16 review:** re-read every source citation the page carried at review
+  time against the pin - **605 citations over 284 distinct file-and-line ranges in
+  79 files**, and **607 over 283** once this pass had added two and merged one - by
+  dumping each cited range out of `raw/postgres-17/` and checking it against the
+  claim it backs. Every range is in bounds, none crosses a version, and every
+  one supports its claim; the two repo-wide checks were re-run too
+  (`pages_deleted` is incremented in exactly two places under
+  `src/backend/access/gin/`, and `RelationTruncate`/`smgrtruncate` have zero hits
+  there). Four label-level defects came out of it and are fixed: a `PageAddItem`
+  credited to `entryPreparePage` when it belongs to `entryExecPlaceToPage`, the
+  same symbol in `## Source References`, one function cited as both `L507-L576`
+  and `L507-L577`, and a `## Contents`-adjacent Markdown heading with no blank
+  line before it. Then rebuilt 17.11 out of tree from the pin and ran the whole
+  published programme **twice**; see [Measurement Script](#measurement-script) and
+  [The last run](#the-last-run).
 - **2026-09-15 protocol re-run:** re-read the maintenance, census and stand-in
   source chain in the pinned checkout before drafting - `vacuum()`'s
   vacuum-then-analyze order, `analyze_rel`'s ANALYZE-only cleanup gate and its
@@ -4967,7 +5102,6 @@ note "done: $STAGES"
   the pin and ran the whole programme; see
   [Measurement Script](#measurement-script).
 - **2026-09-05 plan review:** rechecked the seven findings in
-
   [Plan review](#plan-review) against the pinned v17 implementation, and audited
   the original six steps plus the published census and cross-check statements.
   No database server was built or started; the historical observations below
@@ -5237,14 +5371,16 @@ note "done: $STAGES"
 | Churn reaches `mod_since_analyze` only on a flush, and `ANALYZE` zeroes the counter, so publication order decides what the census reads | [pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L117-L122), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L583-L600), [pgstat_relation.c#mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L855-L860), [pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337), [pg_proc.dat#pg_stat_force_next_flush](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L5916-L5920); run: `tc4_hazard` 10,500 against `tc2_declined` 500 |
 | The census reads `n_mod_since_analyze` from `pg_stat_all_tables` under a snapshot it discards between reads | [system_views.sql#launcher-counters](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L688-L690), [guc_tables.c#stats_fetch_consistency](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4966-L4974), [pg_proc.dat#pg_stat_clear_snapshot](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L5911-L5915), [stats.sql#force-flush](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L101-L110) |
 | `n_data_pages` equals live data pages plus deleted-but-not-recyclable ones, because recyclability is tested first | [ginvacuum.c#ginvacuumcleanup-census](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L789); run: the identity held on 25 of 25 indexes |
+| A metapage's entry-page count goes stale on any growth or flush its last cleanup did not see | [ginvacuum.c:786-789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L786-L789), [ginutil.c#ginUpdateStats](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L645-L650); run 2026-09-16: `n_entry_pages` matched 24 of 27, missing on `a1_analyze_gin` 42/43, `c1_analyzed_gin` 5/6 and `l1_lock_gin` 9/34 |
+| The dead-key population is the difference between two probe passes, not an inference | run 2026-09-16 (`probe_after`): `f1` 100,056 → 50,028, `f14` 102,056 → 51,028, `f11` 297,385 → 148,694, `g100` 200,020 → 100,010, against `f7` 50,030 → 50,029 and seven fixtures at 0 |
 | Whole-page waste is not a lower bound on what a rebuild returns | [index.c:3781-3789](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789), [ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691); run: `f2_pending` 64.64 against 58.05 and `a1_analyze` 52.69 against 45.16 |
 | A page that breaks `pd_upper <= pd_special` is refused by the buffer manager before any SQL guard | [bufpage.c#PageIsVerifiedExtended](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L88-L124), [guc_tables.c#zero_damaged_pages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1123-L1136); run: `s8_gin` |
 | Waste is a lower bound only when the in-use core is at least the rebuild | server 2026-09-15: `f2_pending_gin` 64.64% dead against 58.05% returned with a 2,195,456-byte core under a 2,605,056-byte rebuild, and `a1_analyze_gin` 52.69% against 45.16% with 360,448 under 417,792 |
-| A concurrent VACUUM can make a census read anything between 0 and the truth | server 2026-09-15: five censuses across one VACUUM of an unchanging 898-block file read five different deleted-page counts from 0 to 768; four of the five were flagged, one was not |
-| The protocol lock removes that case | server 2026-09-15: 20 censuses inside one `SHARE ROW EXCLUSIVE` transaction were identical, and the queued VACUUM waited 3425 ms and then deleted 768 pages |
+| A concurrent VACUUM can make a census read anything between 0 and the truth | server 2026-09-16: five censuses across one VACUUM of an unchanging 898-block file read five different deleted-page counts from 0 to 768; four of the five were flagged, one was not |
+| The protocol lock removes that case | server 2026-09-16: 20 censuses inside one `SHARE ROW EXCLUSIVE` transaction were identical, and the queued VACUUM waited 3395 ms and then deleted 768 pages |
 | The corpus reproduces from the published script | server 2026-09-15: `f1` 17,571,840 churned, `f2` 2,195,456 then 6,209,536 with 490 pending flushed, `f4` 16,384, `f5` and `f6` 7,356,416, `f7` 11,927,552, and all five churn-sweep sizes and dead-tuple counts, byte for byte and digit for digit against the superseded corpus; `f3` and `f1`'s rebuild came out one entry page larger |
-| Plan review: page gaps exclude retained empty-key entry tuples; a rebuild builds from the heap |
- [ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558), [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406) |
+| The whole scored corpus reproduces across clusters | server 2026-09-16: two full passes on two freshly initdb'd clusters from the same pin returned the same 27-index page census, the same byte and percentage columns, the same 19 `truth_pct` values and the same two lower-bound violations as 2026-09-15; the only movements are elapsed times, three lock-timeout cancellations by 1 ms, the queued-VACUUM wait, and concurrency case D |
+| Plan review: page gaps exclude retained empty-key entry tuples; a rebuild builds from the heap | [ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558), [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406) |
 | Plan review: a pending flush does not perform the full metapage-count refresh | [ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1031-L1091), [ginvacuum.c:754-802](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L754-L802) |
 | Plan review: disabled cleanup and the failsafe can prevent the GIN cleanup callback | [vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178), [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401), [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066), [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335) |
 | Plan review: a raw-page copy releases its locks before the next call | [rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198) |
@@ -5353,6 +5489,8 @@ Renumbered on 2026-09-15, when the page was re-run under the protocol. Entries 1
 through 12 are the gaps that survived the re-run; 13 through 18 are new, and five of
 them exist because the re-run **removed** a fixture that used to answer something.
 The two entries the previous list ended on are closed and recorded as 19 and 20.
+Entry 21 is what the 2026-09-16 review added; the numbering of 1 through 20 is
+unchanged so that the references to it in the body still resolve.
 
 1. **The `ginVersion <> 2` path is untested except by hand.** v17 always writes
    `GIN_CURRENT_VERSION = 2`
@@ -5362,9 +5500,10 @@ The two entries the previous list ended on are closed and recorded as 19 and 20.
    all 25 censused indexes of this run, as in every earlier one. The only version-1
    reading on the page comes from patching a byte in a scratch index file.
 2. **The payload-and-fill model can be diagnosed but not corrected.** The
-   entry-tuple probe measures the dead-key population exactly and the error is
-   linear in it, but turning that into a corrected prediction needs the *size* of a
-   dead entry tuple, which no contrib function exposes. The fill fraction is also
+   entry-tuple probe measures the dead-key population exactly — since 2026-09-16 as
+   a measured difference between two probe passes rather than an inference — and the
+   error is linear in it, but turning that into a corrected prediction needs the
+   *size* of a dead entry tuple, which no contrib function exposes. The fill fraction is also
    still taken from the rebuild it predicts, and this run widens the problem: across
    nineteen rebuilds it ran from 43.28% to 87.96%, and the same index rebuilt at
    4MB is 22% smaller than at 64MB, so the divisor is a property of the rebuild
@@ -5390,6 +5529,10 @@ The two entries the previous list ended on are closed and recorded as 19 and 20.
    for a census straddling a `REINDEX CONCURRENTLY` swap (in three attempts here and
    22 across two earlier servers it always landed between censuses, never inside
    one), or for how wrong a single unflagged census can get in the worst case.
+   The 2026-09-16 review adds a bound on how repeatable the case itself is: on one
+   pass the unlocked loop read 5 censuses with 4 flagged, on the other 4 with 4
+   flagged and a maximum of 721 rather than 768 dead pages, so "four of five" is
+   one machine's arrival pattern and not a property of the engine.
 6. **The opclass sweep is one fixture per opclass.** Six shapes were scored here —
    `array_ops` on `int[]`, `jsonb_path_ops`, `gin_trgm_ops`, `btree_gin`, plain
    `tsvector`, multicolumn and partial. Untested: `jsonb_ops`, `text[]`, weighted
@@ -5462,7 +5605,9 @@ The two entries the previous list ended on are closed and recorded as 19 and 20.
     account for it is the protocol's build-phase settle step, which moves where
     `f1`'s churn puts its new heap tuples and therefore which TIDs a later fresh
     build sees. That was not tested by holding the settle step out, so it is an
-    inference.
+    inference. The 2026-09-16 review makes the *new* number the stable one — both
+    of its passes read 10,125,312 again — which rules out a one-off and leaves the
+    mechanism still untested.
 18. **The `statement_timeout` leg was not re-run.** This run exercised
     `lock_timeout` ten times from the other side of the protocol lock, but not a
     census cancelled mid-scan, which is the case that matters on a multi-GB index.
@@ -5475,8 +5620,8 @@ The two entries the previous list ended on are closed and recorded as 19 and 20.
 20. **Closed: the page is scored under the shared protocol.** [Mandatory GIN Bloat
     Tests](../../common-concepts/mandatory-gin-bloat-tests.md) defines the phases,
     the settle and maintenance steps, the census, the lock, the oracle, the
-    declare-then-score rule and the cross-checks, and the 2026-09-15 run performed
-    all of them: declarations filed before the first fixture existed, a recorded
+    declare-then-score rule and the cross-checks, and the 2026-09-15 and 2026-09-16
+    runs performed all of them: declarations filed before the first fixture existed, a recorded
     baseline per fixture, the churn phase ending in settle → maintenance → census, a
     decide pass under one `SHARE ROW EXCLUSIVE` transaction, and a measured rebuild
     with `truth_pct` published beside every scored column. What conformance does
@@ -5484,6 +5629,16 @@ The two entries the previous list ended on are closed and recorded as 19 and 20.
     of the stand-in's three differences from an autovacuum worker stand, and the
     coverage row for a second `maintenance_work_mem` is satisfied by one index
     rather than by the corpus.
+21. **Run-to-run stability is now measured, on one machine and one kernel.** Three
+    full passes over this pin — 2026-09-15 and the two of 2026-09-16 — agree on
+    every scored cell, which is the page's reproduction claim. But all three ran on
+    Linux x86_64 with `block_size` 8192 and the same `initdb` locale, so what a
+    different page size, filesystem, core count or kernel does to the *fixture*
+    sizes is still unknown, and the three quantities that did move between the two
+    2026-09-16 passes — elapsed times, three of the eight lock-timeout
+    cancellations, and concurrency case D's census count — have a sample of two.
+    What would settle it is a pass on unlike hardware, which is also what open
+    question 3 wants for `BLCKSZ`.
 
 ## Source References
 
@@ -5579,7 +5734,7 @@ The two entries the previous list ended on are closed and recorded as 19 and 20.
 - [src/include/access/ginblock.h](../../../../raw/postgres-17/src/include/access/ginblock.h#L19-L37) — the "only 8 bytes" comment and `GinPageOpaqueData`.
 - [src/include/access/ginblock.h](../../../../raw/postgres-17/src/include/access/ginblock.h#L180-L188) — `PostingItem`, 10 bytes on an internal data page.
 - [src/include/access/ginblock.h](../../../../raw/postgres-17/src/include/access/ginblock.h#L336-L344) — `GinPostingList` and its `SHORTALIGN`ed segment size.
-- [src/backend/access/gin/ginentrypage.c](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L555-L568) — `entryPreparePage`'s `PageAddItem`, one line pointer per entry tuple.
+- [src/backend/access/gin/ginentrypage.c](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L555-L568) — `entryExecPlaceToPage`'s `PageAddItem`, one line pointer per entry tuple.
 - [src/backend/commands/vacuum.c](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1244-L1298) — `vacuum_xid_failsafe_check` and its `autovacuum_freeze_max_age * 1.05` floor.
 - [src/backend/access/heap/vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2299-L2348) — `lazy_check_wraparound_failsafe`: three flags cleared, one WARNING.
 - [src/backend/access/heap/vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L705-L711) — `VacuumFailsafeActive` choosing `index scan bypassed by failsafe:`.
