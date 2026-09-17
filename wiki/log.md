@@ -2,6 +2,113 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-17] answer v17 | int to bigint: the rewrite priced on both 17.11 and 12.2
+
+- Filed [The I/O Consequences of Changing a Column From integer to bigint in PostgreSQL
+  17, Whether a Very Large Table Needs a Migration Strategy, and What Changed Since
+  PostgreSQL 12
+  (unverified)](v17/questions/storage-and-vacuum/alter-column-int-to-bigint-io.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`, under
+  `questions/storage-and-vacuum/` because the question is about heap rewrite, page
+  layout, TOAST and physical I/O.
+- **Prompt hygiene first.** The request read `follow agents.md, in postgresql 17,
+  question: what are the i/o consequences of changing a column fron int to bigint, what
+  happens, should a migration stratregy be needed if the table is very large. what have
+  changed since postgresql 12.`; the defects are `agents.md` for `AGENTS.md`, lowercase
+  `postgresql` twice, `i/o` for `I/O`, `fron` for `from`, `stratregy` for `strategy`,
+  "should a migration strategy be needed" for "is a migration strategy needed", "what
+  have changed" for "what has changed", three questions run together with commas, and a
+  terminal period where question marks belong. The asker chose **correct and restate**,
+  and the corrected form is filed verbatim under `## Question`. Two scoping answers were
+  taken before any work: **measure both 17.11 and 12.2**, and file under
+  **storage-and-vacuum**.
+- **Source reading.** `ALTER TABLE`'s three phases for `AT_AlterColumnType`
+  (`ATPrepAlterColumnType`, `ATColumnChangeRequiresRewrite`, `ATExecAlterColumnType`,
+  `RememberAllDependentForRebuilding`, `ATPostAlterTypeCleanup`, `TryReuseIndex`,
+  `TryReuseForeignKey`, `ATRewriteTables`, `ATRewriteTable`), the `CLUSTER`-shared
+  rewrite machinery (`make_new_heap`, `swap_relation_files`, `finish_heap_swap`), the
+  heap write path (`heap_insert`, `heap_prepare_insert`, `toast_tuple_init`,
+  `GetBulkInsertState`, `RelationAddBlocks`), the read path (`initscan`'s `BAS_BULKREAD`
+  choice and the read stream), WAL skipping (`RelationNeedsWAL`, `smgrDoPendingSyncs`,
+  `wal_skip_threshold`), the aftermath (`RemoveStatistics`, `index_update_stats`,
+  `heap_create_with_catalog`, `estimate_rel_size`), the foreign-key `old_check_ok`
+  decision into `RI_Initial_Check`, logical replication's name-based column mapping and
+  its text-versus-binary conversion, plus `pg_cast`/`pg_type`/`pg_operator` entries, the
+  `alter_table.sgml` Notes, and four regression-test call sites. 10 GUCs are filed with
+  their contexts and apply scopes.
+- **Two measurement legs, one script each, both published in full** (684 and 685 lines,
+  md5 `44654e63d97a70a2a172cd92368b1093` and `50851d20acb1cd0c0f9f03777c3d32a1`, both
+  byte-identical to the text that ran and both parsing under `bash -n`). 14 stages:
+  build, check, init, fixture, alter, catalog, control, align, toast, iocl, fk, addcol,
+  minimal, logrep, report, clean. `make check`: **All 225 tests passed** on 17.11 and
+  **All 192** on 12.2, exit status 0 on both.
+- **Headline results.** A 208,642,048-byte, 4,000,000-row table with two indexes:
+  **72,413** blocks read, exactly 25,469 + 2 x 25,536 - the old heap once and the new
+  heap once per index rebuild - **427,512,848** bytes of WAL on 17.11 against
+  **484,674,144** on 12.2, a **+327,442,432**-byte data-directory peak (against
+  327,434,240 predicted) taken from inside the open transaction and returned at commit,
+  and **3,951 ms** of `AccessExclusiveLock`. The v17-specific finding is the read shape:
+  **4,576** read calls against 12.2's **72,373** for the same 593,007,616 bytes, and a
+  controlled pair on identical 5,406-block tables at **341** calls against **5,407**
+  with `io_combine_limit = '8kB'`, which is 12.2's 5,406 to the call.
+- **Six more measured findings.** (1) A 417,792-byte heap with a 109,232,128-byte TOAST
+  table cost **111,148,848** bytes of WAL, because the insert path fetches every
+  external value back and pushes it out again. (2) Widening a referenced primary key
+  moved `conpfeqop` to `{416}` = `=(int8,int4)`, so the 2,000,000-row child took **one**
+  seq scan over **all 8,850** of its pages and was never rewritten. (3) Row width grew
+  by **0** bytes on `(int,float8)` and `(int,int,text)` and by 8 on `(int,text)` and
+  `(int,int)`: never 4. (4) `wal_level = minimal` cut WAL to **161,016** bytes, and
+  `SET wal_skip_threshold = '4GB'` put it back to **26,315,416**, while 12.2 wrote
+  ~150 kB either way. (5) The add-column/backfill/`CREATE UNIQUE INDEX
+  CONCURRENTLY`/swap route cut the exclusive lock to a **305 ms** window but cost
+  **1,634,508,136** bytes of WAL - 3.8x - with the heap at 2.15x and `n_tup_hot_upd`
+  **0 of 4,000,000**. (6) Logical replication widened `integer` to `bigint` for all
+  100,000 rows in text mode, and `binary = true` broke apply with **6** `insufficient
+  data left in message` errors; 12.2 rejects the option outright.
+- **Since-v12**: twelve changes attributed to commits and first-release tags by presence
+  tests at `REL_12_0`..`REL_17_0` (not `git tag --contains`), including `c6b92041d38`
+  (v13 WAL skipping and `wal_skip_threshold`, after its revert `de9396326ed`),
+  `0d861bbb702` (v13 deduplication, which is why the same two indexes measure
+  118,243,328 bytes on 17.11 and 179,855,360 on 12.2), `3d351d916b2` (v14
+  `reltuples = -1`), `a4d75c86bf1` (v14 extended statistics dropped and recreated, where
+  `REL_12_0`'s `UpdateStatisticsForTypeChange` only nulled the MCV list - measured as 0
+  `pg_statistic_ext_data` rows on 17.11 against 1 with non-null `stxdndistinct` on
+  12.2), `31966b151e6`/`00d1e02be24` (v16 bulk extension, and the **34** extra blocks
+  every 17.11 rewrite left behind), `a9c70b46dbe` (v16 `pg_stat_io`), `b7b0f3f2724`
+  (v17 read stream), and the two v17 dependency errors `42b041243c0` and `91e7115b177`.
+  Unchanged: one WAL record per copied row, and no progress view at all.
+- **Two process defects found and fixed mid-run, both recorded on the page.** A second
+  concurrent run of a leg re-initdb'd the data directory under the first run's
+  postmaster, whose shutdown then unlinked the live socket; the scripts now take a
+  `mkdir` lock and `stage_init` stops a postmaster it finds in its own `PGDATA`. And
+  `cp /proc/<pid>/io` could not overwrite its own mode-0400 output from a previous run,
+  so one 17 run reported stale I/O deltas; the scripts now use `cat > file`. Both legs
+  were then re-run end to end from `init` with the final script text.
+- **Nine open questions**, led by the 34 unattributed blocks, the arithmetic-only
+  "680 GB is about 2.3 hours" extrapolation, 12.2's statistics-collector lag zeroing the
+  TOAST case's `pg_statio` counters, and the `reltuples = -1` sentinel having no visible
+  planner effect in this state because `relpages` is 0 on both versions.
+- **Validation.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0
+  warnings**. **210 citation occurrences over 129 distinct ranges in 27 files**, every
+  one from `raw/postgres-17/`, none from another version, all in bounds. The
+  `## Contents` list matches all 30 `##`/`###` headings in document order.
+  `raw/postgres-17/` and `raw/postgres-12/` stayed read-only and clean at their pins.
+- **Concept pages** were read and not edited: v17 has only the three bloat-test
+  protocols, none of which covers heap rewrite, `ALTER TABLE` or TOAST, so nothing was
+  linked and nothing was changed. A `heap-rewrite` common concept page would have a
+  consumer now; it is proposed, not created.
+- **Teardown**: both postmasters were stopped with `pg_ctl -m fast -w stop` through each
+  script's `clean` stage, no `postmaster.pid` survived in either data directory,
+  `pgrep -a postgres` is empty, ports 55417 and 55412 are free, and the **8.7 GB**
+  `.wiki-runtime/tmp/intbigint/` sandbox was deleted in full (both builds, both
+  installs, both data directories, both output trees); only the pre-existing
+  `reverted-scripts-20260914/` remains under `.wiki-runtime/tmp/`. Nothing this session
+  did not start was touched.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated;
+  `verified:` untouched and agent verification stays **`not yet`**, because the figures
+  are one machine, one block size, one filesystem, `fsync = off`, and single samples for
+  every millisecond number.
+
 ## [2026-09-17] cleanup | purged .wiki-runtime to the venv, keeping one 12 KB script backup
 
 - Purged `.wiki-runtime` at the user's request, from **27,723,749 to 10,662,728 bytes**,
