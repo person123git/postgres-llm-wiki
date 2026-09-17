@@ -12421,3 +12421,92 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `.wiki-runtime/tmp/pgsi-review/` was deleted too. The five pre-existing
   sandboxes under `.wiki-runtime/tmp/` were not created by this work and were
   left untouched.
+
+## [2026-09-17] answer v17 | pros and cons of a very large shared_buffers, and what changed since v12
+
+- Filed [Pros and Cons of a Very Large shared_buffers Such as 256 GB on a 1 TB RAM
+  System in PostgreSQL 17, and What Changed Since PostgreSQL 12
+  (unverified)](v17/questions/storage-and-vacuum/very-large-shared-buffers.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11,
+  `REL_17_11-7-g786db8dcf16`).
+- **Prompt hygiene**: the request read ``follow agents.md, In PostgreSQL 17, what are the
+  pros and cons of having a very large `shared_buffers`, like 256 GB or more, on a system
+  with more than 1 TB of RAM?, what have changed since version 12.`` Seven defects:
+  `agents.md` for AGENTS.md, the lowercase sentence opening `follow`, a comma splice
+  joining the instruction to the question with `In` capitalised mid-sentence, `?,`
+  splicing two questions, `what have changed` for `what has changed`, a terminating
+  period on a question, and `version 12` for `PostgreSQL 12`. The asker chose **correct
+  and restate**, **build 17.11 and measure**, **v17 citations plus the v17 checkout's own
+  commit history** for the since-v12 part rather than citing the v12 checkout, and
+  **large-pool mechanisms only** as the delta scope. All four are recorded under the
+  page's `## Question`.
+- **Category**: `storage-and-vacuum`, by rule 1 (the buffer manager, which that category
+  names) and confirmed by rule 2 (most citations are `src/backend/storage/buffer/`). The
+  basename matches the existing v12 page, so the pair is a directory diff.
+- **Measurement**: one published 695-line Bash/SQL script, run end to end from a wiped
+  sandbox on Linux x86_64 with 31 GiB of RAM. Core regression **All 225 tests passed**,
+  `contrib/pg_buffercache` **All 1 tests passed**, and the measurement cluster's log
+  carries **0** `ERROR`/`FATAL` lines. The published block is byte-identical to the file
+  that ran (695 lines, md5 `ad316a90d9d6998dbf96138084cb02d3`).
+- **The host cannot allocate 256 GiB, so the page does not pretend to.** Every 256 GiB
+  number comes from `postgres -C shared_memory_size`, which the postmaster answers at
+  `postmaster.c:955-971`, before `CreateSharedMemoryAndSemaphores()`: **267,499 MB** for 33,554,432
+  buffers, 5,355 MB of it bookkeeping, **133,750** 2 MiB huge pages or **262** 1 GiB
+  pages. Everything else is either measured at 16,384 to 2,097,152 buffers or labelled as
+  an extrapolation of a measured slope.
+- **Three findings the source reading alone would not have produced.** A **257 MB** step
+  sits between 33,554,304 and 33,554,305 blocks, because `NBuffers +
+  NUM_BUFFER_PARTITIONS` pushes the mapping table's bucket array from 2^25 to 2^26 - so
+  `'255GB'` costs less than `'256GB'`. Marginal cost is **8331** bytes per buffer away
+  from boundaries but **8364** below 10,000,000 blocks, which makes 17.6's new
+  `MAX_CHECKPOINT_REQUESTS` cap visible as a slope change. And `TRUNCATE` does **not**
+  multiply with fork count, because it replaces the relfilenode and the pool pass happens
+  once at commit.
+- **Two defects in my own measurements, found and fixed before filing.** The first
+  `DROP`/`TRUNCATE` timings showed no pool dependence at all, because the buffer-pool
+  pass runs in `smgrDoPendingDeletes()` at commit, outside the timed region; the timer
+  became a plpgsql **procedure** that commits inside the interval, after which the same
+  measurement showed 0.65 ms rising to 12.9 ms across the four pool sizes. The first
+  startup timings were also wrong: the postmaster logs `starting PostgreSQL` *after*
+  `CreateSharedMemoryAndSemaphores()`, so the log-to-log interval excluded the pool
+  initialisation it was supposed to price; the stage now reports the shell-clock to
+  first-log interval (15 -> 206 ms) beside the flat post-creation interval (8-11 ms).
+- **Measured slopes**: **10.7 ns/buffer** for a checkpoint's full-header scan (7.1 to
+  30.5 ms median over six runs each), **90 ns/buffer** for shared-memory creation plus
+  `InitBufferPool`, **5.9 ns/buffer** for every `DROP`/`TRUNCATE`. The drop cost is
+  unavoidable on a primary: v14's `BUF_DROP_FULL_SCAN_THRESHOLD` shortcut needs
+  `smgrnblocks_cached()`, which answers only `InRecovery`. Batching 30 drops into one
+  transaction measured **10x** cheaper than one transaction each.
+- **Also measured**: the `NBuffers / 4` bulk-read line, as 18,692 of 18,692 blocks
+  resident below it against **32** - exactly the 256 kB ring - above it with 37,352
+  `reuses`; the `NBuffers / 8` ring cap read back as 16,399 blocks under `VACUUM
+  (BUFFER_USAGE_LIMIT '256MB')` against 31, 271 and 41,137 for 128 kB, 2 MB and
+  unlimited; SLRU auto-sizing at 32 -> 256 -> 1024 blocks; `pg_buffercache` rows at
+  **445.8 ms** against **8.0 ms** for `pg_buffercache_summary()`; `debug_io_direct = data`
+  at **522.2 ms** against 43.7 ms of `read_time`; and four startup edges including a
+  200 GB request's ENOMEM hint naming 219,065,999,360 bytes.
+- **Negative result kept, not dropped**: `pg_stat_io.reads` counts blocks, not read calls
+  (`WaitReadBuffers()` passes `io_buffers_len`, and `op_bytes` is hard-coded to `BLCKSZ`),
+  so the same scan reported **37,489 reads at every** `io_combine_limit`, and the four
+  scan times did not order monotonically. Filed as an open question rather than as
+  evidence that combining does nothing.
+- **Since-v12 section**: 22 rows, each attributed to a commit in the v17 checkout's own
+  history and to the first release tag containing it, from v13 `pg_shmem_allocations`
+  through v17 read streams and SLRU GUCs to 17.6's queue cap; plus nine mechanisms
+  verified unchanged over `REL_12_2..786db8dcf16`. No v12 checkout citation appears on
+  the page, per the asker's choice.
+- **Citations**: 253 occurrences over 159 distinct ranges in 50 files, every one checked
+  in bounds; five ranges were corrected during the check (`syncscan.c` is under
+  `access/common/`, not `access/heap/`, plus four ranges that started or ended on a blank
+  line or one line past a file's end).
+- **Concept layer**: `wiki/v17/common-concepts/` holds only the three mandatory bloat-test
+  protocol pages, so the buffer manager, the clock sweep, buffer access strategies and
+  the buffer mapping table are explained inline on this page and are **proposed** as
+  concept pages in the response. No concept page was created or edited.
+- **Bookkeeping**: entries added to `wiki/index.md` under v17 Storage and Vacuum and to
+  `wiki/v17/index.md`, plus a clause on the v17 row and a dated note in
+  `wiki/versions.md`. `verified:` untouched and **agent verification stays `not yet`**.
+- **Teardown**: the measurement cluster was stopped by the script's `stop` stage - no
+  `postmaster.pid`, no matching `postgres` process, 0 listeners on port 55418 - and the
+  sandbox `.wiki-runtime/tmp/shbuf/` plus the runtime copy of the script were deleted
+  afterwards. The pre-existing sandboxes under `.wiki-runtime/tmp/` were not touched.
