@@ -2,6 +2,108 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-17] review v17 | COMMENT-baseline GIN heuristic: the last page brought onto the no-defeat rule
+
+- Reviewed [A COMMENT-Stored Baseline and Normalized Index Growth for Finding GIN
+  Indexes That Need REINDEX CONCURRENTLY in PostgreSQL 17
+  (unverified)](v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md)
+  end to end at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11, clean
+  worktree), as the **last consumer page brought onto** [Mandatory GIN Bloat
+  Tests](v17/common-concepts/mandatory-gin-bloat-tests.md)'s **`### The maintenance must
+  not be defeated`** - a rule that page gained on 2026-09-15 *after* this page's own run.
+- **Prompt hygiene first.** The request read `follow agents.md, in postgresql 17, review :
+  gin-reindex-normalized-growth-comment-baseline.md`; the defects are `agents.md` for
+  `AGENTS.md`, lowercase `postgresql`, a space before the colon, the page named by file name
+  rather than title, no sentence capitalisation and no terminal period. The asker chose
+  **correct and restate**, and the corrected form is filed verbatim on the page as the third
+  prompt. Three scoping answers were taken before any edit: **source re-verification plus a
+  full script re-run**; **bring the page onto the rule** by editing the filed script in
+  place; **delete the sandbox** at the end.
+- **Citations.** All **154** citations the page carried - **73** distinct ranges over **29**
+  files - were dumped out of `raw/postgres-17/` and read against the claim each backs.
+  **Every range is in bounds, none crosses a version, and every one supports its label**, so
+  this pass corrected **no** citation. It added **23** ranges (`procarray.c`, `twophase.c`,
+  `ginbtree.c`, the `VERBOSE` tuples line, the `lazy_vacuum` gate, the worker's timeout
+  forcing, `transaction_timeout`/`idle_in_transaction_session_timeout`, the three progress
+  views, the `pg_stat_activity`/`pg_replication_slots` horizon columns, and `ANALYZE`'s
+  sample extrapolation), taking the page to **208 occurrences over 96 ranges in 32 files**.
+  The page's one repo-wide grep still holds: 0 hits for `RelationTruncate`/`smgrtruncate`
+  under `src/backend/access/gin/`.
+- **Script edits, made in place and then run.** Every settle and maintenance statement of
+  the run - 25 build settles, 22 churn settles, `s01`'s second settle, 22 maintenances,
+  `i01`'s `INDEX_CLEANUP OFF`, 2 auto-analyze stand-ins, the census `ANALYZE` and the
+  published-statement replay's 3 - now goes through `run_maint`, which forces
+  `statement_timeout`, `lock_timeout`, `transaction_timeout` and
+  `idle_in_transaction_session_timeout` to `0` and prints them back, and `check_maint`, which
+  parses the statement's own `VERBOSE` output for the rule's four proofs and **dies rather
+  than score** a defeated fixture. Added with them: a `proto.maint` proof table, a horizon
+  reading on each side of every step, the three progress views counted at both ends of every
+  page census, declared invariants **I7/I8/I9**, a `maint_proofs` report that refuses to
+  score a defeated run, a settle-step delta report, and probe **P6**.
+- **Two runs on Linux x86_64** (Ubuntu 24.04 on WSL2, gcc 13.3.0, 22 cores, `JOBS=20`): the
+  first with the no-defeat machinery, the second from a fresh `reset` with the final script
+  text. `make check` **All 225** plus `pageinspect` All 8, `pgstattuple` All 1,
+  `pg_freespacemap` All 1, `btree_gin` All 30, `pg_trgm` All 4 on both.
+- **Nothing was defeated.** 79 maintenance steps, **all four timeouts 0 on 79 of 79**,
+  **`dead but not yet removable` 0 on 78 of 78**, **0** skip lines, **0** cancellations, 158
+  horizon readings with 0 slots and 0 prepared transactions, and the one declared exception -
+  `s01`'s settling `VACUUM` under a snapshot opened *before* the churn committed - reporting
+  exactly **500,000**, with `152/0/0/0`, then `152/60/60/0`, then `152/0/0/60` on its three
+  `VACUUM VERBOSE` index lines. The `declared` branch now **requires** that nonzero count,
+  which is the check that would have caught the defect the sibling non-B-tree page had.
+- **Every scored cell of the 2026-09-15 pass reproduced**: the 24 decide and rebuilt sizes,
+  all 24 `truth` values including `p02`'s **−21.01 %**, the 19/1/0/4 decision score, the six
+  original invariants (24/24, 25/25, 23/23, 23/23, 21/21, 21/23), the census and FSM counts,
+  the `reltuples` swing (994200/200000/100000/500000/500000/100000), the linearity curve and
+  its entry/data splits, the 64MB row at 71,737,344, the 4-of-4 pgstat race, `k01`, `m01`,
+  the `a01`/`a02` stand-ins (493 and 232 pending pages flushed), the 28-table census, the
+  eleven edge cases and the verbatim lifecycle (60.06 % against a predicted 60.04 %).
+- **One verdict moved, and two findings are new.** (1) `c02`'s upper bound went from `HELD`
+  (+0.01) to **`VIOLATED`** (−0.03 on run 1, −0.01 on run 2), so `est_reclaimable` is now
+  **13 held / 8 violated** of 21. The cause is the denominator, not the model: the fixture's
+  decide size, rebuilt size, `truth` and `index_size_ratio` are byte-identical on all three
+  runs, and what moved is `reltuples`. (2) New probe **P6** measures that directly - five
+  `ANALYZE`s of an unchanged 1,000,000-row table wrote **1,002,033 / 1,001,233 / 1,002,333 /
+  1,001,433 / 1,002,633**, never the row count, always high by 0.12-0.26 % - so the page
+  gained a `Third failure` section: the baseline `bhr` is an exact count from `CREATE INDEX`
+  and every later reading is a sample. (3) **The settle step the protocol mandates adds
+  bytes**: on **8 of 23** fixtures with a settle step the settling `VACUUM` grew the file,
+  by 4,849,664 on `c01` and `c12` and 16,310,272 in total, 0 shrank, every one of them a
+  fixture that reached the step with 150-507 pending pages. On `c01` that is 42 % of the
+  growth the method reads.
+- **Page changes**: two new sections (`The maintenance was not defeated`, `What the settle
+  step itself cost`) plus `Third failure: the denominator is a sample and the baseline is
+  not`; the conformance table gained three rows; the invariants table went from six to nine;
+  the fixture table, the bound table, the accuracy bands, the thresholds row, the coverage
+  table, the `s01` and `i01` sections, the census section, the edge-case OIDs and the
+  end-to-end replay were updated to this run; five new open questions (16-20) record the
+  limits, including that the horizon read is a read and not an interlock and that the six
+  probes are outside the rule; the `## Contents`, usage rows, output-file table, measured
+  runtime (6 min from a built tree, 3 min 38 s for the programme) and sandbox size (5.1 GB)
+  were refreshed.
+- **Validation.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0
+  warnings**. The `## Contents` list matches all 54 `##`/`###` headings in document order
+  with every anchor resolving. The published fenced script is **byte-identical** to the
+  1,902-line file that ran (md5 `188138052edd939818c5aeb46fffa660`) and parses with
+  `bash -n`. `raw/postgres-17/` stayed read-only at its pin.
+- **The concept page was read and not edited.** Both rules this pass implements - the
+  no-defeat rule and the concurrency rule - were already in
+  [Mandatory GIN Bloat Tests](v17/common-concepts/mandatory-gin-bloat-tests.md); nothing the
+  run found contradicts it.
+- **Teardown**: the script's `clean` stage stopped the 17.11 postmaster, reported no
+  surviving `postmaster.pid` and no matching `postgres` process, and deleted
+  `.wiki-runtime/tmp/ginnorm/` entirely; port 55417 is free and `pgrep -a postgres` is empty.
+  The review's own scratch directory `.wiki-runtime/tmp/ginreview/` was deleted too. No
+  cluster this session did not create was touched.
+- **Process note**: one text substitution on the page was made with the host `python3`
+  instead of `.wiki-runtime/venv/bin/python`, which `MANDATORY Environment Isolation`
+  reserves for creating the venv. No package was installed and nothing outside the repo was
+  written; the remaining scripted edits used the venv interpreter.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated with the
+  review, its two new findings and the moved verdict; `verified:` untouched and agent
+  verification stays **`not yet`**, because the corpus is one machine's, one block size and
+  one key universe, and `c02` shows a bound verdict that a single run cannot decide.
+
 ## [2026-09-16] review v17 | deduplication-after-pg_upgrade page: every number reproduced, one verdict was wrong
 
 - Reviewed and re-ran [Checking Whether an Index Needs a Rebuild to Enable
