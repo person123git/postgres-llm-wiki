@@ -2,6 +2,49 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-17] cleanup | purged .wiki-runtime to the venv, keeping one 12 KB script backup
+
+- Purged `.wiki-runtime` at the user's request, from **27,723,749 to 10,662,728 bytes**,
+  reclaiming **17,061,021 bytes**. Deleted five working directories under
+  `.wiki-runtime/tmp/`: `btree-suite-scripts/` (8.8 MB), `btmaint-review/` (6.9 MB),
+  `btmaint-work/` (1.5 MB), `physidx-review/` (732 KB) and the empty, unreferenced
+  `pgdedup-audit/`. Also deleted `cache/repin_citations/v19.json` (205,237 bytes),
+  `cache/wiki_lint/last-run.txt`, and all three files in `logs/`
+  (`recent_log.log`, `repin_citations.log`, `wiki_lint.log`). The empty `cache/`,
+  `indexes/{ctags,search,tree-sitter}`, `logs/` and `tmp/` scaffold was left in place,
+  as was `venv/`.
+- **Teardown**: nothing was stopped, because nothing was running. Before any deletion,
+  `pgrep -a postgres` was empty, and `find .wiki-runtime -name postmaster.pid` and
+  `-name PG_VERSION` both returned nothing, so no cluster, no data directory and no
+  socket directory existed anywhere under `.wiki-runtime/`. `pgrep -a postgres` is
+  still empty afterwards. This work started no service of its own.
+- One directory was **kept at the user's instruction**:
+  `.wiki-runtime/tmp/reverted-scripts-20260914/` (12 KB), holding the `bootstrap_venv`
+  and `recent_log` scripts dropped from `scripts/` by `5d4042d` on 2026-09-14. It is
+  kept because it is the **only copy**: `git hash-object` on each file
+  (`f759852eaba5…`, `f2602ac65b3d…`) matches no blob of `scripts/bootstrap_venv` or
+  `scripts/recent_log` in any commit that touched them, the committed `bootstrap_venv`
+  being the uv-based variant rather than this `python3 -m venv` one.
+- One filed page named a deleted path and was corrected: the 2026-09-10 re-run bullet
+  under `## Context Reviewed` on [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat
+  Method on PostgreSQL 17
+  (unverified)](v17/questions/indexing/btree-index-bloat-core-sql-only.md) said
+  1.8 MB of script copies "remains under `.wiki-runtime/tmp/btree-suite-scripts/`". It
+  now records that later runs grew that directory to 8.8 MB, that it was deleted here,
+  that nothing in it was a cluster or a data directory, and that the scripts it held
+  are published in full under the page's `## Measurement Script`. No number, verdict or
+  citation changed, `verified:` is untouched and `verified_by_agent` stays `not yet`.
+  No index entry changed, because a teardown fact in `## Context Reviewed` is not a
+  coverage change.
+- `raw/` untouched: `git status --short raw/` is empty, all five checkouts clean at
+  their pins.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: **0 errors, 0 warnings**, run after
+  the purge and the page edit. It recreated `logs/wiki_lint.log` and
+  `cache/wiki_lint/last-run.txt` (53 bytes combined, leaving `.wiki-runtime` at
+  10,662,781 bytes), which confirms the venv toolchain survived the purge.
+  `logs/recent_log.log` correctly stayed absent, since `scripts/recent_log` no longer
+  exists to write it.
+
 ## [2026-09-17] review v17 | COMMENT-baseline GIN heuristic: the last page brought onto the no-defeat rule
 
 - Reviewed [A COMMENT-Stored Baseline and Normalized Index Growth for Finding GIN
@@ -12510,3 +12553,111 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `postmaster.pid`, no matching `postgres` process, 0 listeners on port 55418 - and the
   sandbox `.wiki-runtime/tmp/shbuf/` plus the runtime copy of the script were deleted
   afterwards. The pre-existing sandboxes under `.wiki-runtime/tmp/` were not touched.
+
+## [2026-09-17] review v17 | very large shared_buffers: 16 defects corrected, re-measured under a 4 GiB test cap
+
+- Reviewed, corrected and re-measured [Pros and Cons of a Very Large shared_buffers Such
+  as 256 GB on a 1 TB RAM System in PostgreSQL 17, and What Changed Since PostgreSQL 12
+  (unverified)](v17/questions/storage-and-vacuum/very-large-shared-buffers.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11,
+  `REL_17_11-7-g786db8dcf16`).
+- **Prompt hygiene**: the review request read `follow agents.md, In PostgreSQL 17, fix
+  this issues on question:# Pros and Cons of a Very Large shared_buffers ... (unverified)
+  ,The page needs corrections before verification. No files changed. [16 numbered
+  findings] , on tests to not use shared buffers sizes larger than 4GB.` Defects:
+  `agents.md` for AGENTS.md, the lowercase sentence opening `follow`, a comma splice
+  joining the instruction to the list with `In` capitalised mid-sentence, `this issues`
+  for `these issues`, `issues on question:` for `issues on the question page:`, a comma
+  before `The page needs` splicing two sentences, and the trailing fragment `, on tests
+  to not use shared buffers sizes larger than 4GB` for `and make the tests use no
+  shared_buffers size larger than 4 GB`. The asker chose **correct and restate**, and
+  answered two scope questions: the cap applies **everywhere**, including non-allocating
+  `postgres -C` probes, and the replacement pool ladder is **1GB 2GB 3GB 4GB**.
+- **The cap is the biggest consequence.** `MAX_SB_BLOCKS` = 524,288 blocks is enforced by
+  one `guard_sb()` helper on every server start and every `-C` probe, and validated over
+  `BASE_SB` and `POOLS` before the first stage runs. It deleted every previously measured
+  256 GiB figure, so the page gained a new subsection, `How the 256 GiB figures were
+  computed under a 4 GiB test cap`, and a new `model` stage.
+- **The model is the substitute, and it is checked before it is used.** It implements
+  `BufferShmemSize`, `StrategyShmemSize`, `BufTableShmemSize`, `hash_estimate_size`,
+  `CheckpointerShmemSize` and the 8 kB round-up, fits everything non-scaling as one
+  constant, and is measured against `sum(allocated_size)` over `pg_shmem_allocations` -
+  the exact segment in bytes, not the MiB-rounded `shared_memory_size`. To keep
+  unmodelled terms still, the pass pins the three auto-sizing SLRUs to 1024 blocks (the
+  value a 256 GiB pool would choose) and `wal_buffers` to 16 MiB. Result: **+8192 bytes
+  at all three checks**, one constant page, and at 33,554,432 buffers **280,492,630,016
+  bytes** -> **267,499 MB**, **133,750** / **262** huge pages. Those are the same values
+  the earlier *uncapped* `-C` run measured, which is the strongest available check on the
+  substitution.
+- **The marginal cost now decomposes exactly**, and that is a new finding the cap forced:
+  8292 (four arrays) + 32 (sync slot) + 40 (mapping element) + **64.94 (three SLRUs still
+  growing)** = 8428.9 against 8426-8451 measured. `transaction` costs 16,545 bytes per
+  block against 8,353 for the other two because CLOG alone carries `group_lsn`. The
+  SLRUs cap at exactly `NBuffers = 524,288` - the cap itself - so 8364 above 4 GiB and
+  8332 above 10,000,000 blocks are arithmetic, which also explains why the first filing's
+  8331/8364 pair differs from this run's numbers.
+- **All 16 findings corrected.** Nine source claims: (1) truncation scans the pool once
+  for all forks, not once per fork, and PostgreSQL 13's `6d05086c0a79` is why - now a
+  since-v12 row; (2) the `debug_io_direct` recommendation is gone, replaced by the
+  documentation's own "developer testing only" and a controlled pair; (3) the background
+  writer's `min_scan_buffers` target counts already-clean reusable buffers, so it is not
+  comparable with `bgwriter_lru_maxpages`; (4) `evictions`/`reuses` count claiming any
+  valid victim, not writing; (5) `num_requested` includes manual and DDL checkpoints and
+  `buffers_written` counts performed writes; (6) an ordinary `BufferAlloc()` lookup shares
+  a cached page whatever `synchronize_seqscans` says, and one sub-`NBuffers / 4` scan
+  cannot evict more than its own size; (7) `backend_flush_after` is `PGC_USERSET`, and the
+  script's own header had `track_io_timing` under the wrong context; (8)
+  `DropDatabaseBuffers()` on the `CREATE DATABASE` path is `createdb_failure_callback()`;
+  (9) the sync queue keeps its queue-full *and* no-checkpointer fallbacks. Three history
+  omissions: `6d05086c0a79` (13.0), 17.6's `e4b8f925a929` autoprewarm `MCXT_ALLOC_HUGE`
+  fix, and the recovery shortcut's real conditions. Two more: startup acceptance now
+  **starts a real server** at the 16-block floor instead of asking `-C`, which exits
+  before shared memory exists, and the oversized-allocation claim is now source-only.
+- **Four script defects fixed, and two of them changed the numbers.** The timer now
+  accumulates in a local array and writes after the last timed statement: the old one
+  inserted a row *between* checkpoints, which inflated the 1 GiB `CHECKPOINT` median from
+  6.09 to 9.5 ms. The `vacring` fixture is rebuilt identically per limit and counted with
+  a fork filter, which turned 31/271/16,399/41,137-against-a-stale-37,384 into exactly
+  **16 / 256 / 16,384 / 41,122** main-fork blocks on a 41,122-block table. Plus: every
+  exit status is checked (`make check` on status *and* result line), an `EXIT` trap stops
+  both clusters however the run ends, and teardown asserts Unix sockets rather than TCP
+  listeners and covers the probe cluster too.
+- **Two measurement problems the new ladder created, and how they were solved.** At 1-4
+  GiB the startup and drop costs sit near this host's noise floor. Startup now takes
+  `STARTUP_TRIALS` = 10 restarts per size and files every trial, reporting minima with
+  medians beside them: 25/32/44/53 ms, monotonic, **71 ns/buffer**. `DROP` now times with
+  `synchronous_commit = off` so the commit's WAL flush wait is outside the interval:
+  1.13/1.97/2.91/3.71 ms, **6.6 ns/buffer**, against 9.6 for `TRUNCATE`.
+- **The fork finding is now measured as well as read**: a 222/3/1-block three-fork
+  `TRUNCATE` cost **1.15x** the one-fork case, not 3x.
+- **Also re-measured**: `pg_buffercache` rows at 103.1 ms against 1.8 ms at 524,288
+  buffers; the direct-I/O pair at 511.7 against 31.2 ms on **one** fixture at **one**
+  `io_combine_limit`, which the review had flagged as uncontrolled; 37,495 reads and 380
+  hits at all four combine limits over 12 trials while median `read_time` moved 39.0 ->
+  27.9 ms, which upgrades that open question from "inconclusive" to "the 8 kB penalty is
+  clear, the rest is inside the spread".
+- **One finding of my own**: a `VACUUM` ring can be *asked* for at most
+  `MAX_BAS_VAC_RING_SIZE_KB` = 16 GiB, so at 256 GiB the setting's maximum binds before
+  `NBuffers / 8` = 32 GiB does. The page said 32 GiB was available.
+- **Run**: one invocation of the 1,111-line script from a wiped sandbox on Linux x86_64
+  with 31 GiB of RAM. Core regression **All 225 tests passed**, `pg_buffercache` **All 1
+  tests passed**, **0** `ERROR`/`FATAL` lines. The published block is byte-identical to
+  the file that ran (md5 `c6e4fef919c925b05b07440caa9ea05d`).
+- **Citations**: 257 occurrences over 51 files, every range re-checked in bounds; five
+  ranges I introduced were trimmed off blank first/last lines before filing.
+- **Open questions**: 9 -> 11, led by the cap itself, and including an unexplained
+  `TRUNCATE`-versus-`DROP` per-buffer gap (6.6 against 9.6 ns) that the source reading
+  says should not exist, since both are one `DropRelationsAllBuffers()` pass at commit.
+- **Concept layer**: `wiki/v17/common-concepts/` still holds only the three mandatory
+  bloat-test protocol pages, so the buffer manager, clock sweep, buffer access strategies
+  and buffer mapping table remain explained inline and are still **proposed** as concept
+  pages. No concept page was created or edited.
+- **Bookkeeping**: `wiki/index.md` and `wiki/v17/index.md` entries rewritten, a dated
+  coverage note added to `wiki/versions.md` above the original filing note, and the v17
+  row clause updated. `verified:` untouched; **agent verification stays `not yet`**.
+  `scripts/wiki_lint` reports 0 errors and 0 warnings.
+- **Teardown**: `bash shbuf.sh clean` ran the `stop` stage and deleted the sandbox - no
+  `postmaster.pid` in either data directory, no `postgres` process referring to the
+  sandbox, no socket file for port 55418 or 55419, 0 TCP listeners on either port, and
+  `.wiki-runtime/tmp/shbuf/` removed. The pre-existing directory
+  `.wiki-runtime/tmp/reverted-scripts-20260914/` was not touched.
