@@ -2,6 +2,94 @@
 
 Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
 
+## [2026-09-16] review v17 | deduplication-after-pg_upgrade page: every number reproduced, one verdict was wrong
+
+- Reviewed and re-ran [Checking Whether an Index Needs a Rebuild to Enable
+  Deduplication After pg_upgrade From PostgreSQL 12 to 17
+  (unverified)](v17/questions/indexing/btree-deduplication-after-pg-upgrade.md) at
+  unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c`, with the 12 leg at
+  `45b88269a353ad93744772791feb6d01bc7e1e42`.
+- **Prompt hygiene first**: the request read `follow agents.md, in postgresql 17,
+  review : btree-deduplication-after-pg-upgrade.md` - `agents.md` for AGENTS.md,
+  lowercase `postgresql`, a space before the colon, the file name in place of the
+  page title, and no terminal period. The asker chose **correct and restate**, and
+  then chose **source re-verification plus a full script re-run** for scope.
+- **Citations**: all **175** links (73 distinct ranges over 35 files) were re-read
+  against the pin, content and all. **Every one is in bounds and supports its
+  label**, so this pass corrected no citation; it added 8 ranges, taking the page
+  to 203 occurrences over 81 ranges in 39 files. The source-history claims held
+  too: four commits with their subjects and first release tags, the 193-commit
+  repin range with `8434c938598` (`nbtsearch.c` only) as its sole `nbtree` change,
+  `01992176e08` plus `3e85b223b06` under `src/bin/pg_upgrade`, `contrib/pageinspect`
+  untouched, and `git log -S allequalimage -- src/bin/pg_upgrade` still empty.
+- **Script re-run four times** on Linux x86_64 (Ubuntu 24.04, gcc 13.3.0, ICU 74.2,
+  22 cores, `JOBS=20`): twice on the filed text, twice on the edited text, every run
+  from a fresh `initdb` on both majors and a fresh `pg_upgrade --copy`. `make check`
+  All 225 plus `pageinspect` All 8 on 17.11 and All 192 on 12.2 on all four.
+  **Every scored cell reproduced on all four runs**: 26 carried-over files at 26 of
+  26 identical digests, the 189-row check at 162/15/6/5/1 with 27 flags false, the
+  offsets (`sizeof` 48 / `pd_lower` 72 against 40 / 64 with `btm_oldest_btpo_xact`
+  at byte 48), the 17-of-17 gate with 9 flags set, the 0.0/9.8/48.1/65.4/69.5/67.4
+  curve, the twins at 22,519,808 / 22,519,808 / 6,963,200 then 43,737,088 with
+  48.5 % over 69.1 %, the 3.1x churn, all 17 rebuild rows, the trap's
+  7,340,032 → 22,519,808 → 7,340,032, the flag matrix's relfilenodes, the
+  170/3/17 versus 170/20 fallback joins, and the counters (old `NextXID` 487 and
+  `NextOID` 24576; new 553 and 16449; `xmin` 552; post-upgrade OID 16503).
+- **The finding is a wrong verdict, not a wrong number.** `interval_ops` lost its
+  equalimage support function in `5f27b5f848a` ("Dissociate btequalimage() from
+  interval_ops"), first contained by `REL_17_0` here and back-patched to v13 per its
+  own message, while v17's `btequalimage()` still returns true unconditionally and
+  only a rebuild rewrites the metapage field. So an `interval` index built on a
+  pre-fix 13-16 cluster arrives in v17 with the flag **true** where
+  `_bt_allequalimage()` says false - the state `amcheck` reports as "metapage
+  incorrectly indicates that deduplication is safe", hinting at indexes "last built
+  on a version predating 2023-11" - and the page's filed check answered **"no
+  rebuild needed"**. The check now has a `rebuild for correctness: metapage says
+  safe, catalogs disagree` branch. It matched **0 rows** on the measured 12 → 17 leg,
+  as it must, and is filed as source-verified and unexercised.
+- **Three more corrections.** The refusal list is now the **16 rows** of
+  `opr_sanity`'s expected output rather than the documentation's four bullets, which
+  adds `interval`, `tsquery` and `tsvector` as plain scalar types with no support
+  function 4 (and the false claim "ordinary scalar types register `btequalimage`" is
+  gone). The partial index's triage row was wrong twice over: it prints **9,673.4**
+  rows per key against an exact **100,000 rows over one distinct key value**, since
+  `st = 'open'` holds exactly where `k10` is 0, and the superseded "actual 99,867
+  rows over 10 keys" was a sample divided by a table-wide `n_distinct`. And the XID
+  sentence now says the restore consumed 487 up to 552, leaving `NextXID` 553,
+  rather than being "one restore transaction past 487".
+- **Coverage added**: `_bt_first()` as the read path's direct caller of
+  `_bt_metaversion()`, the posting-list search and posting-list-split asserts, both
+  metapage WAL copies, `amcheck` as a third reader, the after-rebuild self-check
+  (`no rebuild needed` 162 → 176, exactly the 14 equal-image rebuilds, with the 6
+  refusals unmoved even though 6 of them were rebuilt too), and the explicit note
+  that nothing upstream tests a carried-over metapage - `allequalimage` appears in
+  15 files and the only test file among them is `pageinspect`'s `btree.out`.
+- **Four script edits, made in place and then re-run**: the new check branch, an
+  exact-population probe for the partial index, per-run truncation of both server
+  logs in `reset` (the audit had been counting three runs' lines as one), and an
+  itemized `ERROR` audit in `summary` replacing a bare count. The audit now reads
+  **6 lines on 17.11, every one provoked on purpose** - 3 permission denials, 1
+  absolute-path refusal, 1 `index 64 out of valid range, 0..39`, 1 nondeterministic
+  `text_pattern_ops` - and **0 on 12.2**.
+- Also refreshed: the measured runtime (236 s from an empty sandbox, 76 s from built
+  trees), the `## Measurement Script` usage rows, `The last run` including a
+  reproducibility row for the four runs, and the `Open Questions` list, which gained
+  the unexercised correctness branch, the sampled-`reltuples` spread (101,667 /
+  104,734 / 98,700 / 96,734 against an exact 100,000) and the fact that 12.2 is the
+  one old version that cannot show the `interval` hazard.
+- **Teardown**: the `clean` stage stopped both servers, reported no surviving
+  `postmaster.pid` and no matching `postgres` process, and deleted
+  `.wiki-runtime/tmp/pgdedup/`; `pgrep -a postgres` is empty and ports 55312 and
+  55317 are free. Nothing outside the sandbox was written and both pinned checkouts
+  stayed read-only and clean at their pins.
+- `scripts/wiki_lint` reports 0 errors and 0 warnings; the published script block is
+  byte-identical to the 1,148-line file that ran and parses with `bash -n`; human
+  `verified:` is untouched and `verified_by_agent` stays `not yet`, because the new
+  correctness branch and the `amcheck` error it mirrors are unexercised here. The
+  concept page was read and **not edited**.
+- Bookkeeping: `wiki/index.md`, `wiki/v17/index.md` and `wiki/versions.md` updated
+  with the review, its corrections and its measurements.
+
 ## [2026-09-16] review v17 | core-SQL estimator brought onto the no-defeating-the-maintenance rule, both legs re-run
 
 - Reviewed [Testing the PostgreSQL 12 Core-SQL B-Tree Bloat Method on

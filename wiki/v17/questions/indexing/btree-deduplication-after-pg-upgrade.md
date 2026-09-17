@@ -20,6 +20,7 @@ verified_by_agent: not yet
   - [Check 2: prove the byte offsets on your platform](#check-2-prove-the-byte-offsets-on-your-platform)
   - [Check 3: would a rebuild even help?](#check-3-would-a-rebuild-even-help)
   - [What the gate rejects, and why](#what-the-gate-rejects-and-why)
+  - [When a true flag is the wrong answer](#when-a-true-flag-is-the-wrong-answer)
   - [The deduplicate_items trap](#the-deduplicate_items-trap)
   - [Unique and near-unique indexes get the flag but no size win](#unique-and-near-unique-indexes-get-the-flag-but-no-size-win)
   - [What a rebuild actually recovered](#what-a-rebuild-actually-recovered)
@@ -62,6 +63,14 @@ In PostgreSQL 17, question: after a database is upgraded from v12 to v17, how do
 > PostgreSQL 12 to 17"*, which the asker chose to correct and restate. Every
 > number below comes from one run of [the script filed on this page](#the-script)
 > against the current 17.11 pin; the superseded numbers were 17.10 measurements.
+>
+> Reviewed again on 2026-09-16 under the same prompt, restated the same way after
+> the asker again chose **correct and restate** over keeping
+> *follow agents.md, in postgresql 17, review : btree-deduplication-after-pg-upgrade.md*
+> as written. That pass re-read every citation against the unchanged pin, re-ran
+> the page's script end to end, and added the `interval_ops` case in
+> [When a true flag is the wrong answer](#when-a-true-flag-is-the-wrong-answer),
+> which is the one shape where this page's own check gave the wrong verdict.
 
 ## Answer
 
@@ -99,6 +108,12 @@ version is 4 both before and after the rebuild
 ([nbtree.h#BTREE_VERSION](../../../../raw/postgres-17/src/include/access/nbtree.h#L148-L152));
 all 22 carried-over indexes in `public` reported version 4 while none of them could
 deduplicate.
+
+One exception runs the other way, and it is a correctness matter rather than a size
+one: coming from PostgreSQL 13 through 16, an index on an `interval` column can
+arrive with the flag already **true** when v17 says it must be false. Part 1 alone
+would call that index finished. See
+[When a true flag is the wrong answer](#when-a-true-flag-is-the-wrong-answer).
 
 ### Why every carried-over index is affected
 
@@ -194,13 +209,37 @@ Who writes the byte:
   Note that replay *does* rewrite `pd_lower` to 72, so `pd_lower` is a hint, not
   the answer; read byte 64.
 
-Who reads it: `_bt_metaversion()` loads it into the insertion scan key
-([nbtutils.c#_bt_mkscankey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L118-L160)),
-and both deduplication paths gate on it — the index build
+Who reads it: `_bt_metaversion()` puts it in the insertion scan key on the write
+path
+([nbtutils.c#_bt_mkscankey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L118-L160))
+and `_bt_first()` calls it directly on the read path
+([nbtsearch.c#_bt_first](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L1314-L1324)).
+Both deduplication paths then gate on it — the index build
 ([nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1144-L1152))
 and the insert-time pass that tries to avoid a page split
 ([nbtinsert.c#_bt_delete_or_dedup_one_page](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2774-L2782)).
 So a carried-over index does not deduplicate on insert either: it just splits.
+
+Three more readers matter when reasoning about a carried-over metapage:
+
+- Posting lists only exist in an index whose flag is set, so the code that
+  searches one asserts the flag
+  ([nbtsearch.c#_bt_binsrch_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L595-L620)),
+  as does the path that splits one during insertion
+  ([nbtinsert.c:1164-1171](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1164-L1171)).
+- The metapage WAL records copy the flag out of the live metapage rather than
+  recomputing it, both when an insert updates the metapage
+  ([nbtinsert.c:1350-1357](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1350-L1357))
+  and when a new root is created
+  ([nbtinsert.c:2573-2580](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2573-L2580)),
+  so replay can neither invent nor drop it.
+- `contrib/amcheck` re-derives the rule and compares: it calls
+  `_bt_metaversion()`, then errors with "metapage incorrectly indicates that
+  deduplication is safe" when the stored flag is true but `_bt_allequalimage()`
+  now returns false
+  ([verify_nbtree.c#bt_index_check_internal](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L365-L400)).
+  That is the engine's own version of [Check 3](#check-3-would-a-rebuild-even-help),
+  and it is what makes the `interval` case below detectable.
 
 ### Check 1: read the flag with core SQL
 
@@ -223,6 +262,8 @@ SELECT /* wiki_dedup_rebuild_check */
        CASE
          WHEN m.allequalimage IS NULL
            THEN 'unknown: could not read metapage'
+         WHEN m.allequalimage AND NOT e.equalimage_ok
+           THEN 'rebuild for correctness: metapage says safe, catalogs disagree'
          WHEN m.allequalimage
            THEN 'no rebuild needed'
          WHEN i.indnatts <> i.indnkeyatts
@@ -270,6 +311,12 @@ WHERE a.amname = 'btree'
 ORDER BY (m.allequalimage IS NOT TRUE) DESC, pg_relation_size(c.oid) DESC;
 ```
 
+The second branch is the `interval` guard added on 2026-09-16: it fires when the
+metapage claims deduplication is safe and the catalogs say it is not, which is a
+rebuild for correctness rather than for size. On a 12 → 17 upgrade it can never
+fire, because v12 wrote the flag false everywhere, and on this run it matched 0
+rows; see [When a true flag is the wrong answer](#when-a-true-flag-is-the-wrong-answer).
+
 On the upgraded 17.11 cluster this printed 189 rows — every readable B-tree index in
 the database, catalog and TOAST included — of which 27 read false: the 26 carried
 over, plus one freshly built catalog index whose key is `float4`. The verdicts:
@@ -280,7 +327,17 @@ over, plus one freshly built catalog index whose key is `float4`. The verdicts:
 | `rebuild: unique index, no immediate size win` | 5 | `i_uniq`, carried-over `pg_largeobject_loid_pn_index` and three carried-over TOAST indexes |
 | `no gain: key type or collation is not deduplication-safe` | 6 | `i_num` (numeric), `i_flt` (float8), `i_js` (jsonb), `i_arr` (int[]), `i_multimixed` (int + numeric), and `pg_enum_typid_sortorder_index` (float4, not carried over) |
 | `no gain: INCLUDE index can never deduplicate` | 1 | `i_inc` |
+| `rebuild for correctness: metapage says safe, catalogs disagree` | 0 | none here; v12 never set the flag |
 | `no rebuild needed` | 162 | 122 of the 124 `pg_catalog` B-tree indexes and 40 of the 43 in `pg_toast`, all built by the new cluster's `initdb` rather than transferred |
+
+Re-running the same query after the rebuilds is a cheap self-check, and it moves
+exactly as far as it should. `no rebuild needed` went from 162 to **176**: the 14
+rebuilt indexes whose keys are equal-image, and only those. The 6 type-refusals and
+the one `INCLUDE` refusal stayed put even though 6 of them were rebuilt too, and 6
+rows stayed flagged — `i_dup10b` and `p_main_2_k_idx`, deliberately left alone for
+the [twins](#separating-deduplication-from-ordinary-bloat) and the partition pair,
+plus the four unique carried-over indexes (`pg_largeobject_loid_pn_index` and the
+three TOAST indexes), which no rebuild touched.
 
 Cross-checked against `pageinspect`'s `bt_metap()` — installed only as ground truth,
 not as part of the check — the probe's `version`, `allequalimage` and
@@ -394,19 +451,39 @@ for the suite this page was not scored against, and
 
 The documented list of unsafe cases
 ([btree.sgml#btree-deduplication](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L834-L909))
-matches what the catalogs encode:
+matches what the catalogs encode, and the tree tests the catalog side directly.
+`opr_sanity` selects every B-tree opclass whose support function 4 is not
+`btequalimage`, and its comment says the expected output has to be updated whenever
+a new opclass cannot deduplicate
+([opr_sanity.sql:1336-1353](../../../../raw/postgres-17/src/test/regress/sql/opr_sanity.sql#L1336-L1353)).
+That expected output is therefore the authoritative refusal list, 16 rows on this
+pin
+([opr_sanity.out:2204-2222](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222)):
 
-- `numeric` (display scale), `jsonb` (numeric internally), `float4`/`float8`
-  (`-0` versus `0`) and container types such as arrays, composites and ranges have
-  no `amprocnum = 4` row at all.
+| support function 4 | opclasses | what the gate does |
+|---|---|---|
+| `btvarstrequalimage` | `bpchar_ops`, `name_ops`, `text_ops`, `varchar_ops` | safe unless the key collation is nondeterministic |
+| none at all | `array_ops`, `float4_ops`, `float8_ops`, `interval_ops`, `jsonb_ops`, `multirange_ops`, `numeric_ops`, `range_ops`, `record_image_ops`, `record_ops`, `tsquery_ops`, `tsvector_ops` | never safe, so a rebuild buys nothing |
+| `btequalimage` | every other core B-tree opclass, including `text_pattern_ops` | always safe |
+
+Anything the test does not list registers `btequalimage`, because its
+`IS DISTINCT FROM` predicate catches the missing-row case too. Read that way, the
+refusal set is wider than the documentation's four bullets:
+
+- `numeric` (display scale), `jsonb` (numeric internally) and `float4`/`float8`
+  (`-0` versus `0`) have no `amprocnum = 4` row at all, and neither do the
+  container types — arrays, records, ranges and multiranges.
+- **`interval`, `tsquery` and `tsvector` are plain scalar types that also carry
+  none**, so "ordinary scalar types are safe" is not a rule you can apply by eye.
+  `interval_ops` is the one that used to be safe and stopped being safe; see
+  [When a true flag is the wrong answer](#when-a-true-flag-is-the-wrong-answer).
 - `text` and `name` register `btvarstrequalimage` in the `text_ops` family
   ([pg_amproc.dat:201-212](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L201-L212)),
   `bpchar` registers it in its own family
   ([pg_amproc.dat:31-33](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L31-L33)),
   and `varchar_ops` is itself a `btree/text_ops` opclass over `text`
   ([pg_opclass.dat:145-146](../../../../raw/postgres-17/src/include/catalog/pg_opclass.dat#L145-L146)),
-  so a nondeterministic collation disqualifies all of them; ordinary scalar types
-  register `btequalimage`.
+  so a nondeterministic collation disqualifies all of them.
 - `INCLUDE` indexes are refused outright, regardless of key types.
 
 One edge worth knowing: `text_pattern_ops` registers `btequalimage`
@@ -418,6 +495,52 @@ Measured: `CREATE INDEX ... (a text_pattern_ops)` on a nondeterministic-collatio
 column failed with `ERROR:  nondeterministic collations are not supported for
 operator class "text_pattern_ops"`, so the simpler and the proc-aware forms of the
 collation test cannot disagree in practice.
+
+### When a true flag is the wrong answer
+
+Everything above assumes the carried-over flag can only be stale in the harmless
+direction: false where a rebuild would make it true. Coming from PostgreSQL 13
+through 16 there is one shape that is stale the other way, and this page's own
+check answered it wrongly until 2026-09-16.
+
+`interval_ops` used to register `btequalimage` as its support function 4.
+`5f27b5f848a`, "Dissociate btequalimage() from interval_ops, ending its
+deduplication", removed it. Its message states the reason — under `interval_ops`
+some equal values are distinguishable, `'24:00:00'` and `'1 day'` among them — that
+this "can cause incorrect results from index-only scans", that "users should REINDEX
+any btree indexes having interval-type columns", and that in back branches
+`btequalimage()` itself was taught to return false for `interval` while
+`interval_ops` simply omits the function going forward. In this checkout the commit
+is first contained by `REL_17_0`, and its own message records the back-patch to v13.
+
+On a v17 cluster that leaves four facts that combine badly:
+
+- The catalogs carry no support function 4 for `interval_ops`, so
+  `_bt_allequalimage()` returns false for an `interval` key and
+  [Check 3](#check-3-would-a-rebuild-even-help) refuses it exactly like `numeric`
+  ([opr_sanity.out:2204-2222](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222)).
+- v17's `btequalimage()` returns true unconditionally
+  ([datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L415-L438)),
+  so the back branches' type-specific guard is not present here. Nothing in v17
+  turns an old `true` into a `false`.
+- `pg_upgrade` copies the index file, and the only in-place metapage upgrade
+  refuses to touch the field — "Only a REINDEX can set this field"
+  ([nbtpage.c#_bt_upgrademetapage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L98-L131)).
+  A `true` written by a pre-fix v13-v16 build therefore survives the upgrade
+  unchanged, and byte 64 keeps reading 1.
+- `amcheck` is what notices: a true flag plus a now-false rule raises
+  `ERROR:  index "..." metapage incorrectly indicates that deduplication is safe`,
+  with an `errhint` naming "interval" indexes "last built on a version predating
+  2023-11"
+  ([verify_nbtree.c#bt_index_check_internal](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L365-L400)).
+
+So on a 13 → 17 or 16 → 17 upgrade, "the flag is true" is not the end of the
+triage. Do not short-circuit on the flag: compare it against the catalog gate, which
+is what the `rebuild for correctness: metapage says safe, catalogs disagree` branch
+of [Check 1](#check-1-read-the-flag-with-core-sql) now does, and rebuild whatever it
+names. This page measured only 12 → 17, where every carried-over flag is false, so
+that branch is source-verified and matched 0 rows on the run; see
+[Open Questions](#open-questions).
 
 ### The deduplicate_items trap
 
@@ -624,11 +747,17 @@ ORDER BY pg_relation_size(c.oid) DESC;
 
 Measured behaviour after the staged analyze: `rows_per_key` came out 100,000.0 for
 the 10-distinct-value index, 1000.0 for the 1000-value one, 100.0 for the two-column
-index, 1.0 for the unique and the `uuid` index, 9,986.7 for the partial index — whose
-`reltuples` is its own 99,867 rows, not the table's — and `NULL` for the expression
-index `i_expr`, whose key has no `pg_stats` row under the table's column names.
-Expression and partial indexes need the fuller model on the bloat page cited above;
-this query only orders work.
+index, 1.0 for the unique and the `uuid` index, and `NULL` for the expression index
+`i_expr`, whose key has no `pg_stats` row under the table's column names.
+
+The partial index is the row to distrust. It printed **9,673.4** rows per key from
+an index `reltuples` of **96,734**, where the truth is **100,000 indexed rows over
+exactly one distinct key value, so 100,000.0 rows per key** — an order of magnitude
+out. Two independent errors stack: an index's `reltuples` is an `ANALYZE` estimate
+of its own population rather than a count, and the divisor is the *table-wide*
+`n_distinct` of `k10`, which is 10, while the predicate `st = 'open'` admits only
+the rows whose `k10` is 0. Expression and partial indexes need the fuller model on
+the bloat page cited above; this query only orders work.
 
 ### Second opinion: make the engine say it
 
@@ -680,9 +809,12 @@ new cluster's XID counters from the old cluster's control data
 ([pg_upgrade.c#copy_xact_xlog_xid](../../../../raw/postgres-17/src/bin/pg_upgrade/pg_upgrade.c#L701-L737)),
 and then asks `pg_resetwal -o` for the old cluster's next OID
 ([pg_upgrade.c#main](../../../../raw/postgres-17/src/bin/pg_upgrade/pg_upgrade.c#L155-L197)),
-so restored rows do not sit at obviously low XIDs: every carried-over index's
-`pg_class` row had `xmin = 552`, one restore transaction past the old cluster's
-`NextXID` of 487. The OID side gives no band either. The carried-over relfilenodes
+so restored rows do not sit at obviously low XIDs: the schema restore consumed the
+XIDs from the old cluster's `NextXID` of 487 up to 552, leaving the new cluster's
+`NextXID` at 553, and it wrote every carried-over `pg_class` row in the last of
+them — all 26 share a single `xmin` of 552.
+
+The OID side gives no band either. The carried-over relfilenodes
 ran 16392 to 16441, the new cluster's control file reported `NextOID` 16449 both
 immediately after the upgrade and later, and a table created after the upgrade got
 OID 16503 — adjacent to the carried-over range, not separated from it. The band is
@@ -733,6 +865,7 @@ From this checkout's own history, with first release tags:
 | `0d861bbb702` | Add deduplication to nbtree. | `REL_13_0` |
 | `e5d8a999030` | Use full 64-bit XIDs in deleted nbtree pages. | `REL_14_0` |
 | `9f3665fbfc3` | Don't consider newly inserted tuples in nbtree VACUUM. | `REL_14_0` |
+| `5f27b5f848a` | Dissociate btequalimage() from interval_ops, ending its deduplication. | `REL_17_0` |
 
 `0d861bbb702` is also the commit that introduced the "zero'ed on ... pg_upgrade'd
 from Postgres 12" comment in `_bt_metaversion()`, and no commit in
@@ -752,6 +885,12 @@ dropped the `vacuum_cleanup_index_scale_factor` GUC and reloption, and cut the
 `num_heap_tuples` argument out of `_bt_set_cleanup_info()`. Measured here as
 harmless either way: the repurposed field read 0 on all 26 carried-over indexes, and
 `pageinspect` agreed with the probe on that field in all 189 rows.
+
+`5f27b5f848a` is the one commit here that can make a carried-over metapage *wrong*
+rather than merely stale, because it withdrew an opclass's equal-image support
+instead of adding the field. It is covered in
+[When a true flag is the wrong answer](#when-a-true-flag-is-the-wrong-answer), and
+it is out of reach of a 12 → 17 upgrade, whose flags are all false to begin with.
 
 ### Settings this page touches
 
@@ -778,13 +917,13 @@ build's own headers; a reviewer needs a compiler, a shell and this page.
 
 | Item | What to give |
 |---|---|
-| Purpose | Builds PostgreSQL 12.2 and 17.11 from this repository's pinned checkouts, creates disposable 12.2 fixtures, upgrades them with `pg_upgrade --copy`, and measures every number this page reports: the metapage census, the core-SQL probe and its privileges, the catalog gate against the engine's `DEBUG1` verdict, the rebuild results, the `deduplicate_items` trap, the flag-setting matrix, the relfilenode fallback, the savings curve, the bloat/deduplication split, the churn comparison, the post-upgrade statistics and the edge cases |
+| Purpose | Builds PostgreSQL 12.2 and 17.11 from this repository's pinned checkouts, creates disposable 12.2 fixtures, upgrades them with `pg_upgrade --copy`, and measures every number this page reports: the metapage census, the core-SQL probe and its privileges, the catalog gate against the engine's `DEBUG1` verdict, the rebuild results, the `deduplicate_items` trap, the flag-setting matrix, the relfilenode fallback, the savings curve, the bloat/deduplication split, the churn comparison, the post-upgrade statistics including the partial index's exact population against `ANALYZE`'s estimate, the edge cases, and an audit of both server logs for `ERROR` lines that were not provoked on purpose |
 | Invocation | `bash .wiki-runtime/tmp/pgdedup/dedup_upgrade_probe.sh [stage ...]`, run from the repository root. With no arguments it runs every stage except `clean`. Extract the fenced script below to that path first |
-| Stages | Default order: `build12 build17 check reset fixtures upgrade offsets probe gate curve twins churn rebuild stats summary`. `build12`/`build17` configure and install out of tree and skip when the binary exists; `check` runs `make check` on both trees plus `contrib/pageinspect`; `reset` deletes both clusters but keeps the builds, so a full run always starts from the same state; `fixtures` initdbs 12.2 and builds the disposable fixtures, then stops it and digests every index file; `upgrade` initdbs 17.11 and runs `pg_upgrade --copy`; `offsets` compiles the two `offsetof()` programs against both header sets; `probe` starts 17.11 and takes the census, the self-test, the `pageinspect` cross-check, the digest comparison, the counters, the privilege matrix and the edge cases; `gate` builds the 17 gate shapes under `client_min_messages = debug1`; `curve` measures the savings curve; `twins` measures the bloat/deduplication split; `churn` measures the cost of leaving an index alone; `rebuild` runs the concurrent rebuilds, the trap, the flag matrix and the fallback; `stats` runs `vacuumdb --all --analyze-in-stages` and the priority query; `summary` collects everything into `out/summary.txt`. `clean` is not in the default order and must be run last |
+| Stages | Default order: `build12 build17 check reset fixtures upgrade offsets probe gate curve twins churn rebuild stats summary`. `build12`/`build17` configure and install out of tree and skip when the binary exists; `check` runs `make check` on both trees plus `contrib/pageinspect`; `reset` deletes both clusters and truncates both server logs but keeps the builds, so a full run always starts from the same state; `fixtures` initdbs 12.2 and builds the disposable fixtures, then stops it and digests every index file; `upgrade` initdbs 17.11 and runs `pg_upgrade --copy`; `offsets` compiles the two `offsetof()` programs against both header sets; `probe` starts 17.11 and takes the census, the self-test, the `pageinspect` cross-check, the digest comparison, the counters, the privilege matrix and the edge cases; `gate` builds the 17 gate shapes under `client_min_messages = debug1`; `curve` measures the savings curve; `twins` measures the bloat/deduplication split; `churn` measures the cost of leaving an index alone; `rebuild` runs the concurrent rebuilds, the trap, the flag matrix and the fallback; `stats` runs `vacuumdb --all --analyze-in-stages`, the priority query and the partial index's exact-population probe; `summary` collects everything into `out/summary.txt` and itemizes every `ERROR` line in both server logs. `clean` is not in the default order and must be run last |
 | Environment | `REPO` (`$PWD`), `SRC17` (`$REPO/raw/postgres-17`), `SRC12` (`$REPO/raw/postgres-12`), `SANDBOX` (`$REPO/.wiki-runtime/tmp/pgdedup`), `JOBS` (`8`), `PORT12` (`55312`), `PORT17` (`55317`), `ROWS` (`1000000`), `CHURN_ROWS` (`200000`), `STMT_TIMEOUT` (`600s`), `LOCK_TIMEOUT` (`30s`), `EXTRA_CFLAGS12` (`-O2 -g -DTRUE=1 -DFALSE=0`) |
 | Prerequisites | See [Prerequisites](#prerequisites) |
 | Output | Everything lands under `$SANDBOX/out/`; see [Where the results land](#where-the-results-land). Read `out/summary.txt` first |
-| Runtime | About 3 minutes from an empty sandbox on the recorded host: roughly 100 s for the two builds, 21 s for the three regression suites, and 58 s for every measurement stage. A re-run from built trees is about 1 minute |
+| Runtime | About 4 minutes from an empty sandbox on the recorded host: 236 s in total, of which 156 s is the two builds (70 s for 12.2, 86 s for 17.11), 31 s the three regression suites, and 49 s every measurement stage. A re-run from built trees is 76 s: 29 s of suites and 47 s of measurement |
 | Cleanup | `bash dedup_upgrade_probe.sh clean` stops both servers, reports whether any `postmaster.pid` or matching `postgres` process survived, and deletes the whole sandbox |
 
 ### Prerequisites
@@ -811,14 +950,14 @@ build's own headers; a reviewer needs a compiler, a shell and this page.
 
 | File | What is in it |
 |---|---|
-| `summary.txt` | every section below, in one file; read this first |
+| `summary.txt` | every section below, in one file, ending with the itemized `ERROR`-line audit of both server logs; read this first |
 | `checks.txt`, `check*.log` | the three regression suites and their full logs |
 | `configure*.log`, `make*.log`, `install*.log` | build diagnostics, copied out of the build trees so they outlive `reset` |
 | `offsets.txt` | the three `offsetof()` runs: v17 fields on 17.11 headers, the same program refused by the 12.2 headers, and the v12 field set |
 | `upgrade.log`, `upgrade_says.txt`, `upgrade_artifacts.txt` | the whole `pg_upgrade` run, the scripts it left, and the grep for reindex/rebuild/deduplicat |
 | `census12.txt`, `census17_before.txt`, `census17_files.txt`, `census_summary.txt` | the index inventories on both clusters and the per-schema flag counts |
 | `md5_old.txt`, `md5_new.txt`, `md5_compare.txt` | the file digests before and after the upgrade, and the per-index comparison |
-| `stats_zero.txt`, `priority.txt` | `relpages`/`reltuples` as the upgrade left them, and the rebuild priority query after the staged analyze |
+| `stats_zero.txt`, `priority.txt` | `relpages`/`reltuples` as the upgrade left them, and the rebuild priority query after the staged analyze, followed by the partial index's exact population and `ANALYZE`'s estimate of it |
 | `selftest.txt`, `crosscheck_before.txt`, `crosscheck_after.txt` | the platform self-test and the two `bt_metap()` cross-checks |
 | `privileges.txt`, `edges.txt`, `counters.txt` | the seven privilege probes, the edge cases, and the XID/OID counters |
 | `gate_build.txt`, `gate_debug1.txt`, `gate_rows.txt`, `gate_score.txt`, `gate_pattern.txt` | the gate fixtures, the engine's `DEBUG1` lines, and the scored table |
@@ -831,7 +970,7 @@ build's own headers; a reviewer needs a compiler, a shell and this page.
 
 | Fact | Value |
 |---|---|
-| Date | 2026-09-15, the review that re-measured this page on the 17.11 pin |
+| Date | 2026-09-16, the review that re-ran the script after editing it; it supersedes the 2026-09-15 run, which produced the same numbers except where noted |
 | Host | `Linux x86_64`, Ubuntu 24.04, gcc 13.3.0, ICU 74.2, 22 cores, `JOBS=20` |
 | Platform facts | `block_size` 8192, `max_data_alignment` 8, `database_block_size` 8192, `MAXIMUM_ALIGNOF` 8 |
 | 17 leg | 17.11 from `786db8dcf168bd9df8f55047337525ac19118b1c`, `--enable-debug --with-icu --with-readline --with-zlib`; `make check` **All 225 tests passed**, `contrib/pageinspect` **All 8 tests passed** ([regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59)) |
@@ -839,10 +978,15 @@ build's own headers; a reviewer needs a compiler, a shell and this page.
 | Clusters | `initdb --locale=C --encoding=UTF8` on both, `autovacuum = off`, `fsync = off`, `max_wal_size = 2GB` (all three `PGC_SIGHUP`, set in `postgresql.conf` before the first start), ports 55312 and 55317, sockets and data directories inside the sandbox |
 | Fixtures | 1,000,000 rows in `t_main` and `t_main2`, 200,000 in `t_churn`, `t_ts`, `t_unlog` and `t_part`, an empty `t_empty`, a TOASTed `t_toast`, one large object; 22 B-tree indexes in `public` |
 | Upgrade | `pg_upgrade --copy`, 12.2 → 17.11, one script left (`delete_old_cluster.sh`), 26 index files carried over, 26 of 26 digests identical |
+| Reproducibility | the script ran four times on this host today, twice before the edits and twice after. Every scored cell came out identical on all four — the census, the 189-row check and its verdict counts, the offsets, the gate, the curve, the twins, the churn, the 17 rebuild rows, the trap, the flag matrix, the fallback joins and the counters. The one moving number is the partial index's sampled `reltuples`: 101,667, 104,734, 98,700 and 96,734, against 99,867 on 2026-09-15 and an exact population of 100,000 |
+| Server logs | 6 `ERROR` lines on 17.11, every one provoked on purpose — 3 × `permission denied for function pg_read_binary_file`, 1 × `absolute path not allowed`, 1 × `index 64 out of valid range, 0..39`, 1 × `nondeterministic collations are not supported for operator class "text_pattern_ops"` — and 0 on 12.2 |
 | Teardown | the `clean` stage stopped both servers and deleted the sandbox; see the log entry for the confirmation |
 
 The numbers on this page and the script text below come from that one run. If the
-script is edited afterwards, re-run it before changing any number.
+script is edited afterwards, re-run it before changing any number. The 2026-09-16
+review did edit it — a `rebuild for correctness` branch in the filed check, an
+exact-population probe for the partial index, per-run truncation of the server logs
+in `reset`, and the itemized log audit in `summary` — and then re-ran every stage.
 
 ### The script
 
@@ -977,6 +1121,9 @@ stage_reset() {
   stop17; stop12
   rm -rf "$DATA12" "$DATA17" "$TS12" "$UPG" "$SOCK12" "$SOCK17"
   rm -f "$OUT"/census*.txt "$OUT"/md5_*.txt
+  # pg_ctl appends, so the server logs have to start empty too: the summary
+  # audits them for unexpected ERROR lines, and a stale log would be counted.
+  : > "$OUT/server12.log"; : > "$OUT/server17.log"
   mkdir -p "$SOCK12" "$SOCK17" "$TS12" "$UPG"
 }
 
@@ -1272,6 +1419,8 @@ SELECT /* wiki_dedup_rebuild_check */
        CASE
          WHEN m.allequalimage IS NULL
            THEN 'unknown: could not read metapage'
+         WHEN m.allequalimage AND NOT e.equalimage_ok
+           THEN 'rebuild for correctness: metapage says safe, catalogs disagree'
          WHEN m.allequalimage
            THEN 'no rebuild needed'
          WHEN i.indnatts <> i.indnkeyatts
@@ -1915,6 +2064,17 @@ SQL
              FROM pg_class c JOIN pg_am a ON a.oid = c.relam
              JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE c.relkind = 'i' AND a.amname = 'btree' AND n.nspname = 'public'" >> "$OUT/priority.txt"
+  # rows_per_key divides a sampled reltuples, so record what the partial index's
+  # population exactly is next to what ANALYZE estimated it to be.
+  q17 "$DB" "SELECT /* wiki_dedup_partial_exact */ 'i_partial: ' || count(*) ||
+               ' indexed rows over ' || count(DISTINCT k10) || ' distinct key value(s) = ' ||
+               round(count(*)::numeric / count(DISTINCT k10), 1) || ' rows per key exactly; ' ||
+               'ANALYZE estimated reltuples ' ||
+               (SELECT reltuples::bigint FROM pg_class WHERE oid = 'i_partial'::regclass) ||
+               ', and the n_distinct the priority query divides by is ' ||
+               (SELECT n_distinct::bigint FROM pg_stats
+                WHERE schemaname = 'public' AND tablename = 't_main' AND attname = 'k10')
+             FROM t_main WHERE st = 'open'" >> "$OUT/priority.txt"
   cat "$OUT/priority.txt" >&2
 }
 
@@ -1942,7 +2102,13 @@ stage_summary() {
     printf '\n=== statistics ===\n';        cat "$OUT/priority.txt" 2>/dev/null
     printf '\n=== counters ===\n';          cat "$OUT/counters.txt" 2>/dev/null
     printf '\n=== server log errors ===\n'
-    grep -c 'ERROR' "$OUT/server17.log" 2>/dev/null || printf '0\n'
+    # Every ERROR this run provokes is deliberate, so print them rather than a
+    # bare count: an unexplained line here invalidates the run.  grep -c prints
+    # 0 and exits 1 on no match, so take its output and ignore the status.
+    err_count() { local n; n="$(grep -c 'ERROR:' "$1" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+    printf 'ERROR lines in server17.log: %s\n' "$(err_count "$OUT/server17.log")"
+    grep -o 'ERROR:.*' "$OUT/server17.log" 2>/dev/null | sort | uniq -c | sort -rn
+    printf 'ERROR lines in server12.log: %s\n' "$(err_count "$OUT/server12.log")"
   } > "$OUT/summary.txt" 2>&1
   note "summary written to $OUT/summary.txt"
 }
@@ -1979,7 +2145,11 @@ note "done: $STAGES"
 
 - Metapage and deduplication implementation: `src/include/access/nbtree.h`,
   `src/backend/access/nbtree/nbtpage.c`, `nbtutils.c`, `nbtsort.c`, `nbtinsert.c`,
-  `nbtdedup.c`, `nbtree.c`, `nbtxlog.c`.
+  `nbtdedup.c`, `nbtree.c`, `nbtxlog.c`, `nbtsearch.c`.
+- Every reader of the flag in the tree, found by grepping the whole checkout for
+  `allequalimage`: 15 files, of which `nbtsearch.c` (`_bt_first`,
+  `_bt_binsrch_posting`) and `contrib/amcheck/verify_nbtree.c` were not covered
+  before the 2026-09-16 review.
 - Equal-image support functions and their catalog rows:
   `src/backend/utils/adt/datum.c`, `src/backend/utils/adt/varlena.c`,
   `src/include/catalog/pg_amproc.dat`, `src/include/catalog/pg_opclass.dat`,
@@ -1995,22 +2165,32 @@ note "done: $STAGES"
   `relfilenumber.c`, and `src/bin/pg_dump/pg_dump.c` binary-upgrade support.
 - Documentation: `doc/src/sgml/btree.sgml`, `doc/src/sgml/ref/create_index.sgml`,
   `doc/src/sgml/ref/pgupgrade.sgml`, `doc/src/sgml/regress.sgml`.
-- Tests: `src/test/regress/sql/btree_index.sql` and its expected output,
+- Tests: `src/test/regress/sql/opr_sanity.sql` and its expected output, which
+  enumerate the B-tree opclasses that cannot deduplicate unconditionally;
+  `src/test/regress/sql/btree_index.sql` and its expected output,
   `src/test/regress/expected/collate.icu.utf8.out`,
   `src/bin/pg_amcheck/t/005_opclass_damage.pl`,
-  `contrib/pageinspect/expected/btree.out`.
+  `contrib/pageinspect/expected/btree.out`. Nothing in the tree exercises a
+  carried-over metapage: `allequalimage` appears in 15 files, and the only test
+  file among them is `contrib/pageinspect/expected/btree.out`, where a freshly
+  built index reads true. The `pg_upgrade` behaviour itself is untested upstream,
+  which is what the script on this page measures.
 - Ground truth only, not part of the answer: `contrib/pageinspect/btreefuncs.c`.
+  Read as a second implementation of the same rule, not as part of the check:
+  `contrib/amcheck/verify_nbtree.c`.
 - Source history: `git log`, `git tag --contains` and `git log -S` in this checkout
-  for `612a1ab7672`, `0d861bbb702`, `e5d8a999030`, `9f3665fbfc3`, for
+  for `612a1ab7672`, `0d861bbb702`, `e5d8a999030`, `9f3665fbfc3`, `5f27b5f848a`,
+  for `interval_ops` under `src/include/catalog/pg_amproc.dat`, for
   `allequalimage` under `src/bin/pg_upgrade`, and for the repin range
   `54eeefaed..786db8dcf16`.
 - Wiki concept layer: [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md),
   read for the deduplication-gate family and the suite's boundary. It was not
   edited, and this page is not scored against it; see
   [Open Questions](#open-questions).
-- Live measurement, 2026-09-15: one isolated 12.2 cluster and one isolated 17.11
+- Live measurement, 2026-09-16: one isolated 12.2 cluster and one isolated 17.11
   cluster created from it by `pg_upgrade --copy`, both built from their pins by
   [the script on this page](#the-script) and both stopped and deleted afterwards.
+  The script ran four times, the last two on the text published here.
 - Pinned checkout `raw/postgres-17/` at commit
   `786db8dcf168bd9df8f55047337525ac19118b1c` (PostgreSQL 17.11,
   `REL_17_11-7-g786db8dcf16`); repinned from
@@ -2044,7 +2224,12 @@ note "done: $STAGES"
 | A build writes its pages, metapage included, through the bulk-write path | [nbtsort.c#_bt_blwritepage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L631-L639) |
 | Insert-time deduplication is gated on the flag and the reloption | [nbtinsert.c#_bt_delete_or_dedup_one_page](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2774-L2782) |
 | Build-time deduplication also requires non-uniqueness | [nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1144-L1152) |
-| Flag reaches scans/inserts through the insertion scan key | [nbtutils.c#_bt_mkscankey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L118-L160) |
+| Flag reaches inserts through the insertion scan key | [nbtutils.c#_bt_mkscankey](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L118-L160) |
+| Scans read it directly in `_bt_first` | [nbtsearch.c#_bt_first](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L1314-L1324) |
+| Posting-list search and posting-list splits assert it | [nbtsearch.c#_bt_binsrch_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L595-L620), [nbtinsert.c:1164-1171](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1164-L1171) |
+| Metapage WAL records copy the flag rather than recomputing it | [nbtinsert.c:1350-1357](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1350-L1357), [nbtinsert.c:2573-2580](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2573-L2580) |
+| `amcheck` errors when a stored true flag disagrees with the live rule, hinting at `interval` | [verify_nbtree.c#bt_index_check_internal](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L365-L400) |
+| The authoritative list of B-tree opclasses that cannot deduplicate unconditionally, and the test that guards it | [opr_sanity.sql:1336-1353](../../../../raw/postgres-17/src/test/regress/sql/opr_sanity.sql#L1336-L1353), [opr_sanity.out:2204-2222](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222) |
 | Eligibility rule: `INCLUDE`, support function 4, collation | [nbtutils.c#_bt_allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5129-L5183), [nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L686-L712) |
 | `btequalimage` always true; `btvarstrequalimage` true for C, default or deterministic collations only | [datum.c#btequalimage](../../../../raw/postgres-17/src/backend/utils/adt/datum.c#L415-L438), [varlena.c#btvarstrequalimage](../../../../raw/postgres-17/src/backend/utils/adt/varlena.c#L2595-L2613) |
 | Which opclasses register which support function | [pg_amproc.dat:201-212](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L201-L212), [pg_amproc.dat:31-33](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L31-L33), [pg_amproc.dat:240-241](../../../../raw/postgres-17/src/include/catalog/pg_amproc.dat#L240-L241), [pg_opclass.dat:145-146](../../../../raw/postgres-17/src/include/catalog/pg_opclass.dat#L145-L146) |
@@ -2118,26 +2303,48 @@ note "done: $STAGES"
   no test forced a metapage update to sit dirty in shared buffers while the probe
   ran. `btm_allequalimage` never changes after build, so the risk is bounded, but
   it is unmeasured.
-- **12.2 is the only old version measured.** An 11 or earlier cluster would also
-  carry `btm_version = 3` metapages, where `_bt_upgrademetapage()` and the
-  `heapkeyspace` differences matter as well; nothing here was run against one.
-- **The gate was scored on 17 index shapes.** It agreed with the metapage on all of
-  them, but the space of opclasses is much larger: user-defined opclasses that
-  register support function 4 and return false for reasons other than collation
-  would defeat the SQL mirror, which cannot call the function. Nor was a
-  nondeterministic collation with a C locale constructed, which is the only shape
-  where `btvarstrequalimage`'s C short-circuit could disagree with
-  `collisdeterministic`.
+- **12.2 is the only old version measured, and it is the one version that cannot
+  show the `interval` hazard.** An 11 or earlier cluster would also carry
+  `btm_version = 3` metapages, where `_bt_upgrademetapage()` and the `heapkeyspace`
+  differences matter; a 13 through 16 cluster is where a *true* flag can be carried
+  into v17 and be wrong. Nothing here was run against either.
+- **The `rebuild for correctness` branch is source-verified and unexercised.** It
+  is derived from `5f27b5f848a`, the catalogs, `btequalimage()` and `amcheck`, and
+  it matched 0 rows on the measured leg because v12 wrote every flag false. No
+  fixture on this page produces a metapage whose flag is true while the catalogs
+  refuse the key, which would need either a pre-fix 13-16 build or a hand-edited
+  metapage. Its counterpart in the engine — the `amcheck` error — was likewise not
+  triggered here.
+- **The gate was scored on 17 index shapes, none of them `interval`.** It agreed
+  with the metapage on all 17, but the space of opclasses is much larger:
+  `opr_sanity` names 16 core opclasses that cannot deduplicate unconditionally,
+  and the fixtures cover only `numeric`, `float8`, `jsonb`, `int[]` and
+  nondeterministic `text` among them. User-defined opclasses that register support
+  function 4 and return false for reasons other than collation would also defeat
+  the SQL mirror, which cannot call the function. Nor was a nondeterministic
+  collation with a C locale constructed, which is the only shape where
+  `btvarstrequalimage`'s C short-circuit could disagree with `collisdeterministic`.
 - **The earlier `INCLUDE` loss was not reproduced.** The superseded 17.10 text
   reported that `i_inc` lost six pages on rebuild and could not isolate the cause.
   On this run the `INCLUDE` index rebuilt byte-identical, at 22,519,808 bytes both
   before and after, so nothing remains to explain — but the fixture is not the same
   one: this `i_inc` includes a short `text` column that fits inside the tuple
   alignment of the key alone.
-- **Partial-index triage is approximate.** `rows_per_key` divides the index's own
-  `reltuples` by the table's `n_distinct`, which assumes the predicate does not
-  correlate with the key. Measured on `i_partial`: 9,986.7 rows per key against an
-  actual population of 99,867 rows over 10 keys.
+- **Partial-index triage is approximate, and on this fixture it is wrong by an
+  order of magnitude.** `rows_per_key` divides the index's own `reltuples` by the
+  table's `n_distinct`, which assumes the predicate does not correlate with the
+  key. On `i_partial` the predicate *is* the key — `st = 'open'` holds exactly
+  where `k10` is 0 — so the query printed 9,673.4 rows per key where the truth is
+  100,000 rows over one distinct key value. The superseded text called 99,867 rows
+  over 10 keys the "actual" figures; both halves of that were wrong, the row count
+  because an index's `reltuples` is a sample and the key count because the subset
+  holds one value. No general fix is filed here: correcting it needs statistics on
+  the indexed subset, which `pg_stats` does not carry for a partial index.
+- **The sampled `reltuples` behind that column moves every run.** Four runs on one
+  host on 2026-09-16 gave 101,667, 104,734, 98,700 and 96,734 for a population that
+  is exactly 100,000, and 2026-09-15 gave 99,867. Every other scored cell on this
+  page reproduced exactly across those runs, so treat this one column as an
+  estimate with a few percent of spread rather than a measurement.
 - **No timing was recorded for the rebuilds.** Sizes were measured; wall-clock cost
   and WAL volume of the `REINDEX INDEX CONCURRENTLY` runs were not.
 - **The carried-over catalog and TOAST indexes were flagged but not rebuilt.**
@@ -2160,7 +2367,12 @@ note "done: $STAGES"
 - [nbtsort.c#_bt_blwritepage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L631-L639)
 - [nbtsort.c#_bt_load](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1118-L1152)
 - [nbtinsert.c#_bt_findinsertloc](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L899-L907)
+- [nbtinsert.c:1164-1171](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1164-L1171)
+- [nbtinsert.c:1350-1357](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1350-L1357)
+- [nbtinsert.c:2573-2580](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2573-L2580)
 - [nbtinsert.c#_bt_delete_or_dedup_one_page](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2654-L2782)
+- [nbtsearch.c#_bt_binsrch_posting](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L595-L620)
+- [nbtsearch.c#_bt_first](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L1314-L1324)
 - [nbtree.c#btbuildempty](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L158-L171)
 - [nbtxlog.c#_bt_restore_meta](../../../../raw/postgres-17/src/backend/access/nbtree/nbtxlog.c#L101-L125)
 - [bufpage.h#PageGetContents](../../../../raw/postgres-17/src/include/storage/bufpage.h#L246-L258)
@@ -2199,10 +2411,13 @@ note "done: $STAGES"
 - [pgupgrade.sgml#post-upgrade-scripts](../../../../raw/postgres-17/doc/src/sgml/ref/pgupgrade.sgml#L1078-L1086)
 - [regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59)
 - [btree_index.sql:208-231](../../../../raw/postgres-17/src/test/regress/sql/btree_index.sql#L208-L231)
+- [opr_sanity.sql:1336-1353](../../../../raw/postgres-17/src/test/regress/sql/opr_sanity.sql#L1336-L1353)
+- [opr_sanity.out:2204-2222](../../../../raw/postgres-17/src/test/regress/expected/opr_sanity.out#L2204-L2222)
 - [collate.icu.utf8.out:1796-1801](../../../../raw/postgres-17/src/test/regress/expected/collate.icu.utf8.out#L1796-L1801)
 - [005_opclass_damage.pl:45-52](../../../../raw/postgres-17/src/bin/pg_amcheck/t/005_opclass_damage.pl#L45-L52)
 - [btreefuncs.c#bt_metap](../../../../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L828-L922)
 - [btree.out:1-16](../../../../raw/postgres-17/contrib/pageinspect/expected/btree.out#L1-L16)
+- [verify_nbtree.c#bt_index_check_internal](../../../../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L365-L400)
 
 ## Navigation
 
