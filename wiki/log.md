@@ -12768,3 +12768,128 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   sandbox, no socket file for port 55418 or 55419, 0 TCP listeners on either port, and
   `.wiki-runtime/tmp/shbuf/` removed. The pre-existing directory
   `.wiki-runtime/tmp/reverted-scripts-20260914/` was not touched.
+
+## [2026-09-19] review v17 | planner penalties for bloated indexes: nine source readings corrected, re-measured on 17.11 from a published script
+
+- Reviewed [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11; detached `HEAD` at the pin, clean
+  worktree).
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17 , review : # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)`;
+  the defects are `agents.md` -> `AGENTS.md`, lowercase `postgresql`, a space before the
+  comma and before the colon, the lowercase sentence opening, a stray Markdown `#` carried
+  in with the pasted title, and no terminal period. Both forms are filed under the page's
+  `## Question`.
+- **Scope, in two steps.** Asked after the full analysis had been shown in chat, the asker
+  chose **report only**: nothing filed, working files deleted. They then replied
+  `fix issues`, which this entry records as the fix-in-place pass over every finding.
+- **Citations.** All 340 citations of the previous text (177 ranges, 46 files) were re-read
+  against the pin: all in bounds, all from `raw/postgres-17/`. Six ranges were tightened or
+  extended (`gin_clean_pending_list` stopped mid-`ereport`, `lazy_vacuum`'s bypass range
+  ended one line before `do_index_vacuuming = false`, the failsafe and `sortopfamily`
+  ranges stopped short, `index_pages_fetched` started one line after its comment opener),
+  the `pgstatginindex` label pointed at the legacy superuser entry point where extension
+  1.5 binds `pgstatginindex_v1_5`, and five behavioral claims had no citation. The page now
+  carries 406 citation occurrences over 199 ranges in 53 files, all re-checked in bounds.
+- **Nine source readings were wrong.** (1) `cost_index()` hands `compute_parallel_worker()`
+  the AM's `*indexPages` output, which is `numIndexPages`, the pages the scan is expected to
+  touch; only the cache model gets `index->pages`. The page said "the same `index_pages`
+  value". (2) `cost_index()` has three `index_pages_fetched()` call sites, not four.
+  (3) "Exactly four AMs" use `genericcostestimate()`: contrib `bloom` is a fifth, and it sets
+  `numIndexTuples = index->tuples`, so it is charged for every page on every scan.
+  (4) `get_relation_info_hook` runs after every `IndexOptInfo` is filled and may rewrite
+  `pages`, `tuples`, `tree_height` or `amcostestimate`; the page named two hooks and said an
+  extension cannot change the height charge. (5) "The height never shrinks through deletion
+  alone" is true of `btm_level` and false of the planner's `btm_fastlevel`. (6) "`ceil()`
+  collapses every selective lookup to one page regardless of how bloated the index is"
+  holds only while `pages <= tuples`. (7) The filed closed form carried a standalone
+  `+ qual_op_cost` that `genericcostestimate()` does not have; that term, not rounding,
+  produced the one-cent gaps the page had parked under Open Questions. (8) `num_sa_scans`
+  multiplies the page charge through Mackert-Lohman, not the per-tuple charge, which
+  `btcostestimate()` divides by the same number first. (9) GIN's pending pages being booked
+  as startup cost does not "disqualify GIN from `LIMIT` plans": a GIN path is bitmap-only
+  and `cost_bitmap_heap_scan()` takes the index total as its own startup.
+- **History method replaced.** The page said the v17 checkout "contains the `REL_12_0`
+  through `REL_17_0` tags" and used `git tag --contains`. On this host `raw/postgres-17`
+  is a single-branch clone with 0 tags. Attributions now rest on
+  `git merge-base --is-ancestor` against the five `Stamp HEAD as NNdevel.` commits and the
+  twelve `Stamp 17.N.` commits, `git log -L` over `615cebc94b..HEAD`, and `REL_12_0` function
+  text read from the v12 checkout's own tag. All 19 commit ids, subjects and dates, every
+  first-major attribution, the five-commit `btcostestimate` history and the two-commit
+  `gincostestimate` history held. One sentence was wrong: `genericcostestimate()` has a
+  second diff against `REL_12_0`, from `9391f71523b`.
+- **Re-measured on the pin from a published script.** The page had about a hundred measured
+  numbers from an unpublished 17.10 run on Linux x86_64 whose scripts were purged on
+  2026-09-07. It now files an 833-line `## Measurement Script` (Bash and SQL only, every
+  statement tagged, stages selectable and idempotent, teardown asserted) that rebuilds
+  every fixture from the old prose. Build: `PostgreSQL 17.11 on aarch64-apple-darwin27.0.0`,
+  Apple clang 21, `--without-icu --without-readline`, `block_size` 8192, maximum data
+  alignment 8; `make check` **All 225**, `pgstattuple` **All 1**, `pageinspect` **All 8**,
+  `btree_gin` **All 30**. The script sets `default_statistics_target = 10000` so that
+  `ANALYZE` reads every row; two complete passes with the filed text agreed on all **33**
+  index rows, **11** GIN rows, **7 of 7** closed-form predictions and **116** plans, and
+  three earlier runs agreed on the 112 plans they shared. The published copy was extracted
+  from the page and compared byte for byte with the script before the final full run.
+- **What reproduced.** Every number that depends only on an index and exact statistics came
+  back identical to the 17.10 filing on a different OS and architecture: 2,745 / 26,411 /
+  276 / 2,465 deleted / 744 / 139 / 1,323 / 8 / 55 / 852 / 2,749 / 5,285 / 428 -> 3,801
+  blocks and every density, `28480.42`, `123144.43`, `4.44` -> `4.31`, `12730.42`,
+  `2854.29`, `8226.42`, the four fixture-H costs, all twelve SAOP-clamp costs, `22353.00`,
+  4 versus 6 workers, and in the follow-up `12.97`, `4.52`, `3.97`, `30.10`, `13.57`,
+  `4.82`, `8.31`, `8.64`, `8.55`, `1001.00` charged pages, all four error messages and both
+  diagnostic blocks (`2030.46` and `1121.46`, 303.00 pages).
+- **What was replaced, and why.** Sampled row estimates (`9731.06` -> `9590.42`,
+  `4706.74` -> `4606.43`, `16026.44` -> `15966.42`, `3136.70` / `12502.38` -> `3100.43` /
+  `12568.42`, the deduplication gaps `68.00` / `7516.00` -> `76.00` / `7512.00`); the
+  unseeded random-order index (1,101 blocks at 49.73% -> a seeded 1,148 at 49.87%, the
+  identity now `1616.00 = 404 * 4.0`); `25528.42` -> `24640.42`: the old figure reproduced to
+  the cent only with the table left un-vacuumed, which adds `888.00` of heap fetches the
+  method note said were zero; and the version-churn and GIN fixtures whose definitions the old
+  page did not record (583 / 1,174 -> 543 / 1,173 blocks at 1,000 tag values; 982 pending
+  pages -> 736 and 1,471).
+- **New measured findings.** A one-row lookup on 2,745 blocks over 1,000 rows costs
+  `12.29` against `4.44` built and `4.29` rebuilt, because `numIndexPages =
+  ceil(2745 / 1000) = 3`. The same fixture reads `tree_level` 2 against `fastlevel` 1 after
+  a delete and two VACUUMs with no rebuild, startup `0.42` -> `0.28`. Parallel workers are
+  6 / 5 / 5 against 4 / 3 / 2 at 100% / 50% / 20% of the keys. A repeated inner scan costs
+  `0.66` against `2.50` per loop, `1.38` against `3.55` at `effective_cache_size = 64MB`.
+  A 100-value twin of the churn fixture grows to 1,020 blocks with or without a held
+  snapshot. The GIN index stays in the `BitmapAnd` at 736 pending pages (`3321.93` against
+  a B-tree-only `3486.80`, 25 times the vacuumed plan) and leaves it at 1,471 (`6264.98`
+  for the GIN scan alone against `4646.42` for the whole alternative), which identifies the
+  comparison the first filing could not explain. A partial index prices `500.00` below its
+  plain twin because `check_index_predicates()` drops the predicate-implied clause from
+  its quals.
+- **Open questions** stay at 10: the one-cent gaps and the fast-root divergence are closed,
+  the cache-model and `BitmapAnd` questions are narrowed to their unmeasured halves, and
+  two are added (the partial-scan worker counts needed zeroed parallel costs; every row
+  estimate on the page is exact, so no default-target run is filed).
+- **Concept layer**: `wiki/v17/common-concepts/` holds only the three mandatory bloat-test
+  protocol pages, which govern bloat estimators, not planner costing. None defines a
+  concept this page explains, so none is linked, and no concept page was created or edited.
+- **Not touched**: the v12 twin,
+  `wiki/v12/questions/query-planning/bloated-indexes-query-planner.md`, was not reviewed
+  in this pass. It is a differently written page: a search for the nine corrected
+  sentences (call-site count, "exactly four AMs", the hook and height-charge claims, the
+  parallel-worker input) found none of them there, so no carry-over is known. Whether its
+  own readings hold needs a separate pass against `raw/postgres-12/`.
+- **Bookkeeping**: summaries rewritten in `wiki/index.md` and `wiki/v17/index.md`; the v17
+  row passage corrected and a dated note added in `wiki/versions.md`. `verified:` untouched
+  and **agent verification stays `not yet`**, by the wiki's practice for pages that still
+  carry open questions. Validation: `scripts/wiki_lint` reports the host baseline of 9
+  errors and 2 warnings, none on this page, all from other checkouts on this machine (the
+  v18 and v19 pins absent, v14 on another commit, uncommitted changes in v12 and v14); all
+  77 `## Contents` anchors resolve.
+- **Teardown**: one measurement cluster per run under `.wiki-runtime/tmp/bloatplan/`, port
+  55437, each stopped by the script's `stop` stage, which asserts no `postmaster.pid`, no
+  process from the data directory and no socket on the port. The `clean` stage then
+  deleted the sandbox, and the runtime copy of the script and the run logs under
+  `.wiki-runtime/tmp/` were deleted afterwards. `raw/postgres-17/` and `raw/postgres-12/`
+  were read only.
+- **Version control**: committed and pushed on the asker's instruction, to `master` by
+  their choice. Three commits from another host (`00f259f`, `c268096`, `b167f2a`) had
+  reached `origin/master` during the review; this pass was rebased onto them.
+  `wiki/log.md` and `wiki/versions.md` conflicted and were resolved by keeping the
+  incoming text and re-applying this pass's edits on top of it; `wiki/index.md` and
+  `wiki/v17/index.md` merged cleanly, and the page itself was not touched by them.
