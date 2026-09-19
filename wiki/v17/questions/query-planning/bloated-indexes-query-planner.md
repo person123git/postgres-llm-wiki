@@ -96,7 +96,9 @@ Follow-up:
 
 When might a GIN index be discarded by the query planner and a B-tree used instead?
 
-Review prompt, 2026-09-19, corrected form: `Follow AGENTS.md. In PostgreSQL 17, review: Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified).` The request as written read `follow agents.md, in postgresql 17 , review : # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)`; the defects were `agents.md` for AGENTS.md, lowercase `postgresql`, a space before the comma and before the colon, the lowercase sentence opening `follow`, a stray Markdown heading marker `#` carried in with the pasted title, and no terminal period. The asker chose **correct and restate** and **report only**, read the findings, and then asked for them to be fixed (`fix issues`). That pass corrected nine source readings, replaced the history method, re-measured every number on the 17.11 pin from the script now filed under [Measurement Script](#measurement-script), and is recorded in the 2026-09-19 entry of [log](../../../log.md).
+Review prompt, 2026-09-19, corrected form: `Follow AGENTS.md. In PostgreSQL 17, review: Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified).` The request as written read `follow agents.md, in postgresql 17 , review : # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)`; the defects were `agents.md` for AGENTS.md, lowercase `postgresql`, a space before the comma and before the colon, the lowercase sentence opening `follow`, a stray Markdown heading marker `#` carried in with the pasted title, and no terminal period. The asker chose **correct and restate** and **report only**, read the findings, and then asked for them to be fixed (`fix issues`). That pass corrected nine source readings, replaced the history method, re-measured every number on the 17.11 pin from the script now filed under [Measurement Script](#measurement-script), and is recorded in the first 2026-09-19 entry of [log](../../../log.md).
+
+Second review prompt, 2026-09-19, corrected form: `Follow AGENTS.md. In PostgreSQL 17, for the question "Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)", fix these issues:` followed by a list of twelve findings, fourteen counting the three folded into the last one. The request as written read `follow agents.md, in postgresql 17 , for question : # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified) fix these issues :`; the defects were `agents.md` for AGENTS.md, lowercase `postgresql`, the lowercase sentence openings `follow` and `fix`, a space before the comma in `17 ,` and before each of the two colons, a stray Markdown heading marker `#` carried in with the pasted title, and no terminal punctuation. The pasted finding list carried two defects of its own: the numbering stopped at 11 and the twelfth item began mid-sentence at `planner.md:148) omits potentially stale cached metadata`, its opening clause missing, and item 2's `fa predict` was unquoted so it did not read as a command. The asker chose **correct and restate**, and chose to **replace** fixture `l3` rather than keep its degenerate form. All fourteen sub-findings were confirmed against the pin and fixed; that pass is the second 2026-09-19 entry of [log](../../../log.md).
 
 ## Answer
 
@@ -118,7 +120,7 @@ The consequences are sharply uneven, and measurements on an isolated server buil
 - **Leaf fragmentation is worth exactly zero.** A 1,148-block index at 49.87% `leaf_fragmentation` and a 744-block index at 0% differ in cost by `1616.00`, which is precisely `(1148 - 744) * random_page_cost`. There is no residual for fragmentation.
 - **`avg_leaf_density` and planner cost can point in opposite directions.** Two 2,745-block indexes over the same 100,000 rows cost an identical `12730.42`, while `pgstatindex` reports 9.27% density for one and a healthy-looking 89.18% for the other (the second hides 2,465 deleted pages).
 
-The v17 manual describes B-tree bloat operationally as an index that "contains many empty or nearly-empty pages" and recommends `REINDEX` ([ref/reindex.sgml#bloated](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L54-L64)), notes that a page keeps its space when "all but a few index keys on a page have been deleted" ([maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1032-L1040)), and separately says a freshly built B-tree is slightly faster because logically adjacent pages are usually physically adjacent ([maintenance.sgml#fresh-index](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1048-L1054)). That last effect is exactly what `leaf_fragmentation` exposes and exactly what the planner ignores.
+The v17 manual describes B-tree bloat operationally as an index that "contains many empty or nearly-empty pages" and recommends `REINDEX` ([ref/reindex.sgml#bloated](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L54-L64)), notes that a page keeps its space when "all but a few index keys on a page have been deleted" ([maintenance.sgml#routine-reindex](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1032-L1040)), and separately says a freshly built B-tree is slightly faster because logically adjacent pages are usually physically adjacent ([maintenance.sgml#fresh-index](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1048-L1054)). `leaf_fragmentation` is a one-sided proxy for that last effect rather than a measure of it: it counts only leaf pages whose right-sibling link points at a *lower* block number ([pgstatindex.c#fragments](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L323)). A leaf chain that always moves forward but in thousand-block jumps scores 0% while being no more physically adjacent than one that moves backwards. Whatever part of the effect the metric does capture, the planner ignores all of it.
 
 Since PostgreSQL 12, the cost formulas themselves barely moved: `index_pages_fetched()` and `cost_index()` are byte-identical to their `REL_12_0` text, and the bloat-relevant core of `genericcostestimate()` is unchanged. What changed is (a) one new v17 penalty channel through `index->pages`, and (b) a great deal of nbtree work in v13 and v14 that reduces how much bloat exists to be penalized in the first place.
 
@@ -144,7 +146,7 @@ Three consequences follow directly:
 2. **Removing index entries does not lower `tuples`.** For a non-partial index, `tuples` is the *table's* row estimate, so the `pages / tuples` ratio rises purely as pages accumulate.
 3. **Partial indexes take a different path.** `estimate_rel_size()` still reports live blocks as `*pages`, but derives `*tuples` from `pg_class` tuple density after discounting the metapage ([plancat.c#estimate_rel_size-index](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1079-L1160)). A partial index therefore inherits stale-statistics behavior that an ordinary index does not.
 
-For B-trees only, the height comes from the metapage while the index is open; every other AM is left at `-1` ([plancat.c#get_relation_info-tree-height](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L488-L500)). Partitioned indexes have no storage, so all three fields are zeroed ([plancat.c#get_relation_info-partitioned](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L502-L508)).
+For B-trees only, the height comes from the metapage while the index is open; every other AM is left at `-1` ([plancat.c#get_relation_info-tree-height](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L488-L500)). That read is not necessarily a fresh one — it can be answered from a per-backend cached copy of the metapage, which is the third caveat in [2. B-tree height carries an explicit anti-bloat charge](#2-b-tree-height-carries-an-explicit-anti-bloat-charge). Partitioned indexes have no storage, so all three fields are zeroed ([plancat.c#get_relation_info-partitioned](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L502-L508)).
 
 ### 1. Physical page count enters index cost
 
@@ -175,7 +177,13 @@ descentCost = (index->tree_height + 1) * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_opera
 
 The in-tree comment is explicit: "if we had no such charge at all, bloated indexes would appear to have the same search cost as unbloated ones, at least in cases where only a single leaf page is expected to be visited." `DEFAULT_PAGE_CPU_MULTIPLIER` is `50.0` ([selfuncs.c:145](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L145)), so each extra level costs `50 * cpu_operator_cost` = `0.125` at the default `cpu_operator_cost` of `0.0025`.
 
-Two caveats matter. First, this is a *level* charge, not a density charge: it changes only when the B-tree gains or loses a level. Second, the planner's height is the **fast-root** level, not the true root level. `_bt_getrootheight()` returns `btm_fastlevel` ([nbtpage.c#_bt_getrootheight](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L663-L717)), and page deletion can lower `btm_fastlevel` in place ([nbtpage.c#fastroot-update](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L2565-L2659)); the nbtree README explains the fast-root idea and states that tree height can never *decrease* by page deletion alone ([README#page-deletion-and-tree-height](../../../../raw/postgres-17/src/backend/access/nbtree/README#L362-L381)). `pgstatindex` reports `btm_level` as `tree_level` ([pgstatindex.c#metapage](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L252-L265)), so `pgstatindex.tree_level` and the planner's `tree_height` are not guaranteed to be the same number. Fixture F below measures them apart: `tree_level` 2 against `fastlevel` 1.
+Three caveats matter.
+
+First, this is a *level* charge, not a density charge: it changes only when the B-tree gains or loses a level.
+
+Second, the planner's height is the **fast-root** level, not the true root level. `_bt_getrootheight()` returns `btm_fastlevel` ([nbtpage.c#_bt_getrootheight](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L663-L717)), and page deletion can lower `btm_fastlevel` in place ([nbtpage.c#fastroot-update](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L2565-L2659)); the nbtree README explains the fast-root idea and states that tree height can never *decrease* by page deletion alone ([README#page-deletion-and-tree-height](../../../../raw/postgres-17/src/backend/access/nbtree/README#L362-L381)). `pgstatindex` reports `btm_level` as `tree_level` ([pgstatindex.c#metapage](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L252-L265)), so `pgstatindex.tree_level` and the planner's `tree_height` are not guaranteed to be the same number. Fixture F below measures them apart: `tree_level` 2 against `fastlevel` 1.
+
+Third, the number the planner gets can be stale. `_bt_getrootheight()` reads the metapage only on the first call in a backend, copies the whole `BTMetaPageData` into `rel->rd_amcache`, and answers every later call from that copy without rechecking it. The function's comment says the staleness is deliberate: "Since it's only an estimate, slightly-stale data is fine, hence we don't worry about updating previously cached data" ([nbtpage.c#_bt_getrootheight](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L663-L717)). The cache is per-backend and is freed only when the index's relcache entry is invalidated ([relcache.c#RelationInvalidateRelation](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L2534-L2557)), so a long-lived backend can keep charging for a level that VACUUM has already removed, and two backends can price the same index differently at the same moment. Every measurement below is taken from a fresh `psql` session, so none of them is reading a stale height.
 
 ### 3. Index pages enter cache modeling and parallel worker counts
 
@@ -265,11 +273,18 @@ Because a taller tree means more descent pages, the level charge fires. Measured
 
 ### Physically fragmented leaf chains
 
-`leaf_fragmentation` counts leaf pages whose right sibling lives at a lower block number. It rises when pages split in the middle of the key space and the new right half is appended at the end of the file, which is what random-order insertion produces. The manual ties this to real runtime cost ([maintenance.sgml#fresh-index](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1048-L1054)). The planner never reads it. Measured contribution to cost: exactly `0.00`.
+`leaf_fragmentation` counts leaf pages whose right sibling lives at a lower block number. It rises when pages split in the middle of the key space and the new right half is appended at the end of the file, which is what random-order insertion produces. Only *backward* links count ([pgstatindex.c#fragments](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L323)), so the metric under-reports: a right-sibling link that jumps a thousand blocks forward defeats read-ahead just as thoroughly and scores nothing. The manual ties physical adjacency to real runtime cost ([maintenance.sgml#fresh-index](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1048-L1054)). The planner never reads the metric at all. Measured contribution to cost: exactly `0.00`.
 
 ### Version-churn duplicates from non-HOT UPDATEs
 
-An `UPDATE` that modifies any indexed column writes a new index entry in *every* index, including indexes whose own columns did not change ([btree.sgml#version-churn](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L638-L655)). Those entries are logically unchanged duplicates. Since v14, nbtree attacks them with bottom-up index deletion passes triggered when a version-churn page split is anticipated ([btree.sgml#bottom-up-deletion](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L656-L678), [nbtdedup.c#_bt_bottomupdel_pass](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L307-L320), [nbtinsert.c#delete-then-dedup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2770-L2785)).
+An `UPDATE` that modifies a column used by a *hot-blocking* index cannot be HOT, so it writes a new index entry in every index that accepts the new row, including indexes whose own columns did not change ([btree.sgml#version-churn](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L638-L655)). Those entries are logically unchanged duplicates.
+
+Two cases fall outside that, and neither produces a duplicate in an unrelated B-tree:
+
+- **Only summarizing-index columns changed.** `heap_update()` tests the modified columns against the hot-blocking set and the summarizing set separately. An update that misses the hot-blocking set still takes the HOT path, and sets `summarized_update` if it touched the summarizing set ([heapam.c#heap_update-hot-decision](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L4140-L4161)), which becomes `TU_Summarizing` — "Only summarized columns were updated, TID is unchanged" ([heapam.c#update_indexes](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L4415-L4429), [tableam.h#TU_UpdateIndexes](../../../../raw/postgres-17/src/include/access/tableam.h#L113-L127)). `ExecUpdateEpilogue()` passes that through as `onlySummarizing` ([nodeModifyTable.c#ExecUpdateEpilogue-onlySummarizing](../../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2162-L2166)), and `ExecInsertIndexTuples()` then skips every non-summarizing index ([execIndexing.c#ExecInsertIndexTuples-onlySummarizing](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L361-L366)). A BRIN-indexed column can therefore be churned without adding one B-tree entry.
+- **A partial index whose predicate the new row fails.** `ExecInsertIndexTuples()` evaluates each index's `ii_Predicate` against the new tuple and skips the insert when it is not satisfied ([execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L368-L387)), so a non-HOT update whose new row leaves a partial index's predicate adds nothing to that index.
+
+Since v14, nbtree attacks the duplicates it does get with bottom-up index deletion passes triggered when a version-churn page split is anticipated ([btree.sgml#bottom-up-deletion](../../../../raw/postgres-17/doc/src/sgml/btree.sgml#L656-L678), [nbtdedup.c#_bt_bottomupdel_pass](../../../../raw/postgres-17/src/backend/access/nbtree/nbtdedup.c#L307-L320), [nbtinsert.c#delete-then-dedup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2770-L2785)).
 
 Measured on the pin: five whole-table non-HOT `UPDATE` rounds over 200,000 rows grew an unrelated index on a 1,000-value column from 169 to **543 blocks**. Repeating the identical workload with a long-lived `REPEATABLE READ` snapshot open in another session, which is the condition the README names as blocking deletion, grew it to **1,173 blocks** instead. The benefit depends on the shape of the index: the same workload over a 100-value column grew its index from 180 to **1,020 blocks in both runs**, so there the unheld horizon bought nothing.
 
@@ -283,8 +298,17 @@ Measured: 1,000,000 rows over 100 distinct keys built **852 blocks** with `dedup
 
 Two v14-era escape hatches let index bloat accumulate without any VACUUM touching it:
 
-- The 2% bypass. `lazy_vacuum()` skips index vacuuming when fewer than `BYPASS_THRESHOLD_PAGES` (2% of `rel_pages`) hold `LP_DEAD` items and the TID store is under 32MB ([vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89), [vacuumlazy.c#lazy_vacuum-bypass](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1880-L1949)).
+- The 2% bypass. `lazy_vacuum()` skips index *vacuuming* when fewer than `BYPASS_THRESHOLD_PAGES` (2% of `rel_pages`) hold `LP_DEAD` items and the TID store is under 32MB ([vacuumlazy.c#BYPASS_THRESHOLD_PAGES](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L85-L89), [vacuumlazy.c#lazy_vacuum-bypass](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1880-L1949)).
 - The wraparound failsafe, which makes the ongoing VACUUM bypass all further index vacuuming ([vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2287-L2347)).
+
+The 2% bypass is not a skip of all index maintenance, and reading it that way overstates how much bloat it can hide. It clears only `do_index_vacuuming`, and the branch says so in as many words — "bypass index vacuuming, but do index cleanup" ([vacuumlazy.c#lazy_vacuum-bypass-branch](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1936-L1949)) — so `amvacuumcleanup` still runs. What that buys differs by access method:
+
+| AM | Under the 2% bypass |
+|---|---|
+| B-tree | No entry is deleted, but `btvacuumcleanup()` is still called with `stats == NULL` and asks `_bt_vacuum_needs_cleanup()`; when that says yes it runs a full `btvacuumscan()`, which can place previously deleted pages in the FSM ([nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L851-L893)) |
+| GIN | `ginvacuumcleanup()` flushes the pending list whenever `ginbulkdelete` was not called, which is exactly the bypass case ([ginvacuum.c#ginvacuumcleanup-pending](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L719-L729)) |
+
+The wraparound failsafe is the stronger escape hatch, because it clears `do_index_cleanup` as well as `do_index_vacuuming` ([vacuumlazy.c#lazy_check_wraparound_failsafe-clears](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2326)), so it does stop `amvacuumcleanup` and with it the GIN pending-list flush.
 
 `vacuum_index_cleanup = off` has the same effect by request, and the manual warns it "may also lead to severely bloated indexes if table modifications are frequent" ([ref/create_table.sgml#vacuum_index_cleanup](../../../../raw/postgres-17/doc/src/sgml/ref/create_table.sgml#L1558-L1575)).
 
@@ -319,7 +343,8 @@ Method notes that matter for reading the numbers:
 - Each comparison uses **two separate tables with identical contents**, so every query has exactly one candidate index and no index-choice tie-breaking is involved. Where one table carries two indexes, each is priced with the other dropped inside a rolled-back subtransaction, so the statistics are literally the same.
 - Comparisons use `Index Only Scan` on tables vacuum-frozen to 100% all-visible, so the heap component of `cost_index()` is zero and the reported cost is the pure index cost. Three fixtures are exceptions on purpose, and each pays the same heap fetches on both sides of its comparison: H and N select a non-indexed column, and I is analyzed but never vacuumed. The plan-choice tests select a non-indexed column too, because a heap fetch is what makes the sequential scan competitive.
 - `enable_seqscan` and `enable_bitmapscan` were disabled where a specific scan type had to be priced; they were left at their defaults for the plan-choice tests.
-- **Statistics are exact, so the numbers are reproducible.** Every session runs with `default_statistics_target = 10000` (`PGC_USERSET`, session scope). `ANALYZE` samples 300 rows per unit of that target ([analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1876-L1894)), which at 3,000,000 is more rows than any fixture holds, so it reads every row and the row estimates carry no sampling noise. The setting does not enter the cost model. A second complete run of every fixture stage reproduced all 33 recorded index rows, all 11 GIN rows, all 7 closed-form predictions and all 116 recorded plans byte for byte, and so did three earlier runs, two of them on freshly initialized clusters, for the 112 plans they shared.
+- **Statistics are exact, so the numbers are reproducible.** Every session runs with `default_statistics_target = 10000` (`PGC_USERSET`, session scope). `ANALYZE` samples 300 rows per unit of that target ([analyze.c#std_typanalyze-minrows](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1876-L1894)), which at 3,000,000 is more rows than any fixture holds, so it reads every row and the statistics carry no sampling noise. The setting does not enter the cost model. Two further complete passes of every fixture stage reproduced all 33 recorded index rows, all 11 GIN rows, all 7 closed-form predictions and all 118 recorded plans byte for byte, one of them from an empty sandbox; and so did three runs of the previous pass, two of them on freshly initialized clusters, for the 112 plans they shared.
+- **Exact statistics are not exact row estimates.** Exhaustive sampling makes the statistics, and therefore every cost on this page, the same on every run. It does not make a row estimate equal the true row count, because the selectivity model applies its own assumptions on top of exact statistics: `clauselist_selectivity_ext()` multiplies the per-clause selectivities of clauses it cannot pair into a range query, which assumes they are independent ([clausesel.c#clauselist_selectivity_ext-multiply](../../../../raw/postgres-17/src/backend/optimizer/path/clausesel.c#L253-L263)). Fixture L3 is the only measurement here with two clauses on two columns, and [Bloat changes plans](#bloat-changes-plans) records its estimates beside its true row counts: on that fixture, whose columns are independent by construction, all three agree exactly. No fixture on this page violates the assumption, so none of them bounds the error it can cause.
 
 | Fixture | Contents | Dense index | Bloated twin |
 |---|---|---|---|
@@ -333,8 +358,9 @@ Method notes that matter for reading the numbers:
 | N | 1,000,000 rows over 100 distinct keys | `deduplicate_items = on`, 852 blocks | `deduplicate_items = off`, 2,749 blocks |
 | P | 200,000 rows, `tag = id % 1000`, five whole-table non-HOT `UPDATE` rounds | no blocking snapshot: 169 -> 543 blocks | `REPEATABLE READ` snapshot held: 169 -> 1,173 blocks |
 | P-100 | the same with `tag = id % 100` | no blocking snapshot: 180 -> 1,020 blocks | snapshot held: 180 -> 1,020 blocks |
+| L3 | 500,000 rows, `a = g % 2000` plus an independent seeded `c` over 0..19; `l3_a` is 449 blocks at 85.47% throughout | `l3_c` at the default fillfactor: 427 blocks, 89.81% density | `l3_c` rebuilt at `fillfactor = 10`: 3,801 blocks, 10.37% density |
 
-Fixture G's random order is seeded, so its block count is reproducible; the first filing's unseeded build measured 1,101 blocks at 49.73% fragmentation. Fixture P's first filing did not record the tag column's cardinality and measured 583 and 1,174 blocks.
+Fixture G's random order is seeded, so its block count is reproducible; the first filing's unseeded build measured 1,101 blocks at 49.73% fragmentation. Fixture P's first filing did not record the tag column's cardinality and measured 583 and 1,174 blocks. Fixture L3 was rebuilt on the second 2026-09-19 pass: its `c` column used to be `g % 20`, which made `a = 5 AND c = 7` an impossible combination, because 20 divides 2,000 and so `a = 5` forced `c = 5` and the predicate matched no row at all. `c` is now an independent seeded draw over the same twenty values, and the figures that moved with it are 428 blocks at 89.59% density becoming 427 at 89.81%, and a `BitmapAnd` total of `332.49` with a `275.92` `c` bitmap becoming `328.51` and `275.70`.
 
 ### Index cost is a closed form in pages, tuples and tree height
 
@@ -436,15 +462,25 @@ Fixture A with all `enable_*` settings at their defaults, selecting a non-indexe
 
 The sequential scan is the same `22353.00` on both tables: 7,353 heap pages plus 1,000,000 rows at `cpu_tuple_cost` and two operator evaluations each. The first filing's three index-scan costs (`9731.06`, `4706.74`, `16026.44`) carried sampled row estimates; with exact statistics the estimates are 250,000 and 120,000 rows.
 
-Bloat also removes an index from a `BitmapAnd`. With two healthy indexes on a 500,000-row table (`a = id % 2000`, `c = id % 20`), `a = 5 AND c = 7` produced a `BitmapAnd` over both (total `332.49`, the `c` bitmap costing `275.92`). Bloating only the `c` index from 428 to 3,801 blocks (89.59% to 10.37% density) by rebuilding it at `fillfactor = 10` made the planner drop it and demote `c = 7` to a `Filter`:
+Bloat also removes an index from a `BitmapAnd`. Fixture L3 is a 500,000-row table with `a = g % 2000` and an independent `c` drawn from a seeded PRNG over 0..19, so the two columns are independent of each other and `a = 5 AND c = 7` selects real rows. With both indexes healthy — `l3_a` at 449 blocks and 85.47% density, `l3_c` at 427 and 89.81% — the two-clause predicate produced a `BitmapAnd` over both, total `328.51`, of which the `c` bitmap alone cost `275.70` against the `a` bitmap's `6.30`. Bloating only the `c` index to 3,801 blocks at 10.37% density, by rebuilding it at `fillfactor = 10`, made the planner drop it and demote `c = 7` to a `Filter`:
 
 ```text
-Bitmap Heap Scan on l3  (cost=6.30..806.01 rows=13 width=25)
+Bitmap Heap Scan on l3  (cost=6.30..806.01 rows=12 width=25)
   Recheck Cond: (a = 5)
   Filter: (c = 7)
   ->  Bitmap Index Scan on l3_a  (cost=0.00..6.30 rows=250 width=0)
         Index Cond: (a = 5)
 ```
+
+This is also the one fixture on the page that can check the method note's claim that exhaustive statistics make every cost reproducible without thereby making every estimate true. Both columns are analyzed exhaustively, and the conjunction is still estimated by multiplying two per-clause selectivities, which assumes independence ([clausesel.c#clauselist_selectivity_ext-multiply](../../../../raw/postgres-17/src/backend/optimizer/path/clausesel.c#L253-L263)). Recording each estimate beside the true count:
+
+| Predicate | Estimated rows | Actual rows |
+|---|---:|---:|
+| `a = 5` | 250 | 250 |
+| `c = 7` | 24,971 | 24,971 |
+| `a = 5 AND c = 7` | 12 | 12 |
+
+Every one of them is exact. The two single-column estimates are exact because `default_statistics_target = 10000` buys each column an MCV list long enough to hold all of its values at their true frequencies, and the conjunction is exact because the columns really are independent, which is how the fixture is built. That is agreement, not proof: the multiplication is an assumption, and no fixture on this page violates it, so nothing here bounds the error it can cause. That limit is filed under [Open Questions](#open-questions).
 
 ### Bloat changes parallel worker counts
 
@@ -592,14 +628,21 @@ Every setting below is `PGC_USERSET`, so each takes effect at session or transac
 | `effective_cache_size` | `DEFAULT_EFFECTIVE_CACHE_SIZE` | Splits notional cache between heap and index pages ([guc_tables.c#effective_cache_size](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3508-L3518)) | session/transaction |
 | `min_parallel_index_scan_size` | 512kB ([guc_tables.c#min_parallel_index_scan_size](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3531-L3540)) | Threshold and ramp for index-driven worker counts | session/transaction |
 
-Two per-index storage parameters change the physical layout rather than its price, and both take `ShareUpdateExclusiveLock` because they apply only to later inserts: `fillfactor` ([reloptions.c#btree-fillfactor](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L185-L194)) and `deduplicate_items` ([reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L167)). Changing either only affects existing pages after a rebuild, which is one of the scenarios `REINDEX` documents ([ref/reindex.sgml#storage-parameter](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L66-L71)).
+Two per-index storage parameters change the physical layout rather than its price, and both take `ShareUpdateExclusiveLock` with the in-tree reason "since it applies only to later inserts": `fillfactor` ([reloptions.c#btree-fillfactor](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L185-L194)) and `deduplicate_items` ([reloptions.c#deduplicate_items](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L159-L167)).
+
+Neither is inert on the pages that already exist, so "no effect until a rebuild" is too strong. Both are read from the relation at the moment a leaf page is about to split:
+
+- `_bt_findsplitloc()` takes `leaffillfactor = BTGetFillFactor(rel)` on every split ([nbtsplitloc.c#leaffillfactor](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L170-L176)), so a changed `fillfactor` governs the next split of a page that was built under the old value.
+- `_bt_delete_or_dedup_one_page()` runs `_bt_dedup_pass()` over the existing leaf page before splitting it ([nbtinsert.c#delete-then-dedup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2770-L2785)), gated on `BTGetDeduplicateItems(rel)` and on `allequalimage`, which is an opclass property fixed into the metapage at build time and is not affected by the reloption ([nbtsort.c#allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L560-L564)). Turning `deduplicate_items` back on therefore compacts existing leaves in place as inserts reach them.
+
+What a rebuild adds is reach and immediacy: `REINDEX` applies the new layout to every page at once instead of page by page as traffic happens to touch them, which is one of the scenarios it documents ([ref/reindex.sgml#storage-parameter](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L66-L71)). Fixture N and the `l3_c` bloating step below both use `REINDEX` for exactly that reason.
 
 ## Practical Interpretation
 
 - **Rank rebuild candidates by physical size against useful rows, not by `avg_leaf_density`.** The planner is charged for blocks, and fixture M shows a 10x-oversized index reporting 89.18% density.
 - **Do not expect a bloated index to be abandoned by OLTP queries.** Point lookups are charged only the height difference: `0.125` per level at default settings, about 1.5% on a typical lookup.
 - **The exception is an index with more pages than rows.** A drained queue table is the usual way to get one. There a one-row lookup is charged `ceil(pages / tuples)` random pages, measured at `12.29` against `4.29` after a rebuild, so this is the one shape where a rebuild changes what OLTP lookups cost.
-- **Do not read the planner's height from `pgstatindex`.** `tree_level` is the true root level; the planner charges the fast-root level, which VACUUM's page deletion can lower without a rebuild. `bt_metap()` shows both.
+- **Do not read the planner's height from `pgstatindex`.** `tree_level` is the true root level; the planner charges the fast-root level, which VACUUM's page deletion can lower without a rebuild. `bt_metap()` shows both. Even `bt_metap()` only shows what is on disk now: a long-lived backend can still be costing from its own cached copy of an older metapage, so two sessions can price the same index differently.
 - **Expect plan changes on the analytical side.** Fixture A flipped to a sequential scan at 25% selectivity, and a bloated index was dropped from a `BitmapAnd` entirely.
 - **Treat `leaf_fragmentation` as a runtime concern only.** It has real I/O consequences the manual acknowledges, and exactly zero cost-model consequences.
 - **Watch for `= ANY (...)` regressions on v17 specifically.** The descent clamp means bloat is now charged through a channel that did not exist before v17.
@@ -609,12 +652,12 @@ Two per-index storage parameters change the physical layout rather than its pric
 
 | Structure | Field | Role |
 |---|---|---|
-| `IndexOptInfo` | `pages`, `tuples`, `tree_height` | The complete set of size inputs available to any `amcostestimate` ([pathnodes.h#IndexOptInfo](../../../../raw/postgres-17/src/include/nodes/pathnodes.h#L1120-L1128)) |
+| `IndexOptInfo` | `pages`, `tuples`, `tree_height` | The size inputs `get_relation_info()` fills for every AM, and the only ones `genericcostestimate()` reads ([pathnodes.h#IndexOptInfo](../../../../raw/postgres-17/src/include/nodes/pathnodes.h#L1120-L1128)). Not the complete set for every AM: `gincostestimate()` and `brincostestimate()` each reopen the index and read their own metapage counters on top ([selfuncs.c#gincostestimate-stats](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7697-L7711), [selfuncs.c#brincostestimate-stats](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8086-L8101)) |
 | `RelOptInfo` | `pages`, `tuples`, `allvisfrac` | Parent-table estimates; `tuples` is copied into a non-partial index's `tuples` ([pathnodes.h#RelOptInfo](../../../../raw/postgres-17/src/include/nodes/pathnodes.h#L941-L944)) |
 | `PlannerInfo` | `total_table_pages` | Table-only page total used to prorate `effective_cache_size` ([pathnodes.h#total_table_pages](../../../../raw/postgres-17/src/include/nodes/pathnodes.h#L483-L484)) |
 | `GenericCosts` | `numIndexPages`, `numIndexTuples`, `num_sa_scans` | Shared cost scratchpad; `numIndexPages` is what every caller returns as `*indexPages`, and `num_sa_scans` became an input in v17 ([selfuncs.h#GenericCosts](../../../../raw/postgres-17/src/include/utils/selfuncs.h#L108-L138)) |
 | `BTMetaPageData` | `btm_level`, `btm_fastlevel` | True root level versus the fast-root level the planner uses ([nbtree.h#BTMetaPageData](../../../../raw/postgres-17/src/include/access/nbtree.h#L103-L119)) |
-| `LVRelState` | `consider_bypass_optimization`, `do_index_vacuuming` | Controls whether VACUUM touches indexes at all ([vacuumlazy.c#LVRelState](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L148-L156)) |
+| `LVRelState` | `consider_bypass_optimization`, `do_index_vacuuming`, `do_index_cleanup` | Two separate switches, not one: the 2% bypass clears only `do_index_vacuuming`, so `amvacuumcleanup` still runs; the wraparound failsafe clears both ([vacuumlazy.c#LVRelState](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L148-L156)) |
 | `pg_class` | `relpages`, `reltuples`, `relallvisible` | The only physical-size catalog columns; no density or fragmentation column exists ([pg_class.h#relpages](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L69)) |
 
 ## Caller And Callee Boundary
@@ -645,7 +688,7 @@ On the write side, the code that decides how many pages exist runs entirely insi
 
 ## Build, Generated-Header, And Extension Boundary
 
-- Nothing on this path depends on a generated parser or catalog artifact at cost time. `pg_class.relpages` / `reltuples` / `relallvisible` come from the hand-written catalog header `src/include/catalog/pg_class.h`, whose `BKI_DEFAULT(-1)` on `reltuples` encodes the v14 redefinition ([pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L65-L66)). The `pg_class` struct that `estimate_rel_size()` reads is materialized through the normal `genbki.pl` header generation, so a change to that column's type or default would require a catalog version bump, not just a recompile.
+- Nothing on this path depends on a generated parser or catalog artifact at cost time. `pg_class.relpages` / `reltuples` / `relallvisible` come from the hand-written catalog header `src/include/catalog/pg_class.h`, whose `BKI_DEFAULT(-1)` on `reltuples` encodes the v14 redefinition ([pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L65-L66)). The `FormData_pg_class` struct that `estimate_rel_size()` reads is not generated by `genbki.pl`: it is the `CATALOG()` macro in that same hand-written header expanding through cpp, `#define CATALOG(name,oid,oidmacro) typedef struct CppConcat(FormData_,name)` ([genbki.h:23](../../../../raw/postgres-17/src/include/catalog/genbki.h#L23)), which the header's own comment states — "cpp turns this into typedef struct FormData_pg_class" ([pg_class.h#CATALOG](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L21-L32)). What `genbki.pl` does with the header, by way of `Catalog.pm` reading it ([pg_class.h#NOTES](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L11-L16)), is emit the derived `pg_class_d.h` and the bootstrap `.bki` data that `initdb` consumes. So changing one of these columns' declarations is an initdb-visible catalog change and not only a recompile, but the struct the planner reads is plain cpp output.
 - `DEFAULT_PAGE_CPU_MULTIPLIER` is a private `#define` inside `selfuncs.c` ([selfuncs.c:145](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L145)), not an exported symbol and not a GUC, so the multiplier itself is fixed at compile time. What it multiplies is not: an extension can change `cpu_operator_cost`, and it can rewrite `tree_height` through `get_relation_info_hook`, below.
 - `pathnodes.h` deliberately types `IndexOptInfo.amcostestimate` weakly to avoid including `amapi.h`, so `cost_index()` casts it before calling ([costsize.c#cost_index-amcostestimate](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L610-L621)). A custom index AM therefore participates in bloat pricing entirely through its own `amcostestimate`, and gets `tree_height = -1` unless it is a B-tree.
 - Three hooks sit on this path. `get_relation_info_hook` runs at the end of `get_relation_info()`, after every `IndexOptInfo` is filled, so that a plugin can "editorialize on the info we obtained from the catalogs. Actions might include altering the assumed relation size, removing an index, or adding a hypothetical index to the indexlist" ([plancat.c#get_relation_info_hook](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L570-L576), [plancat.h#get_relation_info_hook_type](../../../../raw/postgres-17/src/include/optimizer/plancat.h#L20-L25)). A plugin there can substitute `pages`, `tuples`, `tree_height` or the `amcostestimate` pointer itself before any path is costed, and the cost code expects it: `gincostestimate()` skips the metapage read for an index marked `hypothetical` ([selfuncs.c#gincostestimate-stats](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7697-L7711)). The other two, `get_relation_stats_hook` and `get_index_stats_hook`, are consulted by `btcostestimate()` for correlation statistics only ([selfuncs.c#btcostestimate-stats-hooks](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7116-L7171)) and cannot substitute a page count or a tree height.
@@ -663,13 +706,15 @@ On the write side, the code that decides how many pages exist runs entirely insi
 
 ### Short answer
 
-PostgreSQL 17 discards a GIN index at three separate gates, and only the third one is about cost. A GIN index that clears gates 1 and 2 still loses to a B-tree on the same column for ordinary comparison predicates, because `gincostestimate()` charges `random_page_cost` for every pending, entry and data page it expects to touch and adds a `50 * cpu_operator_cost` charge per page on top ([selfuncs.c#gincostestimate](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7662-L8050)), while `genericcostestimate()` charges the B-tree only a pro-rata share of `index->pages` plus cheap CPU descent ([selfuncs.c#genericcostestimate-numIndexPages](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6717-L6732)).
+PostgreSQL 17 discards a GIN index at three separate gates, and only the third one is about cost. Gates 1 and 2 are absolute: they are catalog and access-method properties, and no setting moves them. Gate 3 is a comparison of computed costs, not a rule. `choose_bitmap_and()` keeps only the cheapest path in each group of paths that use an identical clause set ([indxpath.c#choose_bitmap_and-cheapest-of-group](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1353-L1357)), and `add_path()` prunes on cost ([pathnode.c#add_path](../../../../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L419-L453)), so a GIN index that clears the first two gates loses exactly when its estimate comes out higher, and not otherwise.
+
+For ordinary comparison predicates on the same column it does come out higher, and the reason is a model asymmetry rather than a size difference: `gincostestimate()` charges `random_page_cost` for every pending, entry and data page it expects to touch and adds a `50 * cpu_operator_cost` charge per page on top ([selfuncs.c#gincostestimate](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7662-L8050)), while `genericcostestimate()` charges the B-tree only a pro-rata share of `index->pages` plus cheap CPU descent ([selfuncs.c#genericcostestimate-numIndexPages](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6717-L6732)). That is the outcome on every comparison predicate measured below, and it is what `contrib/btree_gin`'s own documentation says in general terms: "In general, these operator classes will not outperform the equivalent standard B-tree index methods" ([btree-gin.sgml#caveats](../../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33)). Nothing in the source makes it a guarantee, and [Where GIN still wins](#where-gin-still-wins) measures a case where the GIN path is the cheaper one.
 
 | Gate | Where | What makes GIN lose | Recovery |
 |---|---|---|---|
 | 1. Clause matching | `match_clause_to_indexcol()` | The query operator is not in the GIN index's operator family and no planner support function rewrites it, so no `IndexClause` and therefore no GIN path is ever built ([indxpath.c#match_clause_to_indexcol](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2203-L2269), [indxpath.c#match_opclause_to_indexcol](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2386-L2500)) | Use a matching operator, or add the operators with `contrib/btree_gin` |
-| 2. Plan shape | `build_index_paths()` / `get_index_paths()` | GIN has no `amgettuple`, no ordering, no `amcanreturn`, no null search, no native array search and no parallelism, so it cannot produce a plain `Index Scan`, satisfy `ORDER BY` pathkeys, feed an `Index Only Scan`, serve `IS NULL`, or run in parallel ([ginutil.c#ginhandler](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89), [indxpath.c#get_index_paths](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L709-L767)) | None. These are AM properties, not costs |
-| 3. Cost | `gincostestimate()` versus `btcostestimate()`, then `add_path()` / `choose_bitmap_and()` | GIN's page charges are all at `random_page_cost` and include the whole pending list, as startup cost ([selfuncs.c#gincostestimate-pending](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7882-L7886), [selfuncs.c#gincostestimate-random-page-cost](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7976-L7980)) | Clean the pending list, `VACUUM`, or drop `fastupdate` |
+| 2. Plan shape | `build_index_paths()` / `get_index_paths()` | GIN has no `amgettuple`, no ordering, no `amcanreturn`, no null search, no native array search and no `amcanparallel`, so it cannot produce a plain `Index Scan`, satisfy `ORDER BY` pathkeys, feed an `Index Only Scan`, serve `IS NULL`, or contribute a *partial* index path of its own ([ginutil.c#ginhandler](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89), [indxpath.c#get_index_paths](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L709-L767)). It can still sit under a parallel plan; see [Gate 2](#gate-2-the-required-plan-shape-rules-gin-out) | None. These are AM properties, not costs |
+| 3. Cost | `gincostestimate()` versus `btcostestimate()`, then `add_path()` / `choose_bitmap_and()` | GIN's page charges are all at `random_page_cost` and include the whole pending list, as startup cost ([selfuncs.c#gincostestimate-pending](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7882-L7886), [selfuncs.c#gincostestimate-random-page-cost](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7976-L7980)) | Drain the pending list with `gin_clean_pending_list()` or `VACUUM`. Turning `fastupdate` off is not enough on its own: it stops future entries from joining the pending list but "does not in itself flush previous entries" ([ref/create_index.sgml#fastupdate-note](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L524-L532)), so it still needs one of the other two afterward |
 
 Measured at this pin on one table carrying both indexes over the same 300,000 rows, so the two `EXPLAIN` runs saw literally identical statistics: the same `n = 42` predicate cost **`12.97` through a `btree_gin` GIN index and `4.52` through a B-tree**, and the planner chose the B-tree. The GIN index was 279 blocks and the B-tree 280, so GIN lost while being the physically smaller index.
 
@@ -703,7 +748,9 @@ One case that looks like a gate-1 rejection but is not: a boolean column. `WHERE
 | `amcanreturn` | `NULL` ([ginutil.c:70](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L70)) | `btcanreturn` | `index_can_return()` returns false when `amcanreturn` is `NULL` ([indexam.c#index_can_return](../../../../raw/postgres-17/src/backend/access/index/indexam.c#L780-L797)), so every `canreturn[i]` is false and `check_index_only()` fails ([indxpath.c#check_index_only](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1730-L1800)) |
 | `amsearchnulls` | `false` ([ginutil.c:51](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L51)) | `true` | `match_clause_to_indexcol()` accepts a `NullTest` only when `index->amsearchnulls`, so `IS NULL` never reaches GIN ([indxpath.c#match_clause_to_indexcol-nulltest](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2251-L2266)) |
 | `amsearcharray` | `false` ([ginutil.c:50](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L50)) | `true` | A `ScalarArrayOpExpr` is omitted from plain paths and re-offered only as a bitmap path ([indxpath.c#build_index_paths-saop](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L862-L885), [indxpath.c#get_index_paths-nonnative-saop](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L753-L766)), and `counts.arrayScans` multiplies the GIN estimate ([selfuncs.c#gincost_scalararrayopexpr](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7550-L7660)) |
-| `amcanparallel` | `false` ([ginutil.c:55](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L55)) | `true` | No partial GIN path; `build_index_paths()` gates parallel paths on `index->amcanparallel` ([indxpath.c#build_index_paths-parallel](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L975-L1002)) |
+| `amcanparallel` | `false` ([ginutil.c:55](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L55)) | `true` | No partial GIN *index* path: `build_index_paths()` gates parallel paths on `index->amcanparallel` ([indxpath.c#build_index_paths-parallel](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L975-L1002)). It does not keep GIN out of a parallel plan, because the bitmap heap scan above it can still be partial |
+
+**GIN is not shut out of parallel plans, though, and "no parallelism" overstates the flag.** What `amcanparallel = false` removes is a partial *index* path. The bitmap heap scan built on top of a GIN bitmap can still be parallel: `create_index_paths()` hands whatever `choose_bitmap_and()` produced straight to `create_partial_bitmap_paths()` ([indxpath.c:347](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L347)), which sizes workers from the heap pages alone — it passes `index_pages = -1` to `compute_parallel_worker()` — and adds a `Parallel Bitmap Heap Scan` over the unchanged bitmapqual ([allpaths.c#create_partial_bitmap_paths](../../../../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L4162-L4185)). The GIN scan itself is built once in the leader; the heap fetches that follow it are divided among workers. So a GIN index cannot *drive* parallelism, and it does not prevent it either.
 
 Three consequences follow, and none can be reversed by tuning:
 
@@ -752,7 +799,16 @@ The GIN index leaves the `BitmapAnd` at the point where its own scan costs more 
 
 `gin_clean_pending_list()` returned exactly `1471`, matching `pgstatginindex` ([ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1091), [pgstatindex.c#pgstatginindex_internal](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L506-L577)).
 
-Note the direction of the sign: unlike the B-tree page-count penalty in [1. Physical page count enters index cost](#1-physical-page-count-enters-index-cost), this is not a mild pro-rata increase. Every pending page is charged in full on every scan, at `random_page_cost` plus the page CPU charge ([selfuncs.c#gincostestimate-random-page-cost](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7976-L7980)). `gincostestimate()` books that charge as startup cost, but the distinction never reaches a plan: a GIN path is only ever a bitmap input, and `cost_bitmap_heap_scan()` takes the index's total cost as its own startup cost whatever the split was ([costsize.c#cost_bitmap_heap_scan-startup](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1044-L1048)).
+Note the direction of the sign: unlike the B-tree page-count penalty in [1. Physical page count enters index cost](#1-physical-page-count-enters-index-cost), this is not a mild pro-rata increase. On a single scan every pending page is charged in full, at `random_page_cost` plus the page CPU charge ([selfuncs.c#gincostestimate-random-page-cost](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7976-L7980)). `gincostestimate()` books that charge as startup cost, but the distinction never reaches a plan: a GIN path is only ever a bitmap input, and `cost_bitmap_heap_scan()` takes the index's total cost as its own startup cost whatever the split was ([costsize.c#cost_bitmap_heap_scan-startup](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1044-L1048)).
+
+"In full on every scan" needs one qualification, because the two halves of the charge behave differently once the scan repeats. The pending pages are seeded into `entryPagesFetched` ([selfuncs.c:7886](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7886)), and when there is more than one iteration — a nested-loop inner scan with `loop_count > 1`, or an array qual with `counts.arrayScans > 1` — `gincostestimate()` runs `entryPagesFetched` and `dataPagesFetched` through `index_pages_fetched()` and divides by `outer_scans`, exactly as `genericcostestimate()` does for the B-tree ([selfuncs.c#gincostestimate-cache-effects](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7957-L7974)):
+
+| Half of the charge | Repeated scans |
+|---|---|
+| The `random_page_cost` I/O charge | **Amortized.** It is applied after the cache adjustment, so the Mackert-Lohman cap covers the pending pages too ([selfuncs.c:7980](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7980)) |
+| The `50 * cpu_operator_cost` per-page charge | **Not amortized.** It is computed from the pre-adjustment page count, and the source says why in as many words: "This is not amortized over a loop" ([selfuncs.c#gincostestimate-page-cpu](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7937-L7955)) |
+
+Every GIN measurement on this page prices a single scan, where `outer_scans` and `arrayScans` are both 1 and the adjustment does not fire, so the numbers below are the unamortized case throughout.
 
 ### Stale GIN metapage statistics
 
@@ -813,7 +869,7 @@ Each row below is two `EXPLAIN` runs on fixture S, with the *other* index droppe
 | `SELECT n WHERE n = 42` | no index-only scan: `Bitmap Heap Scan` at `119.83` | `Index Only Scan` at `4.82` | 30 |
 | `n IS NULL` | no index path: `Seq Scan` at `10000004328.00` | `Index Scan` at `8.31` | 1 |
 
-The three "no index path" rows are priced by `disable_cost = 1.0e10` ([costsize.c:130](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L130)), which is what a forced-off sequential scan costs when it is the only path available. They are gate-2 outcomes, not cost losses. With every `enable_*` setting at its default, the planner chose the B-tree for `n = 42`, `n BETWEEN 100 AND 200` and `n < 20` alike.
+The last three rows are gate-2 outcomes rather than cost losses, and they are not the same outcome. Two of them, `ORDER BY n LIMIT 10` and `n IS NULL`, have **no GIN path at all**, so their costs are `disable_cost = 1.0e10` ([costsize.c:130](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L130)) — what a forced-off sequential scan costs when it is the only path available. The other, `SELECT n WHERE n = 42`, still **uses the GIN index**: it loses only the index-*only* scan and falls back to a `Bitmap Heap Scan` at `119.83`, against the B-tree's `Index Only Scan` at `4.82`. That is `amcanreturn` being `NULL`, not a missing path, and it is why only two of the seven rows carry a `disable_cost` figure. With every `enable_*` setting at its default, the planner chose the B-tree for `n = 42`, `n BETWEEN 100 AND 200` and `n < 20` alike.
 
 #### The page charge, isolated
 
@@ -902,8 +958,14 @@ The `Bitmap Index Scan` costs were `2030.46` and `1121.46`, so `(2030.46 - 1121.
 |---|---|---|---|
 | `random_page_cost` | 4.0 | Multiplies every pending, entry and data page GIN expects to touch ([guc_tables.c#random_page_cost](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3686-L3696)) | session/transaction (`PGC_USERSET`) |
 | `cpu_operator_cost` | 0.0025 | Scales GIN's entry-tree descent and its `50 *` per-page CPU charge, and the B-tree's height charge ([guc_tables.c#cpu_operator_cost](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3719-L3729)) | session/transaction (`PGC_USERSET`) |
-| `gin_pending_list_limit` | 4MB | Caps how large a pending list gets before an insert drains it, so it caps the startup penalty ([guc_tables.c#gin_pending_list_limit](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3576-L3585)) | session/transaction (`PGC_USERSET`) |
-| `enable_bitmapscan` | on | Turning it off removes GIN's only plan shape entirely ([guc_tables.c#enable_bitmapscan](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L813-L822)) | session/transaction (`PGC_USERSET`) |
+| `gin_pending_list_limit` | 4MB | The size at which an insert *asks* for a cleanup. Not a ceiling: see below ([guc_tables.c#gin_pending_list_limit](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3576-L3585)) | session/transaction (`PGC_USERSET`) |
+| `enable_bitmapscan` | on | Turning it off does not remove GIN's plan shape; it adds `disable_cost` to it. See below ([guc_tables.c#enable_bitmapscan](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L813-L822)) | session/transaction (`PGC_USERSET`) |
+
+Two of those four need the fine print spelled out, because the obvious reading of each is wrong.
+
+**`gin_pending_list_limit` triggers a cleanup; it does not cap the list.** `ginHeapTupleFastInsert()` writes the new entries first and only then compares the resulting size against the limit, setting `needCleanup` after the fact, so the list is already over the limit when the test fires ([ginfast.c#needCleanup](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L448-L471)). The cleanup that follows is deliberately not forced: `ginInsertCleanup()` called from a regular insert takes the metapage lock only conditionally and, if another process holds it, returns at once "in hope that concurrent process will clean up pending list" ([ginfast.c#ginInsertCleanup-conditional-lock](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L818-L828)). The manual frames it the same way, as a condition under which entries are moved, and notes that "the overhead work can be done by a background process" ([gin.sgml#fast-update](../../../../raw/postgres-17/doc/src/sgml/gin.sgml#L503-L529)). So the setting bounds the *typical* startup penalty, not its maximum — fixture D reaches 1,471 pending pages precisely by raising the limit so that no insert ever asks.
+
+**`enable_bitmapscan = off` does not remove the path.** It is a cost penalty, not a veto: `cost_bitmap_heap_scan()` adds `disable_cost` to the startup cost and then prices the path normally ([costsize.c#cost_bitmap_heap_scan-disable](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1041-L1042)). A GIN plan therefore still wins when every alternative is also disabled or more expensive — which is exactly how the `disable_cost`-priced sequential scans in the table above were produced, with `enable_seqscan = off`. What turning it off reliably does is make any other viable plan win.
 
 Two per-index storage parameters change the physical shape rather than its price, and both take `AccessExclusiveLock`: `fastupdate` (default on) and a per-index `gin_pending_list_limit` override ([reloptions.c#fastupdate](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L123-L130), [reloptions.c#gin_pending_list_limit](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L339-L347)). `gin_clean_pending_list()` drains the list on demand and takes `RowExclusiveLock` on the index ([ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1091)).
 
@@ -959,12 +1021,13 @@ Symbols: [indxpath.c#create_index_paths](../../../../raw/postgres-17/src/backend
 |---|---|
 | Purpose | produces every measured number on this page, in the main answer and in the GIN follow-up: block counts, `pgstatindex` density and fragmentation, `bt_metap()` fast-root levels, GIN metapage counters and pending pages, every `EXPLAIN` cost and worker count, the closed-form predictions, the four GIN rejection messages, and the verbatim run of the two filed diagnostic blocks |
 | Invocation | `bash .wiki-runtime/tmp/bloatplan.sh` from the repository root, with the script saved at that path. Any path works: it resolves everything from `WIKI_ROOT`, which defaults to `$PWD` |
-| Stages | `build check cluster fa fb ff fg fh fi fn fstale fl3 fp gs gd gt gp gb grej diag predict summary stop` in that default order, plus `clean` on request. Select stages as arguments: `bash .wiki-runtime/tmp/bloatplan.sh fa predict`. `build` configures out of tree, installs core plus `pgstattuple`, `pageinspect` and `btree_gin`, and skips when the binary exists. `check` runs `make check` and the three contrib suites. `cluster` runs `initdb` once, starts the server, and installs the recording helpers `xp()`, `nodes()`, `ixstat()`, `ginstat()` and `predict()`. `fa` `fb` `ff` `fg` `fh` `fi` `fn` `fstale` `fl3` `fp` build the B-tree fixtures A, B with M, F, G, H, I, N, the forged catalog rows, the `BitmapAnd` pair, and P with P-100. `gs` `gd` `gt` `gp` `gb` build the GIN fixtures S, D, T, P-gin and B-gin. `grej` sends the four statements that must fail. `diag` reads the two `sql` blocks out of this page and runs them verbatim. `predict` compares the closed form with `EXPLAIN`. `summary` writes the result file. `stop` stops the server and asserts the teardown. Every fixture stage drops and rebuilds its own tables and replaces its own result rows, so any stage can be re-run alone; `grej` needs `gs`, and `predict` needs `fa` |
+| Stages | `build check cluster fa fb ff fg fh fi fn fstale fl3 fp gs gd gt gp gb grej diag predict summary stop` in that default order, plus `clean` on request. Select stages as arguments: `bash .wiki-runtime/tmp/bloatplan.sh fa predict`. `build` configures out of tree, installs core plus `pgstattuple`, `pageinspect` and `btree_gin`, and skips when the binary exists. `check` runs `make check` and the three contrib suites. `cluster` runs `initdb` once, starts the server, and installs the recording helpers `xp()`, `nodes()`, `ixstat()`, `ginstat()` and `predict()`. `fa` `fb` `ff` `fg` `fh` `fi` `fn` `fstale` `fl3` `fp` build the B-tree fixtures A, B with M, F, G, H, I, N, the forged catalog rows, the `BitmapAnd` pair L3, and P with P-100. `gs` `gd` `gt` `gp` `gb` build the GIN fixtures S, D, T, P-gin and B-gin. `grej` sends the four statements that must fail. `diag` reads the two `sql` blocks out of this page and runs them verbatim. `predict` compares the closed form with `EXPLAIN`. `summary` writes the result file. `stop` stops the server and asserts the teardown. Every fixture stage drops and rebuilds its own tables and replaces its own result rows, so any stage can be re-run alone; `grej` needs `gs`, and `predict` needs `fa`. Every stage except `build` and `check` starts the server itself if it is not up, so a selected re-run works after a default run has already stopped the cluster |
+| Failure handling | Every stage's exit status is checked and the first failure aborts the run with a non-zero status, so a failed `configure`, `make`, `make check` or `psql` cannot be reported as a pass; an unknown stage name is rejected before anything runs. An `EXIT` trap stops the server and the snapshot-holding session on every path out, including a `die` in the middle of a fixture and an interrupt, and leaves the sandbox for inspection |
 | Environment | `WIKI_ROOT` (`$PWD`), `SRC` (`$WIKI_ROOT/raw/postgres-17`), `SANDBOX` (`$WIKI_ROOT/.wiki-runtime/tmp/bloatplan`), `PAGE` (this page under `$WIKI_ROOT`), `PORT` (`55437`), `JOBS` (`8`), `STATS_TARGET` (`10000`) |
 | Prerequisites | a C toolchain, `make`, `flex`, `bison`, `perl` for the build, and zlib headers. The tree is configured `--without-icu --without-readline`, so neither library is needed. `initdb` runs with `--locale=C --encoding=UTF8`. About 3 GiB of disk for the build, install and data directories |
 | Output | `$SANDBOX/out/summary.txt`: the B-tree index table, the GIN table, the prediction table, each fixture table's visibility state, one line per recorded plan with every node's index, costs, rows, workers, index condition and filter, then the platform facts, the four error messages and the two diagnostic outputs. Read it first. `server.log`, the build and test logs, and the extracted `diag1.sql` and `diag2.sql` sit beside it |
 | Runtime | about 2 minutes for a full run on 10 cores, of which roughly 1 minute is the build and the four test suites; a re-run of every fixture stage from a built tree takes about 35 seconds |
-| Cleanup | `bash .wiki-runtime/tmp/bloatplan.sh clean` stops the server and deletes `$SANDBOX`. The `stop` stage, which runs by default, stops the server and asserts that no `postmaster.pid`, no process from the data directory and no socket on `$PORT` is left |
+| Cleanup | `bash .wiki-runtime/tmp/bloatplan.sh clean` stops the server and deletes `$SANDBOX`. The `stop` stage, which runs by default, stops the server and asserts that no `postmaster.pid`, no process from the data directory and no socket on `$PORT` is left. Neither is the only safety net: the `EXIT` trap stops the server on any exit path, so an aborted run leaves no postmaster behind either |
 
 Isolation: the pinned checkout is read only, the build is out of tree, the cluster has its own data directory, socket directory and port `55437`, and every fixture table is disposable. Stage `fstale` forges two `pg_class` rows on purpose, tagged `wiki_bloatplan_fixture_catalog_forgery`; they belong to a throwaway fixture and must never be pointed at a database anyone cares about. GUC apply scopes are named in the script's own header. Every `psql` call runs `-X -v ON_ERROR_STOP=1` with session-scoped `statement_timeout` and `lock_timeout`, except the `grej` stage, whose four statements are meant to fail and which asserts that exactly four errors came back. Every statement carries a `/* wiki_bloatplan_... */` tag after its leading verb.
 
@@ -972,15 +1035,15 @@ Isolation: the pinned checkout is read only, the build is out of tree, the clust
 
 | Item | Value |
 |---|---|
-| Date | 2026-09-19, two complete passes with the script text filed below: a full run from an empty sandbox, then a second pass over every fixture stage |
+| Date | 2026-09-19, three passes with the script text filed below: a full default run, then a second pass over every fixture stage with the cluster stopped at the start, then a third full run from an empty sandbox |
 | Server | `PostgreSQL 17.11 on aarch64-apple-darwin27.0.0, compiled by Apple clang version 21.0.0 (clang-2100.3.34.2), 64-bit`, built from pin `786db8dcf168bd9df8f55047337525ac19118b1c`, configured `--without-icu --without-readline` |
 | Platform | Darwin arm64, `block_size` 8192, maximum data alignment 8, `initdb --locale=C --encoding=UTF8` |
-| Test suites | `make check` All 225 tests passed; `pgstattuple` All 1, `pageinspect` All 8, `btree_gin` All 30 |
-| Agreement | the second pass reproduced every recorded value of the first: 33 B-tree index rows, 11 GIN rows, 7 of 7 closed-form predictions equal to `EXPLAIN`, 116 plans, four error messages, both diagnostic outputs |
-| Runtime | 1 minute 40 seconds for the full run; about 35 seconds for the second pass |
-| Teardown | the `stop` stage asserted no `postmaster.pid`, no process from the data directory and no socket on port 55437; the `clean` stage then deleted the sandbox |
+| Test suites | `make check` All 225 tests passed; `pgstattuple` All 1, `pageinspect` All 8, `btree_gin` All 30 — twice, once in each full run |
+| Agreement | all three passes wrote a byte-identical `summary.txt` apart from its two run timestamps: 33 B-tree index rows, 11 GIN rows, 7 of 7 closed-form predictions equal to `EXPLAIN`, 118 plans, 26 fixture-table rows, four error messages, both diagnostic outputs |
+| Runtime | 1 minute 38 seconds for the full run from an empty sandbox, of which roughly 77 seconds is the build and the four test suites; 27 seconds for a second pass over every fixture stage on a built tree |
+| Teardown | the `stop` stage asserted no `postmaster.pid`, no process from the data directory and no socket on port 55437 after each run. A deliberately aborted run (`cluster bogus`, which starts the server and then hits an unknown stage) was checked to leave that same state through the `EXIT` trap. The `clean` stage then stopped the server and deleted the sandbox |
 
-The published text was extracted from this page and compared byte for byte with the script that ran before the full run started.
+The published text was extracted from this page and `md5`-compared with the script text that ran, before each full run started.
 
 ### The script
 
@@ -1016,6 +1079,15 @@ The published text was extracted from this page and compared byte for byte with 
 #   build check cluster fa fb ff fg fh fi fn fstale fl3 fp
 #   gs gd gt gp gb grej diag predict summary stop
 # and, on request only: clean
+#
+# Failure and teardown.  Every stage's exit status is checked and any failure
+# aborts the run, so a failed configure, make, make check or psql can never be
+# reported as a pass.  An EXIT trap stops the server and the snapshot-holding
+# session on every path out of the script, including a failure in the middle of
+# a fixture and an interrupt, so no postmaster is left behind; the sandbox is
+# kept for inspection unless the clean stage ran.  Any stage that needs a
+# server starts one first, so a selected re-run works after a default run has
+# stopped the cluster; only build and check do not need one.
 #
 # Environment: WIKI_ROOT SRC SANDBOX PAGE PORT JOBS STATS_TARGET
 #
@@ -1065,6 +1137,39 @@ pgerr() { PGOPTIONS="$SESSION_OPTS" "$BIN/psql" -X "$@"; }
 running() { [ -x "$BIN/pg_ctl" ] && "$BIN/pg_ctl" -D "$DATA" status >/dev/null 2>&1; }
 stop_server() { running && "$BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null 2>&1; return 0; }
 
+# Teardown on every path out of the script, not only on the stop stage: a die
+# in the middle of a fixture, a failed psql, or an interrupt all land here, so
+# no measurement postmaster and no snapshot holder survives the run.  The
+# sandbox is left alone; only the clean stage deletes it.
+HOLDER_PID=""
+on_exit() {
+  local st=$?
+  trap - EXIT INT TERM
+  if [ "$st" -ne 0 ] && running; then
+    printf '!! exit status %s with the server still up; stopping it\n' "$st" >&2
+  fi
+  # Stopping the server first drops the holder session's connection, so its
+  # pg_sleep ends and the background subshell exits on its own; the kill is only
+  # there for the case where the shutdown could not reach it.
+  stop_server
+  [ -n "$HOLDER_PID" ] && kill "$HOLDER_PID" 2>/dev/null
+  wait 2>/dev/null
+  [ "$st" -ne 0 ] && printf '!! failed with status %s; %s was kept\n' "$st" "$SANDBOX" >&2
+  exit "$st"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Any stage that talks SQL needs a server.  stage_cluster is idempotent, so
+# calling it again after a default run's stop stage just restarts the same data
+# directory with the same recorded rows still in it.
+need_server() {
+  running && return 0
+  [ -x "$BIN/pg_ctl" ] || die "no built server at $BIN: run the build stage first"
+  stage_cluster || die "could not start the measurement server"
+}
+
 stage_build() {
   say "build: configure the pinned checkout out of tree, install core and three contrib modules"
   mkdir -p "$BUILD" "$OUT" "$SOCK"
@@ -1082,11 +1187,15 @@ stage_build() {
 
 stage_check() {
   say "check: core regression suite, then the three contrib suites, on the built tree"
-  ( cd "$BUILD" && make -s check > "$OUT/check.log" 2>&1 )
+  # A failing suite is a failed stage.  Without the || die the subshell's status
+  # is discarded and a run with four broken suites reports a pass.
+  ( cd "$BUILD" && make -s check > "$OUT/check.log" 2>&1 ) \
+    || die "make check failed, see $OUT/check.log"
   note "core: $(grep -E 'tests passed|tests failed|failed' "$OUT/check.log" | tail -1)"
   local m
   for m in pgstattuple pageinspect btree_gin; do
-    ( cd "$BUILD" && make -s -C contrib/$m check > "$OUT/check_$m.log" 2>&1 )
+    ( cd "$BUILD" && make -s -C contrib/$m check > "$OUT/check_$m.log" 2>&1 ) \
+      || die "contrib/$m check failed, see $OUT/check_$m.log"
     note "$m: $(grep -E 'tests passed|tests failed|failed' "$OUT/check_$m.log" | tail -1)"
   done
 }
@@ -1487,11 +1596,16 @@ SQL
 }
 
 stage_fl3() {
-  say "fl3: a bloated index dropped from a BitmapAnd"
+  say "fl3: a bloated index dropped from a BitmapAnd, over two independent columns"
+  # c is drawn from a seeded PRNG instead of being derived from g, so a and c
+  # are independent of each other and a = 5 AND c = 7 is a combination that
+  # exists.  setseed makes the draw reproducible, as it does for fixture G.
   pg -q <<'SQL'
 DROP /* wiki_bloatplan_fixture */ TABLE IF EXISTS l3;
 CREATE /* wiki_bloatplan_fixture */ TABLE l3 (a int NOT NULL, c int NOT NULL, pad text NOT NULL);
-INSERT /* wiki_bloatplan_fixture */ INTO l3 SELECT g % 2000, g % 20, repeat('x', 24) FROM generate_series(1, 500000) g;
+SELECT /* wiki_bloatplan_fixture */ setseed(0.42);
+INSERT /* wiki_bloatplan_fixture */ INTO l3
+  SELECT g % 2000, floor(random() * 20)::int, repeat('x', 24) FROM generate_series(1, 500000) g;
 CREATE /* wiki_bloatplan_fixture */ INDEX l3_a ON l3 (a);
 CREATE /* wiki_bloatplan_fixture */ INDEX l3_c ON l3 (c);
 VACUUM /* wiki_bloatplan_fixture */ (FREEZE, ANALYZE) l3;
@@ -1500,11 +1614,23 @@ SQL
 SELECT /* wiki_bloatplan_record */ ixstat('l3 a', 'l3_a');
 SELECT /* wiki_bloatplan_record */ ixstat('l3 c healthy', 'l3_c');
 SELECT /* wiki_bloatplan_record */ xp('l3 healthy', 'SELECT pad FROM l3 WHERE a = 5 AND c = 7');
+SELECT /* wiki_bloatplan_record */ xp('l3 a only',  'SELECT pad FROM l3 WHERE a = 5');
+SELECT /* wiki_bloatplan_record */ xp('l3 c only',  'SELECT pad FROM l3 WHERE c = 7');
 SQL
   pg -q -c "ALTER /* wiki_bloatplan_fixture */ INDEX l3_c SET (fillfactor = 10)" -c "REINDEX /* wiki_bloatplan_fixture */ INDEX l3_c"
   pgq <<'SQL'
 SELECT /* wiki_bloatplan_record */ ixstat('l3 c bloated', 'l3_c');
 SELECT /* wiki_bloatplan_record */ xp('l3 bloated', 'SELECT pad FROM l3 WHERE a = 5 AND c = 7');
+-- Exact statistics are not exact estimates.  Both columns are analyzed
+-- exhaustively here, and the conjunction is still estimated by multiplying two
+-- per-clause selectivities, so record each estimate beside the true count and
+-- let the page report the gap rather than assert there is none.
+SELECT /* wiki_bloatplan_estimate */ 'l3 actual rows: a=5 AND c=7 = ' || count(*) FILTER (WHERE a = 5 AND c = 7)
+       || ', a=5 = ' || count(*) FILTER (WHERE a = 5)
+       || ', c=7 = ' || count(*) FILTER (WHERE c = 7)
+       || ', total = ' || count(*) FROM l3;
+SELECT /* wiki_bloatplan_estimate */ 'l3 estimated rows: ' || string_agg(label || ' = ' || plan_rows, ', ' ORDER BY seq)
+  FROM r WHERE label IN ('l3 healthy', 'l3 a only', 'l3 c only', 'l3 bloated');
 SQL
 }
 
@@ -1521,6 +1647,7 @@ hold_snapshot() {  # hold_snapshot <table>: REPEATABLE READ snapshot in a second
       -c "BEGIN /* wiki_bloatplan_fixture_holder */ ISOLATION LEVEL REPEATABLE READ" \
       -c "SELECT /* wiki_bloatplan_fixture_holder */ count(*) FROM $t" \
       -c "SELECT /* wiki_bloatplan_fixture_holder */ pg_sleep(900)" > "$OUT/holder_$t.log" 2>&1 ) &
+  HOLDER_PID=$!
   until [ "$(pgq -c "SELECT /* wiki_bloatplan_holder_probe */ count(*) FROM pg_stat_activity WHERE application_name = 'bloatplan_holder' AND backend_xmin IS NOT NULL")" = "1" ]; do
     tries=$((tries + 1)); [ "$tries" -gt 60 ] && die "the holder session never took its snapshot"
     sleep 1
@@ -1531,6 +1658,7 @@ hold_snapshot() {  # hold_snapshot <table>: REPEATABLE READ snapshot in a second
 release_snapshot() {
   pgq -c "SELECT /* wiki_bloatplan_holder_release */ 'holder terminated=' || pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'bloatplan_holder'"
   wait 2>/dev/null
+  HOLDER_PID=""
   [ "$(pgq -c "SELECT /* wiki_bloatplan_holder_probe */ count(*) FROM pg_stat_activity WHERE application_name = 'bloatplan_holder'")" = "0" ] \
     || die "the holder session is still connected"
 }
@@ -1810,14 +1938,23 @@ stage_clean() {
   note "removed $SANDBOX"
 }
 
-DEFAULT="build check cluster fa fb ff fg fh fi fn fstale fl3 fp gs gd gt gp gb grej diag predict summary stop"
-[ $# -eq 0 ] && set -- $DEFAULT
-for st in "$@"; do
+# The dispatcher rejects an unknown stage, starts a server for the stages that
+# need one, and turns a failed stage into a failed run.  Without the || die a
+# stage that returns non-zero without calling die is skipped over and the script
+# still exits 0.
+run_stage() {
+  local st="$1"
   case "$st" in
-    build|check|cluster|fa|fb|ff|fg|fh|fi|fn|fstale|fl3|fp|gs|gd|gt|gp|gb|grej|diag|predict|summary|stop|clean) "stage_$st" ;;
+    build|check|cluster|stop|clean) ;;
+    fa|fb|ff|fg|fh|fi|fn|fstale|fl3|fp|gs|gd|gt|gp|gb|grej|diag|predict|summary) need_server ;;
     *) die "unknown stage: $st" ;;
   esac
-done
+  "stage_$st" || die "stage $st failed"
+}
+
+DEFAULT="build check cluster fa fb ff fg fh fi fn fstale fl3 fp gs gd gt gp gb grej diag predict summary stop"
+[ $# -eq 0 ] && set -- $DEFAULT
+for st in "$@"; do run_stage "$st"; done
 ```
 
 ## Open Questions
@@ -1831,7 +1968,8 @@ done
 - The GIN entry-page estimate `ceil(searchEntries * rint(pow(numEntryPages, 0.15)))` was reconciled arithmetically in every measured case, but `rint()`'s banker's rounding at exact `.5` boundaries was not exercised.
 - Whether `contrib/btree_gin`'s partial-match path (`gincost_pattern()` charging `partialEntries += 100` per key) systematically over- or under-charges a range predicate was not investigated; the measurements report only the resulting costs.
 - The partial-scan columns of the parallel-worker table were planned with `parallel_setup_cost = 0` and `parallel_tuple_cost = 0`. At the default parallel costs the planner chose a serial plan for the 50% and 20% scans on both indexes, so whether bloat changes the worker count of a real partial scan depends on the parallel path winning on cost first, which was not explored.
-- Every row estimate on this page is exact, because the script runs with `default_statistics_target = 10000`. A server at the default target samples 30,000 rows, and the first filing's numbers show what that does: its range-scan and plan-flip costs differed from the ones filed here by between 0.4% and 2.2%. The plan shapes did not change, but no sampled run is filed on this page.
+- Every row estimate on this page comes from exhaustive statistics, because the script runs with `default_statistics_target = 10000`, and every estimate the script recorded beside a true count matched it. That is not the same as the model being exact, and this page does not bound the difference. Fixture L3 is the only measurement here with two clauses on two columns, and it was deliberately built with *independent* columns, which is the one case where the multiplication in `clauselist_selectivity_ext()` is right by construction ([clausesel.c#clauselist_selectivity_ext-multiply](../../../../raw/postgres-17/src/backend/optimizer/path/clausesel.c#L253-L263)). Nothing here exercises a correlated column pair, histogram interpolation rather than a complete MCV list, or an extended-statistics object. The fixture L3 that the first 2026-09-19 filing used did exercise it, by accident: with `c = g % 20` against `a = g % 2000`, `a = 5 AND c = 7` could not match a row and was estimated at 13, an error of 13 rows on a true count of 0. That fixture was replaced on the second pass, so the page no longer carries a measured case in which the assumption fails. A server at the default target additionally samples only 30,000 rows, and the first filing's numbers show what that does: its range-scan and plan-flip costs differed from the ones filed here by between 0.4% and 2.2%. The plan shapes did not change, but no sampled run is filed on this page.
+- Seven claims added on the second 2026-09-19 pass are read from source and have no fixture on this page: that a long-lived backend can keep costing from a stale cached metapage, and that two backends can therefore price one index differently; that an `UPDATE` touching only summarizing-index columns leaves an unrelated B-tree untouched; that a partial index whose predicate the new row fails receives no entry; that VACUUM's 2% bypass still runs `amvacuumcleanup`, so it can flush a GIN pending list or recycle B-tree pages while skipping index vacuuming; that a changed `fillfactor` or `deduplicate_items` reaches already-existing pages at their next split; that a serial GIN bitmap index scan can feed a `Parallel Bitmap Heap Scan`; and that a repeated GIN scan amortizes the pending-page I/O charge through `index_pages_fetched()` while leaving the per-page CPU charge unamortized. Each is cited to the pinned source, which `MANDATORY Evidence` treats as primary, but none was reproduced on the measurement server, and the last one in particular would change how [A bloated GIN index loses to a B-tree](#a-bloated-gin-index-loses-to-a-b-tree) reads for a nested-loop inner scan.
 
 ## Related Pages
 
@@ -1886,7 +2024,7 @@ done
 | GIN is discarded at clause matching when the operator is not in its opfamily | [indxpath.c#match_opclause_to_indexcol-op_in_opfamily](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2433-L2459); core GIN families carry no `<`/`<=`/`>=`/`>` ([pg_amop.dat#gin-array_ops](../../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1232-L1244), [pg_amop.dat#gin-jsonb_ops](../../../../raw/postgres-17/src/include/catalog/pg_amop.dat#L1593-L1611)) |
 | `btree_gin` adds strategies 1-5 but is documented not to outperform B-tree | [btree_gin--1.0.sql#int4_ops](../../../../raw/postgres-17/contrib/btree_gin/btree_gin--1.0.sql#L56-L69), [btree-gin.sgml#caveats](../../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33) |
 | A bare boolean `Var` still matches a GIN bool opclass in v17 | [indxpath.c#IsBooleanOpfamily](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2271-L2286), [indxpath.c#match_boolean_index_clause](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2288-L2384), [bool.out#gin-bool-equality](../../../../raw/postgres-17/contrib/btree_gin/expected/bool.out#L89-L98); measured `38.26` for `i`, `i = true` and `i IS TRUE` |
-| GIN yields no plain index scan, no pathkeys, no index-only scan, no `IS NULL`, no native array scan, no parallel scan | [ginutil.c#ginhandler](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89), [indxpath.c#get_index_paths-submit](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L740-L751), [indxpath.c#build_index_paths-pathkeys](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L905-L944), [indxpath.c#check_index_only](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1730-L1800), [indxpath.c#match_clause_to_indexcol-nulltest](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2251-L2266), [amutils.out#index-properties](../../../../raw/postgres-17/src/test/regress/expected/amutils.out#L122-L129); measured as `disable_cost` sequential scans |
+| GIN yields no plain index scan, no pathkeys, no index-only scan, no `IS NULL`, no native array scan, and no partial index path of its own | [ginutil.c#ginhandler](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L36-L89), [indxpath.c#get_index_paths-submit](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L740-L751), [indxpath.c#build_index_paths-pathkeys](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L905-L944), [indxpath.c#check_index_only](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1730-L1800), [indxpath.c#match_clause_to_indexcol-nulltest](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2251-L2266), [amutils.out#index-properties](../../../../raw/postgres-17/src/test/regress/expected/amutils.out#L122-L129); measured as `disable_cost` sequential scans |
 | GIN charges every pending, entry and data page at `random_page_cost` plus `50 * cpu_operator_cost` | [selfuncs.c#gincostestimate-page-cpu](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7937-L7955), [selfuncs.c#gincostestimate-random-page-cost](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7976-L7980); measured `12.97` GIN vs `4.52` B-tree on identical statistics, both predicted to the cent |
 | The pending list is charged to startup cost in full | [selfuncs.c#gincostestimate-pending](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7882-L7886); measured 736 pending pages moving the GIN scan from `13.01` to `3141.12` inside a `BitmapAnd` the planner kept, and 1,471 pages moving it to `6264.98` and out of the `BitmapAnd` |
 | `gin_clean_pending_list()` drains the list but leaves `nTotalPages` stale | [ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1027-L1091), [selfuncs.c#gincostestimate-scale-or-invent](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7713-L7767); only [gininsert.c:406](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L406) and [ginvacuum.c:789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L789) call `ginUpdateStats()`; measured 2,073 live blocks against a metapage still reading 302 |
@@ -1895,6 +2033,22 @@ done
 | GIN rejects unique, `INCLUDE`, exclusion and `CLUSTER` | [indexcmds.c#DefineIndex-am-checks](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L860-L879), [cluster.c#cluster_rel-amclusterable](../../../../raw/postgres-17/src/backend/commands/cluster.c#L517-L522); all four messages reproduced |
 | A multicolumn GIN can beat a `BitmapAnd` of GIN + B-tree | [btree-gin.sgml#caveats](../../../../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L24-L33); measured `21.51` versus `240.13` |
 | No test compares GIN and B-tree plan choice, and none covers `gincostestimate` | no `src/test` match for `gincostestimate`; `btree_gin` tests use `EXPLAIN (COSTS OFF)` ([bool.sql#enable_seqscan-off](../../../../raw/postgres-17/contrib/btree_gin/sql/bool.sql#L1-L9)) |
+| The planner's tree height can be a stale per-backend cached copy of the metapage | [nbtpage.c#_bt_getrootheight](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L663-L717) caches `BTMetaPageData` in `rel->rd_amcache` and its comment declines to refresh it; freed only on relcache invalidation ([relcache.c#RelationInvalidateRelation](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L2534-L2557)) |
+| `leaf_fragmentation` counts backward sibling links only, not physical adjacency | [pgstatindex.c#fragments](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L323) |
+| An `UPDATE` of only summarizing-index columns adds no entry to a B-tree | [heapam.c#heap_update-hot-decision](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L4140-L4161), [heapam.c#update_indexes](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L4415-L4429), [tableam.h#TU_UpdateIndexes](../../../../raw/postgres-17/src/include/access/tableam.h#L113-L127), [nodeModifyTable.c#ExecUpdateEpilogue-onlySummarizing](../../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2162-L2166), [execIndexing.c#ExecInsertIndexTuples-onlySummarizing](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L361-L366) |
+| A partial index whose predicate the new row fails gets no entry | [execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L368-L387) |
+| The 2% bypass skips index vacuuming but still runs index cleanup | [vacuumlazy.c#lazy_vacuum-bypass-branch](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1936-L1949) clears only `do_index_vacuuming`; [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L851-L893) can still scan and recycle; [ginvacuum.c#ginvacuumcleanup-pending](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L719-L729) flushes the pending list |
+| The wraparound failsafe clears `do_index_cleanup` too, so it does stop cleanup | [vacuumlazy.c#lazy_check_wraparound_failsafe-clears](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2326) |
+| `fillfactor` and `deduplicate_items` reach existing pages at the next split, without a rebuild | [nbtsplitloc.c#leaffillfactor](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L170-L176), [nbtinsert.c#delete-then-dedup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2770-L2785), [nbtsort.c#allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L560-L564) |
+| `IndexOptInfo` is not the whole size input for every AM: GIN and BRIN read metapage counters as well | [selfuncs.c#gincostestimate-stats](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7697-L7711), [selfuncs.c#brincostestimate-stats](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8086-L8101) |
+| `FormData_pg_class` is cpp output of the `CATALOG()` macro, not a `genbki.pl` product | [genbki.h:23](../../../../raw/postgres-17/src/include/catalog/genbki.h#L23), [pg_class.h#CATALOG](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L21-L32), [pg_class.h#NOTES](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L11-L16) |
+| A serial GIN bitmap index scan can feed a `Parallel Bitmap Heap Scan` | [indxpath.c:347](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L347), [allpaths.c#create_partial_bitmap_paths](../../../../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L4162-L4185) |
+| On a repeated GIN scan the pending-page I/O charge is amortized and the per-page CPU charge is not | [selfuncs.c#gincostestimate-cache-effects](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7957-L7974), [selfuncs.c:7980](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7980), [selfuncs.c#gincostestimate-page-cpu](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7937-L7955) |
+| `gin_pending_list_limit` triggers a non-forced cleanup after the insert, and is not a ceiling | [ginfast.c#needCleanup](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L448-L471), [ginfast.c#ginInsertCleanup-conditional-lock](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L818-L828), [gin.sgml#fast-update](../../../../raw/postgres-17/doc/src/sgml/gin.sgml#L503-L529) |
+| `fastupdate = off` does not flush the entries already in the pending list | [ref/create_index.sgml#fastupdate-note](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L524-L532) |
+| `enable_bitmapscan = off` adds `disable_cost` and does not remove the bitmap path | [costsize.c#cost_bitmap_heap_scan-disable](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1041-L1042) |
+| Gate 3 is a comparison of computed costs, not a rule that GIN loses | [indxpath.c#choose_bitmap_and-cheapest-of-group](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1353-L1357), [pathnode.c#add_path](../../../../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L419-L453); measured: a multicolumn GIN at `21.51` beating a `BitmapAnd` at `240.13` |
+| Exhaustive sampling removes sampling noise; the independence assumption survives it | [clausesel.c#clauselist_selectivity_ext-multiply](../../../../raw/postgres-17/src/backend/optimizer/path/clausesel.c#L253-L263); measured on fixture L3, whose independent columns make the product exact: 250, 24,971 and 12 estimated against 250, 24,971 and 12 actual. No fixture here violates the assumption |
 
 ## Context Reviewed
 
@@ -1928,7 +2082,9 @@ Follow-up history: `git log -L` on `gincostestimate` over `615cebc94b..HEAD` ret
 
 Follow-up empirical: the GIN stages of the same script on the same server, with `btree_gin`, `pgstattuple` and `pageinspect` installed, covering same-column GIN-versus-B-tree costing on identical statistics, closed-form reconciliation of both cost models, all six plan-shape cases, `fastupdate` pending-list bloat at two sizes with the B-tree-only alternative priced beside it, the drain and the following `VACUUM`, the 4X stale-metapage fallback, the keyless partial-index path, the boolean-column case, the live AM property matrix, the four `CREATE INDEX`/`CLUSTER` rejections, a multicolumn-GIN comparison, and verbatim execution of the two filed diagnostic blocks as read out of this page. The `clean` stage stopped the server and deleted the sandbox.
 
-Review, 2026-09-19: all 340 citations of the previous text (177 ranges in 46 files) were re-read against the pin; all were in bounds and all came from `raw/postgres-17/`. Six ranges were tightened or extended, one label pointed at a legacy entry point, and five behavioral claims had no citation. Files read for the first time in this pass: `contrib/bloom/blcost.c`, `src/include/optimizer/plancat.h` and the `get_relation_info_hook` call in `plancat.c`, `src/include/utils/selfuncs.h` (`GenericCosts`), `src/backend/commands/analyze.c` (`std_typanalyze`), `indxpath.c` (`check_index_predicates`, `match_restriction_clauses_to_index`), `costsize.c` (`cost_bitmap_heap_scan`), `gininsert.c` and `ginvacuum.c` (`ginUpdateStats()` callers), and `contrib/pgstattuple/pgstattuple--1.4--1.5.sql`. Common concepts: the three v17 concept pages are bloat-test protocols for estimator pages; none defines a concept this page explains, so none is linked, and none was edited.
+Review, 2026-09-19, second pass: fourteen reported defects were each checked against the pin and each confirmed, then fixed. Files read for the first time on this page: `src/backend/optimizer/path/clausesel.c` (`clauselist_selectivity_ext`), `src/backend/utils/cache/relcache.c` (`RelationInvalidateRelation`, the `rd_amcache` free sites), `src/backend/access/heap/heapam.c` (`heap_update`'s HOT and summarizing decision and its `update_indexes` result), `src/include/access/tableam.h` (`TU_UpdateIndexes`), `src/backend/executor/nodeModifyTable.c` (`ExecUpdateEpilogue`) and `src/backend/executor/execIndexing.c` (`ExecInsertIndexTuples`), `src/backend/access/nbtree/nbtree.c` (`btvacuumcleanup`), `src/backend/access/gin/ginvacuum.c` (`ginvacuumcleanup`), `src/backend/access/gin/ginfast.c` (`ginHeapTupleFastInsert`'s `needCleanup` test and `ginInsertCleanup`'s conditional lock), `src/backend/access/nbtree/nbtsort.c` (`_bt_allequalimage` at build), `src/include/catalog/genbki.h` (the `CATALOG()` macro), and `src/backend/utils/adt/selfuncs.c` (`brincostestimate`'s `brinGetStats` read and `gincostestimate`'s cache-effect block). `nbtsplitloc.c`'s `BTGetFillFactor` read, `costsize.c`'s `enable_bitmapscan` test, `allpaths.c`'s `create_partial_bitmap_paths` and its call site in `indxpath.c`, `pgstatindex.c`'s `fragments` counter, and `ref/create_index.sgml`'s `fastupdate` note were read for the first time as evidence. The script gained failure propagation, an exit trap and a `need_server` step, and fixture L3 was rebuilt on two independent columns; every number was re-measured from the edited script. No common concept page was created, edited, or needed.
+
+Review, 2026-09-19, first pass: all 340 citations of the previous text (177 ranges in 46 files) were re-read against the pin; all were in bounds and all came from `raw/postgres-17/`. Six ranges were tightened or extended, one label pointed at a legacy entry point, and five behavioral claims had no citation. Files read for the first time in this pass: `contrib/bloom/blcost.c`, `src/include/optimizer/plancat.h` and the `get_relation_info_hook` call in `plancat.c`, `src/include/utils/selfuncs.h` (`GenericCosts`), `src/backend/commands/analyze.c` (`std_typanalyze`), `indxpath.c` (`check_index_predicates`, `match_restriction_clauses_to_index`), `costsize.c` (`cost_bitmap_heap_scan`), `gininsert.c` and `ginvacuum.c` (`ginUpdateStats()` callers), and `contrib/pgstattuple/pgstattuple--1.4--1.5.sql`. Common concepts: the three v17 concept pages are bloat-test protocols for estimator pages; none defines a concept this page explains, so none is linked, and none was edited.
 
 ## Source References
 
@@ -2008,6 +2164,31 @@ Review, 2026-09-19: all 340 citations of the previous text (177 ranges in 46 fil
 - [gininsert.c:406](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L406)
 - [ginvacuum.c:789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L789)
 - [guc_tables.c#enable_bitmapscan](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L813-L822)
+- [clausesel.c#clauselist_selectivity_ext-multiply](../../../../raw/postgres-17/src/backend/optimizer/path/clausesel.c#L253-L263)
+- [relcache.c#RelationInvalidateRelation](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L2534-L2557)
+- [heapam.c#heap_update-hot-decision](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L4140-L4161)
+- [heapam.c#update_indexes](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L4415-L4429)
+- [tableam.h#TU_UpdateIndexes](../../../../raw/postgres-17/src/include/access/tableam.h#L113-L127)
+- [nodeModifyTable.c#ExecUpdateEpilogue-onlySummarizing](../../../../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2162-L2166)
+- [execIndexing.c#ExecInsertIndexTuples-onlySummarizing](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L361-L366)
+- [execIndexing.c#ExecInsertIndexTuples-predicate](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L368-L387)
+- [vacuumlazy.c#lazy_vacuum-bypass-branch](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1936-L1949)
+- [vacuumlazy.c#lazy_check_wraparound_failsafe-clears](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2326)
+- [nbtree.c#btvacuumcleanup](../../../../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L851-L893)
+- [ginvacuum.c#ginvacuumcleanup-pending](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L719-L729)
+- [nbtsplitloc.c#leaffillfactor](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L170-L176)
+- [nbtsort.c#allequalimage](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L560-L564)
+- [genbki.h:23](../../../../raw/postgres-17/src/include/catalog/genbki.h#L23)
+- [allpaths.c#create_partial_bitmap_paths](../../../../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L4162-L4185)
+- [ginfast.c#needCleanup](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L448-L471)
+- [ginfast.c#ginInsertCleanup-conditional-lock](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L818-L828)
+- [ref/create_index.sgml#fastupdate-note](../../../../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L524-L532)
+- [costsize.c#cost_bitmap_heap_scan-disable](../../../../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1041-L1042)
+- [selfuncs.c#brincostestimate-stats](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8086-L8101)
+- [selfuncs.c#gincostestimate-cache-effects](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7957-L7974)
+- [selfuncs.c#gincostestimate-page-cpu](../../../../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7937-L7955)
+- [pgstatindex.c#fragments](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L323)
+- [indxpath.c#choose_bitmap_and-cheapest-of-group](../../../../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1353-L1357)
 
 ## Navigation
 

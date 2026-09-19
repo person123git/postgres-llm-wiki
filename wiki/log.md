@@ -12893,3 +12893,95 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `wiki/log.md` and `wiki/versions.md` conflicted and were resolved by keeping the
   incoming text and re-applying this pass's edits on top of it; `wiki/index.md` and
   `wiki/v17/index.md` merged cleanly, and the page itself was not touched by them.
+
+## [2026-09-19] review v17 | planner penalties for bloated indexes: fourteen reported defects fixed, fixture L3 rebuilt on independent columns
+
+- Fixed fourteen reported defects in [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). Each was checked against the pin
+  before being fixed and each was confirmed; none was a false report.
+- **Prompt hygiene first.** The asker chose "correct and restate". The request read
+  `follow agents.md, in postgresql 17 , for question : # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified) fix these issues :`;
+  the defects are `agents.md` -> `AGENTS.md`, lowercase `postgresql`, the lowercase sentence
+  openings `follow` and `fix`, a space before the comma in `17 ,` and before each of the two
+  colons, a stray Markdown `#` carried in with the pasted title, and no terminal
+  punctuation. The pasted finding list carried two of its own: the numbering stopped at 11
+  and the twelfth item began mid-sentence at `planner.md:148) omits potentially stale cached
+  metadata`, its opening clause missing, and item 2's `fa predict` was unquoted so it did
+  not read as a command. Both forms are filed under the page's `## Question`.
+- **Scope, asked with the hygiene question.** The asker chose to **replace** fixture L3
+  rather than keep its degenerate form, accepting that all of its numbers would be
+  re-measured and that its impossible-combination counterexample would be lost.
+- **The one P1, in the published script.** `stage_check()` discarded the exit status of
+  `make check` and of the three contrib suites, and the dispatcher discarded every stage's
+  status, so a run whose four suites all failed still exited 0. Reproduced with a `make`
+  shim returning 23 in a throwaway sandbox: the stage now stops at the first failure and
+  the run exits 1. Every essential command carries `|| die`, stages run through a
+  `run_stage` wrapper that propagates failure, and an unknown stage name is rejected before
+  anything runs.
+- **Script teardown and selective re-runs.** There was no exit cleanup, so a `die` after
+  startup left the postmaster running, and the `fa predict` re-run the usage table
+  documented could not work, because the default run's `stop` stage had already shut the
+  cluster down. Added an `EXIT`/`INT`/`TERM` trap that stops the server and the
+  snapshot-holding session on every path out, and a `need_server` step that every SQL stage
+  passes through. Both verified: `cluster bogus` aborted with the server up and left no
+  `postmaster.pid`, no process from the data directory and no socket on port 55437; and
+  `fl3` run alone with the cluster down started it and reproduced its rows exactly.
+- **Fixture L3 rebuilt.** `c` was `g % 20` against `a = g % 2000`; because 20 divides 2,000,
+  `a = 5` forced `c = 5`, so `a = 5 AND c = 7` matched no row while the page reported an
+  estimated 13. `c` is now an independent seeded draw over the same twenty values. Moved:
+  428 blocks at 89.59% density -> **427 at 89.81%**, the `BitmapAnd` total `332.49` ->
+  **`328.51`**, the `c` bitmap `275.92` -> **`275.70`**, and `rows=13` -> **`rows=12`**.
+  Unchanged: the bloated `l3_c` at **3,801** blocks and **10.37%**, and the surviving
+  `Bitmap Heap Scan` at **`806.01`** with `c = 7` demoted to a `Filter`.
+- **The exactness claim, corrected on source.** The page said every row estimate was exact
+  because sampling was exhaustive, which conflates sampling noise with model error:
+  `clauselist_selectivity_ext()` multiplies per-clause selectivities and so assumes
+  independence. The rebuilt L3 now records each estimate beside the true count -
+  **250/250, 24,971/24,971 and 12/12** - so the page reports agreement and states plainly
+  that agreement is not proof, because L3's columns are independent by construction and no
+  fixture here violates the assumption. The replaced fixture's 13-against-0 is filed under
+  `## Open Questions` as the measured counterexample the rebuild gave up.
+- **Eleven further source corrections**, each newly cited to the pin: the planner's tree
+  height can be a stale per-backend `rd_amcache` copy of the metapage, which
+  `_bt_getrootheight()` deliberately never refreshes, so two backends can price one index
+  differently; `leaf_fragmentation` counts backward sibling links only, so a forward
+  thousand-block jump scores nothing; an `UPDATE` does not always write into every index -
+  a HOT update of only summarizing-index columns yields `TU_Summarizing` and
+  `ExecInsertIndexTuples()` then skips every non-summarizing index, and a partial index
+  whose predicate the new row fails gets no entry; VACUUM's 2% bypass clears only
+  `do_index_vacuuming` and still runs `amvacuumcleanup`, which can recycle B-tree pages and
+  does flush a GIN pending list, while the wraparound failsafe clears `do_index_cleanup`
+  too; `fillfactor` and `deduplicate_items` reach existing pages at their next split rather
+  than only after a rebuild; `IndexOptInfo` is not the whole size input for every AM, since
+  GIN and BRIN reopen the index for metapage counters; `FormData_pg_class` is cpp output of
+  the `CATALOG()` macro, not a `genbki.pl` product; gate 3 is a comparison of computed
+  costs, not a rule that GIN loses; `amcanparallel = false` removes only a partial GIN
+  *index* path, because `create_partial_bitmap_paths()` can still put a `Parallel Bitmap
+  Heap Scan` over a serial GIN bitmap; a repeated GIN scan amortizes the pending-page I/O
+  charge through `index_pages_fetched()` while the per-page CPU charge stays unamortized;
+  `gin_pending_list_limit` triggers a non-forced cleanup *after* the insert and is not a
+  ceiling, and `fastupdate = off` does not flush entries already pending;
+  `enable_bitmapscan = off` adds `disable_cost` and does not remove the bitmap path; and
+  two of the seven GIN plan-shape rows, not three, are `disable_cost` outcomes, because
+  `SELECT n WHERE n = 42` keeps the GIN index and loses only the index-only scan.
+- **Re-measured from the edited script.** Three passes on 2026-09-19 at
+  `PostgreSQL 17.11 on aarch64-apple-darwin27.0.0`, Darwin arm64, `block_size` 8192,
+  maximum data alignment 8: a full default run, a second pass over every fixture stage with
+  the cluster down at the start, and a third full run from an empty sandbox. `make check`
+  **All 225 tests passed**, with All 1 / 8 / 30 on `pgstattuple`, `pageinspect` and
+  `btree_gin`. The second pass reproduced the first byte for byte, the only diff being the
+  two run timestamps: **33** index rows, **11** GIN rows, **7 of 7** closed-form
+  predictions, **118** plans (two more than before, the new single-clause L3 estimates),
+  **26** fixture tables, four error messages and both diagnostic outputs. The published
+  script text was extracted from the page and `md5`-compared with the text that ran.
+- **Teardown.** The `stop` stage asserted no `postmaster.pid`, no process from the data
+  directory and no socket on port 55437 after each run; the `clean` stage then stopped the
+  server and deleted `.wiki-runtime/tmp/bloatplan`. Nothing is left running and nothing is
+  retained. No cluster the asker did not name was touched.
+- **Bookkeeping.** No heading was added, removed or renamed, so `## Contents` is unchanged.
+  `verified:` untouched and `verified_by_agent:` left at `not yet`, because this pass
+  re-read only the citations it touched. `wiki/index.md` and `wiki/v17/index.md` entries
+  updated; `wiki/versions.md` coverage text updated. No common concept page was created,
+  edited or needed: the three v17 concept pages are bloat-test protocols and none defines a
+  concept this page explains. `scripts/wiki_lint` run after the edits.
