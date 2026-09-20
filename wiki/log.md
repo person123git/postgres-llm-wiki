@@ -12985,3 +12985,126 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   updated; `wiki/versions.md` coverage text updated. No common concept page was created,
   edited or needed: the three v17 concept pages are bloat-test protocols and none defines a
   concept this page explains. `scripts/wiki_lint` run after the edits.
+
+## [2026-09-20] review v17 | planner penalties for bloated indexes: ten reported defects fixed, fixture D rebuilt on independent populations
+
+- Fixed ten reported defects in [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11; detached `HEAD` at the pin). Each
+  was checked against the pin before being fixed and each was confirmed; none was a false
+  report.
+- **Prompt hygiene first.** The asker chose **correct silently**, so the page's `## Question`
+  records the corrected form only and not the defect list. The request read
+  `follow agents.md, in postgresql 17 , on question : # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified) , fix these issues :`;
+  the defects were `agents.md` for AGENTS.md, lowercase `postgresql`, the lowercase sentence
+  openings `follow` and `fix`, a space before the comma in `17 ,` and in `(unverified) ,`, a
+  space before each of the two colons, `on question` for "for the question", a stray Markdown
+  `#` carried in with the pasted title, and no terminal punctuation. The pasted finding list
+  opened lowercase and cited raw files as bare `path:line` rather than in the mandatory
+  Markdown link form.
+- **Scope, asked with the hygiene question.** The asker chose to **rebuild fixture D on
+  independent columns** rather than keep it as a labelled selectivity-error example,
+  accepting that every fixture-D number would be re-measured.
+- **The one P1, in the published script, and deeper than the last one.** `pg()` and `pgq()`
+  returned their exit status to callers that never looked at it, so only a stage function's
+  *last* command decided the stage's status: a failed fixture build or a failed `UPDATE`
+  round in the middle of a stage was reported as a pass, and `run_stage`'s `|| die` never
+  saw it. Reproduced by injecting two such failures into a copy of the script - a failing
+  `UPDATE` inside `churn()` and a failing `CREATE INDEX` inside `stage_gd`'s fixture build,
+  both placed so the stage's last command still succeeds. Pre-fix: both runs exited **0**.
+  Filed text: both exit **1**, naming the stage and the statement, and the `EXIT` trap left
+  no `postmaster.pid`, no process from the data directory and no socket on port 55437. The
+  fix moves the abort into `pg()`, `pgq()` and a new `pgopt()` wrapper for the three calls
+  that must override `PGOPTIONS`; `pgerr()` stays the one deliberate exception, for `grej`.
+  The `pg_controldata` call and the platform-record pipeline gained their own checks.
+- **Fixture D rebuilt.** It added the rare lexeme on every 5,000th row while `cat` was
+  `i % 20`; 20 divides 5,000, so every marked row had `cat = 0` and
+  `zebracorn AND cat = 7` could not match a row - the same defect fixture L3 had, which the
+  previous pass fixed. The marker now lands on every 4,999th row; 4,999 is prime, so it is
+  coprime with the twenty category values and the two populations are independent, with
+  exactly one marked row in twenty carrying each category. **Every recorded fixture-D cost
+  reproduced to the cent** - 302 / 1,038 / 1,773 / 2,073 blocks, 736 and 1,471 pending
+  pages, `13.01` / `3141.12` / `6264.98` / `17.49` / `17.46` for the GIN scan, `132.40` /
+  `3321.93` / `255.85` / `255.81` for the chosen plan, `2323.30` / `3486.80` / `4646.42` /
+  `4646.40` for the B-tree-only alternative, the multicolumn GIN at `21.51` against
+  `240.13`, and the `docs_cat_bt` B-tree at 171 blocks - while the true row count moved from
+  **0 to 4**. The page now records estimate against truth for D as it does for L3: 80/80,
+  20,000/20,000 and 4/4. That the costs did not move is the point, and the page says so: a
+  cost is computed from an estimate that assumes independence either way, so the model
+  cannot tell the two fixtures apart.
+- **Eight further source corrections**, each newly cited to the pin. (1) The opening
+  "exactly four planner inputs" table is a B-tree-family summary, not an all-index one:
+  `gincostestimate()` and `brincostestimate()` reopen the index and read metapage counters
+  no `IndexOptInfo` field carries, and only two of the four rows are stored fields at all -
+  the cache-model and SAOP-clamp rows are expressions the cost code derives from `pages`.
+  (2) The cached tree height is not cleared only by relcache invalidation: `_bt_getroot()`
+  throws the cache away when the cached fast root fails its checks and `_bt_gettrueroot()`
+  flushes it unconditionally; the effect stands, because neither path is reached by costing.
+  (3) `compute_parallel_worker()`'s page-based calculation is conditional: a table
+  `parallel_workers` reloption is used instead and skips it entirely, and the
+  `min_parallel_index_scan_size` rejection is guarded on `RELOPT_BASEREL`, exempting
+  inheritance children. (4) The HOT exception needs `newbuf == buffer` as well as untouched
+  hot-blocking columns; a row that no longer fits on its own page leaves `use_hot_update`
+  false and `heap_update()` reports `TU_All`, so every index that accepts it gets an entry.
+  (5) The filed page-charge probe is invalid on an index whose tablespace sets
+  `random_page_cost`, because `get_tablespace_page_costs()` returns the reloption and ignores
+  the session GUC; the diagnostic block now opens with a catalog check for the override and
+  the page adds the second precondition, that both plans must name the same index. (6) The
+  one-page rule is bounded at both ends: `genericcostestimate()` runs the pro-rata formula
+  only while `pages > 1` **and** `tuples > 1`, so a table down to one row prices an index of
+  any size at a single page, and a *repeated* lookup is priced through Mackert-Lohman with
+  the whole index as the page universe even while the per-iteration estimate stays at one.
+  (7) "Every GIN measurement has `arrayScans = 1`" was wrong: fixture S's `n IN (1,2,3)`
+  sets `arrayScans = 3` through `gincost_scalararrayopexpr()` and does take the cache
+  adjustment; the recorded plan carries `Index Cond: (n = ANY ('{1,2,3}'::integer[]))` on the
+  GIN index. (8) Gate 1 rejects a *clause*, not the index: `build_index_paths()` still
+  generates a path on `useful_predicate` alone, which is how the page's own keyless partial
+  GIN example happens.
+- **New fixture F-one** measures correction 6's lower bound, in the `ff` stage: a 200,000-row
+  table's 551-block index, stripped to one surviving row and vacuumed twice, keeps all 551
+  blocks (1 live leaf, 547 deleted, 0.29% density, `tree_level` 2 against `fastlevel` **0**)
+  and is charged **one** page. Its whole-index scan and its point lookup both cost `4.14`,
+  against `5704.42` before the delete; the page term fell from `551 * 4.0 = 2204.00` to
+  `1 * 4.0 = 4.00` with `index->pages` unchanged, and the `ceil(log2(tuples))` charge
+  vanished for the same reason.
+- **Re-measured from the edited script.** Three passes on 2026-09-20 at
+  `PostgreSQL 17.11 on aarch64-apple-darwin27.0.0`, Apple clang 21, `--without-icu
+  --without-readline`, Darwin arm64, `block_size` 8192, maximum data alignment 8: two full
+  runs from an empty sandbox (1 m 38 s and 1 m 42 s) and one pass over every fixture stage
+  with the cluster stopped at the start (27 s). `make check` **All 225 tests passed**, with
+  All 1 / 8 / 30 on `pgstattuple`, `pageinspect` and `btree_gin` in each full run. All three
+  wrote a byte-identical `summary.txt` apart from its two run timestamps: **35** index rows
+  (33 + F-one's two), **11** GIN rows, **7 of 7** closed-form predictions, **121** plans
+  (118 + F-one's three), **27** fixture tables, four error messages and both diagnostic
+  outputs. Every number the previous filing recorded came back unchanged. The published
+  script text was extracted from the page and `md5`-compared with the text that ran
+  (`b35725e3756274148cf90ed6573e2eb1`).
+- **Citations.** The page now carries **547** citation occurrences over **242** distinct
+  ranges in **64** files; every range was re-checked in bounds against the pin, all from
+  `raw/postgres-17/`, none from another version, and no Obsidian wikilink remains. Files
+  cited here for the first time: `src/backend/utils/cache/spccache.c` and the `reloptions.c`
+  table `parallel_workers` entry.
+- **Open questions** 11 -> 12. The new bullet collects the four corrections that are read
+  from source with no fixture: the `parallel_workers` reloption bypass, the inheritance-child
+  exemption, the `TU_All` fallthrough when a row leaves its page, and the tablespace
+  `random_page_cost` override that invalidates the probe (the filed block was run only
+  against `pg_default`, where it correctly reported no override). The independence bullet now
+  records that fixture D was the second accidental counterexample the page has given up.
+- **Bookkeeping.** One heading was added, `### The pages-outnumber-rows guard at its limit`,
+  and `## Contents` was updated; all 78 `##`/`###` sections are listed and all 105 in-page
+  anchors resolve. `verified:` untouched and `verified_by_agent:` left at `not yet`, because
+  this pass re-read only the citations it touched and the page still carries open questions.
+  `wiki/index.md` and `wiki/v17/index.md` entries updated; `wiki/versions.md` gained a dated
+  coverage note and its v17 row clause was corrected where it repeated the "four inputs
+  filled by `get_relation_info()`" reading. No common concept page was created, edited or
+  needed: `wiki/v17/common-concepts/` holds only the three bloat-test protocol pages, none of
+  which defines a concept this page explains.
+- **Teardown.** The `stop` stage asserted no `postmaster.pid`, no process from the data
+  directory and no socket on port 55437 after each run, including after the two deliberately
+  aborted injection runs, where the `EXIT` trap did it. The `clean` stage then stopped the
+  server and deleted `.wiki-runtime/tmp/bloatplan`, and the runtime copy of the script and
+  the run logs under `.wiki-runtime/tmp/` were deleted afterwards. **Not touched**: a
+  pre-existing, already-stopped sandbox at `.wiki-runtime/tmp/bpf17/` with its
+  `bloatplan-fix-20260920.sh` and run log, left by earlier work on this page; it had no
+  `postmaster.pid`, no process and no socket, and this pass neither started nor removed it.
+  `raw/postgres-17/` was read only.
