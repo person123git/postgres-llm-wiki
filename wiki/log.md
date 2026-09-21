@@ -13108,3 +13108,81 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   `bloatplan-fix-20260920.sh` and run log, left by earlier work on this page; it had no
   `postmaster.pid`, no process and no socket, and this pass neither started nor removed it.
   `raw/postgres-17/` was read only.
+
+## [2026-09-21] review v17 | REINDEX_SCORE heuristic page: bookkeeping filed, three citations corrected
+
+- Asked, per `AGENTS.md`, to fix the wiki-rule compliance of
+  [How Accurate Is the pgstatindex REINDEX_SCORE B-Tree Maintenance Heuristic, on
+  PostgreSQL 17 and 12 (unverified)](v17/questions/indexing/btree-reindex-score-heuristic.md)
+  at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+- **Prompt hygiene first.** The request carried typos and the asker chose **correct
+  silently**, so only the corrected form is recorded here and the page's `## Question`
+  is untouched: it still restates the original heuristic prompt, whose own hygiene pass
+  is filed on the page under `### Prompt corrections`.
+- **Scope, asked with the hygiene question.** The asker chose **bookkeeping plus the
+  citation fixes** and **no re-measurement**. Every number on the page therefore stands
+  as filed, from the run the page records as 2026-09-21 on Linux x86_64; this pass did
+  not reproduce it, and the page's `verified_by_agent:` stays `not yet`.
+- **The rule violations were all bookkeeping.** The page had been filed with no index
+  entry anywhere, which `scripts/wiki_lint` reported as an orphan page and as a version
+  landing page missing one of its own questions - 9 errors / **4** warnings against this
+  host's 9 / 2 baseline. Now linked from `wiki/v17/index.md` under `### Indexing` and
+  from `wiki/index.md` under `#### Indexing` of `### PostgreSQL 17.11`, with a coverage
+  clause added to the v17 row of `wiki/versions.md`, and this entry appended. Lint is
+  back to **9 / 2** on this host: the two remaining warnings are the pre-existing
+  uncommitted `raw/postgres-14` and `raw/postgres-12` checkouts, and the nine errors are
+  the pre-existing v18, v19 and v14 pin and citation failures, none of them on this
+  page.
+- **Three citation corrections**, each checked against the pin before it was made.
+  (1) `nbtree.h#BTGetTargetPageFreeSpace` was cited at `#L1138-L1145` in the body and
+  `#L1144-L1145` in the Evidence Map and Source References; the macro is 1144-1145 and
+  the longer range opens on `BTGetFillFactor`, so the body now matches the label and the
+  page cites one range per label. (2) `pg_regress.c#PGOPTIONS` was `#L785-L798` in the
+  body against `#L783-L799` elsewhere, the shorter range starting mid-comment; both are
+  now `#L783-L799`. (3) The two `NaN` claims the page's whole defect rests on - that
+  `NaN = NaN` is true and that `NaN >= 0.5` is true - were cited only to the
+  window-function `in_range` block of `float.c`, which restates the rule rather than
+  defining it. The page now cites the operator chain end to end instead. For the
+  comparison that fires the false signal: the `>=` operator is
+  [float.c#float8ge](../raw/postgres-17/src/backend/utils/adt/float.c#L957-L964), which
+  returns [float.h#float8_ge](../raw/postgres-17/src/include/utils/float.h#L327-L331),
+  and that returns true on a `NaN` left argument before it looks at the right one - the
+  defect, stated by its own implementation. For the guard's predicate:
+  [float.c#float8eq](../raw/postgres-17/src/backend/utils/adt/float.c#L912-L919) returns
+  [float.h#float8_eq](../raw/postgres-17/src/include/utils/float.h#L267-L271), which
+  answers `isnan(val2)` instead of falling through to the C `==`, which is why
+  `x <> x` never fires. For `GREATEST(0, NaN)`:
+  [execExpr.c#MinMaxExpr](../raw/postgres-17/src/backend/executor/execExpr.c#L2194-L2201)
+  shows `ExecInitExprRec` resolving a `MinMaxExpr` to the type's B-tree comparison
+  function, which for `float8` is
+  [float.c#btfloat8cmp](../raw/postgres-17/src/backend/utils/adt/float.c#L966-L973) and
+  so `float8_cmp_internal`, which sorts by
+  [float.h#float8_gt](../raw/postgres-17/src/include/utils/float.h#L315-L319). The two
+  `float.c` `in_range` ranges are kept as the corroborating comment. The Evidence Map
+  gains two rows, one for `NaN >= 0.5` and one for how `GREATEST` reaches that
+  comparison function, `## Context Reviewed` names the chain, and `## Source References`
+  grows from 14 entries to **21** over 8 files, `utils/float.h` and
+  `executor/execExpr.c` being cited here for the first time.
+- **Checked and found already compliant**, so nothing was changed: front-matter order,
+  `version:`/`pinned_commit:` against `wiki/versions.md`, the `(unverified)` title hint,
+  the `indexing` category, the `## Contents` table of contents (all 30 `##`/`###`
+  sections listed in document order, every in-page anchor resolving, including the one
+  link to a `####` heading), all **62** citation occurrences over **21** distinct ranges
+  resolving in bounds and every one from `raw/postgres-17/`, with no cross-version
+  citation and no Obsidian wikilink, the
+  single `## Measurement Script` section with one script per version leg and all eight
+  mandatory usage items, no literal Markdown fence inside either published script, the
+  GUC context and apply scope named for every setting the scripts write, and the filed
+  statement's `/* wiki_reindex_score_12_17 */` tag with its session `statement_timeout`
+  and `lock_timeout`.
+- **No common concept page was touched.** The page reads
+  [Mandatory B-Tree Bloat Tests (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md)
+  as its suite definition and links it; its two open questions that would change that
+  concept page - family 4's `f88` never reaching the `FALSE NEGATIVE` band, and the
+  absent all-pages-deleted fixture - remain filed as open questions and remain their own
+  task.
+- **Teardown: nothing was running.** This pass started no service and built nothing. No
+  `postmaster.pid` and no `postgres` process existed before or after it, `.wiki-runtime/tmp/`
+  held no sandbox, and the scratch directory this pass created for its own checker,
+  `.wiki-runtime/tmp/rulecheck/`, was deleted before the final response.
+  `raw/postgres-17/` was read only.
