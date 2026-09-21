@@ -13186,3 +13186,157 @@ Added the follow-up question and answer to the PostgreSQL 12 COMMENT-stored byte
   held no sandbox, and the scratch directory this pass created for its own checker,
   `.wiki-runtime/tmp/rulecheck/`, was deleted before the final response.
   `raw/postgres-17/` was read only.
+
+## [2026-09-21] review v17 | REINDEX_SCORE heuristic page: 22 reported defects fixed, both legs re-measured with an exact error decomposition
+
+- Follow-up to the report-only review earlier the same day. The asker said
+  `fix issues and use the plan`, which per the established two-step pattern
+  means every finding including the structural ones, following the plan filed
+  in that reply. Prompt hygiene was asked once and answered **correct
+  silently**, so only the corrected form of the two review prompts is recorded
+  and the page's `## Question` section is untouched: it still restates the
+  original heuristic prompts, whose own hygiene passes are filed on the page.
+- Target:
+  [How Accurate Is the pgstatindex REINDEX_SCORE B-Tree Maintenance Heuristic, on
+  PostgreSQL 17 and 12 (unverified)](v17/questions/indexing/btree-reindex-score-heuristic.md)
+  at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+
+**The three findings that changed what the page claims.**
+
+- **The guard-placement argument rested on an index shape the engine cannot
+  produce.** The page argued that the inner `CASE` decides correctness because
+  an all-pages-deleted index would score high with it and 0 without it.
+  `_bt_pagedel` refuses to delete a page that is rightmost on its level or is
+  the root, and the `README` states the same restriction as an invariant, so an
+  index that ever held an entry keeps a live leaf and `leaf_pages = 0` implies
+  `deleted_pages = empty_pages = 0`. The two guard placements therefore agree on
+  every index that can exist. Replaced the argument with the cited invariant,
+  added guard fixture `i_alldel` (200,000 rows, all deleted, vacuumed twice,
+  measured at 1 leaf beside 547 deleted pages, score 99.5 against a measured
+  99.8), added `facts`-stage counters that check the invariant rather than
+  assume it (`leaf_pages = 0` against `total_pages = 1` disagree on 0 rows;
+  `NaN` density with live leaves, 0 rows; both legs), and **withdrew** the open
+  question that had asked the concept page for an all-pages-deleted fixture,
+  since no such fixture could exist.
+- **The threshold conclusion was circular.** "Agrees with the oracle" scored a
+  50 % cut on the measured rebuild against the signal, so a well-calibrated
+  score had to peak at 50; the page read that peak as choosing 50. Scored by the
+  suite's own bands, every threshold from 35 % to 65 % on 17.11 and 35 % to 70 %
+  on 12.2 has zero violations. Added a `band_violations` column and a histogram
+  of where the fixtures' rebuilds actually fall, and rewrote the section: 50 %
+  is inside the admissible range, the range is as wide as a gap in the
+  population (no fixture's rebuild lands between **49.9 %** and **60.0 %**), and
+  the agreement metric is reported as calibration. The sentence "below 50 the
+  false positives grow" contradicted the page's own table at 35-45 % and is gone.
+- **"Where it errs" named the wrong mechanism.** The metapage and root are in
+  the denominator only, so they push the score down, not up; and `p32` is not a
+  "large, deep index". Recorded the rebuilt file's page classes in `res` and
+  derived an exact identity - `err x total_pages = (leaves_after - leaf * LEAST(1,
+  d/ff)) + (internal_after - internal) + (empty_after + deleted_after)` - so every
+  point of every fixture's error is attributable. Measured residual **0.1
+  points** on both legs, which is the rounding of four one-decimal columns. The
+  worst under-estimate, `p32` at -9.8, is **6.3 points of internal pages** and
+  3.6 of leaf model; the over-estimates are whole pages (`p25` predicts 1.35
+  leaves, the rebuild writes 2); and `f82`'s +5.1 is deduplication packing a
+  fresh build to 85.28 against a fillfactor of 90, which is why family 3's mean
+  error is 0.85 on 17.11 against 0.13 on 12.2 - the one substantive
+  cross-version difference, and it runs opposite to the headline.
+
+**Harness and script defects fixed, all in place, no second script.**
+
+- `expected_stage` still recomputed the *unguarded* formula under a comment
+  saying it matched the filed text, so `statement_vs_instrument` read 1 on both
+  legs against a check the concept page calls mandatory, and the page never
+  reported it. Now recomputes both guards; the count is **0** on both legs, and
+  the rows behind it are printed rather than left as a number.
+- The `score_guard` variant had become identical to the filed reading. Replaced
+  it with `nan_pct`/`nan_signal`, the statement with both guards removed, so the
+  page's "before" column is computed in the same run over the same population
+  instead of quoted from an earlier one. The whole-cluster comparison is now
+  233 -> 95 signalled on 17.11 and 219 -> 86 on 12.2, with 138 and 133 `NaN`
+  rows removed, 138 and 133 verdicts moved, and **0 finite scores changed**.
+- `sed 's/.*\(ERROR\|FATAL\|PANIC\)/\1/'` relies on a GNU extension and matched
+  nothing under BSD `sed`, so the error audit never collapsed duplicate
+  messages. Now `sed -E`.
+- The cross-leg comparison compared integer parts (`${p%%.*}`), calling 49.6 and
+  49.1 the same score. Now compares tenths; the split moved from a reported
+  19 / 64 / 15 to a measured **21 / 74 / 3**.
+- `decide` claimed to check the two readings agree and only printed counts. It
+  now compares the fixture rows, which must agree exactly and do (**0** on both
+  legs), and prints the whole-population count separately with the catalog drift
+  between the two reads named.
+- `facts` gained the `total_pages` check its description already claimed: the
+  filed denominator against both `pg_relation_size` and the page classes plus
+  one, **0 differences** over 363 and 349 rows.
+- Six stale or wrong comments corrected, including one in `stage_decide` that
+  contradicted the page's own central claim by saying a `NaN` is not equal to
+  itself under `=`, and one in the census block naming a schema `bl` that does
+  not exist.
+- Documentation corrected: the 12 leg reads `SRC12`, `PORT12` and
+  `EXTRA_CFLAGS`, not `SRC`/`PORT`, so a `PORT` set for it was silently ignored;
+  `git` was listed as a prerequisite and is never invoked; "every `psql` runs
+  with `ON_ERROR_STOP`" was false at five call sites per script, each of which is
+  a place where the server's refusal is the measurement.
+
+**Citations.** `pgstattuple--1.4.sql#pgstatindex` cited the `text` overload
+while the statement calls the `regclass` one; now cites both the `regclass`
+declaration and its 1.5 redefinition with the `REVOKE`/`GRANT` pair. Added
+citations for claims that had none: `NaN` propagation through `float8_mi`,
+`float8_mul` and `float8_div`; `ExecEvalMinMax`'s selection loop; the fixed
+non-leaf fillfactor and the all-duplicates 96 %; `_bt_buildadd`'s soft page-full
+test; the page-deletion invariants and `_bt_uppershutdown`'s no-data path;
+`pgstatindex`'s block loop; and `BTEQUALIMAGE_PROC`. The "deduplication arrived
+after 12" claim had no evidence from either pinned checkout and is now dated
+from the v17 checkout's own history: commit `0d861bbb70` (2020-02-26, "Add
+deduplication to nbtree"), which adds `nbtdedup.c` and support function 4 in one
+change, is a descendant of `615cebc94b` ("Stamp HEAD as 13devel") and an
+ancestor of `d10b19e224` ("Stamp HEAD as 14devel"). `## Source References` grew
+from 21 entries to **37** over 12 files; all 37 resolve in bounds and every one
+is from `raw/postgres-17/`.
+
+**New section.** `### What the guard fixtures show` reports readings the run
+always took and the page never published: fresh builds scored at four
+fillfactors (the control the formula must pass, and where the `fillfactor`
+reading earns its keep), `i_dup` sitting **above** its own fillfactor at 91.38
+against 90, `i_alldel`, and `i_one` - a two-page index holding one entry that
+scores **49.8** against a measured 0.0, which is the sharpest edge on the page
+and clears a false rebuild order by 0.2 points. Also who can run the statement
+(`pgstattuple` 1.5 revokes `EXECUTE` from `PUBLIC`; a role with no grant is
+refused, a `pg_stat_scan_tables` member is not) and what it costs (363 indexes,
+136,517 pages, 1,067 MB read per run).
+
+**Re-measurement.** Both legs re-run end to end from their pinned checkouts on
+**Darwin arm64** (macOS 27.0, Apple clang 21), `block_size` 8192,
+`max_data_alignment` 8, `pgstattuple` 1.5, **All 225** and **All 192 tests
+passed** plus **All 1** for the `pgstattuple` check on each leg, exit status 0
+throughout. Every number on the page is from this one run. Test 120's
+precondition was met on both legs this time, and because it is the worst
+over-estimate on both, every headline is now given twice - over the 125 and 116
+deterministic fixtures and over all 126 and 117 - rather than silently moving
+between runs. The earlier filing recorded its platform as Linux x86_64; every
+fixture figure agreed except `p120`. The page's `verified_by_agent:` stays
+`not yet`.
+
+**Bookkeeping.** `wiki/index.md`, `wiki/v17/index.md` and the v17 coverage
+clause in `wiki/versions.md` rewritten to the new figures and the new claims.
+Lint run: **9 errors / 2 warnings**, this host's pre-existing baseline (v18 and
+v19 pins absent, v14 on another commit, two uncommitted raw checkouts), none of
+them on this page or on any file this pass touched.
+
+**No common concept page was touched.** The page reads
+[Mandatory B-Tree Bloat Tests (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md)
+and links it. One open question against that page remains - family 4's `f88`
+never reaching the `FALSE NEGATIVE` band - and one was withdrawn, the request
+for an all-pages-deleted fixture, because the engine cannot produce that shape.
+A third is new and is the concept page's to answer if anyone wants the threshold
+plateau narrowed: the suite has no fixture whose measured rebuild lands between
+49.9 % and 60.0 %.
+
+**Teardown.** Both sandbox clusters stopped with `pg_ctl -m fast stop` through
+each leg's own `clean` stage, which confirms no `postmaster.pid`, no matching
+process and an empty socket directory before deleting anything;
+`.wiki-runtime/tmp/rscore/` and the `rscore-fix/` driver directory deleted.
+Verified after teardown: no `postgres` process, ports 55417 and 55412 free,
+`.wiki-runtime/tmp/` empty. `raw/postgres-17/` and `raw/postgres-12/` were read
+only throughout.

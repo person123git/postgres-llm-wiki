@@ -20,6 +20,7 @@ verified_by_agent: not yet
   - [The two readings the formula does not supply](#the-two-readings-the-formula-does-not-supply)
   - [Where it errs, and in which direction](#where-it-errs-and-in-which-direction)
   - [The NaN defect, and the guard that closes it](#the-nan-defect-and-the-guard-that-closes-it)
+  - [What the guard fixtures show](#what-the-guard-fixtures-show)
   - [The threshold](#the-threshold)
   - [What the two majors do differently](#what-the-two-majors-do-differently)
   - [What this run does not settle](#what-this-run-does-not-settle)
@@ -121,11 +122,13 @@ The asker chose "correct and restate".
 Two scoping answers were taken before the edit:
 
 1. **Guard every `NaN`-capable value**, not just one place: the
-   `avg_leaf_density` input *and* the score itself. The inner guard is the one
-   that decides correctness and the outer one is a backstop; guarding only the
-   outer would map an all-pages-deleted index to 0 and suppress the rebuild that
-   would return almost its whole file. See
-   [Why the guard goes on the input, not only on the score](#why-the-guard-goes-on-the-input-not-only-on-the-score).
+   `avg_leaf_density` input *and* the score itself. The scoping answer was
+   taken on the reasoning that the two placements could disagree on an index
+   whose pages had all been deleted. The measurement since shows they cannot,
+   because the engine does not produce that shape, so both guards are kept for
+   the reason the answer gave and neither is load-bearing against the other.
+   See
+   [What a NaN density means, and why the two guards agree](#what-a-nan-density-means-and-why-the-two-guards-agree).
 2. **Rebuild and re-run both legs.** The sandbox had been deleted, so this meant
    a full compile of 12.2 and 17.11 rather than a re-run, and every number below
    is from that run.
@@ -139,49 +142,62 @@ were re-run end to end. No second script was added.
 ### The verdict
 
 **With the `NaN` cases added, the heuristic is correct on every fixture the suite
-scores, on both majors: no false positives and no false negatives. The 50 %
-threshold is well chosen. The arithmetic was always excellent; the `NaN` guard is
+scores, on both majors: no false positives and no false negatives, and no
+fixture where the signal and a measured `REINDEX INDEX` disagree. 50 % is inside
+the range of thresholds that achieve that, though the fixtures cannot show it is
+the best point in that range. The arithmetic was always good; the `NaN` guard is
 what made the signal safe to automate.**
 
 Scored against the numbered fixtures of
 [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md),
-whose only oracle is a measured `REINDEX INDEX`:
+whose only oracle is a measured `REINDEX INDEX`. Test 120's precondition is a
+random `ANALYZE` sample missing a subset, so it is scored on some runs and not
+others; it was scored on both legs of this one, and it is the worst
+over-estimate on both, so every figure it moves is given twice:
 
-| | 17.11 | 12.2 |
-|---|---|---|
-| fixtures scored for accuracy | 125 | 116 |
-| mean absolute error, points | **0.94** | **0.75** |
-| median absolute error, points | 0.50 | 0.45 |
-| worst over-estimate, points | +6.5 | +3.8 |
-| worst under-estimate, points | −9.8 | −9.8 |
-| within 1 point of the oracle | 97 | 101 |
-| within 5 points | 119 | 112 |
-| within 10 points | **125 of 125** | **116 of 116** |
-| correlation with the oracle | **0.9991** | **0.9994** |
-| at 50 %: true pos / **false pos** / true neg / **false neg** | 92 / **0** / 33 / **0** | 83 / **0** / 33 / **0** |
-| fixtures where the signal and the oracle disagree | **none** | **none** |
+| | 17.11 | 17.11 without `p120` | 12.2 | 12.2 without `p120` |
+|---|---|---|---|---|
+| fixtures scored for accuracy | 126 | 125 | 117 | 116 |
+| mean absolute error, points | **0.99** | **0.94** | **0.80** | **0.75** |
+| median absolute error, points | 0.50 | 0.50 | 0.50 | 0.45 |
+| worst over-estimate, points | +6.6 | +6.5 | +6.6 | +3.8 |
+| worst under-estimate, points | −9.8 | −9.8 | −9.8 | −9.8 |
+| correlation with the oracle | **0.9990** | **0.9991** | **0.9993** | **0.9994** |
+| within 1 point of the oracle | 97 | — | 101 | — |
+| within 5 points | 119 | — | 112 | — |
+| within 10 points | **126 of 126** | — | **117 of 117** | — |
+| at 50 %: true pos / **false pos** / true neg / **false neg** | 92 / **0** / 34 / **0** | — | 83 / **0** / 34 / **0** | — |
+| fixtures where the signal and the oracle disagree | **none** | — | **none** | — |
 
 The score is not a loose heuristic. It is a first-order model of what a rebuild
-does to the file, and the measurement says the model is right to about one point
-on every fixture on both majors; see
-[Why the formula is accurate](#why-the-formula-is-accurate).
+does to the file, and the residual is not a mood: it decomposes exactly into
+three named terms, of which only one is systematic and that one is conservative;
+see [Why the formula is accurate](#why-the-formula-is-accurate) and
+[Where it errs, and in which direction](#where-it-errs-and-in-which-direction).
 
 What the guard changed is visible at cluster scale rather than on the fixture
-set, where it moved exactly one verdict. Run over the whole cluster, before and
-after:
+set, where it moved exactly one verdict. Both columns below come from the same
+run: the harness recomputes the unguarded statement beside the filed one over
+the same candidates, so "before" and "after" are two readings of one population.
 
 | | 17.11 before | 17.11 after | 12.2 before | 12.2 after |
 |---|---|---|---|---|
-| rows the statement printed | 360 | 360 | 346 | 346 |
-| rows it signalled for rebuild | 231 | **94** | 217 | **85** |
-| signalled rows whose score is `NaN` | 137 | **0** | 132 | **0** |
-| metapage-only indexes signalled | 137 | **0 of 136** | 132 | **0 of 132** |
+| candidates measured | 363 | 363 | 349 | 349 |
+| signalled for rebuild | 233 | **95** | 219 | **86** |
+| whose score is `NaN` | 138 | **0** | 133 | **0** |
+| metapage-only indexes | 138 | 138 | 133 | 133 |
+| metapage-only indexes signalled | 138 | **0 of 138** | 133 | **0 of 133** |
+| verdicts the guards moved | — | **138** | — | **133** |
+| finite scores the guards changed | — | **0** | — | **0** |
 
-`231 − 137 = 94` and `217 − 132 = 85`, exactly. **The guard removed precisely the
-`NaN` rows and changed no other row's signal** — it suppressed 59 % of the
-rebuild orders on 17.11 and 61 % on 12.2, every one of them an 8,192-byte
-metapage-only file a rebuild cannot shrink. See
+`233 − 138 = 95` and `219 − 133 = 86`, exactly. **The guards removed precisely
+the `NaN` rows and changed no other row's score or signal** — they suppressed
+59 % of the rebuild orders on 17.11 and 61 % on 12.2, every one of them an
+8,192-byte metapage-only file a rebuild cannot shrink. See
 [The NaN defect, and the guard that closes it](#the-nan-defect-and-the-guard-that-closes-it).
+The filed statement itself printed 361 and 347 rows and signalled 95 and 86; the
+two extra candidates per leg are indexes the harness created between the two
+reads.
 
 ### The statement
 ```sql
@@ -208,15 +224,16 @@ metapage-only file a rebuild cannot shrink. See
 -- Every NaN-capable value is mapped to 0 by a CASE, in two places:
 --
 --   inner   avg_leaf_density is NaN whenever pgstatindex scanned no leaf page,
---           which is every index whose file is just a metapage.  Mapping the
---           density to 0 here leaves the deleted_pages and empty_pages terms
---           live, so an index whose pages are all deleted still scores high.
+--           which is every index whose file is just a metapage, and only
+--           those: nbtree never deletes the rightmost page of a level, so a
+--           file that ever held an entry keeps at least one live leaf.
 --   outer   the score itself, so that nothing NaN can reach the >= comparison
 --           whatever a later edit does to the terms above.
 --
--- The inner guard is the one that decides correctness; the outer one is a
--- backstop.  Guarding only the outer would map an all-pages-deleted index to
--- 0 and suppress a rebuild that would return almost the whole file.
+-- The inner guard is the one that fires.  Because leaf_pages = 0 implies
+-- deleted_pages = empty_pages = 0, the whole numerator is 0 there and the two
+-- placements agree on every index that can exist; the outer CASE is a
+-- backstop against a later edit, not a second correctness rule.
 --
 -- The test is `= 'NaN'::float8`, not a self-inequality: PostgreSQL defines
 -- NaN = NaN as true, so the C-style `x <> x` test never fires here.  The
@@ -310,11 +327,13 @@ SELECT /* wiki_reindex_score_12_17 */
 The score is not an analogy for bloat. It is an estimate of the very quantity
 the oracle measures, and the algebra shows why.
 
-A fresh serial build packs leaf pages to the index's fillfactor, leaving
-`BLCKSZ * (100 - fillfactor) / 100` free on each leaf and a fixed 70 % on the
-levels above
+A fresh serial build aims each leaf page at the index's fillfactor, leaving
+`BLCKSZ * (100 - fillfactor) / 100` free on it, and aims every level above the
+leaf level at a fixed fillfactor of 70 %, leaving `BLCKSZ * 30 / 100` free
+there
 ([nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L660-L666),
-[nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145)).
+[nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145),
+[nbtree.h:201](../../../../raw/postgres-17/src/include/access/nbtree.h#L201)).
 So for an index currently holding `leaf_pages` leaves at `avg_leaf_density`, the
 same entries repacked to `fillfactor` need about `leaf_pages * density /
 fillfactor` leaves. Rearranged, the leaf level gives back
@@ -325,13 +344,25 @@ leaf_pages * (1 - avg_leaf_density / fillfactor)
 
 pages, floored at zero because a rebuild never makes the leaf level larger. Empty
 and deleted pages hold nothing at any fillfactor and come back whole
-([pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L295-L320)).
+([pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L298-L326)).
 Divide the sum of the three terms by the file's page count and the result is the
 fraction of the file a rebuild returns — which is exactly what
 `(size_before - size_after) / size_before` measures after the oracle's
-`REINDEX INDEX`. The formula and the oracle are estimating the same number, so a
-mean absolute error under one point is the expected outcome rather than a lucky
-one.
+`REINDEX INDEX`. The formula and the oracle are estimating the same number,
+which is why the error is small; it is not zero, and the three places the model
+is deliberately coarser than the engine are named and measured under
+[Where it errs, and in which direction](#where-it-errs-and-in-which-direction).
+
+Two of those three are already visible in the paragraph above. **The fillfactor
+is a target, not a guarantee.** `_bt_buildadd` starts a new page when the
+current one is short of room for the next tuple *or* when its free space has
+fallen below the fillfactor threshold and it already holds at least two items,
+so a page is finished at whatever boundary the tuple widths happen to fall on
+([nbtsort.c#_bt_buildadd-full](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L844-L855)),
+and a page filled with a single repeated value is packed to 96 % instead
+([nbtree.h:202](../../../../raw/postgres-17/src/include/access/nbtree.h#L202)).
+**And the result is a whole number of pages.** A model that predicts 1.35
+leaves is measured against a rebuild that writes 2.
 
 `avg_leaf_density` is the right input for that term because it is itself a
 leaf-only ratio: `pgstatindex` accumulates `free_space` and `max_avail` over leaf
@@ -342,9 +373,13 @@ pages and reports `100 - free_space / max_avail * 100`
 
 `pgstatindex` returns ten columns — `version`, `tree_level`, `index_size`,
 `root_block_no`, `internal_pages`, `leaf_pages`, `empty_pages`, `deleted_pages`,
-`avg_leaf_density`, `leaf_fragmentation`
-([pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31)).
-Neither `total_pages` nor `fillfactor` is among them, so the formula is not
+`avg_leaf_density`, `leaf_fragmentation`. The statement passes a `regclass`, so
+the overload it calls is the `regclass` one, which the extension declares with
+the same ten columns as the `text` one and which version 1.5 redefines onto
+`pgstatindexbyid_v1_5` and takes away from `PUBLIC`
+([pgstattuple--1.4.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L62-L74),
+[pgstattuple--1.4--1.5.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)).
+Neither `total_pages` nor `fillfactor` is among the ten, so the formula is not
 computable until both are defined, and each definition is part of what was
 scored.
 
@@ -363,16 +398,24 @@ both. The page-class sum:
 
 | Reading | Fixtures scored | Undefined | Rebuild orders | Worst gap vs the filed reading |
 |---|---|---|---|---|
-| `index_size / block_size`, as filed | 125 / 116 | 0 | 92 / 83 | — |
-| `internal + leaf + empty + deleted` | 125 / 116 | **1** | 92 / 83 | **7.30** / **5.30 points** |
+| `index_size / block_size`, as filed | 126 / 117 | 0 | 92 / 83 | — |
+| `internal + leaf + empty + deleted` | 126 / 117 | **1** | 92 / 83 | **7.30** / **5.30 points** |
 
-The page-class sum is zero for an index whose file is only a metapage, so the
-score raises `division by zero` — which is one of the two such lines the v12
-error audit still records, because the harness keeps computing this variant for
-comparison. The filed reading never divides by zero, because the metapage always
-counts. **The asker's choice is the safer one, and it is the only one of the two
-that is total** — and note that the `NaN` guard does not rescue the page-class
-sum, because a zero denominator raises rather than producing `NaN`.
+The page-class sum is zero for an index whose file is only a metapage, and
+`float8_div` raises `division by zero` on a zero divisor unless the dividend is
+already `NaN`
+([float.h#float8_div](../../../../raw/postgres-17/src/include/utils/float.h#L237-L251)).
+So that reading is undefined on exactly the rows the `NaN` guard is about, and
+the guard does not rescue it: a zero denominator raises rather than producing a
+`NaN` for a `CASE` to catch. The filed reading never divides by zero, because
+the metapage always counts. **The asker's choice is the safer one, and it is
+the only one of the two that is total.**
+
+The harness computes the variant through `NULLIF`, so the run records that row
+as undefined rather than dying on it, and the two `division by zero` lines each
+leg's error audit reports come from the `facts` stage instead, which reads both
+halves of the rule on purpose: `'NaN'::float8 / 0` returns `NaN`, because
+`float8_div` tests the dividend first, and `0::float8 / 0` raises.
 
 **`fillfactor`.** The asker chose the index's own reloption with 90 where unset,
 which is what the engine resolves for that index: `BTGetFillFactor` reads
@@ -385,18 +428,66 @@ This matters to the suite, which builds fixtures at 70, 90 and 100: a hardcoded
 
 ### Where it errs, and in which direction
 
-The residual error is small but not random. It has two opposite causes, and both
-follow from what the numerator leaves out.
+The error is not a mood of the formula. It is the sum of exactly three terms,
+and the run reports each of them per fixture rather than describing them.
+Writing `m` for the leaf fraction the statement predicts survives a rebuild,
+`LEAST(1, density / fillfactor)`, the identity is
 
-| Direction | Cause | Worst case measured |
-|---|---|---|
-| **Under-estimate** on large, deep indexes | the numerator models only the leaf level, but a rebuild shrinks the internal levels in proportion too. Those pages are in the denominator and never in the numerator, so the model is conservative | `p32`, score 79.8 against an actual 89.6, **−9.8 points**, at density 17.44 over 421 leaves |
-| **Over-estimate** on tiny indexes | the metapage and the root are in the denominator and are not reclaimable, so on a handful of pages they are a large fixed share the model credits to the rebuild | `p25`, score 66.5 against an actual 60.0 on **8** leaf pages (17.11); the same fixture on 12.2 has 14 leaves and the gap halves to +3.8 |
+```text
+err x total_pages = (leaves_after  - leaf_pages * m)   the leaf model's own error
+                  + (internal_after - internal_pages)  the levels it never models
+                  + (empty_after + deleted_after)      dead pages the rebuild kept
+```
 
-The under-estimate is the safe direction for a rebuild signal, and it is the
-larger of the two. The over-estimate is bounded by how much of a small file the
-metapage and root occupy, which is why it never produced a false positive above
-the `FALSE POSITIVE` band on any fixture except the `NaN` case below.
+It is an identity, not a fit: substituting `total_pages = 1 + internal + leaf +
+empty + deleted` into `score - actual` cancels everything else. The `accuracy`
+stage prints the three terms beside `err` and the largest residual across all
+fixtures, which is **0.1 points** on both legs — the rounding of three
+one-decimal columns against a fourth, and nothing more.
+
+| Term | What it is | Sign | Measured on 17.11 |
+|---|---|---|---|
+| **leaf** | the leaf level repacked to a whole number of pages at a density the build only approximates | either | mean **−0.13**, worst +6.6 (`p120`) and −3.6 (`p32`) |
+| **internal** | every level above the leaf level: in the denominator, never in the numerator, and it shrinks with the leaf level | **≤ 0 always** | mean **−0.34**, worst −6.3 (`p32`); **47** of 126 fixtures shrank an internal level |
+| **dead** | `empty` and `deleted` pages a rebuild failed to reclaim | ≥ 0 | **0.00 on every fixture, both legs** — a rebuild left no dead page anywhere |
+
+Three consequences follow, and each replaces a plausible story with a
+measurement.
+
+**The only systematic bias is the internal term, and it is conservative.** A
+rebuild shrinks the upper levels roughly in proportion to the leaf level, and
+the numerator credits the rebuild with none of that, so the score reads low on
+any index deep enough to have upper levels worth counting. It is the larger part
+of the worst under-estimate: `p32` scores 79.8 against a measured 89.6, and of
+those 9.8 points, **6.3 are internal pages** — 46 internal pages before the
+rebuild, 6 after — against 3.6 from the leaf model. It is not a size effect;
+`x107`, at 8,105 pages the largest fixture scored, errs by −3.4.
+
+**The over-estimates are whole pages, not the metapage.** The metapage and the
+root are in the denominator and not in the numerator, which pushes the score
+*down*, not up. What pushes it up is that a rebuild writes an integer number of
+leaves. `p25` holds 8 leaves at density 15.23, so the model predicts 1.35 leaves
+survive and the rebuild writes **2**: 0.65 of a 10-page file is 6.5 points, and
+the leaf term accounts for all of it. `p120` predicts 5.47 and the rebuild
+writes 6. On a small file one page is a large fraction, which is why every
+over-estimate above 2 points is on a file of 91 pages or fewer.
+
+**One over-estimate is not rounding, and it is version-specific.** `f82` is a
+freshly built, never-churned index of 89 leaves whose rebuild returns nothing,
+and the statement scores it 5.1 rather than 0. Its density is 85.28 against a
+fillfactor of 90, so the model believes 5 % of the leaf level is recoverable
+when the build already packed it as tightly as this server packs it. The cause
+is deduplication: a build that merges duplicates aims at the fillfactor through
+a posting-list size cap and lands near, not on, it, and the code says so in as
+many words — the cap exists to "get close to fillfactor% space utilization when
+there happen to be a great many duplicates"
+([nbtsort.c#maxpostingsize](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1288-L1308)).
+The same fixture on 12.2, where nothing deduplicates, builds 278 leaves instead
+of 89 and errs by **+0.1**.
+
+The under-estimate is the safe direction for a rebuild signal and it is the
+larger of the two. No over-estimate reached a false-positive band on any
+fixture.
 
 By family, the error is flat — no family is systematically mispriced:
 
@@ -404,14 +495,32 @@ By family, the error is flat — no family is systematically mispriced:
 |---|---|---|---|---|
 | gate (family 1) | 25 | 0.88 | 16 | 0.92 |
 | partial (family 2) | 60 | 1.25 | 60 | 1.03 |
-| falsepos (family 3) | 8 | 0.85 | 8 | 0.13 |
+| falsepos (family 3) | 8 | **0.85** | 8 | **0.13** |
 | falseneg (family 4) | 6 | 1.27 | 6 | 0.52 |
 | control (family 5) | 20 | 0.27 | 20 | 0.28 |
-| zero (family 6) | 6 | 0.20 | 6 | 0.20 |
+| zero (family 6) | 7 | 1.11 | 7 | 1.11 |
 
 Family 3 exists to make "rebuild everything" fail, and the heuristic left all
 eight alone on both majors, scoring every one of them between 0.0 and 5.1 against
 a measured rebuild of 0.0.
+
+The one family whose error differs between the majors is family 3, at 0.85
+against 0.13, and the cause is the `f82` effect above. Family 3's fixtures are
+fresh builds, so their density is whatever the build achieved, and three of the
+eight build a smaller file on 17.11 than on 12.2 — `f79` at 336 pages against
+1,207, `f81` at 87 against 278, `f82` at 91 against 278 — because their subsets
+are duplicate-heavy and 17.11 deduplicates them. Two of those three carry the
+whole difference in error: `f81` at 0.9 against 0.1, and `f82` at 5.1 against
+0.1.
+
+That is the substantive cross-version difference this page found, and it runs
+the opposite way to the one a reader might expect: on fresh duplicate-heavy
+indexes the formula is slightly *less* accurate on the newer major, because the
+newer major packs them tighter than the fillfactor alone predicts and the
+formula reads the gap as reclaimable space. The direction is safe — it
+over-estimates by at most 5.1 points on an index the oracle says is already
+optimal, nowhere near a rebuild order — but it is a real asymmetry and it is
+not visible in the headline numbers.
 
 Family 4 exists to make "rebuild nothing" fail, and the heuristic rebuilt **five
 of the six** on both majors. It left `f88` alone — score 43.1 against an actual
@@ -427,25 +536,39 @@ does mean the fixture does not exercise what family 4 was built for; see
 true, so the heuristic ordered a rebuild that cannot return a byte. The two
 `CASE` expressions map that `NaN` to 0 and the defect is gone.**
 
-Three engine facts compose into the defect:
+Four engine facts compose into the defect:
 
 1. `pgstatindex` reports `avg_leaf_density` as the literal string `NaN` when
    `max_avail` is zero, which is exactly when no leaf page was scanned
    ([pgstatindex.c#avg_leaf_density-NaN](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L367)).
-2. `NaN` propagates through the arithmetic: `1 - NaN/90` is `NaN`, `0 * NaN` is
-   `NaN`, and `GREATEST(0, NaN)` is `NaN` because `NaN` sorts after every
-   non-`NaN` value. That ordering is decided in one place. `GREATEST` is a
-   `MinMaxExpr`, which the executor evaluates through the type's **B-tree
-   comparison function**
-   ([execExpr.c#MinMaxExpr](../../../../raw/postgres-17/src/backend/executor/execExpr.c#L2194-L2201));
-   for `float8` that is `btfloat8cmp`, which is `float8_cmp_internal`
+2. `NaN` propagates through the arithmetic. The division, subtraction and
+   multiplication are the inline `float8_div`, `float8_mi` and `float8_mul`,
+   none of which special-cases a `NaN` operand: each computes in C, where a
+   `NaN` operand yields a `NaN` result, and then checks only for overflow,
+   underflow and division by zero, all three of which a `NaN` result fails to
+   trigger
+   ([float.h#float8_mi](../../../../raw/postgres-17/src/include/utils/float.h#L181-L191),
+   [float.h#float8_mul](../../../../raw/postgres-17/src/include/utils/float.h#L207-L219),
+   [float.h#float8_div](../../../../raw/postgres-17/src/include/utils/float.h#L237-L251)).
+   So `1 - NaN/90` is `NaN` and `0 * NaN` is `NaN`.
+3. `GREATEST(0, NaN)` is `NaN`, because `NaN` sorts after every non-`NaN`
+   value. That ordering is decided in one place. `GREATEST` is a `MinMaxExpr`,
+   which `ExecInitExprRec` compiles against the type's **B-tree comparison
+   function**
+   ([execExpr.c#MinMaxExpr](../../../../raw/postgres-17/src/backend/executor/execExpr.c#L2194-L2201))
+   and `ExecEvalMinMax` then keeps the argument that compares greater
+   ([execExprInterp.c#ExecEvalMinMax](../../../../raw/postgres-17/src/backend/executor/execExprInterp.c#L3127-L3173));
+   for `float8` that function is `btfloat8cmp`, which is `float8_cmp_internal`
    ([float.c#btfloat8cmp](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L966-L973),
    [float.c#float8_cmp_internal](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L903-L909));
    and `float8_cmp_internal` sorts by the inline `float8_gt`, which is true
    whenever its left argument is `NaN` and its right is not
    ([float.h#float8_gt](../../../../raw/postgres-17/src/include/utils/float.h#L315-L319),
    [float.c#NaN-sorts-after](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L1038-L1041)).
-3. The comparison `NaN >= 0.5` is **true** for the same reason, and its own
+   The header states the rule it is implementing: all `NaN`s are equal and
+   larger than any non-`NaN`
+   ([float.h#NaN-ordering](../../../../raw/postgres-17/src/include/utils/float.h#L255-L259)).
+4. The comparison `NaN >= 0.5` is **true** for the same reason, and its own
    implementation says so without any appeal to the ordering: the `>=` operator
    on `float8` is `float8ge`
    ([float.c#float8ge](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L957-L964)),
@@ -455,53 +578,85 @@ Three engine facts compose into the defect:
    So `reindex_signal` is set.
 
 The suite has a fixture for precisely this shape — test 116, "the subset empty
-from the start and measured empty" — and before the guard it caught the defect on
+from the start and measured empty" — and the unguarded statement fails it on
 both majors, as the single `CRITICAL FALSE POSITIVE` in each confusion matrix.
-With the guard it scores 0.0 against a measured 0.0 and passes:
+With the guards it scores 0.0 against a measured 0.0 and passes. Both columns
+come from the same run, the unguarded one recomputed by the harness beside the
+filed one:
 
-| num | fixture | total_pages | leaf_pages | score before | score after | actual | verdict after |
+| num | fixture | total_pages | leaf_pages | score unguarded | score as filed | actual | verdict as filed |
 |---|---|---|---|---|---|---|---|
 | 116 | `p116` | 1 | 0 | `NaN` | **0.0** | 0.0 | `PASS` |
 
-**The fixture understated the problem, which is why the cluster-scale numbers
-matter more.** Before the guard, 137 of the 231 rows the 17 leg ordered rebuilt
-and 132 of 217 on the 12 leg were `NaN`, every one an index whose entire file is
-the 8,192-byte metapage. On a fresh cluster those are the empty TOAST indexes and
-the empty catalog indexes — `pg_toast_*_index` on unfilled TOAST tables,
-`pg_default_acl_role_nsp_obj_index`, `pg_replication_origin_roname_index`,
-`pg_transform_type_lang_index`, `pg_trigger_tgconstraint_index`. After the guard
-each of them scores `0.0000` and is not signalled: **0 of 136** on 17.11 and
-**0 of 132** on 12.2.
+It is also the one fixture on which the two denominator readings part company:
+the page-class sum is 0 there, so that variant is undefined rather than wrong,
+and it is the `nometa_undefined = 1` the `accuracy` stage reports on each leg.
 
-The guard also removed the only cross-version signal disagreement. Before, four
-shared index names were signalled on one major and not the other — the 17 leg
-read `pg_shdepend_depender_index` and `pg_shdepend_reference_index` as `NaN`
-while the 12 leg scored them 48.3 and 48.7, and the 12 leg read
-`pg_toast_1255_index` as `NaN` while the 17 leg scored it 49.6. All four now
-agree, and `differing_rows_whose_signal_differs` is **0** where it was **4**.
+**One fixture understates the problem, which is why the cluster-scale numbers
+matter more.** Before the guards, 138 of the 233 rows the 17 leg would have
+ordered rebuilt and 133 of 219 on the 12 leg scored `NaN`, every one an index
+whose entire file is the 8,192-byte metapage. On a fresh cluster those are the
+empty TOAST indexes and the empty catalog indexes — `pg_toast_*_index` on
+unfilled TOAST tables, `pg_default_acl_role_nsp_obj_index`,
+`pg_replication_origin_roname_index`, `pg_transform_type_lang_index`,
+`pg_trigger_tgconstraint_index`. With the guards each of them scores `0.0000`
+and is not signalled: **0 of 138** on 17.11 and **0 of 133** on 12.2.
 
-#### Why the guard goes on the input, not only on the score
+The population is a property of a new cluster rather than of the defect, and the
+page says so under [Open Questions](#open-questions). What is not a property of
+the population is the shape of the failure: every one of these files is a single
+metapage, so a rebuild of any of them returns nothing, and an unguarded
+automatic signal would have issued a rebuild for each on every run, forever.
 
-The two `CASE` expressions are not redundant, and the inner one is the one that
-decides correctness. `avg_leaf_density` is `NaN` whenever `pgstatindex` scanned
-no leaf page, and that is true of two different shapes:
+#### What a NaN density means, and why the two guards agree
 
-| Shape | `leaf_pages` | `deleted_pages` | A rebuild returns |
-|---|---|---|---|
-| an empty index, file is one metapage | 0 | 0 | nothing |
-| an index whose pages are **all** deleted | 0 | > 0 | almost the whole file |
+**A `NaN` density means the file is one metapage, and nothing else.** That is
+the fact that decides how much the guard's placement matters, and it is an
+engine invariant rather than a property of this run's population.
 
-Mapping the **density** to 0 handles both: the leaf term collapses to zero while
-the `deleted_pages` and `empty_pages` terms stay live, so the first shape scores
-0 and the second still scores high. Mapping only the **score** to 0 would handle
-the first and get the second exactly backwards, converting a correct rebuild
-order into a false negative on the index that needs it most. The outer guard is
-kept as a backstop against a later edit reintroducing an undefined value, not as
-the mechanism.
+`avg_leaf_density` is `NaN` exactly when `max_avail` is zero, which is exactly
+when the scan classified no page as a leaf. The tempting reading is that this
+covers two shapes — an empty index, and an index whose pages have all been
+deleted — and that they want opposite verdicts. **The second shape does not
+exist.** `_bt_pagedel` refuses to delete a page that is rightmost on its level
+or is the root, and it rechecks that on every iteration
+([nbtpage.c#_bt_pagedel-refusals](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L1877-L1905));
+page deletion only ever begins at an empty leaf, and the README states the
+restriction as an invariant of the algorithm
+([README#never-delete-rightmost](../../../../raw/postgres-17/src/backend/access/nbtree/README#L236-L245),
+[README#tree-height](../../../../raw/postgres-17/src/backend/access/nbtree/README#L365-L367)).
+So an index that ever held an entry keeps at least one live leaf page however
+much is vacuumed out of it, and `leaf_pages` never reaches 0 while
+`deleted_pages` is above 0.
 
-The suite contains no fixture of the second shape, so this is reasoning from the
-arithmetic rather than a measured result; it is filed under
-[Open Questions](#open-questions).
+The only way to a leaf-free file is to have no entries to build a leaf from.
+`_bt_uppershutdown` writes the metapage pointing at `P_NONE` when the build had
+no data at all
+([nbtsort.c#_bt_uppershutdown](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1118-L1128)),
+and `pgstatindex`'s per-block loop starts at block 1, so a one-block file is
+classified as nothing at all
+([pgstatindex.c#block-loop](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L279-L283)).
+
+Guard fixture `i_alldel` measures the boundary: 200,000 rows, every row
+deleted, vacuumed twice. Both majors leave the same shape, and it is not the
+`NaN` shape.
+
+| `rs.i_alldel` | `total_pages` | `internal` | `leaf` | `deleted` | `density` | score |
+|---|---|---|---|---|---|---|
+| after the deletes and two `VACUUM`s | 551 | 2 | **1** | 547 | 0.05 | 99.9 |
+| after `REINDEX INDEX`, so with no entries at all | 1 | 0 | **0** | 0 | `NaN` | 0.0 |
+
+The consequence for the statement is that `leaf_pages = 0` implies
+`deleted_pages = empty_pages = 0`, so on a `NaN` row the whole numerator is
+zero whichever guard is applied, and **the inner and the outer `CASE` reach the
+same verdict on every index that can exist**. The inner one is the one that
+fires; the outer one never does once the inner one is in place. Both are kept:
+the inner because it is the natural place to say what a missing density means,
+and the outer as a backstop against a later edit reintroducing an undefined
+value into the numerator. Neither is load-bearing against the other, and the
+run checks the claim rather than assuming it — the `facts` stage counts rows
+where `leaf_pages = 0` and `total_pages = 1` disagree, and rows with a `NaN`
+density and live leaves, and both counts are **0** on both legs.
 
 One detail the test itself depends on: the predicate must be
 `density = 'NaN'::float8`. PostgreSQL defines `NaN = NaN` as **true**: the `=`
@@ -515,49 +670,170 @@ the window-function `in_range` path states the same rule in a comment
 So the C-style `density <> density` idiom never fires and would leave the defect
 in place while looking like a guard.
 
-The guard is not a tuning change. It removes an undefined value from a
-comparison, and on the fixture set it moved exactly one verdict — `p116`'s — and
-left all 92 rebuild orders on 17.11 and all 83 on 12.2 unchanged.
+The guards are not a tuning change. They remove an undefined value from a
+comparison and nothing else, and the run checks that claim rather than asserting
+it. On the fixture set they moved exactly one verdict, `p116`'s, taking the
+rebuild orders from 93 to 92 on 17.11 and from 84 to 83 on 12.2 and leaving the
+rest untouched. Over the whole candidate population they moved 138 and 133
+verdicts, every one a metapage-only file, and changed **no finite score at all**
+— `finite_scores_that_differ` is 0 on both legs.
+
+### What the guard fixtures show
+
+Schema `rs` is not part of the shared suite and carries no verdict band. It
+exists to put the statement's edges under the same oracle, and four of its
+readings bear on the answer. Every row below pairs the statement's score with a
+measured `REINDEX INDEX` on 17.11:
+
+| Fixture | Shape | `density` / `fillfactor` | score | measured rebuild |
+|---|---|---|---|---|
+| `i_fresh` | a fresh build, fillfactor unset | 90.00 / 90 | 0.0 | 0.0 |
+| `i_ff50` | a fresh build at fillfactor 50 | 49.81 / 50 | 0.4 | 0.0 |
+| `i_ff10` | a fresh build at fillfactor 10 | 9.62 / 10 | 3.8 | 0.0 |
+| `i_ff100` | a fresh build at fillfactor 100 | 99.82 / 100 | 0.2 | 0.0 |
+| `i_dup` | 100 rows per key, untouched | **91.38 / 90** | 0.0 | 0.0 |
+| `i_sparse` | nine tenths of the rows deleted and vacuumed | 9.26 / 90 | 89.1 | 89.7 |
+| `i_head` | the leading nine tenths of the key range deleted | 87.91 / 90 | 89.5 | 89.7 |
+| `i_alldel` | **every** row deleted and vacuumed twice | 0.05 / 90 | 99.5 | **99.8** |
+| `i_one` | one entry, two pages | 0.29 / 90 | **49.8** | **0.0** |
+| `i_empty` | an index on an empty table | `NaN` / 90 | 0.0 | 0.0 |
+
+**The score reads a correctly built index as correctly built, at every
+fillfactor.** That is the control the formula has to pass before its
+high scores mean anything, and it passes at 90, 50, 10 and 100 with at most 3.8
+points of noise. It is also where the `fillfactor` reading earns its keep: a
+statement that hardcoded 90 would read `i_ff10` as 89 % reclaimable and order a
+rebuild of an index that is exactly as its owner asked for it.
+
+**`i_alldel` is the emptiest shape a live B-tree reaches**, and the statement
+prices it at 99.5 against a measured 99.8. It is also the fixture that bounds
+what the `NaN` guards can be tested against; see
+[What a NaN density means, and why the two guards agree](#what-a-nan-density-means-and-why-the-two-guards-agree).
+
+**`i_dup` sits above its own fillfactor**, at 91.38 against 90. That is the
+soft-limit behaviour named under
+[Why the formula is accurate](#why-the-formula-is-accurate) rather than an
+anomaly, and it is why the statement's `GREATEST(0, ...)` floor is load-bearing:
+without it this index would score a negative reclaim.
+
+**`i_one` is the sharpest edge on the page, and the formula survives it by 0.2
+points.** A two-page index holding a single entry has a leaf 0.29 % full, so the
+leaf term claims essentially the whole leaf page, which is half the file — a
+score of 49.8 against a rebuild that returns nothing. It does not signal,
+because 49.8 is below 50, but nothing about the arithmetic keeps it there: a
+one-entry index whose metapage were a smaller share of the file would cross.
+This is the bound on the over-estimate direction, and it is a property of files
+of two or three pages, where a rebuild has nothing to give back and the model
+still sees an almost-empty leaf. An automatic signal that also skipped indexes
+below a handful of pages would not lose anything this page measured.
+
+**Who can run it, and what it costs.** `pgstattuple` 1.5 revokes `EXECUTE` on
+`pgstatindex` from `PUBLIC` and grants it to `pg_stat_scan_tables`
+([pgstattuple--1.4--1.5.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)),
+and the run confirms both halves: a role with no grant is refused with
+`permission denied for function pgstatindex`, and a member of
+`pg_stat_scan_tables` reads the index. An automatic signal therefore needs a
+role with that membership or an explicit grant. The statement also reads every
+page of every B-tree it scores — 363 indexes, 136,517 pages, 1,067 MB on this
+sandbox — so it is a full scan of the index population each time it runs, which
+is the cost that decides how often it can be scheduled rather than the wall
+clock, which on a `fsync = off` disposable cluster is not a durability-realistic
+figure.
 
 ### The threshold
 
-**50 % sits on a flat optimum, and the plateau is wide.** Sweeping the threshold
-over the guarded formula's fixtures:
+**50 % is inside the admissible range on both majors, and the range is wide
+because the fixtures leave a gap around it.** That is a weaker claim than "50 %
+is optimal", and it is the one the measurement supports. Two scorings of the
+same sweep say why.
 
-| Threshold | Critical false pos | False pos | False neg | Rebuilt | Agrees with oracle |
-|---|---|---|---|---|---|
-| 5 % | 1 | 3 | 0 | 98 | 119 |
-| 10–20 % | 0 | 2 | 0 | 97 | 120 |
-| 25–30 % | 0 | 1 | 0 | 96 | 121 |
-| 35–40 % | 0 | 0 | 0 | 95 | 122 |
-| 45 % | 0 | 0 | 0 | 94 | 123 |
-| **50–65 %** | **0** | **0** | **0** | 92 | **125 of 125** |
-| 70 % | 0 | 0 | 1 | 91 | 124 |
-| 75 % | 0 | 0 | 5 | 87 | 120 |
-| 85 % | 0 | 0 | 18 | 74 | 107 |
-| 95 % | 0 | 0 | 90 | 2 | 35 |
+**By the suite's own bands**, a threshold is acceptable when no fixture lands in
+a false-positive or false-negative band. Every threshold from **35 % to 65 %**
+on 17.11, and from **35 % to 70 %** on 12.2, has zero violations, so the run
+cannot separate them: 40 % would have scored exactly as well as 50 %. The range
+is bounded below by a false positive that appears at 30 % and above by a false
+negative that appears at 70 % on 17.11 and 75 % on 12.2.
 
-Agreement peaks at **125 of 125** across 50, 55, 60 and 65, and the first false
-negative appears at 70. Below 50 the false positives grow without buying any
-recall, because there is no false negative to recover. The 12 leg's sweep has the
-same shape with a wider plateau — perfect agreement at **116 of 116** from 50
-through **70**, the first false negative at 75 — so 50 % is the lowest threshold
-that is optimal on both majors.
+**By agreement with a 50 % cut on the measured rebuild**, agreement peaks at
+50 %. That is this page's own construct rather than one of the suite's bands,
+and it cannot do otherwise: the score tracks the measured rebuild to about a
+point, so asking how often `score >= t` matches `actual >= 50` is bound to peak
+at `t = 50`. It measures calibration, and it is reported as that rather than as
+the reason to choose 50.
 
-Note what the guard did to this table: the residual `1` that used to sit in the
-critical-false-positive column at *every* threshold, and which no threshold could
-fix, is now 0 everywhere except at 5 %. The asker's description of 50 % as
-*conservative* is now borne out in both directions rather than one.
+What bounds both readings is the population. No fixture's rebuild lands between
+**49.9 %** and **60.0 %**, and only three land between 35 % and 50 %, so the
+plateau is as wide as that gap; see [Open Questions](#open-questions).
+
+Sweeping the threshold over the guarded formula's fixtures:
+
+| Threshold | Critical false pos | False pos | False neg | **Band violations** | Rebuilt | Agrees with a 50 % cut |
+|---|---|---|---|---|---|---|
+| 5 % | 2 | 4 | 0 | 4 | 99 | 119 |
+| 10–20 % | 0 | 2 | 0 | 2 | 97 | 121 |
+| 25–30 % | 0 | 1 | 0 | 1 | 96 | 122 |
+| **35–40 %** | 0 | 0 | 0 | **0** | 95 | 123 |
+| **45 %** | 0 | 0 | 0 | **0** | 94 | 124 |
+| **50–65 %** | **0** | **0** | **0** | **0** | 92 | **126 of 126** |
+| 70 % | 0 | 0 | 1 | 1 | 91 | 125 |
+| 75 % | 0 | 0 | 5 | 5 | 87 | 121 |
+| 80 % | 0 | 0 | 9 | 9 | 83 | 117 |
+| 85 % | 0 | 0 | 18 | 18 | 74 | 108 |
+| 90 % | 0 | 0 | 87 | 87 | 5 | 39 |
+| 95 % | 0 | 0 | 90 | 90 | 2 | 36 |
+
+The `False pos` column counts every fixture rebuilt below the 35 % band, so it
+includes the critical ones; `Band violations` is that column plus `False neg`,
+and it is the column the suite's contract is written against.
+
+Read by bands, the table is flat from 35 % to 65 % and the choice of 50 % inside
+that range is not something this run decided. Read by agreement with a 50 % cut,
+it peaks at 50 through 65 — which, as above, it was always going to. **What the
+table does establish is the shape of the failure on each side**: below 35 % the
+method starts rebuilding indexes the oracle says are not worth rebuilding, and
+it buys nothing by it, because there is no false negative at 50 % to recover; at
+70 % it starts leaving a reclaimable index alone. The 12 leg's sweep has the same
+shape with the upper edge one step further out, band-clean from 35 % through
+**70 %**, with the first false negative at 75 %.
+
+Note what the guards did to this table: the `CRITICAL FALSE POSITIVE` that used
+to sit at *every* threshold, and which no threshold could fix because `NaN`
+satisfies every comparison, is gone. The two rows left in the critical column at
+5 % are ordinary small-file over-estimates, not undefined values. The asker's
+description of 50 % as *conservative* is borne out in both directions rather
+than one.
 
 ### What the two majors do differently
 
-The heuristic's accuracy is indistinguishable across the two majors — 0.94 and
-0.75 points of mean error, 0.9991 and 0.9994 correlation, zero false positives
-and zero false negatives on both — and that is the substantive cross-version
-result: the formula reads page counts and a density ratio, and neither depends on
-any feature that changed between 12 and 17.
+At the level of the headline the two majors are indistinguishable — 0.99 and
+0.80 points of mean error, 0.9990 and 0.9993 correlation, zero false positives
+and zero false negatives on both. That is unsurprising: the formula reads page
+counts and a density ratio, and neither is a version-specific quantity.
 
-What did differ is what the *suite* could build:
+Underneath it, two things do differ, and both come from deduplication.
+
+**The formula is slightly less accurate on 17.11, on fresh duplicate-heavy
+indexes**, for the reason given under
+[Where it errs, and in which direction](#where-it-errs-and-in-which-direction):
+a deduplicating build lands near rather than on the fillfactor, and the formula
+reads the shortfall as reclaimable. Family 3's mean error is 0.85 on 17.11
+against 0.13 on 12.2, and the guard fixture `i_dup` shows the size effect
+directly — 169 pages on 17.11 against 552 on 12.2 for the same 200,000 rows at
+100 rows per key, a file about three tenths the size, scored 0.0 against a
+measured rebuild of 0.0 on both.
+
+**One engine behaviour the page depends on differs too.** Both majors agree that
+`NaN >= 0.5` is true, that `GREATEST(0, NaN)` is `NaN` and that `0 * NaN` is
+`NaN`, so the defect and its guard behave identically. They disagree about
+`'NaN'::float8 / 0`: 17.11 returns `NaN`, because `float8_div` tests the
+dividend for `NaN` before it tests the divisor for zero
+([float.h#float8_div](../../../../raw/postgres-17/src/include/utils/float.h#L237-L251)),
+while the 12.2 server raised `division by zero` on the same expression. It
+changes nothing about the filed statement, whose denominator is never zero, and
+it is why the 12 leg's error audit records two `division by zero` lines where
+the 17 leg records one.
+
+What differs most is what the *suite* could build:
 
 | | 17.11 | 12.2 |
 |---|---|---|
@@ -567,36 +843,75 @@ What did differ is what the *suite* could build:
 | `_bt_allequalimage` `DEBUG1` verdicts logged | 11 safe, 13 unsafe | **0, none exist** |
 
 All nine skips are family 1 fixtures 13 to 16, each refused with
-`operator class "..." does not exist for access method "btree"`, because B-tree
-support function 4 and the equal-image callbacks the suite's custom operator
-classes register do not exist on 12.2. Deduplication itself arrived after 12, so
-on the 12 leg the family's engine-side oracle is silent rather than wrong. This is
-the feature gate the concept page requires a run to report rather than work
-around; see
+`operator class "..." does not exist for access method "btree"`, because the
+operator classes those fixtures index through could not be created in the first
+place: B-tree support function 4 and the equal-image callbacks they register do
+not exist on the 12.2 server. The run records each refusal in the server's own
+words rather than asserting the cause, which is what the concept page's feature
+gate asks for; see
 [Feature gates that skip a fixture](../../common-concepts/mandatory-btree-bloat-tests.md#feature-gates-that-skip-a-fixture).
+
+**Why that gate falls where it does** is a matter of the v17 checkout's own
+history, not of the v12 source, which this page may not cite. Support function
+4 is `BTEQUALIMAGE_PROC`, defined as `4` in the pinned tree
+([nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L703-L710)),
+and one commit in this checkout's history introduced it together with
+deduplication itself: commit `0d861bbb70` (2020-02-26, "Add deduplication to
+nbtree"), which adds `src/backend/access/nbtree/nbtdedup.c` and the amproc
+number in the same change. That commit is a descendant of `615cebc94b`
+(2019-07-01, "Stamp HEAD as 13devel") and an ancestor of `d10b19e224`
+("Stamp HEAD as 14devel"), so it landed inside the PostgreSQL 13 development
+cycle and first shipped in 13 — after the 12.2 server this page's other leg
+runs. On the 12 leg the family's engine-side oracle is therefore silent rather
+than wrong.
+
 For how `pgstatindex` computes its columns on the 12.2 pin, see
 [How pgstatindex Calculates Its Information in PostgreSQL 12 (unverified)](../../../v12/questions/indexing/how-pgstatindex-calculates-information.md);
 this page cites v17 source only, per `AGENTS.md`.
+
+**What the 12 leg followed, stated here because PostgreSQL 12 has no concept
+page.** The 12 leg runs the same six `sql` blocks as the 17 leg, read out of
+this page and hash-checked before use, so the suite it ran is the v17 concept
+page's suite verbatim rather than a port of it: the six families, rule 1's cut
+at the index build through the `snap_on_build` event trigger, rule 2's uniform
+drain over the same 38 tables, rule 3's census recomputing the launcher's
+analyze verdict from the engine's own effective per-table values, the catalog
+forgeries after the census, the maintenance assumption's bracketed
+`VACUUM (VERBOSE, ANALYZE)` after every churn, the no-defeat rule's four proofs,
+the `REINDEX INDEX` oracle and the four verdict bands. The two legs differ in
+three places, each forced by the older server and each recorded rather than
+worked around: the nine feature-gated skips above; `wiki_flush()` waiting out
+the statistics publish interval where `pg_stat_force_next_flush()` does not
+exist; and `parse_verbose()` reading 12.2's wording of the `VACUUM (VERBOSE)`
+dead-tuple line. Nothing else in the protocol is version-conditional.
 
 Run over each whole cluster, the two reports overlap but are not identical:
 
 | Cross-leg comparison | Value |
 |---|---|
-| rows the 17 report prints | 360 |
-| rows the 12 report prints | 346 |
-| index names both print | 290 |
-| rows identical field for field | 192 |
+| rows the 17 report prints | 361 |
+| rows the 12 report prints | 347 |
+| index names both print | 285 |
+| rows identical field for field | 187 |
 | shared names whose rows differ | 98 |
-| of those, scoring higher on 17 / lower on 17 / the same | 19 / 64 / 15 |
+| of those, scoring higher on 17 / lower on 17 / the same | 21 / 74 / 3 |
 | of those, whose **signal** differs | **0** |
-| names only the 17 report prints | 70 |
-| names only the 12 report prints | 56 |
+| names only the 17 report prints | 76 |
+| names only the 12 report prints | 62 |
 
+The comparison is made at the precision the report prints, a tenth of a point.
 The 98 differing rows are catalog and TOAST indexes whose page counts differ
 between the two majors' own system catalogs, which is a difference in the
-fixtures rather than in the heuristic. **All 98 now agree on the signal**; before
-the `NaN` guard, four did not, and all four were `NaN` on one leg and a finite
-score on the other.
+fixtures rather than in the heuristic, and 74 of them score lower on 17.11
+because 17.11's catalog indexes are the denser ones. **All 98 agree on the
+signal.**
+
+The `crossleg` stage compares the two filed reports, so it says nothing about
+what the cross-leg picture looked like before the guards; that comparison is not
+part of this run. What each leg does measure is that the guards moved only its
+own metapage-only rows and changed no finite score, so a cross-leg signal
+disagreement could only ever have come from an index that is metapage-only on
+one major and not on the other.
 
 ### What this run does not settle
 
@@ -605,38 +920,57 @@ one block size, runs no concurrency, and has no partitioned-table fixture, so
 none of those is evidence either way for this formula; see
 [What the suite does not cover](../../common-concepts/mandatory-btree-bloat-tests.md#what-the-suite-does-not-cover).
 Beyond those, the limits specific to this page are filed under
-[Open Questions](#open-questions). Three of them bear directly on the `NaN`
-cases: **no fixture reaches the all-pages-deleted shape** the inner guard exists
-to get right, so the argument for that placement is arithmetic rather than
-measured; **the outer guard never fires** once the inner one is in place, so it
-is an untested backstop; and the whole-cluster figures — both the 137 and 132
-false alarms removed and the 94 and 85 rebuild orders that remain — come from two
-freshly `initdb`-ed clusters rather than from any production population. The
-others are that the deduplication interaction is scored only where the suite's
-fixtures happen to exercise it, that `want_stage` predictions are judgements
-rather than derivations, that test 120 is probabilistic and has moved on every
-run, and that family 4's `f88` does not reach the band it was built to test.
+[Open Questions](#open-questions). The two that bear hardest on the result are
+about the population rather than the arithmetic. **The fixtures leave a gap
+around the cut**: none of them lands between the highest measured rebuild below
+50 % and the lowest above it, so the threshold sweep cannot distinguish any
+threshold inside that gap, and the plateau it reports is as wide as the gap
+rather than as wide as the method's tolerance. And **the whole-cluster figures
+come from two freshly `initdb`-ed clusters** rather than from any production
+population, so the share of metapage-only indexes they report is a property of
+a new cluster.
+
+The others are that the deduplication interaction is scored only where the
+suite's fixtures happen to exercise it, that `want_stage` predictions are
+judgements rather than derivations, that test 120 is probabilistic and moves
+between runs, and that family 4's `f88` does not reach the band it was built to
+test.
 
 ## Measurement Script
 
 Two scripts produce every number on this page, one per version leg:
 `reindex_score_v17.sh` for 17.11 and `reindex_score_v12.sh` for 12.2. Both are
-filed below in full, in Bash and SQL only. Both ran end to end on **2026-09-21**
-on Linux x86_64, every stage in one invocation per leg, at `block_size` 8192 and
-`max_data_alignment` 8, against `pgstattuple` 1.5. The regression suites passed
-on both: **All 225 tests passed** on 17.11 and **All 192 tests passed** on 12.2,
-each with exit status 0, alongside **All 1 tests passed** for the `pgstattuple`
-check on each leg.
+filed below in full, in Bash and SQL only.
 
-Every number on this page is from the run of the statement **as it now stands**,
-with the two `NaN` cases. When that statement changed, `BASE_SQL` was updated in
-both scripts and both legs were rebuilt from their pinned checkouts and re-run
+**Last run: 2026-09-21**, both legs end to end, every stage in one invocation
+per leg, from the pins this page's front matter records. The platform facts the
+numbers depend on:
+
+| | Value |
+|---|---|
+| host | Darwin arm64 (macOS 27.0), Apple clang 21.0.0 |
+| server | 17.11 (`server_version_num` 170011) and 12.2 (120002), built out of tree from `raw/postgres-17` and `raw/postgres-12` |
+| `block_size` | 8192 on both |
+| `max_data_alignment` | 8 on both |
+| extension | `pgstattuple` 1.5 on both |
+| regression suites | **All 225 tests passed** on 17.11, **All 192 tests passed** on 12.2, each with exit status 0, alongside **All 1 tests passed** for the `pgstattuple` check on each leg |
+| wall clock | about 2.5 minutes for the 17 leg and 7.5 for the 12 leg from a built tree; about 1 minute more for both builds, run in parallel at `JOBS=8` |
+
+An earlier run of the same two scripts, at the same pins, was made on a Linux
+x86_64 host. Every fixture figure agreed with this one except the probabilistic
+`p120`; the page now reports its headline both with and without that fixture,
+so the difference is visible rather than silent. On a host whose ICU has no
+`pkg-config` entry, as this one does not, `configure --with-icu` needs
+`ICU_CFLAGS` and `ICU_LIBS` exported before either leg's `build` stage.
+
+**Every number on this page comes from that one run**, including the "before"
+column of the guard comparison. The unguarded statement is no longer quoted
+from an earlier run: the harness recomputes it beside the filed one from the
+same `pgstatindex` output, as `nan_pct` and `nan_signal`, so before and after
+are two readings of one population rather than two runs. When the statement
+itself changed, `BASE_SQL` was updated in both scripts and both legs were re-run
 end to end, per `AGENTS.md`'s requirement that the page's script be edited in
-place and re-run rather than duplicated. Where this page quotes a figure from the
-unguarded statement — the 231 and 217 rebuild orders, the 137 and 132 `NaN` rows,
-the four cross-leg signal disagreements — it is labelled "before" and comes from
-the immediately preceding run of the same two scripts at the same pins on the
-same host.
+place and re-run rather than duplicated.
 
 **The fixtures they score are the shared suite's, not this page's own.** The six
 families, the five phases, the maintenance assumption, the rule that the
@@ -648,16 +982,26 @@ and its churn phase are filed here as `sql` blocks 2 to 6 and read out of this
 page at run time, so both legs run the same suite and a text that does not hash
 to the filed one stops the run.
 
-The no-defeat rule's proofs were recorded on both legs and are clean: 67
-maintenance statements issued, 67 completed, `drain=38 fixture=28 prebuild=1` by
-source, a maximum "dead but not yet removable" count of **0** over 67 tables,
-22,457,692 tuples removed, 73 of 73 horizon probes clean, and **0** skip or
-cancellation lines naming a fixture's table.
+The no-defeat rule's proofs were recorded on both legs and are clean. The
+`maint` table holds one row per maintained table rather than one per statement,
+so "67" below counts tables:
 
-Schema `rs` holds 18 guard fixtures the suite does not cover and this page still
+| Proof | 17.11 | 12.2 |
+|---|---|---|
+| tables carrying a maintenance statement, and how many completed | 67, all 67 | 67, all 67 |
+| by source | `drain=38 fixture=28 prebuild=1` | `drain=38 fixture=28 prebuild=1` |
+| worst "dead but not yet removable" count over those tables | **0** | **0** |
+| tuples removed | 22,457,808 | 22,457,692 |
+| horizon probes clean | 73 of 73 | 73 of 73 |
+| skip or cancellation lines naming a fixture's table | **0** | **0** |
+
+Schema `rs` holds 19 guard fixtures the suite does not cover and this page still
 measures: the shapes `pgstatindex` refuses, an index the catalog says is not
-valid, fresh builds at four fillfactors, an index on an empty table, a drained
-index and a duplicate-heavy pair. No verdict band is applied to them.
+valid, fresh builds at four fillfactors, an index on an empty table, a two-page
+index, a sparse index, an index whose leading key range was deleted, an index
+every entry was deleted from, and a duplicate-heavy index. Thirteen of the
+nineteen are B-tree indexes the statement scores; the rest exist to be refused
+or filtered out. No verdict band is applied to any of them.
 
 ### How to use the two leg scripts
 
@@ -666,10 +1010,10 @@ index and a duplicate-heavy pair. No verdict band is applied to them.
 | Purpose | builds 17.11 from this page's pin out of tree, runs its regression suites, starts an isolated cluster, builds the shared mandatory suite, executes the filed heuristic exactly as filed, and scores every fixture against a measured `REINDEX INDEX` | the same on 12.2 from the v12 pin, plus a `crossleg` stage that compares the two legs' reports row by row out of the shared `out/` |
 | Invocation | `bash reindex_score_v17.sh [stage ...]`, from the repository root | `bash reindex_score_v12.sh [stage ...]`, from the repository root |
 | Stages | 17 stages plus `stop` and `clean`; with no argument every stage runs in the order below | the same, plus `crossleg` before `summary` |
-| Environment | 7 variables, all with defaults | the same 7 |
-| Prerequisites | a C toolchain, ICU, readline and zlib headers, `git`, `sha256sum`, and the pinned checkout at `raw/postgres-17` | the same, against `raw/postgres-12` |
-| Output | under `$SANDBOX/out`; **read `accuracy17.txt` first**, then `verdicts17.txt`, `maint_proofs17.txt`, `report17.txt`, `skipped17.txt`, `census17.txt`, `facts17.txt`, `guard17.txt`, `errors17_summary.txt` | the same with `12` in every name, plus `crossleg.txt` |
-| Runtime | with the tree already built, about 2 minutes end to end | about 8 minutes; the churn stage sleeps out the statistics publish interval because 12.2 has no `pg_stat_force_next_flush()` |
+| Environment | 7 variables, all with defaults: `WIKI_ROOT`, `PAGE`, `SANDBOX`, `JOBS`, `ROWS`, and this leg's own `SRC` and `PORT` | 8, all with defaults: the five shared ones, plus `SRC12`, `PORT12` and `EXTRA_CFLAGS`. It does not read `SRC` or `PORT` |
+| Prerequisites | a C toolchain, ICU, readline and zlib headers, `sha256sum`, and the pinned checkout at `raw/postgres-17`. Neither leg runs `git`: the pin is whatever the checkout is at, and the page records it | the same, against `raw/postgres-12`. ICU 68 and later also need `EXTRA_CFLAGS` |
+| Output | under `$SANDBOX/out`; **read `accuracy17.txt` first**, then `verdicts17.txt`, `maint_proofs17.txt`, `decide17.txt`, `report17.txt`, `skipped17.txt`, `census17.txt`, `facts17.txt`, `guard17.txt`, `errors17_summary.txt` | the same with `12` in every name, plus `crossleg.txt` |
+| Runtime | with the tree already built, about 2.5 minutes end to end | about 7.5 minutes; the suite and churn stages sleep out the statistics publish interval because 12.2 has no `pg_stat_force_next_flush()` |
 | Cleanup | `bash reindex_score_v17.sh clean` stops the server, confirms the teardown, and only then deletes `$SANDBOX` after checking it is inside `$WIKI_ROOT/.wiki-runtime/tmp/`. **`out/` is inside `$SANDBOX`, so copy it out first** | `clean` stops the 12 server and deletes this leg's directories; run the 17 leg's `clean` last |
 
 ### The stages, both legs
@@ -685,16 +1029,16 @@ and `guard` follow it.
 | `check` | `make check` plus the `pgstattuple` check, one result line each, checked on exit status as well as on the result line |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, writes the settings below, starts on `PORT`, creates the database and the extension, records the platform facts |
 | `texts` | extracts `sql` blocks 1 to 6 from this page and checks each one's SHA-256 against the constant at the top of the script; generates the harness view from block 1 with the two `SET` lines dropped, printed |
-| `fixtures` | drops and rebuilds schema `rs`, the 18 guard fixtures |
+| `fixtures` | drops and rebuilds schema `rs`, the 19 guard fixtures |
 | `suite` | phases 1 and 2 of the shared suite: the harness of block 2, family 1 from block 3 under `client_min_messages = debug1`, families 2 to 6 from block 4, then every fixture's build contract while it is still as built |
 | `churn` | phase 3: rule 2's drain from block 5 with its maintenance step, then rule 3's census, the catalog forgeries and the churned snapshot from block 6, then the no-defeat rule's four proofs, which **die rather than score** a defeated fixture |
 | `report` | phase 4: runs the filed heuristic **as filed**, both `SET` lines included, and records whether it executed, how many rows and columns it returned, and how many it signalled |
-| `decide` | materializes the same text over its internal `final` stage so every intermediate column is visible, and checks the two readings agree on every row |
-| `facts` | the version-local facts: candidate count, `index_size` against `pg_relation_size`, the `NaN` comparisons, the AM refusals, the invalid index, fresh-build density at four fillfactors, and the guard fixtures |
+| `decide` | materializes the same text over its internal `final` stage so every intermediate column is visible; reports how far that reading agrees with the printed report, the fixture rows exactly and the whole population with the catalog drift between the two reads named; and prints the whole-cluster before-and-after of the two `CASE` guards, the unguarded score recomputed beside the filed one |
+| `facts` | the version-local facts: candidate count, `total_pages` against both `pg_relation_size` and the page classes plus one, the `NaN` comparisons, the `leaf_pages = 0` against `total_pages = 1` identity, the AM refusals, the invalid index, fresh-build density at four fillfactors, and the guard fixtures |
 | `cost` | the B-tree population and size, and `EXPLAIN (ANALYZE, BUFFERS)` of the filed text |
 | `priv` | reads an index as a role with no grant and as a member of `pg_stat_scan_tables`, and prints the `EXECUTE` privileges `pgstattuple` ships with |
-| `score` | phase 5, the oracle: per fixture, reads what the statement said, calls `pgstatindex` itself, runs `REINDEX INDEX`, measures the file again, and writes the verdict tables. **Destructive** |
-| `accuracy` | the error of the score against the measured rebuild: the summary row, the per-family breakdown, the confusion matrix at 50 %, every disagreement, the threshold sweep, the three readings of `total_pages` beside the `NaN` guard, and the ten largest errors in each direction |
+| `score` | phase 5, the oracle: per fixture, reads what the statement said, calls `pgstatindex` itself, runs `REINDEX INDEX`, measures the file again, **and calls `pgstatindex` once more on the rebuilt file**, which is what the error decomposition is computed from. Writes the verdict tables, including the rows behind every contract count. **Destructive** |
+| `accuracy` | the error of the score against the measured rebuild: the summary row, the per-family breakdown, the confusion matrix at 50 %, every disagreement, the threshold sweep scored both by the suite's bands and by a 50 % cut, where the fixtures' own rebuild sizes fall, the two denominators beside the unguarded statement, the error decomposed into its three exact terms, and the headline over the deterministic fixtures beside the headline including `p120` |
 | `guard` | the same oracle over schema `rs`, with no verdict band applied. **Destructive** |
 | `errors` | the error audit: counts what the server logged after this run's mark and prints the distinct messages |
 | `crossleg` | **12 leg only.** The two reports side by side out of the shared `out/`; it needs no server and skips itself with a note when the 17 leg has not written its report |
@@ -704,15 +1048,24 @@ and `guard` follow it.
 
 ### What the scripts read from the environment
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `WIKI_ROOT` | `$PWD` | the repository root; everything else resolves beneath it |
-| `PAGE` | this page's path | the file the six `sql` blocks are extracted from |
-| `SRC` | `$WIKI_ROOT/raw/postgres-17`, or `-12` on the 12 leg | the pinned checkout, read only |
-| `SANDBOX` | `$WIKI_ROOT/.wiki-runtime/tmp/rscore` | build, install, data, socket, SQL and output directories; the only tree either script writes |
-| `PORT` | `55417`, or `55412` on the 12 leg | the cluster's port |
-| `JOBS` | `4` | `make -j` parallelism |
-| `ROWS` | `200000` | the schema `rs` guard-fixture size. The shared suite's own fixture sizes are in its `sql` blocks and are not parameterised |
+**The two legs do not share the names of their checkout and port variables**,
+because both legs write into one sandbox and a single `SRC` or `PORT` would
+point both of them at the same tree or the same port. The 17 leg reads `SRC`
+and `PORT`; the 12 leg reads `SRC12` and `PORT12` and ignores `SRC` and `PORT`
+entirely. The 12 leg reads one variable the 17 leg has no use for.
+
+| Variable | Leg | Default | Meaning |
+|---|---|---|---|
+| `WIKI_ROOT` | both | `$PWD` | the repository root; everything else resolves beneath it |
+| `PAGE` | both | this page's path | the file the six `sql` blocks are extracted from |
+| `SANDBOX` | both | `$WIKI_ROOT/.wiki-runtime/tmp/rscore` | build, install, data, socket, SQL and output directories; the only tree either script writes |
+| `JOBS` | both | `4` | `make -j` parallelism |
+| `ROWS` | both | `200000` | the schema `rs` guard-fixture size. The shared suite's own fixture sizes are in its `sql` blocks and are not parameterised |
+| `SRC` | 17 only | `$WIKI_ROOT/raw/postgres-17` | the pinned checkout, read only |
+| `PORT` | 17 only | `55417` | the cluster's port |
+| `SRC12` | 12 only | `$WIKI_ROOT/raw/postgres-12` | the pinned checkout, read only |
+| `PORT12` | 12 only | `55412` | the cluster's port |
+| `EXTRA_CFLAGS` | 12 only | `-O2 -g -DTRUE=1 -DFALSE=0` | ICU 68 dropped the `TRUE`/`FALSE` macros a 12.2 tree still uses, so the two defines go back in through `CFLAGS`. On a host whose ICU still defines them, set this to `-O2 -g` rather than to the empty string: `configure` treats an empty `CFLAGS` as set and then builds without optimisation |
 
 Both scripts export `PGPORT`, `PGHOST` and `PGDATABASE` for their own `psql`
 calls, so a value in the caller's environment is overridden rather than honoured.
@@ -720,8 +1073,16 @@ Every helper call passes `PGOPTIONS="-c statement_timeout=30min -c
 lock_timeout=60s"` per call rather than exported, because `pg_regress` keeps an
 inherited `PGOPTIONS` and appends its own to it
 ([pg_regress.c#PGOPTIONS](../../../../raw/postgres-17/src/test/regress/pg_regress.c#L783-L799)),
-so an exported value would reach `make check`. Every `psql` runs with `-X` and
-`-v ON_ERROR_STOP=1`.
+so an exported value would reach `make check`.
+
+Every `psql` runs with `-X`, so a stray `~/.psqlrc` cannot change a reading.
+Every `psql` that must succeed also runs with `-v ON_ERROR_STOP=1`, because
+without it a failed statement inside a `-f` script still exits 0. Five call
+sites per script deliberately omit it, and all five are places where the
+server's refusal **is** the measurement: the `err()` and `val_or_err()` helpers,
+which print the message a statement raised; the two connectivity probes in the
+`cluster` stage, which are tested on their exit status instead; and the
+unprivileged role's `pgstatindex` call in the `priv` stage.
 
 ### The cluster settings
 
@@ -777,9 +1138,10 @@ quoted as a headline result.
 #
 # Schema rs holds what the suite does not cover and this page still measures:
 # the shapes pgstatindex refuses, an index the catalog says is not valid, fresh
-# builds at four fillfactors, an index on an empty table, a drained index, and
-# a duplicate-heavy pair.  Those are guard fixtures, not scored fixtures, and
-# no verdict band is applied to them.
+# builds at four fillfactors, an index on an empty table, a two-page index, a
+# sparse index, an index whose leading key range was deleted, an index every
+# entry was deleted from, and a duplicate-heavy index.  Those are guard
+# fixtures, not scored fixtures, and no verdict band is applied to them.
 #
 # The pinned checkout is read only.  Everything this script writes lives under
 # $SANDBOX, and `clean` deletes it.
@@ -813,12 +1175,12 @@ export PGPORT="$PORT" PGHOST="$SOCK" PGDATABASE=postgres
 # BASE_CENSUS are the shared suite's harness, its family 1 fixtures, its
 # families 2 to 6, rule 2's drain and rule 3's census.  A text that does not
 # hash to its constant stops the run: the scored text must be the filed text.
-BASE_SQL=40d5f95ab2c950545009c92ecaf3a1d9b5c24f851975c33bf8149a7b22b8367f
-BASE_HARNESS=b817e3af3b31769756347cbed32b2ec5e8288e2025032a2130f00dd53fda8a53
+BASE_SQL=7d1a9f6aa59015b3f5075d947a2aff8e6f8ba92630de449a60be9b5b10c4f3bf
+BASE_HARNESS=31033e6f614a3ed52e95e9eee15371405bfc3e46c4efa3171a50ae84d357aae2
 BASE_GATE=9d49596f780958fcae8982d19c168da9d6c87ad75c1b40c910dc34c135325e49
 BASE_SUITE=1c228956cc706420ddb03e46d0c263c019c96c5ded4af314002cfd630ef5bae3
 BASE_DRAIN=0d36f4980d9ee918ada8f24dffe8e0fc2566728d3079a35ebfdc373075a0d794
-BASE_CENSUS=1b911b4c0f093b9a26c005ffc3e3a8d8b5e166f3c7a0f9428df6273699f598ff
+BASE_CENSUS=e3e1a0ae28599887c79482b4b3eda8a3ac4292c6bb089a01a45e723dcf0b09ec
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -1187,12 +1549,28 @@ CREATE INDEX i_head ON rs.t_head (id);
 DELETE FROM rs.t_head WHERE id <= (:rows * 9) / 10;
 VACUUM rs.t_head;
 
--- 6. duplicates: a key with 100 rows per value, dense and untouched.  A
---    rebuild of this shape shrinks the file on a server that deduplicates and
---    does not on one that does not, while the score reads 0 on both.
+-- 6. duplicates: a key with 100 rows per value, dense and untouched.  The
+--    file a server that deduplicates writes is about a third of the one a
+--    server that does not writes, so this fixture prices the build rather than
+--    the rebuild; on both majors the score reads 0 and a rebuild of a file
+--    already written that way returns nothing.
 CREATE TABLE rs.t_dup (k int);
 INSERT INTO rs.t_dup SELECT g % (:rows / 100) FROM generate_series(1, :rows) g;
 CREATE INDEX i_dup ON rs.t_dup (k);
+
+-- 6b. every entry removed: the emptiest shape a live B-tree reaches.  nbtree
+--     never deletes the rightmost page of a level, so this index keeps one
+--     leaf and one internal page however much is vacuumed out of it, and
+--     avg_leaf_density stays a number rather than becoming NaN.  This is the
+--     fixture behind the page's claim that leaf_pages = 0 means a metapage and
+--     nothing else: an emptied index does not reach that state, and only a
+--     rebuilt or never-filled one does.
+CREATE TABLE rs.t_alldel (id int);
+INSERT INTO rs.t_alldel SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_alldel ON rs.t_alldel (id);
+DELETE FROM rs.t_alldel;
+VACUUM rs.t_alldel;
+VACUUM rs.t_alldel;
 
 -- 7. the shapes pgstatindex refuses, and the ones the candidate filter drops.
 CREATE TABLE rs.t_other (id int, txt text, arr int[], pt point);
@@ -1220,7 +1598,7 @@ UPDATE pg_index SET indisvalid = false
  WHERE indexrelid = 'rs.i_invalid'::regclass;
 
 ANALYZE rs.t_fresh, rs.t_empty, rs.t_one, rs.t_sparse, rs.t_head, rs.t_dup,
-        rs.t_other, rs.t_invalid;
+        rs.t_alldel, rs.t_other, rs.t_invalid;
 SQL
   PGOPTIONS="$SESSION_OPTS" "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" \
     -v rows="$ROWS" -f "$SQLD/fixtures.sql" > "$OUT/fixtures17.log" 2>&1 \
@@ -1364,11 +1742,20 @@ stage_decide() {
     printf 'decide_rows=%s\n' "$(s 'SELECT count(*) FROM decide')"
     printf 'decide_fixtures=%s\n' "$(s 'SELECT count(*) FROM decide d JOIN plan p ON p.idx = d.index_name')"
     printf 'filed_rows=%s\n' "$(s 'SELECT count(*) FROM report_filed')"
-    # The view differs from the filed text in its presentation SELECT only, so
-    # the two must agree on every row, and the view may hold no row the report
-    # did not print.  IS NOT DISTINCT FROM, because a NaN is not equal to
-    # itself under = but is the same reading.
-    printf 'view_disagrees_with_filed=%s\n' \
+    # The view differs from the filed text in its presentation SELECT only, but
+    # the two are not two readings of one state: the report ran first, the view
+    # ran second, and between them this stage created its own tables, so the
+    # catalog and TOAST indexes of the fixture database have moved.  The
+    # fixtures have not, which is why the fixture rows are the comparison that
+    # must come out at zero and the whole-population count is printed beside it
+    # as context rather than as a check.  IS DISTINCT FROM, so that a row
+    # missing on one side counts as a difference.
+    printf 'view_disagrees_with_filed_fixtures=%s\n' \
+      "$(s "SELECT count(*) FROM plan p
+              JOIN report_filed r ON r.index_name = p.idx
+              JOIN decide d       ON d.index_name = p.idx
+             WHERE round(100 * d.reindex_score::numeric, 1) IS DISTINCT FROM r.reindex_score_pct")"
+    printf 'view_disagrees_with_filed_all=%s (catalog drift between the two reads)\n' \
       "$(s "SELECT count(*) FROM report_filed r JOIN decide d ON d.index_name = r.index_name
              WHERE round(100 * d.reindex_score::numeric, 1) IS DISTINCT FROM r.reindex_score_pct")"
     printf 'signal_disagrees_with_filed=%s\n' \
@@ -1385,6 +1772,47 @@ stage_decide() {
     printf 'nan_scores_signalled=%s\n' \
       "$(s "SELECT count(*) FROM decide WHERE reindex_score = 'NaN'::float8
               AND reindex_score >= 0.5")"
+    # The whole-cluster before-and-after, both halves from this run.  "before"
+    # is the same statement with the two CASE guards removed, recomputed here
+    # from the columns the statement itself kept, so the page's before column
+    # is not a quotation from an earlier run.  u.nan is the unguarded score.
+    printf -- '-- the guards, over every candidate: unguarded (before) beside filed (after)\n'
+    t "SELECT /* wiki_rs_guard_effect */
+              count(*)                                              AS rows_printed,
+              count(*) FILTER (WHERE u.nan >= 0.5)                  AS signalled_before,
+              count(*) FILTER (WHERE d.reindex_score >= 0.5)        AS signalled_after,
+              count(*) FILTER (WHERE u.nan = 'NaN'::float8)         AS nan_before,
+              count(*) FILTER (WHERE d.reindex_score = 'NaN'::float8) AS nan_after,
+              count(*) FILTER (WHERE d.total_pages = 1)             AS metapage_only,
+              count(*) FILTER (WHERE d.total_pages = 1
+                                 AND u.nan >= 0.5)                  AS metapage_only_before,
+              count(*) FILTER (WHERE d.total_pages = 1
+                                 AND d.reindex_score >= 0.5)        AS metapage_only_after,
+              count(*) FILTER (WHERE (u.nan >= 0.5)
+                                  <> (d.reindex_score >= 0.5))      AS verdicts_the_guards_moved,
+              count(*) FILTER (WHERE u.nan <> 'NaN'::float8
+                                 AND round(u.nan::numeric, 6)
+                                     <> round(d.reindex_score::numeric, 6)) AS finite_scores_that_differ
+         FROM decide d
+         CROSS JOIN LATERAL (
+              SELECT (d.deleted_pages + d.empty_pages
+                      + d.leaf_pages * GREATEST(0::float8,
+                                                1 - d.avg_leaf_density / d.fillfactor))
+                     / d.total_pages::float8 AS nan) u"
+    # leaf_pages = 0 and total_pages = 1 must be the same set of rows: that is
+    # the claim that a NaN density means a metapage and nothing else.
+    printf -- '-- leaf_pages = 0 against total_pages = 1, and what those rows hold\n'
+    t "SELECT /* wiki_rs_metapage_only */
+              count(*) FILTER (WHERE leaf_pages = 0)                AS no_leaf,
+              count(*) FILTER (WHERE total_pages = 1)               AS one_page,
+              count(*) FILTER (WHERE (leaf_pages = 0) <> (total_pages = 1))
+                                                                    AS the_two_disagree,
+              count(*) FILTER (WHERE leaf_pages = 0
+                                 AND deleted_pages + empty_pages > 0)
+                                                                    AS no_leaf_but_dead_pages,
+              count(*) FILTER (WHERE avg_leaf_density = 'NaN'::float8
+                                 AND leaf_pages > 0)                AS nan_with_leaves
+         FROM decide"
   } > "$OUT/decide17.txt"
   cat "$OUT/decide17.txt" >&2
 }
@@ -1433,6 +1861,22 @@ stage_facts() {
             count(*) FILTER (WHERE reindex_score = 'NaN'::float8) AS nan_score,
             count(*) FILTER (WHERE reindex_score >= 0.5)          AS signalled
        FROM decide GROUP BY schema_name ORDER BY schema_name" >> "$OUT/facts17.txt" 2>&1
+  # The filed denominator against the file itself.  pgstatindex builds
+  # index_size from the four page classes plus the metapage, and its scan
+  # covers every block of the relation, so index_size / block_size must equal
+  # the page count pg_relation_size reports - which is the file a REINDEX
+  # shrinks, and therefore the denominator the oracle measures against.
+  printf -- '-- total_pages against the file: index_size / block_size vs pg_relation_size\n' >> "$OUT/facts17.txt"
+  t "SELECT /* wiki_rs_denominator */ count(*) AS rows_read,
+            count(*) FILTER (WHERE d.total_pages
+                                   <> pg_relation_size(d.idx_oid)
+                                      / current_setting('block_size')::bigint)
+                AS total_pages_differs_from_the_file,
+            count(*) FILTER (WHERE d.total_pages
+                                   <> 1 + d.internal_pages + d.leaf_pages
+                                        + d.empty_pages + d.deleted_pages)
+                AS total_pages_differs_from_the_classes_plus_one
+       FROM decide d" >> "$OUT/facts17.txt" 2>&1
   printf -- '-- the ceiling: (total_pages - 1 - internal_pages) / total_pages\n' >> "$OUT/facts17.txt"
   t "SELECT /* wiki_rs_ceiling */ count(*) AS finite_rows,
             count(*) FILTER (WHERE reindex_score
@@ -1557,6 +2001,13 @@ stage_score() {
     t "SELECT /* wiki_rs_want_misses */ num, idx, grp, want_stage, taken_nofilter,
               score_pct, actual, verdict
          FROM verdicts WHERE want_stage <> taken_nofilter ORDER BY num"
+    # The concept page calls expected_stage mandatory, so the rows behind the
+    # count are printed rather than left as a number: a statement that
+    # disagrees with its own instrument has to be readable fixture by fixture.
+    t "SELECT /* wiki_rs_instrument_misses */ num, idx, grp, score_pct,
+              expected_stage, taken_nofilter, density, leaf_pages, dead_pages,
+              total_pages
+         FROM verdicts WHERE taken_nofilter <> expected_stage ORDER BY num"
     t "SELECT /* wiki_rs_bad_verdicts */ num, idx, grp, score_pct, actual, err,
               density, leaf_pages, dead_pages, total_pages, verdict
          FROM verdicts WHERE verdict <> 'PASS' ORDER BY verdict, num"
@@ -1606,33 +2057,98 @@ stage_accuracy() {
          FROM verdicts
         WHERE (taken_nofilter = 'rebuild') <> (actual >= 50)
         ORDER BY abs(err) DESC"
+    # The sweep, scored two ways, because they answer different questions.
+    # band_violations is the shared suite's own test: a threshold is acceptable
+    # when no fixture lands in a false-positive or false-negative band, and
+    # every threshold with a zero there is equally acceptable to the suite.
+    # agrees_with_50 instead asks how often the signal matches a 50 % cut on
+    # the measured rebuild, which is this page's own construct, not a band -
+    # and because the score tracks the actual closely it necessarily peaks at
+    # 50, so it measures calibration and may not be read as choosing 50.
     printf -- '-- what a different threshold would have cost, over the same fixtures\n'
     t "SELECT /* wiki_rs_sweep */ th AS threshold_pct,
               count(*) FILTER (WHERE score_pct >= th AND actual < 10) AS critical_false_pos,
               count(*) FILTER (WHERE score_pct >= th AND actual < 35) AS false_pos,
               count(*) FILTER (WHERE score_pct <  th AND actual >= 50) AS false_neg,
+              count(*) FILTER (WHERE score_pct >= th AND actual < 35)
+              + count(*) FILTER (WHERE score_pct < th AND actual >= 50)
+                                                                      AS band_violations,
               count(*) FILTER (WHERE score_pct >= th) AS rebuilt,
-              count(*) FILTER (WHERE (score_pct >= th) = (actual >= 50)) AS agrees_with_oracle
+              count(*) FILTER (WHERE (score_pct >= th) = (actual >= 50)) AS agrees_with_50
          FROM verdicts, generate_series(5, 95, 5) th
         GROUP BY th ORDER BY th"
-    printf -- '-- the three readings of total_pages and the NaN guard, side by side\n'
+    # Where the fixtures actually sit, which is what bounds the sweep's
+    # resolution: a plateau is only as informative as the gap in the
+    # population that produced it.
+    printf -- '-- the measured rebuilds, bucketed, and the gap around the cut\n'
+    t "SELECT /* wiki_rs_actual_histogram */ width_bucket(actual, 0, 100, 10) * 10 - 10
+                AS actual_from_pct,
+              count(*) AS fixtures, round(min(actual), 1) AS lowest,
+              round(max(actual), 1) AS highest
+         FROM verdicts GROUP BY 1 ORDER BY 1"
+    t "SELECT /* wiki_rs_band_gap */
+              round(max(actual) FILTER (WHERE actual < 50), 1)  AS highest_below_50,
+              round(min(actual) FILTER (WHERE actual >= 50), 1) AS lowest_at_or_above_50,
+              count(*) FILTER (WHERE actual >= 35 AND actual < 50) AS between_35_and_50,
+              count(*) FILTER (WHERE actual >= 50 AND actual < 70) AS between_50_and_70
+         FROM verdicts"
+    printf -- '-- the two denominators and the unguarded statement, side by side\n'
     t "SELECT /* wiki_rs_variants */
               count(*) AS fixtures,
               count(*) FILTER (WHERE verdict = 'PASS')       AS filed_pass,
-              count(*) FILTER (WHERE verdict_guard = 'PASS') AS guarded_pass,
+              count(*) FILTER (WHERE verdict_nan = 'PASS')   AS unguarded_pass,
               count(*) FILTER (WHERE score_pct  >= 50)       AS filed_rebuilds,
-              count(*) FILTER (WHERE guard_pct  >= 50)       AS guarded_rebuilds,
+              count(*) FILTER (WHERE nan_signal)             AS unguarded_rebuilds,
+              count(*) FILTER (WHERE nan_pct = 'NaN'::numeric) AS unguarded_nan,
               count(*) FILTER (WHERE nometa_pct >= 50)       AS nometa_rebuilds,
               count(*) FILTER (WHERE nometa_pct IS NULL)     AS nometa_undefined,
               round(max(nometa_pct - score_pct), 2)          AS worst_nometa_gap
          FROM verdicts"
     printf -- '-- the fixtures where the three readings do not agree\n'
-    t "SELECT /* wiki_rs_variant_rows */ num, idx, total_pages, score_pct,
-              nometa_pct, guard_pct, actual
+    t "SELECT /* wiki_rs_variant_rows */ num, idx, total_pages, leaf_pages,
+              score_pct, nometa_pct, nan_pct, actual
          FROM verdicts
-        WHERE (score_pct >= 50) <> (nometa_pct >= 50)
-           OR (score_pct >= 50) IS DISTINCT FROM (guard_pct >= 50)
+        WHERE (score_pct >= 50) IS DISTINCT FROM (nometa_pct >= 50)
+           OR (score_pct >= 50) IS DISTINCT FROM nan_signal
         ORDER BY num"
+    # The error, split into the three terms it is made of.  The identity is
+    # exact: err = leaf_term + internal_term + dead_term, so a fixture's error
+    # is attributable rather than narrated.  leaf_term is what the leaf model
+    # itself got wrong, which on a small index is mostly the whole page a
+    # rebuild cannot avoid writing; internal_term is the levels above the leaf
+    # level, which the numerator never models and which are always in the
+    # denominator, so it is <= 0 and is the conservative direction.
+    printf -- '-- the error decomposed: leaf model, internal levels, dead pages left\n'
+    t "SELECT /* wiki_rs_decomposition */ count(*) AS fixtures,
+              round(avg(leaf_term), 2)     AS mean_leaf_term,
+              round(avg(internal_term), 2) AS mean_internal_term,
+              round(avg(dead_term), 2)     AS mean_dead_term,
+              round(max(abs(err - (leaf_term + internal_term + dead_term))), 1)
+                                           AS worst_residual,
+              count(*) FILTER (WHERE internal_term < 0) AS shrank_internal_levels,
+              count(*) FILTER (WHERE dead_term <> 0)    AS kept_dead_pages
+         FROM verdicts"
+    printf -- '-- the same, for every fixture whose error exceeds one point\n'
+    t "SELECT /* wiki_rs_decomposition_rows */ num, idx, grp, total_pages,
+              internal_pages, leaf_pages, density, aft_internal, aft_leaf,
+              score_pct, actual, err, leaf_term, internal_term, dead_term
+         FROM verdicts WHERE abs(err) > 1 ORDER BY err"
+    # The headline both ways.  Test 120 is the suite's one probabilistic
+    # fixture: its precondition is a sample miss, so it is scored on some runs
+    # and not others, and any statistic that includes it moves between runs.
+    # Both populations are printed so the page can report the stable one and
+    # name what the other adds.
+    printf -- '-- the headline over the deterministic fixtures, and with p120 included\n'
+    t "SELECT /* wiki_rs_headline */ scope, count(*) AS fixtures,
+              round(avg(abs(err)), 2) AS mean_abs_err,
+              round(percentile_cont(0.5) WITHIN GROUP (ORDER BY abs(err))::numeric, 2)
+                                      AS median_abs_err,
+              round(max(err), 1) AS worst_over, round(min(err), 1) AS worst_under,
+              round(corr(score_pct::float8, actual::float8)::numeric, 4) AS correlation
+         FROM (SELECT v.*, 'all scored'  AS scope FROM verdicts v
+               UNION ALL
+               SELECT v.*, 'without p120' AS scope FROM verdicts v WHERE v.num <> 120) z
+        GROUP BY scope ORDER BY scope"
     printf -- '-- the ten largest over-estimates and the ten largest under-estimates\n'
     t "SELECT /* wiki_rs_worst_over */ num, idx, grp, score_pct, actual, err, density,
               leaf_pages, dead_pages
@@ -1694,7 +2210,7 @@ stage_errors() {
   {
     printf 'logged_error_lines=%s\n' "$(grep -c '' "$OUT/errors17.txt")"
     printf -- '-- distinct messages\n'
-    sed 's/.*\(ERROR\|FATAL\|PANIC\)/\1/' "$OUT/errors17.txt" | sort | uniq -c | sort -rn
+    sed -E 's/.*(ERROR|FATAL|PANIC)/\1/' "$OUT/errors17.txt" | sort | uniq -c | sort -rn
   } > "$OUT/errors17_summary.txt"
   cat "$OUT/errors17_summary.txt" >&2
 }
@@ -1795,9 +2311,10 @@ main "$@"
 #
 # Schema rs holds what the suite does not cover and this page still measures:
 # the shapes pgstatindex refuses, an index the catalog says is not valid, fresh
-# builds at four fillfactors, an index on an empty table, a drained index, and
-# a duplicate-heavy pair.  Those are guard fixtures, not scored fixtures, and
-# no verdict band is applied to them.
+# builds at four fillfactors, an index on an empty table, a two-page index, a
+# sparse index, an index whose leading key range was deleted, an index every
+# entry was deleted from, and a duplicate-heavy index.  Those are guard
+# fixtures, not scored fixtures, and no verdict band is applied to them.
 #
 # The pinned checkout is read only.  Everything this script writes lives under
 # $SANDBOX, and `clean` deletes it.
@@ -1836,12 +2353,12 @@ export PGPORT="$PORT12" PGHOST="$SOCK" PGDATABASE=postgres
 # BASE_CENSUS are the shared suite's harness, its family 1 fixtures, its
 # families 2 to 6, rule 2's drain and rule 3's census.  A text that does not
 # hash to its constant stops the run: the scored text must be the filed text.
-BASE_SQL=40d5f95ab2c950545009c92ecaf3a1d9b5c24f851975c33bf8149a7b22b8367f
-BASE_HARNESS=b817e3af3b31769756347cbed32b2ec5e8288e2025032a2130f00dd53fda8a53
+BASE_SQL=7d1a9f6aa59015b3f5075d947a2aff8e6f8ba92630de449a60be9b5b10c4f3bf
+BASE_HARNESS=31033e6f614a3ed52e95e9eee15371405bfc3e46c4efa3171a50ae84d357aae2
 BASE_GATE=9d49596f780958fcae8982d19c168da9d6c87ad75c1b40c910dc34c135325e49
 BASE_SUITE=1c228956cc706420ddb03e46d0c263c019c96c5ded4af314002cfd630ef5bae3
 BASE_DRAIN=0d36f4980d9ee918ada8f24dffe8e0fc2566728d3079a35ebfdc373075a0d794
-BASE_CENSUS=1b911b4c0f093b9a26c005ffc3e3a8d8b5e166f3c7a0f9428df6273699f598ff
+BASE_CENSUS=e3e1a0ae28599887c79482b4b3eda8a3ac4292c6bb089a01a45e723dcf0b09ec
 
 say()  { printf '\n== %s\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
@@ -2211,12 +2728,28 @@ CREATE INDEX i_head ON rs.t_head (id);
 DELETE FROM rs.t_head WHERE id <= (:rows * 9) / 10;
 VACUUM rs.t_head;
 
--- 6. duplicates: a key with 100 rows per value, dense and untouched.  A
---    rebuild of this shape shrinks the file on a server that deduplicates and
---    does not on one that does not, while the score reads 0 on both.
+-- 6. duplicates: a key with 100 rows per value, dense and untouched.  The
+--    file a server that deduplicates writes is about a third of the one a
+--    server that does not writes, so this fixture prices the build rather than
+--    the rebuild; on both majors the score reads 0 and a rebuild of a file
+--    already written that way returns nothing.
 CREATE TABLE rs.t_dup (k int);
 INSERT INTO rs.t_dup SELECT g % (:rows / 100) FROM generate_series(1, :rows) g;
 CREATE INDEX i_dup ON rs.t_dup (k);
+
+-- 6b. every entry removed: the emptiest shape a live B-tree reaches.  nbtree
+--     never deletes the rightmost page of a level, so this index keeps one
+--     leaf and one internal page however much is vacuumed out of it, and
+--     avg_leaf_density stays a number rather than becoming NaN.  This is the
+--     fixture behind the page's claim that leaf_pages = 0 means a metapage and
+--     nothing else: an emptied index does not reach that state, and only a
+--     rebuilt or never-filled one does.
+CREATE TABLE rs.t_alldel (id int);
+INSERT INTO rs.t_alldel SELECT g FROM generate_series(1, :rows) g;
+CREATE INDEX i_alldel ON rs.t_alldel (id);
+DELETE FROM rs.t_alldel;
+VACUUM rs.t_alldel;
+VACUUM rs.t_alldel;
 
 -- 7. the shapes pgstatindex refuses, and the ones the candidate filter drops.
 CREATE TABLE rs.t_other (id int, txt text, arr int[], pt point);
@@ -2244,7 +2777,7 @@ UPDATE pg_index SET indisvalid = false
  WHERE indexrelid = 'rs.i_invalid'::regclass;
 
 ANALYZE rs.t_fresh, rs.t_empty, rs.t_one, rs.t_sparse, rs.t_head, rs.t_dup,
-        rs.t_other, rs.t_invalid;
+        rs.t_alldel, rs.t_other, rs.t_invalid;
 SQL
   PGOPTIONS="$SESSION_OPTS" "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB" \
     -v rows="$ROWS" -f "$SQLD/fixtures.sql" > "$OUT/fixtures12.log" 2>&1 \
@@ -2388,11 +2921,20 @@ stage_decide() {
     printf 'decide_rows=%s\n' "$(s 'SELECT count(*) FROM decide')"
     printf 'decide_fixtures=%s\n' "$(s 'SELECT count(*) FROM decide d JOIN plan p ON p.idx = d.index_name')"
     printf 'filed_rows=%s\n' "$(s 'SELECT count(*) FROM report_filed')"
-    # The view differs from the filed text in its presentation SELECT only, so
-    # the two must agree on every row, and the view may hold no row the report
-    # did not print.  IS NOT DISTINCT FROM, because a NaN is not equal to
-    # itself under = but is the same reading.
-    printf 'view_disagrees_with_filed=%s\n' \
+    # The view differs from the filed text in its presentation SELECT only, but
+    # the two are not two readings of one state: the report ran first, the view
+    # ran second, and between them this stage created its own tables, so the
+    # catalog and TOAST indexes of the fixture database have moved.  The
+    # fixtures have not, which is why the fixture rows are the comparison that
+    # must come out at zero and the whole-population count is printed beside it
+    # as context rather than as a check.  IS DISTINCT FROM, so that a row
+    # missing on one side counts as a difference.
+    printf 'view_disagrees_with_filed_fixtures=%s\n' \
+      "$(s "SELECT count(*) FROM plan p
+              JOIN report_filed r ON r.index_name = p.idx
+              JOIN decide d       ON d.index_name = p.idx
+             WHERE round(100 * d.reindex_score::numeric, 1) IS DISTINCT FROM r.reindex_score_pct")"
+    printf 'view_disagrees_with_filed_all=%s (catalog drift between the two reads)\n' \
       "$(s "SELECT count(*) FROM report_filed r JOIN decide d ON d.index_name = r.index_name
              WHERE round(100 * d.reindex_score::numeric, 1) IS DISTINCT FROM r.reindex_score_pct")"
     printf 'signal_disagrees_with_filed=%s\n' \
@@ -2409,6 +2951,47 @@ stage_decide() {
     printf 'nan_scores_signalled=%s\n' \
       "$(s "SELECT count(*) FROM decide WHERE reindex_score = 'NaN'::float8
               AND reindex_score >= 0.5")"
+    # The whole-cluster before-and-after, both halves from this run.  "before"
+    # is the same statement with the two CASE guards removed, recomputed here
+    # from the columns the statement itself kept, so the page's before column
+    # is not a quotation from an earlier run.  u.nan is the unguarded score.
+    printf -- '-- the guards, over every candidate: unguarded (before) beside filed (after)\n'
+    t "SELECT /* wiki_rs_guard_effect */
+              count(*)                                              AS rows_printed,
+              count(*) FILTER (WHERE u.nan >= 0.5)                  AS signalled_before,
+              count(*) FILTER (WHERE d.reindex_score >= 0.5)        AS signalled_after,
+              count(*) FILTER (WHERE u.nan = 'NaN'::float8)         AS nan_before,
+              count(*) FILTER (WHERE d.reindex_score = 'NaN'::float8) AS nan_after,
+              count(*) FILTER (WHERE d.total_pages = 1)             AS metapage_only,
+              count(*) FILTER (WHERE d.total_pages = 1
+                                 AND u.nan >= 0.5)                  AS metapage_only_before,
+              count(*) FILTER (WHERE d.total_pages = 1
+                                 AND d.reindex_score >= 0.5)        AS metapage_only_after,
+              count(*) FILTER (WHERE (u.nan >= 0.5)
+                                  <> (d.reindex_score >= 0.5))      AS verdicts_the_guards_moved,
+              count(*) FILTER (WHERE u.nan <> 'NaN'::float8
+                                 AND round(u.nan::numeric, 6)
+                                     <> round(d.reindex_score::numeric, 6)) AS finite_scores_that_differ
+         FROM decide d
+         CROSS JOIN LATERAL (
+              SELECT (d.deleted_pages + d.empty_pages
+                      + d.leaf_pages * GREATEST(0::float8,
+                                                1 - d.avg_leaf_density / d.fillfactor))
+                     / d.total_pages::float8 AS nan) u"
+    # leaf_pages = 0 and total_pages = 1 must be the same set of rows: that is
+    # the claim that a NaN density means a metapage and nothing else.
+    printf -- '-- leaf_pages = 0 against total_pages = 1, and what those rows hold\n'
+    t "SELECT /* wiki_rs_metapage_only */
+              count(*) FILTER (WHERE leaf_pages = 0)                AS no_leaf,
+              count(*) FILTER (WHERE total_pages = 1)               AS one_page,
+              count(*) FILTER (WHERE (leaf_pages = 0) <> (total_pages = 1))
+                                                                    AS the_two_disagree,
+              count(*) FILTER (WHERE leaf_pages = 0
+                                 AND deleted_pages + empty_pages > 0)
+                                                                    AS no_leaf_but_dead_pages,
+              count(*) FILTER (WHERE avg_leaf_density = 'NaN'::float8
+                                 AND leaf_pages > 0)                AS nan_with_leaves
+         FROM decide"
   } > "$OUT/decide12.txt"
   cat "$OUT/decide12.txt" >&2
 }
@@ -2457,6 +3040,22 @@ stage_facts() {
             count(*) FILTER (WHERE reindex_score = 'NaN'::float8) AS nan_score,
             count(*) FILTER (WHERE reindex_score >= 0.5)          AS signalled
        FROM decide GROUP BY schema_name ORDER BY schema_name" >> "$OUT/facts12.txt" 2>&1
+  # The filed denominator against the file itself.  pgstatindex builds
+  # index_size from the four page classes plus the metapage, and its scan
+  # covers every block of the relation, so index_size / block_size must equal
+  # the page count pg_relation_size reports - which is the file a REINDEX
+  # shrinks, and therefore the denominator the oracle measures against.
+  printf -- '-- total_pages against the file: index_size / block_size vs pg_relation_size\n' >> "$OUT/facts12.txt"
+  t "SELECT /* wiki_rs_denominator */ count(*) AS rows_read,
+            count(*) FILTER (WHERE d.total_pages
+                                   <> pg_relation_size(d.idx_oid)
+                                      / current_setting('block_size')::bigint)
+                AS total_pages_differs_from_the_file,
+            count(*) FILTER (WHERE d.total_pages
+                                   <> 1 + d.internal_pages + d.leaf_pages
+                                        + d.empty_pages + d.deleted_pages)
+                AS total_pages_differs_from_the_classes_plus_one
+       FROM decide d" >> "$OUT/facts12.txt" 2>&1
   printf -- '-- the ceiling: (total_pages - 1 - internal_pages) / total_pages\n' >> "$OUT/facts12.txt"
   t "SELECT /* wiki_rs_ceiling */ count(*) AS finite_rows,
             count(*) FILTER (WHERE reindex_score
@@ -2581,6 +3180,13 @@ stage_score() {
     t "SELECT /* wiki_rs_want_misses */ num, idx, grp, want_stage, taken_nofilter,
               score_pct, actual, verdict
          FROM verdicts WHERE want_stage <> taken_nofilter ORDER BY num"
+    # The concept page calls expected_stage mandatory, so the rows behind the
+    # count are printed rather than left as a number: a statement that
+    # disagrees with its own instrument has to be readable fixture by fixture.
+    t "SELECT /* wiki_rs_instrument_misses */ num, idx, grp, score_pct,
+              expected_stage, taken_nofilter, density, leaf_pages, dead_pages,
+              total_pages
+         FROM verdicts WHERE taken_nofilter <> expected_stage ORDER BY num"
     t "SELECT /* wiki_rs_bad_verdicts */ num, idx, grp, score_pct, actual, err,
               density, leaf_pages, dead_pages, total_pages, verdict
          FROM verdicts WHERE verdict <> 'PASS' ORDER BY verdict, num"
@@ -2630,33 +3236,98 @@ stage_accuracy() {
          FROM verdicts
         WHERE (taken_nofilter = 'rebuild') <> (actual >= 50)
         ORDER BY abs(err) DESC"
+    # The sweep, scored two ways, because they answer different questions.
+    # band_violations is the shared suite's own test: a threshold is acceptable
+    # when no fixture lands in a false-positive or false-negative band, and
+    # every threshold with a zero there is equally acceptable to the suite.
+    # agrees_with_50 instead asks how often the signal matches a 50 % cut on
+    # the measured rebuild, which is this page's own construct, not a band -
+    # and because the score tracks the actual closely it necessarily peaks at
+    # 50, so it measures calibration and may not be read as choosing 50.
     printf -- '-- what a different threshold would have cost, over the same fixtures\n'
     t "SELECT /* wiki_rs_sweep */ th AS threshold_pct,
               count(*) FILTER (WHERE score_pct >= th AND actual < 10) AS critical_false_pos,
               count(*) FILTER (WHERE score_pct >= th AND actual < 35) AS false_pos,
               count(*) FILTER (WHERE score_pct <  th AND actual >= 50) AS false_neg,
+              count(*) FILTER (WHERE score_pct >= th AND actual < 35)
+              + count(*) FILTER (WHERE score_pct < th AND actual >= 50)
+                                                                      AS band_violations,
               count(*) FILTER (WHERE score_pct >= th) AS rebuilt,
-              count(*) FILTER (WHERE (score_pct >= th) = (actual >= 50)) AS agrees_with_oracle
+              count(*) FILTER (WHERE (score_pct >= th) = (actual >= 50)) AS agrees_with_50
          FROM verdicts, generate_series(5, 95, 5) th
         GROUP BY th ORDER BY th"
-    printf -- '-- the three readings of total_pages and the NaN guard, side by side\n'
+    # Where the fixtures actually sit, which is what bounds the sweep's
+    # resolution: a plateau is only as informative as the gap in the
+    # population that produced it.
+    printf -- '-- the measured rebuilds, bucketed, and the gap around the cut\n'
+    t "SELECT /* wiki_rs_actual_histogram */ width_bucket(actual, 0, 100, 10) * 10 - 10
+                AS actual_from_pct,
+              count(*) AS fixtures, round(min(actual), 1) AS lowest,
+              round(max(actual), 1) AS highest
+         FROM verdicts GROUP BY 1 ORDER BY 1"
+    t "SELECT /* wiki_rs_band_gap */
+              round(max(actual) FILTER (WHERE actual < 50), 1)  AS highest_below_50,
+              round(min(actual) FILTER (WHERE actual >= 50), 1) AS lowest_at_or_above_50,
+              count(*) FILTER (WHERE actual >= 35 AND actual < 50) AS between_35_and_50,
+              count(*) FILTER (WHERE actual >= 50 AND actual < 70) AS between_50_and_70
+         FROM verdicts"
+    printf -- '-- the two denominators and the unguarded statement, side by side\n'
     t "SELECT /* wiki_rs_variants */
               count(*) AS fixtures,
               count(*) FILTER (WHERE verdict = 'PASS')       AS filed_pass,
-              count(*) FILTER (WHERE verdict_guard = 'PASS') AS guarded_pass,
+              count(*) FILTER (WHERE verdict_nan = 'PASS')   AS unguarded_pass,
               count(*) FILTER (WHERE score_pct  >= 50)       AS filed_rebuilds,
-              count(*) FILTER (WHERE guard_pct  >= 50)       AS guarded_rebuilds,
+              count(*) FILTER (WHERE nan_signal)             AS unguarded_rebuilds,
+              count(*) FILTER (WHERE nan_pct = 'NaN'::numeric) AS unguarded_nan,
               count(*) FILTER (WHERE nometa_pct >= 50)       AS nometa_rebuilds,
               count(*) FILTER (WHERE nometa_pct IS NULL)     AS nometa_undefined,
               round(max(nometa_pct - score_pct), 2)          AS worst_nometa_gap
          FROM verdicts"
     printf -- '-- the fixtures where the three readings do not agree\n'
-    t "SELECT /* wiki_rs_variant_rows */ num, idx, total_pages, score_pct,
-              nometa_pct, guard_pct, actual
+    t "SELECT /* wiki_rs_variant_rows */ num, idx, total_pages, leaf_pages,
+              score_pct, nometa_pct, nan_pct, actual
          FROM verdicts
-        WHERE (score_pct >= 50) <> (nometa_pct >= 50)
-           OR (score_pct >= 50) IS DISTINCT FROM (guard_pct >= 50)
+        WHERE (score_pct >= 50) IS DISTINCT FROM (nometa_pct >= 50)
+           OR (score_pct >= 50) IS DISTINCT FROM nan_signal
         ORDER BY num"
+    # The error, split into the three terms it is made of.  The identity is
+    # exact: err = leaf_term + internal_term + dead_term, so a fixture's error
+    # is attributable rather than narrated.  leaf_term is what the leaf model
+    # itself got wrong, which on a small index is mostly the whole page a
+    # rebuild cannot avoid writing; internal_term is the levels above the leaf
+    # level, which the numerator never models and which are always in the
+    # denominator, so it is <= 0 and is the conservative direction.
+    printf -- '-- the error decomposed: leaf model, internal levels, dead pages left\n'
+    t "SELECT /* wiki_rs_decomposition */ count(*) AS fixtures,
+              round(avg(leaf_term), 2)     AS mean_leaf_term,
+              round(avg(internal_term), 2) AS mean_internal_term,
+              round(avg(dead_term), 2)     AS mean_dead_term,
+              round(max(abs(err - (leaf_term + internal_term + dead_term))), 1)
+                                           AS worst_residual,
+              count(*) FILTER (WHERE internal_term < 0) AS shrank_internal_levels,
+              count(*) FILTER (WHERE dead_term <> 0)    AS kept_dead_pages
+         FROM verdicts"
+    printf -- '-- the same, for every fixture whose error exceeds one point\n'
+    t "SELECT /* wiki_rs_decomposition_rows */ num, idx, grp, total_pages,
+              internal_pages, leaf_pages, density, aft_internal, aft_leaf,
+              score_pct, actual, err, leaf_term, internal_term, dead_term
+         FROM verdicts WHERE abs(err) > 1 ORDER BY err"
+    # The headline both ways.  Test 120 is the suite's one probabilistic
+    # fixture: its precondition is a sample miss, so it is scored on some runs
+    # and not others, and any statistic that includes it moves between runs.
+    # Both populations are printed so the page can report the stable one and
+    # name what the other adds.
+    printf -- '-- the headline over the deterministic fixtures, and with p120 included\n'
+    t "SELECT /* wiki_rs_headline */ scope, count(*) AS fixtures,
+              round(avg(abs(err)), 2) AS mean_abs_err,
+              round(percentile_cont(0.5) WITHIN GROUP (ORDER BY abs(err))::numeric, 2)
+                                      AS median_abs_err,
+              round(max(err), 1) AS worst_over, round(min(err), 1) AS worst_under,
+              round(corr(score_pct::float8, actual::float8)::numeric, 4) AS correlation
+         FROM (SELECT v.*, 'all scored'  AS scope FROM verdicts v
+               UNION ALL
+               SELECT v.*, 'without p120' AS scope FROM verdicts v WHERE v.num <> 120) z
+        GROUP BY scope ORDER BY scope"
     printf -- '-- the ten largest over-estimates and the ten largest under-estimates\n'
     t "SELECT /* wiki_rs_worst_over */ num, idx, grp, score_pct, actual, err, density,
               leaf_pages, dead_pages
@@ -2718,7 +3389,7 @@ stage_errors() {
   {
     printf 'logged_error_lines=%s\n' "$(grep -c '' "$OUT/errors12.txt")"
     printf -- '-- distinct messages\n'
-    sed 's/.*\(ERROR\|FATAL\|PANIC\)/\1/' "$OUT/errors12.txt" | sort | uniq -c | sort -rn
+    sed -E 's/.*(ERROR|FATAL|PANIC)/\1/' "$OUT/errors12.txt" | sort | uniq -c | sort -rn
   } > "$OUT/errors12_summary.txt"
   cat "$OUT/errors12_summary.txt" >&2
 }
@@ -2759,7 +3430,12 @@ stage_crossleg() {
     # Field 12 is reindex_score_pct and field 13 is reindex_signal: the two
     # numbers this page is about, per shared key, on each major.
     printf -- '-- shared keys whose rows differ: key, score 17, score 12, signal 17, signal 12\n'
-    local k p17 p12 s17 s12 higher=0 lower=0 same=0 sigdiff=0
+    # The two scores are compared at the precision the report prints them at.
+    # reindex_score_pct is round(..., 1), so each value is an integer number of
+    # tenths once the decimal point is removed, and comparing those integers is
+    # an exact comparison of what the reader sees.  Comparing ${p%%.*} instead
+    # would compare integer parts and call 49.6 and 49.1 the same score.
+    local k p17 p12 s17 s12 a b higher=0 lower=0 same=0 sigdiff=0
     while IFS= read -r k; do
       p17=$(grep -m1 -F "$k|" "$SQLD/x17_rows.txt" | cut -d'|' -f12)
       p12=$(grep -m1 -F "$k|" "$SQLD/x12_rows.txt" | cut -d'|' -f12)
@@ -2769,8 +3445,9 @@ stage_crossleg() {
       [ "$s17" = "$s12" ] || sigdiff=$((sigdiff + 1))
       case "$p17|$p12" in
         NaN*|*\|NaN) same=$((same + 1)) ;;
-        *) if   [ "${p17%%.*}" -gt "${p12%%.*}" ] 2>/dev/null; then higher=$((higher + 1))
-           elif [ "${p17%%.*}" -lt "${p12%%.*}" ] 2>/dev/null; then lower=$((lower + 1))
+        *) a=$((10#${p17/./})); b=$((10#${p12/./}))
+           if   [ "$a" -gt "$b" ]; then higher=$((higher + 1))
+           elif [ "$a" -lt "$b" ]; then lower=$((lower + 1))
            else same=$((same + 1)); fi ;;
       esac
     done < "$SQLD/x_diff_keys.txt"
@@ -2903,6 +3580,13 @@ CREATE TABLE snap(phase text, idx text, bytes numeric, blocks int,
 -- what the rebuild then gave back.  score is kept as float8 rather than
 -- numeric because the NaN the formula can produce is the point: it has to
 -- survive into the comparison the verdict bands make.
+-- The aft_* columns are the same ten pgstatindex columns read again after the
+-- oracle's REINDEX.  They are what turns the error into an identity rather
+-- than a narrative: err * total_pages is exactly
+--   (aft_leaf - leaf * density / fillfactor)   the leaf model's own error
+-- + (aft_internal - internal)                  the levels the numerator omits
+-- + (aft_empty + aft_deleted)                  dead pages the rebuild kept
+-- so every point of every fixture's error lands in one of three named terms.
 CREATE TABLE res(num int, leg text, req text, idx text,
                  size_before bigint, size_after bigint,
                  blocks_before int, blocks_after int,
@@ -2912,6 +3596,8 @@ CREATE TABLE res(num int, leg text, req text, idx text,
                  raw_size bigint, raw_internal int, raw_leaf int,
                  raw_empty int, raw_deleted int,
                  raw_density float8, raw_frag float8, fillfactor int,
+                 aft_size bigint, aft_internal int, aft_leaf int,
+                 aft_empty int, aft_deleted int, aft_density float8,
                  true_rows bigint, want_rows bigint, note text,
                  PRIMARY KEY (num, leg));
 
@@ -3150,7 +3836,8 @@ END $ab$;
 -- statement's own CTE chain.  The REINDEX is the only oracle, and it runs
 -- after both readings.
 CREATE OR REPLACE PROCEDURE score_all() LANGUAGE plpgsql AS $sc$
-DECLARE p record; d record; x record; sb bigint; sa bigint; tr bigint; rep record;
+DECLARE p record; d record; x record; y record; sb bigint; sa bigint;
+        tr bigint; rep record;
 BEGIN
   FOR p IN SELECT * FROM plan ORDER BY num, leg LOOP
     tr := NULL;
@@ -3164,6 +3851,9 @@ BEGIN
     SELECT * INTO x FROM pgstatindex(p.idx::regclass);
     EXECUTE format('REINDEX INDEX %I', p.idx);
     sa := pg_relation_size(p.idx::regclass);
+    -- The rebuilt file's own page classes, which is what the error
+    -- decomposition on the res table above is computed from.
+    SELECT * INTO y FROM pgstatindex(p.idx::regclass);
     INSERT INTO res VALUES (p.num, p.leg, p.req, p.idx, sb, sa,
       (sb / current_setting('block_size')::int)::int,
       (sa / current_setting('block_size')::int)::int,
@@ -3173,7 +3863,10 @@ BEGIN
       d.reindex_score >= 0.5, d.total_pages,
       x.index_size, x.internal_pages, x.leaf_pages, x.empty_pages,
       x.deleted_pages, x.avg_leaf_density, x.leaf_fragmentation,
-      d.fillfactor, tr, p.want_rows, p.note);
+      d.fillfactor,
+      y.index_size, y.internal_pages, y.leaf_pages, y.empty_pages,
+      y.deleted_pages, y.avg_leaf_density,
+      tr, p.want_rows, p.note);
   END LOOP;
 END $sc$;
 
@@ -3185,30 +3878,52 @@ END $sc$;
 -- to every index whether the report printed it or not, so the two columns
 -- coincide exactly when the statement hides nothing, and they are kept side by
 -- side as the check on that.  expected_stage recomputes REINDEX_SCORE from the
--- harness's own pgstatindex call, so a statement that disagrees with its own
--- instrument is visible.
+-- harness's own pgstatindex call, guards included, so a statement that
+-- disagrees with its own instrument is visible.  It tracks the filed text: if
+-- the statement's guards change, this recomputation changes with them, or the
+-- check silently reports the difference between two formulas instead.
 --
 -- The 50 % threshold here is the heuristic's own - the signal the question
--- proposes - and it is applied as the formula writes it, in float8, so the NaN
--- an index with no leaf pages produces reaches the comparison unguarded.  The
--- suite's FALSE NEGATIVE band happens to sit at the same 50 %; they are
--- different numbers with the same value, one the method's threshold and one
--- the band's.
+-- proposes.  The suite's FALSE NEGATIVE band happens to sit at the same 50 %;
+-- they are different numbers with the same value, one the method's threshold
+-- and one the band's.
 --
--- Three further readings are computed beside the filed one, because the
--- formula does not say which is meant and the page reports what each costs:
+-- Two further readings are computed beside the filed one, because the formula
+-- does not say which denominator is meant and because the page reports what
+-- the guards bought:
 --   score_meta     total_pages = index_size / block_size, the filed reading
 --   score_nometa   total_pages = internal + leaf + empty + deleted, which is
 --                  the same count without the metapage, and is 0 for an index
 --                  that holds only a metapage, so it is division by zero there
---   score_guard    the filed reading with the NaN read as a density of 0
+--   score_nan      the filed reading with both CASE guards removed, which is
+--                  the statement as it stood before them.  It is what the
+--                  page's "before" column reports, computed in the same run as
+--                  the "after" column rather than quoted from an earlier one.
 CREATE VIEW verdicts AS
 SELECT r.num, r.leg, p.grp, r.idx, r.req,
        s.blocks AS blocks_built, r.blocks_before, r.blocks_after, a.actual,
-       r.score_pct, v.nometa_pct, v.guard_pct,
+       r.score_pct, v.nometa_pct, v.nan_pct,
        round((r.score_pct - a.actual), 1)                       AS err,
+       -- The error decomposition, in points, exact by construction:
+       -- err = leaf_term + internal_term + dead_term, to the rounding of each.
+       -- The leaf term carries the statement's own floor.  GREATEST(0, 1 - d/ff)
+       -- is 1 - LEAST(1, d/ff), so the leaf count the statement predicts is
+       -- leaf * LEAST(1, d/ff): an index already denser than its fillfactor is
+       -- predicted to keep every leaf it has, not to grow.  Dropping the floor
+       -- here would charge such a fixture an error the statement never made.
+       round(100 * (r.aft_leaf - r.raw_leaf
+                    * LEAST(1::float8,
+                            CASE WHEN r.raw_density = 'NaN'::float8 THEN 0::float8
+                                 ELSE r.raw_density END / r.fillfactor))::numeric
+             / r.total_pages, 1)                                AS leaf_term,
+       round(100 * (r.aft_internal - r.raw_internal)::numeric
+             / r.total_pages, 1)                                AS internal_term,
+       round(100 * (r.aft_empty + r.aft_deleted)::numeric
+             / r.total_pages, 1)                                AS dead_term,
+       r.aft_internal, r.aft_leaf, r.aft_density,
        r.raw_density AS density,
        r.raw_empty + r.raw_deleted AS dead_pages, r.raw_leaf AS leaf_pages,
+       r.raw_internal AS internal_pages,
        r.total_pages, r.reported, d.taken_stage, d.taken_nofilter,
        x.expected_stage, p.want_stage,
        CASE WHEN d.taken_stage = 'rebuild' AND a.actual < 10  THEN 'CRITICAL FALSE POSITIVE'
@@ -3219,10 +3934,11 @@ SELECT r.num, r.leg, p.grp, r.idx, r.req,
             WHEN d.taken_nofilter = 'rebuild' AND a.actual < 35  THEN 'FALSE POSITIVE'
             WHEN d.taken_nofilter = 'leave'   AND a.actual >= 50 THEN 'FALSE NEGATIVE'
             ELSE 'PASS' END                                   AS verdict_nofilter,
-       CASE WHEN v.guard_signal AND a.actual < 10  THEN 'CRITICAL FALSE POSITIVE'
-            WHEN v.guard_signal AND a.actual < 35  THEN 'FALSE POSITIVE'
-            WHEN NOT v.guard_signal AND a.actual >= 50 THEN 'FALSE NEGATIVE'
-            ELSE 'PASS' END                                   AS verdict_guard,
+       CASE WHEN v.nan_signal AND a.actual < 10  THEN 'CRITICAL FALSE POSITIVE'
+            WHEN v.nan_signal AND a.actual < 35  THEN 'FALSE POSITIVE'
+            WHEN NOT v.nan_signal AND a.actual >= 50 THEN 'FALSE NEGATIVE'
+            ELSE 'PASS' END                                   AS verdict_nan,
+       v.nan_signal,
        CASE WHEN d.taken_stage = 'leave' AND a.actual >= 50
             THEN CASE WHEN r.score IS NULL     THEN 'unmeasured'
                       WHEN NOT r.reported      THEN 'not printed'
@@ -3283,19 +3999,28 @@ SELECT r.num, r.leg, p.grp, r.idx, r.req,
                CASE WHEN r.raw_leaf > 0 AND r.raw_density <> 'NaN'::float8
                     THEN (r.raw_density / 100)::numeric ELSE 0 END AS dens) g
   -- expected_stage: REINDEX_SCORE recomputed from the ten columns pgstatindex
-  -- returned to the harness, unguarded, exactly as the filed text computes it.
+  -- returned to the harness, exactly as the filed text computes it, both CASE
+  -- guards included.  gd is the filed text's inner guard and the outer CASE is
+  -- applied to the quotient, so a difference between this column and the
+  -- statement's own verdict is a difference in the data, not in the formula.
+  CROSS JOIN LATERAL (
+        SELECT CASE WHEN r.raw_density = 'NaN'::float8 THEN 0::float8
+                    ELSE r.raw_density END                        AS gd) e
   CROSS JOIN LATERAL (
         SELECT (r.raw_deleted + r.raw_empty
                 + r.raw_leaf * GREATEST(0::float8,
-                                        1 - r.raw_density / r.fillfactor))
-               / (r.raw_size / b.bs::bigint)::float8              AS exp_score) h
+                                        1 - e.gd / r.fillfactor))
+               / (r.raw_size / b.bs::bigint)::float8              AS raw_exp) h0
+  CROSS JOIN LATERAL (
+        SELECT CASE WHEN h0.raw_exp = 'NaN'::float8 THEN 0::float8
+                    ELSE h0.raw_exp END                           AS exp_score) h
   CROSS JOIN LATERAL (
         SELECT CASE WHEN h.exp_score >= 0.5 THEN 'rebuild' ELSE 'leave' END
                                                                   AS expected_stage) x
   -- The two variant readings.  The no-metapage denominator is NULL rather than
-  -- zero for an index that holds only a metapage, because float8 division by
-  -- zero raises rather than returning an infinity, and the point of the
-  -- variant is what it costs, not that it kills the run.
+  -- zero for an index that holds only a metapage, because that is the one row
+  -- where the variant is undefined and the point is to count it, not to kill
+  -- the run; the facts stage reads what the bare division does instead.
   CROSS JOIN LATERAL (
         SELECT round((100 * (r.raw_deleted + r.raw_empty
                      + r.raw_leaf * GREATEST(0::float8,
@@ -3303,13 +4028,13 @@ SELECT r.num, r.leg, p.grp, r.idx, r.req,
                / NULLIF(r.raw_internal + r.raw_leaf + r.raw_empty
                         + r.raw_deleted, 0)::float8)::numeric, 1) AS nometa_pct,
                round((100 * (r.raw_deleted + r.raw_empty
-                     + r.raw_leaf * GREATEST(0::float8, 1 - g.dens::float8 * 100
-                                                        / r.fillfactor))
-               / (r.raw_size / b.bs::bigint)::float8)::numeric, 1) AS guard_pct,
+                     + r.raw_leaf * GREATEST(0::float8,
+                                             1 - r.raw_density / r.fillfactor))
+               / (r.raw_size / b.bs::bigint)::float8)::numeric, 1) AS nan_pct,
                ((r.raw_deleted + r.raw_empty
-                 + r.raw_leaf * GREATEST(0::float8, 1 - g.dens::float8 * 100
-                                                     / r.fillfactor))
-                / (r.raw_size / b.bs::bigint)::float8) >= 0.5      AS guard_signal) v;
+                 + r.raw_leaf * GREATEST(0::float8,
+                                         1 - r.raw_density / r.fillfactor))
+                / (r.raw_size / b.bs::bigint)::float8) >= 0.5      AS nan_signal) v;
 ```
 
 ### Family 1, the deduplication gate
@@ -4643,8 +5368,9 @@ SELECT /* wiki_rs_census_horizon_before */ horizon_probe('census-before', NULL);
 -- longer changes what the census does to them, but the arithmetic stays the
 -- engine's because the defect a current_setting() census would have is in the
 -- arithmetic, not in those two fixtures.  autovacuum is off on this cluster,
--- so every ANALYZE below is one this rule asked for.  Only the suite's own schema is censused; the guard
--- fixtures in schema bl are not suite fixtures and are left alone.
+-- so every ANALYZE below is one this rule asked for.  Only the suite's own
+-- schema is censused; the guard fixtures in schema rs are not suite fixtures
+-- and are left alone.
 DROP TABLE IF EXISTS autoanl;
 DROP TABLE IF EXISTS autoanl_after;
 CREATE TABLE autoanl AS
@@ -4822,23 +5548,41 @@ SELECT /* wiki_rs_snap_phases */ phase, count(*) AS snapshots
   accumulation that only leaf pages contribute to, the `index_size` expression
   that adds the metapage to the four classes, and both `NaN` branches, for
   `avg_leaf_density` and for `leaf_fragmentation`.
-- The ten output columns of `pgstatindex` and `pgstatindexbyid` as the extension
-  script declares them, which is what fixes the set of inputs the formula may
-  read.
+- Both `pgstatindex` overloads and both `pgstatindexbyid` overloads as the
+  extension scripts declare them across 1.4 and the 1.4-to-1.5 upgrade,
+  including which one a `regclass` argument resolves to and the `REVOKE`/`GRANT`
+  pair 1.5 applies to it. The ten output columns are what fixes the set of
+  inputs the formula may read.
 - The B-tree fillfactor path: `BTGetFillFactor`'s reloption-or-default
   resolution, its `BTOptions` member, `BTGetTargetPageFreeSpace`, and the four
-  fillfactor constants including `BTREE_DEFAULT_FILLFACTOR` and the fixed
-  non-leaf 70 %.
-- The build geometry the fillfactor target describes: `_bt_pagestate`'s leaf and
-  non-leaf fill targets and `nbtsort.c`'s sorted-input contract.
-- Float comparison semantics, operator by operator: the SQL-level `float8eq`
-  and `float8ge`, the inline `float8_eq`, `float8_gt` and `float8_ge` of
+  fillfactor constants — `BTREE_MIN_FILLFACTOR`, `BTREE_DEFAULT_FILLFACTOR`,
+  the fixed non-leaf `BTREE_NONLEAF_FILLFACTOR` and the all-duplicates
+  `BTREE_SINGLEVAL_FILLFACTOR`.
+- The build geometry the fillfactor target describes, and the sense in which it
+  is a target: `_bt_pagestate`'s leaf and non-leaf fill targets, `nbtsort.c`'s
+  sorted-input contract, and `_bt_buildadd`'s page-full test, where the
+  fillfactor is the soft half of a two-part condition that also requires the
+  page to hold two items already.
+- The page-deletion invariants that decide what a `NaN` density can mean:
+  `_bt_pagedel`'s refusal to delete a rightmost, root, non-empty or
+  incompletely-split page, the `README`'s statement of the same restriction and
+  of its consequence for tree height, and `_bt_uppershutdown`'s no-data path,
+  which writes a metapage pointing at `P_NONE`.
+- Float arithmetic and comparison semantics, operator by operator: the inline
+  `float8_mi`, `float8_mul` and `float8_div` the score's own arithmetic runs
+  through, none of which special-cases a `NaN` operand and the last of which
+  tests the dividend before the divisor; the SQL-level `float8eq` and
+  `float8ge`; the inline `float8_eq`, `float8_gt` and `float8_ge` of
   `utils/float.h` they return, where `NaN = NaN` and `NaN >= 0.5` are each
-  decided before any C comparison runs, `btfloat8cmp` and `float8_cmp_internal`,
-  which sort by those same inline comparators, `ExecInitExprRec`'s `MinMaxExpr`
-  case, which is how `GREATEST` reaches that B-tree comparison function, and the
-  two `in_range` comment blocks that restate the rule. Together they are what
+  decided before any C comparison runs; `btfloat8cmp` and `float8_cmp_internal`,
+  which sort by those same inline comparators; `ExecInitExprRec`'s `MinMaxExpr`
+  case and `ExecEvalMinMax`'s selection loop, which together are how `GREATEST`
+  reaches that B-tree comparison function; and the header comment and the two
+  `in_range` comment blocks that state the ordering rule. Together they are what
   make `GREATEST(0, NaN)` and `NaN >= 0.5` behave as they do.
+- This checkout's own history for the one version-history claim the page makes:
+  the commit that added `nbtdedup.c` and `BTEQUALIMAGE_PROC`, and the two
+  version-stamp commits that bracket it into the PostgreSQL 13 cycle.
 - `pg_regress`'s handling of an inherited `PGOPTIONS`, which is why the scripts
   pass session options per call rather than exporting them.
 - The shared suite in full, as
@@ -4852,34 +5596,46 @@ SELECT /* wiki_rs_snap_phases */ phase, count(*) AS snapshots
 
 | Claim | Evidence |
 |---|---|
-| `pgstatindex` returns ten columns, and neither `total_pages` nor `fillfactor` is one of them | [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31) |
+| `pgstatindex` returns ten columns, and neither `total_pages` nor `fillfactor` is one of them; the statement calls the `regclass` overload | [pgstattuple--1.4.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L62-L74), [pgstattuple--1.4--1.5.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92) |
 | `index_size` is the four page classes plus the metapage, so the two candidate denominators differ by exactly one page | [pgstatindex.c#index_size](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L352-L357) |
-| `avg_leaf_density` is `100 - free_space / max_avail * 100`, accumulated over leaf pages only | [pgstatindex.c#avg_leaf_density](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L366), [pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L295-L320) |
+| `avg_leaf_density` is `100 - free_space / max_avail * 100`, accumulated over leaf pages only | [pgstatindex.c#avg_leaf_density](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L366), [pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L298-L326) |
 | `avg_leaf_density` is `NaN` exactly when no leaf page was scanned | [pgstatindex.c#avg_leaf_density-NaN](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L367) |
-| `GREATEST` compares through the type's B-tree comparison function, which for `float8` is `float8_cmp_internal` | [execExpr.c#MinMaxExpr](../../../../raw/postgres-17/src/backend/executor/execExpr.c#L2194-L2201), [float.c#btfloat8cmp](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L966-L973) |
-| `NaN` sorts after every non-`NaN` value, so `GREATEST(0, NaN)` is `NaN` | [float.h#float8_gt](../../../../raw/postgres-17/src/include/utils/float.h#L315-L319), [float.c#float8_cmp_internal](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L903-L909), [float.c#NaN-sorts-after](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L1038-L1041) |
+| A `NaN` density means a metapage-only file, because nbtree never deletes a rightmost or root page, so an index that ever held an entry keeps a live leaf | [nbtpage.c#_bt_pagedel-refusals](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L1877-L1905), [README#never-delete-rightmost](../../../../raw/postgres-17/src/backend/access/nbtree/README#L236-L245), [README#tree-height](../../../../raw/postgres-17/src/backend/access/nbtree/README#L365-L367) |
+| A build with no data writes only a metapage, and the page scan starts at block 1, so such a file classifies as nothing at all | [nbtsort.c#_bt_uppershutdown](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1118-L1128), [pgstatindex.c#block-loop](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L279-L283) |
+| `NaN` propagates through the score's division, subtraction and multiplication, none of which special-cases it | [float.h#float8_mi](../../../../raw/postgres-17/src/include/utils/float.h#L181-L191), [float.h#float8_mul](../../../../raw/postgres-17/src/include/utils/float.h#L207-L219), [float.h#float8_div](../../../../raw/postgres-17/src/include/utils/float.h#L237-L251) |
+| A zero `float8` divisor raises unless the dividend is already `NaN`, which is why the page-class denominator is undefined rather than `NaN` | [float.h#float8_div](../../../../raw/postgres-17/src/include/utils/float.h#L237-L251) |
+| `GREATEST` compares through the type's B-tree comparison function, which for `float8` is `float8_cmp_internal`, and keeps the argument that compares greater | [execExpr.c#MinMaxExpr](../../../../raw/postgres-17/src/backend/executor/execExpr.c#L2194-L2201), [execExprInterp.c#ExecEvalMinMax](../../../../raw/postgres-17/src/backend/executor/execExprInterp.c#L3127-L3173), [float.c#btfloat8cmp](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L966-L973) |
+| `NaN` sorts after every non-`NaN` value, so `GREATEST(0, NaN)` is `NaN` | [float.h#float8_gt](../../../../raw/postgres-17/src/include/utils/float.h#L315-L319), [float.h#NaN-ordering](../../../../raw/postgres-17/src/include/utils/float.h#L255-L259), [float.c#float8_cmp_internal](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L903-L909), [float.c#NaN-sorts-after](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L1038-L1041) |
 | `NaN >= 0.5` is true, which is what turns an unguarded `NaN` into a rebuild order | [float.c#float8ge](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L957-L964), [float.h#float8_ge](../../../../raw/postgres-17/src/include/utils/float.h#L327-L331) |
 | `NaN = NaN` is true, so the guard must test `= 'NaN'::float8` and `x <> x` never fires | [float.c#float8eq](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L912-L919), [float.h#float8_eq](../../../../raw/postgres-17/src/include/utils/float.h#L267-L271), [float.c#NaN-equals-NaN](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L1043-L1047) |
-| A rebuild repacks leaves to the index's fillfactor, which is what the density term models | [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L660-L666), [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145) |
+| A rebuild aims leaves at the index's fillfactor and every level above it at a fixed 70 %, which is what the density term models | [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L660-L666), [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145), [nbtree.h:201](../../../../raw/postgres-17/src/include/access/nbtree.h#L201) |
+| That target is a soft limit, so a rebuilt leaf level does not land exactly on the fillfactor: a page is finished at a tuple boundary once it holds two items, and an all-duplicates page is packed to 96 % | [nbtsort.c#_bt_buildadd-full](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L844-L855), [nbtree.h:202](../../../../raw/postgres-17/src/include/access/nbtree.h#L202) |
 | The engine resolves an index's fillfactor as its reloption, else 90 | [nbtree.h#BTGetFillFactor](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1143), [nbtree.h:200](../../../../raw/postgres-17/src/include/access/nbtree.h#L200) |
+| B-tree support function 4 is `BTEQUALIMAGE_PROC`, and this checkout's history introduced it with deduplication inside the PostgreSQL 13 cycle | [nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L703-L710); commit `0d861bbb70` (2020-02-26, "Add deduplication to nbtree"), a descendant of `615cebc94b` ("Stamp HEAD as 13devel") and an ancestor of `d10b19e224` ("Stamp HEAD as 14devel") |
 | `pgstatindex` refuses any access method but B-tree, which bounds the population the heuristic can score | [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L216-L250) |
 | An inherited `PGOPTIONS` reaches `make check`, so the scripts pass session options per call | [pg_regress.c#PGOPTIONS](../../../../raw/postgres-17/src/test/regress/pg_regress.c#L783-L799) |
-| Every accuracy, confusion-matrix, threshold-sweep, denominator, cross-leg and whole-cluster number on this page | the 2026-09-21 run of the two scripts in [Measurement Script](#measurement-script); `out/accuracy17.txt`, `out/accuracy12.txt`, `out/verdicts17.txt`, `out/verdicts12.txt`, `out/report17.txt`, `out/report12.txt`, `out/crossleg.txt` |
+| Every accuracy, error-decomposition, confusion-matrix, threshold-sweep, denominator, guard, cross-leg and whole-cluster number on this page | the 2026-09-21 run of the two scripts in [Measurement Script](#measurement-script); `out/accuracy17.txt`, `out/accuracy12.txt`, `out/verdicts17.txt`, `out/verdicts12.txt`, `out/decide17.txt`, `out/decide12.txt`, `out/facts17.txt`, `out/facts12.txt`, `out/guard17.txt`, `out/guard12.txt`, `out/report17.txt`, `out/report12.txt`, `out/crossleg.txt` |
+| The error decomposition is an identity rather than a fit | derived above from `total_pages = 1 + internal + leaf + empty + deleted`, and checked by the run: the largest `err - (leaf_term + internal_term + dead_term)` over all fixtures is 0.1 points on both legs, which is the rounding of the four columns |
 
 ## Open Questions
 
 - **The whole-cluster figures come from two freshly `initdb`-ed clusters.** The
-  137-of-231 and 132-of-217 `NaN` shares the guard removed, and the 94 and 85
+  138-of-233 and 133-of-219 `NaN` shares the guards removed, and the 95 and 86
   rebuild orders that remain, are the figures for a new cluster carrying the
   suite's fixtures and nothing else, where empty TOAST indexes are abundant. On a
   long-lived production database the shares would differ, in an unmeasured
   direction, and nothing here predicts them. Neither the defect nor the guard
   depends on the share.
-- **Test 120 is probabilistic and has moved on every run.** `ANALYZE` samples
-  randomly, so `p120`'s precondition has been met on some runs and not others,
-  which makes the family-6 row of this page's error table the one cell that is
-  not stable across runs. No other fixture has moved. Details under the `p120`
-  entry below.
+- **Test 120 is probabilistic, and it moves the headline rather than one cell.**
+  `ANALYZE` samples randomly, so `p120`'s precondition — a 300-row sample
+  missing a 2,000-row subset — is met on some runs and not on others, and the
+  fixture is scored only when it is met. It was met on both legs of this run.
+  Because `p120` is also the worst over-estimate on both legs, including it
+  moves the fixture count, the mean and worst error, the correlation and the
+  family-6 row. Every headline on this page is therefore given twice, over the
+  125 and 116 deterministic fixtures and over all 126 and 117; no other fixture
+  has moved between runs. A reader reproducing this page should expect the
+  `p120` row to be present or absent and the deterministic figures to match.
 - **The deduplication interaction is scored only incidentally.** Family 1 pins
   which indexes *may* deduplicate, not how much a page-level merge saves, and the
   concept page says so. A rebuild of a deduplicating index can return more than
@@ -4889,10 +5645,11 @@ SELECT /* wiki_rs_snap_phases */ phase, count(*) AS snapshots
 - **`want_stage` predictions are judgements.** The suite records disagreement
   between a filed prediction and the measurement but has no rule for which is at
   fault, so the `want_rebuild` column of the family table is context rather than
-  a scored result. Three of the four prediction-versus-decision disagreements on
-  each leg — `p73`, `p76` and `f88` — are cases where the prediction said
-  `rebuild` and both the heuristic **and** the oracle said leave, so the
-  prediction was the thing that was wrong.
+  a scored result. All three prediction-versus-decision disagreements on each
+  leg — `p73`, `p76` and `f88` — are cases where the prediction said `rebuild`
+  and both the heuristic **and** the oracle said leave, so the prediction was
+  the thing that was wrong. There were four before the guards, the fourth being
+  `p116`, where the prediction was right and the unguarded statement was wrong.
 - **Family 4's `f88` does not reach the band it was built to test.** The concept
   page describes family 4 as six indexes that "really are reclaimable" and that
   "all six must be rebuilt", but `f88`'s measured rebuild returns 40.5 % on
@@ -4904,40 +5661,43 @@ SELECT /* wiki_rs_snap_phases */ phase, count(*) AS snapshots
   [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md)
   and therefore its own task; this page only records the measurement.
 - **Two fixtures sit within a point of the false-negative band.** `p73` and
-  `p76` were left alone at a score of 49.6 against measured rebuilds of 49.6 and
-  49.9, so the "no false negatives" result has 0.1 and 0.4 points of margin on
-  those two. The margin is benign rather than lucky — the score tracks the actual
-  to within 0.3 there, so both cross 50 % at nearly the same moment — but the
-  suite contains no fixture whose actual lands just above 50 while its score
-  lands just below, which is the shape that would produce a false negative.
-- **No fixture exercises the all-pages-deleted shape the inner guard exists
-  for.** `leaf_pages = 0` with `deleted_pages > 0` is the shape where guarding
-  the score instead of the density would invert the verdict, and the argument for
-  the chosen placement rests on the arithmetic rather than on a measurement,
-  because no fixture in the suite reaches it: the only `leaf_pages = 0` fixture,
-  `p116`, has `deleted_pages = 0`, and `p113b` — the drained queue, the closest
-  shape — retained leaf pages and scored 99.9 against an actual 100.0. A fixture
-  that vacuums every leaf page out of an index would settle it, and adding one is
-  a change to
-  [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md)
-  rather than to this page.
-- **The outer guard is untested by construction.** With the inner guard in place
-  no input to the score can be `NaN`, so the outer `CASE` never fires in this
-  run. It is a backstop against a later edit, and nothing here demonstrates it
-  working; a reviewer removing the inner guard would be relying on an untested
-  branch.
-- **`p120`'s precondition failed on both legs of this run.** The suite's one
-  probabilistic fixture was not scored this time, where the previous run scored
-  it on the 17 leg at +6.6. That is why family 6's mean error reads 0.20 on both
-  legs here and 1.30 on the 17 leg before, and why the 17 accuracy population is
-  125 in both runs for different reasons. The fixture asserted its precondition
-  and recorded the miss rather than assuming it, as the concept page requires.
+  `p76` were left alone at a score of 49.6 apiece, against measured rebuilds of
+  49.6 and 49.9, so the "no false negatives" result has **0.4** and **0.1**
+  points of margin on those two. The margin is benign rather than lucky — the
+  score tracks the actual to within 0.3 there, so both cross 50 % at nearly the
+  same moment — but the suite contains no fixture whose actual lands just above
+  50 while its score lands just below, which is the shape that would produce a
+  false negative. Both figures are identical on the two legs.
+- **Neither guard is tested against the other, because the engine does not
+  produce the shape that would separate them.** `leaf_pages = 0` with
+  `deleted_pages > 0` is the only shape on which guarding the density and
+  guarding the score would disagree, and nbtree cannot reach it: the rightmost
+  page of a level is never deleted, so an index that ever held an entry keeps a
+  live leaf. Guard fixture `i_alldel` measures the boundary — 200,000 rows,
+  every one deleted and vacuumed twice, leaving 1 leaf beside 547 deleted pages
+  — and the `facts` stage counts zero rows where `leaf_pages = 0` and
+  `total_pages = 1` disagree. The two placements therefore agree on every index
+  that can exist, and the outer `CASE` never fires once the inner one is in
+  place. This is a bound on what the run can distinguish, not a defect: no
+  fixture added to the suite could separate them either, so the earlier request
+  for an all-pages-deleted fixture is withdrawn rather than left open against
+  [Mandatory B-Tree Bloat Tests (unverified)](../../common-concepts/mandatory-btree-bloat-tests.md).
+- **The threshold plateau is as wide as a gap in the fixtures.** No fixture's
+  measured rebuild lands between **49.9 %** and **60.0 %**, and only three land
+  between 35 % and 50 %. By the suite's own bands every threshold from 35 % to
+  65 % on 17.11, and 35 % to 70 % on 12.2, produces zero violations, so the run
+  cannot distinguish them and does not establish 50 % as better than 40 %. What
+  it does establish is that 50 % is inside the admissible range on both majors
+  and that the range is bounded below by a false positive at 30 % and above by a
+  false negative at 70 %. Narrowing it would need fixtures whose rebuilds land
+  in the gap, which is a change to the shared suite and therefore its own task.
 - **No v12 source citation appears on this page.** The page is `version: 17`, and
   `AGENTS.md` forbids citing another version's checkout, so every 12.2 statement
-  here is either a measurement or a link to a v12 page. The claim that B-tree
-  support function 4 does not exist on 12.2 is therefore filed as the nine
+  here is either a measurement, a link to a v12 page, or — for the one
+  version-history claim — the v17 checkout's own commit history. The claim that
+  B-tree support function 4 does not exist on 12.2 is filed as the nine
   `operator class ... does not exist` refusals the run recorded, not as a source
-  reading.
+  reading of the 12.2 tree.
 - **PostgreSQL 12 has no `mandatory-btree-bloat-tests` concept page.** The 12 leg
   ran the v17 concept page's protocol, which is the only written form of it, and
   states that inline. A v12 concept page is its own task and needs the user's
@@ -4950,25 +5710,41 @@ SELECT /* wiki_rs_snap_phases */ phase, count(*) AS snapshots
 ## Source References
 
 - [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L216-L250)
-- [pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L295-L320)
+- [pgstatindex.c#block-loop](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L279-L283)
+- [pgstatindex.c#page-classes](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L298-L326)
 - [pgstatindex.c#index_size](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L352-L357)
 - [pgstatindex.c#avg_leaf_density](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L366)
 - [pgstatindex.c#avg_leaf_density-NaN](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L363-L367)
-- [pgstattuple--1.4.sql#pgstatindex](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L19-L31)
+- [pgstattuple--1.4.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4.sql#L62-L74)
+- [pgstattuple--1.4--1.5.sql#pgstatindex-regclass](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)
 - [nbtree.h:200](../../../../raw/postgres-17/src/include/access/nbtree.h#L200)
+- [nbtree.h:201](../../../../raw/postgres-17/src/include/access/nbtree.h#L201)
+- [nbtree.h:202](../../../../raw/postgres-17/src/include/access/nbtree.h#L202)
+- [nbtree.h#BTEQUALIMAGE_PROC](../../../../raw/postgres-17/src/include/access/nbtree.h#L703-L710)
 - [nbtree.h#BTGetFillFactor](../../../../raw/postgres-17/src/include/access/nbtree.h#L1138-L1143)
 - [nbtree.h#BTGetTargetPageFreeSpace](../../../../raw/postgres-17/src/include/access/nbtree.h#L1144-L1145)
 - [nbtsort.c#_bt_pagestate](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L660-L666)
+- [nbtsort.c#_bt_buildadd-full](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L844-L855)
+- [nbtsort.c#maxpostingsize](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1288-L1308)
+- [nbtsort.c#_bt_uppershutdown](../../../../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1118-L1128)
+- [nbtpage.c#_bt_pagedel-refusals](../../../../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L1877-L1905)
+- [README#never-delete-rightmost](../../../../raw/postgres-17/src/backend/access/nbtree/README#L236-L245)
+- [README#tree-height](../../../../raw/postgres-17/src/backend/access/nbtree/README#L365-L367)
 - [float.c#float8_cmp_internal](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L903-L909)
 - [float.c#float8eq](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L912-L919)
 - [float.c#float8ge](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L957-L964)
 - [float.c#btfloat8cmp](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L966-L973)
 - [float.c#NaN-sorts-after](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L1038-L1041)
 - [float.c#NaN-equals-NaN](../../../../raw/postgres-17/src/backend/utils/adt/float.c#L1043-L1047)
+- [float.h#float8_mi](../../../../raw/postgres-17/src/include/utils/float.h#L181-L191)
+- [float.h#float8_mul](../../../../raw/postgres-17/src/include/utils/float.h#L207-L219)
+- [float.h#float8_div](../../../../raw/postgres-17/src/include/utils/float.h#L237-L251)
+- [float.h#NaN-ordering](../../../../raw/postgres-17/src/include/utils/float.h#L255-L259)
 - [float.h#float8_eq](../../../../raw/postgres-17/src/include/utils/float.h#L267-L271)
 - [float.h#float8_gt](../../../../raw/postgres-17/src/include/utils/float.h#L315-L319)
 - [float.h#float8_ge](../../../../raw/postgres-17/src/include/utils/float.h#L327-L331)
 - [execExpr.c#MinMaxExpr](../../../../raw/postgres-17/src/backend/executor/execExpr.c#L2194-L2201)
+- [execExprInterp.c#ExecEvalMinMax](../../../../raw/postgres-17/src/backend/executor/execExprInterp.c#L3127-L3173)
 - [pg_regress.c#PGOPTIONS](../../../../raw/postgres-17/src/test/regress/pg_regress.c#L783-L799)
 
 ## Navigation
