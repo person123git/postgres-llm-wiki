@@ -13647,3 +13647,96 @@ Verified after teardown: no `postgres` process, ports 55417 and 55412 free,
 the asker said `commit and push`, on top of the revision it follows, commit `d69c03b`. A
 fetch just before the commit showed no new commit on `origin/master`, so no rebase was
 needed.
+
+## [2026-09-22] review v17 | REINDEX_SCORE heuristic page: 26 reviewed defects and five more fixed, both legs re-run from pinned, checked commits
+
+- Asked, per `AGENTS.md`, to review
+  [How Accurate Is the pgstatindex REINDEX_SCORE B-Tree Maintenance Heuristic, on
+  PostgreSQL 17 and 12 (unverified)](v17/questions/indexing/btree-reindex-score-heuristic.md)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). Prompt hygiene and scope were asked
+  once, after the review was shown in chat, and answered **correct silently** and **fix
+  everything, re-run**. Only the corrected prompt is recorded, here and in the page's new
+  `### Review after filing`: "Follow `AGENTS.md`, in PostgreSQL 17, review the question
+  "How Accurate Is the pgstatindex REINDEX_SCORE B-Tree Maintenance Heuristic, on
+  PostgreSQL 17 and 12 (unverified)"."
+
+**The review.** Every claim was re-read against the pinned 17 source and the v17
+checkout's history, and both published leg scripts were run unchanged from an empty
+sandbox (both passed `bash -n`, all six block hashes matched). That run reproduced every
+headline figure on both legs exactly, with `p120` met on both, and read-only probe queries
+against the two finished clusters settled the numeric findings before both were stopped
+through their own `clean` stages. The text around the numbers did not hold:
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | the band-clean threshold range was said to be "as wide as" the 49.9-60.0 % gap in the rebuilds | two scores set it: `p66` (33.0 against 33.2) below, and `p25`'s 66.5 against 60.0 on 17.11 or `f86`/`f87`/`f89`/`f90` at 73.9 on 12.2 above; the gap on 12.2 is 49.9-74.3 %; the page, its Open Questions and both index blurbs rewritten |
+| 2 | "the 98 differing cross-leg rows are catalog and TOAST indexes" | 41 of 98 are the run's own objects (37 fixtures, 3 harness keys, `rs.i_dup`); the `crossleg` stage now prints the split by schema |
+| 3 | a rebuild "packs a single-value page to 96 %" | `BTREE_SINGLEVAL_FILLFACTOR` is used only by page splits (`nbtsplitloc.c`, `nbtdedup.c`); the build's real page-finishing behaviour is cited instead |
+| 4 | commit `0d861bbb70` "adds `nbtdedup.c` and the amproc number" | `BTEQUALIMAGE_PROC`, the equal-image builtins and `_bt_allequalimage` came from its parent `612a1ab767`; both are inside the 13 cycle |
+| 5 | "only one term is systematic" | the leaf term is one-signed (never negative) wherever a rebuild keeps the leaf count, 31 and 29 fixtures; the internal term's `<= 0` is measured, not guaranteed, and both directions are now counted |
+| 6 | `GREATEST(0, NaN)` was attributed to `float8_gt` | `ExecEvalMinMax` compares (0, NaN), which `float8_lt` decides; cited |
+| 7 | "none of `float8_mi/mul/div` special-cases `NaN`"; "tests the dividend first" | `float8_div` spares a `NaN` dividend its zero-divisor error, and tests the divisor first; `float8_pl` added |
+| 8 | the metapage and root "push the score down" | they cancel in the page's own identity |
+| 9 | the two critical false positives at 5 % "are ordinary small-file over-estimates" | they are `p120` and the 91-page `f82` |
+| 10 | "safe to automate" | one candidate that cannot be locked or opened ends the whole statement; documented in the filed text's header, the verdict and Open Questions |
+| 11 | `i_alldel` scored 99.9 | 99.5 (measured rebuild 99.8) |
+| 12 | `f82` on 12.2 "builds 278 leaves" | 274 leaves in a 278-page file |
+| 13 | "two `division by zero` lines" on each leg | one on 17.11, two on 12.2 |
+| 14 | `x107` "the largest fixture scored" | the largest churned one; `x110` is 8,507 pages |
+| 15 | whole-cluster and cross-leg counts presented as fixed; the 138 metapage-only files all "catalog and TOAST" | the counts drift between runs (136,517 then 136,482 pages; 285 then 291 shared names); six of the 138 are the run's own objects, named by `facts` |
+| 16 | the 12.2 pin was recorded nowhere, and neither script checked its checkout | both scripts carry `PIN`, check `rev-parse` and tracked-file status in `build` and `check`, record the pin in the install and the platform file; both pins are on the page |
+| 17 | no `guc_tables.c` citation; three session settings unnamed | all fourteen settings cited with context and apply scope in two tables |
+| 18 | `clean` checked the sandbox textually, after stopping, and the 17 leg deleted a sandbox under a running 12 cluster | both legs resolve the path, require a marked directory directly inside `.wiki-runtime/tmp` before stopping anything, and the 17 leg refuses while `data12` exists; tested against decoys and in the real teardown |
+| 19 | `check` never failed the run; "every stage is idempotent" | `check` dies on a failed suite; `score` and `guard` refuse a second pass |
+| 20 | the `priv` probe called the `text` overload | both overloads are probed and both `REVOKE` pairs cited |
+| 21 | `guard` printed verdict bands the page says it does not apply | removed |
+| 22 | stale comments, one inside hash-checked block 4 ("all fourteen" for 24 fixtures) | fixed; the 12.2 invalid-index difference added to the page |
+| 23-26 | the Linux run "of the same two scripts"; the `i_one` "would cross" argument; the tag after the final `SELECT` rather than `WITH`; the fragmentary restated question | corrected; the tag now follows `WITH` and both `SET` lines |
+
+Five more, found while fixing: "a rebuild never makes the leaf level larger" (the floor is
+the formula's choice; single-value splits pack above the fillfactor); `f82`'s over-estimate
+called "the safe direction"; block 2's decomposition comment without `LEAST`; the uncited
+`x <> x` claim (now `float8ne`/`float8_ne`); and `pgrep -af`, whose `-a` also matches the
+caller's own ancestors on macOS, now `pgrep -f`.
+
+**Scripts and blocks.** Both leg scripts edited in place, no second script: new SHA-256
+`9433d181...` (17) and `015084bf...` (12). Blocks 1, 2 and 4 changed with them and hash
+`ffa9d4fa...`, `6d33108a...` and `5a29c8d8...`; blocks 3, 5 and 6 are unchanged. The
+filed statement's behaviour is unchanged; its tag moved and its header now states the
+all-or-nothing lock behaviour.
+
+**Re-measurement.** Both legs from an empty sandbox, side by side, on Darwin 27.0.0 arm64,
+Apple clang 21.0.0, `JOBS=8`: 17 leg 23:15:27Z-23:20:12Z, 12 leg 23:15:30Z-23:25:55Z, both
+exit 0, each built from its pin after the new check passed, **All 225** and **All 192**
+plus the `pgstattuple` check on each. Every fixture figure is unchanged. `p120` was met on
+17.11 and not on 12.2, where the census found its index's count at 3,334, so 12.2 now
+scores 116 fixtures: 0.75 mean error, 83 / 0 / 33 / 0 at 50 %. The page's blocks and
+scripts were compared byte for byte with what ran after the last prose edit.
+
+**Citations.** 67 distinct, up from 37, all from `raw/postgres-17/`, all inside their
+files and listed in `## Source References`; all 33 in-page anchors resolve.
+`verified_by_agent:` stays `not yet`.
+
+**Bookkeeping.** The page's blurbs in `wiki/index.md` and `wiki/v17/index.md`, its clause
+on the v17 row of `wiki/versions.md` and a 2026-09-22 coverage note. Lint run: **9 errors
+/ 2 warnings**, this host's pre-existing baseline, none of them on a file this pass touched.
+
+**No common concept page was touched.** The page still reads and links
+[Mandatory B-Tree Bloat Tests (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md);
+its open items against that page (family 4's `f88`, the gaps around the cut) remain its
+own task.
+
+**Teardown.** Two runs started clusters. The review run's two clusters were stopped with
+`pg_ctl -m fast -w stop` through the published `clean` stages and `.wiki-runtime/tmp/rscore`
+deleted. The fix run's 17 leg `clean` was first run while the 12 cluster was up and
+refused, as intended; then the 12 leg's `clean` stopped its cluster and removed its
+directories, and the 17 leg's stopped its cluster and deleted the sandbox. Each `clean`
+confirmed no `postmaster.pid`, no matching process and an empty socket directory. The two
+decoy directories made to test the path checks were removed. Verified after teardown: no
+`postgres` process, ports 55417 and 55412 free, `.wiki-runtime/tmp/` empty.
+`raw/postgres-17/` and `raw/postgres-12/` were read only throughout.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once
+the asker said `commit and push`, on top of commit `ddcdf74`. A fetch just before the
+commit showed no new commit on `origin/master`, so no rebase was needed.
