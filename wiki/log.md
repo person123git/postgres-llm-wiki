@@ -13471,3 +13471,83 @@ and `raw/postgres-12/` were read only throughout, with both builds out of tree.
 **Version control.** Committed and pushed on the asker's instruction, straight to
 `master` and `origin/master`. A fetch just before the commit showed no new commit on
 `origin/master`, so no rebase was needed.
+
+## [2026-09-22] revise v17 | non-B-tree COMMENT-baseline heuristic: the two INDEX_CLEANUP OFF fixtures removed, both legs re-measured
+
+- Follow-up in the same session to the filing pushed as commit `9b535e2`. The asker wrote
+  `remove these test scenarios:` and quoted the page summary's false-negative bullet,
+  which described fixtures `h06` and `n11`, the only two whose maintenance step was
+  `VACUUM (ANALYZE, INDEX_CLEANUP OFF)`. The prompt had no typo or grammatical error, so
+  no hygiene question was needed; it is restated verbatim in the page's new
+  `### Revision after filing`.
+- The asker then asked whether the two tests are on the common-concept documents.
+  Answered in chat: neither concept page names a fixture, but both list "a `VACUUM` whose
+  index cleanup did not run" as coverage a conforming run must reach, so the removal
+  leaves that row unmet under both protocols. The removal went ahead as asked, and the
+  page records the row as skipped and the gap as open question 11.
+- Target:
+  [A COMMENT-Stored Baseline Non-B-Tree Index-Maintenance Heuristic for PostgreSQL 12
+  Through 17 (unverified)](v17/questions/indexing/non-btree-comment-baseline-maintenance-heuristic.md)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+
+**Scripts, both legs, edited in place.** `h06` and `n11` left the fixture lists, the
+build, churn and maintenance recipes and the predictions. Their declared exceptions `X3`
+and `X4` were dropped and the measurement-lock exception renumbered from `X5` to `X3`.
+The two coverage rows for a `VACUUM` whose index cleanup did not run are declared
+skipped, invariant `I9` no longer names `INDEX_CLEANUP OFF`, and `SKIPPED` names the pair,
+which the criteria file now prints under "not built". New SHA-256 values: `71e8626f...`
+for the 17 leg and `c9525b97...` for the 12 leg.
+
+**Re-measurement.** Both legs ran end to end from empty sandboxes at the same time on
+2026-09-22, 19:21:59Z to 19:35:42Z (17) and 19:36:25Z (12), on Darwin 27.0.0 arm64, Apple
+clang 21.0.0, `JOBS=8`. Engine tests **All 225** and **All 192**, as before. The `verify`
+stage confirmed both texts and both script blocks byte-identical to what ran.
+
+| Result | 17.11 | 12.2 |
+|---|---|---|
+| fixtures scored | 29 | 28 |
+| pass / false positive / false negative | 22 / 7 / 0 | 22 / 6 / 0 |
+| rebuilds ordered, mean share of the file returned | 21, 48.8 % | 20, 51.2 % |
+| skips, mean share a rebuild would have returned | 8, 3.3 % | 8, 3.3 % |
+| predictions filed before the run that held | 29 of 29 | 28 of 28 |
+| maintenance steps checked, defeated | 27, 0 | 26, 0 |
+| edge-case verdicts | 91 of 91 | 91 of 91 |
+
+**What moved besides the removal.** Every other fixture's action and score, and every
+other size, is unchanged. Three things moved:
+
+- `g09`: on 17.11 the churned file read 453,812,224 bytes while the sorted build and the
+  sorted rebuild were byte-identical to the previous run; on 12.2, where both are
+  insert-driven, all three sizes moved. That split fits the page's reading that
+  `gistchoose`'s random tie-break is the cause; open question 6 now says so.
+- The tuple ratios of seven fixtures whose table count is an `ANALYZE` sample estimate;
+  the range over fixtures whose rows never changed is now 0.9844 to 1.0115.
+- Step 1's duration: 11.5 ms on 17.11 and 8.8 ms on 12.2.
+
+The `b10` sentence was restated from this run's revmap counts, 94 summaries as built and
+477 after, because the as-built heap size had come from the census table the teardown
+deletes. It now cites `brinsummarize`'s rule that a `VACUUM` leaves the partial range at
+the end unsummarized, a new citation added to `## Source References`, the evidence map and
+`## Context Reviewed`. `verified_by_agent:` stays `not yet`.
+
+**Bookkeeping.** The page's bullets in `wiki/index.md` and `wiki/v17/index.md`, the v17
+row clause in `wiki/versions.md` and a new 2026-09-22 coverage note. Lint run: **9 errors
+/ 2 warnings**, this host's pre-existing baseline, none of them on this page or on any
+file this revision touched.
+
+**No common concept page was touched.** Both concept pages still require the coverage
+row this revision gives up; that is the asker's decision, recorded on the page.
+
+**Teardown.** Both sandbox clusters were stopped with `pg_ctl -m fast -w stop` through
+each leg's `clean` stage, after their output directories were copied out; the stage
+confirmed no `postmaster.pid`, no matching process and an empty socket directory, then
+deleted `.wiki-runtime/tmp/nbmaint17/` and `.wiki-runtime/tmp/nbmaint12/`. The two leg
+script files were deleted from `.wiki-runtime/tmp/` after a last check against the page's
+blocks. Verified after teardown: no `postgres` process, ports 55417 and 55412 free,
+`.wiki-runtime/tmp/` empty. `raw/postgres-17/` and `raw/postgres-12/` were read only.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once
+the asker said `commit and push`, on top of the filing it revises, commit `9b535e2`. A
+fetch just before the commit showed no new commit on `origin/master`, so no rebase was
+needed.
