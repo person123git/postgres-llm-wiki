@@ -13340,3 +13340,134 @@ process and an empty socket directory before deleting anything;
 Verified after teardown: no `postgres` process, ports 55417 and 55412 free,
 `.wiki-runtime/tmp/` empty. `raw/postgres-17/` and `raw/postgres-12/` were read
 only throughout.
+
+## [2026-09-22] answer v17 | non-B-tree COMMENT-stored baseline maintenance heuristic, 12 through 17, built and measured on both legs
+
+- Filed
+  [A COMMENT-Stored Baseline Non-B-Tree Index-Maintenance Heuristic for PostgreSQL
+  12 Through 17 (unverified)](v17/questions/indexing/non-btree-comment-baseline-maintenance-heuristic.md)
+  at pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), with a 12.2 leg built
+  from `45b88269a353ad93744772791feb6d01bc7e1e42`. New page; `verified_by_agent:`
+  stays `not yet`. The prompt asked for a plan before implementation, and the plan
+  was presented first.
+- Prompt hygiene was asked once, together with the scope questions, and answered
+  **correct silently**, so only the corrected prompt is filed under `## Question`,
+  with no defect list.
+- Scope answers, recorded on the page under `### Scope settled before drafting`:
+  the payload stores **two values**, the index size and the table's `reltuples`,
+  each with its own 30 % test; the corpus is **only the 31 numbered fixtures** of
+  [Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline
+  in PostgreSQL 17 (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md),
+  which ran under both mandatory protocols; the pay-off threshold is **23.08 %**,
+  `1 - 1/1.30`, declared before any fixture existed.
+- Assumptions stated in the plan, not objected to: the page is new, so both leg
+  scripts are new files, edited in place from now on; a `refresh` rule handles an
+  index smaller than its baseline; step 2 runs the plain `REINDEX INDEX`; 13 to 16
+  are not built; no concept page is edited; nothing is committed until the asker says so.
+
+**What the page files.** Two texts that run unchanged on 12.2 and 17.11: step 1, a
+read-only statement that decides and prints the `COMMENT` and `REINDEX` commands,
+and step 2, a `DO` block that carries them out with one commit per index and a
+`WHEN OTHERS` block that turns a lock timeout into a counted failure. The baseline
+is one line of 65 to 71 bytes appended to the index comment,
+`@nbmaint:{"v":2,"sz":...,"tup":...,"at":...}`, parsed with a regex `substring`
+because `pg_input_is_valid` does not exist on 12. The ladder is `blocked`, then
+`initialize` for an absent, unparsable or non-version-2 payload, then `refresh` for
+an index smaller than its baseline, then `reindex` when either test fires, else
+`skip`. Human text in the comment survives every write and both `REINDEX` forms.
+
+**Results**, scored against a measured `REINDEX INDEX` at 23.08 %:
+
+| Result | 17.11 | 12.2 |
+|---|---|---|
+| fixtures scored | 31 | 30; `b11` needs `int8_minmax_multi_ops` |
+| pass / false positive / false negative | 22 / 7 / 2 | 22 / 6 / 2 |
+| rebuilds ordered, mean share of the file returned | 21, 48.8 % | 20, 51.2 % |
+| skips, mean share a rebuild would have returned | 10, 8.8 % | 10, 8.8 % |
+| predictions filed before the run that held | 31 of 31 | 30 of 30 |
+| step 1 equal to the two tests recomputed independently | 31 of 31 | 30 of 30 |
+| edge-case verdicts | 91 of 91 | 91 of 91 |
+
+**What the run found.**
+
+- Every false positive is legitimate growth: the BRIN indexes grow with their heap
+  (`b10` to `b13`), `h04` grew by insertion, and `n05` and `n12` took rows through
+  the pending list. Both false negatives, `h06` and `n11`, are dead entries left by
+  a `VACUUM` with `INDEX_CLEANUP OFF`.
+- The tuple test is right in one direction only. Every fall it caught paid off
+  (`g08`, `n10`, `s10`) and no rise did (`b13`, `h04`, `n05`), on both legs.
+- After the oracle rebuilt every fixture, step 1 ordered 8 more rebuilds on 17.11
+  and 6 on 12.2: the payload carries no relation file number, so an out-of-band
+  rebuild counts only when it shrank the file. Filed as an open question, not
+  fixed, because the brief fixes the payload at two values.
+- 12.2's `pgstattuple` refuses a hash index holding an all-zero page: 10 refusals,
+  on `h01` to `h05` after their churn. The 17 checkout's history dates the fix to
+  commit `036decbba2` (2025-10-02, first released in 17.7; its message says it went
+  back to 13). Both legs' hash census now records the refusal instead of dying, and
+  the 12 leg's server-log audit lists the message as deliberate.
+- `g09`'s churned size is not byte-reproducible: 449,568,768 bytes in this run
+  against 454,885,376 in the source page's 17.11 filing. 12.2's insert-driven build,
+  which has no sorted path, varied by a similar margin between passes, so the sorted
+  build the source page suspects is not needed for the spread. The page names
+  `gistchoose`'s random tie-break as the likely cause, not isolated. Every pass
+  scored `g09` `reindex` / `PASS`.
+- The declared coverage row "half-empty posting-tree leaves with nothing deletable"
+  on `n04` was **not reached** on either leg: `n04` holds 0 posting-tree pages
+  before and after its churn. The source page files the same row as reached; that
+  page was not edited.
+
+**The no-defeat rule.** Every `VACUUM` and `ANALYZE` session read its settable
+timeouts back at 0: 69 sessions with four timeouts each on 17.11, 67 with three on
+12.2. 29 and 28 maintenance steps were checked the moment they returned and none was
+defeated; the dead-but-not-yet-removable count was 0 on all 25 and 24 checked
+`VACUUM`s outside the two declared snapshots. The `defeat` stage's deliberately
+defeated step stopped the run with exit status 1 on both legs. Server log: 26 and 28
+`ERROR` and `FATAL` lines, all deliberate.
+
+**Measurement.** Both legs ran end to end from empty sandboxes at the same time on
+2026-09-22, 18:45:59Z to 18:56:54Z (17) and 18:57:25Z (12), on Darwin 27.0.0 arm64,
+Apple clang 21.0.0, `JOBS=8`, `block_size` 8192, `max_data_alignment` 8. Engine
+tests: 17.11 core **All 225**, `pageinspect` 8, `pgstattuple` 1, `pg_freespacemap`
+1; 12.2 core **All 192**, `pageinspect` 5, `pgstattuple` 1, and no
+`pg_freespacemap` suite in 12.2. Both leg scripts are published in full under
+`## Measurement Script` (SHA-256 `52ff3a45...` and `1e438b6e...`), and the `verify`
+stage confirmed the page's two texts and two script blocks byte-identical to what
+ran. Development passes before the recorded run fixed four harness defects in both
+scripts: `extract(epoch ...)` returns `double precision` on 12 and is now cast to
+`numeric`; the hash census refusal above; an `ORDER BY` position in the `declare`
+stage; and edge round B's expected human text.
+
+**Citations.** 79 distinct citations, all from `raw/postgres-17/`, all within file
+bounds, all listed in `## Source References`. Before filing, the ranges of
+`comment.c#CommentObject-ownership`, `aclchk.c#object_ownercheck` and four
+`guc_tables.c` entries were corrected, and two narrower in-text citations that
+reused a wider entry's label got labels of their own. The v12 pages are linked, not
+cited. All 38 `## Contents` anchors resolve.
+
+**Bookkeeping.** New bullets in `wiki/index.md` and `wiki/v17/index.md` under
+Indexing; a clause on the v17 row and a 2026-09-22 coverage note in
+`wiki/versions.md`. Lint run: **9 errors / 2 warnings**, this host's pre-existing
+baseline (v18 and v19 pins absent, v14 on another commit, two raw checkouts with
+uncommitted changes, which in `raw/postgres-12` are two `.DS_Store` files), none of
+them on this page or on any file this task touched.
+
+**No common concept page was touched.** The page reads and links
+[Mandatory GIN Bloat Tests (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md)
+and
+[Mandatory Non-B-Tree, Non-GIN Bloat Tests (unverified)](v17/common-concepts/mandatory-non-btree-non-gin-bloat-tests.md).
+The source fixture page was not edited either. Four v17 question pages, this one
+included, are titled for a COMMENT-stored baseline of their own, and no concept page
+covers one; that page is proposed, not created.
+
+**Teardown.** Both sandbox clusters were stopped with `pg_ctl -m fast -w stop`
+through each leg's own `clean` stage, which confirms no `postmaster.pid`, no
+matching process and an empty socket directory before it deletes anything;
+`.wiki-runtime/tmp/nbmaint17/` and `.wiki-runtime/tmp/nbmaint12/` deleted. The two
+leg script files were deleted from `.wiki-runtime/tmp/` after a last check that the
+page's blocks are byte-identical to them. Verified after teardown: no `postgres`
+process, ports 55417 and 55412 free, `.wiki-runtime/tmp/` empty. `raw/postgres-17/`
+and `raw/postgres-12/` were read only throughout, with both builds out of tree.
+
+**Version control.** Committed and pushed on the asker's instruction, straight to
+`master` and `origin/master`. A fetch just before the commit showed no new commit on
+`origin/master`, so no rebase was needed.
