@@ -13,11 +13,13 @@ verified_by_agent: not yet
 - [Question](#question)
   - [Scope settled before drafting](#scope-settled-before-drafting)
   - [Revision after filing](#revision-after-filing)
+  - [Second revision: twelve reported defects](#second-revision-twelve-reported-defects)
 - [Answer](#answer)
   - [Verdict](#verdict)
   - [What is stored, and where](#what-is-stored-and-where)
   - [Step 1: the plan](#step-1-the-plan)
   - [Step 2: carrying it out](#step-2-carrying-it-out)
+  - [What step 2 locks, and what it checks under the locks](#what-step-2-locks-and-what-it-checks-under-the-locks)
   - [How to read the plan](#how-to-read-the-plan)
   - [The decision ladder, in order](#the-decision-ladder-in-order)
   - [Why the candidate filters are there](#why-the-candidate-filters-are-there)
@@ -28,6 +30,7 @@ verified_by_agent: not yet
   - [Who writes the table's reltuples](#who-writes-the-tables-reltuples)
   - [The ported fixtures, and the protocols they ran under](#the-ported-fixtures-and-the-protocols-they-ran-under)
   - [The maintenance was not defeated](#the-maintenance-was-not-defeated)
+  - [The protocol cross-checks](#the-protocol-cross-checks)
   - [Results on 17.11](#results-on-1711)
   - [Results on 12.2](#results-on-122)
   - [Why the two tests miss where they miss](#why-the-two-tests-miss-where-they-miss)
@@ -121,11 +124,42 @@ After this page was filed and pushed on 2026-09-22, the asker wrote:
 The quoted bullet summarized fixtures `h06` and `n11`, the only two whose maintenance step
 was `VACUUM (ANALYZE, INDEX_CLEANUP OFF)`. Both were removed from both leg scripts, with
 their recipes, their predictions and their two declared exceptions, and both legs were
-re-measured end to end. Every number on this page comes from that re-run. Neither concept
-page names a fixture, but both list "a `VACUUM` whose index cleanup did not run" as
-coverage a conforming run must reach. This run therefore declares that row skipped under
-both protocols; see
+re-measured end to end. Neither concept page names a fixture, but both list "a `VACUUM`
+whose index cleanup did not run" as coverage a conforming run must reach. This run
+therefore declares that row skipped under both protocols; see
 [Coverage the protocols require, and what this run skipped](#coverage-the-protocols-require-and-what-this-run-skipped).
+
+### Second revision: twelve reported defects
+
+The asker then filed a review of the page, with the request:
+
+> Follow `AGENTS.md`, in PostgreSQL 17, for the question "A COMMENT-Stored Baseline
+> Non-B-Tree Index-Maintenance Heuristic for PostgreSQL 12 Through 17 (unverified)": fix
+> these issues.
+
+Each of the twelve findings was checked against the pin before it was fixed, and each was
+confirmed. They were fixed in the order the review proposed: the two leg scripts first,
+then step 2 and the payload, then the protocol checks and the coverage labels, then a
+re-measurement of both legs. `h06` and `n11` stay removed, and neither concept page was
+changed.
+
+| # | Finding | What changed |
+|---|---|---|
+| 1 | the cleanup stage accepted a sandbox path that `..` took out of `.wiki-runtime/tmp`, and stopped the cluster before it checked the path | both scripts resolve every path to its canonical form, require the sandbox to be a plain directory directly under the repository's `.wiki-runtime/tmp` that carries the marker the script writes when it creates one, and check both before they write, stop or delete anything |
+| 2 | a stage that failed, a failed regression suite and a mismatch between the page and what ran did not fail the run | every stage's exit status and every required check now stops the run, which exits 1 and stops its cluster; see [The stages](#the-stages) |
+| 3 | step 2 read names and human text before it held any lock, then ran its DDL by name | step 2 takes `REINDEX INDEX`'s own two locks first, checks that both names still belong to the objects it read, decides again, and reads and rewrites the comment under those locks; see [What step 2 locks, and what it checks under the locks](#what-step-2-locks-and-what-it-checks-under-the-locks) |
+| 4 | one index held in `ACCESS EXCLUSIVE` elsewhere could abort step 2's whole scan | the scan reads the catalogs only, and every size read is inside the per-index exception block |
+| 5 | re-running a stage appended a second set of records, and `decide score`, the documented re-run, re-decided on rebuilt indexes | one row per fixture, phase and reading, enforced by the tables; a stage that changes the fixtures runs once and in order, and a stage that only reads replaces its own records |
+| 6 | a stray `@nbmaint:` marker in human prose was deleted with the rest of its line, and trailing whitespace was trimmed | the payload is one reserved line, and everything outside it is kept byte for byte; two reserved lines are a conflict, and nothing is written |
+| 7 | independent searches for `"v"`, `"sz"` and `"tup"` accepted a payload whose fields sat inside another object | the reserved line must match, whole, the one grammar step 2 writes, before any value is read out of it |
+| 8 | an existing install was reused with no evidence of the commit it was built from | the build refuses any commit but the pin and writes a manifest into the install; a reused install must match it file for file |
+| 9 | `max_reindex` counted rebuilds that succeeded, not rebuilds started | it counts a rebuild before it starts, so a rebuild that fails uses up its place; measured in edge round G |
+| 10 | the BRIN census compared a count of pages, not each page's free space; invariant I9 checked that the `VERBOSE` index line existed, not what it said; and `g08` was said to reach "deleted but not recyclable under a held snapshot" | a page-by-page BRIN free-space comparison (invariant I18); I9 now checks every count on the line against the censuses around its `VACUUM`; the `g08` row is filed as not reached |
+| 11 | the score rounded the reclaimed fraction to two decimals before comparing it with the threshold | the threshold is applied to the unrounded fraction; the two decimals are display only |
+| 12 | the rounding bound on the tuple test ignored that both counts are rounded, and `n05` and `n12` were called 21.45 % and 11.50 % larger than their rebuilds | both explanations corrected; see [The two tests, and the states that disable them](#the-two-tests-and-the-states-that-disable-them) and [Why the two tests miss where they miss](#why-the-two-tests-miss-where-they-miss) |
+
+Every number on this page now comes from the re-measurement that followed; see
+[The last run](#the-last-run).
 
 ## Answer
 
@@ -133,9 +167,10 @@ both protocols; see
 
 Two texts do it, and both run unchanged on 12.2 and 17.11: step 1, a read-only statement
 that decides and prints the commands, and step 2, a `DO` block that carries the decision
-out, one index per transaction. The baseline is one line of about 70 bytes appended to the
-index's own comment, `@nbmaint:{"v":2,"sz":...,"tup":...,"at":...}`, and any human text in
-the comment survives every write and both `REINDEX` forms.
+out, one index per transaction, deciding each index again under `REINDEX INDEX`'s own two
+locks before it writes. The baseline is one reserved line of about 70 bytes in the index's
+own comment, `@nbmaint:{"v":2,"sz":...,"tup":...,"at":...}`, and any human text in the
+comment survives every write and both `REINDEX` forms byte for byte.
 
 Scored against a measured `REINDEX INDEX` on the ported fixtures, at the declared pay-off
 of 23.08 %:
@@ -151,6 +186,8 @@ of 23.08 %:
 | predictions filed before the first fixture existed that held | 29 of 29 | 28 of 28 |
 | step 1's action equal to the two tests recomputed independently | 29 of 29 | 28 of 28 |
 | maintenance steps checked the moment they returned, and defeated | 27, 0 | 26, 0 |
+| invariants filed before the run that held, cross-checks included | 18 of 18 | 18 of 18 |
+| edge-case verdicts, each filed before its case ran, that held | 158 of 158 | 158 of 158 |
 
 **The two tests measure growth, not waste, so every miss is a false positive.**
 
@@ -195,7 +232,10 @@ whole ([pg_description.h#FormData](../../../../raw/postgres-17/src/include/catal
 So every write rewrites the whole comment, and keeping the human text is the method's job,
 not the server's.
 
-The payload is one line, appended after any human text:
+The payload is one **reserved line**: a whole line of the comment that begins with
+`@nbmaint:{` and ends with `}`. Everything before and after that line is human text, and
+step 2 writes it back byte for byte, trailing spaces and blank lines included. A comment
+with no reserved line gets the payload as a new last line:
 
 ```text
 Search index used by the application.
@@ -210,18 +250,37 @@ Second line: an @ sign, a { and a } brace.
 | `tup` | the table's `pg_class.reltuples` then, rounded | the brief's second value |
 | `at` | when the baseline was written | staleness is otherwise invisible; it takes no part in any decision |
 
-The payload is plain text, parsed with `substring(... from '...')` rather than cast to
-`jsonb`. A regex `substring` returns NULL when the pattern does not match
-([regexp.c#textregexsubstr](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L583-L604)),
+What the comment holds decides what happens to it:
+
+| The comment holds | `baseline` | What step 2 writes |
+|---|---|---|
+| no reserved line: no comment, or `@nbmaint:` only inside a line of prose | `absent` | the whole comment, a newline, then the payload |
+| one reserved line that matches the version-2 grammar exactly | `ok` | the same comment, with that line replaced in place |
+| one reserved line of any other shape: another version, a field nested in another object, a repeated or extra field, a string where a number goes | `invalid` | the same, and the baseline starts again |
+| two or more reserved lines | `ambiguous` | nothing: the plan says `conflict` until a person removes one |
+
+A reserved line is a baseline only when the whole line matches the one grammar step 2
+writes: `v` equal to the format version, then `sz`, `tup` and `at`, in that order, with no
+leading zeros, `tup` allowed to be `-1`, and nothing before or after. `sz` and `tup` are
+read out of that single match and nowhere else, so a field inside another object, or a
+field written twice, cannot supply a baseline. The lines are found in newline-sensitive
+mode, the `n` flag and the `(?n)` prefix, in which `^` and `$` match at every line end and
+`.` never crosses one
+([regexp.c#parse_re_flags-n](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L418-L420),
+[func.sgml#newline-sensitive](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L7449-L7458)).
+Edge round A exercised every row of the table.
+
+The payload is plain text, parsed with regexes rather than cast to `jsonb`. A regex that
+does not match returns NULL
+([regexp.c#textregexsubstr](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L583-L604),
+[regexp.c#regexp_match](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L1367-L1390)),
 while a `jsonb` cast of a malformed payload raises and aborts the statement for every
 index. The guard that would make the cast safe, `pg_input_is_valid()`, exists on 17
 ([pg_proc.dat#pg_input_is_valid](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7202-L7204))
-and was measured absent on 12.2. Each field's pattern ends in `[,}]`, so a value longer
-than the pattern allows fails to match instead of being truncated.
+and was measured absent on 12.2.
 
-Human text is everything left after two passes: every well-formed payload removed, then
-any leftover `@nbmaint:` marker removed to the end of its line, then trailing whitespace
-trimmed. The payload is always written last, on its own line.
+A reserved line is still a claim on a line of the comment: a person who writes a line of
+exactly that shape has written a payload as far as the method can tell.
 
 ### Step 1: the plan
 
@@ -233,8 +292,8 @@ Read-only. It decides, prints the exact commands, and writes nothing.
 --
 --   params   the two thresholds and the payload format version
 --   cand     every valid non-B-tree index this session can see
---   parsed   the @nbmaint: payload pulled out of the index's own comment
---   gate     whether that payload is a usable baseline
+--   parsed   the index's comment, cut around its one reserved @nbmaint: line
+--   gate     whether that line is a usable baseline
 --   decided  the size test and the table tuple-count test
 --   staged   the action: the first rule that matches decides
 --
@@ -256,6 +315,7 @@ cand AS MATERIALIZED (
            c.relname               AS index_name,
            t.relname               AS table_name,
            a.amname                AS access_method,
+           pg_get_userbyid(c.relowner) AS owner_name,
            pg_relation_size(c.oid) AS cur_bytes,
            t.reltuples::numeric    AS cur_tuples,
            d.description           AS cmt,
@@ -273,36 +333,56 @@ cand AS MATERIALIZED (
        AND x.indisvalid AND x.indisready AND x.indislive
        AND NOT pg_is_other_temp_schema(c.relnamespace)
        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+       -- step 2 narrows the pipeline to one index by setting this for its
+       -- own transaction only; in any other session it is unset, and every
+       -- candidate is read
+       AND (nullif(current_setting('nbmaint.only_index', true), '') IS NULL
+            OR c.oid = nullif(current_setting('nbmaint.only_index', true), '')::oid)
 ),
 parsed AS MATERIALIZED (
-    SELECT c.*,
-           substring(pay.payload from '"v":([0-9]{1,6})[,}]')::numeric   AS pv,
-           substring(pay.payload from '"sz":([0-9]{1,25})[,}]')::numeric AS base_bytes,
-           substring(pay.payload from
-                     '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric AS base_tuples,
-           -- The human text: every well-formed payload removed first, then any
-           -- marker left over, to the end of its line, then trailing whitespace.
-           rtrim(regexp_replace(
-                   regexp_replace(coalesce(c.cmt, ''),
-                                  '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'),
-                   '[[:space:]]*@nbmaint:[^\n]*', '', 'g'),
-                 E' \t\r\n')                                         AS user_cmt
+    -- The payload is one reserved line: a whole line of the comment that
+    -- starts with "@nbmaint:{" and ends with "}".  Everything before and
+    -- after that line is the human text, and is kept byte for byte.
+    SELECT c.*, p.grow_ratio, p.tuple_ratio, p.fmt, r.n_reserved,
+           CASE WHEN r.n_reserved = 1 THEN r.split[1] END AS before_line,
+           CASE WHEN r.n_reserved = 1 THEN r.split[2] END AS reserved_line,
+           CASE WHEN r.n_reserved = 1 THEN r.split[3] END AS after_line
       FROM cand c
-      CROSS JOIN LATERAL (
-           SELECT substring(c.cmt from '@nbmaint:(\{[^}]*\})') AS payload) pay
+     CROSS JOIN params p
+     CROSS JOIN LATERAL (
+          SELECT (SELECT count(*)
+                    FROM regexp_matches(coalesce(c.cmt, ''),
+                                        '^@nbmaint:\{.*\}$', 'gn'))    AS n_reserved,
+                 regexp_match(coalesce(c.cmt, ''),
+                              '^(.*\n)?(@nbmaint:\{[^\n]*\})(\n.*)?$') AS split) r
      WHERE c.cur_bytes IS NOT NULL            -- NULL: dropped since the catalog read
 ),
 gate AS MATERIALIZED (
-    SELECT s.*, p.grow_ratio, p.tuple_ratio,
-           CASE WHEN s.cmt IS NULL OR s.cmt !~ '@nbmaint:' THEN 'absent'
-                WHEN s.pv IS DISTINCT FROM p.fmt
-                  OR s.base_bytes IS NULL
-                  OR s.base_tuples IS NULL                 THEN 'invalid'
-                ELSE 'ok' END                              AS baseline,
+    SELECT s.*,
+           CASE WHEN s.n_reserved = 0 THEN 'absent'
+                WHEN s.n_reserved > 1 THEN 'ambiguous'
+                WHEN v.pay IS NULL    THEN 'invalid'
+                ELSE 'ok' END                                  AS baseline,
+           v.pay[1]::numeric                                   AS base_bytes,
+           v.pay[2]::numeric                                   AS base_tuples,
+           -- where a new payload goes: in place of the one reserved line, or
+           -- on a new last line of a comment that has none
+           CASE WHEN s.n_reserved = 0 THEN coalesce(s.cmt || E'\n', '')
+                WHEN s.n_reserved = 1 THEN coalesce(s.before_line, '') END AS keep_before,
+           CASE WHEN s.n_reserved = 0 THEN ''
+                WHEN s.n_reserved = 1 THEN coalesce(s.after_line, '') END  AS keep_after,
            -- reltuples is -1 on a table nothing has counted yet, from
            -- PostgreSQL 14 on; 12 and 13 store 0 there instead
-           (s.cur_tuples < 0)                              AS tuples_unknown
-      FROM parsed s CROSS JOIN params p
+           (s.cur_tuples < 0)                                  AS tuples_unknown
+      FROM parsed s
+     CROSS JOIN LATERAL (
+          -- the whole reserved line, matched against the one grammar step 2
+          -- writes; no value is read out of a line that does not match it all
+          SELECT regexp_match(s.reserved_line,
+                     '^@nbmaint:\{"v":' || s.fmt
+                     || ',"sz":(0|[1-9][0-9]{0,24}),"tup":(-1|0|[1-9][0-9]{0,24})'
+                     || ',"at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+                     || '[+-][0-9]{2}(?::[0-9]{2})?"\}$')      AS pay) v
 ),
 decided AS MATERIALIZED (
     SELECT g.*,
@@ -322,6 +402,7 @@ decided AS MATERIALIZED (
 staged AS MATERIALIZED (
     SELECT d.*,
            CASE WHEN NOT d.owns_index             THEN 'blocked'
+                WHEN d.baseline = 'ambiguous'     THEN 'conflict'
                 WHEN d.baseline <> 'ok'           THEN 'initialize'
                 WHEN d.shrank                     THEN 'refresh'
                 WHEN d.size_test OR d.tuple_test  THEN 'reindex'
@@ -343,7 +424,10 @@ SELECT /* wiki_nbmaint_plan_12_17 */
        s.tuple_ratio_now                     AS tuple_ratio,
        array_to_string(array_remove(ARRAY[
            CASE WHEN NOT s.owns_index THEN 'not the index owner: nothing can be written' END,
-           CASE WHEN s.baseline = 'invalid' THEN 'unreadable @nbmaint: payload, replaced' END,
+           CASE WHEN s.baseline = 'ambiguous'
+                THEN 'more than one reserved @nbmaint: line: nothing written until one is removed' END,
+           CASE WHEN s.baseline = 'invalid'
+                THEN 'reserved @nbmaint: line is not a version-2 payload: replaced' END,
            CASE WHEN s.tuples_unknown THEN 'table reltuples unknown: tuple test cannot fire' END,
            CASE WHEN s.baseline = 'ok' AND s.base_tuples < 0
                 THEN 'baseline tuple count unknown: tuple test cannot fire' END,
@@ -355,19 +439,23 @@ SELECT /* wiki_nbmaint_plan_12_17 */
        ], NULL), '; ')                       AS notes,
        -- The comment is written now for initialize and refresh.  A reindex
        -- row has none: its new baseline is only known after the rebuild.
+       -- A printed COMMENT is only as fresh as this read; step 2 re-reads
+       -- the comment under its locks before it writes one.
        CASE WHEN s.action IN ('initialize', 'refresh')
             THEN format('COMMENT ON INDEX %I.%I IS %L', s.schema_name, s.index_name,
-                   CASE WHEN length(s.user_cmt) > 0 THEN s.user_cmt || E'\n' ELSE '' END
-                   || '@nbmaint:{"v":2,"sz":' || s.cur_bytes
+                   s.keep_before
+                   || '@nbmaint:{"v":' || s.fmt || ',"sz":' || s.cur_bytes
                    || ',"tup":' || round(GREATEST(s.cur_tuples, -1))
-                   || ',"at":"' || to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSOF') || '"}') END
+                   || ',"at":"' || to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSOF') || '"}'
+                   || s.keep_after) END
                                              AS comment_command,
        CASE WHEN s.action = 'reindex'
             THEN format('REINDEX INDEX %I.%I', s.schema_name, s.index_name) END
                                              AS reindex_command
   FROM staged s
  ORDER BY CASE s.action WHEN 'reindex' THEN 0 WHEN 'refresh' THEN 1
-                        WHEN 'initialize' THEN 2 WHEN 'blocked' THEN 3 ELSE 4 END,
+                        WHEN 'initialize' THEN 2 WHEN 'conflict' THEN 3
+                        WHEN 'blocked' THEN 4 ELSE 5 END,
           s.cur_bytes DESC, s.schema_name, s.index_name;
 ```
 
@@ -375,8 +463,13 @@ SELECT /* wiki_nbmaint_plan_12_17 */
 apply at session scope and need neither a reload nor a restart
 ([guc_tables.c#statement_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620),
 [guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631)).
-Step 1 reads catalogs and file sizes only; over the suite database it took 11.5 ms on
-17.11 and 8.8 ms on 12.2, measured under the lock.
+Step 1 reads catalogs and file sizes only; over the suite database it took 23.3 ms on
+17.11 and 16.4 ms on 12.2, measured under the lock. It is one statement, and reading a
+size waits for any lock that excludes `AccessShareLock`, so one candidate index held in
+`ACCESS EXCLUSIVE` for longer than `lock_timeout` cancels step 1 as a whole: edge round H
+measured `canceling statement due to lock timeout`, from its 5-second `lock_timeout`, on
+both servers. Step 2 reads sizes one index at a time and carries on; see
+[What step 2 locks, and what it checks under the locks](#what-step-2-locks-and-what-it-checks-under-the-locks).
 
 ### Step 2: carrying it out
 
@@ -396,35 +489,93 @@ transaction termination`, which both servers returned when the block was run ins
 -- when no transaction block is open around it.
 --
 -- The CTE pipeline below, from "WITH params AS (" through the end of the
--- staged CTE, is byte-identical to step 1's.  Only the final SELECT differs:
--- step 1 shows the plan to a reader, step 2 hands it to the loop below.
+-- staged CTE, is byte-identical to step 1's.  Step 2 runs it once per index,
+-- narrowed to that index by the nbmaint.only_index setting: first with no
+-- lock taken, to see whether the index needs anything, then again under the
+-- two locks REINDEX INDEX takes, and it acts on that second answer only.
+-- The comment is read and rewritten under those locks, so no other COMMENT
+-- can land between the read and the write.
+--
 -- statement_timeout bounds the whole run, because a DO block is one
 -- statement; lock_timeout bounds each lock wait, and an index whose lock
 -- cannot be had in time is skipped for this run rather than failing it.
+-- Every read after a lock must see what committed before the lock was
+-- granted, which read committed guarantees and the stricter levels do not.
 
 SET /* wiki_nbmaint_apply_statement_timeout */ statement_timeout = '1h';
 SET /* wiki_nbmaint_apply_lock_timeout */ lock_timeout = '5s';
+SET /* wiki_nbmaint_apply_isolation */ default_transaction_isolation = 'read committed';
 
 DO /* wiki_nbmaint_apply_12_17 */ $nbmaint$
 DECLARE
-    dry_run     boolean := false;  -- true: report the plan, write nothing
-    max_reindex integer := 1000;   -- cap on rebuilds per run
-    v_oid    oid[];
-    v_action text[];
-    i        integer;
-    n_re     integer := 0;
-    n_init   integer := 0;
-    n_ref    integer := 0;
-    n_block  integer := 0;
-    n_fail   integer := 0;
-    n_gone   integer := 0;
-    n_capped integer := 0;
-    r_nsp    text;
-    r_idx    text;
-    r_user   text;
-    r_bytes  numeric;
-    r_tuples numeric;
+    dry_run     boolean := false;  -- true: report the plan, lock nothing, write nothing
+    max_reindex integer := 1000;   -- cap on the rebuilds one run may start
+    v_oid        oid[];
+    i            integer;
+    pass         integer;
+    ix           record;           -- the pipeline's row for this index
+    first_action text;             -- the action the unlocked pass decided
+    locked       boolean;
+    seen         boolean;
+    done         text;
+    r_oid        oid;
+    r_bytes      numeric;
+    r_tuples     numeric;
+    n_re         integer := 0;
+    n_start      integer := 0;
+    n_init       integer := 0;
+    n_ref        integer := 0;
+    n_block      integer := 0;
+    n_confl      integer := 0;
+    n_fail       integer := 0;
+    n_gone       integer := 0;
+    n_capped     integer := 0;
+    n_moved      integer := 0;
 BEGIN
+-- The candidates, from the catalogs alone: nothing here opens or locks an
+-- index, so a lock held elsewhere cannot stop the run before it starts.  It
+-- keeps every index that is not B-tree, and the pipeline applies the other
+-- filters.  Largest first, by the page count the catalog last recorded.
+SELECT array_agg(c.oid ORDER BY c.relpages DESC, c.oid)
+  INTO v_oid
+  FROM pg_class c
+  JOIN pg_am a ON a.oid = c.relam
+ WHERE c.relkind = 'i' AND a.amname <> 'btree';
+
+FOR i IN 1 .. COALESCE(array_length(v_oid, 1), 0) LOOP
+    first_action := NULL; locked := false; seen := false; done := NULL;
+    BEGIN
+        -- narrows the pipeline to this one index until this transaction ends
+        PERFORM set_config('nbmaint.only_index', v_oid[i]::text, true);
+        FOR pass IN 1 .. 2 LOOP
+            IF pass = 2 THEN
+                -- REINDEX INDEX's two locks, in its order: SHARE on the table,
+                -- then ACCESS EXCLUSIVE on the index.  ALTER INDEX ... OWNER TO
+                -- the owner it already has changes nothing and takes that index
+                -- lock, which also holds off every other COMMENT on the index.
+                EXECUTE format('LOCK TABLE %I.%I IN SHARE MODE',
+                               ix.schema_name, ix.table_name);
+                EXECUTE format('ALTER INDEX %I.%I OWNER TO %I',
+                               ix.schema_name, ix.index_name, ix.owner_name);
+                locked := true;
+                -- Nothing can rename or drop either object now, so both names
+                -- must still be the objects the unlocked pass read.
+                SELECT c.oid INTO r_oid
+                  FROM pg_class c
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = ix.schema_name AND c.relname = ix.index_name;
+                IF r_oid IS DISTINCT FROM v_oid[i] OR NOT EXISTS (
+                       SELECT 1
+                         FROM pg_index x
+                         JOIN pg_class t ON t.oid = x.indrelid
+                         JOIN pg_namespace n ON n.oid = t.relnamespace
+                        WHERE x.indexrelid = v_oid[i]
+                          AND n.nspname = ix.schema_name
+                          AND t.relname = ix.table_name) THEN
+                    RAISE EXCEPTION 'renamed, dropped or re-created since it was read'
+                          USING ERRCODE = 'object_not_in_prerequisite_state';
+                END IF;
+            END IF;
 WITH params AS (
     SELECT 1.30::numeric AS grow_ratio,   -- index-size test
            0.30::numeric AS tuple_ratio,  -- table tuple-count test, either way
@@ -436,6 +587,7 @@ cand AS MATERIALIZED (
            c.relname               AS index_name,
            t.relname               AS table_name,
            a.amname                AS access_method,
+           pg_get_userbyid(c.relowner) AS owner_name,
            pg_relation_size(c.oid) AS cur_bytes,
            t.reltuples::numeric    AS cur_tuples,
            d.description           AS cmt,
@@ -453,36 +605,56 @@ cand AS MATERIALIZED (
        AND x.indisvalid AND x.indisready AND x.indislive
        AND NOT pg_is_other_temp_schema(c.relnamespace)
        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+       -- step 2 narrows the pipeline to one index by setting this for its
+       -- own transaction only; in any other session it is unset, and every
+       -- candidate is read
+       AND (nullif(current_setting('nbmaint.only_index', true), '') IS NULL
+            OR c.oid = nullif(current_setting('nbmaint.only_index', true), '')::oid)
 ),
 parsed AS MATERIALIZED (
-    SELECT c.*,
-           substring(pay.payload from '"v":([0-9]{1,6})[,}]')::numeric   AS pv,
-           substring(pay.payload from '"sz":([0-9]{1,25})[,}]')::numeric AS base_bytes,
-           substring(pay.payload from
-                     '"tup":(-?[0-9]{1,25}(?:[.][0-9]{1,10})?)[,}]')::numeric AS base_tuples,
-           -- The human text: every well-formed payload removed first, then any
-           -- marker left over, to the end of its line, then trailing whitespace.
-           rtrim(regexp_replace(
-                   regexp_replace(coalesce(c.cmt, ''),
-                                  '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'),
-                   '[[:space:]]*@nbmaint:[^\n]*', '', 'g'),
-                 E' \t\r\n')                                         AS user_cmt
+    -- The payload is one reserved line: a whole line of the comment that
+    -- starts with "@nbmaint:{" and ends with "}".  Everything before and
+    -- after that line is the human text, and is kept byte for byte.
+    SELECT c.*, p.grow_ratio, p.tuple_ratio, p.fmt, r.n_reserved,
+           CASE WHEN r.n_reserved = 1 THEN r.split[1] END AS before_line,
+           CASE WHEN r.n_reserved = 1 THEN r.split[2] END AS reserved_line,
+           CASE WHEN r.n_reserved = 1 THEN r.split[3] END AS after_line
       FROM cand c
-      CROSS JOIN LATERAL (
-           SELECT substring(c.cmt from '@nbmaint:(\{[^}]*\})') AS payload) pay
+     CROSS JOIN params p
+     CROSS JOIN LATERAL (
+          SELECT (SELECT count(*)
+                    FROM regexp_matches(coalesce(c.cmt, ''),
+                                        '^@nbmaint:\{.*\}$', 'gn'))    AS n_reserved,
+                 regexp_match(coalesce(c.cmt, ''),
+                              '^(.*\n)?(@nbmaint:\{[^\n]*\})(\n.*)?$') AS split) r
      WHERE c.cur_bytes IS NOT NULL            -- NULL: dropped since the catalog read
 ),
 gate AS MATERIALIZED (
-    SELECT s.*, p.grow_ratio, p.tuple_ratio,
-           CASE WHEN s.cmt IS NULL OR s.cmt !~ '@nbmaint:' THEN 'absent'
-                WHEN s.pv IS DISTINCT FROM p.fmt
-                  OR s.base_bytes IS NULL
-                  OR s.base_tuples IS NULL                 THEN 'invalid'
-                ELSE 'ok' END                              AS baseline,
+    SELECT s.*,
+           CASE WHEN s.n_reserved = 0 THEN 'absent'
+                WHEN s.n_reserved > 1 THEN 'ambiguous'
+                WHEN v.pay IS NULL    THEN 'invalid'
+                ELSE 'ok' END                                  AS baseline,
+           v.pay[1]::numeric                                   AS base_bytes,
+           v.pay[2]::numeric                                   AS base_tuples,
+           -- where a new payload goes: in place of the one reserved line, or
+           -- on a new last line of a comment that has none
+           CASE WHEN s.n_reserved = 0 THEN coalesce(s.cmt || E'\n', '')
+                WHEN s.n_reserved = 1 THEN coalesce(s.before_line, '') END AS keep_before,
+           CASE WHEN s.n_reserved = 0 THEN ''
+                WHEN s.n_reserved = 1 THEN coalesce(s.after_line, '') END  AS keep_after,
            -- reltuples is -1 on a table nothing has counted yet, from
            -- PostgreSQL 14 on; 12 and 13 store 0 there instead
-           (s.cur_tuples < 0)                              AS tuples_unknown
-      FROM parsed s CROSS JOIN params p
+           (s.cur_tuples < 0)                                  AS tuples_unknown
+      FROM parsed s
+     CROSS JOIN LATERAL (
+          -- the whole reserved line, matched against the one grammar step 2
+          -- writes; no value is read out of a line that does not match it all
+          SELECT regexp_match(s.reserved_line,
+                     '^@nbmaint:\{"v":' || s.fmt
+                     || ',"sz":(0|[1-9][0-9]{0,24}),"tup":(-1|0|[1-9][0-9]{0,24})'
+                     || ',"at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+                     || '[+-][0-9]{2}(?::[0-9]{2})?"\}$')      AS pay) v
 ),
 decided AS MATERIALIZED (
     SELECT g.*,
@@ -502,106 +674,200 @@ decided AS MATERIALIZED (
 staged AS MATERIALIZED (
     SELECT d.*,
            CASE WHEN NOT d.owns_index             THEN 'blocked'
+                WHEN d.baseline = 'ambiguous'     THEN 'conflict'
                 WHEN d.baseline <> 'ok'           THEN 'initialize'
                 WHEN d.shrank                     THEN 'refresh'
                 WHEN d.size_test OR d.tuple_test  THEN 'reindex'
                 ELSE 'skip' END                   AS action
       FROM decided d
 )
-SELECT /* wiki_nbmaint_snapshot_12_17 */
-       array_agg(s.idx_oid ORDER BY s.cur_bytes DESC, s.idx_oid),
-       array_agg(s.action  ORDER BY s.cur_bytes DESC, s.idx_oid)
-  INTO v_oid, v_action
-  FROM staged s
- WHERE s.action <> 'skip';
+            SELECT s.* INTO ix FROM staged s;
+            seen := FOUND;
+            EXIT WHEN NOT seen OR pass = 2;
+            first_action := ix.action;
+            -- nothing to lock for, or nothing this run may start
+            EXIT WHEN dry_run OR ix.action IN ('skip', 'blocked', 'conflict')
+                   OR (ix.action = 'reindex' AND n_start >= max_reindex);
+        END LOOP;
 
-FOR i IN 1 .. COALESCE(array_length(v_oid, 1), 0) LOOP
-    IF v_action[i] = 'blocked' THEN
-        n_block := n_block + 1;
-        RAISE NOTICE 'nbmaint: % is not owned by %, nothing written',
-                     v_oid[i]::regclass, current_user;
-        CONTINUE;
-    END IF;
-    -- Re-read the name and the human text now: the snapshot above is older
-    -- than every commit this loop has made since.  A row that has gone is an
-    -- index dropped in the meantime, which is not an error here.
-    SELECT n.nspname, c.relname,
-           rtrim(regexp_replace(
-                   regexp_replace(coalesce(d.description, ''),
-                                  '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'),
-                   '[[:space:]]*@nbmaint:[^\n]*', '', 'g'),
-                 E' \t\r\n')
-      INTO r_nsp, r_idx, r_user
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      LEFT JOIN pg_description d ON d.objoid = c.oid
-                               AND d.classoid = 'pg_class'::regclass
-                               AND d.objsubid = 0
-     WHERE c.oid = v_oid[i];
-    IF NOT FOUND THEN
-        n_gone := n_gone + 1;
-        RAISE NOTICE 'nbmaint: index % dropped since the snapshot, skipped', v_oid[i];
-        CONTINUE;
-    END IF;
-    IF v_action[i] = 'reindex' AND n_re >= max_reindex THEN
-        n_capped := n_capped + 1;
-        RAISE NOTICE 'nbmaint: %.% needs a rebuild, max_reindex % reached',
-                     r_nsp, r_idx, max_reindex;
-        CONTINUE;
-    END IF;
-    IF dry_run THEN
-        RAISE NOTICE 'nbmaint: %.% -> % (dry run, nothing written)',
-                     r_nsp, r_idx, v_action[i];
-        CONTINUE;
-    END IF;
-    BEGIN
-        IF v_action[i] = 'reindex' THEN
-            EXECUTE format('REINDEX /* wiki_nbmaint_reindex */ INDEX %I.%I',
-                           r_nsp, r_idx);
+        IF NOT seen THEN
+            -- no row: dropped, or not a candidate at all, such as another
+            -- session's temporary index or an invalid one
+            IF locked OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = v_oid[i]) THEN
+                n_gone := n_gone + 1;
+                RAISE NOTICE 'nbmaint: index % dropped or no longer a candidate, skipped',
+                             v_oid[i];
+            END IF;
+        ELSIF ix.action = 'blocked' THEN
+            n_block := n_block + 1;
+            RAISE NOTICE 'nbmaint: %.% is not owned by %, nothing written',
+                         ix.schema_name, ix.index_name, current_user;
+        ELSIF ix.action = 'conflict' THEN
+            n_confl := n_confl + 1;
+            RAISE NOTICE 'nbmaint: %.% has more than one reserved @nbmaint: line, nothing written',
+                         ix.schema_name, ix.index_name;
+        ELSIF NOT locked AND dry_run THEN
+            IF ix.action <> 'skip' THEN
+                RAISE NOTICE 'nbmaint: %.% -> % (dry run, nothing written)',
+                             ix.schema_name, ix.index_name, ix.action;
+            END IF;
+        ELSIF ix.action = 'reindex' AND n_start >= max_reindex THEN
+            n_capped := n_capped + 1;
+            RAISE NOTICE 'nbmaint: %.% needs a rebuild, max_reindex % reached',
+                         ix.schema_name, ix.index_name, max_reindex;
+        ELSIF locked THEN
+            -- the answer given under the locks is the one acted on
+            IF ix.action IS DISTINCT FROM first_action THEN
+                n_moved := n_moved + 1;
+                RAISE NOTICE 'nbmaint: %.% was % before the locks and % under them',
+                             ix.schema_name, ix.index_name, first_action, ix.action;
+            END IF;
+            IF ix.action IN ('reindex', 'initialize', 'refresh') THEN
+                r_bytes := ix.cur_bytes;
+                r_tuples := ix.cur_tuples;
+                IF ix.action = 'reindex' THEN
+                    -- counted before it starts, so a rebuild that fails still
+                    -- uses up its place under max_reindex
+                    n_start := n_start + 1;
+                    EXECUTE format('REINDEX /* wiki_nbmaint_reindex */ INDEX %I.%I',
+                                   ix.schema_name, ix.index_name);
+                    -- the new baseline is the rebuilt file, and the table
+                    -- count the rebuild's own heap scan wrote
+                    SELECT pg_relation_size(c.oid), t.reltuples::numeric
+                      INTO r_bytes, r_tuples
+                      FROM pg_class c
+                      JOIN pg_index x ON x.indexrelid = c.oid
+                      JOIN pg_class t ON t.oid = x.indrelid
+                     WHERE c.oid = v_oid[i];
+                END IF;
+                EXECUTE format('COMMENT /* wiki_nbmaint_comment */ ON INDEX %I.%I IS %L',
+                               ix.schema_name, ix.index_name,
+                               ix.keep_before
+                               || '@nbmaint:{"v":' || ix.fmt || ',"sz":' || r_bytes
+                               || ',"tup":' || round(GREATEST(r_tuples, -1))
+                               || ',"at":"' || to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSOF') || '"}'
+                               || ix.keep_after);
+                done := ix.action;
+            END IF;
         END IF;
-        -- The new baseline is read now: after the rebuild for a reindex,
-        -- which resized the file and recounted the table, and from the
-        -- current state for initialize and refresh.
-        SELECT pg_relation_size(c.oid), t.reltuples::numeric
-          INTO r_bytes, r_tuples
-          FROM pg_class c
-          JOIN pg_index x ON x.indexrelid = c.oid
-          JOIN pg_class t ON t.oid = x.indrelid
-         WHERE c.oid = v_oid[i];
-        EXECUTE format('COMMENT /* wiki_nbmaint_comment */ ON INDEX %I.%I IS %L',
-                       r_nsp, r_idx,
-                       CASE WHEN length(r_user) > 0 THEN r_user || E'\n' ELSE '' END
-                       || '@nbmaint:{"v":2,"sz":' || r_bytes
-                       || ',"tup":' || round(GREATEST(r_tuples, -1))
-                       || ',"at":"' || to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSOF') || '"}');
     EXCEPTION WHEN OTHERS THEN
-        -- The rebuild and the comment roll back together, so the index keeps
-        -- its old baseline and is looked at again on the next run.
+        -- Everything this index's transaction did is rolled back and its
+        -- locks released: it keeps its old baseline and is looked at again
+        -- on the next run.
         n_fail := n_fail + 1;
-        RAISE WARNING 'nbmaint: %.% %: nothing written: % (SQLSTATE %)',
-                      r_nsp, r_idx, v_action[i], SQLERRM, SQLSTATE;
-        CONTINUE;
+        done := NULL;
+        RAISE WARNING 'nbmaint: %: nothing written: % (SQLSTATE %)',
+                      v_oid[i]::regclass, SQLERRM, SQLSTATE;
     END;
     COMMIT;
-    CASE v_action[i]
-        WHEN 'reindex'    THEN n_re   := n_re + 1;
-        WHEN 'initialize' THEN n_init := n_init + 1;
-        ELSE                   n_ref  := n_ref + 1;
-    END CASE;
-    RAISE NOTICE 'nbmaint: %.% -> % (sz %, tup %)', r_nsp, r_idx, v_action[i],
-                 r_bytes, round(GREATEST(r_tuples, -1));
+    IF done IS NOT NULL THEN
+        CASE done
+            WHEN 'reindex'    THEN n_re   := n_re + 1;
+            WHEN 'initialize' THEN n_init := n_init + 1;
+            ELSE                   n_ref  := n_ref + 1;
+        END CASE;
+        RAISE NOTICE 'nbmaint: %.% -> % (sz %, tup %)', ix.schema_name, ix.index_name,
+                     done, r_bytes, round(GREATEST(r_tuples, -1));
+    END IF;
 END LOOP;
 
-RAISE NOTICE 'nbmaint: reindex=% initialize=% refresh=% blocked=% failed=% gone=% capped=% dry_run=%',
-             n_re, n_init, n_ref, n_block, n_fail, n_gone, n_capped, dry_run;
+RAISE NOTICE 'nbmaint: reindex=% initialize=% refresh=% blocked=% conflict=% failed=% gone=% capped=% started=% changed=% dry_run=%',
+             n_re, n_init, n_ref, n_block, n_confl, n_fail, n_gone, n_capped,
+             n_start, n_moved, dry_run;
 END
 $nbmaint$;
 ```
 
 The pipeline in step 2, from `WITH params AS (` through the end of the `staged` CTE, is
-byte-identical to the same region of step 1: 82 lines, SHA-256 `651d5fed2fe5dfd3…` in
-both texts, checked by both leg scripts on every run. Only the final `SELECT` differs, so
-the two tests are defined once.
+byte-identical to the same region of step 1: 104 lines, SHA-256 `4e22b4c2f2757314…` in
+both texts, checked by both leg scripts on every run. Only what surrounds it differs, so
+the two tests, the payload grammar and the rule for keeping the human text are each
+defined once.
+
+### What step 2 locks, and what it checks under the locks
+
+Step 2 acts on nothing it read before it held the locks it needs, and it decides each index
+twice. Per index, in its own transaction:
+
+1. **The candidate list comes from the catalogs alone.** The scan reads `pg_class` and
+   `pg_am` and opens no index, so a lock held on one index elsewhere cannot stop the run
+   before it starts. Reading a size is not free: `pg_relation_size` takes
+   `AccessShareLock` on the relation before it looks at it
+   ([dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L371),
+   [relation.c#try_relation_open](../../../../raw/postgres-17/src/backend/access/common/relation.c#L88-L108)),
+   and the earlier text read every candidate's size in its scan, outside any exception
+   block, so one index held in `ACCESS EXCLUSIVE` elsewhere cancelled the whole run.
+2. **Pass 1, unlocked.** The pipeline runs narrowed to this one index by
+   `nbmaint.only_index`, a custom setting step 2 sets for its own transaction only
+   ([pg_proc.dat#set_config](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6270-L6273),
+   [pg_proc.dat#current_setting-missing_ok](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6268-L6269)).
+   Step 1, in any other session, reads it as unset, or as empty once a transaction that
+   set it has ended, and reads every candidate; both servers measured both. If the answer
+   is `skip`, `blocked` or `conflict`, or the rebuild cap is spent, nothing is locked. The
+   size read is inside the index's exception block, so a lock timeout there costs that
+   index alone: edge round H held one index in `ACCESS EXCLUSIVE` for a whole run, and
+   step 2 counted it failed with `SQLSTATE 55P03` and finished every other one.
+3. **The two locks `REINDEX INDEX` takes, in its order.** `LOCK TABLE ... IN SHARE MODE`,
+   then `ALTER INDEX ... OWNER TO` the owner the index already has. `ReindexIndex` locks
+   the table before the index "to avoid deadlock hazard", and the plain form's pair is
+   `ShareLock` on the table and `AccessExclusiveLock` on the index
+   ([indexcmds.c#ReindexIndex-lock-order](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2812-L2829),
+   [indexcmds.c#RangeVarCallbackForReindexIndex-table-lockmode](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2871-L2872),
+   [index.c#reindex_index-locks](../../../../raw/postgres-17/src/backend/catalog/index.c#L3601-L3614)).
+   `ALTER INDEX ... OWNER TO` takes `AccessExclusiveLock`, checks ownership the way
+   `COMMENT` does, and on an index whose owner does not change neither writes nor warns
+   ([tablecmds.c#AlterTableGetLockLevel-ChangeOwner](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4542-L4547),
+   [tablecmds.c#RangeVarCallbackForAlterRelation-ownership](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L17904-L17906),
+   [tablecmds.c#ATExecChangeOwner-index](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14543-L14562),
+   [tablecmds.c#ATExecChangeOwner-noop](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14614-L14618)).
+   Both servers measured it: `AccessExclusiveLock` held, nothing printed, and the index's
+   `pg_class` row kept its `xmin`. Every `COMMENT` takes `ShareUpdateExclusiveLock` on its
+   object, which that lock excludes
+   ([comment.c#CommentObject-ownership](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L76),
+   [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L64-L104)),
+   so from here to the commit no other comment on the index can land. `LOCK TABLE` in
+   `SHARE` mode needs `MAINTAIN`, `UPDATE`, `DELETE` or `TRUNCATE` on the table
+   ([lockcmds.c#LockTableAclCheck](../../../../raw/postgres-17/src/backend/commands/lockcmds.c#L280-L299)),
+   which its owner has.
+4. **Identity, under the locks.** An index rename needs `ShareUpdateExclusiveLock` on the
+   index and a table rename `AccessExclusiveLock` on the table
+   ([tablecmds.c#RenameRelation-lockmode](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4101-L4106)),
+   and both conflict with what step 2 now holds. So the names are fixed, and step 2 checks
+   that the index name still resolves to the OID the scan listed and that the table name
+   is still that index's table. If a rename, or a drop and a re-create, moved either
+   before the locks were granted, step 2 raises and the index's transaction rolls back.
+   Edge round K renamed an index and created another under its old name while step 2
+   waited: step 2 refused it with `SQLSTATE 55000`, and neither index was written.
+5. **Pass 2, under the locks.** The same pipeline again, and its answer is the one step 2
+   acts on. Edge round J rewrote a payload to the file's true size while step 2 waited:
+   the answer went from `reindex` to `skip`, and nothing was rebuilt. Edge round I rewrote
+   the human text while step 2 waited: the text written then is the text step 2 kept.
+6. **The write.** `initialize` and `refresh` write the comment. `reindex` is counted
+   against `max_reindex` before it starts, which a failure cannot undo because an
+   exception block rolls back the database, not the block's local variables
+   ([plpgsql.sgml#trapping-errors](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L2856-L2860));
+   then the rebuild, then the size and count read again, then the comment. One commit
+   ends the index's transaction and releases both locks.
+
+**Read committed is required, and step 2 sets it.** Each transaction step 2 starts after a
+`COMMIT` takes the default isolation level
+([plpgsql.sgml#transaction-defaults](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L3743-L3744)),
+and only read committed takes a new snapshot for each statement; repeatable read fixes the
+snapshot at the transaction's first statement, which here comes before the locks
+([mvcc.sgml#read-committed](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L317-L333),
+[mvcc.sgml#repeatable-read](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L508-L513)).
+The third `SET` line therefore sets `default_transaction_isolation`, a `PGC_USERSET`
+setting, for the session
+([guc_tables.c#default_transaction_isolation](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4820-L4827)).
+
+**What it costs.** Every index step 2 writes to is held in `ACCESS EXCLUSIVE` for its
+transaction: for `initialize` and `refresh` only while the comment is written, for
+`reindex` for the whole rebuild, as the plain form always holds it. While step 2 waits for
+that lock, queries that would use the index wait behind it, for up to `lock_timeout`.
+`ALTER INDEX` is DDL that fires event triggers, as `COMMENT` and `REINDEX` already are
+([cmdtag.h#PG_CMDTAG](../../../../raw/postgres-17/src/include/tcop/cmdtag.h#L19),
+[cmdtaglist.h#ALTER-INDEX](../../../../raw/postgres-17/src/include/tcop/cmdtaglist.h#L42)),
+so a database with DDL event triggers sees one per index step 2 writes to.
 
 ### How to read the plan
 
@@ -610,11 +876,11 @@ the two tests are defined once.
 | Column | Means | Watch for |
 |---|---|---|
 | `access_method` | the index's `pg_am.amname` | every AM but `btree` is a candidate, including a non-core one such as `bloom` |
-| `action` | `reindex`, `refresh`, `initialize`, `blocked`, `skip` | `blocked` means this session cannot write the comment at all |
-| `baseline` | `ok`, `absent`, `invalid` | `invalid` is a marker that could not be parsed, or a payload of another version; it is replaced, not trusted |
+| `action` | `reindex`, `refresh`, `initialize`, `conflict`, `blocked`, `skip` | `blocked` means this session cannot write the comment at all; `conflict` means the comment holds more than one reserved line and step 2 will not write it |
+| `baseline` | `ok`, `absent`, `invalid`, `ambiguous` | `invalid` is a reserved line that does not match the version-2 grammar whole; it is replaced, not trusted |
 | `index_size`, `baseline_size`, `size_ratio` | the file now, the stored size, and the first over the second | `>= 1.30` is the size test |
 | `table_tuples`, `baseline_tuples`, `tuple_ratio` | the table's `reltuples` now, stored, and the first over the second | a move of 30 % either way is the tuple test |
-| `notes` | why a row looks the way it does | eight strings, listed under the ladder below |
+| `notes` | why a row looks the way it does | nine strings, listed under the ladder below |
 | `comment_command`, `reindex_command` | exactly what step 2 will run | `comment_command` is NULL on a `reindex` row, because its new baseline is only known after the rebuild |
 
 ### The decision ladder, in order
@@ -624,12 +890,16 @@ The first rule that matches decides. This is the order of the `staged` CTE.
 | # | Condition | Action | Writes |
 |---|---|---|---|
 | 1 | this session does not own the index | `blocked` | nothing |
-| 2 | no readable version-2 `@nbmaint:` payload | `initialize` | the baseline, at current values |
-| 3 | the index is smaller than its stored size | `refresh` | the baseline, at current values |
-| 4 | size `>= 1.30 x` stored, or table tuples moved `>= 30 %` either way | `reindex` | `REINDEX INDEX`, then the baseline read after the rebuild |
-| 5 | none of the above | `skip` | nothing |
+| 2 | the comment holds more than one reserved `@nbmaint:` line | `conflict` | nothing, until a person removes one |
+| 3 | no reserved line, or one that is not a version-2 payload | `initialize` | the baseline, at current values |
+| 4 | the index is smaller than its stored size | `refresh` | the baseline, at current values |
+| 5 | size `>= 1.30 x` stored, or table tuples moved `>= 30 %` either way | `reindex` | `REINDEX INDEX`, then the baseline read after the rebuild |
+| 6 | none of the above | `skip` | nothing |
 
-**Rule 3 is not in the brief, and it is needed.** A `VACUUM` never shortens one of these
+**Rule 2 keeps the human text safe.** With two reserved lines the method cannot tell which
+one is its own, so it writes neither and reports the index until a person removes one.
+
+**Rule 4 is not in the brief, and it is needed.** A `VACUUM` never shortens one of these
 index files. The only call to `RelationTruncate` in the hash, GiST, SP-GiST, GIN, BRIN and
 B-tree directories of the pinned tree is SP-GiST's, and it sits inside `#ifdef NOT_USED`;
 the hash README says only `REINDEX` shrinks a hash index; and GIN's cleanup re-reads the
@@ -640,20 +910,25 @@ relation length rather than shortening it
 So an index smaller than its baseline was given a new file by something else, such as a
 hand-run `REINDEX`, which builds into a new relation file
 ([index.c#reindex_index-rebuild](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789)).
-A stored size that is now too high would hide the next 30 % of growth. Rule 3 rewrites it,
-and it runs before rule 4, so an index rebuilt elsewhere is not rebuilt again. The payload
+A stored size that is now too high would hide the next 30 % of growth. Rule 4 rewrites it,
+and it runs before rule 5, so an index rebuilt elsewhere is not rebuilt again. The payload
 carries no relation file number, so a rebuild elsewhere that did **not** shrink the file
 goes unnoticed; see [After an out-of-band rebuild](#after-an-out-of-band-rebuild).
 
 Step 2's two knobs, `dry_run` and `max_reindex`, sit at the top of its `DECLARE` block.
-`dry_run := true` prints what each index would get and writes nothing; `max_reindex` caps
-the rebuilds one run may start, and an index over the cap is reported and left for the
-next run.
+`dry_run := true` prints what each index would get, and locks and writes nothing.
+`max_reindex` caps the rebuilds one run may **start**: a rebuild is counted before it
+begins, so one that fails still uses up its place, and an index over the cap is reported
+and left for the next run. Edge round G measured it with the cap set to 1: the first
+rebuild failed with `SQLSTATE 22012`, and the next index due was reported as capped, its
+file and comment untouched.
 
-Eight `notes` strings exist: `not the index owner: nothing can be written`, `unreadable
-@nbmaint: payload, replaced`, `table reltuples unknown: tuple test cannot fire`, `baseline
-tuple count unknown: tuple test cannot fire`, `baseline tuple count was zero`, `index
-smaller than its baseline: rebuilt elsewhere`, `size test fired` and `tuple test fired`.
+Nine `notes` strings exist: `not the index owner: nothing can be written`, `more than one
+reserved @nbmaint: line: nothing written until one is removed`, `reserved @nbmaint: line
+is not a version-2 payload: replaced`, `table reltuples unknown: tuple test cannot fire`,
+`baseline tuple count unknown: tuple test cannot fire`, `baseline tuple count was zero`,
+`index smaller than its baseline: rebuilt elsewhere`, `size test fired` and `tuple test
+fired`.
 
 ### Why the candidate filters are there
 
@@ -684,10 +959,17 @@ arithmetic:
 | current count is negative | the tuple test cannot fire, and `notes` says so | `reltuples` is `-1` on a table nothing has counted, from PostgreSQL 14 on; 12.2 stores `0` there instead ([pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)) |
 | stored count is negative | the tuple test cannot fire, and `notes` says so | a baseline written while the count was unknown; the next `refresh` or `reindex` writes a known one |
 
-Both counts pass through `float4` to `numeric`, which prints six significant digits
+Both counts pass through `float4` to `numeric`, which keeps `FLT_DIG`, six, significant
+digits
 ([numeric.c#float4_numeric](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4708-L4740));
-both servers measured `1234567::float4::numeric` as `1234570`. Stored and current values
-go through the same cast, so the rounding cannot move a 30 % test by more than 0.0005 %.
+both servers measured `1234567::float4::numeric` as `1234570`. The two counts are rounded
+separately - the stored one when its baseline was written, the current one now - and each
+rounding can move its value by half a unit in the sixth significant digit, at most
+5 x 10^-6 of it. The errors do not cancel, so the ratio the test reads can be off by up to
+about 1 x 10^-5 of itself. At the rising boundary a true 1.3000 can read anywhere from
+1.29999 to 1.30001, so the test can fire on a true rise of 29.9987 % or miss one of
+30.0013 %; at the falling boundary a true 0.7000 can read 0.69999 to 0.70001, a band of
+about 0.0007 percentage points either side of 30 %.
 
 ### The comment survives both REINDEX forms
 
@@ -727,6 +1009,8 @@ it ([indexcmds.c#RangeVarCallbackForReindexIndex-table-lockmode](../../../../raw
 [index.c#reindex_index-index-lock](../../../../raw/postgres-17/src/backend/catalog/index.c#L3647-L3654)).
 `COMMENT` takes `ShareUpdateExclusiveLock` on the index
 ([comment.c#CommentObject-ownership](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L76)).
+Step 2 takes the plain form's two locks itself before it reads anything it will act on;
+see [What step 2 locks, and what it checks under the locks](#what-step-2-locks-and-what-it-checks-under-the-locks).
 
 **The two timeouts behave differently inside step 2, on purpose.** A `DO` block is one
 statement, so `statement_timeout` bounds the whole run, and PL/pgSQL's `WHEN OTHERS`
@@ -737,11 +1021,11 @@ Both servers measured it: a `DO` block whose inner `WHEN OTHERS` wraps a sleep p
 timeout ended with `canceling statement due to statement timeout`. Every index step 2
 committed before the timeout keeps its rebuild and its baseline. `lock_timeout` instead
 fires per lock wait with `SQLSTATE 55P03`, which `WHEN OTHERS` does catch, so an index
-whose table lock cannot be had in 5 seconds is skipped for this run with a `WARNING`, its
-old baseline intact, and the loop goes on. The edge case measured exactly that on both
-servers: one index refused by a held lock, `failed=1`, five others rebuilt and one
-refreshed in the same run, and the refused one rebuilt by the next run once the lock was
-gone.
+whose size, table lock or index lock cannot be had in 5 seconds is skipped for this run
+with a `WARNING`, its old baseline intact, and the loop goes on. Edge round B measured the
+table lock on both servers: one index refused by a held lock, `failed=1`, five others
+rebuilt and one refreshed in the same run, and the refused one rebuilt by the next run
+once the lock was gone. Edge round H measured the size read, as above.
 
 ### What is version-local between 12 and 17
 
@@ -753,6 +1037,9 @@ discovered by the scripts' `facts` stage on the running server.
 | both texts run unmodified | yes | yes | the compatibility claim; the `exact` stage ran each twice on each server |
 | `WITH ... AS MATERIALIZED` | accepted | accepted | the pipeline's optimization fences |
 | `pg_input_is_valid()` | 1 `pg_proc` row | 0 | the payload is parsed by regex, not by a guarded cast |
+| `regexp_match()` | 2 `pg_proc` rows | 2 | the payload grammar is matched whole, with its fields read from that one match |
+| `ALTER INDEX ... OWNER TO` the owner it has | holds `AccessExclusiveLock`, prints nothing, and leaves the index's `pg_class` row with its `xmin` | the same | step 2's lock on the index |
+| `nbmaint.only_index` after a transaction that set it locally, and in a fresh session | `''`, and NULL | the same | step 1 reads every candidate |
 | `COMMIT` inside `DO`, top level / inside `BEGIN` | accepted / `invalid transaction termination` | the same | one transaction per index, and step 2 must run at the top level |
 | plain `REINDEX` inside `DO` | accepted | accepted | step 2 can rebuild |
 | `REINDEX CONCURRENTLY` inside `DO` | refused | refused | step 2 uses the plain form |
@@ -819,12 +1106,12 @@ Where the two servers differ, a cell reads `17.11 / 12.2`:
 | `VACUUM` | the live tuples it saw, extrapolated over the pages it skipped from the old density | [vacuumlazy.c#new_live_tuples](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1034-L1037), [vacuumlazy.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L572-L575), [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1300-L1366) |
 | `TRUNCATE` | `-1` on 17, measured `0` on 12.2 | [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3943-L3954) |
 
-Every fixture's maintenance step is a `VACUUM ANALYZE`, which vacuums first and analyzes
-second, so the count the method compares is `ANALYZE`'s sample estimate on both sides of
-the comparison. That estimate moves even when the rows do not: on the fixtures whose row
-count never changed, the tuple ratio read between 0.9844 (`s08` on 12.2) and 1.0115 (`g09`
-on 12.2). Only a fixture sitting on the 30 % boundary could flip on that, and the one
-that does, `s10` at a 30 % delete, is also opened by its size test.
+Most maintenance steps are a `VACUUM ANALYZE`, which vacuums first and analyzes second, so
+the count the method compares is `ANALYZE`'s sample estimate on both sides of the
+comparison. That estimate moves even when the rows do not: on the fixtures whose row count
+ended where it began, the tuple ratio read between 0.9962 (`g06` on 12.2) and 1.0185 (`g09` on 17.11). Only a fixture sitting on
+the 30 % boundary could flip on that, and the one that does, `s10` at a 30 % delete, is
+also opened by its size test.
 
 The same probe shows why the index's own `reltuples` was left out of the payload. A GIN
 build writes the entries it inserted, 400,000 for 200,000 rows of two keys, and the next
@@ -900,10 +1187,10 @@ What this run did in each phase:
 Filed before the first fixture existed, in their own database: the declared kind of every
 column step 1 publishes, all six of them **levels**, because the method publishes a
 decision and no estimate of reclaimable bytes; the method's two tests; the pay-off
-threshold; one prediction per fixture, taken from the source page's 17.11 figures; 17
-invariants; the three declared exceptions of the no-defeat rule; and the coverage plan.
-The first baseline payload was written after all of them, and the scripts print both
-timestamps.
+threshold; one prediction per fixture, taken from the source page's 17.11 figures; 18
+invariants, each scored as holding or failing, and a failure stops the run; the three
+declared exceptions of the no-defeat rule; and the coverage plan. The first baseline
+payload was written after all of them, and the scripts print both timestamps.
 
 **Three differences from the source page's run.** The method under test is this page's,
 not the source page's. `max_parallel_maintenance_workers` is 0 here and was 2 there, so
@@ -968,6 +1255,76 @@ but not yet removable, then a second `VACUUM` after the release reported 0 and d
 2,330 GiST pages and 375 GIN posting-tree pages, none of them free yet. Both fixtures are
 scored on that second state.
 
+### The protocol cross-checks
+
+Both protocols require every number to be read more than one way. The 18 invariants,
+filed before the first fixture existed, are those second readings; all 18 held on both
+legs. Two of them are the protocols' own checks on `VACUUM`'s report and on BRIN's free
+space map.
+
+**`VACUUM VERBOSE`'s index line, against the census (I9).** On 17 the line reads `pages:
+N in total, N newly deleted, N currently deleted, N reusable`
+([vacuumlazy.c#verbose-index-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732)).
+Each maintenance `VACUUM`'s line is compared, count by count, with the censuses taken just
+before and just after that `VACUUM`:
+
+| AM | What each count is, in the pinned source | What it is checked against |
+|---|---|---|
+| hash | cleanup returns no statistics, and so no line, unless `hashbulkdelete` ran; when it ran, only `num_pages` is filled ([hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663), [hash.c#hashbulkdelete-stats](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L631-L637)) | no line exactly where `VERBOSE` does not print `index scan needed:`, which it prints only when bulk deletion ran ([vacuumlazy.c#index-scan-needed](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L695-L700)); otherwise the census after, and three zeros |
+| GiST | the scan counts a recyclable or new page as deleted and reusable and records it free, a deleted page not yet recyclable as deleted, and each page it deletes as newly deleted and deleted ([gistvacuum.c#gistvacuumpage-classes](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L309), [gistvacuum.c#gistdeletepage-counters](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L655-L658)) | deleted = deleted-flag plus all-zero pages after; reusable = FSM free pages after; newly deleted = deleted-flag pages after minus before |
+| SP-GiST | a page outside the metapage and the two roots that is left new or empty is recorded free and counted, and the three counts are set equal ([spgvacuum.c#spgvacuumpage-fsm](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L665-L683), [spgvacuum.c#final-stats](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L902-L905), [spgist_private.h#fixed-blocks](../../../../raw/postgres-17/src/include/access/spgist_private.h#L47-L53)) | the new or empty pages after, read from page headers ([bufpage.h#PageIsEmpty](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214-L224)), and FSM free pages after |
+| BRIN | `num_pages` is read before the scan and the summarization, and the rest stays 0 ([brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332)) | pages in total = the census before |
+| GIN | reusable is the recyclable pages the cleanup scan records free ([ginvacuum.c#ginvacuumcleanup-free](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L794)) | FSM free pages after |
+
+Every maintenance step agreed with its censuses, count by count: 27 of 27 on 17.11, 24 of
+them with an index line, and 26 of 26, 23 with a line, on 12.2. The steps with no line are `h04`'s
+`VACUUM`, whose bulk deletion never ran, and the two `ANALYZE`-only stand-ins, `h05` and
+`n12`. 12.2 reports the same counts in two messages, `index "X" now contains ... in P
+pages` and `D index pages have been deleted, F are currently reusable`, with no
+newly-deleted count; the 12 leg reads them from there, and its checks skip the count 12.2
+does not print.
+
+**BRIN's free space, page by page (I18).** The non-B-tree protocol asks for `pg_freespace`
+against each regular page's own free space, not a count of pages. A BRIN page's own free
+space is `PageGetFreeSpace`, or 0 on a page flagged `BRIN_EVACUATE_PAGE`
+([brin_pageops.c#br_page_get_freespace](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L913-L927)),
+and the FSM keeps it rounded down to a category `BLCKSZ / 256` bytes wide
+([freespace.c#FSM_CATEGORIES](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L64-L66),
+[freespace.c#fsm_space_avail_to_cat](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L402-L421),
+[freespace.c#fsm_space_cat_to_avail](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L427-L435)).
+The census reads each regular page's header and its flags out of the raw page
+([brin_page.h#BrinSpecialSpace](../../../../raw/postgres-17/src/include/access/brin_page.h#L29-L60))
+and compares the two for every page, on every census.
+
+Where they must agree is narrower than "after a `VACUUM`". `brin_vacuum_scan` records every
+regular page's free space
+([brin.c#brin_vacuum_scan](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L2154-L2193),
+[brin_pageops.c#brin_page_cleanup](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L609-L661)),
+but the same `VACUUM` then summarizes, and BRIN writes a page's FSM entry only when the page
+is extended or a search finds it short of space, "but not every single time we add a tuple
+to the page", and an extended page's entry is the space left after its first summary; a
+summary that moves to another page frees space on its old page and records nothing
+([brin_pageops.c#brin_getinsertbuffer-fsm-policy](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L679-L682),
+[brin_pageops.c#brin_doinsert-extended-freespace](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L417-L419),
+[brin_pageops.c#brin_doinsert-fsm](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L460-L464),
+[brin_pageops.c#brin_doupdate-move](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L244-L313),
+[brin_pageops.c#brin_getinsertbuffer-record](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L861-L865)).
+So I18 scores the pages the `VACUUM` did not write, found by an LSN no newer than the WAL
+insert position read just before it began, and reports the rest.
+
+That leaves few pages to score, because most of a BRIN index's regular pages take a
+summary during its `VACUUM`. On 17.11 the two pages the `VACUUM`s did not write, one each
+in `b12` and `b13`, read their exact category, and so did 13 of the 18 they wrote. Three
+of the other five read higher, and each is the last page of `b10`, `b11` or `b12`, the page
+that index's summarization extended it onto and went on filling. Two read lower, both on
+`b11`, the one index whose summaries moved between pages: 21 line pointers were left
+behind by moves during its churn. A moved summary frees space it does not record, which
+fits, but the census keeps no per-page history, so it does not show which summary left
+which page. On 12.2, where `b11` is not built, the same two unwritten pages read their exact
+category, and so did 4 of the 6 written ones; the other two read higher, and they are the
+last pages of `b10` and `b12`, with the same free space and FSM entry as on 17.11. Every
+scored page agreed on both legs.
+
 ### Results on 17.11
 
 `B` is the as-built size, `C` the maintained size step 1 decided on, `R` the size right
@@ -986,19 +1343,19 @@ the stored count. The score compares the decision with `truth %` at 23.08 %.
 | `h07` | hash | 32,768 | 32,768 | 32,768 | 0.00 | 1.0000 | - | - | skip | PASS |
 | `h08` | hash | 33,570,816 | 33,570,816 | 33,570,816 | 0.00 | 1.0000 | 1.0000 | - | skip | PASS |
 | `h12` | hash | 58,736,640 | 66,568,192 | 66,568,192 | 0.00 | 1.1333 | 1.0000 | - | skip | PASS |
-| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 0.9995 | size | reindex | PASS |
+| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 1.0042 | size | reindex | PASS |
 | `g07` | GiST | 81,100,800 | 300,523,520 | 81,100,800 | 73.01 | 3.7056 | 1.0000 | size | reindex | PASS |
 | `g08` | GiST | 24,330,240 | 24,330,240 | 4,866,048 | 80.00 | 1.0000 | 0.2000 | tuples | reindex | PASS |
-| `g09` | GiST | 45,375,488 | 453,812,224 | 70,787,072 | 84.40 | 10.0013 | 1.0083 | size | reindex | PASS |
-| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 1.0020 | size | reindex | PASS |
+| `g09` | GiST | 45,375,488 | 456,310,784 | 70,787,072 | 84.49 | 10.0563 | 1.0185 | size | reindex | PASS |
+| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 1.0057 | size | reindex | PASS |
 | `s09` | SP-GiST | 33,964,032 | 134,873,088 | 33,964,032 | 74.82 | 3.9711 | 1.0000 | size | reindex | PASS |
 | `s10` | SP-GiST | 12,582,912 | 16,957,440 | 9,502,720 | 43.96 | 1.3477 | 0.7000 | both | reindex | PASS |
-| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0005 | size | reindex | **FALSE POSITIVE** |
-| `b11` | BRIN | 49,152 | 114,688 | 114,688 | 0.00 | 2.3333 | 1.0008 | size | reindex | **FALSE POSITIVE** |
-| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 1.0035 | size | reindex | **FALSE POSITIVE** |
+| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0050 | size | reindex | **FALSE POSITIVE** |
+| `b11` | BRIN | 49,152 | 114,688 | 114,688 | 0.00 | 2.3333 | 1.0053 | size | reindex | **FALSE POSITIVE** |
+| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 0.9980 | size | reindex | **FALSE POSITIVE** |
 | `b13` | BRIN | 24,576 | 24,576 | 24,576 | 0.00 | 1.0000 | 1.5000 | tuples | reindex | **FALSE POSITIVE** |
 | `n03` | GIN | 43,106,304 | 50,659,328 | 43,106,304 | 14.91 | 1.1752 | 1.0000 | - | skip | PASS |
-| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 0.9899 | size | reindex | PASS |
+| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0111 | size | reindex | PASS |
 | `n05` | GIN | 43,106,304 | 85,131,264 | 66,871,296 | 21.45 | 1.9749 | 1.5000 | both | reindex | **FALSE POSITIVE** |
 | `n06` | GIN | 43,335,680 | 123,756,544 | 40,034,304 | 67.65 | 2.8558 | 1.0000 | size | reindex | PASS |
 | `n07` | GIN | 43,106,304 | 188,317,696 | 49,135,616 | 73.91 | 4.3687 | 1.0000 | size | reindex | PASS |
@@ -1029,18 +1386,18 @@ The same 29 fixtures but `b11`, on a server built from the 12.2 pin.
 | `h07` | hash | 81,920 | 81,920 | 81,920 | 0.00 | 1.0000 | - | - | skip | PASS |
 | `h08` | hash | 33,570,816 | 33,570,816 | 33,570,816 | 0.00 | 1.0000 | 1.0000 | - | skip | PASS |
 | `h12` | hash | 58,736,640 | 66,568,192 | 66,568,192 | 0.00 | 1.1333 | 1.0000 | - | skip | PASS |
-| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 1.0027 | size | reindex | PASS |
+| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 0.9962 | size | reindex | PASS |
 | `g07` | GiST | 81,100,800 | 300,523,520 | 81,100,800 | 73.01 | 3.7056 | 1.0000 | size | reindex | PASS |
 | `g08` | GiST | 24,330,240 | 24,330,240 | 4,866,048 | 80.00 | 1.0000 | 0.2000 | tuples | reindex | PASS |
-| `g09` | GiST | 97,968,128 | 482,336,768 | 78,053,376 | 83.82 | 4.9234 | 1.0115 | size | reindex | PASS |
-| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 0.9844 | size | reindex | PASS |
+| `g09` | GiST | 97,902,592 | 487,817,216 | 78,102,528 | 83.99 | 4.9827 | 0.9978 | size | reindex | PASS |
+| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 1.0002 | size | reindex | PASS |
 | `s09` | SP-GiST | 33,964,032 | 134,873,088 | 33,964,032 | 74.82 | 3.9711 | 1.0000 | size | reindex | PASS |
 | `s10` | SP-GiST | 12,582,912 | 16,957,440 | 9,502,720 | 43.96 | 1.3477 | 0.7000 | both | reindex | PASS |
-| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0018 | size | reindex | **FALSE POSITIVE** |
-| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 0.9949 | size | reindex | **FALSE POSITIVE** |
+| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0009 | size | reindex | **FALSE POSITIVE** |
+| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 1.0074 | size | reindex | **FALSE POSITIVE** |
 | `b13` | BRIN | 24,576 | 24,576 | 24,576 | 0.00 | 1.0000 | 1.5000 | tuples | reindex | **FALSE POSITIVE** |
 | `n03` | GIN | 43,106,304 | 50,659,328 | 43,106,304 | 14.91 | 1.1752 | 1.0000 | - | skip | PASS |
-| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0072 | size | reindex | PASS |
+| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0046 | size | reindex | PASS |
 | `n05` | GIN | 43,106,304 | 85,131,264 | 66,871,296 | 21.45 | 1.9749 | 1.5000 | both | reindex | **FALSE POSITIVE** |
 | `n06` | GIN | 43,335,680 | 123,756,544 | 40,034,304 | 67.65 | 2.8558 | 1.0000 | size | reindex | PASS |
 | `n07` | GIN | 43,106,304 | 188,317,696 | 49,135,616 | 73.91 | 4.3687 | 1.0000 | size | reindex | PASS |
@@ -1088,8 +1445,10 @@ Probe P2 shows the dependence directly, identically on both legs: rebuilding `h0
 after forging its table's `reltuples` to 100 produced 38,346,752 bytes instead of
 33,570,816, and a fresh `ANALYZE` put it back.
 `n05` and `n12` are the GIN counterparts: rows that arrived through the pending list and
-were merged by the maintenance step leave an index 21.45 % and 11.50 % larger than a fresh
-build of the same rows. `n05` sits 1.63 points under the pay-off threshold.
+were merged by the maintenance step leave an index 27.31 % and 12.99 % larger than a fresh
+build of the same rows, so a rebuild returns 21.45 % and 11.50 % of the file - the two
+figures are `C / R - 1` and `1 - R / C` of the same sizes. `n05` sits 1.63 points under
+the pay-off threshold.
 
 **The tuple test, by direction.** A fall in the table's count means rows left, and on these
 fixtures the entries they left behind were real waste: `g08` 80.00 %, `n10` 78.91 %, `s10`
@@ -1119,7 +1478,7 @@ freshly rebuilt by a `REINDEX` the method never saw.
 
 Step 2 did exactly what step 1 printed, and a settled database cost nothing. What step 1
 printed is the finding. The indexes whose rebuilt file was smaller than the as-built
-baseline were refreshed, as rule 3 intends. Every other index whose size or table count
+baseline were refreshed, as rule 4 intends. Every other index whose size or table count
 sat 30 % away from its as-built baseline was ordered rebuilt again: the BRIN indexes;
 `h01`, whose 100 hot keys need overflow pages even in a fresh build, at 1.46x; `h04` and
 `n05`, which hold 40 % and 50 % more rows; and on 17.11 `g09`, whose relocated points
@@ -1129,23 +1488,37 @@ relation file number, so a rebuild done elsewhere counts only when it shrank the
 
 ### Edge cases, measured
 
-The `edge` stage exercises the comment handling, the two tests' boundaries and the
-filters, each case with its expected result filed before the texts run. **91 of 91
-verdicts held on each leg.**
+The `edge` stage exercises the comment handling, the two tests' boundaries, the filters,
+and what step 2 does when another session holds a lock, edits the comment, rewrites the
+payload or renames the index while step 2 waits for its locks. Each case files its
+expected result before the texts run, and any difference fails the run. **158 of
+158 verdicts held on each leg.**
 
 | Round | What it does | Result, both legs |
 |---|---|---|
-| A | first run over 19 candidates: no comment; a human comment with an `@`, a `{`, a `}` and trailing blank lines; `keep me` above a version-1 payload; a payload whose `sz` is a string; a bare marker between two human lines | 19 `initialize`; every comment rewritten with its human text intact, exactly one payload, last, and `sz` and `tup` equal to the file and the table count. The B-tree index, the failed concurrent build and the partitioned parent never appear |
-| B | forged payloads: the size test at and one byte under 1.30x; the tuple test at 30 % up and down and one tuple inside each; a stored count of 0; a stored size twice the file; a valid payload between two human lines; an index whose table another session holds in `ROW EXCLUSIVE` | exactly the expected `reindex`, `refresh` and `skip`; the human text above and below the payload kept; the locked table's rebuild refused after 5 seconds with `SQLSTATE 55P03`, `failed=1`, its file and comment untouched, and the rest of the run carried on |
+| A | first run over 31 candidates: no comment; a human comment with an `@`, a `{`, a `}`, trailing spaces and blank lines; `keep me` above a version-1 payload; a payload whose `sz` is a string; a payload nested inside another object; a payload with a repeated field; two reserved lines; a payload-shaped string inside a line of prose; a bare `@nbmaint:` between two human lines; a version-1 payload followed by a newline | 30 `initialize` and one `conflict`. Every comment written keeps its human text byte for byte and in place, holds exactly one reserved line, and carries `sz` and `tup` equal to the file and the table count; the nested and repeated payloads are re-initialized, not read; the two-line comment is untouched. The B-tree index, the failed concurrent build and the partitioned parent never appear |
+| B | forged payloads: the size test at and one byte under 1.30x; the tuple test at 30 % up and down and one tuple inside each; a stored count of 0; a stored size twice the file; a valid payload between two human lines; an index whose table another session holds in `ROW EXCLUSIVE` | exactly the expected `reindex`, `refresh` and `skip`; the payload between two human lines replaced where it stood; the locked table's index refused after 5 seconds with `SQLSTATE 55P03`, `failed=1`, its file and comment untouched, and the rest of the run carried on |
 | C | the lock released, then two more runs | the refused rebuild happens; then a run that changes no comment and no file |
-| D | both texts under a role that owns nothing | every one of the 19 rows `blocked`; nothing written |
+| D | both texts under a role that owns nothing | every one of the 31 rows `blocked`; nothing written |
 | E | `REINDEX INDEX`, then `REINDEX INDEX CONCURRENTLY`, on an index with a human comment and a payload | the plain form keeps the OID, the concurrent one moves to a new OID, the comment is byte-identical after both, and step 1 then reads `skip` |
-| F | another session holds a temporary hash index | not a candidate |
+| F | another session holds a temporary hash index | step 1 never lists it, and step 2 passes it by without counting it |
+| H | another session holds one index in `ACCESS EXCLUSIVE` for the whole round | step 1 is cancelled by its 5-second `lock_timeout` with `canceling statement due to lock timeout`; step 2 counts that index `failed` with `SQLSTATE 55P03`, writes nothing to it, and finishes the others |
+| I | a person rewrites the comment's human text while step 2 waits for its table lock | step 2 reads the comment again under its locks, refreshes the payload, and keeps the text written while it waited |
+| J | the payload is rewritten to the file's true size while step 2 waits | `reindex` before the locks and `skip` under them, `changed=1`; no rebuild, and the comment is the one written meanwhile |
+| K | the index is renamed, and a new index takes its old name, while step 2 waits | refused with `SQLSTATE 55000`, both indexes untouched; the next run rebuilds the renamed index and initializes the new one |
+| G | step 2 with one documented edit, `max_reindex` set to 1; the first index due fails to rebuild with a division by zero | `started=1`, `failed=1`, `capped=1`: the failed rebuild used up the cap, and the next index due keeps its file and comment |
 
 On 17.11 an index built on an empty table that nothing has counted reads `table
 reltuples unknown` and `baseline tuple count unknown`; on 12.2 the same index reads
 `baseline tuple count was zero`. Both skip it. The stored payloads were 66 to 71 bytes on
 17.11 and 65 to 71 on 12.2, which stores an unknown count as `0` rather than `-1`.
+
+Rounds I to K depend on timing in one direction only. Step 2 waits up to its own
+`lock_timeout` of 5 seconds for the table lock; the stage polls `pg_locks` every 0.05
+seconds until step 2 is queued, then makes its change and releases the lock. A change that
+came too late would have left step 2 failing on its lock timeout, and the round's verdicts
+would differ; none did. Round G's cap is the one documented edit of step 2; the stage
+checks that exactly one line differs from the filed text before it runs it.
 
 ### Coverage the protocols require, and what this run skipped
 
@@ -1158,7 +1531,7 @@ reads the same on both legs unless the 12.2 column says otherwise.
 | non-B-tree | hash: a splitpoint allocation | `h02` | reached: 4,098 blocks grew to 20,749 | the same |
 | non-B-tree | hash: an index whose `hashbulkdelete` never ran | `h04` | reached: no `VERBOSE` index line | the same |
 | non-B-tree | GiST: an emptied leaf deleted, and one kept as its parent's last downlink | `g07` | partly: 26,315 pages deleted beside 10,037 live leaves; a page-class census cannot tell a last-downlink leaf from any other | the same |
-| non-B-tree | GiST: a deleted-but-not-recyclable page under a held snapshot | `g08` | reached: nothing deleted under the snapshot, then 2,330 pages deleted and none free yet | the same |
+| non-B-tree | GiST: a deleted-but-not-recyclable page under a held snapshot | - | **not reached**: `g08`'s snapshot kept its dead rows, so the `VACUUM` under it deleted no page; the 2,330 pages the second `VACUUM` deleted came after the release, and were not yet free only because their deletion XID, taken as they were deleted, was not yet older than every snapshot's horizon; see [Open Questions](#open-questions) | the same |
 | non-B-tree | GiST: a sorted build beside a non-sorted one | `g09` beside `g06` to `g08` | reached: `point_ops` has support function 11 | **not reachable**: no GiST operator class has it on 12.2 |
 | non-B-tree | SP-GiST: placeholders, a trailing run removed, an interior one kept | `s09` | partly: 109 pages freed, from `VACUUM`'s own counters; no decoder shows the page classes | the same |
 | non-B-tree | SP-GiST: an emptied non-root page and the root | `s09` | partly, the same limit | the same |
@@ -1178,7 +1551,7 @@ reads the same on both legs unless the 12.2 column says otherwise.
 | GIN | half-empty posting-tree leaves with nothing deletable | `n04`, as declared | **not reached**: `n04` holds no posting-tree page at all, 0 data pages before and after its churn | the same |
 | GIN | a populated pending list, and the same index after a flush | `n05` | reached: 2,206 pending pages before the maintenance step, 0 after | the same |
 | GIN | an untouched index and an empty index | `n08`, `n09` | reached | the same |
-| GIN | a snapshot held across the settling `VACUUM` | `n10` | reached: 960,000 tuples dead but not yet removable under it | the same |
+| GIN | a snapshot held across the settling `VACUUM` | `n10` | reached: 960,000 tuples dead but not yet removable under it, and no posting-tree page deleted; the 375 pages deleted later came after the release | the same |
 | GIN | more than one operator class | `n06`, `n07` | reached: `jsonb_path_ops` and `tsvector_ops` beside `array_ops` | the same |
 | GIN | one rebuild at more than one `maintenance_work_mem` | probe P3 | reached: 46,784,512, 48,021,504 and 49,143,808 bytes at 4MB, 64MB and 256MB | 46,825,472, 47,980,544 and 49,143,808 |
 | GIN | the GIN auto-analyze stand-in, `ANALYZE` plus `gin_clean_pending_list()` | `n12` | reached | the same |
@@ -1204,11 +1577,18 @@ reads the same on both legs unless the 12.2 column says otherwise.
 - **A partial index is judged by its whole table's count.** The brief's second value is
   the table's; a predicate population can move far without the table's count moving.
 - **A stored count of `-1` disables the tuple test** until the next write of the baseline.
-- **A comment that already contains `@nbmaint:` as prose** is read as a broken payload:
-  the marker and the rest of its line are replaced. Trailing whitespace of the human text
-  is trimmed on the first write.
+- **A whole line of the form `@nbmaint:{...}` is reserved.** A person who writes one has
+  written a payload as far as the method can tell; two such lines stop the method on that
+  index until one is removed. `@nbmaint:` inside a line of prose is left alone.
 - **Step 2 rebuilds with the blocking form**, which stops writers on the table for the
   whole rebuild. The concurrent form has to be run from the top level.
+- **Step 2 takes `ACCESS EXCLUSIVE` on every index it writes to**, even to write only a
+  comment, for the length of that index's transaction; queries on that index wait behind
+  it for up to `lock_timeout`, and the `ALTER INDEX` that takes it fires DDL event
+  triggers.
+- **Step 1 is all or nothing.** It is one statement, so one candidate index held in
+  `ACCESS EXCLUSIVE` elsewhere for longer than `lock_timeout` cancels it; step 2 goes on
+  without that index.
 - **Step 2's `statement_timeout` bounds the whole run**, not one rebuild. Rebuilds
   already committed keep their baselines when it fires.
 - **PostgreSQL 13 to 16 were not built.** The texts use nothing newer than 12, and the
@@ -1229,39 +1609,40 @@ filed texts out of this page, so the text that is scored is the text that is pub
 | Item | 17 leg, `nbmaint_suite_v17.sh` | 12 leg, `nbmaint_suite_v12.sh` |
 |---|---|---|
 | Purpose | Build 17.11 out of tree, run the engine and contrib regression suites, start an isolated cluster, run both filed texts on an empty database, discover the version-local facts, file the declarations, build 29 of the source page's 31 fixtures, all but `h06` and `n11`, store their baselines with step 2, churn and maintain them under the no-defeat proofs, run the simulated auto-analyze census, decide with step 1 under the measurement lock, rebuild every fixture as the oracle, run step 2 on the rebuilt state, score, run four probes and the edge cases, and check the page against what ran. Every number in [Answer](#answer) that names 17.11 is one of its outputs | The same on 12.2, with 28 fixtures: `b11` also needs an operator class 12.2 does not have. Every number that names 12.2 is one of its outputs |
-| Invocation | Save the block to `.wiki-runtime/tmp/nbmaint_suite_v17.sh` and run `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh` from the repository root. Selected stages: `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh decide score` | The same with `nbmaint_suite_v12.sh` |
-| Stages | `build check cluster texts exact facts declare fixtures churn autoanalyze crosscheck decide oracle act score probes edge verify criteria report`, in that default order; `start`, `stop`, `reset` and `clean` run only when named | the same |
+| Invocation | Save the block to `.wiki-runtime/tmp/nbmaint_suite_v17.sh` and run `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh` from the repository root. It exits 0 only when every stage and every required check passed. To score a finished run again: `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh score criteria`. To run the fixtures again, start at `fixtures`, which rebuilds the fixture database; `reset` drops every database, so a new run starts at `declare` | The same with `nbmaint_suite_v12.sh` |
+| Stages | `build check cluster texts exact facts declare fixtures churn autoanalyze crosscheck decide oracle act score probes edge defeat verify criteria report`, in that default order; `start`, `stop`, `reset` and `clean` run only when named. `churn`, `autoanalyze`, `decide`, `oracle` and `act` change the fixtures: each refuses to run before the stages it depends on, and after a later one has changed what it would read. `crosscheck`, `score` and `probes` may run again, and replace their own records | the same |
 | Environment | `WIKI_ROOT` (`$PWD`), `PAGE` (this page), `SRC` (`$WIKI_ROOT/raw/postgres-17`), `SANDBOX` (`$WIKI_ROOT/.wiki-runtime/tmp/nbmaint17`), `PORT` (`55417`), `JOBS` (`8`), `BASE_ROWS` (`1000000`), `BRIN_ROWS` (`2000000`), `SMALL_ROWS` (`300000`), `GIN_ROWS` (`600000`), `HOT_ROWS` (`1200000`), `A05_INSERTS` (`120000`), `ROUNDS` (`6`), `MWM` (`256MB`) | the same names; `SRC` defaults to `raw/postgres-12`, `SANDBOX` to `.wiki-runtime/tmp/nbmaint12`, `PORT` to `55412` |
 | Prerequisites | See [Prerequisites](#prerequisites) | the same |
 | Output | Everything under `$SANDBOX/out`. Read `criteria.txt` first, then `score-table.txt`, `score-summary.txt`, `invariants.txt` and `maintenance-proof.txt`; see [Where the results land](#where-the-results-land) | the same, under the 12 leg's sandbox |
-| Runtime | 13 min 43 s from an empty sandbox on the recorded host, run alongside the 12 leg: 130 s to build, 67 s of regression suites, 86 s of fixtures, 7 min 6 s of churn, 65 s of oracle. About 11 min 30 s from a built tree | 14 min 26 s from an empty sandbox, alongside the 17 leg: 120 s to build, 59 s of regression suites, 94 s of fixtures, 7 min 55 s of churn including the one-second publication waits, 69 s of oracle. About 12 min 30 s from a built tree |
-| Cleanup | `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh clean` stops the cluster with `pg_ctl -m fast -w stop`, confirms no `postmaster.pid`, no `postgres` process on the data directory and an empty socket directory, refuses any path outside `.wiki-runtime/tmp/`, and deletes the sandbox. **`out/` is inside the sandbox, so copy it out first** | the same; the two legs have separate sandboxes, so either can be cleaned while the other runs |
+| Runtime | 14 min 25 s from an empty sandbox on the recorded host, run alongside the 12 leg: 146 s to build, 70 s of regression suites, 88 s of fixtures, 7 min 15 s of churn, 67 s of oracle. About 12 min from a built tree | 12 min 54 s from an empty sandbox, run alone after the 17 leg: 89 s to build, 40 s of regression suites, 80 s of fixtures, 7 min 15 s of churn including the one-second publication waits, 68 s of oracle. About 11 min 30 s from a built tree |
+| Cleanup | `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh clean` first checks that the sandbox resolves, with every symbolic link and `..` taken out, to a directory directly under this repository's `.wiki-runtime/tmp` that carries the marker the script wrote when it created it, and refuses anything else before it stops or deletes. It then stops the cluster with `pg_ctl -m fast -w stop`, confirms no `postmaster.pid`, no `postgres` process on the data directory and an empty socket directory, and deletes the sandbox. A run that fails stops its own cluster on the way out. **`out/` is inside the sandbox, so copy it out first** | the same; the two legs have separate sandboxes, so either can be cleaned while the other runs |
 
 ### The stages
 
 | Stage | What it does |
 |---|---|
-| `build` | configures the pinned checkout out of tree with `--without-icu --without-readline --with-zlib --enable-debug`, builds, installs, and installs `pageinspect`, `pgstattuple` and `pg_freespacemap` from the same tree; skipped when the binary is already there |
-| `check` | `make check`, then `make check` in each of the three contrib modules, with the exit status and pass count of each |
+| `build` | refuses unless the checkout is the leg's pinned commit with no tracked file changed; configures it out of tree with `--without-icu --without-readline --with-zlib --enable-debug`, builds, installs, installs `pageinspect`, `pgstattuple` and `pg_freespacemap` from the same tree, and writes `nbmaint-build-manifest.txt` into the install: the pin, the flags, a hash of the build tree's `config.status` and a hash of every installed file. An existing install is reused only when all four still match |
+| `check` | checks the manifest again, then `make check`, then `make check` in each contrib module that has a suite; any suite that does not exit 0 with all its tests passed fails the run |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, the settings below, the start, the `scratch` database, and the settings actually in force with their contexts |
-| `texts` | takes step 1 and step 2 out of this page by their tags, hashes them against the values recorded in the script, checks that their shared pipeline is byte-identical, and builds the one-edit view |
-| `exact` | runs both texts, unmodified, on a database with one hash, one GiST and one B-tree index: step 1, step 2, the comments written, step 2 again, step 1 again |
+| `texts` | takes step 1 and step 2 out of this page by their tags, hashes them against the values recorded in the script, checks that their shared pipeline is byte-identical, and builds the one-edit view; a hash that differs, or a pipeline that does, fails the run |
+| `exact` | runs both texts, unmodified, on a database with one hash, one GiST and one B-tree index: step 1, step 2, the comments written, step 2 again, step 1 again; a text that fails, or a second run that writes, fails the run |
 | `facts` | every version-local fact the texts and the harness depend on, discovered on the running server |
-| `declare` | files the declared kinds, the method's thresholds, the pay-off threshold, the 29 predictions (28 on the 12 leg), 17 invariants, 3 declared exceptions and the coverage plan into their own database, and refuses to run once the fixture database exists |
-| `fixtures` | builds every fixture, takes a locked page census of each, then runs step 2 once, which writes every baseline |
+| `declare` | files the declared kinds, the method's thresholds, the pay-off threshold, the 29 predictions (28 on the 12 leg), 18 invariants, 3 declared exceptions and the coverage plan into their own database, and refuses to run once the fixture database exists |
+| `fixtures` | builds every fixture, takes a locked page census of each, then runs step 2 once, which must write a version-2 payload into every fixture index |
 | `churn` | per fixture: the recipe's writes, a locked census of the unmaintained state, the maintenance step in a session with every timeout at 0, the no-defeat check, and a locked census of the maintained state; the BRIN stand-in and the two held-snapshot fixtures in line. **It dies at the first defeated maintenance**, so nothing after it runs |
 | `autoanalyze` | the simulated auto-analyze census: the launcher's analyze verdict recomputed per table, and `ANALYZE` on the tables it names |
-| `crosscheck` | `VACUUM VERBOSE`'s index line per fixture, the horizon holders, the `pgstattuple` refusals, the instrument matrix, and the census summary |
+| `crosscheck` | `VACUUM VERBOSE`'s index line from each maintenance `VACUUM`, stored against the censuses just before and just after it; the horizon holders, the `pgstattuple` refusals, the instrument matrix, and the census summary |
 | `decide` | step 1, verbatim, in one transaction holding `SHARE ROW EXCLUSIVE` on every fixture table, then the same rows through the view and the harness's own reading of every index, in that transaction |
 | `oracle` | `REINDEX INDEX` on every fixture at `maintenance_work_mem = 256MB`, with `pg_relation_size(index, 'main')` and the heap's `relpages` and `reltuples` read before and after |
-| `act` | step 1, step 2 and step 2 again on the state the oracle left, and the check that step 2 did what step 1 printed |
-| `score` | refuses to score if any maintenance proof failed; otherwise scores every decision against the oracle and the filed predictions, and prints the 17 invariants and the per-census GIN and BRIN detail |
+| `act` | step 1, step 2 and step 2 again on the state the oracle left; fails the run unless step 2 did what step 1 printed and its second run wrote nothing |
+| `score` | refuses to score if any maintenance proof failed; otherwise scores every decision against the oracle and the filed predictions on the unrounded reclaimed fraction, and evaluates the 18 invariants, failing the run if any declared invariant fails |
 | `probes` | who writes `reltuples`, the hash oracle's dependence on the heap estimate, the GIN oracle's dependence on `maintenance_work_mem`, and which GiST operator classes can take a sorted build |
-| `edge` | the comment shapes, the two tests' boundaries, the filters, a lock timeout, a role that owns nothing, both `REINDEX` forms and another session's temporary index, each with its expected result filed first, in their own database |
-| `verify` | takes both texts and this script out of the page again and compares them with what ran |
-| `criteria` | collects the results a reader checks first, the timeouts in force in every `VACUUM` and `ANALYZE` session of the run, and the server-log audit of deliberate and unexpected errors |
+| `edge` | the comment shapes, the two tests' boundaries, the filters, the lock and concurrency rounds, a role that owns nothing, both `REINDEX` forms, another session's temporary index and the rebuild cap, each with its expected result filed first, in their own database; any difference fails the run |
+| `defeat` | a throwaway fixture whose maintenance is defeated on purpose by an undeclared snapshot; fails the run if the no-defeat check does not stop that step |
+| `verify` | takes both texts and this script out of the page again and compares them with what ran; any difference fails the run |
+| `criteria` | collects the results a reader checks first, the timeouts in force in every `VACUUM` and `ANALYZE` session of the run, and the server-log audit; an unexpected error or a maintenance skip line fails the run |
 | `report` | lists the output files |
-| `start`, `stop`, `reset`, `clean` | start the built cluster; stop it cleanly and confirm the stop; drop the three databases and the edge role; stop and delete the sandbox |
+| `start`, `stop`, `reset`, `clean` | start the built cluster; stop it cleanly and confirm the stop; drop the three databases and the edge role; stop and delete the sandbox, after the checks above |
 
 ### The cluster settings
 
@@ -1299,10 +1680,13 @@ and the running servers reported the same contexts.
 - zlib headers. ICU and readline are not needed: both legs configure `--without-icu
   --without-readline`, and `initdb` runs with `--locale=C --encoding=UTF8`, which is what
   makes the text and `tsvector` fixtures deterministic.
-- The pinned checkouts at `raw/postgres-17` and `raw/postgres-12`, read only; `git` is
-  used only to print the commit the checkout is on.
-- `sha256sum`, `cmp`, `sed`, `grep`, `seq`, `pgrep`.
-- The leg's port free, and about 8 GB of disk under `.wiki-runtime/tmp/` per leg.
+- The pinned checkouts at `raw/postgres-17` and `raw/postgres-12`, read only. `git` reads
+  the commit each checkout is on and whether a tracked file differs from it, with
+  `--no-optional-locks`, so it writes nothing into the checkout.
+- `sha256sum`, `cmp`, `diff`, `find`, `sort`, `sed`, `grep`, `seq`, `pgrep`.
+- The leg's port free, and about 8 GB of disk under `.wiki-runtime/tmp/` per leg. The
+  sandbox must be a new directory directly under `.wiki-runtime/tmp`, or one this script
+  created; the script refuses any other.
 - Superuser on the sandbox cluster, which `initdb` gives the invoking user, because
   `pageinspect`'s raw-page reader requires it
   ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L199)).
@@ -1314,45 +1698,52 @@ and the running servers reported the same contexts.
 | `criteria.txt` | the summary a reader checks first |
 | `hashes.txt`, `exact.txt`, `facts.txt` | the two texts' hashes and pipeline check, both texts on an empty database, and the version-local facts |
 | `checks.txt`, `check-*.log` | the regression suites |
-| `settings.txt`, `version.txt`, `pin.txt`, `timing.txt` | the settings in force with their contexts, the server version, the checkout's commit, and each stage's duration |
+| `settings.txt`, `version.txt`, `pin.txt`, `timing.txt` | the settings in force with their contexts, the server version, the commit the install was built from by its manifest beside the commit the checkout is on, and each stage's duration |
+| `../inst/nbmaint-build-manifest.txt` | the build manifest: pin, flags, build configuration hash, compiler, platform, and the hash of every installed file |
 | `declared.txt` | every declaration, and the moment it was filed |
 | `baseline-sizes.txt`, `baseline-apply.txt` | the as-built sizes, and step 2's first run |
 | `maintenance-proof.txt`, `horizon-holders.txt`, `maint-*.log`, `settle2-*.log`, `standin-b13.log` | the no-defeat proofs per maintenance step, the horizon readings, and each step's own output with the timeouts it ran under |
 | `census-*.log`, `census-summary.txt`, `maintenance-pair.txt` | one locked census per fixture and phase, and the size before and after each maintenance step |
 | `autoanalyze-verdicts.txt`, `autoanalyze-named.txt` | the simulated auto-analyze census |
-| `verbose-lines.txt`, `instrument-matrix.txt`, `pgstattuple-refusals.txt` | `VACUUM`'s index line, which reader accepted which AM, and every `pgstattuple` refusal |
+| `verbose-lines.txt`, `instrument-matrix.txt`, `pgstattuple-refusals.txt` | `VACUUM`'s index line per maintenance `VACUUM`, which reader accepted which AM, and every `pgstattuple` refusal |
 | `decide.txt`, `decide-cost.txt` | step 1's own output under the measurement lock, and its duration |
 | `oracle-summary.txt`, `phase-sizes.txt` | the oracle per fixture, and every phase size |
-| `score-table.txt`, `score-summary.txt`, `invariants.txt`, `i6-i8-detail.txt` | the scored table, its totals, the invariants and the GIN and BRIN detail |
+| `score-table.txt`, `score-summary.txt`, `invariants.txt`, `invariant-detail.txt` | the scored table, its totals, the 18 invariants with whether each held, and the per-census and per-`VACUUM` detail behind I6, I8, I9 and I18 |
 | `act.txt`, `plan-act.txt`, `apply-act*.log` | step 1 and step 2 on the rebuilt state |
 | `probe-p1.txt` to `probe-p4.txt` | the four probes |
 | `edge.txt`, `plan-edge*.txt`, `apply-edge*.log` | the edge cases, expected against observed |
+| `defeat.txt`, `defeat-run.log` | the deliberately defeated maintenance step and the check that stopped it |
 | `verify.txt` | the page against what ran |
 | `server.log`, `server-errors-all.txt`, `server-errors-unexpected.txt` | the server log and its audit |
 
 ### The last run
 
-Both legs ran at the same time on one host, each from an empty sandbox through every
-default stage, with the script text published below.
+Each leg ran from an empty sandbox through every default stage, with the script text
+published below. The 17 leg ran beside a first run of the 12 leg. That run's
+`invariant-detail.txt` printed no `VERBOSE` counts at all on 12.2, because 12.2 reports no
+newly-deleted count and the missing value blanked the whole line. So the 12 leg's detail
+query was fixed and the 12 leg run again on its own. The second run decided, scored and
+checked exactly as the first; only `g09`'s sizes, the `ANALYZE`-sampled tuple ratios and
+the timings moved. Every 12.2 number on this page is from the second run.
 
 | Item | 17 leg | 12 leg |
 |---|---|---|
-| Date | 2026-09-22, 19:21:59Z to 19:35:42Z | 2026-09-22, 19:21:59Z to 19:36:25Z |
+| Date | 2026-09-22, 21:30:43Z to 21:45:08Z | 2026-09-22, 21:49:47Z to 22:02:41Z, alone |
 | Server | PostgreSQL 17.11, built from `786db8dcf168bd9df8f55047337525ac19118b1c` | PostgreSQL 12.2, built from `45b88269a353ad93744772791feb6d01bc7e1e42` |
+| Build manifest | built 21:33:09Z from the pin with no tracked file changed; `config.status` `5c749f3a4554b67c…`; installed files `f60bdcd606e7e1b5…` | built 21:51:16Z from the pin with no tracked file changed; `config.status` `6f7ecc70651c1cba…`; installed files `6d555377ddcdb59e…` |
 | Platform | Darwin 27.0.0 arm64, Apple clang 21.0.0, `JOBS=8` | the same |
 | `block_size`, `max_data_alignment` | 8192, 8 | 8192, 8 |
 | Engine tests | core **All 225**; `pageinspect` All 8; `pgstattuple` All 1; `pg_freespacemap` All 1 | core **All 192**; `pageinspect` All 5; `pgstattuple` All 1; `pg_freespacemap` has no suite in 12.2 |
-| Declarations filed, first baseline payload written | 19:25:21Z, 19:26:47Z | 19:25:04Z, 19:26:38Z |
-| Text hashes | step 1 `0a806aee7d6fcb2f…`, step 2 `ffd38111e81840b1…`, both matching the values in the script; shared pipeline identical | the same |
-| Script SHA-256 | `71e8626fd026d4041cfb766d78e3d2e75cf06e98496ef0bb4dc4e24f9c655d63` | `c9525b9701d53731985d2e67b2ebf478331f0e66aa3544b9625a0de84c47ea1a` |
+| Declarations filed, first baseline payload written | 21:34:26Z, 21:35:54Z | 21:52:01Z, 21:53:22Z |
+| Text hashes | step 1 `89293844dee3972f…`, step 2 `52bcbea7214af4f8…`, both matching the values in the script; shared pipeline identical | the same |
+| Script SHA-256 | `7cf385090b1f2aefd69dd55a251cd24ed671a751f10efa56fed0be08374552d8` | `8fc8c78fce7e96d0d25812ce1e635cf0f87df8b96f18c9a7613192edc67bccff` |
 | The page against what ran | both texts, and the script block below, byte-identical to the files that ran | the same |
-| Server log | 26 `ERROR` and `FATAL` lines, all 26 deliberate; 0 maintenance skip lines | 28, all deliberate; 0 |
+| Server log | 31 `ERROR` and `FATAL` lines, all 31 deliberate; 0 maintenance skip lines | 33, all deliberate; 0 |
 | Teardown | the `clean` stage: `pg_ctl -m fast` stop, no `postmaster.pid`, no `postgres` process on the data directory, empty socket directory, sandbox deleted | the same |
 
-The timings above are from two legs sharing ten cores with other work on the host; the
-sizes, the decisions and the scores do not depend on them. Every number on this page is
-from this pair of runs, except the figures from earlier passes that
-[Open Questions](#open-questions) names as such.
+The timings above are from a host shared with other work; the sizes, the decisions and
+the scores do not depend on them. Every number on this page is from these two runs, except
+the figures from earlier passes that [Open Questions](#open-questions) names as such.
 
 ### The PostgreSQL 17 leg script
 
@@ -1390,14 +1781,22 @@ from this pair of runs, except the figures from earlier passes that
 # against the no-defeat rule as soon as it returns, and the run dies rather
 # than score when one was defeated.
 #
+# A run fails - exit status 1, with the cluster stopped - when a stage fails,
+# a regression suite fails, a required check fails, or the page differs from
+# what ran.  The stages that change the fixtures run once each and in order;
+# a stage that only reads or re-scores replaces its own records when it runs
+# again, and every stage refuses to run before the stages it depends on.
+#
 # Every object this script creates is DISPOSABLE.  It runs its own cluster on
 # a non-default port with its own socket directory, never touches a cluster it
-# did not start, and treats raw/postgres-17 as read only.
+# did not start, and treats raw/postgres-17 as read only.  Before it writes,
+# stops or deletes anything it checks that the sandbox is a directory it
+# created itself, directly under this repository's .wiki-runtime/tmp.
 #
 # Usage, from the repository root:
-#   bash .wiki-runtime/tmp/nbmaint_suite_v17.sh                 # every stage
-#   bash .wiki-runtime/tmp/nbmaint_suite_v17.sh decide score    # some stages
-#   bash .wiki-runtime/tmp/nbmaint_suite_v17.sh clean           # stop, delete
+#   bash .wiki-runtime/tmp/nbmaint_suite_v17.sh                  # every stage
+#   bash .wiki-runtime/tmp/nbmaint_suite_v17.sh score criteria   # re-score a run
+#   bash .wiki-runtime/tmp/nbmaint_suite_v17.sh clean            # stop, delete
 #
 # Stages, in the default order: build check cluster texts exact facts declare
 # fixtures churn autoanalyze crosscheck decide oracle act score probes edge defeat
@@ -1428,14 +1827,17 @@ ROUNDS="${ROUNDS:-6}"
 MWM="${MWM:-256MB}"
 
 LEG=17
-BUILD="$SANDBOX/build"; INST="$SANDBOX/inst"; BIN="$INST/bin"
-DATA="$SANDBOX/data"; SOCK="$SANDBOX/sock"; OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"
+# The one commit this leg measures, and how it is built.  The build stage
+# refuses any other commit, and an install it did not build from this commit
+# with these flags - by its own manifest - is never reused.
+EXPECTED_PIN=786db8dcf168bd9df8f55047337525ac19118b1c
+CONFIGURE_FLAGS="--without-icu --without-readline --with-zlib --enable-debug"
 DB=nbmaint; PDB=protocol; EDB=edge; XDB=scratch
 
-# SHA-256 of the page's two filed texts as last measured.  A changed text must
-# be re-measured and these refiled; the texts stage prints match or DIFFERS.
-BASE_PLAN=0a806aee7d6fcb2f89367ee5cd382ce0d43886135ceba12e65122d28d133f320
-BASE_APPLY=ffd38111e81840b1107ca3c26ee7c8330aede6008ddf6702b650683b18c18c4f
+# SHA-256 of the page's two filed texts as last measured.  A text that differs
+# fails the texts stage: it must be re-measured and these refiled.
+BASE_PLAN=89293844dee3972f60ee34c977805cf42075456f7a029d2e23c8c9e127c39f2f
+BASE_APPLY=52bcbea7214af4f8e42fa09735a755a6d8c4eb414b18f22ebce3ab64980e924d
 
 # The run's own session timeouts: they bound a census and a rebuild.  Every
 # session that issues a VACUUM or an ANALYZE overrides them with zero_timeouts.
@@ -1451,17 +1853,31 @@ SKIPPED="h06 and n11: removed from the corpus at the asker's request on 2026-09-
 
 say()  { printf '\n=== %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
-die()  { printf 'FATAL: %s\n' "$*" >&2; exit 1; }
+# die stops the run.  Inside a subshell - a pipeline, a $(...) - exit ends
+# only that subshell, so die also appends to FAILMARK, which the dispatcher
+# reads after every stage.  EXPECT_DIE is set only in the one subshell that
+# provokes a die on purpose and records its exit status.
+die()  {
+  printf 'FATAL: %s\n' "$*" >&2
+  if [ -z "${EXPECT_DIE:-}" ] && [ -n "${FAILMARK:-}" ]; then
+    printf '%s\n' "$*" >> "$FAILMARK" 2>/dev/null
+  fi
+  exit 1
+}
 
-# psql helpers.  -X ignores ~/.psqlrc, and ON_ERROR_STOP is on every helper but
-# qe, whose callers want the server's refusal as their result.
+# psql helpers.  -X ignores ~/.psqlrc and ON_ERROR_STOP is on, and every
+# helper but three stops the run when psql fails.  qtry returns the failure to
+# its caller, which wants the server's refusal as its result; qe runs without
+# ON_ERROR_STOP for the same reason; qbg is a background session that another
+# session terminates on purpose.
 PSQL() { "$BIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -p "$PORT" "$@"; }
-q()    { PSQL -d "$1" -At -c "$2"; }                 # one statement, bare output
-qf()   { PSQL -d "$1" -f "$2"; }                     # a file
-qin()  { PSQL -d "$1"; }                             # stdin
-qat()  { PSQL -d "$1" -At -f "$2"; }                 # a file, bare output
-qgen() { PSQL -d "$1" -q -At -f "$2"; }              # a file, no command tags
+q()    { PSQL -d "$1" -At -c "$2" || die "psql failed on $1: ${2:0:120}"; }
+qf()   { PSQL -d "$1" -f "$2" || die "psql failed on $1: file $2"; }
+qin()  { PSQL -d "$1" || die "psql failed on $1: standard input"; }
+qat()  { PSQL -d "$1" -At -f "$2" || die "psql failed on $1: file $2"; }
+qtry() { PSQL -d "$1" -At -c "$2"; }
 qe()   { "$BIN/psql" -X -h "$SOCK" -p "$PORT" -d "$1"; }
+qbg()  { PSQL -d "$1"; }
 
 # The preamble of every session that issues a VACUUM or an ANALYZE: the four
 # settable timeouts forced to 0, which is what an autovacuum launcher and a
@@ -1477,7 +1893,7 @@ zero_timeouts() {
   printf "  FROM pg_settings WHERE name IN (%s);\n" "$TIMEOUT_GUCS"
 }
 # qz <db>: run stdin in a session that begins with zero_timeouts
-qz() { { zero_timeouts; cat; } | PSQL -d "$1" -At; }
+qz() { { zero_timeouts; cat; } | PSQL -d "$1" -At || die "psql failed on $1: a zero-timeout session"; }
 
 # errf <db> <sql>: run a statement expected to fail, print the error or
 # "accepted"
@@ -1487,7 +1903,6 @@ errf() {
           -d "$1" -f - 2>&1 | grep -E 'ERROR' | head -1 | sed -E 's/^psql:[^ ]* //')
   printf '%s' "${out:-accepted}"
 }
-
 # md_block_with <language> <tag> <file>: print the fenced block of that
 # language which contains <tag>.  The fence is assembled from printf '\140'
 # so that this script contains no literal Markdown fence.
@@ -1526,8 +1941,8 @@ plan_view() {
   done < "$1"
 }
 
-sha() { sha256sum < "$1" | cut -d' ' -f1; }
 
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
 tbl() { printf 'f_%s' "$1"; }
 idx() { printf 'f_%s_i' "$1"; }
 fx_am() {
@@ -1537,17 +1952,115 @@ fx_am() {
   esac
 }
 
+# ------------------------------------------------------------ the sandbox ----
+# SANDBOX, WIKI_ROOT and PAGE come from the environment, so nothing is written,
+# stopped or deleted until they have been checked here.  WIKI_ROOT must be
+# this repository; SANDBOX must resolve, with every symbolic link and every
+# ".." taken out, to a plain directory directly under its .wiki-runtime/tmp;
+# and an existing sandbox must carry the marker this script writes when it
+# creates one, naming this leg.  From here on every path is the canonical one.
+canon_dir() { ( cd -P -- "$1" 2>/dev/null && pwd -P ); }
+MARKER_NAME=.nbmaint-sandbox
+sandbox_guard() {   # <create|existing>
+  local mode=$1 root tmp parent base
+  root=$(canon_dir "$WIKI_ROOT") || die "WIKI_ROOT $WIKI_ROOT is not a directory"
+  [ -f "$root/AGENTS.md" ] && [ -f "$root/wiki/versions.md" ] && [ -d "$root/raw" ] \
+    || die "WIKI_ROOT $root is not the wiki repository"
+  if [ ! -d "$root/.wiki-runtime/tmp" ]; then
+    [ "$mode" = create ] || { SANDBOX_STATE=absent; return 0; }
+    mkdir -p "$root/.wiki-runtime/tmp" || die "cannot create $root/.wiki-runtime/tmp"
+  fi
+  tmp=$(canon_dir "$root/.wiki-runtime/tmp") || die "no $root/.wiki-runtime/tmp"
+  case "$tmp" in "$root"/*) : ;; *) die "$root/.wiki-runtime/tmp resolves outside the repository, to $tmp" ;; esac
+  base=${SANDBOX%/}; base=${base##*/}
+  case "$base" in
+    ''|.|..|*[!A-Za-z0-9._-]*) die "refusing sandbox $SANDBOX: its last component must be a plain name" ;;
+  esac
+  parent=$(canon_dir "$(dirname -- "$SANDBOX")") || die "the parent of $SANDBOX does not exist"
+  [ "$parent" = "$tmp" ] || die "refusing sandbox $SANDBOX: it resolves under $parent, not directly under $tmp"
+  WIKI_ROOT=$root
+  SANDBOX="$tmp/$base"
+  if [ -L "$SANDBOX" ]; then
+    die "refusing sandbox $SANDBOX: it is a symbolic link"
+  elif [ -e "$SANDBOX" ]; then
+    [ -d "$SANDBOX" ] || die "refusing sandbox $SANDBOX: it is not a directory"
+    [ "$(cat "$SANDBOX/$MARKER_NAME" 2>/dev/null)" = "nbmaint sandbox, leg $LEG" ] \
+      || die "refusing sandbox $SANDBOX: it has no $MARKER_NAME marker for leg $LEG, so this script did not create it"
+    SANDBOX_STATE=ours
+  elif [ "$mode" = create ]; then
+    mkdir -- "$SANDBOX" || die "cannot create $SANDBOX"
+    printf 'nbmaint sandbox, leg %s\n' "$LEG" > "$SANDBOX/$MARKER_NAME" || die "cannot mark $SANDBOX"
+    SANDBOX_STATE=ours
+  else
+    SANDBOX_STATE=absent
+    return 0
+  fi
+  BUILD="$SANDBOX/build"; INST="$SANDBOX/inst"; BIN="$INST/bin"
+  DATA="$SANDBOX/data"; SOCK="$SANDBOX/sock"; OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"
+  FAILMARK="$SANDBOX/.failed-stage"
+}
+
+# On every way out: the background sessions this run opened are ended, and a
+# run that failed also stops its cluster, so a failure never leaves a
+# postmaster behind.  A run that succeeded leaves the cluster up for the next
+# selective run; the clean stage stops it and deletes the sandbox.
+on_exit() {
+  local rc=$?
+  trap - EXIT INT TERM
+  if [ "${SANDBOX_STATE:-}" = ours ] && [ -s "$DATA/postmaster.pid" ] \
+       && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/psql" -X -At -h "$SOCK" -p "$PORT" -d postgres -c \
+      "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid()
+          AND (query LIKE '%wiki_nbmaint_snapshot%' OR query LIKE '%wiki_nbmaint_edge_%')" \
+      > /dev/null 2>&1
+    if [ "$rc" -ne 0 ]; then
+      "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 \
+        && printf 'the run failed: cluster on %s stopped\n' "$DATA" >&2
+    fi
+  fi
+  wait 2> /dev/null
+  exit "$rc"
+}
+
 # ---------------------------------------------------------------- build ------
+# The checkout must be the pinned commit with no tracked file changed.  A
+# build leaves a manifest in the install naming that commit, the flags, the
+# build tree's configuration and a hash of every installed file; an install
+# is reused only when all four still match.
+install_inventory() {
+  ( cd "$INST" && find . -type f ! -name nbmaint-build-manifest.txt -exec sha256sum {} + ) \
+    | LC_ALL=C sort -k2 | sha256sum | cut -d' ' -f1
+}
+manifest_value() { sed -n "s/^$1: //p" "$INST/nbmaint-build-manifest.txt" 2>/dev/null | head -1; }
+check_checkout() {
+  local head
+  head=$(git -C "$SRC" rev-parse HEAD 2>/dev/null) || die "$SRC is not a git checkout"
+  [ "$head" = "$EXPECTED_PIN" ] || die "$SRC is at $head, not the pinned $EXPECTED_PIN"
+  git -C "$SRC" --no-optional-locks diff --quiet HEAD -- \
+    || die "$SRC has tracked files changed from $EXPECTED_PIN"
+}
+check_install() {
+  [ -f "$INST/nbmaint-build-manifest.txt" ] || die "$INST has no build manifest: run clean, then build"
+  [ "$(manifest_value pin)" = "$EXPECTED_PIN" ] \
+    || die "the install was built from $(manifest_value pin), not $EXPECTED_PIN"
+  [ "$(manifest_value configure)" = "$CONFIGURE_FLAGS" ] || die "the install was configured with other flags"
+  [ "$(manifest_value build-config)" = "$(sha "$BUILD/config.status")" ] \
+    || die "the build tree is not the one the install came from"
+  [ "$(manifest_value inventory)" = "$(install_inventory)" ] \
+    || die "the installed files differ from the ones the build left"
+}
 stage_build() {
   say "build: 17.11 out of tree from $SRC"
   mkdir -p "$OUT"
-  if [ -x "$BIN/postgres" ]; then
-    note "already built: $("$BIN/postgres" --version)"
+  check_checkout
+  if [ -e "$INST" ]; then
+    check_install
+    note "reused, the manifest matches: $("$BIN/postgres" --version)"
   else
     [ -x "$SRC/configure" ] || die "no pinned checkout at $SRC"
     mkdir -p "$BUILD"
-    ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" --without-icu --without-readline \
-        --with-zlib --enable-debug > configure.log 2>&1 ) \
+    ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" $CONFIGURE_FLAGS > configure.log 2>&1 ) \
       || die "configure failed, see $BUILD/configure.log"
     ( cd "$BUILD" && make -j"$JOBS" -s > make.log 2>&1 ) || die "make failed, see $BUILD/make.log"
     ( cd "$BUILD" && make -s install > install.log 2>&1 ) || die "install failed"
@@ -1556,30 +2069,49 @@ stage_build() {
       ( cd "$BUILD" && make -s -C "contrib/$m" install >> install.log 2>&1 ) \
         || die "contrib/$m install failed"
     done
+    check_checkout   # the checkout did not move while it was built
+    { printf 'pin: %s\n' "$EXPECTED_PIN"
+      printf 'source: %s\n' "$SRC"
+      printf 'configure: %s\n' "$CONFIGURE_FLAGS"
+      printf 'build-config: %s\n' "$(sha "$BUILD/config.status")"
+      printf 'version: %s\n' "$("$BIN/postgres" --version)"
+      printf 'compiler: %s\n' "$(cc --version 2>/dev/null | head -1)"
+      printf 'platform: %s\n' "$(uname -srm)"
+      printf 'built: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf 'inventory: %s\n' "$(install_inventory)"
+    } > "$INST/nbmaint-build-manifest.txt" || die "cannot write the build manifest"
+    check_install
   fi
   "$BIN/postgres" --version | tee "$OUT/version.txt"
-  printf 'source %s at %s\n' "$SRC" "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo unknown)" \
-    | tee "$OUT/pin.txt"
+  { printf 'install built from %s, per its manifest\n' "$(manifest_value pin)"
+    printf 'checkout %s is at %s\n' "$SRC" "$(git -C "$SRC" rev-parse HEAD)"
+  } | tee "$OUT/pin.txt"
 }
 
 # ---------------------------------------------------------------- check ------
+# Every suite must exit 0 and report all its tests passed, or the run stops.
+suite_result() {
+  grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$1" | tail -1
+}
 stage_check() {
   say "check: make check, and the three contrib suites the cross-checks read"
   mkdir -p "$OUT"; : > "$OUT/checks.txt"
-  local rc m
+  check_checkout
+  check_install
+  local rc m res bad=""
   ( cd "$BUILD" && make -s check > "$OUT/check-core.log" 2>&1 ); rc=$?
-  printf 'core exit=%s %s\n' "$rc" \
-    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' \
-        "$OUT/check-core.log" | tail -1)" >> "$OUT/checks.txt"
+  res=$(suite_result "$OUT/check-core.log")
+  printf 'core exit=%s %s\n' "$rc" "$res" >> "$OUT/checks.txt"
+  { [ "$rc" = 0 ] && case "$res" in All*passed) true ;; *) false ;; esac; } || bad="$bad core"
   for m in pageinspect pgstattuple pg_freespacemap; do
     ( cd "$BUILD" && make -s -C "contrib/$m" check > "$OUT/check-$m.log" 2>&1 ); rc=$?
-    printf '%s exit=%s %s\n' "$m" "$rc" \
-      "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' \
-          "$OUT/check-$m.log" | tail -1)" >> "$OUT/checks.txt"
+    res=$(suite_result "$OUT/check-$m.log")
+    printf '%s exit=%s %s\n' "$m" "$rc" "$res" >> "$OUT/checks.txt"
+    { [ "$rc" = 0 ] && case "$res" in All*passed) true ;; *) false ;; esac; } || bad="$bad $m"
   done
   cat "$OUT/checks.txt"
+  [ -z "$bad" ] || die "regression suites failed:$bad (see $OUT/checks.txt)"
 }
-
 # ---------------------------------------------------------------- cluster ----
 # Settings and their apply scope, written before the first start:
 #   listen_addresses, port, unix_socket_directories, shared_buffers
@@ -1668,7 +2200,7 @@ stage_texts() {
   { printf 'pipeline plan  %s\n' "$(sha "$OUT/pipeline_plan.sql")"
     printf 'pipeline apply %s\n' "$(sha "$OUT/pipeline_apply.sql")"
     printf 'pipeline lines %s\n' "$(grep -c '' "$OUT/pipeline_plan.sql")"
-    if cmp -s "$OUT/pipeline_plan.sql" "$OUT/pipeline_apply.sql"; then
+    if [ -s "$OUT/pipeline_plan.sql" ] && cmp -s "$OUT/pipeline_plan.sql" "$OUT/pipeline_apply.sql"; then
       printf 'pipeline identical yes\n'
     else
       printf 'pipeline identical NO\n'
@@ -1676,30 +2208,38 @@ stage_texts() {
   } >> "$OUT/hashes.txt"
   plan_view "$SQLD/plan.sql" > "$SQLD/plan_view.sql"
   cat "$OUT/hashes.txt"
+  ! grep -Eq 'DIFFERS|identical NO' "$OUT/hashes.txt" \
+    || die "the page's texts are not the ones this script was last measured with: re-measure, then refile BASE_PLAN and BASE_APPLY"
 }
 
 # run_plan <db> <tag> [prefix-sql]: step 1, verbatim; run_apply the same for
 # step 2.  The optional prefix runs first in the same session (SET ROLE).
+# Both return psql's exit status, which every caller checks.
 run_plan() {
   { [ -n "${3:-}" ] && printf '%s\n' "$3"; cat "$SQLD/plan.sql"; } \
     | "$BIN/psql" -X -v ON_ERROR_STOP=1 -P pager=off -h "$SOCK" -p "$PORT" -d "$1" \
       > "$OUT/plan-$2.txt" 2>&1
 }
 run_apply() {
-  { [ -n "${3:-}" ] && printf '%s\n' "$3"; cat "$SQLD/apply.sql"; } \
+  { [ -n "${3:-}" ] && printf '%s\n' "$3"; cat "${APPLY_FILE:-$SQLD/apply.sql}"; } \
     | "$BIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -p "$PORT" -d "$1" \
       > "$OUT/apply-$2.log" 2>&1
 }
 apply_summary() { grep -Eo 'nbmaint: reindex=.*' "$OUT/apply-$1.log" | tail -1; }
+plan_actions()  {
+  grep -Eo '\| (initialize|refresh|reindex|skip|blocked|conflict) ' "$OUT/plan-$1.txt" \
+    | sort | uniq -c | tr -s ' ' | tr '\n' ';'
+}
 
 # ---------------------------------------------------------------- exact ------
 # Both filed texts, executed unmodified on this server before any fixture
-# exists: the compatibility claim in its smallest form.
+# exists: the compatibility claim in its smallest form.  Any text that fails,
+# or a second step 2 run that writes anything, fails the stage.
 stage_exact() {
   say "exact: both filed texts, unmodified, on a database with no fixture in it"
   : > "$OUT/exact.txt"
   q "$XDB" 'DROP TABLE IF EXISTS zz_exact CASCADE' > /dev/null
-  qz "$XDB" > "$OUT/exact-build.log" 2>&1 <<'SQL' || die "exact: build failed"
+  qz "$XDB" > "$OUT/exact-build.log" 2>&1 <<'SQL'
 CREATE /* wiki_nbmaint_exact */ TABLE zz_exact AS
   SELECT i::bigint AS k, int8range(i, i + 10) AS r FROM generate_series(1, 200000) i;
 ANALYZE /* wiki_nbmaint_exact */ zz_exact;
@@ -1708,26 +2248,24 @@ CREATE /* wiki_nbmaint_exact */ INDEX zz_exact_g ON zz_exact USING gist (r);
 CREATE /* wiki_nbmaint_exact */ INDEX zz_exact_b ON zz_exact (k);
 COMMENT /* wiki_nbmaint_exact */ ON INDEX zz_exact_h IS 'a human note that must survive';
 SQL
-  local rc
-  run_plan "$XDB" exact1; rc=$?
+  local rc bad=""
+  run_plan "$XDB" exact1; rc=$?; [ "$rc" = 0 ] || bad="$bad step-1-first"
   printf 'step 1, first run: exit=%s, rows naming zz_exact=%s, actions: %s\n' "$rc" \
-    "$(grep -c 'zz_exact_' "$OUT/plan-exact1.txt")" \
-    "$(grep -Eo '\| (initialize|refresh|reindex|skip|blocked) ' "$OUT/plan-exact1.txt" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" \
-    >> "$OUT/exact.txt"
-  run_apply "$XDB" exact1; rc=$?
+    "$(grep -c 'zz_exact_' "$OUT/plan-exact1.txt")" "$(plan_actions exact1)" >> "$OUT/exact.txt"
+  run_apply "$XDB" exact1; rc=$?; [ "$rc" = 0 ] || bad="$bad step-2-first"
   printf 'step 2, first run:  exit=%s, %s\n' "$rc" "$(apply_summary exact1)" >> "$OUT/exact.txt"
   q "$XDB" "SELECT /* wiki_nbmaint_exact */ c.relname || ': ' || replace(d.description, chr(10), ' | ')
               FROM pg_description d JOIN pg_class c ON c.oid = d.objoid
              WHERE d.classoid = 'pg_class'::regclass AND c.relname LIKE 'zz_exact_%'
              ORDER BY 1" >> "$OUT/exact.txt"
-  run_apply "$XDB" exact2; rc=$?
+  run_apply "$XDB" exact2; rc=$?; [ "$rc" = 0 ] || bad="$bad step-2-second"
   printf 'step 2, second run: exit=%s, %s\n' "$rc" "$(apply_summary exact2)" >> "$OUT/exact.txt"
-  run_plan "$XDB" exact2; rc=$?
-  printf 'step 1, after both: exit=%s, actions: %s\n' "$rc" \
-    "$(grep -Eo '\| (initialize|refresh|reindex|skip|blocked) ' "$OUT/plan-exact2.txt" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" \
-    >> "$OUT/exact.txt"
+  apply_summary exact2 | grep -q 'reindex=0 initialize=0 refresh=0 ' || bad="$bad second-run-wrote"
+  run_plan "$XDB" exact2; rc=$?; [ "$rc" = 0 ] || bad="$bad step-1-after"
+  printf 'step 1, after both: exit=%s, actions: %s\n' "$rc" "$(plan_actions exact2)" >> "$OUT/exact.txt"
   q "$XDB" 'DROP TABLE IF EXISTS zz_exact CASCADE' > /dev/null
   cat "$OUT/exact.txt"
+  [ -z "$bad" ] || die "exact:$bad (see $OUT/exact.txt and $OUT/plan-exact*.txt, $OUT/apply-exact*.log)"
 }
 
 # ---------------------------------------------------------------- facts ------
@@ -1742,6 +2280,8 @@ stage_facts() {
     "$(errf "$XDB" 'WITH x AS MATERIALIZED (SELECT 1) SELECT count(*) FROM x;')"
   fact pg_input_is_valid_rows \
     "$(q "$XDB" "SELECT count(*) FROM pg_proc WHERE proname = 'pg_input_is_valid'")"
+  fact regexp_match_rows \
+    "$(q "$XDB" "SELECT count(*) FROM pg_proc WHERE proname = 'regexp_match'")"
   fact pg_stat_force_next_flush_rows \
     "$(q "$XDB" "SELECT count(*) FROM pg_proc WHERE proname = 'pg_stat_force_next_flush'")"
   fact transaction_timeout_rows \
@@ -1765,6 +2305,14 @@ stage_facts() {
     "$(errf "$XDB" 'DO $x$ BEGIN PERFORM 1; COMMIT; END $x$;')"
   fact commit_inside_do_in_begin \
     "$(errf "$XDB" 'BEGIN; DO $x$ BEGIN PERFORM 1; COMMIT; END $x$; COMMIT;')"
+  # step 2 narrows its pipeline with a transaction-local custom setting; what
+  # step 1 then reads in the same session, and in a fresh one
+  fact custom_setting_after_local_set \
+    "$(printf '%s\n' 'BEGIN;' "SELECT set_config('nbmaint.only_index', '1', true);" 'COMMIT;' \
+         "SELECT 'after commit: ' || coalesce(quote_literal(current_setting('nbmaint.only_index', true)), 'NULL');" \
+       | PSQL -d "$XDB" -q -At 2>&1 | tail -1)"
+  fact custom_setting_fresh_session \
+    "$(q "$XDB" "SELECT coalesce(quote_literal(current_setting('nbmaint.only_index', true)), 'NULL')")"
   q "$XDB" 'DROP TABLE IF EXISTS zz_f CASCADE' > /dev/null
   q "$XDB" 'CREATE TABLE zz_f (k bigint)' > /dev/null
   q "$XDB" 'INSERT INTO zz_f SELECT g FROM generate_series(1, 1000) g' > /dev/null
@@ -1776,6 +2324,17 @@ stage_facts() {
   fact reindex_concurrently_top_level "$(errf "$XDB" 'REINDEX INDEX CONCURRENTLY zz_f_h;')"
   fact comment_with_expression "$(errf "$XDB" "COMMENT ON INDEX zz_f_h IS 'a' || 'b';")"
   fact comment_with_literal "$(errf "$XDB" "COMMENT ON INDEX zz_f_h IS 'ab';")"
+  # ALTER INDEX ... OWNER TO the owner it already has, which step 2 uses as its
+  # index lock: the lock it holds, anything it prints, and whether it rewrote
+  # the index's pg_class row
+  local x0 x1
+  x0=$(q "$XDB" "SELECT xmin FROM pg_class WHERE relname = 'zz_f_h'")
+  fact alter_index_owner_to_owner \
+    "$(printf '%s\n' 'BEGIN;' 'ALTER INDEX zz_f_h OWNER TO CURRENT_USER;' \
+         "SELECT 'held: ' || string_agg(mode, ',' ORDER BY mode) FROM pg_locks WHERE relation = 'zz_f_h'::regclass AND pid = pg_backend_pid();" \
+         'COMMIT;' | PSQL -d "$XDB" -q -At 2>&1 | tr '\n' ' ' | sed -e 's/ *$//')"
+  x1=$(q "$XDB" "SELECT xmin FROM pg_class WHERE relname = 'zz_f_h'")
+  fact alter_index_owner_rewrote_pg_class "$([ "$x0" = "$x1" ] && echo no || echo "yes ($x0 -> $x1)")"
   # A statement timeout inside a DO block's EXCEPTION WHEN OTHERS is not
   # caught: it ends the whole block.  That is what bounds step 2 as a whole.
   fact statement_timeout_vs_others \
@@ -1791,7 +2350,6 @@ stage_facts() {
   q "$XDB" 'DROP TABLE IF EXISTS zz_f CASCADE' > /dev/null
   cat "$OUT/facts.txt"
 }
-
 # ---------------------------------------------------------------- declare ----
 # Files the declared kind of every published column, the method's own
 # thresholds, the pay-off threshold every decision is scored at, the
@@ -1830,9 +2388,11 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_decision (knob, value, meaning) 
  ('refresh when', 'index smaller than its stored size',
                   'not a decision to rebuild; the baseline is rewritten'),
  ('pay-off',      'truth_pct >= 23.08',
-                  'a rebuild was worth it: 100 * (1 - 1/1.30), the reclaim a 30 % growth implies'),
+                  'a rebuild was worth it: 100 * (1 - 1/1.30), the reclaim a 30 % growth implies, rounded to 23.08; compared with the unrounded 100 * (1 - R / C), never with its two-decimal display'),
  ('score',        'PASS, FALSE POSITIVE, FALSE NEGATIVE',
-                  'reindex and truth_pct >= pay-off, or neither: PASS; reindex below it: FALSE POSITIVE; no reindex at or above it: FALSE NEGATIVE');
+                  'reindex and truth_pct >= pay-off, or neither: PASS; reindex below it: FALSE POSITIVE; no reindex at or above it: FALSE NEGATIVE'),
+ ('cross-checks', 'a VERBOSE count and a BRIN free-space reading are compared with the censuses taken just before and just after the VACUUM that produced them',
+                  'see invariants I9 and I18');
 
 -- Predictions filed before the run, from the B, C and R figures the source
 -- page filed on 17.11 on 2026-09-16.  A miss is reported, not corrected.
@@ -1877,11 +2437,11 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_invariant (id, claim) VALUES
  ('I2',  'size bracket: pg_relation_size(index, main) re-read after each census equals block_size times the blocks the census scanned'),
  ('I3',  'hash: the census page classes and pgstathashindex both account for every block of the file'),
  ('I4',  'hash: every block hash_bitmap_info reports free reads back as an unused page'),
- ('I5',  'GiST: the FSM free-page count never exceeds the census deleted-plus-new count; SP-GiST is not applicable, having no decoder'),
+ ('I5',  'GiST: the FSM free-page count never exceeds the census deleted-plus-new count; SP-GiST: it never exceeds the new or empty pages outside the metapage and the two root pages, read from page headers'),
  ('I6',  'BRIN: the revmap entry count equals the summary tuples the regular pages hold'),
  ('I7',  'BRIN: the index is never smaller after the maintenance step than before it'),
- ('I8',  'GIN: the metapage entry and data page counts equal the census, a not-yet-recyclable deleted page counted as data'),
- ('I9',  'the VACUUM VERBOSE index line appears exactly where index cleanup ran and returned statistics: not for the ANALYZE-only stand-ins, not for a hash index whose bulk delete never ran'),
+ ('I8',  'GIN: on every census whose metapage counts the build or a VACUUM wrote last, the metapage entry, data and total page counts equal the census, a not-yet-recyclable deleted page counted as data; a census taken after writes and before a VACUUM reads counts stale by construction and is reported, not scored'),
+ ('I9',  'the VACUUM VERBOSE index line appears exactly where index cleanup ran and returned statistics (not for the ANALYZE-only stand-ins, not for a hash index whose bulk delete never ran), and each of its counts equals the census: pages in total = the census just after that VACUUM, except on BRIN, which counts before it summarizes, = the census just before; hash and BRIN: 0 newly deleted, 0 currently deleted, 0 reusable; GiST: currently deleted = deleted-flag plus all-zero pages after, reusable = FSM free pages after, newly deleted = deleted-flag pages after minus before; SP-GiST: newly deleted = currently deleted = reusable = the new or empty pages outside the metapage and the two roots after, = FSM free pages after; GIN: reusable = FSM free pages after'),
  ('I10', 'the maintenance was not defeated: every maintenance VACUUM reports 0 tuples dead but not yet removable, except a declared held snapshot, which must pin something and whose second VACUUM reports 0'),
  ('I11', 'every VACUUM and ANALYZE session ran with all four settable timeouts at 0, and no maintenance log carries a skip line, an error or a cancellation'),
  ('I12', 'the measurement lock was never held across a maintenance step'),
@@ -1889,7 +2449,8 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_invariant (id, claim) VALUES
  ('I14', 'step 2''s first run stored a version-2 payload in every fixture index, with sz equal to the baseline census size and tup equal to the table count it read'),
  ('I15', 'the method decided on the maintained state: the size step 1 saw equals the maintained census size and the oracle''s before-size'),
  ('I16', 'step 1''s action equals the same two tests recomputed independently from the stored payload and the decide-time readings'),
- ('I17', 'step 2 carried out exactly the plan step 1 printed on the same state, and a second run of step 2 wrote nothing');
+ ('I17', 'step 2 carried out exactly the plan step 1 printed on the same state, and a second run of step 2 wrote nothing'),
+ ('I18', 'BRIN, per regular page, on every census taken just after a VACUUM: every page that VACUUM did not write - its LSN no newer than the WAL insert position read just before the VACUUM began - reads in pg_freespace exactly the FSM category floor of its own free space, pd_upper minus pd_lower less one line pointer, or 0 on a page flagged BRIN_EVACUATE_PAGE; the pages the VACUUM''s own summarization wrote are compared and reported, not scored, because BRIN writes such a page''s FSM entry only when the page is extended or a search finds it short of space');
 
 CREATE /* wiki_nbmaint_declare */ TABLE declared_exception (
   id text PRIMARY KEY, fixture text NOT NULL, state text NOT NULL,
@@ -1910,7 +2471,7 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('non-btree','hash: a splitpoint allocation','h02'),
  ('non-btree','hash: an index whose hashbulkdelete never ran','h04'),
  ('non-btree','GiST: an emptied leaf that was deleted, and one that survived as its parent''s last downlink','g07'),
- ('non-btree','GiST: a deleted-but-not-recyclable page under a held snapshot','g08'),
+ ('non-btree','GiST: a deleted-but-not-recyclable page under a held snapshot','not reached: no fixture deletes a GiST page while a snapshot is held; g08''s snapshot makes its maintenance VACUUM delete nothing, and its second VACUUM deletes pages only after the release'),
  ('non-btree','GiST: a sorted build beside a non-sorted one','g09 (point_ops) beside g06 to g08 (range_ops)'),
  ('non-btree','SP-GiST: redirects turned into placeholders, a trailing run removed, an interior one retained','s09, read from VACUUM''s counters: no SP-GiST decoder'),
  ('non-btree','SP-GiST: an emptied non-root page and the root page','s09, the same limit'),
@@ -1930,7 +2491,7 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('gin','half-empty posting-tree leaves with nothing deletable','n04'),
  ('gin','a populated pending list, and the same index after a flush','n05'),
  ('gin','an untouched index and an empty index','n08 and n09'),
- ('gin','a snapshot held across the settling VACUUM','n10'),
+ ('gin','a snapshot held across the settling VACUUM','n10: its maintenance VACUUM runs under the snapshot and deletes no page; its posting-tree pages are deleted by the second VACUUM, after the release'),
  ('gin','a VACUUM whose index cleanup did not run','skipped: its fixture, n11, was removed from the corpus at the asker''s request'),
  ('gin','more than one operator class','n06 (jsonb_path_ops) and n07 (tsvector_ops) beside array_ops'),
  ('gin','one rebuild at more than one maintenance_work_mem','probe P3'),
@@ -1960,9 +2521,25 @@ CREATE /* wiki_nbmaint_proto */ EXTENSION pageinspect;
 CREATE /* wiki_nbmaint_proto */ EXTENSION pgstattuple;
 CREATE /* wiki_nbmaint_proto */ EXTENSION pg_freespacemap;
 
+-- One row per fixture, phase and metric: a stage that runs again replaces its
+-- own rows, and anything that would record a second reading of the same
+-- thing fails instead of doubling a score.
 CREATE TABLE proto.meas (
   fixture text NOT NULL, phase text NOT NULL, metric text NOT NULL,
-  num numeric, txt text, at timestamptz NOT NULL DEFAULT clock_timestamp());
+  num numeric, txt text, at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (fixture, phase, metric));
+
+-- The stages that have changed the fixture database, in the order they ran.
+CREATE TABLE proto.stage_log (
+  stage text PRIMARY KEY, done_at timestamptz NOT NULL DEFAULT clock_timestamp());
+
+-- The graduated FSM agreement on BRIN, page by page: the page's own free
+-- space, the value its FSM category floor must read, and what pg_freespace
+-- did read.
+CREATE TABLE proto.brin_page (
+  fixture text NOT NULL, phase text NOT NULL, blkno int NOT NULL,
+  free_bytes int NOT NULL, fsm_expected int NOT NULL, fsm_read int, page_lsn numeric NOT NULL,
+  evacuate boolean NOT NULL, PRIMARY KEY (fixture, phase, blkno));
 
 CREATE FUNCTION proto.note(p_fix text, p_phase text, p_metric text,
                            p_num numeric DEFAULT NULL, p_txt text DEFAULT NULL)
@@ -1972,19 +2549,21 @@ RETURNS void LANGUAGE sql AS $fn$
 $fn$;
 
 -- Every non-B-tree index in public: its file, its table's count and its
--- comment, with the payload decoded.  The payloads read here were written by
--- step 2, so the jsonb cast is safe; a cast that raised would stop the run.
+-- comment, with the payload decoded - independently of the texts, as JSON,
+-- out of the comment's one reserved line.  The payloads read here were
+-- written by step 2, so the jsonb cast is safe; a cast that raised would stop
+-- the run.  One row per phase and index.
 CREATE TABLE proto.snap (
   phase text NOT NULL, idx text NOT NULL, oid oid, filenode oid, bytes bigint,
   tbl_tuples numeric, cmt text, pv numeric, sz numeric, tup numeric,
-  at timestamptz NOT NULL DEFAULT clock_timestamp());
+  at timestamptz NOT NULL DEFAULT clock_timestamp(), UNIQUE (phase, idx));
 CREATE FUNCTION proto.take_snap(p_phase text) RETURNS void LANGUAGE sql AS $fn$
   INSERT INTO proto.snap(phase, idx, oid, filenode, bytes, tbl_tuples, cmt, pv, sz, tup)
   SELECT p_phase, c.relname, c.oid, c.relfilenode, pg_relation_size(c.oid),
          t.reltuples::numeric, d.description,
-         (substring(d.description from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'v')::numeric,
-         (substring(d.description from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric,
-         (substring(d.description from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'tup')::numeric
+         (substring(d.description from '(?n)^@nbmaint:(\{.*\})$')::jsonb ->> 'v')::numeric,
+         (substring(d.description from '(?n)^@nbmaint:(\{.*\})$')::jsonb ->> 'sz')::numeric,
+         (substring(d.description from '(?n)^@nbmaint:(\{.*\})$')::jsonb ->> 'tup')::numeric
     FROM pg_class c
     JOIN pg_index x ON x.indexrelid = c.oid
     JOIN pg_class t ON t.oid = x.indrelid
@@ -2109,12 +2688,16 @@ END $fn$;
 
 -- pageinspect ships no SP-GiST decoder, so this census is the page header and
 -- nothing else, and every page-class quantity derived from it is a level.
+-- A header does show the one class SP-GiST's VACUUM counts and frees: a page
+-- that is new or holds no line pointer, outside the metapage (block 0) and
+-- the two root pages (blocks 1 and 2), which VACUUM never frees.
 CREATE FUNCTION proto.census_spgist(p_fix text, p_phase text, p_idx text)
 RETURNS void LANGUAGE plpgsql AS $fn$
 DECLARE
   blk int := current_setting('block_size')::int;
+  hdr_size int := 24;    -- SizeOfPageHeaderData: offsetof(PageHeaderData, pd_linp)
   n int; nblocks int; hdr record;
-  c_used int := 0; c_zero int := 0; c_bad int := 0; fsm_free int;
+  c_used int := 0; c_zero int := 0; c_empty int := 0; c_bad int := 0; fsm_free int;
 BEGIN
   nblocks := pg_relation_size(p_idx::regclass, 'main') / blk;
   FOR n IN 0 .. nblocks - 1 LOOP
@@ -2123,52 +2706,89 @@ BEGIN
       IF hdr.lower = 0 AND hdr.upper = 0 THEN c_zero := c_zero + 1;
       ELSE c_used := c_used + 1;
       END IF;
+      -- PageIsNew or PageIsEmpty, on a block VACUUM is allowed to free
+      IF n >= 3 AND hdr.lower <= hdr_size THEN c_empty := c_empty + 1; END IF;
     EXCEPTION WHEN OTHERS THEN c_bad := c_bad + 1;
     END;
   END LOOP;
   SELECT count(*) INTO fsm_free FROM pg_freespace(p_idx::regclass) WHERE avail > 0;
   INSERT INTO proto.meas(fixture, phase, metric, num) VALUES
-   (p_fix, p_phase, 'census_scanned',    nblocks),
-   (p_fix, p_phase, 'census_used',       c_used),
-   (p_fix, p_phase, 'census_new',        c_zero),
-   (p_fix, p_phase, 'census_unreadable', c_bad),
-   (p_fix, p_phase, 'fsm_free_pages',    fsm_free),
-   (p_fix, p_phase, 'size_after_census', pg_relation_size(p_idx::regclass, 'main'));
+   (p_fix, p_phase, 'census_scanned',      nblocks),
+   (p_fix, p_phase, 'census_used',         c_used),
+   (p_fix, p_phase, 'census_new',          c_zero),
+   (p_fix, p_phase, 'census_new_or_empty', c_empty),
+   (p_fix, p_phase, 'census_unreadable',   c_bad),
+   (p_fix, p_phase, 'fsm_free_pages',      fsm_free),
+   (p_fix, p_phase, 'size_after_census',   pg_relation_size(p_idx::regclass, 'main'));
 END $fn$;
 
+-- The BRIN census.  Beside the page classes and the summaries it runs the
+-- graduated FSM agreement the non-B-tree protocol requires, page by page:
+-- every regular page's pg_freespace against that page's own free space as
+-- br_page_get_freespace computes it - pd_upper minus pd_lower less one line
+-- pointer, or 0 on a page flagged BRIN_EVACUATE_PAGE - rounded down to its
+-- FSM category, block_size / 256 bytes wide.  The flags and the page type are
+-- read out of the raw page: BrinSpecialSpace holds MAXALIGN(1) / 2 uint16s,
+-- the flags next to last and the type last, little endian on this platform,
+-- and a regular page whose type does not read 0xF093 there is unreadable.
 CREATE FUNCTION proto.census_brin(p_fix text, p_phase text, p_idx text)
 RETURNS void LANGUAGE plpgsql AS $fn$
 DECLARE
-  blk int := current_setting('block_size')::int;
-  n int; nblocks int; t text; k int; un int;
+  bsz int := current_setting('block_size')::int;
+  step int := current_setting('block_size')::int / 256;
+  ma int;
+  n int; nblocks int; t text; k int; un int; raw bytea; hdr record;
+  flags_w int; type_w int; free_b int; want int; got int;
   c_meta int := 0; c_revmap int := 0; c_reg int := 0; c_bad int := 0;
   items bigint := 0; unused bigint := 0; revmap_entries bigint := 0;
-  fsm_free int;
+  fsm_free int; f_agree int := 0; f_high int := 0; f_low int := 0; f_evac int := 0;
 BEGIN
-  nblocks := pg_relation_size(p_idx::regclass, 'main') / blk;
+  SELECT max_data_alignment INTO ma FROM pg_control_init();
+  nblocks := pg_relation_size(p_idx::regclass, 'main') / bsz;
   FOR n IN 0 .. nblocks - 1 LOOP
     BEGIN
-      t := brin_page_type(get_raw_page(p_idx, n));
+      raw := get_raw_page(p_idx, n);
+      t := brin_page_type(raw);
     EXCEPTION WHEN OTHERS THEN
       t := 'unreadable';
     END;
     IF t = 'meta' THEN c_meta := c_meta + 1;
     ELSIF t = 'revmap' THEN
       c_revmap := c_revmap + 1;
-      SELECT count(*) INTO k FROM brin_revmap_data(get_raw_page(p_idx, n)) r
+      SELECT count(*) INTO k FROM brin_revmap_data(raw) r
        WHERE r.pages IS NOT NULL AND r.pages::text <> '(0,0)';
       revmap_entries := revmap_entries + k;
     ELSIF t = 'regular' THEN
-      c_reg := c_reg + 1;
       BEGIN
         -- one row per (item, attnum); an unused line pointer - what a moved
         -- summary or a desummarize leaves behind - comes back with blknum NULL
         SELECT count(DISTINCT bi.itemoffset) FILTER (WHERE bi.blknum IS NOT NULL),
                count(DISTINCT bi.itemoffset) FILTER (WHERE bi.blknum IS NULL)
           INTO k, un
-          FROM brin_page_items(get_raw_page(p_idx, n), p_idx::regclass) bi;
+          FROM brin_page_items(raw, p_idx::regclass) bi;
+        SELECT * INTO hdr FROM page_header(raw);
+        flags_w := get_byte(raw, hdr.special + ma - 4) + 256 * get_byte(raw, hdr.special + ma - 3);
+        type_w  := get_byte(raw, hdr.special + ma - 2) + 256 * get_byte(raw, hdr.special + ma - 1);
+        IF type_w <> 61587 THEN     -- BRIN_PAGETYPE_REGULAR, 0xF093
+          RAISE EXCEPTION 'block % does not read as a regular BRIN page', n;
+        END IF;
+        c_reg := c_reg + 1;
         items := items + k;
         unused := unused + un;
+        IF flags_w & 1 <> 0 THEN    -- BRIN_EVACUATE_PAGE
+          free_b := 0; f_evac := f_evac + 1;
+        ELSE
+          free_b := greatest(hdr.upper - hdr.lower - 4, 0);   -- less one ItemIdData
+        END IF;
+        want := least(free_b / step, 254) * step;
+        got := pg_freespace(p_idx::regclass, n);
+        INSERT INTO proto.brin_page (fixture, phase, blkno, free_bytes, fsm_expected, page_lsn,
+                                     fsm_read, evacuate)
+             VALUES (p_fix, p_phase, n, free_b, want, hdr.lsn - '0/0'::pg_lsn, got, flags_w & 1 <> 0);
+        IF got = want THEN f_agree := f_agree + 1;
+        ELSIF got > want THEN f_high := f_high + 1;
+        ELSE f_low := f_low + 1;
+        END IF;
       EXCEPTION WHEN OTHERS THEN
         c_bad := c_bad + 1;
       END;
@@ -2185,6 +2805,10 @@ BEGIN
    (p_fix, p_phase, 'brin_items',          items),
    (p_fix, p_phase, 'brin_unused_items',   unused),
    (p_fix, p_phase, 'brin_revmap_entries', revmap_entries),
+   (p_fix, p_phase, 'brin_fsm_agree',      f_agree),
+   (p_fix, p_phase, 'brin_fsm_higher',     f_high),
+   (p_fix, p_phase, 'brin_fsm_lower',      f_low),
+   (p_fix, p_phase, 'brin_evacuate_pages', f_evac),
    (p_fix, p_phase, 'fsm_free_pages',      fsm_free),
    (p_fix, p_phase, 'size_after_census',   pg_relation_size(p_idx::regclass, 'main'));
 END $fn$;
@@ -2671,7 +3295,10 @@ check_maint() {
 run_maint() {
   local f="$1" db="$2" tag="$3"
   horizon_probe "$db" "$f" "${tag}_before"
-  q "$db" "SELECT proto.note('$f','$tag','started', extract(epoch from clock_timestamp())::numeric)" > /dev/null
+  # the WAL insert position just before the step: an index page whose LSN is
+  # no newer than this was not written by the step (I18)
+  q "$db" "SELECT proto.note('$f','$tag','started', extract(epoch from clock_timestamp())::numeric),
+                  proto.note('$f','$tag','wal_lsn_before', pg_current_wal_insert_lsn() - '0/0'::pg_lsn)" > /dev/null
   fx_maint "$f" | qz "$db" > "$OUT/$tag-$f.log" 2>&1 \
     || die "maintenance of $f ($tag) failed, see $OUT/$tag-$f.log"
   q "$db" "SELECT proto.note('$f','$tag','ended', extract(epoch from clock_timestamp())::numeric)" > /dev/null
@@ -2689,7 +3316,7 @@ hold_snapshot() {
   ( printf "BEGIN /* wiki_nbmaint_snapshot */ ISOLATION LEVEL REPEATABLE READ;\n"
     printf "SELECT /* wiki_nbmaint_snapshot */ 'snapshot holder pid ' || pg_backend_pid();\n"
     printf "SELECT /* wiki_nbmaint_snapshot */ pg_sleep(900);\n"
-    printf "COMMIT /* wiki_nbmaint_snapshot */;\n" ) | qin "$db" > "$OUT/snapshot-$f.log" 2>&1 &
+    printf "COMMIT /* wiki_nbmaint_snapshot */;\n" ) | qbg "$db" > "$OUT/snapshot-$f.log" 2>&1 &
   SNAP_PID=$!
   until [ "$(q "$db" "SELECT count(*) FROM pg_stat_activity
                        WHERE query LIKE '%wiki_nbmaint_snapshot%' AND backend_xmin IS NOT NULL
@@ -2709,15 +3336,51 @@ release_snapshot() {
   SNAP_PID=""
 }
 
+# ------------------------------------------------------------ stage order ----
+# The stages that change the fixture database log themselves in
+# proto.stage_log.  Each one checks the stages it depends on before it starts,
+# and refuses to run again, or after a later stage has changed what it would
+# read: to repeat one of those, start again at the fixtures stage.  The stages
+# that only read, cross-check or re-score replace their own records instead.
+need_texts() {
+  [ -s "$SQLD/plan.sql" ] && [ -s "$SQLD/apply.sql" ] && [ -s "$SQLD/plan_view.sql" ] \
+    || die "the page's texts have not been taken out yet: run the texts stage first"
+}
+need_db() {
+  [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname = '$DB'")" = 1 ] \
+    || die "no fixture database: run the fixtures stage first"
+}
+have_stage() { [ "$(q "$DB" "SELECT count(*) FROM proto.stage_log WHERE stage = '$1'")" = 1 ]; }
+need_stage() {
+  local s
+  for s in "$@"; do have_stage "$s" || die "run the $s stage first"; done
+  return 0
+}
+refuse_after() {   # <this stage> <stage...>: die if any of those already ran
+  local me=$1 s; shift
+  for s in "$@"; do
+    if have_stage "$s"; then
+      if [ "$s" = "$me" ]; then die "$me already ran on this fixture database: start again at the fixtures stage"; fi
+      die "$me cannot run after $s has changed the fixtures: start again at the fixtures stage"
+    fi
+  done
+  return 0
+}
+stage_done() {
+  q "$DB" "INSERT INTO proto.stage_log (stage) VALUES ('$1')
+           ON CONFLICT (stage) DO UPDATE SET done_at = clock_timestamp()" > /dev/null
+}
+
 # ----------------------------------------------------------- stage: fixtures -
 stage_fixtures() {
   say "fixtures: build phase, locked baseline census, then step 2's first run"
   q postgres "SELECT count(*) FROM pg_database WHERE datname = '$PDB'" | grep -q '^1$' \
     || die "declarations are not filed: run the declare stage first"
+  need_texts
   q postgres "DROP /* wiki_nbmaint_fixtures */ DATABASE IF EXISTS $DB" > /dev/null
   q postgres "CREATE /* wiki_nbmaint_fixtures */ DATABASE $DB" > /dev/null
   proto_ddl | qin "$DB" > "$OUT/proto-ddl.log" 2>&1 || die "proto DDL failed"
-  local f
+  local f n
   for f in $SCORED; do
     printf '  build %-4s (%s)\n' "$f" "$(fx_am "$f")"
     fx_build "$f" | qz "$DB" > "$OUT/build-$f.log" 2>&1 || die "build of $f failed, see $OUT/build-$f.log"
@@ -2731,9 +3394,11 @@ stage_fixtures() {
   run_apply "$DB" baseline || die "step 2 (baseline) failed, see $OUT/apply-baseline.log"
   apply_summary baseline | tee "$OUT/baseline-apply.txt"
   q "$DB" "SELECT proto.take_snap('baseline')" > /dev/null
-  q "$DB" "SELECT count(*) || ' fixture indexes carry a version-2 payload'
-             FROM proto.snap WHERE phase = 'baseline' AND pv = 2" | tee -a "$OUT/baseline-apply.txt"
+  n=$(q "$DB" "SELECT count(*) FROM proto.snap WHERE phase = 'baseline' AND pv = 2 AND idx ~ '^f_.*_i\$'")
+  printf '%s fixture indexes carry a version-2 payload\n' "$n" | tee -a "$OUT/baseline-apply.txt"
+  [ "$n" = "$(printf '%s\n' $SCORED | grep -c .)" ] || die "step 2's first run left a fixture index without a payload"
   date -u +'baselines filed at %Y-%m-%dT%H:%M:%SZ' | tee -a "$OUT/baseline-apply.txt"
+  stage_done fixtures
 }
 
 # -------------------------------------------------------------- stage: churn -
@@ -2743,6 +3408,7 @@ stage_fixtures() {
 # asked about that state.
 stage_churn() {
   say "churn: recipe writes, the maintenance step, the proofs, for every fixture"
+  need_db; need_stage fixtures; refuse_after churn churn
   local f t i
   : > "$OUT/maintenance-proof.txt"
   for f in $SCORED; do
@@ -2802,6 +3468,7 @@ SQL
              FROM proto.meas WHERE metric = 'index_size'
              GROUP BY fixture ORDER BY fixture" > "$OUT/maintenance-pair.txt"
   printf 'maintenance steps checked: %s, all ok\n' "$(grep -c ' ok ' "$OUT/maintenance-proof.txt")"
+  stage_done churn
 }
 
 # ----------------------------------------------------- stage: autoanalyze ----
@@ -2832,6 +3499,7 @@ SELECT c.relname AS tbl,
  WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace"
 stage_autoanalyze() {
   say "autoanalyze: the launcher's analyze verdict, recomputed per table"
+  need_db; need_stage churn; refuse_after autoanalyze decide
   local t
   for t in tc_past tc_exact tc_off; do q "$DB" "DROP TABLE IF EXISTS $t" > /dev/null; done
   qz "$DB" > "$OUT/autoanalyze-build.log" 2>&1 <<'SQL' || die "census tables failed"
@@ -2865,33 +3533,62 @@ SQL
   printf 'census named %s table(s) for ANALYZE: %s\n' "$(grep -c 'ANALYZE' "$OUT/autoanalyze-named.txt")" \
     "$(tr '\n' ' ' < "$OUT/autoanalyze-named.txt")" | tee -a "$OUT/autoanalyze-verdicts.txt"
   grep -E 'tc_past|tc_exact|tc_off' "$OUT/autoanalyze-verdicts.txt"
+  stage_done autoanalyze
 }
 
 # ---------------------------------------------------- stage: the cross-checks
+# VACUUM VERBOSE's index line, read out of each maintenance VACUUM's own log
+# and stored against the census phases on either side of that VACUUM, so the
+# score stage can check every count it prints against the censuses (I9).
+# Then the horizon holders, the pgstattuple refusals, the instrument matrix
+# and the census summary.  A crosscheck that runs again replaces its rows.
+verbose_parse() {   # <fixture> <tag> <census before> <census after>
+  local f=$1 tag=$2 pre=$3 post=$4 lg="$OUT/$2-$1.log" i line fields vac scans
+  [ -f "$lg" ] || return 0
+  i=$(idx "$f")
+  vac=0; grep -q 'vacuuming "' "$lg" && vac=1
+  # "index scan needed:" is printed exactly when ambulkdelete ran
+  scans=0; grep -q 'index scan needed:' "$lg" && scans=1
+  q "$DB" "SELECT proto.note('$f','verbose_$tag','vacuum_ran',$vac),
+                  proto.note('$f','verbose_$tag','index_scans_ran',$scans),
+                  proto.note('$f','verbose_$tag','census_before',NULL,'$pre'),
+                  proto.note('$f','verbose_$tag','census_after',NULL,'$post')" > /dev/null
+  line=$(grep -E "index \"$i\": pages: " "$lg" | head -1)
+  if [ -n "$line" ]; then
+    fields=$(printf '%s' "$line" | sed -E \
+      's/.*pages: ([0-9]+) in total, ([0-9]+) newly deleted, ([0-9]+) currently deleted, ([0-9]+) reusable.*/\1 \2 \3 \4/')
+    set -- $fields
+    [ "$#" = 4 ] || die "cannot read the VERBOSE index line of $f ($tag): $line"
+    q "$DB" "SELECT proto.note('$f','verbose_$tag','num_pages',$1),
+                    proto.note('$f','verbose_$tag','pages_newly_deleted',$2),
+                    proto.note('$f','verbose_$tag','pages_deleted',$3),
+                    proto.note('$f','verbose_$tag','pages_free',$4),
+                    proto.note('$f','verbose_$tag','index_line',NULL,'present')" > /dev/null
+  else
+    q "$DB" "SELECT proto.note('$f','verbose_$tag','index_line',NULL,'absent')" > /dev/null
+  fi
+}
 stage_crosscheck() {
   say "crosscheck: VACUUM's index line, the proofs, the holders, the instruments"
-  local f i line fields
+  need_db; need_stage churn
+  q "$DB" "DELETE FROM proto.meas WHERE phase LIKE 'verbose%'" > /dev/null
+  local f
   for f in $SCORED; do
-    i=$(idx "$f")
-    line=$(cat "$OUT/settle2-$f.log" "$OUT/maint-$f.log" 2>/dev/null \
-             | grep -E "index \"$i\": pages: " | head -1)
-    if [ -n "$line" ]; then
-      fields=$(printf '%s' "$line" | sed -E \
-        's/.*pages: ([0-9]+) in total, ([0-9]+) newly deleted, ([0-9]+) currently deleted, ([0-9]+) reusable.*/\1 \2 \3 \4/')
-      set -- $fields
-      q "$DB" "SELECT proto.note('$f','verbose','num_pages',$1), proto.note('$f','verbose','pages_newly_deleted',$2),
-                      proto.note('$f','verbose','pages_deleted',$3), proto.note('$f','verbose','pages_free',$4),
-                      proto.note('$f','verbose','index_line',NULL,'present')" > /dev/null
-    else
-      q "$DB" "SELECT proto.note('$f','verbose','index_line',NULL,'absent')" > /dev/null
-    fi
+    case "$f" in
+      b13) verbose_parse "$f" maint standin churn_maintained ;;
+      *)   verbose_parse "$f" maint churn_raw churn_maintained ;;
+    esac
+    verbose_parse "$f" settle2 churn_maintained settle2
   done
-  q "$DB" "SELECT fixture || ' ' || coalesce(max(txt) FILTER (WHERE metric = 'index_line'), '?') ||
+  q "$DB" "SELECT fixture || ' ' || substring(phase from 9) || ' ' ||
+             coalesce(max(txt) FILTER (WHERE metric = 'index_line'), '?') ||
              coalesce(' total=' || max(num) FILTER (WHERE metric = 'num_pages'), '') ||
              coalesce(' newly=' || max(num) FILTER (WHERE metric = 'pages_newly_deleted'), '') ||
              coalesce(' deleted=' || max(num) FILTER (WHERE metric = 'pages_deleted'), '') ||
-             coalesce(' free=' || max(num) FILTER (WHERE metric = 'pages_free'), '')
-             FROM proto.meas WHERE phase = 'verbose' GROUP BY fixture ORDER BY fixture" \
+             coalesce(' free=' || max(num) FILTER (WHERE metric = 'pages_free'), '') ||
+             ' vacuum=' || max(num) FILTER (WHERE metric = 'vacuum_ran') ||
+             ' bulkdelete=' || max(num) FILTER (WHERE metric = 'index_scans_ran')
+             FROM proto.meas WHERE phase LIKE 'verbose%' GROUP BY fixture, phase ORDER BY fixture, phase" \
     > "$OUT/verbose-lines.txt"
   q "$DB" "SELECT format('%-4s %-14s backends=%s slots=%s prepared=%s | %s', fixture, phase,
              max(num) FILTER (WHERE metric = 'horizon_backends'),
@@ -2907,7 +3604,7 @@ stage_crosscheck() {
     ix=$(idx "$f"); am=$(fx_am "$f")
     for fn in "pgstattuple('$ix')" "pgstatindex('$ix')" "pgstathashindex('$ix')" "pgstatginindex('$ix')"; do
       printf '%-7s %-16s %s\n' "$am" "${fn%%(*}" \
-        "$(q "$DB" "SELECT 'accepted' FROM $fn" 2>&1 | tr '\n' ' ' | sed -e 's/^ *//' -e 's/ *$//' | cut -c1-90)" \
+        "$(qtry "$DB" "SELECT 'accepted' FROM $fn" 2>&1 | tr '\n' ' ' | sed -e 's/^ *//' -e 's/ *$//' | cut -c1-90)" \
         >> "$OUT/instrument-matrix.txt"
     done
   done
@@ -2918,6 +3615,11 @@ stage_crosscheck() {
              coalesce(' fsm=' || max(num) FILTER (WHERE metric = 'fsm_free_pages'), '') ||
              coalesce(' deleted=' || max(num) FILTER (WHERE metric = 'census_deleted'), '') ||
              coalesce(' new=' || max(num) FILTER (WHERE metric = 'census_new'), '') ||
+             coalesce(' new_or_empty=' || max(num) FILTER (WHERE metric = 'census_new_or_empty'), '') ||
+             coalesce(' fsm_agree=' || max(num) FILTER (WHERE metric = 'brin_fsm_agree')
+                      || '/' || max(num) FILTER (WHERE metric = 'census_regular')
+                      || ' higher=' || max(num) FILTER (WHERE metric = 'brin_fsm_higher')
+                      || ' lower=' || max(num) FILTER (WHERE metric = 'brin_fsm_lower'), '') ||
              coalesce(' unreadable=' || max(num) FILTER (WHERE metric = 'census_unreadable'), '') ||
              coalesce(' progress=' || (max(num) FILTER (WHERE metric = 'progress_vacuum')
                                      + coalesce(max(num) FILTER (WHERE metric = 'progress_analyze'), 0)
@@ -2932,14 +3634,19 @@ stage_crosscheck() {
              FROM proto.meas WHERE metric = 'pgst_refusal'" | tee "$OUT/pgstattuple-refusals.txt"
   wc -l "$OUT/verbose-lines.txt" "$OUT/horizon-holders.txt" "$OUT/census-summary.txt" | sed 's/^/    /'
   cat "$OUT/instrument-matrix.txt"
+  stage_done crosscheck
 }
 
 # -------------------------------------------------------------- stage: decide
 # Step 1, verbatim, inside one transaction holding SHARE ROW EXCLUSIVE on every
 # fixture table; then the same rows through the one-edit view, and the
-# harness's own readings of every index, in the same transaction.
+# harness's own readings of every index, in the same transaction.  A decide
+# that runs again, before the oracle, replaces its own records.
 stage_decide() {
   say "decide: step 1, verbatim, under the measurement lock"
+  need_texts; need_db; need_stage autoanalyze; refuse_after decide oracle
+  q "$DB" "DELETE FROM proto.meas WHERE fixture = 'decide'" > /dev/null
+  q "$DB" "DELETE FROM proto.snap WHERE phase = 'decide'" > /dev/null
   qf "$DB" "$SQLD/plan_view.sql" > "$OUT/plan-view.log" 2>&1 || die "the one-edit view failed"
   local locks="" f
   for f in $SCORED; do locks="$locks$(tbl "$f"), "; done
@@ -2962,11 +3669,13 @@ stage_decide() {
              - max(num) FILTER (WHERE metric = 'lock_acquired')) * 1000, 1) || ' ms under the lock'
              FROM proto.meas WHERE fixture = 'decide'" | tee "$OUT/decide-cost.txt"
   q "$DB" "SELECT action || ': ' || count(*) FROM proto.decided GROUP BY action ORDER BY action"
+  stage_done decide
 }
 
 # -------------------------------------------------------------- stage: oracle
 stage_oracle() {
   say "oracle: REINDEX INDEX at maintenance_work_mem = $MWM, bracketed"
+  need_db; need_stage decide; refuse_after oracle oracle
   local f t i
   for f in $SCORED; do
     t=$(tbl "$f"); i=$(idx "$f")
@@ -2991,15 +3700,17 @@ SQL
              FROM proto.meas WHERE phase = 'oracle' AND metric IN ('size_before','size_after')
              GROUP BY fixture ORDER BY fixture" > "$OUT/oracle-summary.txt"
   wc -l < "$OUT/oracle-summary.txt" | sed 's/^/    fixtures rebuilt: /'
+  stage_done oracle
 }
 
 # ----------------------------------------------------------------- stage: act
 # Step 1 then step 2 on the state the oracle left - every fixture index just
 # rebuilt out of band - then step 2 again.  Not scored against the oracle: it
 # checks that step 2 does what step 1 printed, and that a settled database
-# costs nothing.
+# costs nothing, and it fails the run when either does not hold.
 stage_act() {
   say "act: step 1, step 2, step 2 again, on the rebuilt state"
+  need_texts; need_db; need_stage oracle; refuse_after act act
   q "$DB" "SELECT proto.take_snap('act_before')" > /dev/null
   run_plan "$DB" act || die "step 1 (act) failed"
   q "$DB" "DROP TABLE IF EXISTS proto.act_plan;
@@ -3008,52 +3719,65 @@ stage_act() {
   q "$DB" "SELECT proto.take_snap('act_after')" > /dev/null
   run_apply "$DB" act2 || die "step 2 (act2) failed"
   q "$DB" "SELECT proto.take_snap('act_second')" > /dev/null
+  local did same n
+  n=$(q "$DB" "SELECT count(*) FROM proto.act_plan")
+  did=$(q "$DB" "WITH b AS (SELECT * FROM proto.snap WHERE phase = 'act_before'),
+                      a AS (SELECT * FROM proto.snap WHERE phase = 'act_after')
+                 SELECT count(*) FILTER (WHERE CASE p.action
+                          WHEN 'reindex' THEN a.filenode <> b.filenode AND a.pv = 2 AND a.sz = a.bytes
+                                              AND a.tup = round(greatest(a.tbl_tuples, -1))
+                          WHEN 'initialize' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
+                                              AND a.tup = round(greatest(a.tbl_tuples, -1))
+                          WHEN 'refresh' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
+                                              AND a.tup = round(greatest(a.tbl_tuples, -1))
+                          WHEN 'skip' THEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt
+                          ELSE false END)
+                   FROM proto.act_plan p JOIN b ON b.idx = p.index_name JOIN a ON a.idx = p.index_name")
+  same=$(q "$DB" "SELECT count(*) FILTER (WHERE s.filenode = a.filenode AND s.cmt IS NOT DISTINCT FROM a.cmt)
+                    FROM proto.act_plan p
+                    JOIN proto.snap a ON a.phase = 'act_after'  AND a.idx = p.index_name
+                    JOIN proto.snap s ON s.phase = 'act_second' AND s.idx = p.index_name")
   { printf 'step 1 plan:   %s\n' "$(q "$DB" "SELECT string_agg(action || '=' || n, ' ' ORDER BY action)
                                             FROM (SELECT action, count(*) n FROM proto.act_plan GROUP BY action) s")"
     printf 'step 2 run 1:  %s\n' "$(apply_summary act1)"
     printf 'step 2 run 2:  %s\n' "$(apply_summary act2)"
-    q "$DB" "WITH b AS (SELECT * FROM proto.snap WHERE phase = 'act_before'),
-                  a AS (SELECT * FROM proto.snap WHERE phase = 'act_after'),
-                  s AS (SELECT * FROM proto.snap WHERE phase = 'act_second'),
-                  p AS (SELECT index_name, action FROM proto.act_plan)
-             SELECT 'per index, step 2 did what step 1 printed: ' ||
-                    count(*) FILTER (WHERE CASE p.action
-                      WHEN 'reindex' THEN a.filenode <> b.filenode AND a.pv = 2 AND a.sz = a.bytes
-                                          AND a.tup = round(greatest(a.tbl_tuples, -1))
-                      WHEN 'initialize' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
-                                          AND a.tup = round(greatest(a.tbl_tuples, -1))
-                      WHEN 'refresh' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
-                                          AND a.tup = round(greatest(a.tbl_tuples, -1))
-                      WHEN 'skip' THEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt
-                      ELSE false END) || ' of ' || count(*) ||
-                    '; unchanged by the second run: ' ||
-                    count(*) FILTER (WHERE s.filenode = a.filenode AND s.cmt IS NOT DISTINCT FROM a.cmt)
-                    || ' of ' || count(*)
-               FROM p JOIN b ON b.idx = p.index_name JOIN a ON a.idx = p.index_name
-                      JOIN s ON s.idx = p.index_name"
+    printf 'per index, step 2 did what step 1 printed: %s of %s; unchanged by the second run: %s of %s\n' \
+      "$did" "$n" "$same" "$n"
     printf -- '-- per fixture: the action on the rebuilt state, and why\n'
     q "$DB" "SELECT format('%-10s %-8s size_ratio=%s tuple_ratio=%s %s', index_name, action,
                            coalesce(size_ratio::text, '-'), coalesce(tuple_ratio::text, '-'), notes)
                FROM proto.act_plan ORDER BY index_name"
   } > "$OUT/act.txt"
   head -4 "$OUT/act.txt"
+  [ "$did" = "$n" ] && [ "$same" = "$n" ] \
+    || die "act: step 2 did not do what step 1 printed, or its second run wrote (see $OUT/act.txt)"
+  apply_summary act2 | grep -q 'reindex=0 initialize=0 refresh=0 ' || die "act: the second run of step 2 wrote"
+  stage_done act
 }
 
 # --------------------------------------------------------------- stage: score
+# Pure computation over what the earlier stages recorded, so it may run again
+# at any time after act; each run rebuilds its tables.  truth_pct is the
+# oracle's fraction rounded for display; every comparison with the pay-off
+# threshold uses the unrounded truth_exact.  Every invariant is stored with
+# whether it held, and a run in which any declared invariant failed fails
+# here, after every file is written.
+NOCHURN="'h00','h07','n08','n09'"
 stage_score() {
   say "score: every decision against the oracle, at the filed pay-off threshold"
+  need_db; need_stage churn crosscheck decide oracle act
   # The run is refused a score when any maintenance proof failed.  check_maint
   # already stopped the run at the failing step; this is the same rule, read
   # back from what was recorded, for a score stage run on its own.
-  grep -q 'DEFEATED' "$OUT/maintenance-proof.txt" 2>/dev/null \
-    && die "a maintenance step was defeated: nothing is scored"
+  ! grep -q 'DEFEATED' "$OUT/maintenance-proof.txt" 2>/dev/null \
+    || die "a maintenance step was defeated: nothing is scored"
   [ "$(q "$DB" "SELECT count(*) FROM proto.meas WHERE metric = 'dead_not_removable'")" -gt 0 ] \
     || die "no maintenance proof was recorded: nothing is scored"
   local tb
   for tb in declared_kind declared_decision declared_prediction declared_invariant declared_exception declared_coverage; do
     q "$DB" "DROP TABLE IF EXISTS proto.$tb" > /dev/null
   done
-  qin "$DB" > "$OUT/score-ddl.log" 2>&1 <<'SQL' || die "score DDL failed"
+  qin "$DB" > "$OUT/score-ddl.log" 2>&1 <<'SQL'
 CREATE TABLE proto.declared_kind       (column_name text, declared_kind text, claim text, filed_at timestamptz);
 CREATE TABLE proto.declared_decision   (knob text, value text, meaning text, filed_at timestamptz);
 CREATE TABLE proto.declared_prediction (fixture text, action text, score text, why text, filed_at timestamptz);
@@ -3064,7 +3788,7 @@ SQL
   for tb in declared_kind declared_decision declared_prediction declared_invariant declared_exception declared_coverage; do
     q "$PDB" "SELECT format('INSERT INTO proto.$tb SELECT (json_populate_record(NULL::proto.$tb, %L)).*;',
                             row_to_json(d)::text) FROM $tb d" \
-      | qin "$DB" > "$OUT/score-copy-$tb.log" 2>&1 || die "copying $tb failed"
+      | qin "$DB" > "$OUT/score-copy-$tb.log" 2>&1
   done
   { q "$DB" "SELECT 'declarations carried: ' || count(*) || ' kinds, filed at ' ||
                to_char(min(filed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM proto.declared_kind"
@@ -3073,7 +3797,7 @@ SQL
                FROM proto.snap WHERE phase = 'baseline'"
   } | tee "$OUT/score-declarations.txt"
 
-  qin "$DB" > "$OUT/score-build.log" 2>&1 <<'SQL' || die "score build failed"
+  qin "$DB" > "$OUT/score-build.log" 2>&1 <<'SQL'
 DROP TABLE IF EXISTS proto.score;
 CREATE /* wiki_nbmaint_score */ TABLE proto.score AS
 WITH m AS (
@@ -3114,8 +3838,9 @@ base AS (
          bl.captured_tup, bl.capture_tuples, m.raw_size, m.maint_size, ds.decide_bytes,
          m.oracle_before, m.oracle_after, m.heap_relpages, m.heap_reltuples,
          ds.stored_sz, ds.stored_tup, ds.decide_tuples,
+         -- the oracle's own fraction, unrounded: what the threshold is applied to
          CASE WHEN m.oracle_before > 0
-              THEN round(100.0 * (1 - m.oracle_after / m.oracle_before), 2) ELSE 0 END AS truth_pct,
+              THEN 100.0 * (1 - m.oracle_after / m.oracle_before) ELSE 0 END AS truth_exact,
          dec.size_ratio, dec.tuple_ratio, dec.notes, dec.action,
          -- the brief's two tests, recomputed from the harness's own readings
          (ds.decide_bytes >= ds.stored_sz * 1.30) AS size_fired,
@@ -3130,17 +3855,19 @@ base AS (
     LEFT JOIN proto.declared_prediction p USING (fixture)
 )
 SELECT b.*,
+       round(b.truth_exact, 2) AS truth_pct,
        CASE WHEN b.stored_sz IS NULL THEN 'initialize'
             WHEN b.decide_bytes < b.stored_sz THEN 'refresh'
             WHEN b.size_fired OR b.tuple_fired THEN 'reindex'
             ELSE 'skip' END AS expected_action,
-       (b.truth_pct >= b.min_truth) AS pays_off,
-       CASE WHEN b.action = 'reindex' AND b.truth_pct >= b.min_truth THEN 'PASS'
-            WHEN b.action = 'reindex'                                THEN 'FALSE POSITIVE'
-            WHEN b.truth_pct >= b.min_truth                          THEN 'FALSE NEGATIVE'
+       (b.truth_exact >= b.min_truth) AS pays_off,
+       CASE WHEN b.action = 'reindex' AND b.truth_exact >= b.min_truth THEN 'PASS'
+            WHEN b.action = 'reindex'                                  THEN 'FALSE POSITIVE'
+            WHEN b.truth_exact >= b.min_truth                          THEN 'FALSE NEGATIVE'
             ELSE 'PASS' END AS score
   FROM base b;
 SQL
+  q "$DB" "SELECT count(*) FROM proto.score" | grep -q '^[1-9]' || die "the score table is empty (see $OUT/score-build.log)"
   q "$DB" "SELECT format('%-4s %-6s B=%-10s C=%-10s R=%-10s truth=%6s%% size=%-7s tuples=%-7s fired=%-11s action=%-7s score=%-15s predicted=%s',
              fixture, am, base_size, decide_bytes, oracle_after, truth_pct,
              coalesce(size_ratio::text, '-'), coalesce(tuple_ratio::text, '-'),
@@ -3150,7 +3877,7 @@ SQL
              CASE WHEN want_action = action AND want_score = score THEN 'hit'
                   ELSE 'MISS (' || coalesce(want_action, '?') || ', ' || coalesce(want_score, '?') || ')' END)
              FROM proto.score ORDER BY am, fixture" > "$OUT/score-table.txt"
-  { q "$DB" "SELECT 'pay-off threshold: truth_pct >= ' || min(min_truth) FROM proto.score"
+  { q "$DB" "SELECT 'pay-off threshold: truth_exact >= ' || min(min_truth) || ', on the unrounded fraction' FROM proto.score"
     q "$DB" "SELECT score || ': ' || count(*) FROM proto.score GROUP BY score ORDER BY score"
     q "$DB" "SELECT am || ': ' || string_agg(score || '=' || n, ', ' ORDER BY score)
                FROM (SELECT am, score, count(*) n FROM proto.score GROUP BY am, score) s
@@ -3164,10 +3891,13 @@ SQL
                FROM proto.score"
     q "$DB" "SELECT 'fixtures that paid off: ' || count(*) FILTER (WHERE pays_off) || ' of ' || count(*) ||
                '; mean truth of the rebuilt ' ||
-               coalesce(round(avg(truth_pct) FILTER (WHERE action = 'reindex'), 1)::text, '-') ||
+               coalesce(round(avg(truth_exact) FILTER (WHERE action = 'reindex'), 1)::text, '-') ||
                ' %, of the skipped ' ||
-               coalesce(round(avg(truth_pct) FILTER (WHERE action <> 'reindex'), 1)::text, '-') || ' %'
+               coalesce(round(avg(truth_exact) FILTER (WHERE action <> 'reindex'), 1)::text, '-') || ' %'
                FROM proto.score"
+    q "$DB" "SELECT 'closest to the threshold: ' || string_agg(fixture || ' ' || round(truth_exact, 4) || ' %', ', '
+               ORDER BY abs(truth_exact - min_truth)) FROM (SELECT * FROM proto.score
+               ORDER BY abs(truth_exact - min_truth) LIMIT 3) s"
     q "$DB" "SELECT 'false positives: ' || coalesce(string_agg(fixture || ' (' || truth_pct || ' %, ' ||
                CASE WHEN size_fired AND tuple_fired THEN 'both' WHEN size_fired THEN 'size' ELSE 'tuples' END
                || ')', ', ' ORDER BY fixture), 'none') FROM proto.score WHERE score = 'FALSE POSITIVE'"
@@ -3195,8 +3925,13 @@ SQL
   } | tee "$OUT/score-summary.txt"
 
   say "score: the invariants"
-  qat "$DB" /dev/stdin > "$OUT/invariants.txt" 2>&1 <<'SQL'
-WITH c AS (
+  local act_line
+  act_line=$(grep -h 'per index, step 2 did what step 1 printed' "$OUT/act.txt" 2>/dev/null)
+  qin "$DB" > "$OUT/invariants-build.log" 2>&1 <<SQL
+DROP TABLE IF EXISTS proto.invariant;
+CREATE TABLE proto.invariant (id text PRIMARY KEY, reading text NOT NULL, holds boolean NOT NULL);
+DROP TABLE IF EXISTS proto.census_v;
+CREATE TABLE proto.census_v AS
   SELECT fixture, phase,
          max(num) FILTER (WHERE metric = 'census_scanned')      AS scanned,
          max(num) FILTER (WHERE metric = 'size_before_census')  AS sz_before,
@@ -3209,14 +3944,18 @@ WITH c AS (
          max(num) FILTER (WHERE metric = 'census_unreadable')   AS c_bad,
          max(num) FILTER (WHERE metric = 'census_deleted')      AS c_del,
          max(num) FILTER (WHERE metric = 'census_new')          AS c_new,
+         max(num) FILTER (WHERE metric = 'census_new_or_empty') AS c_empty,
          max(num) FILTER (WHERE metric = 'census_entry')        AS c_entry,
          max(num) FILTER (WHERE metric = 'census_data')         AS c_data,
+         max(num) FILTER (WHERE metric = 'census_list')         AS c_list,
          max(num) FILTER (WHERE metric = 'fsm_free_pages')      AS fsm,
          max(num) FILTER (WHERE metric = 'brin_items')          AS b_items,
+         max(num) FILTER (WHERE metric = 'brin_unused_items')   AS b_unused,
          max(num) FILTER (WHERE metric = 'brin_revmap_entries') AS b_revmap,
          max(num) FILTER (WHERE metric = 'meta_total_pages')    AS m_total,
          max(num) FILTER (WHERE metric = 'meta_entry_pages')    AS m_entry,
          max(num) FILTER (WHERE metric = 'meta_data_pages')     AS m_data,
+         max(num) FILTER (WHERE metric = 'meta_pending_pages')  AS m_pending,
          max(num) FILTER (WHERE metric = 'hs_bucket_pages')     AS hs_bucket,
          max(num) FILTER (WHERE metric = 'hs_overflow_pages')   AS hs_ovfl,
          max(num) FILTER (WHERE metric = 'hs_bitmap_pages')     AS hs_bitmap,
@@ -3225,159 +3964,231 @@ WITH c AS (
     FROM proto.meas
    WHERE phase IN ('baseline','churn_raw','standin','churn_maintained','settle2')
    GROUP BY fixture, phase
-  HAVING count(*) FILTER (WHERE metric = 'census_scanned') > 0
-),
-am AS (SELECT fixture, am FROM proto.score),
-blk AS (SELECT current_setting('block_size')::numeric AS b)
-SELECT 'I1 maintained size >= as-built size: ' ||
-       (SELECT count(*) FILTER (WHERE maint_size >= base_size) || ' of ' || count(*) ||
-               ' (smaller: ' || coalesce(string_agg(fixture, ',') FILTER (WHERE maint_size < base_size), 'none') || ')'
-          FROM proto.score)
-UNION ALL
-SELECT 'I2 size bracket: ' ||
-       (SELECT count(*) FILTER (WHERE sz_before = sz_after AND sz_after = scanned * blk.b)
-               || ' of ' || count(*) || ' censuses' FROM c CROSS JOIN blk)
-UNION ALL
-SELECT 'I3 hash page classes: ' ||
-       (SELECT count(*) FILTER (WHERE c_meta + c_bucket + c_ovfl + c_bitmap + c_unused + c_bad = scanned
-                                  AND hs_bucket + hs_ovfl + hs_bitmap + hs_unused + 1 = scanned)
-               || ' of ' || count(*) || ' hash censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'hash')
-UNION ALL
-SELECT 'I4 hash bitmap agreement: ' ||
-       (SELECT count(*) FILTER (WHERE bm_dis = 0) || ' of ' || count(*) || ' hash censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'hash')
-UNION ALL
-SELECT 'I5 GiST FSM <= deleted + new: ' ||
-       (SELECT count(*) FILTER (WHERE fsm <= c_del + c_new) || ' of ' || count(*) || ' GiST censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'gist') || '; SP-GiST: not applicable, no decoder'
-UNION ALL
-SELECT 'I6 BRIN revmap = items: ' ||
-       (SELECT count(*) FILTER (WHERE b_revmap = b_items) || ' of ' || count(*) || ' BRIN censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'brin')
-UNION ALL
-SELECT 'I7 BRIN maintained >= raw: ' ||
-       (SELECT count(*) FILTER (WHERE maint_size >= raw_size) || ' of ' || count(*) || ' BRIN fixtures'
-          FROM proto.score WHERE am = 'brin')
-UNION ALL
-SELECT 'I8 GIN metapage identity: ' ||
-       (SELECT count(*) FILTER (WHERE m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0))
-               || ' of ' || count(*) || ' GIN censuses; total-page identity '
-               || count(*) FILTER (WHERE m_total = scanned) || ' of ' || count(*)
-          FROM c JOIN am USING (fixture) WHERE am.am = 'gin')
-UNION ALL
-SELECT 'I9 VACUUM VERBOSE index line: ' ||
-       (SELECT count(*) FILTER (WHERE txt = 'present') || ' present, ' ||
-               count(*) FILTER (WHERE txt = 'absent') || ' absent (' ||
-               coalesce(string_agg(fixture, ',') FILTER (WHERE txt = 'absent'), 'none') || ')'
-          FROM proto.meas WHERE phase = 'verbose' AND metric = 'index_line')
-UNION ALL
-SELECT 'I10 maintenance not defeated: ' ||
-       (SELECT count(*) FILTER (WHERE num = 0) || ' VACUUMs at 0 dead but not yet removable, ' ||
-               count(*) FILTER (WHERE num > 0) || ' above 0 (' ||
-               coalesce(string_agg(fixture || '/' || phase || '=' || num, ', ') FILTER (WHERE num > 0), 'none') || ')'
-          FROM proto.meas WHERE metric = 'dead_not_removable' AND num IS NOT NULL)
-UNION ALL
-SELECT 'I11 timeouts and skips: ' ||
-       (SELECT count(*) || ' maintenance sessions, skip lines ' || coalesce(sum(num) FILTER (WHERE metric = 'skip_lines'), 0)
-               FROM proto.meas WHERE metric = 'skip_lines') || ', error lines ' ||
-       (SELECT coalesce(sum(num), 0) FROM proto.meas WHERE metric = 'error_lines') || ', distinct timeout sets: ' ||
-       (SELECT string_agg(DISTINCT txt, ' | ') FROM proto.meas WHERE metric = 'session_timeouts')
-UNION ALL
-SELECT 'I12 lock never held across a maintenance step: ' ||
-       (WITH lk AS (SELECT fixture, phase,
-                           max(num) FILTER (WHERE metric = 'lock_acquired') AS t0,
-                           max(num) FILTER (WHERE metric = 'lock_released') AS t1
-                      FROM proto.meas WHERE metric IN ('lock_acquired','lock_released')
-                     GROUP BY fixture, phase),
-             mt AS (SELECT fixture, phase,
-                           max(num) FILTER (WHERE metric = 'started') AS m0,
-                           max(num) FILTER (WHERE metric = 'ended')   AS m1
-                      FROM proto.meas WHERE metric IN ('started','ended')
-                     GROUP BY fixture, phase)
-        SELECT (SELECT count(*) FROM lk) || ' lock intervals, ' || (SELECT count(*) FROM mt) ||
-               ' maintenance intervals, overlaps ' ||
-               (SELECT count(*) FROM lk JOIN mt ON lk.t0 < mt.m1 AND mt.m0 < lk.t1))
-UNION ALL
-SELECT 'I13 no undeclared horizon holder: ' ||
-       (SELECT count(*) FILTER (WHERE slots = 0 AND prepared = 0 AND backends = 0)
-               || ' of ' || count(*) || ' probes entirely clean; with a backend holding: '
-               || coalesce(string_agg(fixture || '/' || phase, ', ') FILTER (WHERE backends > 0), 'none')
-               || '; slots ' || coalesce(sum(slots), 0) || ', prepared ' || coalesce(sum(prepared), 0)
-          FROM (SELECT fixture, phase,
-                       max(num) FILTER (WHERE metric = 'horizon_backends') AS backends,
-                       max(num) FILTER (WHERE metric = 'horizon_slots')    AS slots,
-                       max(num) FILTER (WHERE metric = 'horizon_prepared') AS prepared
-                  FROM proto.meas
-                 WHERE phase IN ('maint_before','maint_after','settle2_before','settle2_after')
-                 GROUP BY fixture, phase) h)
-UNION ALL
-SELECT 'I14 baseline payloads: ' ||
-       (SELECT count(*) FILTER (WHERE captured_v = 2 AND captured_sz = base_size
-                                  AND captured_sz = capture_bytes
-                                  AND captured_tup = round(greatest(capture_tuples, -1)))
-               || ' of ' || count(*) || ' version 2, sz = census size, tup = table count'
-          FROM proto.score)
-UNION ALL
-SELECT 'I15 decided on the maintained state: ' ||
-       (SELECT count(*) FILTER (WHERE decide_bytes = maint_size AND decide_bytes = oracle_before)
-               || ' of ' || count(*) FROM proto.score)
-UNION ALL
-SELECT 'I16 step 1 = the tests recomputed: ' ||
-       (SELECT count(*) FILTER (WHERE action = expected_action) || ' of ' || count(*) ||
-               ' (disagreeing: ' || coalesce(string_agg(fixture, ',') FILTER (WHERE action <> expected_action), 'none') || ')'
-          FROM proto.score);
+  HAVING count(*) FILTER (WHERE metric = 'census_scanned') > 0;
+-- One row per maintenance VACUUM: its VERBOSE counts beside the censuses
+-- taken just before and just after it.
+DROP TABLE IF EXISTS proto.vac_v;
+CREATE TABLE proto.vac_v AS
+  SELECT v.fixture, v.phase AS tag, sc.am,
+         max(v.num) FILTER (WHERE v.metric = 'vacuum_ran')          AS vacuum_ran,
+         max(v.num) FILTER (WHERE v.metric = 'index_scans_ran')     AS scans_ran,
+         max(v.txt) FILTER (WHERE v.metric = 'index_line')          AS line,
+         max(v.num) FILTER (WHERE v.metric = 'num_pages')           AS num_pages,
+         max(v.num) FILTER (WHERE v.metric = 'pages_newly_deleted') AS newly,
+         max(v.num) FILTER (WHERE v.metric = 'pages_deleted')       AS deleted,
+         max(v.num) FILTER (WHERE v.metric = 'pages_free')          AS free,
+         max(v.txt) FILTER (WHERE v.metric = 'census_before')       AS pre_phase,
+         max(v.txt) FILTER (WHERE v.metric = 'census_after')        AS post_phase
+    FROM proto.meas v JOIN proto.score sc ON sc.fixture = v.fixture
+   WHERE v.phase LIKE 'verbose%'
+   GROUP BY v.fixture, v.phase, sc.am;
+
+INSERT INTO proto.invariant
+SELECT 'I1', count(*) FILTER (WHERE maint_size >= base_size) || ' of ' || count(*) || ' (smaller: ' ||
+       coalesce(string_agg(fixture, ',') FILTER (WHERE maint_size < base_size), 'none') || ')',
+       bool_and(maint_size >= base_size)
+  FROM proto.score;
+INSERT INTO proto.invariant
+SELECT 'I2', count(*) FILTER (WHERE sz_before = sz_after AND sz_after = scanned * b) || ' of ' || count(*) || ' censuses',
+       bool_and(sz_before = sz_after AND sz_after = scanned * b)
+  FROM proto.census_v CROSS JOIN (SELECT current_setting('block_size')::numeric AS b) blk;
+INSERT INTO proto.invariant
+SELECT 'I3', count(*) FILTER (WHERE c_meta + c_bucket + c_ovfl + c_bitmap + c_unused + c_bad = scanned
+                                AND hs_bucket + hs_ovfl + hs_bitmap + hs_unused + 1 = scanned)
+             || ' of ' || count(*) || ' hash censuses',
+       bool_and(c_meta + c_bucket + c_ovfl + c_bitmap + c_unused + c_bad = scanned
+                AND hs_bucket + hs_ovfl + hs_bitmap + hs_unused + 1 = scanned)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'hash';
+INSERT INTO proto.invariant
+SELECT 'I4', count(*) FILTER (WHERE bm_dis = 0) || ' of ' || count(*) || ' hash censuses', bool_and(bm_dis = 0)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'hash';
+INSERT INTO proto.invariant
+SELECT 'I5', count(*) FILTER (WHERE s.am = 'gist' AND fsm <= c_del + c_new) || ' of '
+             || count(*) FILTER (WHERE s.am = 'gist') || ' GiST censuses, '
+             || count(*) FILTER (WHERE s.am = 'spgist' AND fsm <= c_empty) || ' of '
+             || count(*) FILTER (WHERE s.am = 'spgist') || ' SP-GiST censuses',
+       bool_and(CASE s.am WHEN 'gist' THEN fsm <= c_del + c_new ELSE fsm <= c_empty END)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am IN ('gist', 'spgist');
+INSERT INTO proto.invariant
+SELECT 'I6', count(*) FILTER (WHERE b_revmap = b_items) || ' of ' || count(*) || ' BRIN censuses',
+       bool_and(b_revmap = b_items)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'brin';
+INSERT INTO proto.invariant
+SELECT 'I7', count(*) FILTER (WHERE maint_size >= raw_size) || ' of ' || count(*) || ' BRIN fixtures',
+       bool_and(maint_size >= raw_size)
+  FROM proto.score WHERE am = 'brin';
+-- I8 is scoped to the censuses whose metapage counts the build or a VACUUM's
+-- cleanup wrote last: the metapage is rewritten by nothing else, so a census
+-- taken after writes and before a VACUUM reads counts stale by construction
+INSERT INTO proto.invariant
+SELECT 'I8', count(*) FILTER (WHERE fresh AND ok) || ' of ' || count(*) FILTER (WHERE fresh)
+             || ' GIN censuses the build or a VACUUM left (disagreeing: '
+             || coalesce(string_agg(fixture || '/' || phase, ',') FILTER (WHERE fresh AND NOT ok), 'none')
+             || '); stale by construction, not scored: ' || count(*) FILTER (WHERE NOT fresh),
+       coalesce(bool_and(ok) FILTER (WHERE fresh), true)
+  FROM (SELECT c.fixture, c.phase,
+               (m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0) AND m_total = scanned) AS ok,
+               (c.phase = 'baseline' OR c.fixture IN ($NOCHURN)
+                OR EXISTS (SELECT 1 FROM proto.vac_v v WHERE v.fixture = c.fixture
+                             AND v.post_phase = c.phase AND v.vacuum_ran = 1)) AS fresh
+          FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'gin') g;
+-- I9: VERBOSE's index line against the censuses around its own VACUUM
+INSERT INTO proto.invariant
+SELECT 'I9', count(*) FILTER (WHERE why = 'ok') || ' of ' || count(*)
+             || ' maintenance VACUUM and ANALYZE steps agree (' || count(*) FILTER (WHERE line = 'present')
+             || ' index lines; disagreeing: '
+             || coalesce(string_agg(fixture || '/' || tag || ' ' || why, '; ') FILTER (WHERE why <> 'ok'), 'none')
+             || ')',
+       bool_and(why = 'ok')
+  FROM (SELECT v.fixture, substring(v.tag from 9) AS tag, v.line,
+               CASE
+                 WHEN v.vacuum_ran = 0 THEN CASE WHEN v.line = 'absent' THEN 'ok' ELSE 'a line with no VACUUM' END
+                 WHEN v.am = 'hash' AND v.scans_ran = 0 THEN
+                      CASE WHEN v.line = 'absent' THEN 'ok' ELSE 'a hash line with no bulk delete' END
+                 WHEN v.line IS DISTINCT FROM 'present' THEN 'no line'
+                 WHEN v.num_pages IS DISTINCT FROM CASE WHEN v.am = 'brin' THEN pre.scanned ELSE post.scanned END
+                      THEN 'total ' || v.num_pages
+                 WHEN v.am IN ('hash', 'brin') AND (coalesce(v.newly, 0), v.deleted, v.free) IS DISTINCT FROM (0, 0, 0)
+                      THEN 'nonzero counts'
+                 WHEN v.am = 'gist' AND (v.deleted, v.free, coalesce(v.newly, post.c_del - pre.c_del))
+                      IS DISTINCT FROM (post.c_del + post.c_new, post.fsm, post.c_del - pre.c_del)
+                      THEN 'deleted ' || v.deleted || '/' || (post.c_del + post.c_new) || ' free ' || v.free || '/'
+                           || post.fsm || ' newly ' || v.newly || '/' || (post.c_del - pre.c_del)
+                 WHEN v.am = 'spgist' AND (coalesce(v.newly, post.c_empty), v.deleted, v.free, post.fsm)
+                      IS DISTINCT FROM (post.c_empty, post.c_empty, post.c_empty, post.c_empty)
+                      THEN 'deleted ' || v.deleted || ' free ' || v.free || ' newly ' || v.newly
+                           || ' new-or-empty ' || post.c_empty || ' fsm ' || post.fsm
+                 WHEN v.am = 'gin' AND v.free IS DISTINCT FROM post.fsm
+                      THEN 'free ' || v.free || '/' || post.fsm
+                 ELSE 'ok' END AS why
+          FROM proto.vac_v v
+          LEFT JOIN proto.census_v pre  ON pre.fixture  = v.fixture AND pre.phase  = v.pre_phase
+          LEFT JOIN proto.census_v post ON post.fixture = v.fixture AND post.phase = v.post_phase) x;
+INSERT INTO proto.invariant
+SELECT 'I10', count(*) FILTER (WHERE num = 0) || ' VACUUMs at 0 dead but not yet removable, '
+              || count(*) FILTER (WHERE num > 0) || ' above 0 ('
+              || coalesce(string_agg(fixture || '/' || phase || '=' || num, ', ') FILTER (WHERE num > 0), 'none') || ')',
+       bool_and(CASE WHEN phase = 'maint' AND fixture IN ('g08', 'n10') THEN num > 0 ELSE num = 0 END)
+  FROM proto.meas WHERE metric = 'dead_not_removable' AND num IS NOT NULL;
+INSERT INTO proto.invariant
+SELECT 'I11', count(*) FILTER (WHERE metric = 'skip_lines') || ' maintenance sessions, skip lines '
+              || coalesce(sum(num) FILTER (WHERE metric = 'skip_lines'), 0) || ', error lines '
+              || coalesce(sum(num) FILTER (WHERE metric = 'error_lines'), 0) || ', timeout sets: '
+              || coalesce(string_agg(DISTINCT txt, ' | ') FILTER (WHERE metric = 'session_timeouts'), '-'),
+       coalesce(sum(num) FILTER (WHERE metric IN ('skip_lines', 'error_lines')), 0) = 0
+       AND coalesce(bool_and(txt !~ '=[1-9]') FILTER (WHERE metric = 'session_timeouts'), false)
+  FROM proto.meas WHERE metric IN ('skip_lines', 'error_lines', 'session_timeouts');
+INSERT INTO proto.invariant
+WITH lk AS (SELECT fixture, phase, max(num) FILTER (WHERE metric = 'lock_acquired') AS t0,
+                   max(num) FILTER (WHERE metric = 'lock_released') AS t1
+              FROM proto.meas WHERE metric IN ('lock_acquired','lock_released') GROUP BY fixture, phase),
+     mt AS (SELECT fixture, phase, max(num) FILTER (WHERE metric = 'started') AS m0,
+                   max(num) FILTER (WHERE metric = 'ended') AS m1
+              FROM proto.meas WHERE metric IN ('started','ended') GROUP BY fixture, phase),
+     ov AS (SELECT 1 FROM lk JOIN mt ON lk.t0 < mt.m1 AND mt.m0 < lk.t1)
+SELECT 'I12', (SELECT count(*) FROM lk) || ' lock intervals, ' || (SELECT count(*) FROM mt)
+              || ' maintenance intervals, overlaps ' || (SELECT count(*) FROM ov),
+       (SELECT count(*) FROM ov) = 0;
+INSERT INTO proto.invariant
+SELECT 'I13', count(*) FILTER (WHERE slots = 0 AND prepared = 0 AND backends = 0) || ' of ' || count(*)
+              || ' probes clean; holding a backend: '
+              || coalesce(string_agg(fixture || '/' || phase, ', ') FILTER (WHERE backends > 0), 'none')
+              || '; slots ' || coalesce(sum(slots), 0) || ', prepared ' || coalesce(sum(prepared), 0),
+       bool_and(slots = 0 AND prepared = 0
+                AND backends = CASE WHEN fixture IN ('g08', 'n10') AND phase LIKE 'maint_%' THEN 1 ELSE 0 END)
+  FROM (SELECT fixture, phase,
+               max(num) FILTER (WHERE metric = 'horizon_backends') AS backends,
+               max(num) FILTER (WHERE metric = 'horizon_slots')    AS slots,
+               max(num) FILTER (WHERE metric = 'horizon_prepared') AS prepared
+          FROM proto.meas
+         WHERE phase IN ('maint_before','maint_after','settle2_before','settle2_after')
+         GROUP BY fixture, phase) h;
+INSERT INTO proto.invariant
+SELECT 'I14', count(*) FILTER (WHERE ok) || ' of ' || count(*) || ' version 2, sz = census size, tup = table count',
+       bool_and(ok)
+  FROM (SELECT captured_v = 2 AND captured_sz = base_size AND captured_sz = capture_bytes
+               AND captured_tup = round(greatest(capture_tuples, -1)) AS ok FROM proto.score) s;
+INSERT INTO proto.invariant
+SELECT 'I15', count(*) FILTER (WHERE decide_bytes = maint_size AND decide_bytes = oracle_before) || ' of ' || count(*),
+       bool_and(decide_bytes = maint_size AND decide_bytes = oracle_before)
+  FROM proto.score;
+INSERT INTO proto.invariant
+SELECT 'I16', count(*) FILTER (WHERE action = expected_action) || ' of ' || count(*) || ' (disagreeing: '
+              || coalesce(string_agg(fixture, ',') FILTER (WHERE action <> expected_action), 'none') || ')',
+       bool_and(action = expected_action)
+  FROM proto.score;
+INSERT INTO proto.invariant
+SELECT 'I17', coalesce(nullif('$act_line', ''), 'act has not run'),
+       coalesce('$act_line' ~ ': ([0-9]+) of \1; unchanged by the second run: \1 of \1\$', false);
+-- I18: BRIN's graduated FSM agreement, scored where the source makes it exact:
+-- every regular page a VACUUM did not write, found by its LSN against the WAL
+-- insert position read just before that VACUUM began.  The pages the
+-- VACUUM's own summarization wrote are compared and reported, not scored.
+INSERT INTO proto.invariant
+SELECT 'I18', count(*) FILTER (WHERE untouched AND fsm_read = fsm_expected) || ' of '
+              || count(*) FILTER (WHERE untouched)
+              || ' regular pages the VACUUM did not write read their exact FSM category (failing: '
+              || coalesce(string_agg(fixture || '/' || phase || '/' || blkno, ',')
+                          FILTER (WHERE untouched AND fsm_read <> fsm_expected), 'none')
+              || '); of the ' || count(*) FILTER (WHERE NOT untouched) || ' it wrote, '
+              || count(*) FILTER (WHERE NOT untouched AND fsm_read = fsm_expected) || ' agree, '
+              || count(*) FILTER (WHERE NOT untouched AND fsm_read > fsm_expected) || ' read higher and '
+              || count(*) FILTER (WHERE NOT untouched AND fsm_read < fsm_expected) || ' lower, reported only',
+       coalesce(bool_and(fsm_read = fsm_expected) FILTER (WHERE untouched), true)
+  FROM (SELECT p.fixture, p.phase, p.blkno, p.fsm_read, p.fsm_expected,
+               p.page_lsn <= w.num AS untouched
+          FROM proto.brin_page p
+          JOIN proto.vac_v v ON v.fixture = p.fixture AND v.post_phase = p.phase AND v.vacuum_ran = 1
+          JOIN proto.meas w ON w.fixture = p.fixture AND w.phase = substring(v.tag from 9)
+                           AND w.metric = 'wal_lsn_before') f;
 SQL
-  grep -h 'per index' "$OUT/act.txt" 2>/dev/null | sed 's/^/I17 act: /' >> "$OUT/invariants.txt"
+  q "$DB" "SELECT count(*) FROM proto.invariant" | grep -q '^18$' \
+    || die "the invariants did not all compute (see $OUT/invariants-build.log)"
+  q "$DB" "SELECT id || ' ' || CASE WHEN holds THEN 'holds' ELSE 'FAILS' END || ': ' || reading
+             FROM proto.invariant ORDER BY substring(id from 2)::int" > "$OUT/invariants.txt"
   cat "$OUT/invariants.txt"
 
-  # I6 and I8 per census, so every disagreement can be read against the phase
-  # it happened in: the metapage's counts are written by a VACUUM's cleanup
-  # and nothing else, so a census taken after writes and before one reads
-  # counts that are stale by construction
-  qat "$DB" /dev/stdin > "$OUT/i6-i8-detail.txt" 2>&1 <<'SQL'
-WITH c AS (
-  SELECT fixture, phase,
-         max(num) FILTER (WHERE metric = 'census_scanned')      AS scanned,
-         max(num) FILTER (WHERE metric = 'brin_items')          AS b_items,
-         max(num) FILTER (WHERE metric = 'brin_unused_items')   AS b_unused,
-         max(num) FILTER (WHERE metric = 'brin_revmap_entries') AS b_revmap,
-         max(num) FILTER (WHERE metric = 'census_entry')        AS c_entry,
-         max(num) FILTER (WHERE metric = 'census_data')         AS c_data,
-         max(num) FILTER (WHERE metric = 'census_list')         AS c_list,
-         max(num) FILTER (WHERE metric = 'census_deleted')      AS c_del,
-         max(num) FILTER (WHERE metric = 'census_new')          AS c_new,
-         max(num) FILTER (WHERE metric = 'fsm_free_pages')      AS fsm,
-         max(num) FILTER (WHERE metric = 'meta_total_pages')    AS m_total,
-         max(num) FILTER (WHERE metric = 'meta_entry_pages')    AS m_entry,
-         max(num) FILTER (WHERE metric = 'meta_data_pages')     AS m_data,
-         max(num) FILTER (WHERE metric = 'meta_pending_pages')  AS m_pending
-    FROM proto.meas
-   WHERE phase IN ('baseline','churn_raw','standin','churn_maintained','settle2')
-   GROUP BY fixture, phase
-  HAVING count(*) FILTER (WHERE metric = 'census_scanned') > 0
-)
-SELECT 'I6 ' || fixture || ' [' || phase || '] revmap=' || b_revmap || ' items=' || b_items
-       || ' unused=' || b_unused || CASE WHEN b_revmap = b_items THEN ' ok' ELSE ' DISAGREES' END
-  FROM c WHERE b_items IS NOT NULL
-UNION ALL
-SELECT 'I8 ' || fixture || ' [' || phase || '] meta(total=' || m_total || ', entry=' || m_entry
-       || ', data=' || m_data || ', pending=' || m_pending || ') census(scanned=' || scanned
-       || ', entry=' || c_entry || ', data=' || c_data || ', list=' || c_list
-       || ', deleted=' || c_del || ', new=' || c_new || ', fsm=' || fsm || ')'
-       || CASE WHEN m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0)
-               THEN ' ok' ELSE ' DISAGREES' END
-       || CASE WHEN m_total = scanned THEN ' total=ok' ELSE ' total=DISAGREES' END
-  FROM c WHERE m_total IS NOT NULL
- ORDER BY 1;
-SQL
-  grep -c 'DISAGREES' "$OUT/i6-i8-detail.txt" | sed 's/^/    I6 and I8 detail lines that disagree: /'
+  # I6, I8, I9 and I18 per census or per step, so every disagreement can be
+  # read against the phase it happened in
+  q "$DB" "SELECT 'I6 ' || fixture || ' [' || phase || '] revmap=' || b_revmap || ' items=' || b_items
+             || ' unused=' || b_unused || CASE WHEN b_revmap = b_items THEN ' ok' ELSE ' DISAGREES' END
+             FROM proto.census_v WHERE b_items IS NOT NULL
+           UNION ALL
+           SELECT 'I8 ' || fixture || ' [' || phase || '] meta(total=' || m_total || ', entry=' || m_entry
+             || ', data=' || m_data || ', pending=' || m_pending || ') census(scanned=' || scanned
+             || ', entry=' || c_entry || ', data=' || c_data || ', list=' || c_list
+             || ', deleted=' || c_del || ', new=' || c_new || ', fsm=' || fsm || ')'
+             || CASE WHEN m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0) AND m_total = scanned
+                     THEN ' ok' ELSE ' differs' END
+             FROM proto.census_v WHERE m_total IS NOT NULL
+           UNION ALL
+           SELECT 'I9 ' || v.fixture || ' [' || substring(v.tag from 9) || '] ' || coalesce(v.line, '?')
+             || ' vacuum=' || v.vacuum_ran || ' bulkdelete=' || coalesce(v.scans_ran::text, '-')
+             || coalesce(' total=' || v.num_pages || ' newly=' || v.newly || ' deleted=' || v.deleted
+                         || ' free=' || v.free, '')
+             || ' | before ' || coalesce(v.pre_phase, '-') || ' scanned=' || coalesce(pre.scanned::text, '-')
+             || ' | after ' || coalesce(v.post_phase, '-') || ' scanned=' || coalesce(post.scanned::text, '-')
+             || ' deleted=' || coalesce(post.c_del::text, '-') || ' new=' || coalesce(post.c_new::text, '-')
+             || ' new_or_empty=' || coalesce(post.c_empty::text, '-') || ' fsm=' || coalesce(post.fsm::text, '-')
+             FROM proto.vac_v v
+             LEFT JOIN proto.census_v pre  ON pre.fixture  = v.fixture AND pre.phase  = v.pre_phase
+             LEFT JOIN proto.census_v post ON post.fixture = v.fixture AND post.phase = v.post_phase
+           UNION ALL
+           SELECT 'I18 ' || fixture || ' [' || phase || '] ' || count(*) || ' regular pages: '
+             || count(*) FILTER (WHERE fsm_read = fsm_expected) || ' agree, '
+             || count(*) FILTER (WHERE fsm_read > fsm_expected) || ' higher, '
+             || count(*) FILTER (WHERE fsm_read < fsm_expected) || ' lower, '
+             || count(*) FILTER (WHERE evacuate) || ' flagged for evacuation'
+             FROM proto.brin_page GROUP BY fixture, phase
+           ORDER BY 1" > "$OUT/invariant-detail.txt"
+  printf '    invariant detail lines: %s\n' "$(grep -c '' "$OUT/invariant-detail.txt")"
 
   q "$DB" "SELECT format('%-4s %-6s base=%s raw=%s maintained=%s rebuilt=%s truth=%s%% heap_relpages=%s heap_reltuples=%s',
              fixture, am, base_size, raw_size, maint_size, oracle_after, truth_pct, heap_relpages, heap_reltuples)
              FROM proto.score ORDER BY am, fixture" > "$OUT/phase-sizes.txt"
   q "$DB" "SELECT protocol || ' | ' || behavior || ' -> ' || fixture
              FROM proto.declared_coverage ORDER BY protocol, behavior" > "$OUT/coverage.txt"
+  ! grep -q ' FAILS: ' "$OUT/invariants.txt" || die "a declared invariant failed (see $OUT/invariants.txt)"
 }
 
 # -------------------------------------------------------------- stage: probes
@@ -3385,6 +4196,7 @@ SQL
 # method or a protocol depends on.  They run after the oracle and the score.
 stage_probes() {
   say "probes: who writes reltuples, the hash oracle, the GIN oracle, GiST builds"
+  need_db; need_stage act
   q "$DB" "DROP SCHEMA IF EXISTS pr CASCADE" > /dev/null
   q "$DB" "CREATE SCHEMA pr" > /dev/null
   rt() {
@@ -3470,21 +4282,23 @@ SQL
 }
 
 # ---------------------------------------------------------------- stage: edge
-# The comment handling, the ladder's boundaries and the candidate filters,
+# The comment handling, the ladder's boundaries, the candidate filters, and
+# what step 2 does when another session holds a lock, edits a comment,
+# rewrites a payload or renames an index while step 2 waits for its locks -
 # case by case, in their own database.  Unscored: none is a bloat claim.
 # Each case files what it expects before the texts run, and the stage prints
-# expected against observed.
+# expected against observed and fails the run on any difference.
 edge_mk() {   # <table> <rows>: the build phase every edge table shares
   printf 'CREATE TABLE %s (id bigint, k bigint) WITH (autovacuum_enabled = off);\n' "$1"
   printf 'INSERT INTO %s SELECT g, g FROM generate_series(1, %s) g;\n' "$1" "$2"
   printf 'ANALYZE %s;\n' "$1"
   printf 'CREATE INDEX %s_i ON %s USING hash (k);\n' "$1" "$1"
 }
-edge_seen() {  # <round>: store step 1's rows through the view, and every comment
+edge_seen() {  # <round>: store step 1's rows through the view
   q "$EDB" "INSERT INTO proto.seen_plan (round, idx, action, notes)
               SELECT '$1', index_name, action, notes FROM proto.plan_v" > /dev/null
 }
-edge_snap() {  # <label>
+edge_snap() {  # <label>: every index's OID, file, size, table count and comment
   q "$EDB" "INSERT INTO proto.seen_cmt (label, idx, oid, filenode, bytes, tbl_tuples, cmt)
               SELECT '$1', c.relname, c.oid, c.relfilenode, pg_relation_size(c.oid),
                      t.reltuples::numeric, d.description
@@ -3496,15 +4310,43 @@ edge_snap() {  # <label>
 }
 edge_bg() {    # <tag> <sql...>: a background session, until edge_kill <tag>
   local tag=$1; shift
-  printf '%s\n' "$@" | qin "$EDB" > "$OUT/edge-bg-$tag.log" 2>&1 &
+  printf '%s\n' "$@" | qbg "$EDB" > "$OUT/edge-bg-$tag.log" 2>&1 &
 }
 edge_kill() {
   q "$EDB" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
              WHERE query LIKE '%wiki_nbmaint_edge_$1%' AND pid <> pg_backend_pid()" > /dev/null
   wait 2>/dev/null
 }
+edge_wait_lock() {  # <table> <mode> <granted>: poll until pg_locks shows it
+  local n=0
+  until [ "$(q "$EDB" "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+                         WHERE c.relname = '$1' AND l.mode = '$2' AND l.granted = $3")" -ge 1 ]; do
+    n=$((n + 1)); [ "$n" -gt 200 ] && die "edge: no $2 (granted=$3) on $1 appeared"
+    sleep 0.05
+  done
+}
+# edge_during <round> <table> <sql>: run step 2 in the background, wait until
+# it is queued for its SHARE lock on <table> - held off by a ROW EXCLUSIVE
+# this function takes in another session first - then run <sql> as a third
+# session, release the holder, and wait for step 2 to finish.  Step 2 waits
+# up to its own lock_timeout of 5 s; the poll takes a few hundredths.
+edge_during() {
+  local round=$1 t=$2 sql=$3
+  edge_bg "hold$round" "BEGIN;" "LOCK TABLE $t IN ROW EXCLUSIVE MODE;" \
+    "SELECT /* wiki_nbmaint_edge_hold$round */ pg_sleep(300);" "COMMIT;"
+  edge_wait_lock "$t" RowExclusiveLock true
+  ( run_apply "$EDB" "edge$round" ) &
+  local job=$!
+  edge_wait_lock "$t" ShareLock false
+  printf '%s\n' "$sql" | qin "$EDB" > "$OUT/edge-during-$round.log" 2>&1
+  q "$EDB" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+             WHERE query LIKE '%wiki_nbmaint_edge_hold$round%' AND pid <> pg_backend_pid()" > /dev/null
+  wait "$job" || die "edge round $round: step 2 failed, see $OUT/apply-edge$round.log"
+  wait 2>/dev/null
+}
 stage_edge() {
-  say "edge: comments, boundaries, filters, locks and rebuilds, case by case"
+  say "edge: comments, boundaries, filters, locks, concurrent writers and the cap, case by case"
+  need_texts
   q postgres "DROP DATABASE IF EXISTS $EDB" > /dev/null
   q postgres "DROP ROLE IF EXISTS nbmaint_other" > /dev/null
   q postgres "CREATE DATABASE $EDB" > /dev/null
@@ -3514,16 +4356,38 @@ stage_edge() {
     printf 'CREATE TABLE proto.expect (round text, idx text, want text, human text, PRIMARY KEY (round, idx));\n'
     printf 'CREATE TABLE proto.seen_plan (round text, idx text, action text, notes text);\n'
     printf 'CREATE TABLE proto.seen_cmt (label text, idx text, oid oid, filenode oid, bytes bigint, tbl_tuples numeric, cmt text);\n'
+    # the comment with its one reserved line's content cut out, newlines kept;
+    # how many reserved lines it has; and whether that line is exactly the
+    # version-2 grammar with sz and tup equal to the file and the table count
+    printf '%s\n' "CREATE FUNCTION proto.human(c text) RETURNS text LANGUAGE sql IMMUTABLE AS
+      \$f\$ SELECT regexp_replace(c, '^@nbmaint:\{.*\}\$', '', 'n') \$f\$;"
+    printf '%s\n' "CREATE FUNCTION proto.nres(c text) RETURNS bigint LANGUAGE sql IMMUTABLE AS
+      \$f\$ SELECT count(*) FROM regexp_matches(coalesce(c, ''), '^@nbmaint:\{.*\}\$', 'gn') \$f\$;"
+    printf '%s\n' "CREATE FUNCTION proto.valid(c text, b numeric, t numeric) RETURNS boolean LANGUAGE sql IMMUTABLE AS
+      \$f\$ SELECT coalesce((regexp_match(c, '(?n)^@nbmaint:\{\"v\":2,\"sz\":([0-9]+),\"tup\":(-?[0-9]+),\"at\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{2}(?::[0-9]{2})?\"\}\$'))[1]::numeric = b
+                         AND (regexp_match(c, '(?n)^@nbmaint:\{\"v\":2,\"sz\":([0-9]+),\"tup\":(-?[0-9]+),'))[2]::numeric
+                             = round(greatest(t, -1)), false) \$f\$;"
     local e
-    for e in e_none e_human e_v1 e_bad e_junk e_mid e_shrink e_sz e_zero e_owner e_busy e_surv; do
+    for e in e_none e_human e_v1 e_bad e_junk e_nest e_dup e_two e_prose e_trail e_tailnl \
+             e_mid e_shrink e_sz e_zero e_owner e_busy e_surv e_hold e_cedit e_cpay e_ren; do
       edge_mk "$e" 30000
     done
     edge_mk e_t13 13000
     edge_mk e_t7 7000
+    edge_mk e_capok 5000
     printf 'CREATE INDEX e_sz_i2 ON e_sz USING hash (id);\n'
     printf 'CREATE INDEX e_t13_i2 ON e_t13 USING hash (id);\n'
     printf 'CREATE INDEX e_t7_i2 ON e_t7 USING hash (id);\n'
-    printf 'ANALYZE e_none, e_human, e_v1, e_bad, e_junk, e_mid, e_shrink, e_sz, e_zero, e_owner, e_busy, e_surv, e_t13, e_t7;\n'
+    # round G's rebuild that will fail: an expression index over an immutable
+    # function that is later replaced by one that divides by zero
+    printf "CREATE FUNCTION e_fail_f(bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS 'SELECT \$1';\n"
+    printf 'CREATE TABLE e_capfail (id bigint, k bigint) WITH (autovacuum_enabled = off);\n'
+    printf 'INSERT INTO e_capfail SELECT g, g FROM generate_series(1, 60000) g;\n'
+    printf 'ANALYZE e_capfail;\n'
+    printf 'CREATE INDEX e_capfail_i ON e_capfail USING hash (e_fail_f(k));\n'
+    printf 'CREATE TABLE e_ren2 (id bigint, k bigint) WITH (autovacuum_enabled = off);\n'
+    printf 'INSERT INTO e_ren2 SELECT g, g FROM generate_series(1, 30000) g;\n'
+    printf 'ANALYZE e_none, e_human, e_v1, e_bad, e_junk, e_nest, e_dup, e_two, e_prose, e_trail, e_tailnl, e_mid, e_shrink, e_sz, e_zero, e_owner, e_busy, e_surv, e_hold, e_cedit, e_cpay, e_ren, e_ren2, e_t13, e_t7, e_capok, e_capfail;\n'
     # an index built on an empty table that nothing has counted
     printf 'CREATE TABLE e_unk (id bigint, k bigint) WITH (autovacuum_enabled = off);\n'
     printf 'CREATE INDEX e_unk_i ON e_unk USING hash (k);\n'
@@ -3536,33 +4400,48 @@ stage_edge() {
     printf 'INSERT INTO e_part SELECT g FROM generate_series(1, 30000) g;\n'
     printf 'CREATE INDEX e_part_i ON e_part USING hash (k);\n'
     printf 'ANALYZE e_part_1;\n'
-    # the human comments round A reads
+    # the comments round A reads
     printf "COMMENT ON INDEX e_human_i IS E'Search index used by the application.\\\\nSecond line: an @ sign, a { and a } brace.\\\\n  \\\\n';\n"
     printf "COMMENT ON INDEX e_v1_i IS E'keep me\\\\n@nbmaint:{\"v\":1,\"sz\":123,\"tup\":456,\"at\":\"2020-01-01T00:00:00+00\"}';\n"
     printf "COMMENT ON INDEX e_bad_i IS '@nbmaint:{\"v\":2,\"sz\":\"big\",\"tup\":1,\"at\":\"x\"}';\n"
     printf "COMMENT ON INDEX e_junk_i IS E'above\\\\n@nbmaint: not json\\\\nbelow';\n"
+    printf "COMMENT ON INDEX e_nest_i IS '@nbmaint:{\"x\":{\"v\":2,\"sz\":100,\"tup\":5}}';\n"
+    printf "COMMENT ON INDEX e_dup_i IS '@nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\",\"sz\":999}';\n"
+    printf "COMMENT ON INDEX e_two_i IS E'@nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\"}\\\\nhuman\\\\n@nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\"}';\n"
+    printf "COMMENT ON INDEX e_prose_i IS 'see @nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\"} for the format';\n"
+    printf "COMMENT ON INDEX e_trail_i IS E'human text  \\\\n\\\\n';\n"
+    printf "COMMENT ON INDEX e_tailnl_i IS E'note\\\\n@nbmaint:{\"v\":1,\"sz\":1,\"tup\":1}\\\\n';\n"
     printf "COMMENT ON INDEX e_surv_i IS 'kept through both rebuilds';\n"
   } > "$SQLD/edge-build.sql"
-  qz "$EDB" < "$SQLD/edge-build.sql" > "$OUT/edge-build.log" 2>&1 || die "edge build failed, see $OUT/edge-build.log"
+  qz "$EDB" < "$SQLD/edge-build.sql" > "$OUT/edge-build.log" 2>&1
   # a CREATE INDEX CONCURRENTLY that fails on one row leaves an invalid index
   printf 'CREATE INDEX CONCURRENTLY e_invalid_i ON e_invalid USING hash ((1 / (k - 500)));\n' \
     | qe "$EDB" > "$OUT/edge-invalid.log" 2>&1
-  qf "$EDB" "$SQLD/plan_view.sql" > /dev/null 2>&1 || die "edge: the one-edit view failed"
+  qf "$EDB" "$SQLD/plan_view.sql" > /dev/null 2>&1
 
   # ---- round A: first run, every comment shape
-  qin "$EDB" > "$OUT/edge-expect-A.log" 2>&1 <<'SQL' || die "edge: filing round A's expectations failed"
+  qin "$EDB" > "$OUT/edge-expect-A.log" 2>&1 <<'SQL'
 INSERT INTO proto.expect (round, idx, want, human) VALUES
  ('A','e_none_i','initialize',''),
- ('A','e_human_i','initialize',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.'),
- ('A','e_v1_i','initialize','keep me'),
+ ('A','e_human_i','initialize',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.\n  \n\n'),
+ ('A','e_v1_i','initialize',E'keep me\n'),
  ('A','e_bad_i','initialize',''),
- ('A','e_junk_i','initialize',E'above\nbelow'),
+ ('A','e_junk_i','initialize',E'above\n@nbmaint: not json\nbelow\n'),
+ ('A','e_nest_i','initialize',''),
+ ('A','e_dup_i','initialize',''),
+ ('A','e_two_i','conflict',E'@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}\nhuman\n@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}'),
+ ('A','e_prose_i','initialize',E'see @nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"} for the format\n'),
+ ('A','e_trail_i','initialize',E'human text  \n\n\n'),
+ ('A','e_tailnl_i','initialize',E'note\n\n'),
  ('A','e_mid_i','initialize',''),('A','e_shrink_i','initialize',''),
  ('A','e_sz_i','initialize',''),('A','e_sz_i2','initialize',''),
  ('A','e_t13_i','initialize',''),('A','e_t13_i2','initialize',''),
  ('A','e_t7_i','initialize',''),('A','e_t7_i2','initialize',''),
  ('A','e_zero_i','initialize',''),('A','e_owner_i','initialize',''),
- ('A','e_busy_i','initialize',''),('A','e_surv_i','initialize','kept through both rebuilds'),
+ ('A','e_busy_i','initialize',''),('A','e_surv_i','initialize',E'kept through both rebuilds\n'),
+ ('A','e_hold_i','initialize',''),('A','e_cedit_i','initialize',''),
+ ('A','e_cpay_i','initialize',''),('A','e_ren_i','initialize',''),
+ ('A','e_capok_i','initialize',''),('A','e_capfail_i','initialize',''),
  ('A','e_unk_i','initialize',''),('A','e_part_1_k_idx','initialize',''),
  ('A','e_btree_i','absent',''),('A','e_invalid_i','absent',''),('A','e_part_i','absent','');
 SQL
@@ -3573,7 +4452,7 @@ SQL
   edge_snap A-after
 
   # ---- round B: forged payloads on the boundaries, one lock held elsewhere
-  qin "$EDB" > "$OUT/edge-forge.log" 2>&1 <<'SQL' || die "edge forgery failed"
+  qin "$EDB" > "$OUT/edge-forge.log" 2>&1 <<'SQL'
 CREATE FUNCTION proto.forge(p_idx text, p_before text, p_after text, p_sz numeric, p_tup numeric)
 RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
@@ -3599,7 +4478,7 @@ SELECT proto.forge('e_zero_i',   '', '',           proto.cur('e_zero_i'), 0);
 SELECT proto.forge('e_busy_i',   '', '',           floor(proto.cur('e_busy_i') / 2), proto.curtup('e_busy_i'));
 INSERT INTO e_unk SELECT g, g FROM generate_series(1, 10) g;
 INSERT INTO proto.expect (round, idx, want, human) VALUES
- ('B','e_mid_i','reindex',E'above\nbelow'),
+ ('B','e_mid_i','reindex',E'above\n\nbelow'),
  ('B','e_shrink_i','refresh',''),
  ('B','e_sz_i','reindex',''),('B','e_sz_i2','skip',''),
  ('B','e_t13_i','reindex',''),('B','e_t13_i2','skip',''),
@@ -3607,18 +4486,21 @@ INSERT INTO proto.expect (round, idx, want, human) VALUES
  ('B','e_zero_i','reindex',''),
  ('B','e_busy_i','reindex',''),
  ('B','e_unk_i','skip',''),
- ('B','e_none_i','skip',''),('B','e_v1_i','skip','keep me'),
- ('B','e_human_i','skip',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.'),
- ('B','e_bad_i','skip',''),('B','e_junk_i','skip',E'above\nbelow'),('B','e_owner_i','skip',''),
- ('B','e_surv_i','skip','kept through both rebuilds'),('B','e_part_1_k_idx','skip','');
+ ('B','e_none_i','skip',''),('B','e_v1_i','skip',E'keep me\n'),
+ ('B','e_human_i','skip',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.\n  \n\n'),
+ ('B','e_bad_i','skip',''),('B','e_junk_i','skip',E'above\n@nbmaint: not json\nbelow\n'),
+ ('B','e_nest_i','skip',''),('B','e_dup_i','skip',''),
+ ('B','e_two_i','conflict',E'@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}\nhuman\n@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}'),
+ ('B','e_prose_i','skip',E'see @nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"} for the format\n'),
+ ('B','e_trail_i','skip',E'human text  \n\n\n'),('B','e_tailnl_i','skip',E'note\n\n'),
+ ('B','e_owner_i','skip',''),('B','e_surv_i','skip',E'kept through both rebuilds\n'),
+ ('B','e_hold_i','skip',''),('B','e_cedit_i','skip',''),('B','e_cpay_i','skip',''),
+ ('B','e_ren_i','skip',''),('B','e_capok_i','skip',''),('B','e_capfail_i','skip',''),
+ ('B','e_part_1_k_idx','skip','');
 SQL
   edge_bg holder "BEGIN;" "LOCK TABLE e_busy IN ROW EXCLUSIVE MODE;" \
     "SELECT /* wiki_nbmaint_edge_holder */ pg_sleep(300);" "COMMIT;"
-  local n=0
-  until [ "$(q "$EDB" "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
-                        WHERE c.relname = 'e_busy' AND l.mode = 'RowExclusiveLock' AND l.granted")" = 1 ]; do
-    n=$((n + 1)); [ "$n" -gt 60 ] && die "edge: the lock holder never took its lock"; sleep 0.5
-  done
+  edge_wait_lock e_busy RowExclusiveLock true
   run_plan "$EDB" edgeB || die "edge round B: step 1 failed"
   edge_seen B
   edge_snap B-before
@@ -3653,13 +4535,73 @@ SQL
     "INSERT INTO e_tmp SELECT g FROM generate_series(1, 1000) g;" \
     "CREATE INDEX e_tmp_i ON e_tmp USING hash (k);" \
     "SELECT /* wiki_nbmaint_edge_temp */ pg_sleep(300);"
-  n=0
+  local n=0
   until [ "$(q "$EDB" "SELECT count(*) FROM pg_class WHERE relname = 'e_tmp_i'")" = 1 ]; do
     n=$((n + 1)); [ "$n" -gt 60 ] && die "edge: the temporary index never appeared"; sleep 0.5
   done
   run_plan "$EDB" edgeF || die "edge round F: step 1 failed"
   edge_seen F
+  run_apply "$EDB" edgeF || die "edge round F: step 2 failed"
   edge_kill temp
+
+  # ---- round H: another session holds ACCESS EXCLUSIVE on one index for the
+  # whole run: step 1, one statement, is cancelled by its lock_timeout; step 2
+  # counts that index failed and finishes every other one
+  edge_snap H-before
+  edge_bg hold "BEGIN;" "REINDEX INDEX e_hold_i;" \
+    "SELECT /* wiki_nbmaint_edge_hold */ pg_sleep(300);" "COMMIT;"
+  edge_wait_lock e_hold_i AccessExclusiveLock true
+  local rc_h1
+  run_plan "$EDB" edgeH; rc_h1=$?
+  run_apply "$EDB" edgeH || die "edge round H: step 2 failed"
+  edge_kill hold
+  edge_snap H-after
+
+  # ---- round I: a person rewrites the comment while step 2 waits for its
+  # table lock; step 2 re-reads it under its locks and keeps the new text
+  q "$EDB" "SELECT proto.forge('e_cedit_i', 'old human text', '', proto.cur('e_cedit_i') * 2,
+                               proto.curtup('e_cedit_i'))" > /dev/null
+  edge_snap I-before
+  edge_during I e_cedit "SELECT format('COMMENT /* wiki_nbmaint_edge_edit */ ON INDEX e_cedit_i IS %L',
+                           E'new human text, written while step 2 waited\n'
+                           || substring(description from '(?n)^(@nbmaint:\{.*\})\$'))
+                           FROM pg_description WHERE objoid = 'e_cedit_i'::regclass
+                         \\gexec"
+  edge_snap I-after
+
+  # ---- round J: another run rewrites the payload to the file's true size
+  # while step 2 waits; step 2's second read under the locks says skip
+  q "$EDB" "SELECT proto.forge('e_cpay_i', '', '', floor(proto.cur('e_cpay_i') / 2),
+                               proto.curtup('e_cpay_i'))" > /dev/null
+  edge_snap J-before
+  edge_during J e_cpay "SELECT proto.forge('e_cpay_i', '', '', proto.cur('e_cpay_i'), proto.curtup('e_cpay_i'));"
+  edge_snap J-after
+
+  # ---- round K: the index is renamed, and a new index takes its name, while
+  # step 2 waits; step 2 finds the name no longer names the index it read
+  q "$EDB" "SELECT proto.forge('e_ren_i', '', '', floor(proto.cur('e_ren_i') / 2),
+                               proto.curtup('e_ren_i'))" > /dev/null
+  edge_snap K-before
+  edge_during K e_ren "ALTER INDEX e_ren_i RENAME TO e_ren_i_old;
+                       CREATE INDEX e_ren_i ON e_ren2 USING hash (k);"
+  edge_snap K-after
+  run_apply "$EDB" edgeK2 || die "edge round K: the settling run of step 2 failed"
+  edge_snap K2-after
+
+  # ---- round G: max_reindex 1, and the first rebuild fails.  Step 2 runs with
+  # one documented edit, that cap; the failed rebuild uses up the cap, so the
+  # next index due is capped instead of rebuilt
+  sed 's/^    max_reindex integer := 1000;   -- cap on the rebuilds one run may start$/    max_reindex integer := 1;      -- cap on the rebuilds one run may start/' \
+    "$SQLD/apply.sql" > "$SQLD/apply-cap1.sql"
+  [ "$(diff "$SQLD/apply.sql" "$SQLD/apply-cap1.sql" | grep -c '^[<>]')" = 2 ] \
+    || die "edge round G: the documented edit did not change exactly one line"
+  q "$EDB" "CREATE OR REPLACE FUNCTION e_fail_f(bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS
+              'SELECT 1 / (\$1 - \$1)'" > /dev/null
+  q "$EDB" "SELECT proto.forge('e_capfail_i', '', '', floor(proto.cur('e_capfail_i') / 2), proto.curtup('e_capfail_i')),
+                   proto.forge('e_capok_i', '', '', floor(proto.cur('e_capok_i') / 2), proto.curtup('e_capok_i'))" > /dev/null
+  edge_snap G-before
+  APPLY_FILE="$SQLD/apply-cap1.sql" run_apply "$EDB" edgeG || die "edge round G: step 2 failed"
+  edge_snap G-after
 
   # ---- the verdicts
   qat "$EDB" /dev/stdin > "$OUT/edge.txt" 2>&1 <<'SQL'
@@ -3668,50 +4610,47 @@ WITH pa AS (
          coalesce((SELECT s.action FROM proto.seen_plan s WHERE s.round = e.round AND s.idx = e.idx), 'absent') AS seen
     FROM proto.expect e
 )
-SELECT format('%-6s %-16s want=%-10s seen=%-10s %s', 'plan ' || round, idx, want, seen,
+SELECT format('plan %-2s %-16s want=%-10s seen=%-10s %s', round, idx, want, seen,
               CASE WHEN want = seen THEN 'ok' ELSE 'DIFFERS' END)
   FROM pa ORDER BY round, idx;
 SQL
   qat "$EDB" /dev/stdin >> "$OUT/edge.txt" 2>&1 <<'SQL'
--- every comment step 2 wrote in round A: the human part, exactly one payload,
--- at the end, with sz and tup equal to what the index and the table read
-WITH a AS (SELECT * FROM proto.seen_cmt WHERE label = 'A-after'),
+-- every comment step 2 wrote in round A: the human text byte for byte where
+-- it was, exactly one reserved line, and a version-2 payload whose sz and
+-- tup are the file and the table count; a conflict left exactly as it was
+WITH b AS (SELECT * FROM proto.seen_cmt WHERE label = 'A-before'),
+     a AS (SELECT * FROM proto.seen_cmt WHERE label = 'A-after'),
      e AS (SELECT * FROM proto.expect WHERE round = 'A' AND want <> 'absent')
-SELECT format('write A %-16s human=%s one_payload=%s at_end=%s values=%s %s', e.idx,
-         h_ok, one, at_end, vals, CASE WHEN h_ok AND one AND at_end AND vals THEN 'ok' ELSE 'DIFFERS' END)
-  FROM e JOIN a ON a.idx = e.idx
-  CROSS JOIN LATERAL (SELECT
-     rtrim(regexp_replace(a.cmt, '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'), E' \t\r\n') = e.human AS h_ok,
-     (length(a.cmt) - length(replace(a.cmt, '@nbmaint:', ''))) / 9 = 1 AS one,
-     a.cmt ~ '@nbmaint:\{[^}]*\}$' AS at_end,
-     (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'v') = '2'
-       AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric = a.bytes
-       AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'tup')::numeric
-           = round(greatest(a.tbl_tuples, -1)) AS vals) v
+SELECT format('write A %-15s %s', e.idx,
+         CASE WHEN e.want = 'conflict' THEN
+                CASE WHEN a.cmt = b.cmt AND a.cmt = e.human AND a.filenode = b.filenode
+                     THEN 'ok (untouched)' ELSE 'DIFFERS: ' || coalesce(a.cmt, '<none>') END
+              WHEN proto.human(a.cmt) = e.human AND proto.nres(a.cmt) = 1
+                   AND proto.valid(a.cmt, a.bytes, a.tbl_tuples) AND a.filenode = b.filenode THEN 'ok'
+              ELSE 'DIFFERS: ' || coalesce(replace(a.cmt, E'\n', '\n'), '<none>') END)
+  FROM e JOIN a ON a.idx = e.idx JOIN b ON b.idx = e.idx
  ORDER BY e.idx;
 SQL
   qat "$EDB" /dev/stdin >> "$OUT/edge.txt" 2>&1 <<'SQL'
--- round B: a rebuild changes the file and rewrites the payload; a refresh
--- rewrites the payload only; a skip changes nothing; the locked table's index
--- keeps its file and its forged payload
+-- round B: a rebuild changes the file and rewrites the payload in place; a
+-- refresh rewrites the payload only; a skip changes nothing; the locked
+-- table's index keeps its file and its forged payload
 WITH b AS (SELECT * FROM proto.seen_cmt WHERE label = 'B-before'),
      a AS (SELECT * FROM proto.seen_cmt WHERE label = 'B-after'),
      e AS (SELECT * FROM proto.expect WHERE round = 'B')
-SELECT format('write B %-16s want=%-8s file_changed=%s comment_changed=%s human=%s %s', e.idx, e.want,
-         a.filenode <> b.filenode, a.cmt IS DISTINCT FROM b.cmt,
-         rtrim(regexp_replace(a.cmt, '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'), E' \t\r\n') = e.human,
+SELECT format('write B %-15s want=%-8s %s', e.idx, e.want,
          CASE WHEN e.idx = 'e_busy_i' THEN
                 CASE WHEN a.filenode = b.filenode AND a.cmt = b.cmt THEN 'ok (lock timed out, nothing written)' ELSE 'DIFFERS' END
               WHEN e.want = 'reindex' THEN
-                CASE WHEN a.filenode <> b.filenode AND a.cmt <> b.cmt
-                          AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric = a.bytes
-                          AND rtrim(regexp_replace(a.cmt, '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'), E' \t\r\n') = e.human
-                     THEN 'ok' ELSE 'DIFFERS' END
+                CASE WHEN a.filenode <> b.filenode AND proto.human(a.cmt) = e.human
+                          AND proto.human(a.cmt) = proto.human(b.cmt) AND proto.nres(a.cmt) = 1
+                          AND proto.valid(a.cmt, a.bytes, a.tbl_tuples) THEN 'ok' ELSE 'DIFFERS' END
               WHEN e.want = 'refresh' THEN
-                CASE WHEN a.filenode = b.filenode AND a.cmt <> b.cmt
-                          AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric = a.bytes
-                     THEN 'ok' ELSE 'DIFFERS' END
-              ELSE CASE WHEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt THEN 'ok' ELSE 'DIFFERS' END
+                CASE WHEN a.filenode = b.filenode AND a.cmt <> b.cmt AND proto.human(a.cmt) = proto.human(b.cmt)
+                          AND proto.valid(a.cmt, a.bytes, a.tbl_tuples) THEN 'ok' ELSE 'DIFFERS' END
+              ELSE CASE WHEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt
+                             AND (e.want = 'conflict' AND a.cmt = e.human OR proto.human(a.cmt) = e.human)
+                        THEN 'ok' ELSE 'DIFFERS' END
          END)
   FROM e JOIN a ON a.idx = e.idx JOIN b ON b.idx = e.idx
  ORDER BY e.idx;
@@ -3719,32 +4658,41 @@ SQL
   # the run-level verdicts: each line states what it expected and ends in ok
   # or DIFFERS
   verdict() {   # <label> <expected> <observed>
-    printf 'run    %-58s want=[%s] seen=[%s] %s\n' "$1" "$2" "$3" "$([ "$2" = "$3" ] && echo ok || echo DIFFERS)"
+    printf 'run    %-62s want=[%s] seen=[%s] %s\n' "$1" "$2" "$3" "$([ "$2" = "$3" ] && echo ok || echo DIFFERS)"
+  }
+  summary() { apply_summary "$1" | sed 's/^nbmaint: //'; }
+  unchanged() {  # <index> <label before> <label after>: file and comment both unchanged
+    q "$EDB" "SELECT coalesce(bool_and(a.cmt IS NOT DISTINCT FROM b.cmt AND a.filenode = b.filenode), false)
+                FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
+               WHERE a.idx = '$1' AND b.label = '$2' AND a.label = '$3'"
   }
   local ncand
   ncand=$(q "$EDB" "SELECT count(*) FROM proto.expect WHERE round = 'A' AND want <> 'absent'")
   {
+    verdict 'A: step 2 counts' \
+      "reindex=0 initialize=$((ncand - 1)) refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f" \
+      "$(summary edgeA)"
     verdict 'B: step 2 counts, one rebuild refused by the lock' \
-      'reindex=5 initialize=0 refresh=1 blocked=0 failed=1 gone=0 capped=0 dry_run=f' \
-      "$(apply_summary edgeB | sed 's/^nbmaint: //')"
+      'reindex=5 initialize=0 refresh=1 blocked=0 conflict=1 failed=1 gone=0 capped=0 started=5 changed=0 dry_run=f' \
+      "$(summary edgeB)"
     verdict 'B: the refused rebuild is a lock timeout, SQLSTATE 55P03' 'e_busy_i 55P03' \
-      "$(grep -Eo 'nbmaint: public\.e_busy_i reindex: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeB.log" \
-           | sed -E 's/^nbmaint: public\.(e_busy_i).*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+      "$(grep -Eo 'nbmaint: e_busy_i: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeB.log" \
+           | sed -E 's/^nbmaint: (e_busy_i):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
     verdict 'C1: the lock is gone, so the refused rebuild happens' \
-      'reindex=1 initialize=0 refresh=0 blocked=0 failed=0 gone=0 capped=0 dry_run=f' \
-      "$(apply_summary edgeC1 | sed 's/^nbmaint: //')"
+      'reindex=1 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=1 changed=0 dry_run=f' \
+      "$(summary edgeC1)"
     verdict 'C2: a settled database: nothing to do' \
-      'reindex=0 initialize=0 refresh=0 blocked=0 failed=0 gone=0 capped=0 dry_run=f' \
-      "$(apply_summary edgeC2 | sed 's/^nbmaint: //')"
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeC2)"
     verdict 'C2: every comment and every file unchanged by that run' 't' \
       "$(q "$EDB" "SELECT bool_and(a.cmt IS NOT DISTINCT FROM b.cmt AND a.filenode = b.filenode)
                      FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
                     WHERE a.label = 'C2-after' AND b.label = 'C1-after'")"
     verdict 'D: step 1 as a role that owns nothing: every row blocked' "$ncand blocked, 0 other" \
-      "$(grep -Ec '\| blocked +\|' "$OUT/plan-edgeD.txt") blocked, $(grep -Ec '\| (initialize|refresh|reindex|skip) +\|' "$OUT/plan-edgeD.txt") other"
+      "$(grep -Ec '\| blocked +\|' "$OUT/plan-edgeD.txt") blocked, $(grep -Ec '\| (initialize|refresh|reindex|skip|conflict) +\|' "$OUT/plan-edgeD.txt") other"
     verdict 'D: step 2 as that role' \
-      "reindex=0 initialize=0 refresh=0 blocked=$ncand failed=0 gone=0 capped=0 dry_run=f" \
-      "$(apply_summary edgeD | sed 's/^nbmaint: //')"
+      "reindex=0 initialize=0 refresh=0 blocked=$ncand conflict=0 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f" \
+      "$(summary edgeD)"
     verdict 'D: nothing written by it' 't' \
       "$(q "$EDB" "SELECT bool_and(a.cmt IS NOT DISTINCT FROM b.cmt AND a.filenode = b.filenode)
                      FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
@@ -3766,31 +4714,88 @@ SQL
       "$(q "$EDB" "SELECT action FROM proto.seen_plan WHERE round = 'E' AND idx = 'e_surv_i'")"
     verdict 'F: rows naming another session'"'"'s temporary index' '0' \
       "$(q "$EDB" "SELECT count(*) FROM proto.seen_plan WHERE round = 'F' AND idx = 'e_tmp_i'")"
+    verdict 'F: step 2 passes it by without counting it' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeF)"
+    verdict 'H: step 1 under a lock held on one index is cancelled' 'exit 3, canceling statement due to lock timeout' \
+      "exit $rc_h1, $(grep -Eo 'canceling statement due to lock timeout' "$OUT/plan-edgeH.txt" | head -1)"
+    verdict 'H: step 2 counts that index failed and finishes the others' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=1 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeH)"
+    verdict 'H: the failure is a lock timeout on that index' 'e_hold_i 55P03' \
+      "$(grep -Eo 'nbmaint: e_hold_i: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeH.log" \
+           | sed -E 's/^nbmaint: (e_hold_i):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+    verdict 'H: nothing written to it' 't' "$(unchanged e_hold_i H-before H-after)"
+    verdict 'I: step 2 refreshes the index that waited' \
+      'reindex=0 initialize=0 refresh=1 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeI)"
+    verdict 'I: the text written while it waited is the text kept' 't' \
+      "$(q "$EDB" "SELECT proto.human(cmt) = E'new human text, written while step 2 waited\n'
+                          AND proto.nres(cmt) = 1 AND proto.valid(cmt, bytes, tbl_tuples)
+                     FROM proto.seen_cmt WHERE idx = 'e_cedit_i' AND label = 'I-after'")"
+    verdict 'J: the decision is taken again under the locks' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=1 dry_run=f' \
+      "$(summary edgeJ)"
+    verdict 'J: reindex before the locks, skip under them' 'e_cpay_i reindex skip' \
+      "$(grep -Eo 'nbmaint: public\.e_cpay_i was [a-z]+ before the locks and [a-z]+ under them' "$OUT/apply-edgeJ.log" \
+           | sed -E 's/^nbmaint: public\.(e_cpay_i) was ([a-z]+) before the locks and ([a-z]+) under them$/\1 \2 \3/')"
+    verdict 'J: no rebuild, and the comment is the one written meanwhile' 't' \
+      "$(q "$EDB" "SELECT a.filenode = b.filenode AND a.cmt <> b.cmt AND proto.valid(a.cmt, a.bytes, a.tbl_tuples)
+                          AND a.cmt ~ '\"at\":\"2026-01-01T00:00:00\+00\"'
+                     FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
+                    WHERE a.idx = 'e_cpay_i' AND b.label = 'J-before' AND a.label = 'J-after'")"
+    verdict 'K: the renamed index is refused, and nothing else is touched' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=1 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeK)"
+    verdict 'K: the refusal names it under its new name, SQLSTATE 55000' 'e_ren_i_old 55000' \
+      "$(grep -Eo 'nbmaint: e_ren_i_old: nothing written: renamed, dropped or re-created since it was read .SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeK.log" \
+           | sed -E 's/^nbmaint: (e_ren_i_old):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+    verdict 'K: the renamed index keeps its file and comment' 't' \
+      "$(q "$EDB" "SELECT a.filenode = b.filenode AND a.cmt = b.cmt
+                     FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.oid = a.oid
+                    WHERE b.idx = 'e_ren_i' AND b.label = 'K-before' AND a.label = 'K-after'")"
+    verdict 'K: the index that took the name was never written' 't' \
+      "$(q "$EDB" "SELECT cmt IS NULL FROM proto.seen_cmt WHERE idx = 'e_ren_i' AND label = 'K-after'")"
+    verdict 'K2: the next run rebuilds one and initializes the other' \
+      'reindex=1 initialize=1 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=1 changed=0 dry_run=f' \
+      "$(summary edgeK2)"
+    verdict 'G: a failed rebuild uses up max_reindex 1' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=1 gone=0 capped=1 started=1 changed=0 dry_run=f' \
+      "$(summary edgeG)"
+    verdict 'G: the failure is the rebuild itself, SQLSTATE 22012' 'e_capfail_i 22012' \
+      "$(grep -Eo 'nbmaint: e_capfail_i: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeG.log" \
+           | sed -E 's/^nbmaint: (e_capfail_i):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+    verdict 'G: the next index due is capped, not rebuilt' 'e_capok_i capped, t t' \
+      "$(grep -Eo 'nbmaint: public\.e_capok_i needs a rebuild, max_reindex 1 reached' "$OUT/apply-edgeG.log" \
+           | sed -E 's/^nbmaint: public\.(e_capok_i) needs.*$/\1 capped/'), $(unchanged e_capok_i G-before G-after) $(unchanged e_capfail_i G-before G-after)"
     q "$EDB" "SELECT format('info   E %-11s oid=%s filenode=%s comment_md5=%s', label, oid, filenode, md5(cmt))
                FROM proto.seen_cmt WHERE idx = 'e_surv_i' AND label IN ('E-before','E-plain','E-concurrent')
               ORDER BY CASE label WHEN 'E-before' THEN 1 WHEN 'E-plain' THEN 2 ELSE 3 END"
     q "$EDB" "SELECT 'info   B e_unk_i notes: ' || notes FROM proto.seen_plan WHERE round = 'B' AND idx = 'e_unk_i'"
     q "$EDB" "SELECT 'info   B e_t13_i and e_t7_i notes: ' || string_agg(idx || ': ' || notes, '; ' ORDER BY idx)
                FROM proto.seen_plan WHERE round = 'B' AND idx IN ('e_t13_i','e_t13_i2','e_t7_i','e_t7_i2','e_sz_i','e_sz_i2')"
-    q "$EDB" "SELECT 'info   payload bytes after round C: ' || min(length(substring(cmt from '@nbmaint:\{[^}]*\}')))
-               || ' to ' || max(length(substring(cmt from '@nbmaint:\{[^}]*\}')))
-               FROM proto.seen_cmt WHERE label = 'C2-after' AND cmt LIKE '%@nbmaint:%'"
+    q "$EDB" "SELECT 'info   payload bytes after round C: ' || min(length(substring(cmt from '(?n)^(@nbmaint:\{.*\})\$')))
+               || ' to ' || max(length(substring(cmt from '(?n)^(@nbmaint:\{.*\})\$')))
+               FROM proto.seen_cmt WHERE label = 'C2-after' AND proto.nres(cmt) = 1"
     q "$EDB" "SELECT 'info   e_human_i as stored: ' || replace(cmt, chr(10), ' \\n ')
                FROM proto.seen_cmt WHERE label = 'C2-after' AND idx = 'e_human_i'"
   } >> "$OUT/edge.txt" 2>&1
-  printf 'edge verdicts: %s ok, %s DIFFERS\n' "$(grep -Ec ' ok( \(.*\))?$' "$OUT/edge.txt")" "$(grep -c 'DIFFERS' "$OUT/edge.txt")" \
-    | tee -a "$OUT/edge.txt"
+  local n_ok n_diff
+  n_ok=$(grep -Ec ' ok( \(.*\))?$' "$OUT/edge.txt"); n_diff=$(grep -c 'DIFFERS' "$OUT/edge.txt")
+  printf 'edge verdicts: %s ok, %s different\n' "$n_ok" "$n_diff" | tee -a "$OUT/edge.txt"
   q postgres "DROP DATABASE IF EXISTS $EDB" > /dev/null
   q postgres "DROP ROLE IF EXISTS nbmaint_other" > /dev/null
+  [ "$n_diff" = 0 ] || die "$n_diff edge cases differ from what was filed for them (see $OUT/edge.txt)"
 }
 
 # ------------------------------------------------------------- stage: defeat
 # The no-defeat rule, shown working.  A throwaway fixture's churn commits while
 # an undeclared snapshot is held, and it then gets the same checked
 # maintenance step every scored fixture gets.  The check must stop the run, so
-# here it is called in a subshell and its exit status and message are what the
-# stage records.  Its own database, its proofs under out/defeat, and nothing
-# scored.
+# here it is called in a subshell, the one place a die is expected, and its
+# exit status and message are what the stage records.  Its own database, its
+# proofs under out/defeat, and nothing scored.  A check that did not fire
+# fails the run.
 stage_defeat() {
   say "defeat: an undeclared snapshot across one maintenance step must stop the run"
   local ddb=defeat keep=$OUT rc
@@ -3807,7 +4812,7 @@ SQL
   printf 'DELETE FROM f_zz WHERE id %% 2 = 0;\n' | qin "$ddb" > "$OUT/defeat-churn.log" 2>&1 \
     || die "defeat: churn failed"
   OUT="$keep/defeat"; mkdir -p "$OUT"; : > "$OUT/maintenance-proof.txt"
-  ( run_maint zz "$ddb" maint ) > "$keep/defeat-run.log" 2>&1; rc=$?
+  ( EXPECT_DIE=1; run_maint zz "$ddb" maint ) > "$keep/defeat-run.log" 2>&1; rc=$?
   OUT=$keep
   release_snapshot "$ddb" zz
   { printf 'exit status of the checked maintenance step: %s, %s\n' "$rc" \
@@ -3817,13 +4822,16 @@ SQL
   } > "$OUT/defeat.txt"
   q postgres "DROP DATABASE IF EXISTS $ddb" > /dev/null
   cat "$OUT/defeat.txt"
+  [ "$rc" -ne 0 ] || die "defeat: a defeated maintenance step was not caught"
 }
 
 # -------------------------------------------------------------- stage: verify
-# The page against what ran: the two texts re-extracted and hashed, and this
-# script's own block diffed against the file that is running.
+# The page against what ran: the two texts re-extracted and compared with the
+# files that ran, and this script's own block with the file that is running.
+# Any difference fails the run.
 stage_verify() {
   say "verify: the page's texts and this script, against what ran"
+  need_texts
   local x
   : > "$OUT/verify.txt"
   md_block_with sql wiki_nbmaint_plan_12_17 "$PAGE" > "$OUT/x-plan.sql"
@@ -3842,26 +4850,29 @@ stage_verify() {
       printf 'script DIFFERS from the file that ran\n' >> "$OUT/verify.txt"
     fi
   else
-    printf 'script not found in the page\n' >> "$OUT/verify.txt"
+    printf 'script NOT FOUND in the page\n' >> "$OUT/verify.txt"
   fi
   cat "$OUT/verify.txt"
+  ! grep -Eq 'DIFFERS|NOT FOUND' "$OUT/verify.txt" || die "the page is not what ran (see $OUT/verify.txt)"
 }
 
 # ------------------------------------------------------------ stage: criteria
 # The errors a run provokes on purpose.  Everything else in the server log is
-# reported as unexpected.
-DELIBERATE='invalid transaction termination|REINDEX CONCURRENTLY cannot be executed from a function|syntax error at or near "\|\|"|canceling statement due to statement timeout|division by zero|terminating connection due to administrator command|is not a btree index|is not a GIN index|is not a hash index|is not supported|REINDEX is not yet implemented for partitioned indexes'
+# unexpected, and an unexpected error or a maintenance skip line fails the run.
+DELIBERATE='invalid transaction termination|REINDEX CONCURRENTLY cannot be executed from a function|syntax error at or near "\|\|"|canceling statement due to statement timeout|canceling statement due to lock timeout|division by zero|terminating connection due to administrator command|is not a btree index|is not a GIN index|is not a hash index|is not supported|REINDEX is not yet implemented for partitioned indexes'
 stage_criteria() {
   say "criteria: everything a reader checks first, in one file"
-  local all unexpected
+  local all unexpected skips
   grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+ UTC \[[0-9]+\] (ERROR|FATAL|PANIC):' "$OUT/server.log" \
     > "$OUT/server-errors-all.txt" 2>/dev/null
   grep -Ev "$DELIBERATE" "$OUT/server-errors-all.txt" > "$OUT/server-errors-unexpected.txt"
   all=$(grep -c '' "$OUT/server-errors-all.txt"); unexpected=$(grep -c '' "$OUT/server-errors-unexpected.txt")
   grep -E 'skipping (vacuum|analyze) of|canceling autovacuum task' "$OUT/server.log" > "$OUT/server-maint-skips.txt"
+  skips=$(grep -c '' "$OUT/server-maint-skips.txt")
   {
     printf '1. texts\n';            sed 's/^/   /' "$OUT/hashes.txt"
     printf '2. engine checks\n';    sed 's/^/   /' "$OUT/checks.txt"
+    printf '2b. build\n';           sed 's/^/   /' "$OUT/pin.txt"
     printf '3. fixtures built: %s; not built: %s\n' "$(printf '%s\n' $SCORED | grep -c .)" "${SKIPPED:-none}"
     printf '4. maintenance proofs: %s ok, %s DEFEATED\n' \
       "$(grep -c ' ok ' "$OUT/maintenance-proof.txt")" "$(grep -c 'DEFEATED' "$OUT/maintenance-proof.txt")"
@@ -3874,12 +4885,14 @@ stage_criteria() {
     printf '10. exact\n';           sed 's/^/   /' "$OUT/exact.txt"
     printf '10b. defeat\n';         sed 's/^/   /' "$OUT/defeat.txt" 2>/dev/null
     printf '11. server log: %s ERROR/FATAL/PANIC lines, %s deliberate, %s unexpected; %s maintenance skip lines\n' \
-      "$all" "$((all - unexpected))" "$unexpected" "$(grep -c '' "$OUT/server-maint-skips.txt")"
+      "$all" "$((all - unexpected))" "$unexpected" "$skips"
     sed 's/^/   unexpected: /' "$OUT/server-errors-unexpected.txt" | head -5
     printf '12. verify\n';          sed 's/^/   /' "$OUT/verify.txt" 2>/dev/null
     printf '13. stage timings (seconds)\n'; sed 's/^/   /' "$OUT/timing.txt" 2>/dev/null
   } > "$OUT/criteria.txt" 2>&1
   cat "$OUT/criteria.txt"
+  [ "$unexpected" = 0 ] || die "the server log has $unexpected unexpected error lines"
+  [ "$skips" = 0 ] || die "the server log has $skips maintenance skip lines"
 }
 
 stage_report() {
@@ -3892,9 +4905,11 @@ stage_report() {
 # -m fast disconnects clients and writes a shutdown checkpoint.  The stop is
 # then confirmed the way the teardown rule asks, and the stage dies rather
 # than report a stop that did not happen, so clean never deletes a live
-# cluster.
+# cluster.  Both run only on a sandbox the guard has checked and found to be
+# this script's own.
 stage_stop() {
   say "stop: the sandbox cluster, cleanly"
+  if [ "$SANDBOX_STATE" != ours ]; then note "no sandbox at $SANDBOX: nothing to stop"; return 0; fi
   if [ -x "$BIN/pg_ctl" ] && [ -s "$DATA/postmaster.pid" ] \
        && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
     "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 || die "pg_ctl -m fast stop failed"
@@ -3906,19 +4921,16 @@ stage_stop() {
   [ -z "$(ls -A "$SOCK" 2>/dev/null)" ] || die "socket directory $SOCK is not empty"
   note "confirmed: no postmaster.pid, no postgres process on $DATA, socket directory empty"
 }
-# Containment before any rm -rf: SANDBOX comes from the environment, so
-# refuse to delete anything outside this repository's .wiki-runtime/tmp tree.
-inside_tmp() {
-  case ${1%/} in
-    "$WIKI_ROOT/.wiki-runtime/tmp"/?*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 stage_clean() {
+  if [ "$SANDBOX_STATE" != ours ]; then say "clean"; note "no sandbox at $SANDBOX: nothing to delete"; return 0; fi
   stage_stop
-  inside_tmp "$SANDBOX" || die "refusing to delete $SANDBOX: it is outside .wiki-runtime/tmp/"
-  rm -rf "$SANDBOX"
-  [ -d "$SANDBOX" ] && die "the sandbox is still there"
+  # the guard ran before anything else; check once more that the path about
+  # to be deleted is still the canonical, marked sandbox
+  [ "$(canon_dir "$SANDBOX")" = "$SANDBOX" ] && [ -f "$SANDBOX/$MARKER_NAME" ] \
+    || die "refusing to delete $SANDBOX: it is no longer the marked sandbox"
+  rm -rf -- "$SANDBOX"
+  [ -e "$SANDBOX" ] && die "the sandbox is still there"
+  SANDBOX_STATE=absent
   note "sandbox deleted: $SANDBOX"
 }
 stage_reset() {
@@ -3936,20 +4948,36 @@ need_server() {
 
 ALL="build check cluster texts exact facts declare fixtures churn autoanalyze crosscheck decide oracle act score probes edge defeat verify criteria report"
 
+# The dispatcher: the guard first, then every stage in turn.  A stage that
+# returns non-zero, or dies inside a subshell, stops the run with exit status
+# 1, and the EXIT trap stops the cluster.
 main() {
-  local stages="$*" s t0
+  local stages="$*" s t0 rc
   [ -z "$stages" ] && stages="$ALL"
   for s in $stages; do
     declare -F "stage_$s" > /dev/null || die "no such stage: $s (have: $ALL start stop reset clean)"
   done
+  case " $stages " in
+    " clean "|" stop "|" stop clean ") sandbox_guard existing ;;
+    *) sandbox_guard create ;;
+  esac
+  trap on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  [ "$SANDBOX_STATE" = ours ] && rm -f -- "$FAILMARK"
   for s in $stages; do
     case "$s" in
       build|check|cluster|start|stop|clean) : ;;
       *) need_server ;;
     esac
     t0=$(date +%s)
-    "stage_$s"
-    [ -d "$OUT" ] && printf '%-12s %s\n' "$s" "$(( $(date +%s) - t0 ))" >> "$OUT/timing.txt"
+    "stage_$s"; rc=$?
+    [ "$rc" = 0 ] || die "stage $s failed with exit status $rc"
+    if [ "$SANDBOX_STATE" = ours ] && [ -s "$FAILMARK" ]; then
+      die "stage $s: a check inside a subshell failed: $(head -1 "$FAILMARK")"
+    fi
+    [ "$SANDBOX_STATE" = ours ] && [ -d "$OUT" ] \
+      && printf '%-12s %s\n' "$s" "$(( $(date +%s) - t0 ))" >> "$OUT/timing.txt"
   done
   say "done: $stages"
 }
@@ -4007,14 +5035,22 @@ main "$@"
 # rule as soon as it returns, and the run dies rather than score when one was
 # defeated.
 #
+# A run fails - exit status 1, with the cluster stopped - when a stage fails,
+# a regression suite fails, a required check fails, or the page differs from
+# what ran.  The stages that change the fixtures run once each and in order;
+# a stage that only reads or re-scores replaces its own records when it runs
+# again, and every stage refuses to run before the stages it depends on.
+#
 # Every object this script creates is DISPOSABLE.  It runs its own cluster on
 # a non-default port with its own socket directory, never touches a cluster it
-# did not start, and treats raw/postgres-12 as read only.
+# did not start, and treats raw/postgres-12 as read only.  Before it writes,
+# stops or deletes anything it checks that the sandbox is a directory it
+# created itself, directly under this repository's .wiki-runtime/tmp.
 #
 # Usage, from the repository root:
-#   bash .wiki-runtime/tmp/nbmaint_suite_v12.sh                 # every stage
-#   bash .wiki-runtime/tmp/nbmaint_suite_v12.sh decide score    # some stages
-#   bash .wiki-runtime/tmp/nbmaint_suite_v12.sh clean           # stop, delete
+#   bash .wiki-runtime/tmp/nbmaint_suite_v12.sh                  # every stage
+#   bash .wiki-runtime/tmp/nbmaint_suite_v12.sh score criteria   # re-score a run
+#   bash .wiki-runtime/tmp/nbmaint_suite_v12.sh clean            # stop, delete
 #
 # Stages, in the default order: build check cluster texts exact facts declare
 # fixtures churn autoanalyze crosscheck decide oracle act score probes edge defeat
@@ -4045,14 +5081,17 @@ ROUNDS="${ROUNDS:-6}"
 MWM="${MWM:-256MB}"
 
 LEG=12
-BUILD="$SANDBOX/build"; INST="$SANDBOX/inst"; BIN="$INST/bin"
-DATA="$SANDBOX/data"; SOCK="$SANDBOX/sock"; OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"
+# The one commit this leg measures, and how it is built.  The build stage
+# refuses any other commit, and an install it did not build from this commit
+# with these flags - by its own manifest - is never reused.
+EXPECTED_PIN=45b88269a353ad93744772791feb6d01bc7e1e42
+CONFIGURE_FLAGS="--without-icu --without-readline --with-zlib --enable-debug"
 DB=nbmaint; PDB=protocol; EDB=edge; XDB=scratch
 
-# SHA-256 of the page's two filed texts as last measured.  A changed text must
-# be re-measured and these refiled; the texts stage prints match or DIFFERS.
-BASE_PLAN=0a806aee7d6fcb2f89367ee5cd382ce0d43886135ceba12e65122d28d133f320
-BASE_APPLY=ffd38111e81840b1107ca3c26ee7c8330aede6008ddf6702b650683b18c18c4f
+# SHA-256 of the page's two filed texts as last measured.  A text that differs
+# fails the texts stage: it must be re-measured and these refiled.
+BASE_PLAN=89293844dee3972f60ee34c977805cf42075456f7a029d2e23c8c9e127c39f2f
+BASE_APPLY=52bcbea7214af4f8e42fa09735a755a6d8c4eb414b18f22ebce3ab64980e924d
 
 # The run's own session timeouts: they bound a census and a rebuild.  Every
 # session that issues a VACUUM or an ANALYZE overrides them with zero_timeouts.
@@ -4068,17 +5107,31 @@ SKIPPED="h06 and n11: removed from the corpus at the asker's request on 2026-09-
 
 say()  { printf '\n=== %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
-die()  { printf 'FATAL: %s\n' "$*" >&2; exit 1; }
+# die stops the run.  Inside a subshell - a pipeline, a $(...) - exit ends
+# only that subshell, so die also appends to FAILMARK, which the dispatcher
+# reads after every stage.  EXPECT_DIE is set only in the one subshell that
+# provokes a die on purpose and records its exit status.
+die()  {
+  printf 'FATAL: %s\n' "$*" >&2
+  if [ -z "${EXPECT_DIE:-}" ] && [ -n "${FAILMARK:-}" ]; then
+    printf '%s\n' "$*" >> "$FAILMARK" 2>/dev/null
+  fi
+  exit 1
+}
 
-# psql helpers.  -X ignores ~/.psqlrc, and ON_ERROR_STOP is on every helper but
-# qe, whose callers want the server's refusal as their result.
+# psql helpers.  -X ignores ~/.psqlrc and ON_ERROR_STOP is on, and every
+# helper but three stops the run when psql fails.  qtry returns the failure to
+# its caller, which wants the server's refusal as its result; qe runs without
+# ON_ERROR_STOP for the same reason; qbg is a background session that another
+# session terminates on purpose.
 PSQL() { "$BIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -p "$PORT" "$@"; }
-q()    { PSQL -d "$1" -At -c "$2"; }                 # one statement, bare output
-qf()   { PSQL -d "$1" -f "$2"; }                     # a file
-qin()  { PSQL -d "$1"; }                             # stdin
-qat()  { PSQL -d "$1" -At -f "$2"; }                 # a file, bare output
-qgen() { PSQL -d "$1" -q -At -f "$2"; }              # a file, no command tags
+q()    { PSQL -d "$1" -At -c "$2" || die "psql failed on $1: ${2:0:120}"; }
+qf()   { PSQL -d "$1" -f "$2" || die "psql failed on $1: file $2"; }
+qin()  { PSQL -d "$1" || die "psql failed on $1: standard input"; }
+qat()  { PSQL -d "$1" -At -f "$2" || die "psql failed on $1: file $2"; }
+qtry() { PSQL -d "$1" -At -c "$2"; }
 qe()   { "$BIN/psql" -X -h "$SOCK" -p "$PORT" -d "$1"; }
+qbg()  { PSQL -d "$1"; }
 
 # The preamble of every session that issues a VACUUM or an ANALYZE: the three
 # settable timeouts this server has forced to 0, which is what an autovacuum
@@ -4094,7 +5147,7 @@ zero_timeouts() {
   printf "  FROM pg_settings WHERE name IN (%s);\n" "$TIMEOUT_GUCS"
 }
 # qz <db>: run stdin in a session that begins with zero_timeouts
-qz() { { zero_timeouts; cat; } | PSQL -d "$1" -At; }
+qz() { { zero_timeouts; cat; } | PSQL -d "$1" -At || die "psql failed on $1: a zero-timeout session"; }
 
 # errf <db> <sql>: run a statement expected to fail, print the error or
 # "accepted"
@@ -4104,7 +5157,6 @@ errf() {
           -d "$1" -f - 2>&1 | grep -E 'ERROR' | head -1 | sed -E 's/^psql:[^ ]* //')
   printf '%s' "${out:-accepted}"
 }
-
 # md_block_with <language> <tag> <file>: print the fenced block of that
 # language which contains <tag>.  The fence is assembled from printf '\140'
 # so that this script contains no literal Markdown fence.
@@ -4143,8 +5195,8 @@ plan_view() {
   done < "$1"
 }
 
-sha() { sha256sum < "$1" | cut -d' ' -f1; }
 
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
 tbl() { printf 'f_%s' "$1"; }
 idx() { printf 'f_%s_i' "$1"; }
 fx_am() {
@@ -4154,17 +5206,115 @@ fx_am() {
   esac
 }
 
+# ------------------------------------------------------------ the sandbox ----
+# SANDBOX, WIKI_ROOT and PAGE come from the environment, so nothing is written,
+# stopped or deleted until they have been checked here.  WIKI_ROOT must be
+# this repository; SANDBOX must resolve, with every symbolic link and every
+# ".." taken out, to a plain directory directly under its .wiki-runtime/tmp;
+# and an existing sandbox must carry the marker this script writes when it
+# creates one, naming this leg.  From here on every path is the canonical one.
+canon_dir() { ( cd -P -- "$1" 2>/dev/null && pwd -P ); }
+MARKER_NAME=.nbmaint-sandbox
+sandbox_guard() {   # <create|existing>
+  local mode=$1 root tmp parent base
+  root=$(canon_dir "$WIKI_ROOT") || die "WIKI_ROOT $WIKI_ROOT is not a directory"
+  [ -f "$root/AGENTS.md" ] && [ -f "$root/wiki/versions.md" ] && [ -d "$root/raw" ] \
+    || die "WIKI_ROOT $root is not the wiki repository"
+  if [ ! -d "$root/.wiki-runtime/tmp" ]; then
+    [ "$mode" = create ] || { SANDBOX_STATE=absent; return 0; }
+    mkdir -p "$root/.wiki-runtime/tmp" || die "cannot create $root/.wiki-runtime/tmp"
+  fi
+  tmp=$(canon_dir "$root/.wiki-runtime/tmp") || die "no $root/.wiki-runtime/tmp"
+  case "$tmp" in "$root"/*) : ;; *) die "$root/.wiki-runtime/tmp resolves outside the repository, to $tmp" ;; esac
+  base=${SANDBOX%/}; base=${base##*/}
+  case "$base" in
+    ''|.|..|*[!A-Za-z0-9._-]*) die "refusing sandbox $SANDBOX: its last component must be a plain name" ;;
+  esac
+  parent=$(canon_dir "$(dirname -- "$SANDBOX")") || die "the parent of $SANDBOX does not exist"
+  [ "$parent" = "$tmp" ] || die "refusing sandbox $SANDBOX: it resolves under $parent, not directly under $tmp"
+  WIKI_ROOT=$root
+  SANDBOX="$tmp/$base"
+  if [ -L "$SANDBOX" ]; then
+    die "refusing sandbox $SANDBOX: it is a symbolic link"
+  elif [ -e "$SANDBOX" ]; then
+    [ -d "$SANDBOX" ] || die "refusing sandbox $SANDBOX: it is not a directory"
+    [ "$(cat "$SANDBOX/$MARKER_NAME" 2>/dev/null)" = "nbmaint sandbox, leg $LEG" ] \
+      || die "refusing sandbox $SANDBOX: it has no $MARKER_NAME marker for leg $LEG, so this script did not create it"
+    SANDBOX_STATE=ours
+  elif [ "$mode" = create ]; then
+    mkdir -- "$SANDBOX" || die "cannot create $SANDBOX"
+    printf 'nbmaint sandbox, leg %s\n' "$LEG" > "$SANDBOX/$MARKER_NAME" || die "cannot mark $SANDBOX"
+    SANDBOX_STATE=ours
+  else
+    SANDBOX_STATE=absent
+    return 0
+  fi
+  BUILD="$SANDBOX/build"; INST="$SANDBOX/inst"; BIN="$INST/bin"
+  DATA="$SANDBOX/data"; SOCK="$SANDBOX/sock"; OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"
+  FAILMARK="$SANDBOX/.failed-stage"
+}
+
+# On every way out: the background sessions this run opened are ended, and a
+# run that failed also stops its cluster, so a failure never leaves a
+# postmaster behind.  A run that succeeded leaves the cluster up for the next
+# selective run; the clean stage stops it and deletes the sandbox.
+on_exit() {
+  local rc=$?
+  trap - EXIT INT TERM
+  if [ "${SANDBOX_STATE:-}" = ours ] && [ -s "$DATA/postmaster.pid" ] \
+       && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    "$BIN/psql" -X -At -h "$SOCK" -p "$PORT" -d postgres -c \
+      "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid()
+          AND (query LIKE '%wiki_nbmaint_snapshot%' OR query LIKE '%wiki_nbmaint_edge_%')" \
+      > /dev/null 2>&1
+    if [ "$rc" -ne 0 ]; then
+      "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 \
+        && printf 'the run failed: cluster on %s stopped\n' "$DATA" >&2
+    fi
+  fi
+  wait 2> /dev/null
+  exit "$rc"
+}
+
 # ---------------------------------------------------------------- build ------
+# The checkout must be the pinned commit with no tracked file changed.  A
+# build leaves a manifest in the install naming that commit, the flags, the
+# build tree's configuration and a hash of every installed file; an install
+# is reused only when all four still match.
+install_inventory() {
+  ( cd "$INST" && find . -type f ! -name nbmaint-build-manifest.txt -exec sha256sum {} + ) \
+    | LC_ALL=C sort -k2 | sha256sum | cut -d' ' -f1
+}
+manifest_value() { sed -n "s/^$1: //p" "$INST/nbmaint-build-manifest.txt" 2>/dev/null | head -1; }
+check_checkout() {
+  local head
+  head=$(git -C "$SRC" rev-parse HEAD 2>/dev/null) || die "$SRC is not a git checkout"
+  [ "$head" = "$EXPECTED_PIN" ] || die "$SRC is at $head, not the pinned $EXPECTED_PIN"
+  git -C "$SRC" --no-optional-locks diff --quiet HEAD -- \
+    || die "$SRC has tracked files changed from $EXPECTED_PIN"
+}
+check_install() {
+  [ -f "$INST/nbmaint-build-manifest.txt" ] || die "$INST has no build manifest: run clean, then build"
+  [ "$(manifest_value pin)" = "$EXPECTED_PIN" ] \
+    || die "the install was built from $(manifest_value pin), not $EXPECTED_PIN"
+  [ "$(manifest_value configure)" = "$CONFIGURE_FLAGS" ] || die "the install was configured with other flags"
+  [ "$(manifest_value build-config)" = "$(sha "$BUILD/config.status")" ] \
+    || die "the build tree is not the one the install came from"
+  [ "$(manifest_value inventory)" = "$(install_inventory)" ] \
+    || die "the installed files differ from the ones the build left"
+}
 stage_build() {
   say "build: 12.2 out of tree from $SRC"
   mkdir -p "$OUT"
-  if [ -x "$BIN/postgres" ]; then
-    note "already built: $("$BIN/postgres" --version)"
+  check_checkout
+  if [ -e "$INST" ]; then
+    check_install
+    note "reused, the manifest matches: $("$BIN/postgres" --version)"
   else
     [ -x "$SRC/configure" ] || die "no pinned checkout at $SRC"
     mkdir -p "$BUILD"
-    ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" --without-icu --without-readline \
-        --with-zlib --enable-debug > configure.log 2>&1 ) \
+    ( cd "$BUILD" && "$SRC/configure" --prefix="$INST" $CONFIGURE_FLAGS > configure.log 2>&1 ) \
       || die "configure failed, see $BUILD/configure.log"
     ( cd "$BUILD" && make -j"$JOBS" -s > make.log 2>&1 ) || die "make failed, see $BUILD/make.log"
     ( cd "$BUILD" && make -s install > install.log 2>&1 ) || die "install failed"
@@ -4173,30 +5323,56 @@ stage_build() {
       ( cd "$BUILD" && make -s -C "contrib/$m" install >> install.log 2>&1 ) \
         || die "contrib/$m install failed"
     done
+    check_checkout   # the checkout did not move while it was built
+    { printf 'pin: %s\n' "$EXPECTED_PIN"
+      printf 'source: %s\n' "$SRC"
+      printf 'configure: %s\n' "$CONFIGURE_FLAGS"
+      printf 'build-config: %s\n' "$(sha "$BUILD/config.status")"
+      printf 'version: %s\n' "$("$BIN/postgres" --version)"
+      printf 'compiler: %s\n' "$(cc --version 2>/dev/null | head -1)"
+      printf 'platform: %s\n' "$(uname -srm)"
+      printf 'built: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf 'inventory: %s\n' "$(install_inventory)"
+    } > "$INST/nbmaint-build-manifest.txt" || die "cannot write the build manifest"
+    check_install
   fi
   "$BIN/postgres" --version | tee "$OUT/version.txt"
-  printf 'source %s at %s\n' "$SRC" "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo unknown)" \
-    | tee "$OUT/pin.txt"
+  { printf 'install built from %s, per its manifest\n' "$(manifest_value pin)"
+    printf 'checkout %s is at %s\n' "$SRC" "$(git -C "$SRC" rev-parse HEAD)"
+  } | tee "$OUT/pin.txt"
 }
 
 # ---------------------------------------------------------------- check ------
+# Every suite must exit 0 and report all its tests passed, or the run stops.
+suite_result() {
+  grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' "$1" | tail -1
+}
 stage_check() {
-  say "check: make check, and the three contrib suites the cross-checks read"
+  say "check: make check, and the contrib suites the cross-checks read"
   mkdir -p "$OUT"; : > "$OUT/checks.txt"
-  local rc m
+  check_checkout
+  check_install
+  local rc m res bad=""
   ( cd "$BUILD" && make -s check > "$OUT/check-core.log" 2>&1 ); rc=$?
-  printf 'core exit=%s %s\n' "$rc" \
-    "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' \
-        "$OUT/check-core.log" | tail -1)" >> "$OUT/checks.txt"
-  for m in pageinspect pgstattuple pg_freespacemap; do
+  res=$(suite_result "$OUT/check-core.log")
+  printf 'core exit=%s %s\n' "$rc" "$res" >> "$OUT/checks.txt"
+  { [ "$rc" = 0 ] && case "$res" in All*passed) true ;; *) false ;; esac; } || bad="$bad core"
+  # contrib/pg_freespacemap in 12.2 declares no REGRESS target, so it has no
+  # suite to run; that is checked in its Makefile rather than assumed
+  if grep -q '^REGRESS' "$SRC/contrib/pg_freespacemap/Makefile"; then
+    bad="$bad pg_freespacemap-has-a-suite-this-leg-does-not-run"
+  else
+    printf 'pg_freespacemap no suite: its Makefile declares no REGRESS\n' >> "$OUT/checks.txt"
+  fi
+  for m in pageinspect pgstattuple; do
     ( cd "$BUILD" && make -s -C "contrib/$m" check > "$OUT/check-$m.log" 2>&1 ); rc=$?
-    printf '%s exit=%s %s\n' "$m" "$rc" \
-      "$(grep -Eo 'All [0-9]+ tests passed|[0-9]+ of [0-9]+ tests (passed|failed)' \
-          "$OUT/check-$m.log" | tail -1)" >> "$OUT/checks.txt"
+    res=$(suite_result "$OUT/check-$m.log")
+    printf '%s exit=%s %s\n' "$m" "$rc" "$res" >> "$OUT/checks.txt"
+    { [ "$rc" = 0 ] && case "$res" in All*passed) true ;; *) false ;; esac; } || bad="$bad $m"
   done
   cat "$OUT/checks.txt"
+  [ -z "$bad" ] || die "regression suites failed:$bad (see $OUT/checks.txt)"
 }
-
 # ---------------------------------------------------------------- cluster ----
 # Settings and their apply scope, written before the first start:
 #   listen_addresses, port, unix_socket_directories, shared_buffers
@@ -4285,7 +5461,7 @@ stage_texts() {
   { printf 'pipeline plan  %s\n' "$(sha "$OUT/pipeline_plan.sql")"
     printf 'pipeline apply %s\n' "$(sha "$OUT/pipeline_apply.sql")"
     printf 'pipeline lines %s\n' "$(grep -c '' "$OUT/pipeline_plan.sql")"
-    if cmp -s "$OUT/pipeline_plan.sql" "$OUT/pipeline_apply.sql"; then
+    if [ -s "$OUT/pipeline_plan.sql" ] && cmp -s "$OUT/pipeline_plan.sql" "$OUT/pipeline_apply.sql"; then
       printf 'pipeline identical yes\n'
     else
       printf 'pipeline identical NO\n'
@@ -4293,30 +5469,38 @@ stage_texts() {
   } >> "$OUT/hashes.txt"
   plan_view "$SQLD/plan.sql" > "$SQLD/plan_view.sql"
   cat "$OUT/hashes.txt"
+  ! grep -Eq 'DIFFERS|identical NO' "$OUT/hashes.txt" \
+    || die "the page's texts are not the ones this script was last measured with: re-measure, then refile BASE_PLAN and BASE_APPLY"
 }
 
 # run_plan <db> <tag> [prefix-sql]: step 1, verbatim; run_apply the same for
 # step 2.  The optional prefix runs first in the same session (SET ROLE).
+# Both return psql's exit status, which every caller checks.
 run_plan() {
   { [ -n "${3:-}" ] && printf '%s\n' "$3"; cat "$SQLD/plan.sql"; } \
     | "$BIN/psql" -X -v ON_ERROR_STOP=1 -P pager=off -h "$SOCK" -p "$PORT" -d "$1" \
       > "$OUT/plan-$2.txt" 2>&1
 }
 run_apply() {
-  { [ -n "${3:-}" ] && printf '%s\n' "$3"; cat "$SQLD/apply.sql"; } \
+  { [ -n "${3:-}" ] && printf '%s\n' "$3"; cat "${APPLY_FILE:-$SQLD/apply.sql}"; } \
     | "$BIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -p "$PORT" -d "$1" \
       > "$OUT/apply-$2.log" 2>&1
 }
 apply_summary() { grep -Eo 'nbmaint: reindex=.*' "$OUT/apply-$1.log" | tail -1; }
+plan_actions()  {
+  grep -Eo '\| (initialize|refresh|reindex|skip|blocked|conflict) ' "$OUT/plan-$1.txt" \
+    | sort | uniq -c | tr -s ' ' | tr '\n' ';'
+}
 
 # ---------------------------------------------------------------- exact ------
 # Both filed texts, executed unmodified on this server before any fixture
-# exists: the compatibility claim in its smallest form.
+# exists: the compatibility claim in its smallest form.  Any text that fails,
+# or a second step 2 run that writes anything, fails the stage.
 stage_exact() {
   say "exact: both filed texts, unmodified, on a database with no fixture in it"
   : > "$OUT/exact.txt"
   q "$XDB" 'DROP TABLE IF EXISTS zz_exact CASCADE' > /dev/null
-  qz "$XDB" > "$OUT/exact-build.log" 2>&1 <<'SQL' || die "exact: build failed"
+  qz "$XDB" > "$OUT/exact-build.log" 2>&1 <<'SQL'
 CREATE /* wiki_nbmaint_exact */ TABLE zz_exact AS
   SELECT i::bigint AS k, int8range(i, i + 10) AS r FROM generate_series(1, 200000) i;
 ANALYZE /* wiki_nbmaint_exact */ zz_exact;
@@ -4325,26 +5509,24 @@ CREATE /* wiki_nbmaint_exact */ INDEX zz_exact_g ON zz_exact USING gist (r);
 CREATE /* wiki_nbmaint_exact */ INDEX zz_exact_b ON zz_exact (k);
 COMMENT /* wiki_nbmaint_exact */ ON INDEX zz_exact_h IS 'a human note that must survive';
 SQL
-  local rc
-  run_plan "$XDB" exact1; rc=$?
+  local rc bad=""
+  run_plan "$XDB" exact1; rc=$?; [ "$rc" = 0 ] || bad="$bad step-1-first"
   printf 'step 1, first run: exit=%s, rows naming zz_exact=%s, actions: %s\n' "$rc" \
-    "$(grep -c 'zz_exact_' "$OUT/plan-exact1.txt")" \
-    "$(grep -Eo '\| (initialize|refresh|reindex|skip|blocked) ' "$OUT/plan-exact1.txt" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" \
-    >> "$OUT/exact.txt"
-  run_apply "$XDB" exact1; rc=$?
+    "$(grep -c 'zz_exact_' "$OUT/plan-exact1.txt")" "$(plan_actions exact1)" >> "$OUT/exact.txt"
+  run_apply "$XDB" exact1; rc=$?; [ "$rc" = 0 ] || bad="$bad step-2-first"
   printf 'step 2, first run:  exit=%s, %s\n' "$rc" "$(apply_summary exact1)" >> "$OUT/exact.txt"
   q "$XDB" "SELECT /* wiki_nbmaint_exact */ c.relname || ': ' || replace(d.description, chr(10), ' | ')
               FROM pg_description d JOIN pg_class c ON c.oid = d.objoid
              WHERE d.classoid = 'pg_class'::regclass AND c.relname LIKE 'zz_exact_%'
              ORDER BY 1" >> "$OUT/exact.txt"
-  run_apply "$XDB" exact2; rc=$?
+  run_apply "$XDB" exact2; rc=$?; [ "$rc" = 0 ] || bad="$bad step-2-second"
   printf 'step 2, second run: exit=%s, %s\n' "$rc" "$(apply_summary exact2)" >> "$OUT/exact.txt"
-  run_plan "$XDB" exact2; rc=$?
-  printf 'step 1, after both: exit=%s, actions: %s\n' "$rc" \
-    "$(grep -Eo '\| (initialize|refresh|reindex|skip|blocked) ' "$OUT/plan-exact2.txt" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" \
-    >> "$OUT/exact.txt"
+  apply_summary exact2 | grep -q 'reindex=0 initialize=0 refresh=0 ' || bad="$bad second-run-wrote"
+  run_plan "$XDB" exact2; rc=$?; [ "$rc" = 0 ] || bad="$bad step-1-after"
+  printf 'step 1, after both: exit=%s, actions: %s\n' "$rc" "$(plan_actions exact2)" >> "$OUT/exact.txt"
   q "$XDB" 'DROP TABLE IF EXISTS zz_exact CASCADE' > /dev/null
   cat "$OUT/exact.txt"
+  [ -z "$bad" ] || die "exact:$bad (see $OUT/exact.txt and $OUT/plan-exact*.txt, $OUT/apply-exact*.log)"
 }
 
 # ---------------------------------------------------------------- facts ------
@@ -4359,6 +5541,8 @@ stage_facts() {
     "$(errf "$XDB" 'WITH x AS MATERIALIZED (SELECT 1) SELECT count(*) FROM x;')"
   fact pg_input_is_valid_rows \
     "$(q "$XDB" "SELECT count(*) FROM pg_proc WHERE proname = 'pg_input_is_valid'")"
+  fact regexp_match_rows \
+    "$(q "$XDB" "SELECT count(*) FROM pg_proc WHERE proname = 'regexp_match'")"
   fact pg_stat_force_next_flush_rows \
     "$(q "$XDB" "SELECT count(*) FROM pg_proc WHERE proname = 'pg_stat_force_next_flush'")"
   fact transaction_timeout_rows \
@@ -4382,6 +5566,14 @@ stage_facts() {
     "$(errf "$XDB" 'DO $x$ BEGIN PERFORM 1; COMMIT; END $x$;')"
   fact commit_inside_do_in_begin \
     "$(errf "$XDB" 'BEGIN; DO $x$ BEGIN PERFORM 1; COMMIT; END $x$; COMMIT;')"
+  # step 2 narrows its pipeline with a transaction-local custom setting; what
+  # step 1 then reads in the same session, and in a fresh one
+  fact custom_setting_after_local_set \
+    "$(printf '%s\n' 'BEGIN;' "SELECT set_config('nbmaint.only_index', '1', true);" 'COMMIT;' \
+         "SELECT 'after commit: ' || coalesce(quote_literal(current_setting('nbmaint.only_index', true)), 'NULL');" \
+       | PSQL -d "$XDB" -q -At 2>&1 | tail -1)"
+  fact custom_setting_fresh_session \
+    "$(q "$XDB" "SELECT coalesce(quote_literal(current_setting('nbmaint.only_index', true)), 'NULL')")"
   q "$XDB" 'DROP TABLE IF EXISTS zz_f CASCADE' > /dev/null
   q "$XDB" 'CREATE TABLE zz_f (k bigint)' > /dev/null
   q "$XDB" 'INSERT INTO zz_f SELECT g FROM generate_series(1, 1000) g' > /dev/null
@@ -4393,6 +5585,17 @@ stage_facts() {
   fact reindex_concurrently_top_level "$(errf "$XDB" 'REINDEX INDEX CONCURRENTLY zz_f_h;')"
   fact comment_with_expression "$(errf "$XDB" "COMMENT ON INDEX zz_f_h IS 'a' || 'b';")"
   fact comment_with_literal "$(errf "$XDB" "COMMENT ON INDEX zz_f_h IS 'ab';")"
+  # ALTER INDEX ... OWNER TO the owner it already has, which step 2 uses as its
+  # index lock: the lock it holds, anything it prints, and whether it rewrote
+  # the index's pg_class row
+  local x0 x1
+  x0=$(q "$XDB" "SELECT xmin FROM pg_class WHERE relname = 'zz_f_h'")
+  fact alter_index_owner_to_owner \
+    "$(printf '%s\n' 'BEGIN;' 'ALTER INDEX zz_f_h OWNER TO CURRENT_USER;' \
+         "SELECT 'held: ' || string_agg(mode, ',' ORDER BY mode) FROM pg_locks WHERE relation = 'zz_f_h'::regclass AND pid = pg_backend_pid();" \
+         'COMMIT;' | PSQL -d "$XDB" -q -At 2>&1 | tr '\n' ' ' | sed -e 's/ *$//')"
+  x1=$(q "$XDB" "SELECT xmin FROM pg_class WHERE relname = 'zz_f_h'")
+  fact alter_index_owner_rewrote_pg_class "$([ "$x0" = "$x1" ] && echo no || echo "yes ($x0 -> $x1)")"
   # A statement timeout inside a DO block's EXCEPTION WHEN OTHERS is not
   # caught: it ends the whole block.  That is what bounds step 2 as a whole.
   fact statement_timeout_vs_others \
@@ -4408,7 +5611,6 @@ stage_facts() {
   q "$XDB" 'DROP TABLE IF EXISTS zz_f CASCADE' > /dev/null
   cat "$OUT/facts.txt"
 }
-
 # ---------------------------------------------------------------- declare ----
 # Files the declared kind of every published column, the method's own
 # thresholds, the pay-off threshold every decision is scored at, the
@@ -4447,9 +5649,11 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_decision (knob, value, meaning) 
  ('refresh when', 'index smaller than its stored size',
                   'not a decision to rebuild; the baseline is rewritten'),
  ('pay-off',      'truth_pct >= 23.08',
-                  'a rebuild was worth it: 100 * (1 - 1/1.30), the reclaim a 30 % growth implies'),
+                  'a rebuild was worth it: 100 * (1 - 1/1.30), the reclaim a 30 % growth implies, rounded to 23.08; compared with the unrounded 100 * (1 - R / C), never with its two-decimal display'),
  ('score',        'PASS, FALSE POSITIVE, FALSE NEGATIVE',
-                  'reindex and truth_pct >= pay-off, or neither: PASS; reindex below it: FALSE POSITIVE; no reindex at or above it: FALSE NEGATIVE');
+                  'reindex and truth_pct >= pay-off, or neither: PASS; reindex below it: FALSE POSITIVE; no reindex at or above it: FALSE NEGATIVE'),
+ ('cross-checks', 'a VERBOSE count and a BRIN free-space reading are compared with the censuses taken just before and just after the VACUUM that produced them',
+                  'see invariants I9 and I18');
 
 -- Predictions filed before the run, from the B, C and R figures the source
 -- page filed on 17.11 on 2026-09-16: no 12.2 figure existed for these
@@ -4495,11 +5699,11 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_invariant (id, claim) VALUES
  ('I2',  'size bracket: pg_relation_size(index, main) re-read after each census equals block_size times the blocks the census scanned'),
  ('I3',  'hash: the census page classes and pgstathashindex both account for every block of the file'),
  ('I4',  'hash: every block hash_bitmap_info reports free reads back as an unused page'),
- ('I5',  'GiST: the FSM free-page count never exceeds the census deleted-plus-new count; SP-GiST is not applicable, having no decoder'),
+ ('I5',  'GiST: the FSM free-page count never exceeds the census deleted-plus-new count; SP-GiST: it never exceeds the new or empty pages outside the metapage and the two root pages, read from page headers'),
  ('I6',  'BRIN: the revmap entry count equals the summary tuples the regular pages hold'),
  ('I7',  'BRIN: the index is never smaller after the maintenance step than before it'),
- ('I8',  'GIN: the metapage entry and data page counts equal the census, a not-yet-recyclable deleted page counted as data'),
- ('I9',  'the VACUUM VERBOSE index line appears exactly where index cleanup ran and returned statistics: not for the ANALYZE-only stand-ins, not for a hash index whose bulk delete never ran'),
+ ('I8',  'GIN: on every census whose metapage counts the build or a VACUUM wrote last, the metapage entry, data and total page counts equal the census, a not-yet-recyclable deleted page counted as data; a census taken after writes and before a VACUUM reads counts stale by construction and is reported, not scored'),
+ ('I9',  'the VACUUM VERBOSE index line appears exactly where index cleanup ran and returned statistics (not for the ANALYZE-only stand-ins, not for a hash index whose bulk delete never ran), and each of its counts equals the census: pages in total = the census just after that VACUUM, except on BRIN, which counts before it summarizes, = the census just before; hash and BRIN: 0 newly deleted, 0 currently deleted, 0 reusable; GiST: currently deleted = deleted-flag plus all-zero pages after, reusable = FSM free pages after, newly deleted = deleted-flag pages after minus before; SP-GiST: newly deleted = currently deleted = reusable = the new or empty pages outside the metapage and the two roots after, = FSM free pages after; GIN: reusable = FSM free pages after'),
  ('I10', 'the maintenance was not defeated: every maintenance VACUUM reports 0 tuples dead but not yet removable, except a declared held snapshot, which must pin something and whose second VACUUM reports 0'),
  ('I11', 'every VACUUM and ANALYZE session ran with all four settable timeouts at 0, and no maintenance log carries a skip line, an error or a cancellation'),
  ('I12', 'the measurement lock was never held across a maintenance step'),
@@ -4507,7 +5711,8 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_invariant (id, claim) VALUES
  ('I14', 'step 2''s first run stored a version-2 payload in every fixture index, with sz equal to the baseline census size and tup equal to the table count it read'),
  ('I15', 'the method decided on the maintained state: the size step 1 saw equals the maintained census size and the oracle''s before-size'),
  ('I16', 'step 1''s action equals the same two tests recomputed independently from the stored payload and the decide-time readings'),
- ('I17', 'step 2 carried out exactly the plan step 1 printed on the same state, and a second run of step 2 wrote nothing');
+ ('I17', 'step 2 carried out exactly the plan step 1 printed on the same state, and a second run of step 2 wrote nothing'),
+ ('I18', 'BRIN, per regular page, on every census taken just after a VACUUM: every page that VACUUM did not write - its LSN no newer than the WAL insert position read just before the VACUUM began - reads in pg_freespace exactly the FSM category floor of its own free space, pd_upper minus pd_lower less one line pointer, or 0 on a page flagged BRIN_EVACUATE_PAGE; the pages the VACUUM''s own summarization wrote are compared and reported, not scored, because BRIN writes such a page''s FSM entry only when the page is extended or a search finds it short of space');
 
 CREATE /* wiki_nbmaint_declare */ TABLE declared_exception (
   id text PRIMARY KEY, fixture text NOT NULL, state text NOT NULL,
@@ -4528,7 +5733,7 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('non-btree','hash: a splitpoint allocation','h02'),
  ('non-btree','hash: an index whose hashbulkdelete never ran','h04'),
  ('non-btree','GiST: an emptied leaf that was deleted, and one that survived as its parent''s last downlink','g07'),
- ('non-btree','GiST: a deleted-but-not-recyclable page under a held snapshot','g08'),
+ ('non-btree','GiST: a deleted-but-not-recyclable page under a held snapshot','not reached: no fixture deletes a GiST page while a snapshot is held; g08''s snapshot makes its maintenance VACUUM delete nothing, and its second VACUUM deletes pages only after the release'),
  ('non-btree','GiST: a sorted build beside a non-sorted one','skipped on 12: no GiST operator class has support function 11, so g09 is insert-driven like g06 to g08'),
  ('non-btree','SP-GiST: redirects turned into placeholders, a trailing run removed, an interior one retained','s09, read from VACUUM''s counters: no SP-GiST decoder'),
  ('non-btree','SP-GiST: an emptied non-root page and the root page','s09, the same limit'),
@@ -4548,7 +5753,7 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('gin','half-empty posting-tree leaves with nothing deletable','n04'),
  ('gin','a populated pending list, and the same index after a flush','n05'),
  ('gin','an untouched index and an empty index','n08 and n09'),
- ('gin','a snapshot held across the settling VACUUM','n10'),
+ ('gin','a snapshot held across the settling VACUUM','n10: its maintenance VACUUM runs under the snapshot and deletes no page; its posting-tree pages are deleted by the second VACUUM, after the release'),
  ('gin','a VACUUM whose index cleanup did not run','skipped: its fixture, n11, was removed from the corpus at the asker''s request'),
  ('gin','more than one operator class','n06 (jsonb_path_ops) and n07 (tsvector_ops) beside array_ops'),
  ('gin','one rebuild at more than one maintenance_work_mem','probe P3'),
@@ -4578,9 +5783,25 @@ CREATE /* wiki_nbmaint_proto */ EXTENSION pageinspect;
 CREATE /* wiki_nbmaint_proto */ EXTENSION pgstattuple;
 CREATE /* wiki_nbmaint_proto */ EXTENSION pg_freespacemap;
 
+-- One row per fixture, phase and metric: a stage that runs again replaces its
+-- own rows, and anything that would record a second reading of the same
+-- thing fails instead of doubling a score.
 CREATE TABLE proto.meas (
   fixture text NOT NULL, phase text NOT NULL, metric text NOT NULL,
-  num numeric, txt text, at timestamptz NOT NULL DEFAULT clock_timestamp());
+  num numeric, txt text, at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (fixture, phase, metric));
+
+-- The stages that have changed the fixture database, in the order they ran.
+CREATE TABLE proto.stage_log (
+  stage text PRIMARY KEY, done_at timestamptz NOT NULL DEFAULT clock_timestamp());
+
+-- The graduated FSM agreement on BRIN, page by page: the page's own free
+-- space, the value its FSM category floor must read, and what pg_freespace
+-- did read.
+CREATE TABLE proto.brin_page (
+  fixture text NOT NULL, phase text NOT NULL, blkno int NOT NULL,
+  free_bytes int NOT NULL, fsm_expected int NOT NULL, fsm_read int, page_lsn numeric NOT NULL,
+  evacuate boolean NOT NULL, PRIMARY KEY (fixture, phase, blkno));
 
 CREATE FUNCTION proto.note(p_fix text, p_phase text, p_metric text,
                            p_num numeric DEFAULT NULL, p_txt text DEFAULT NULL)
@@ -4590,19 +5811,21 @@ RETURNS void LANGUAGE sql AS $fn$
 $fn$;
 
 -- Every non-B-tree index in public: its file, its table's count and its
--- comment, with the payload decoded.  The payloads read here were written by
--- step 2, so the jsonb cast is safe; a cast that raised would stop the run.
+-- comment, with the payload decoded - independently of the texts, as JSON,
+-- out of the comment's one reserved line.  The payloads read here were
+-- written by step 2, so the jsonb cast is safe; a cast that raised would stop
+-- the run.  One row per phase and index.
 CREATE TABLE proto.snap (
   phase text NOT NULL, idx text NOT NULL, oid oid, filenode oid, bytes bigint,
   tbl_tuples numeric, cmt text, pv numeric, sz numeric, tup numeric,
-  at timestamptz NOT NULL DEFAULT clock_timestamp());
+  at timestamptz NOT NULL DEFAULT clock_timestamp(), UNIQUE (phase, idx));
 CREATE FUNCTION proto.take_snap(p_phase text) RETURNS void LANGUAGE sql AS $fn$
   INSERT INTO proto.snap(phase, idx, oid, filenode, bytes, tbl_tuples, cmt, pv, sz, tup)
   SELECT p_phase, c.relname, c.oid, c.relfilenode, pg_relation_size(c.oid),
          t.reltuples::numeric, d.description,
-         (substring(d.description from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'v')::numeric,
-         (substring(d.description from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric,
-         (substring(d.description from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'tup')::numeric
+         (substring(d.description from '(?n)^@nbmaint:(\{.*\})$')::jsonb ->> 'v')::numeric,
+         (substring(d.description from '(?n)^@nbmaint:(\{.*\})$')::jsonb ->> 'sz')::numeric,
+         (substring(d.description from '(?n)^@nbmaint:(\{.*\})$')::jsonb ->> 'tup')::numeric
     FROM pg_class c
     JOIN pg_index x ON x.indexrelid = c.oid
     JOIN pg_class t ON t.oid = x.indrelid
@@ -4735,12 +5958,16 @@ END $fn$;
 
 -- pageinspect ships no SP-GiST decoder, so this census is the page header and
 -- nothing else, and every page-class quantity derived from it is a level.
+-- A header does show the one class SP-GiST's VACUUM counts and frees: a page
+-- that is new or holds no line pointer, outside the metapage (block 0) and
+-- the two root pages (blocks 1 and 2), which VACUUM never frees.
 CREATE FUNCTION proto.census_spgist(p_fix text, p_phase text, p_idx text)
 RETURNS void LANGUAGE plpgsql AS $fn$
 DECLARE
   blk int := current_setting('block_size')::int;
+  hdr_size int := 24;    -- SizeOfPageHeaderData: offsetof(PageHeaderData, pd_linp)
   n int; nblocks int; hdr record;
-  c_used int := 0; c_zero int := 0; c_bad int := 0; fsm_free int;
+  c_used int := 0; c_zero int := 0; c_empty int := 0; c_bad int := 0; fsm_free int;
 BEGIN
   nblocks := pg_relation_size(p_idx::regclass, 'main') / blk;
   FOR n IN 0 .. nblocks - 1 LOOP
@@ -4749,52 +5976,89 @@ BEGIN
       IF hdr.lower = 0 AND hdr.upper = 0 THEN c_zero := c_zero + 1;
       ELSE c_used := c_used + 1;
       END IF;
+      -- PageIsNew or PageIsEmpty, on a block VACUUM is allowed to free
+      IF n >= 3 AND hdr.lower <= hdr_size THEN c_empty := c_empty + 1; END IF;
     EXCEPTION WHEN OTHERS THEN c_bad := c_bad + 1;
     END;
   END LOOP;
   SELECT count(*) INTO fsm_free FROM pg_freespace(p_idx::regclass) WHERE avail > 0;
   INSERT INTO proto.meas(fixture, phase, metric, num) VALUES
-   (p_fix, p_phase, 'census_scanned',    nblocks),
-   (p_fix, p_phase, 'census_used',       c_used),
-   (p_fix, p_phase, 'census_new',        c_zero),
-   (p_fix, p_phase, 'census_unreadable', c_bad),
-   (p_fix, p_phase, 'fsm_free_pages',    fsm_free),
-   (p_fix, p_phase, 'size_after_census', pg_relation_size(p_idx::regclass, 'main'));
+   (p_fix, p_phase, 'census_scanned',      nblocks),
+   (p_fix, p_phase, 'census_used',         c_used),
+   (p_fix, p_phase, 'census_new',          c_zero),
+   (p_fix, p_phase, 'census_new_or_empty', c_empty),
+   (p_fix, p_phase, 'census_unreadable',   c_bad),
+   (p_fix, p_phase, 'fsm_free_pages',      fsm_free),
+   (p_fix, p_phase, 'size_after_census',   pg_relation_size(p_idx::regclass, 'main'));
 END $fn$;
 
+-- The BRIN census.  Beside the page classes and the summaries it runs the
+-- graduated FSM agreement the non-B-tree protocol requires, page by page:
+-- every regular page's pg_freespace against that page's own free space as
+-- br_page_get_freespace computes it - pd_upper minus pd_lower less one line
+-- pointer, or 0 on a page flagged BRIN_EVACUATE_PAGE - rounded down to its
+-- FSM category, block_size / 256 bytes wide.  The flags and the page type are
+-- read out of the raw page: BrinSpecialSpace holds MAXALIGN(1) / 2 uint16s,
+-- the flags next to last and the type last, little endian on this platform,
+-- and a regular page whose type does not read 0xF093 there is unreadable.
 CREATE FUNCTION proto.census_brin(p_fix text, p_phase text, p_idx text)
 RETURNS void LANGUAGE plpgsql AS $fn$
 DECLARE
-  blk int := current_setting('block_size')::int;
-  n int; nblocks int; t text; k int; un int;
+  bsz int := current_setting('block_size')::int;
+  step int := current_setting('block_size')::int / 256;
+  ma int;
+  n int; nblocks int; t text; k int; un int; raw bytea; hdr record;
+  flags_w int; type_w int; free_b int; want int; got int;
   c_meta int := 0; c_revmap int := 0; c_reg int := 0; c_bad int := 0;
   items bigint := 0; unused bigint := 0; revmap_entries bigint := 0;
-  fsm_free int;
+  fsm_free int; f_agree int := 0; f_high int := 0; f_low int := 0; f_evac int := 0;
 BEGIN
-  nblocks := pg_relation_size(p_idx::regclass, 'main') / blk;
+  SELECT max_data_alignment INTO ma FROM pg_control_init();
+  nblocks := pg_relation_size(p_idx::regclass, 'main') / bsz;
   FOR n IN 0 .. nblocks - 1 LOOP
     BEGIN
-      t := brin_page_type(get_raw_page(p_idx, n));
+      raw := get_raw_page(p_idx, n);
+      t := brin_page_type(raw);
     EXCEPTION WHEN OTHERS THEN
       t := 'unreadable';
     END;
     IF t = 'meta' THEN c_meta := c_meta + 1;
     ELSIF t = 'revmap' THEN
       c_revmap := c_revmap + 1;
-      SELECT count(*) INTO k FROM brin_revmap_data(get_raw_page(p_idx, n)) r
+      SELECT count(*) INTO k FROM brin_revmap_data(raw) r
        WHERE r.pages IS NOT NULL AND r.pages::text <> '(0,0)';
       revmap_entries := revmap_entries + k;
     ELSIF t = 'regular' THEN
-      c_reg := c_reg + 1;
       BEGIN
         -- one row per (item, attnum); an unused line pointer - what a moved
         -- summary or a desummarize leaves behind - comes back with blknum NULL
         SELECT count(DISTINCT bi.itemoffset) FILTER (WHERE bi.blknum IS NOT NULL),
                count(DISTINCT bi.itemoffset) FILTER (WHERE bi.blknum IS NULL)
           INTO k, un
-          FROM brin_page_items(get_raw_page(p_idx, n), p_idx::regclass) bi;
+          FROM brin_page_items(raw, p_idx::regclass) bi;
+        SELECT * INTO hdr FROM page_header(raw);
+        flags_w := get_byte(raw, hdr.special + ma - 4) + 256 * get_byte(raw, hdr.special + ma - 3);
+        type_w  := get_byte(raw, hdr.special + ma - 2) + 256 * get_byte(raw, hdr.special + ma - 1);
+        IF type_w <> 61587 THEN     -- BRIN_PAGETYPE_REGULAR, 0xF093
+          RAISE EXCEPTION 'block % does not read as a regular BRIN page', n;
+        END IF;
+        c_reg := c_reg + 1;
         items := items + k;
         unused := unused + un;
+        IF flags_w & 1 <> 0 THEN    -- BRIN_EVACUATE_PAGE
+          free_b := 0; f_evac := f_evac + 1;
+        ELSE
+          free_b := greatest(hdr.upper - hdr.lower - 4, 0);   -- less one ItemIdData
+        END IF;
+        want := least(free_b / step, 254) * step;
+        got := pg_freespace(p_idx::regclass, n);
+        INSERT INTO proto.brin_page (fixture, phase, blkno, free_bytes, fsm_expected, page_lsn,
+                                     fsm_read, evacuate)
+             VALUES (p_fix, p_phase, n, free_b, want, hdr.lsn - '0/0'::pg_lsn, got, flags_w & 1 <> 0);
+        IF got = want THEN f_agree := f_agree + 1;
+        ELSIF got > want THEN f_high := f_high + 1;
+        ELSE f_low := f_low + 1;
+        END IF;
       EXCEPTION WHEN OTHERS THEN
         c_bad := c_bad + 1;
       END;
@@ -4811,6 +6075,10 @@ BEGIN
    (p_fix, p_phase, 'brin_items',          items),
    (p_fix, p_phase, 'brin_unused_items',   unused),
    (p_fix, p_phase, 'brin_revmap_entries', revmap_entries),
+   (p_fix, p_phase, 'brin_fsm_agree',      f_agree),
+   (p_fix, p_phase, 'brin_fsm_higher',     f_high),
+   (p_fix, p_phase, 'brin_fsm_lower',      f_low),
+   (p_fix, p_phase, 'brin_evacuate_pages', f_evac),
    (p_fix, p_phase, 'fsm_free_pages',      fsm_free),
    (p_fix, p_phase, 'size_after_census',   pg_relation_size(p_idx::regclass, 'main'));
 END $fn$;
@@ -5285,7 +6553,10 @@ check_maint() {
 run_maint() {
   local f="$1" db="$2" tag="$3"
   horizon_probe "$db" "$f" "${tag}_before"
-  q "$db" "SELECT proto.note('$f','$tag','started', extract(epoch from clock_timestamp())::numeric)" > /dev/null
+  # the WAL insert position just before the step: an index page whose LSN is
+  # no newer than this was not written by the step (I18)
+  q "$db" "SELECT proto.note('$f','$tag','started', extract(epoch from clock_timestamp())::numeric),
+                  proto.note('$f','$tag','wal_lsn_before', pg_current_wal_insert_lsn() - '0/0'::pg_lsn)" > /dev/null
   fx_maint "$f" | qz "$db" > "$OUT/$tag-$f.log" 2>&1 \
     || die "maintenance of $f ($tag) failed, see $OUT/$tag-$f.log"
   q "$db" "SELECT proto.note('$f','$tag','ended', extract(epoch from clock_timestamp())::numeric)" > /dev/null
@@ -5303,7 +6574,7 @@ hold_snapshot() {
   ( printf "BEGIN /* wiki_nbmaint_snapshot */ ISOLATION LEVEL REPEATABLE READ;\n"
     printf "SELECT /* wiki_nbmaint_snapshot */ 'snapshot holder pid ' || pg_backend_pid();\n"
     printf "SELECT /* wiki_nbmaint_snapshot */ pg_sleep(900);\n"
-    printf "COMMIT /* wiki_nbmaint_snapshot */;\n" ) | qin "$db" > "$OUT/snapshot-$f.log" 2>&1 &
+    printf "COMMIT /* wiki_nbmaint_snapshot */;\n" ) | qbg "$db" > "$OUT/snapshot-$f.log" 2>&1 &
   SNAP_PID=$!
   until [ "$(q "$db" "SELECT count(*) FROM pg_stat_activity
                        WHERE query LIKE '%wiki_nbmaint_snapshot%' AND backend_xmin IS NOT NULL
@@ -5323,15 +6594,51 @@ release_snapshot() {
   SNAP_PID=""
 }
 
+# ------------------------------------------------------------ stage order ----
+# The stages that change the fixture database log themselves in
+# proto.stage_log.  Each one checks the stages it depends on before it starts,
+# and refuses to run again, or after a later stage has changed what it would
+# read: to repeat one of those, start again at the fixtures stage.  The stages
+# that only read, cross-check or re-score replace their own records instead.
+need_texts() {
+  [ -s "$SQLD/plan.sql" ] && [ -s "$SQLD/apply.sql" ] && [ -s "$SQLD/plan_view.sql" ] \
+    || die "the page's texts have not been taken out yet: run the texts stage first"
+}
+need_db() {
+  [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname = '$DB'")" = 1 ] \
+    || die "no fixture database: run the fixtures stage first"
+}
+have_stage() { [ "$(q "$DB" "SELECT count(*) FROM proto.stage_log WHERE stage = '$1'")" = 1 ]; }
+need_stage() {
+  local s
+  for s in "$@"; do have_stage "$s" || die "run the $s stage first"; done
+  return 0
+}
+refuse_after() {   # <this stage> <stage...>: die if any of those already ran
+  local me=$1 s; shift
+  for s in "$@"; do
+    if have_stage "$s"; then
+      if [ "$s" = "$me" ]; then die "$me already ran on this fixture database: start again at the fixtures stage"; fi
+      die "$me cannot run after $s has changed the fixtures: start again at the fixtures stage"
+    fi
+  done
+  return 0
+}
+stage_done() {
+  q "$DB" "INSERT INTO proto.stage_log (stage) VALUES ('$1')
+           ON CONFLICT (stage) DO UPDATE SET done_at = clock_timestamp()" > /dev/null
+}
+
 # ----------------------------------------------------------- stage: fixtures -
 stage_fixtures() {
   say "fixtures: build phase, locked baseline census, then step 2's first run"
   q postgres "SELECT count(*) FROM pg_database WHERE datname = '$PDB'" | grep -q '^1$' \
     || die "declarations are not filed: run the declare stage first"
+  need_texts
   q postgres "DROP /* wiki_nbmaint_fixtures */ DATABASE IF EXISTS $DB" > /dev/null
   q postgres "CREATE /* wiki_nbmaint_fixtures */ DATABASE $DB" > /dev/null
   proto_ddl | qin "$DB" > "$OUT/proto-ddl.log" 2>&1 || die "proto DDL failed"
-  local f
+  local f n
   for f in $SCORED; do
     printf '  build %-4s (%s)\n' "$f" "$(fx_am "$f")"
     fx_build "$f" | qz "$DB" > "$OUT/build-$f.log" 2>&1 || die "build of $f failed, see $OUT/build-$f.log"
@@ -5345,9 +6652,11 @@ stage_fixtures() {
   run_apply "$DB" baseline || die "step 2 (baseline) failed, see $OUT/apply-baseline.log"
   apply_summary baseline | tee "$OUT/baseline-apply.txt"
   q "$DB" "SELECT proto.take_snap('baseline')" > /dev/null
-  q "$DB" "SELECT count(*) || ' fixture indexes carry a version-2 payload'
-             FROM proto.snap WHERE phase = 'baseline' AND pv = 2" | tee -a "$OUT/baseline-apply.txt"
+  n=$(q "$DB" "SELECT count(*) FROM proto.snap WHERE phase = 'baseline' AND pv = 2 AND idx ~ '^f_.*_i\$'")
+  printf '%s fixture indexes carry a version-2 payload\n' "$n" | tee -a "$OUT/baseline-apply.txt"
+  [ "$n" = "$(printf '%s\n' $SCORED | grep -c .)" ] || die "step 2's first run left a fixture index without a payload"
   date -u +'baselines filed at %Y-%m-%dT%H:%M:%SZ' | tee -a "$OUT/baseline-apply.txt"
+  stage_done fixtures
 }
 
 # -------------------------------------------------------------- stage: churn -
@@ -5357,6 +6666,7 @@ stage_fixtures() {
 # asked about that state.
 stage_churn() {
   say "churn: recipe writes, the maintenance step, the proofs, for every fixture"
+  need_db; need_stage fixtures; refuse_after churn churn
   local f t i
   : > "$OUT/maintenance-proof.txt"
   for f in $SCORED; do
@@ -5418,6 +6728,7 @@ SQL
              FROM proto.meas WHERE metric = 'index_size'
              GROUP BY fixture ORDER BY fixture" > "$OUT/maintenance-pair.txt"
   printf 'maintenance steps checked: %s, all ok\n' "$(grep -c ' ok ' "$OUT/maintenance-proof.txt")"
+  stage_done churn
 }
 
 # ----------------------------------------------------- stage: autoanalyze ----
@@ -5448,6 +6759,7 @@ SELECT c.relname AS tbl,
  WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace"
 stage_autoanalyze() {
   say "autoanalyze: the launcher's analyze verdict, recomputed per table"
+  need_db; need_stage churn; refuse_after autoanalyze decide
   local t
   for t in tc_past tc_exact tc_off; do q "$DB" "DROP TABLE IF EXISTS $t" > /dev/null; done
   # No pg_stat_force_next_flush() on this server, so every step that must be
@@ -5485,39 +6797,67 @@ SQL
   printf 'census named %s table(s) for ANALYZE: %s\n' "$(grep -c 'ANALYZE' "$OUT/autoanalyze-named.txt")" \
     "$(tr '\n' ' ' < "$OUT/autoanalyze-named.txt")" | tee -a "$OUT/autoanalyze-verdicts.txt"
   grep -E 'tc_past|tc_exact|tc_off' "$OUT/autoanalyze-verdicts.txt"
+  stage_done autoanalyze
 }
 
 # ---------------------------------------------------- stage: the cross-checks
+# VACUUM VERBOSE's index line, read out of each maintenance VACUUM's own log
+# and stored against the census phases on either side of that VACUUM, so the
+# score stage can check every count it prints against the censuses (I9).
+# Then the horizon holders, the pgstattuple refusals, the instrument matrix
+# and the census summary.  A crosscheck that runs again replaces its rows.
+verbose_parse() {   # <fixture> <tag> <census before> <census after>
+  local f=$1 tag=$2 pre=$3 post=$4 lg="$OUT/$2-$1.log" i np dl del free vac scans
+  [ -f "$lg" ] || return 0
+  i=$(idx "$f")
+  vac=0; grep -q 'vacuuming "' "$lg" && vac=1
+  # this server says 'scanned index "X" to remove N row versions' exactly when
+  # ambulkdelete ran on that index
+  scans=0; grep -q "scanned index \"$i\" to remove" "$lg" && scans=1
+  q "$DB" "SELECT proto.note('$f','verbose_$tag','vacuum_ran',$vac),
+                  proto.note('$f','verbose_$tag','index_scans_ran',$scans),
+                  proto.note('$f','verbose_$tag','census_before',NULL,'$pre'),
+                  proto.note('$f','verbose_$tag','census_after',NULL,'$post')" > /dev/null
+  # This server words the index line as two messages: 'index "X" now
+  # contains N row versions in P pages', then a DETAIL whose second line is
+  # 'D index pages have been deleted, F are currently reusable.'  It has no
+  # newly-deleted count, which PostgreSQL 14 added.
+  np=$(grep -Eo "index \"$i\" now contains [0-9]+ row versions in [0-9]+ pages" "$lg" | head -1 \
+         | grep -Eo '[0-9]+ pages$' | grep -Eo '^[0-9]+')
+  if [ -n "$np" ]; then
+    dl=$(grep -A3 -E "index \"$i\" now contains" "$lg" \
+           | grep -Eo '[0-9]+ index pages have been deleted, [0-9]+ are currently reusable' | head -1)
+    [ -n "$dl" ] || die "cannot read the VERBOSE index detail of $f ($tag)"
+    del=${dl%% index pages*}; free=${dl#*deleted, }; free=${free%% are currently*}
+    q "$DB" "SELECT proto.note('$f','verbose_$tag','num_pages',$np),
+                    proto.note('$f','verbose_$tag','pages_deleted',$del),
+                    proto.note('$f','verbose_$tag','pages_free',$free),
+                    proto.note('$f','verbose_$tag','index_line',NULL,'present')" > /dev/null
+  else
+    q "$DB" "SELECT proto.note('$f','verbose_$tag','index_line',NULL,'absent')" > /dev/null
+  fi
+}
 stage_crosscheck() {
   say "crosscheck: VACUUM's index line, the proofs, the holders, the instruments"
-  local f i np dl del free
+  need_db; need_stage churn
+  q "$DB" "DELETE FROM proto.meas WHERE phase LIKE 'verbose%'" > /dev/null
+  local f
   for f in $SCORED; do
-    i=$(idx "$f")
-    # This server words the index line as two messages: 'index "X" now
-    # contains N row versions in P pages', then a DETAIL whose second line is
-    # 'D index pages have been deleted, F are currently reusable.'  It has no
-    # newly-deleted count, which PostgreSQL 14 added.
-    np=$(cat "$OUT/settle2-$f.log" "$OUT/maint-$f.log" 2>/dev/null \
-           | grep -Eo "index \"$i\" now contains [0-9]+ row versions in [0-9]+ pages" | head -1 \
-           | grep -Eo '[0-9]+ pages$' | grep -Eo '^[0-9]+')
-    if [ -n "$np" ]; then
-      dl=$(cat "$OUT/settle2-$f.log" "$OUT/maint-$f.log" 2>/dev/null \
-             | grep -A3 -E "index \"$i\" now contains" \
-             | grep -Eo '[0-9]+ index pages have been deleted, [0-9]+ are currently reusable' | head -1)
-      del=${dl%% index pages*}; free=${dl#*deleted, }; free=${free%% are currently*}
-      q "$DB" "SELECT proto.note('$f','verbose','num_pages',$np),
-                      proto.note('$f','verbose','pages_deleted',${del:-NULL}), proto.note('$f','verbose','pages_free',${free:-NULL}),
-                      proto.note('$f','verbose','index_line',NULL,'present')" > /dev/null
-    else
-      q "$DB" "SELECT proto.note('$f','verbose','index_line',NULL,'absent')" > /dev/null
-    fi
+    case "$f" in
+      b13) verbose_parse "$f" maint standin churn_maintained ;;
+      *)   verbose_parse "$f" maint churn_raw churn_maintained ;;
+    esac
+    verbose_parse "$f" settle2 churn_maintained settle2
   done
-  q "$DB" "SELECT fixture || ' ' || coalesce(max(txt) FILTER (WHERE metric = 'index_line'), '?') ||
+  q "$DB" "SELECT fixture || ' ' || substring(phase from 9) || ' ' ||
+             coalesce(max(txt) FILTER (WHERE metric = 'index_line'), '?') ||
              coalesce(' total=' || max(num) FILTER (WHERE metric = 'num_pages'), '') ||
              coalesce(' newly=' || max(num) FILTER (WHERE metric = 'pages_newly_deleted'), '') ||
              coalesce(' deleted=' || max(num) FILTER (WHERE metric = 'pages_deleted'), '') ||
-             coalesce(' free=' || max(num) FILTER (WHERE metric = 'pages_free'), '')
-             FROM proto.meas WHERE phase = 'verbose' GROUP BY fixture ORDER BY fixture" \
+             coalesce(' free=' || max(num) FILTER (WHERE metric = 'pages_free'), '') ||
+             ' vacuum=' || max(num) FILTER (WHERE metric = 'vacuum_ran') ||
+             ' bulkdelete=' || max(num) FILTER (WHERE metric = 'index_scans_ran')
+             FROM proto.meas WHERE phase LIKE 'verbose%' GROUP BY fixture, phase ORDER BY fixture, phase" \
     > "$OUT/verbose-lines.txt"
   q "$DB" "SELECT format('%-4s %-14s backends=%s slots=%s prepared=%s | %s', fixture, phase,
              max(num) FILTER (WHERE metric = 'horizon_backends'),
@@ -5533,7 +6873,7 @@ stage_crosscheck() {
     ix=$(idx "$f"); am=$(fx_am "$f")
     for fn in "pgstattuple('$ix')" "pgstatindex('$ix')" "pgstathashindex('$ix')" "pgstatginindex('$ix')"; do
       printf '%-7s %-16s %s\n' "$am" "${fn%%(*}" \
-        "$(q "$DB" "SELECT 'accepted' FROM $fn" 2>&1 | tr '\n' ' ' | sed -e 's/^ *//' -e 's/ *$//' | cut -c1-90)" \
+        "$(qtry "$DB" "SELECT 'accepted' FROM $fn" 2>&1 | tr '\n' ' ' | sed -e 's/^ *//' -e 's/ *$//' | cut -c1-90)" \
         >> "$OUT/instrument-matrix.txt"
     done
   done
@@ -5544,6 +6884,11 @@ stage_crosscheck() {
              coalesce(' fsm=' || max(num) FILTER (WHERE metric = 'fsm_free_pages'), '') ||
              coalesce(' deleted=' || max(num) FILTER (WHERE metric = 'census_deleted'), '') ||
              coalesce(' new=' || max(num) FILTER (WHERE metric = 'census_new'), '') ||
+             coalesce(' new_or_empty=' || max(num) FILTER (WHERE metric = 'census_new_or_empty'), '') ||
+             coalesce(' fsm_agree=' || max(num) FILTER (WHERE metric = 'brin_fsm_agree')
+                      || '/' || max(num) FILTER (WHERE metric = 'census_regular')
+                      || ' higher=' || max(num) FILTER (WHERE metric = 'brin_fsm_higher')
+                      || ' lower=' || max(num) FILTER (WHERE metric = 'brin_fsm_lower'), '') ||
              coalesce(' unreadable=' || max(num) FILTER (WHERE metric = 'census_unreadable'), '') ||
              coalesce(' progress=' || (max(num) FILTER (WHERE metric = 'progress_vacuum')
                                      + coalesce(max(num) FILTER (WHERE metric = 'progress_analyze'), 0)
@@ -5558,14 +6903,19 @@ stage_crosscheck() {
              FROM proto.meas WHERE metric = 'pgst_refusal'" | tee "$OUT/pgstattuple-refusals.txt"
   wc -l "$OUT/verbose-lines.txt" "$OUT/horizon-holders.txt" "$OUT/census-summary.txt" | sed 's/^/    /'
   cat "$OUT/instrument-matrix.txt"
+  stage_done crosscheck
 }
 
 # -------------------------------------------------------------- stage: decide
 # Step 1, verbatim, inside one transaction holding SHARE ROW EXCLUSIVE on every
 # fixture table; then the same rows through the one-edit view, and the
-# harness's own readings of every index, in the same transaction.
+# harness's own readings of every index, in the same transaction.  A decide
+# that runs again, before the oracle, replaces its own records.
 stage_decide() {
   say "decide: step 1, verbatim, under the measurement lock"
+  need_texts; need_db; need_stage autoanalyze; refuse_after decide oracle
+  q "$DB" "DELETE FROM proto.meas WHERE fixture = 'decide'" > /dev/null
+  q "$DB" "DELETE FROM proto.snap WHERE phase = 'decide'" > /dev/null
   qf "$DB" "$SQLD/plan_view.sql" > "$OUT/plan-view.log" 2>&1 || die "the one-edit view failed"
   local locks="" f
   for f in $SCORED; do locks="$locks$(tbl "$f"), "; done
@@ -5588,11 +6938,13 @@ stage_decide() {
              - max(num) FILTER (WHERE metric = 'lock_acquired')) * 1000, 1) || ' ms under the lock'
              FROM proto.meas WHERE fixture = 'decide'" | tee "$OUT/decide-cost.txt"
   q "$DB" "SELECT action || ': ' || count(*) FROM proto.decided GROUP BY action ORDER BY action"
+  stage_done decide
 }
 
 # -------------------------------------------------------------- stage: oracle
 stage_oracle() {
   say "oracle: REINDEX INDEX at maintenance_work_mem = $MWM, bracketed"
+  need_db; need_stage decide; refuse_after oracle oracle
   local f t i
   for f in $SCORED; do
     t=$(tbl "$f"); i=$(idx "$f")
@@ -5617,15 +6969,17 @@ SQL
              FROM proto.meas WHERE phase = 'oracle' AND metric IN ('size_before','size_after')
              GROUP BY fixture ORDER BY fixture" > "$OUT/oracle-summary.txt"
   wc -l < "$OUT/oracle-summary.txt" | sed 's/^/    fixtures rebuilt: /'
+  stage_done oracle
 }
 
 # ----------------------------------------------------------------- stage: act
 # Step 1 then step 2 on the state the oracle left - every fixture index just
 # rebuilt out of band - then step 2 again.  Not scored against the oracle: it
 # checks that step 2 does what step 1 printed, and that a settled database
-# costs nothing.
+# costs nothing, and it fails the run when either does not hold.
 stage_act() {
   say "act: step 1, step 2, step 2 again, on the rebuilt state"
+  need_texts; need_db; need_stage oracle; refuse_after act act
   q "$DB" "SELECT proto.take_snap('act_before')" > /dev/null
   run_plan "$DB" act || die "step 1 (act) failed"
   q "$DB" "DROP TABLE IF EXISTS proto.act_plan;
@@ -5634,52 +6988,65 @@ stage_act() {
   q "$DB" "SELECT proto.take_snap('act_after')" > /dev/null
   run_apply "$DB" act2 || die "step 2 (act2) failed"
   q "$DB" "SELECT proto.take_snap('act_second')" > /dev/null
+  local did same n
+  n=$(q "$DB" "SELECT count(*) FROM proto.act_plan")
+  did=$(q "$DB" "WITH b AS (SELECT * FROM proto.snap WHERE phase = 'act_before'),
+                      a AS (SELECT * FROM proto.snap WHERE phase = 'act_after')
+                 SELECT count(*) FILTER (WHERE CASE p.action
+                          WHEN 'reindex' THEN a.filenode <> b.filenode AND a.pv = 2 AND a.sz = a.bytes
+                                              AND a.tup = round(greatest(a.tbl_tuples, -1))
+                          WHEN 'initialize' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
+                                              AND a.tup = round(greatest(a.tbl_tuples, -1))
+                          WHEN 'refresh' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
+                                              AND a.tup = round(greatest(a.tbl_tuples, -1))
+                          WHEN 'skip' THEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt
+                          ELSE false END)
+                   FROM proto.act_plan p JOIN b ON b.idx = p.index_name JOIN a ON a.idx = p.index_name")
+  same=$(q "$DB" "SELECT count(*) FILTER (WHERE s.filenode = a.filenode AND s.cmt IS NOT DISTINCT FROM a.cmt)
+                    FROM proto.act_plan p
+                    JOIN proto.snap a ON a.phase = 'act_after'  AND a.idx = p.index_name
+                    JOIN proto.snap s ON s.phase = 'act_second' AND s.idx = p.index_name")
   { printf 'step 1 plan:   %s\n' "$(q "$DB" "SELECT string_agg(action || '=' || n, ' ' ORDER BY action)
                                             FROM (SELECT action, count(*) n FROM proto.act_plan GROUP BY action) s")"
     printf 'step 2 run 1:  %s\n' "$(apply_summary act1)"
     printf 'step 2 run 2:  %s\n' "$(apply_summary act2)"
-    q "$DB" "WITH b AS (SELECT * FROM proto.snap WHERE phase = 'act_before'),
-                  a AS (SELECT * FROM proto.snap WHERE phase = 'act_after'),
-                  s AS (SELECT * FROM proto.snap WHERE phase = 'act_second'),
-                  p AS (SELECT index_name, action FROM proto.act_plan)
-             SELECT 'per index, step 2 did what step 1 printed: ' ||
-                    count(*) FILTER (WHERE CASE p.action
-                      WHEN 'reindex' THEN a.filenode <> b.filenode AND a.pv = 2 AND a.sz = a.bytes
-                                          AND a.tup = round(greatest(a.tbl_tuples, -1))
-                      WHEN 'initialize' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
-                                          AND a.tup = round(greatest(a.tbl_tuples, -1))
-                      WHEN 'refresh' THEN a.filenode = b.filenode AND a.pv = 2 AND a.sz = a.bytes
-                                          AND a.tup = round(greatest(a.tbl_tuples, -1))
-                      WHEN 'skip' THEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt
-                      ELSE false END) || ' of ' || count(*) ||
-                    '; unchanged by the second run: ' ||
-                    count(*) FILTER (WHERE s.filenode = a.filenode AND s.cmt IS NOT DISTINCT FROM a.cmt)
-                    || ' of ' || count(*)
-               FROM p JOIN b ON b.idx = p.index_name JOIN a ON a.idx = p.index_name
-                      JOIN s ON s.idx = p.index_name"
+    printf 'per index, step 2 did what step 1 printed: %s of %s; unchanged by the second run: %s of %s\n' \
+      "$did" "$n" "$same" "$n"
     printf -- '-- per fixture: the action on the rebuilt state, and why\n'
     q "$DB" "SELECT format('%-10s %-8s size_ratio=%s tuple_ratio=%s %s', index_name, action,
                            coalesce(size_ratio::text, '-'), coalesce(tuple_ratio::text, '-'), notes)
                FROM proto.act_plan ORDER BY index_name"
   } > "$OUT/act.txt"
   head -4 "$OUT/act.txt"
+  [ "$did" = "$n" ] && [ "$same" = "$n" ] \
+    || die "act: step 2 did not do what step 1 printed, or its second run wrote (see $OUT/act.txt)"
+  apply_summary act2 | grep -q 'reindex=0 initialize=0 refresh=0 ' || die "act: the second run of step 2 wrote"
+  stage_done act
 }
 
 # --------------------------------------------------------------- stage: score
+# Pure computation over what the earlier stages recorded, so it may run again
+# at any time after act; each run rebuilds its tables.  truth_pct is the
+# oracle's fraction rounded for display; every comparison with the pay-off
+# threshold uses the unrounded truth_exact.  Every invariant is stored with
+# whether it held, and a run in which any declared invariant failed fails
+# here, after every file is written.
+NOCHURN="'h00','h07','n08','n09'"
 stage_score() {
   say "score: every decision against the oracle, at the filed pay-off threshold"
+  need_db; need_stage churn crosscheck decide oracle act
   # The run is refused a score when any maintenance proof failed.  check_maint
   # already stopped the run at the failing step; this is the same rule, read
   # back from what was recorded, for a score stage run on its own.
-  grep -q 'DEFEATED' "$OUT/maintenance-proof.txt" 2>/dev/null \
-    && die "a maintenance step was defeated: nothing is scored"
+  ! grep -q 'DEFEATED' "$OUT/maintenance-proof.txt" 2>/dev/null \
+    || die "a maintenance step was defeated: nothing is scored"
   [ "$(q "$DB" "SELECT count(*) FROM proto.meas WHERE metric = 'dead_not_removable'")" -gt 0 ] \
     || die "no maintenance proof was recorded: nothing is scored"
   local tb
   for tb in declared_kind declared_decision declared_prediction declared_invariant declared_exception declared_coverage; do
     q "$DB" "DROP TABLE IF EXISTS proto.$tb" > /dev/null
   done
-  qin "$DB" > "$OUT/score-ddl.log" 2>&1 <<'SQL' || die "score DDL failed"
+  qin "$DB" > "$OUT/score-ddl.log" 2>&1 <<'SQL'
 CREATE TABLE proto.declared_kind       (column_name text, declared_kind text, claim text, filed_at timestamptz);
 CREATE TABLE proto.declared_decision   (knob text, value text, meaning text, filed_at timestamptz);
 CREATE TABLE proto.declared_prediction (fixture text, action text, score text, why text, filed_at timestamptz);
@@ -5690,7 +7057,7 @@ SQL
   for tb in declared_kind declared_decision declared_prediction declared_invariant declared_exception declared_coverage; do
     q "$PDB" "SELECT format('INSERT INTO proto.$tb SELECT (json_populate_record(NULL::proto.$tb, %L)).*;',
                             row_to_json(d)::text) FROM $tb d" \
-      | qin "$DB" > "$OUT/score-copy-$tb.log" 2>&1 || die "copying $tb failed"
+      | qin "$DB" > "$OUT/score-copy-$tb.log" 2>&1
   done
   { q "$DB" "SELECT 'declarations carried: ' || count(*) || ' kinds, filed at ' ||
                to_char(min(filed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM proto.declared_kind"
@@ -5699,7 +7066,7 @@ SQL
                FROM proto.snap WHERE phase = 'baseline'"
   } | tee "$OUT/score-declarations.txt"
 
-  qin "$DB" > "$OUT/score-build.log" 2>&1 <<'SQL' || die "score build failed"
+  qin "$DB" > "$OUT/score-build.log" 2>&1 <<'SQL'
 DROP TABLE IF EXISTS proto.score;
 CREATE /* wiki_nbmaint_score */ TABLE proto.score AS
 WITH m AS (
@@ -5740,8 +7107,9 @@ base AS (
          bl.captured_tup, bl.capture_tuples, m.raw_size, m.maint_size, ds.decide_bytes,
          m.oracle_before, m.oracle_after, m.heap_relpages, m.heap_reltuples,
          ds.stored_sz, ds.stored_tup, ds.decide_tuples,
+         -- the oracle's own fraction, unrounded: what the threshold is applied to
          CASE WHEN m.oracle_before > 0
-              THEN round(100.0 * (1 - m.oracle_after / m.oracle_before), 2) ELSE 0 END AS truth_pct,
+              THEN 100.0 * (1 - m.oracle_after / m.oracle_before) ELSE 0 END AS truth_exact,
          dec.size_ratio, dec.tuple_ratio, dec.notes, dec.action,
          -- the brief's two tests, recomputed from the harness's own readings
          (ds.decide_bytes >= ds.stored_sz * 1.30) AS size_fired,
@@ -5756,17 +7124,19 @@ base AS (
     LEFT JOIN proto.declared_prediction p USING (fixture)
 )
 SELECT b.*,
+       round(b.truth_exact, 2) AS truth_pct,
        CASE WHEN b.stored_sz IS NULL THEN 'initialize'
             WHEN b.decide_bytes < b.stored_sz THEN 'refresh'
             WHEN b.size_fired OR b.tuple_fired THEN 'reindex'
             ELSE 'skip' END AS expected_action,
-       (b.truth_pct >= b.min_truth) AS pays_off,
-       CASE WHEN b.action = 'reindex' AND b.truth_pct >= b.min_truth THEN 'PASS'
-            WHEN b.action = 'reindex'                                THEN 'FALSE POSITIVE'
-            WHEN b.truth_pct >= b.min_truth                          THEN 'FALSE NEGATIVE'
+       (b.truth_exact >= b.min_truth) AS pays_off,
+       CASE WHEN b.action = 'reindex' AND b.truth_exact >= b.min_truth THEN 'PASS'
+            WHEN b.action = 'reindex'                                  THEN 'FALSE POSITIVE'
+            WHEN b.truth_exact >= b.min_truth                          THEN 'FALSE NEGATIVE'
             ELSE 'PASS' END AS score
   FROM base b;
 SQL
+  q "$DB" "SELECT count(*) FROM proto.score" | grep -q '^[1-9]' || die "the score table is empty (see $OUT/score-build.log)"
   q "$DB" "SELECT format('%-4s %-6s B=%-10s C=%-10s R=%-10s truth=%6s%% size=%-7s tuples=%-7s fired=%-11s action=%-7s score=%-15s predicted=%s',
              fixture, am, base_size, decide_bytes, oracle_after, truth_pct,
              coalesce(size_ratio::text, '-'), coalesce(tuple_ratio::text, '-'),
@@ -5776,7 +7146,7 @@ SQL
              CASE WHEN want_action = action AND want_score = score THEN 'hit'
                   ELSE 'MISS (' || coalesce(want_action, '?') || ', ' || coalesce(want_score, '?') || ')' END)
              FROM proto.score ORDER BY am, fixture" > "$OUT/score-table.txt"
-  { q "$DB" "SELECT 'pay-off threshold: truth_pct >= ' || min(min_truth) FROM proto.score"
+  { q "$DB" "SELECT 'pay-off threshold: truth_exact >= ' || min(min_truth) || ', on the unrounded fraction' FROM proto.score"
     q "$DB" "SELECT score || ': ' || count(*) FROM proto.score GROUP BY score ORDER BY score"
     q "$DB" "SELECT am || ': ' || string_agg(score || '=' || n, ', ' ORDER BY score)
                FROM (SELECT am, score, count(*) n FROM proto.score GROUP BY am, score) s
@@ -5790,10 +7160,13 @@ SQL
                FROM proto.score"
     q "$DB" "SELECT 'fixtures that paid off: ' || count(*) FILTER (WHERE pays_off) || ' of ' || count(*) ||
                '; mean truth of the rebuilt ' ||
-               coalesce(round(avg(truth_pct) FILTER (WHERE action = 'reindex'), 1)::text, '-') ||
+               coalesce(round(avg(truth_exact) FILTER (WHERE action = 'reindex'), 1)::text, '-') ||
                ' %, of the skipped ' ||
-               coalesce(round(avg(truth_pct) FILTER (WHERE action <> 'reindex'), 1)::text, '-') || ' %'
+               coalesce(round(avg(truth_exact) FILTER (WHERE action <> 'reindex'), 1)::text, '-') || ' %'
                FROM proto.score"
+    q "$DB" "SELECT 'closest to the threshold: ' || string_agg(fixture || ' ' || round(truth_exact, 4) || ' %', ', '
+               ORDER BY abs(truth_exact - min_truth)) FROM (SELECT * FROM proto.score
+               ORDER BY abs(truth_exact - min_truth) LIMIT 3) s"
     q "$DB" "SELECT 'false positives: ' || coalesce(string_agg(fixture || ' (' || truth_pct || ' %, ' ||
                CASE WHEN size_fired AND tuple_fired THEN 'both' WHEN size_fired THEN 'size' ELSE 'tuples' END
                || ')', ', ' ORDER BY fixture), 'none') FROM proto.score WHERE score = 'FALSE POSITIVE'"
@@ -5821,8 +7194,13 @@ SQL
   } | tee "$OUT/score-summary.txt"
 
   say "score: the invariants"
-  qat "$DB" /dev/stdin > "$OUT/invariants.txt" 2>&1 <<'SQL'
-WITH c AS (
+  local act_line
+  act_line=$(grep -h 'per index, step 2 did what step 1 printed' "$OUT/act.txt" 2>/dev/null)
+  qin "$DB" > "$OUT/invariants-build.log" 2>&1 <<SQL
+DROP TABLE IF EXISTS proto.invariant;
+CREATE TABLE proto.invariant (id text PRIMARY KEY, reading text NOT NULL, holds boolean NOT NULL);
+DROP TABLE IF EXISTS proto.census_v;
+CREATE TABLE proto.census_v AS
   SELECT fixture, phase,
          max(num) FILTER (WHERE metric = 'census_scanned')      AS scanned,
          max(num) FILTER (WHERE metric = 'size_before_census')  AS sz_before,
@@ -5835,14 +7213,18 @@ WITH c AS (
          max(num) FILTER (WHERE metric = 'census_unreadable')   AS c_bad,
          max(num) FILTER (WHERE metric = 'census_deleted')      AS c_del,
          max(num) FILTER (WHERE metric = 'census_new')          AS c_new,
+         max(num) FILTER (WHERE metric = 'census_new_or_empty') AS c_empty,
          max(num) FILTER (WHERE metric = 'census_entry')        AS c_entry,
          max(num) FILTER (WHERE metric = 'census_data')         AS c_data,
+         max(num) FILTER (WHERE metric = 'census_list')         AS c_list,
          max(num) FILTER (WHERE metric = 'fsm_free_pages')      AS fsm,
          max(num) FILTER (WHERE metric = 'brin_items')          AS b_items,
+         max(num) FILTER (WHERE metric = 'brin_unused_items')   AS b_unused,
          max(num) FILTER (WHERE metric = 'brin_revmap_entries') AS b_revmap,
          max(num) FILTER (WHERE metric = 'meta_total_pages')    AS m_total,
          max(num) FILTER (WHERE metric = 'meta_entry_pages')    AS m_entry,
          max(num) FILTER (WHERE metric = 'meta_data_pages')     AS m_data,
+         max(num) FILTER (WHERE metric = 'meta_pending_pages')  AS m_pending,
          max(num) FILTER (WHERE metric = 'hs_bucket_pages')     AS hs_bucket,
          max(num) FILTER (WHERE metric = 'hs_overflow_pages')   AS hs_ovfl,
          max(num) FILTER (WHERE metric = 'hs_bitmap_pages')     AS hs_bitmap,
@@ -5851,159 +7233,232 @@ WITH c AS (
     FROM proto.meas
    WHERE phase IN ('baseline','churn_raw','standin','churn_maintained','settle2')
    GROUP BY fixture, phase
-  HAVING count(*) FILTER (WHERE metric = 'census_scanned') > 0
-),
-am AS (SELECT fixture, am FROM proto.score),
-blk AS (SELECT current_setting('block_size')::numeric AS b)
-SELECT 'I1 maintained size >= as-built size: ' ||
-       (SELECT count(*) FILTER (WHERE maint_size >= base_size) || ' of ' || count(*) ||
-               ' (smaller: ' || coalesce(string_agg(fixture, ',') FILTER (WHERE maint_size < base_size), 'none') || ')'
-          FROM proto.score)
-UNION ALL
-SELECT 'I2 size bracket: ' ||
-       (SELECT count(*) FILTER (WHERE sz_before = sz_after AND sz_after = scanned * blk.b)
-               || ' of ' || count(*) || ' censuses' FROM c CROSS JOIN blk)
-UNION ALL
-SELECT 'I3 hash page classes: ' ||
-       (SELECT count(*) FILTER (WHERE c_meta + c_bucket + c_ovfl + c_bitmap + c_unused + c_bad = scanned
-                                  AND hs_bucket + hs_ovfl + hs_bitmap + hs_unused + 1 = scanned)
-               || ' of ' || count(*) || ' hash censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'hash')
-UNION ALL
-SELECT 'I4 hash bitmap agreement: ' ||
-       (SELECT count(*) FILTER (WHERE bm_dis = 0) || ' of ' || count(*) || ' hash censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'hash')
-UNION ALL
-SELECT 'I5 GiST FSM <= deleted + new: ' ||
-       (SELECT count(*) FILTER (WHERE fsm <= c_del + c_new) || ' of ' || count(*) || ' GiST censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'gist') || '; SP-GiST: not applicable, no decoder'
-UNION ALL
-SELECT 'I6 BRIN revmap = items: ' ||
-       (SELECT count(*) FILTER (WHERE b_revmap = b_items) || ' of ' || count(*) || ' BRIN censuses'
-          FROM c JOIN am USING (fixture) WHERE am.am = 'brin')
-UNION ALL
-SELECT 'I7 BRIN maintained >= raw: ' ||
-       (SELECT count(*) FILTER (WHERE maint_size >= raw_size) || ' of ' || count(*) || ' BRIN fixtures'
-          FROM proto.score WHERE am = 'brin')
-UNION ALL
-SELECT 'I8 GIN metapage identity: ' ||
-       (SELECT count(*) FILTER (WHERE m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0))
-               || ' of ' || count(*) || ' GIN censuses; total-page identity '
-               || count(*) FILTER (WHERE m_total = scanned) || ' of ' || count(*)
-          FROM c JOIN am USING (fixture) WHERE am.am = 'gin')
-UNION ALL
-SELECT 'I9 VACUUM VERBOSE index line: ' ||
-       (SELECT count(*) FILTER (WHERE txt = 'present') || ' present, ' ||
-               count(*) FILTER (WHERE txt = 'absent') || ' absent (' ||
-               coalesce(string_agg(fixture, ',') FILTER (WHERE txt = 'absent'), 'none') || ')'
-          FROM proto.meas WHERE phase = 'verbose' AND metric = 'index_line')
-UNION ALL
-SELECT 'I10 maintenance not defeated: ' ||
-       (SELECT count(*) FILTER (WHERE num = 0) || ' VACUUMs at 0 dead but not yet removable, ' ||
-               count(*) FILTER (WHERE num > 0) || ' above 0 (' ||
-               coalesce(string_agg(fixture || '/' || phase || '=' || num, ', ') FILTER (WHERE num > 0), 'none') || ')'
-          FROM proto.meas WHERE metric = 'dead_not_removable' AND num IS NOT NULL)
-UNION ALL
-SELECT 'I11 timeouts and skips: ' ||
-       (SELECT count(*) || ' maintenance sessions, skip lines ' || coalesce(sum(num) FILTER (WHERE metric = 'skip_lines'), 0)
-               FROM proto.meas WHERE metric = 'skip_lines') || ', error lines ' ||
-       (SELECT coalesce(sum(num), 0) FROM proto.meas WHERE metric = 'error_lines') || ', distinct timeout sets: ' ||
-       (SELECT string_agg(DISTINCT txt, ' | ') FROM proto.meas WHERE metric = 'session_timeouts')
-UNION ALL
-SELECT 'I12 lock never held across a maintenance step: ' ||
-       (WITH lk AS (SELECT fixture, phase,
-                           max(num) FILTER (WHERE metric = 'lock_acquired') AS t0,
-                           max(num) FILTER (WHERE metric = 'lock_released') AS t1
-                      FROM proto.meas WHERE metric IN ('lock_acquired','lock_released')
-                     GROUP BY fixture, phase),
-             mt AS (SELECT fixture, phase,
-                           max(num) FILTER (WHERE metric = 'started') AS m0,
-                           max(num) FILTER (WHERE metric = 'ended')   AS m1
-                      FROM proto.meas WHERE metric IN ('started','ended')
-                     GROUP BY fixture, phase)
-        SELECT (SELECT count(*) FROM lk) || ' lock intervals, ' || (SELECT count(*) FROM mt) ||
-               ' maintenance intervals, overlaps ' ||
-               (SELECT count(*) FROM lk JOIN mt ON lk.t0 < mt.m1 AND mt.m0 < lk.t1))
-UNION ALL
-SELECT 'I13 no undeclared horizon holder: ' ||
-       (SELECT count(*) FILTER (WHERE slots = 0 AND prepared = 0 AND backends = 0)
-               || ' of ' || count(*) || ' probes entirely clean; with a backend holding: '
-               || coalesce(string_agg(fixture || '/' || phase, ', ') FILTER (WHERE backends > 0), 'none')
-               || '; slots ' || coalesce(sum(slots), 0) || ', prepared ' || coalesce(sum(prepared), 0)
-          FROM (SELECT fixture, phase,
-                       max(num) FILTER (WHERE metric = 'horizon_backends') AS backends,
-                       max(num) FILTER (WHERE metric = 'horizon_slots')    AS slots,
-                       max(num) FILTER (WHERE metric = 'horizon_prepared') AS prepared
-                  FROM proto.meas
-                 WHERE phase IN ('maint_before','maint_after','settle2_before','settle2_after')
-                 GROUP BY fixture, phase) h)
-UNION ALL
-SELECT 'I14 baseline payloads: ' ||
-       (SELECT count(*) FILTER (WHERE captured_v = 2 AND captured_sz = base_size
-                                  AND captured_sz = capture_bytes
-                                  AND captured_tup = round(greatest(capture_tuples, -1)))
-               || ' of ' || count(*) || ' version 2, sz = census size, tup = table count'
-          FROM proto.score)
-UNION ALL
-SELECT 'I15 decided on the maintained state: ' ||
-       (SELECT count(*) FILTER (WHERE decide_bytes = maint_size AND decide_bytes = oracle_before)
-               || ' of ' || count(*) FROM proto.score)
-UNION ALL
-SELECT 'I16 step 1 = the tests recomputed: ' ||
-       (SELECT count(*) FILTER (WHERE action = expected_action) || ' of ' || count(*) ||
-               ' (disagreeing: ' || coalesce(string_agg(fixture, ',') FILTER (WHERE action <> expected_action), 'none') || ')'
-          FROM proto.score);
+  HAVING count(*) FILTER (WHERE metric = 'census_scanned') > 0;
+-- One row per maintenance VACUUM: its VERBOSE counts beside the censuses
+-- taken just before and just after it.
+DROP TABLE IF EXISTS proto.vac_v;
+CREATE TABLE proto.vac_v AS
+  SELECT v.fixture, v.phase AS tag, sc.am,
+         max(v.num) FILTER (WHERE v.metric = 'vacuum_ran')          AS vacuum_ran,
+         max(v.num) FILTER (WHERE v.metric = 'index_scans_ran')     AS scans_ran,
+         max(v.txt) FILTER (WHERE v.metric = 'index_line')          AS line,
+         max(v.num) FILTER (WHERE v.metric = 'num_pages')           AS num_pages,
+         max(v.num) FILTER (WHERE v.metric = 'pages_newly_deleted') AS newly,
+         max(v.num) FILTER (WHERE v.metric = 'pages_deleted')       AS deleted,
+         max(v.num) FILTER (WHERE v.metric = 'pages_free')          AS free,
+         max(v.txt) FILTER (WHERE v.metric = 'census_before')       AS pre_phase,
+         max(v.txt) FILTER (WHERE v.metric = 'census_after')        AS post_phase
+    FROM proto.meas v JOIN proto.score sc ON sc.fixture = v.fixture
+   WHERE v.phase LIKE 'verbose%'
+   GROUP BY v.fixture, v.phase, sc.am;
+
+INSERT INTO proto.invariant
+SELECT 'I1', count(*) FILTER (WHERE maint_size >= base_size) || ' of ' || count(*) || ' (smaller: ' ||
+       coalesce(string_agg(fixture, ',') FILTER (WHERE maint_size < base_size), 'none') || ')',
+       bool_and(maint_size >= base_size)
+  FROM proto.score;
+INSERT INTO proto.invariant
+SELECT 'I2', count(*) FILTER (WHERE sz_before = sz_after AND sz_after = scanned * b) || ' of ' || count(*) || ' censuses',
+       bool_and(sz_before = sz_after AND sz_after = scanned * b)
+  FROM proto.census_v CROSS JOIN (SELECT current_setting('block_size')::numeric AS b) blk;
+INSERT INTO proto.invariant
+SELECT 'I3', count(*) FILTER (WHERE c_meta + c_bucket + c_ovfl + c_bitmap + c_unused + c_bad = scanned
+                                AND hs_bucket + hs_ovfl + hs_bitmap + hs_unused + 1 = scanned)
+             || ' of ' || count(*) || ' hash censuses',
+       bool_and(c_meta + c_bucket + c_ovfl + c_bitmap + c_unused + c_bad = scanned
+                AND hs_bucket + hs_ovfl + hs_bitmap + hs_unused + 1 = scanned)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'hash';
+INSERT INTO proto.invariant
+SELECT 'I4', count(*) FILTER (WHERE bm_dis = 0) || ' of ' || count(*) || ' hash censuses', bool_and(bm_dis = 0)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'hash';
+INSERT INTO proto.invariant
+SELECT 'I5', count(*) FILTER (WHERE s.am = 'gist' AND fsm <= c_del + c_new) || ' of '
+             || count(*) FILTER (WHERE s.am = 'gist') || ' GiST censuses, '
+             || count(*) FILTER (WHERE s.am = 'spgist' AND fsm <= c_empty) || ' of '
+             || count(*) FILTER (WHERE s.am = 'spgist') || ' SP-GiST censuses',
+       bool_and(CASE s.am WHEN 'gist' THEN fsm <= c_del + c_new ELSE fsm <= c_empty END)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am IN ('gist', 'spgist');
+INSERT INTO proto.invariant
+SELECT 'I6', count(*) FILTER (WHERE b_revmap = b_items) || ' of ' || count(*) || ' BRIN censuses',
+       bool_and(b_revmap = b_items)
+  FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'brin';
+INSERT INTO proto.invariant
+SELECT 'I7', count(*) FILTER (WHERE maint_size >= raw_size) || ' of ' || count(*) || ' BRIN fixtures',
+       bool_and(maint_size >= raw_size)
+  FROM proto.score WHERE am = 'brin';
+-- I8 is scoped to the censuses whose metapage counts the build or a VACUUM's
+-- cleanup wrote last: the metapage is rewritten by nothing else, so a census
+-- taken after writes and before a VACUUM reads counts stale by construction
+INSERT INTO proto.invariant
+SELECT 'I8', count(*) FILTER (WHERE fresh AND ok) || ' of ' || count(*) FILTER (WHERE fresh)
+             || ' GIN censuses the build or a VACUUM left (disagreeing: '
+             || coalesce(string_agg(fixture || '/' || phase, ',') FILTER (WHERE fresh AND NOT ok), 'none')
+             || '); stale by construction, not scored: ' || count(*) FILTER (WHERE NOT fresh),
+       coalesce(bool_and(ok) FILTER (WHERE fresh), true)
+  FROM (SELECT c.fixture, c.phase,
+               (m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0) AND m_total = scanned) AS ok,
+               (c.phase = 'baseline' OR c.fixture IN ($NOCHURN)
+                OR EXISTS (SELECT 1 FROM proto.vac_v v WHERE v.fixture = c.fixture
+                             AND v.post_phase = c.phase AND v.vacuum_ran = 1)) AS fresh
+          FROM proto.census_v c JOIN proto.score s USING (fixture) WHERE s.am = 'gin') g;
+-- I9: VERBOSE's index line against the censuses around its own VACUUM
+INSERT INTO proto.invariant
+SELECT 'I9', count(*) FILTER (WHERE why = 'ok') || ' of ' || count(*)
+             || ' maintenance VACUUM and ANALYZE steps agree (' || count(*) FILTER (WHERE line = 'present')
+             || ' index lines; disagreeing: '
+             || coalesce(string_agg(fixture || '/' || tag || ' ' || why, '; ') FILTER (WHERE why <> 'ok'), 'none')
+             || ')',
+       bool_and(why = 'ok')
+  FROM (SELECT v.fixture, substring(v.tag from 9) AS tag, v.line,
+               CASE
+                 WHEN v.vacuum_ran = 0 THEN CASE WHEN v.line = 'absent' THEN 'ok' ELSE 'a line with no VACUUM' END
+                 WHEN v.am = 'hash' AND v.scans_ran = 0 THEN
+                      CASE WHEN v.line = 'absent' THEN 'ok' ELSE 'a hash line with no bulk delete' END
+                 WHEN v.line IS DISTINCT FROM 'present' THEN 'no line'
+                 WHEN v.num_pages IS DISTINCT FROM CASE WHEN v.am = 'brin' THEN pre.scanned ELSE post.scanned END
+                      THEN 'total ' || v.num_pages
+                 WHEN v.am IN ('hash', 'brin') AND (coalesce(v.newly, 0), v.deleted, v.free) IS DISTINCT FROM (0, 0, 0)
+                      THEN 'nonzero counts'
+                 WHEN v.am = 'gist' AND (v.deleted, v.free, coalesce(v.newly, post.c_del - pre.c_del))
+                      IS DISTINCT FROM (post.c_del + post.c_new, post.fsm, post.c_del - pre.c_del)
+                      THEN 'deleted ' || v.deleted || '/' || (post.c_del + post.c_new) || ' free ' || v.free || '/'
+                           || post.fsm || ' newly ' || v.newly || '/' || (post.c_del - pre.c_del)
+                 WHEN v.am = 'spgist' AND (coalesce(v.newly, post.c_empty), v.deleted, v.free, post.fsm)
+                      IS DISTINCT FROM (post.c_empty, post.c_empty, post.c_empty, post.c_empty)
+                      THEN 'deleted ' || v.deleted || ' free ' || v.free || ' newly ' || v.newly
+                           || ' new-or-empty ' || post.c_empty || ' fsm ' || post.fsm
+                 WHEN v.am = 'gin' AND v.free IS DISTINCT FROM post.fsm
+                      THEN 'free ' || v.free || '/' || post.fsm
+                 ELSE 'ok' END AS why
+          FROM proto.vac_v v
+          LEFT JOIN proto.census_v pre  ON pre.fixture  = v.fixture AND pre.phase  = v.pre_phase
+          LEFT JOIN proto.census_v post ON post.fixture = v.fixture AND post.phase = v.post_phase) x;
+INSERT INTO proto.invariant
+SELECT 'I10', count(*) FILTER (WHERE num = 0) || ' VACUUMs at 0 dead but not yet removable, '
+              || count(*) FILTER (WHERE num > 0) || ' above 0 ('
+              || coalesce(string_agg(fixture || '/' || phase || '=' || num, ', ') FILTER (WHERE num > 0), 'none') || ')',
+       bool_and(CASE WHEN phase = 'maint' AND fixture IN ('g08', 'n10') THEN num > 0 ELSE num = 0 END)
+  FROM proto.meas WHERE metric = 'dead_not_removable' AND num IS NOT NULL;
+INSERT INTO proto.invariant
+SELECT 'I11', count(*) FILTER (WHERE metric = 'skip_lines') || ' maintenance sessions, skip lines '
+              || coalesce(sum(num) FILTER (WHERE metric = 'skip_lines'), 0) || ', error lines '
+              || coalesce(sum(num) FILTER (WHERE metric = 'error_lines'), 0) || ', timeout sets: '
+              || coalesce(string_agg(DISTINCT txt, ' | ') FILTER (WHERE metric = 'session_timeouts'), '-'),
+       coalesce(sum(num) FILTER (WHERE metric IN ('skip_lines', 'error_lines')), 0) = 0
+       AND coalesce(bool_and(txt !~ '=[1-9]') FILTER (WHERE metric = 'session_timeouts'), false)
+  FROM proto.meas WHERE metric IN ('skip_lines', 'error_lines', 'session_timeouts');
+INSERT INTO proto.invariant
+WITH lk AS (SELECT fixture, phase, max(num) FILTER (WHERE metric = 'lock_acquired') AS t0,
+                   max(num) FILTER (WHERE metric = 'lock_released') AS t1
+              FROM proto.meas WHERE metric IN ('lock_acquired','lock_released') GROUP BY fixture, phase),
+     mt AS (SELECT fixture, phase, max(num) FILTER (WHERE metric = 'started') AS m0,
+                   max(num) FILTER (WHERE metric = 'ended') AS m1
+              FROM proto.meas WHERE metric IN ('started','ended') GROUP BY fixture, phase),
+     ov AS (SELECT 1 FROM lk JOIN mt ON lk.t0 < mt.m1 AND mt.m0 < lk.t1)
+SELECT 'I12', (SELECT count(*) FROM lk) || ' lock intervals, ' || (SELECT count(*) FROM mt)
+              || ' maintenance intervals, overlaps ' || (SELECT count(*) FROM ov),
+       (SELECT count(*) FROM ov) = 0;
+INSERT INTO proto.invariant
+SELECT 'I13', count(*) FILTER (WHERE slots = 0 AND prepared = 0 AND backends = 0) || ' of ' || count(*)
+              || ' probes clean; holding a backend: '
+              || coalesce(string_agg(fixture || '/' || phase, ', ') FILTER (WHERE backends > 0), 'none')
+              || '; slots ' || coalesce(sum(slots), 0) || ', prepared ' || coalesce(sum(prepared), 0),
+       bool_and(slots = 0 AND prepared = 0
+                AND backends = CASE WHEN fixture IN ('g08', 'n10') AND phase LIKE 'maint_%' THEN 1 ELSE 0 END)
+  FROM (SELECT fixture, phase,
+               max(num) FILTER (WHERE metric = 'horizon_backends') AS backends,
+               max(num) FILTER (WHERE metric = 'horizon_slots')    AS slots,
+               max(num) FILTER (WHERE metric = 'horizon_prepared') AS prepared
+          FROM proto.meas
+         WHERE phase IN ('maint_before','maint_after','settle2_before','settle2_after')
+         GROUP BY fixture, phase) h;
+INSERT INTO proto.invariant
+SELECT 'I14', count(*) FILTER (WHERE ok) || ' of ' || count(*) || ' version 2, sz = census size, tup = table count',
+       bool_and(ok)
+  FROM (SELECT captured_v = 2 AND captured_sz = base_size AND captured_sz = capture_bytes
+               AND captured_tup = round(greatest(capture_tuples, -1)) AS ok FROM proto.score) s;
+INSERT INTO proto.invariant
+SELECT 'I15', count(*) FILTER (WHERE decide_bytes = maint_size AND decide_bytes = oracle_before) || ' of ' || count(*),
+       bool_and(decide_bytes = maint_size AND decide_bytes = oracle_before)
+  FROM proto.score;
+INSERT INTO proto.invariant
+SELECT 'I16', count(*) FILTER (WHERE action = expected_action) || ' of ' || count(*) || ' (disagreeing: '
+              || coalesce(string_agg(fixture, ',') FILTER (WHERE action <> expected_action), 'none') || ')',
+       bool_and(action = expected_action)
+  FROM proto.score;
+INSERT INTO proto.invariant
+SELECT 'I17', coalesce(nullif('$act_line', ''), 'act has not run'),
+       coalesce('$act_line' ~ ': ([0-9]+) of \1; unchanged by the second run: \1 of \1\$', false);
+-- I18: BRIN's graduated FSM agreement, scored where the source makes it exact:
+-- every regular page a VACUUM did not write, found by its LSN against the WAL
+-- insert position read just before that VACUUM began.  The pages the
+-- VACUUM's own summarization wrote are compared and reported, not scored.
+INSERT INTO proto.invariant
+SELECT 'I18', count(*) FILTER (WHERE untouched AND fsm_read = fsm_expected) || ' of '
+              || count(*) FILTER (WHERE untouched)
+              || ' regular pages the VACUUM did not write read their exact FSM category (failing: '
+              || coalesce(string_agg(fixture || '/' || phase || '/' || blkno, ',')
+                          FILTER (WHERE untouched AND fsm_read <> fsm_expected), 'none')
+              || '); of the ' || count(*) FILTER (WHERE NOT untouched) || ' it wrote, '
+              || count(*) FILTER (WHERE NOT untouched AND fsm_read = fsm_expected) || ' agree, '
+              || count(*) FILTER (WHERE NOT untouched AND fsm_read > fsm_expected) || ' read higher and '
+              || count(*) FILTER (WHERE NOT untouched AND fsm_read < fsm_expected) || ' lower, reported only',
+       coalesce(bool_and(fsm_read = fsm_expected) FILTER (WHERE untouched), true)
+  FROM (SELECT p.fixture, p.phase, p.blkno, p.fsm_read, p.fsm_expected,
+               p.page_lsn <= w.num AS untouched
+          FROM proto.brin_page p
+          JOIN proto.vac_v v ON v.fixture = p.fixture AND v.post_phase = p.phase AND v.vacuum_ran = 1
+          JOIN proto.meas w ON w.fixture = p.fixture AND w.phase = substring(v.tag from 9)
+                           AND w.metric = 'wal_lsn_before') f;
 SQL
-  grep -h 'per index' "$OUT/act.txt" 2>/dev/null | sed 's/^/I17 act: /' >> "$OUT/invariants.txt"
+  q "$DB" "SELECT count(*) FROM proto.invariant" | grep -q '^18$' \
+    || die "the invariants did not all compute (see $OUT/invariants-build.log)"
+  q "$DB" "SELECT id || ' ' || CASE WHEN holds THEN 'holds' ELSE 'FAILS' END || ': ' || reading
+             FROM proto.invariant ORDER BY substring(id from 2)::int" > "$OUT/invariants.txt"
   cat "$OUT/invariants.txt"
 
-  # I6 and I8 per census, so every disagreement can be read against the phase
-  # it happened in: the metapage's counts are written by a VACUUM's cleanup
-  # and nothing else, so a census taken after writes and before one reads
-  # counts that are stale by construction
-  qat "$DB" /dev/stdin > "$OUT/i6-i8-detail.txt" 2>&1 <<'SQL'
-WITH c AS (
-  SELECT fixture, phase,
-         max(num) FILTER (WHERE metric = 'census_scanned')      AS scanned,
-         max(num) FILTER (WHERE metric = 'brin_items')          AS b_items,
-         max(num) FILTER (WHERE metric = 'brin_unused_items')   AS b_unused,
-         max(num) FILTER (WHERE metric = 'brin_revmap_entries') AS b_revmap,
-         max(num) FILTER (WHERE metric = 'census_entry')        AS c_entry,
-         max(num) FILTER (WHERE metric = 'census_data')         AS c_data,
-         max(num) FILTER (WHERE metric = 'census_list')         AS c_list,
-         max(num) FILTER (WHERE metric = 'census_deleted')      AS c_del,
-         max(num) FILTER (WHERE metric = 'census_new')          AS c_new,
-         max(num) FILTER (WHERE metric = 'fsm_free_pages')      AS fsm,
-         max(num) FILTER (WHERE metric = 'meta_total_pages')    AS m_total,
-         max(num) FILTER (WHERE metric = 'meta_entry_pages')    AS m_entry,
-         max(num) FILTER (WHERE metric = 'meta_data_pages')     AS m_data,
-         max(num) FILTER (WHERE metric = 'meta_pending_pages')  AS m_pending
-    FROM proto.meas
-   WHERE phase IN ('baseline','churn_raw','standin','churn_maintained','settle2')
-   GROUP BY fixture, phase
-  HAVING count(*) FILTER (WHERE metric = 'census_scanned') > 0
-)
-SELECT 'I6 ' || fixture || ' [' || phase || '] revmap=' || b_revmap || ' items=' || b_items
-       || ' unused=' || b_unused || CASE WHEN b_revmap = b_items THEN ' ok' ELSE ' DISAGREES' END
-  FROM c WHERE b_items IS NOT NULL
-UNION ALL
-SELECT 'I8 ' || fixture || ' [' || phase || '] meta(total=' || m_total || ', entry=' || m_entry
-       || ', data=' || m_data || ', pending=' || m_pending || ') census(scanned=' || scanned
-       || ', entry=' || c_entry || ', data=' || c_data || ', list=' || c_list
-       || ', deleted=' || c_del || ', new=' || c_new || ', fsm=' || fsm || ')'
-       || CASE WHEN m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0)
-               THEN ' ok' ELSE ' DISAGREES' END
-       || CASE WHEN m_total = scanned THEN ' total=ok' ELSE ' total=DISAGREES' END
-  FROM c WHERE m_total IS NOT NULL
- ORDER BY 1;
-SQL
-  grep -c 'DISAGREES' "$OUT/i6-i8-detail.txt" | sed 's/^/    I6 and I8 detail lines that disagree: /'
+  # I6, I8, I9 and I18 per census or per step, so every disagreement can be
+  # read against the phase it happened in
+  q "$DB" "SELECT 'I6 ' || fixture || ' [' || phase || '] revmap=' || b_revmap || ' items=' || b_items
+             || ' unused=' || b_unused || CASE WHEN b_revmap = b_items THEN ' ok' ELSE ' DISAGREES' END
+             FROM proto.census_v WHERE b_items IS NOT NULL
+           UNION ALL
+           SELECT 'I8 ' || fixture || ' [' || phase || '] meta(total=' || m_total || ', entry=' || m_entry
+             || ', data=' || m_data || ', pending=' || m_pending || ') census(scanned=' || scanned
+             || ', entry=' || c_entry || ', data=' || c_data || ', list=' || c_list
+             || ', deleted=' || c_del || ', new=' || c_new || ', fsm=' || fsm || ')'
+             || CASE WHEN m_entry = c_entry AND m_data = c_data + greatest(c_del - fsm, 0) AND m_total = scanned
+                     THEN ' ok' ELSE ' differs' END
+             FROM proto.census_v WHERE m_total IS NOT NULL
+           UNION ALL
+           SELECT 'I9 ' || v.fixture || ' [' || substring(v.tag from 9) || '] ' || coalesce(v.line, '?')
+             || ' vacuum=' || v.vacuum_ran || ' bulkdelete=' || coalesce(v.scans_ran::text, '-')
+             -- 12.2 reports no newly-deleted count, so a dash stands in for it
+             || coalesce(' total=' || v.num_pages || ' newly=' || coalesce(v.newly::text, '-')
+                         || ' deleted=' || v.deleted || ' free=' || v.free, '')
+             || ' | before ' || coalesce(v.pre_phase, '-') || ' scanned=' || coalesce(pre.scanned::text, '-')
+             || ' | after ' || coalesce(v.post_phase, '-') || ' scanned=' || coalesce(post.scanned::text, '-')
+             || ' deleted=' || coalesce(post.c_del::text, '-') || ' new=' || coalesce(post.c_new::text, '-')
+             || ' new_or_empty=' || coalesce(post.c_empty::text, '-') || ' fsm=' || coalesce(post.fsm::text, '-')
+             FROM proto.vac_v v
+             LEFT JOIN proto.census_v pre  ON pre.fixture  = v.fixture AND pre.phase  = v.pre_phase
+             LEFT JOIN proto.census_v post ON post.fixture = v.fixture AND post.phase = v.post_phase
+           UNION ALL
+           SELECT 'I18 ' || fixture || ' [' || phase || '] ' || count(*) || ' regular pages: '
+             || count(*) FILTER (WHERE fsm_read = fsm_expected) || ' agree, '
+             || count(*) FILTER (WHERE fsm_read > fsm_expected) || ' higher, '
+             || count(*) FILTER (WHERE fsm_read < fsm_expected) || ' lower, '
+             || count(*) FILTER (WHERE evacuate) || ' flagged for evacuation'
+             FROM proto.brin_page GROUP BY fixture, phase
+           ORDER BY 1" > "$OUT/invariant-detail.txt"
+  printf '    invariant detail lines: %s\n' "$(grep -c '' "$OUT/invariant-detail.txt")"
 
   q "$DB" "SELECT format('%-4s %-6s base=%s raw=%s maintained=%s rebuilt=%s truth=%s%% heap_relpages=%s heap_reltuples=%s',
              fixture, am, base_size, raw_size, maint_size, oracle_after, truth_pct, heap_relpages, heap_reltuples)
              FROM proto.score ORDER BY am, fixture" > "$OUT/phase-sizes.txt"
   q "$DB" "SELECT protocol || ' | ' || behavior || ' -> ' || fixture
              FROM proto.declared_coverage ORDER BY protocol, behavior" > "$OUT/coverage.txt"
+  ! grep -q ' FAILS: ' "$OUT/invariants.txt" || die "a declared invariant failed (see $OUT/invariants.txt)"
 }
 
 # -------------------------------------------------------------- stage: probes
@@ -6011,6 +7466,7 @@ SQL
 # method or a protocol depends on.  They run after the oracle and the score.
 stage_probes() {
   say "probes: who writes reltuples, the hash oracle, the GIN oracle, GiST builds"
+  need_db; need_stage act
   q "$DB" "DROP SCHEMA IF EXISTS pr CASCADE" > /dev/null
   q "$DB" "CREATE SCHEMA pr" > /dev/null
   rt() {
@@ -6096,21 +7552,23 @@ SQL
 }
 
 # ---------------------------------------------------------------- stage: edge
-# The comment handling, the ladder's boundaries and the candidate filters,
+# The comment handling, the ladder's boundaries, the candidate filters, and
+# what step 2 does when another session holds a lock, edits a comment,
+# rewrites a payload or renames an index while step 2 waits for its locks -
 # case by case, in their own database.  Unscored: none is a bloat claim.
 # Each case files what it expects before the texts run, and the stage prints
-# expected against observed.
+# expected against observed and fails the run on any difference.
 edge_mk() {   # <table> <rows>: the build phase every edge table shares
   printf 'CREATE TABLE %s (id bigint, k bigint) WITH (autovacuum_enabled = off);\n' "$1"
   printf 'INSERT INTO %s SELECT g, g FROM generate_series(1, %s) g;\n' "$1" "$2"
   printf 'ANALYZE %s;\n' "$1"
   printf 'CREATE INDEX %s_i ON %s USING hash (k);\n' "$1" "$1"
 }
-edge_seen() {  # <round>: store step 1's rows through the view, and every comment
+edge_seen() {  # <round>: store step 1's rows through the view
   q "$EDB" "INSERT INTO proto.seen_plan (round, idx, action, notes)
               SELECT '$1', index_name, action, notes FROM proto.plan_v" > /dev/null
 }
-edge_snap() {  # <label>
+edge_snap() {  # <label>: every index's OID, file, size, table count and comment
   q "$EDB" "INSERT INTO proto.seen_cmt (label, idx, oid, filenode, bytes, tbl_tuples, cmt)
               SELECT '$1', c.relname, c.oid, c.relfilenode, pg_relation_size(c.oid),
                      t.reltuples::numeric, d.description
@@ -6122,15 +7580,43 @@ edge_snap() {  # <label>
 }
 edge_bg() {    # <tag> <sql...>: a background session, until edge_kill <tag>
   local tag=$1; shift
-  printf '%s\n' "$@" | qin "$EDB" > "$OUT/edge-bg-$tag.log" 2>&1 &
+  printf '%s\n' "$@" | qbg "$EDB" > "$OUT/edge-bg-$tag.log" 2>&1 &
 }
 edge_kill() {
   q "$EDB" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
              WHERE query LIKE '%wiki_nbmaint_edge_$1%' AND pid <> pg_backend_pid()" > /dev/null
   wait 2>/dev/null
 }
+edge_wait_lock() {  # <table> <mode> <granted>: poll until pg_locks shows it
+  local n=0
+  until [ "$(q "$EDB" "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+                         WHERE c.relname = '$1' AND l.mode = '$2' AND l.granted = $3")" -ge 1 ]; do
+    n=$((n + 1)); [ "$n" -gt 200 ] && die "edge: no $2 (granted=$3) on $1 appeared"
+    sleep 0.05
+  done
+}
+# edge_during <round> <table> <sql>: run step 2 in the background, wait until
+# it is queued for its SHARE lock on <table> - held off by a ROW EXCLUSIVE
+# this function takes in another session first - then run <sql> as a third
+# session, release the holder, and wait for step 2 to finish.  Step 2 waits
+# up to its own lock_timeout of 5 s; the poll takes a few hundredths.
+edge_during() {
+  local round=$1 t=$2 sql=$3
+  edge_bg "hold$round" "BEGIN;" "LOCK TABLE $t IN ROW EXCLUSIVE MODE;" \
+    "SELECT /* wiki_nbmaint_edge_hold$round */ pg_sleep(300);" "COMMIT;"
+  edge_wait_lock "$t" RowExclusiveLock true
+  ( run_apply "$EDB" "edge$round" ) &
+  local job=$!
+  edge_wait_lock "$t" ShareLock false
+  printf '%s\n' "$sql" | qin "$EDB" > "$OUT/edge-during-$round.log" 2>&1
+  q "$EDB" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+             WHERE query LIKE '%wiki_nbmaint_edge_hold$round%' AND pid <> pg_backend_pid()" > /dev/null
+  wait "$job" || die "edge round $round: step 2 failed, see $OUT/apply-edge$round.log"
+  wait 2>/dev/null
+}
 stage_edge() {
-  say "edge: comments, boundaries, filters, locks and rebuilds, case by case"
+  say "edge: comments, boundaries, filters, locks, concurrent writers and the cap, case by case"
+  need_texts
   q postgres "DROP DATABASE IF EXISTS $EDB" > /dev/null
   q postgres "DROP ROLE IF EXISTS nbmaint_other" > /dev/null
   q postgres "CREATE DATABASE $EDB" > /dev/null
@@ -6140,16 +7626,38 @@ stage_edge() {
     printf 'CREATE TABLE proto.expect (round text, idx text, want text, human text, PRIMARY KEY (round, idx));\n'
     printf 'CREATE TABLE proto.seen_plan (round text, idx text, action text, notes text);\n'
     printf 'CREATE TABLE proto.seen_cmt (label text, idx text, oid oid, filenode oid, bytes bigint, tbl_tuples numeric, cmt text);\n'
+    # the comment with its one reserved line's content cut out, newlines kept;
+    # how many reserved lines it has; and whether that line is exactly the
+    # version-2 grammar with sz and tup equal to the file and the table count
+    printf '%s\n' "CREATE FUNCTION proto.human(c text) RETURNS text LANGUAGE sql IMMUTABLE AS
+      \$f\$ SELECT regexp_replace(c, '^@nbmaint:\{.*\}\$', '', 'n') \$f\$;"
+    printf '%s\n' "CREATE FUNCTION proto.nres(c text) RETURNS bigint LANGUAGE sql IMMUTABLE AS
+      \$f\$ SELECT count(*) FROM regexp_matches(coalesce(c, ''), '^@nbmaint:\{.*\}\$', 'gn') \$f\$;"
+    printf '%s\n' "CREATE FUNCTION proto.valid(c text, b numeric, t numeric) RETURNS boolean LANGUAGE sql IMMUTABLE AS
+      \$f\$ SELECT coalesce((regexp_match(c, '(?n)^@nbmaint:\{\"v\":2,\"sz\":([0-9]+),\"tup\":(-?[0-9]+),\"at\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{2}(?::[0-9]{2})?\"\}\$'))[1]::numeric = b
+                         AND (regexp_match(c, '(?n)^@nbmaint:\{\"v\":2,\"sz\":([0-9]+),\"tup\":(-?[0-9]+),'))[2]::numeric
+                             = round(greatest(t, -1)), false) \$f\$;"
     local e
-    for e in e_none e_human e_v1 e_bad e_junk e_mid e_shrink e_sz e_zero e_owner e_busy e_surv; do
+    for e in e_none e_human e_v1 e_bad e_junk e_nest e_dup e_two e_prose e_trail e_tailnl \
+             e_mid e_shrink e_sz e_zero e_owner e_busy e_surv e_hold e_cedit e_cpay e_ren; do
       edge_mk "$e" 30000
     done
     edge_mk e_t13 13000
     edge_mk e_t7 7000
+    edge_mk e_capok 5000
     printf 'CREATE INDEX e_sz_i2 ON e_sz USING hash (id);\n'
     printf 'CREATE INDEX e_t13_i2 ON e_t13 USING hash (id);\n'
     printf 'CREATE INDEX e_t7_i2 ON e_t7 USING hash (id);\n'
-    printf 'ANALYZE e_none, e_human, e_v1, e_bad, e_junk, e_mid, e_shrink, e_sz, e_zero, e_owner, e_busy, e_surv, e_t13, e_t7;\n'
+    # round G's rebuild that will fail: an expression index over an immutable
+    # function that is later replaced by one that divides by zero
+    printf "CREATE FUNCTION e_fail_f(bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS 'SELECT \$1';\n"
+    printf 'CREATE TABLE e_capfail (id bigint, k bigint) WITH (autovacuum_enabled = off);\n'
+    printf 'INSERT INTO e_capfail SELECT g, g FROM generate_series(1, 60000) g;\n'
+    printf 'ANALYZE e_capfail;\n'
+    printf 'CREATE INDEX e_capfail_i ON e_capfail USING hash (e_fail_f(k));\n'
+    printf 'CREATE TABLE e_ren2 (id bigint, k bigint) WITH (autovacuum_enabled = off);\n'
+    printf 'INSERT INTO e_ren2 SELECT g, g FROM generate_series(1, 30000) g;\n'
+    printf 'ANALYZE e_none, e_human, e_v1, e_bad, e_junk, e_nest, e_dup, e_two, e_prose, e_trail, e_tailnl, e_mid, e_shrink, e_sz, e_zero, e_owner, e_busy, e_surv, e_hold, e_cedit, e_cpay, e_ren, e_ren2, e_t13, e_t7, e_capok, e_capfail;\n'
     # an index built on an empty table that nothing has counted
     printf 'CREATE TABLE e_unk (id bigint, k bigint) WITH (autovacuum_enabled = off);\n'
     printf 'CREATE INDEX e_unk_i ON e_unk USING hash (k);\n'
@@ -6162,33 +7670,48 @@ stage_edge() {
     printf 'INSERT INTO e_part SELECT g FROM generate_series(1, 30000) g;\n'
     printf 'CREATE INDEX e_part_i ON e_part USING hash (k);\n'
     printf 'ANALYZE e_part_1;\n'
-    # the human comments round A reads
+    # the comments round A reads
     printf "COMMENT ON INDEX e_human_i IS E'Search index used by the application.\\\\nSecond line: an @ sign, a { and a } brace.\\\\n  \\\\n';\n"
     printf "COMMENT ON INDEX e_v1_i IS E'keep me\\\\n@nbmaint:{\"v\":1,\"sz\":123,\"tup\":456,\"at\":\"2020-01-01T00:00:00+00\"}';\n"
     printf "COMMENT ON INDEX e_bad_i IS '@nbmaint:{\"v\":2,\"sz\":\"big\",\"tup\":1,\"at\":\"x\"}';\n"
     printf "COMMENT ON INDEX e_junk_i IS E'above\\\\n@nbmaint: not json\\\\nbelow';\n"
+    printf "COMMENT ON INDEX e_nest_i IS '@nbmaint:{\"x\":{\"v\":2,\"sz\":100,\"tup\":5}}';\n"
+    printf "COMMENT ON INDEX e_dup_i IS '@nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\",\"sz\":999}';\n"
+    printf "COMMENT ON INDEX e_two_i IS E'@nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\"}\\\\nhuman\\\\n@nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\"}';\n"
+    printf "COMMENT ON INDEX e_prose_i IS 'see @nbmaint:{\"v\":2,\"sz\":1,\"tup\":1,\"at\":\"2026-01-01T00:00:00+00\"} for the format';\n"
+    printf "COMMENT ON INDEX e_trail_i IS E'human text  \\\\n\\\\n';\n"
+    printf "COMMENT ON INDEX e_tailnl_i IS E'note\\\\n@nbmaint:{\"v\":1,\"sz\":1,\"tup\":1}\\\\n';\n"
     printf "COMMENT ON INDEX e_surv_i IS 'kept through both rebuilds';\n"
   } > "$SQLD/edge-build.sql"
-  qz "$EDB" < "$SQLD/edge-build.sql" > "$OUT/edge-build.log" 2>&1 || die "edge build failed, see $OUT/edge-build.log"
+  qz "$EDB" < "$SQLD/edge-build.sql" > "$OUT/edge-build.log" 2>&1
   # a CREATE INDEX CONCURRENTLY that fails on one row leaves an invalid index
   printf 'CREATE INDEX CONCURRENTLY e_invalid_i ON e_invalid USING hash ((1 / (k - 500)));\n' \
     | qe "$EDB" > "$OUT/edge-invalid.log" 2>&1
-  qf "$EDB" "$SQLD/plan_view.sql" > /dev/null 2>&1 || die "edge: the one-edit view failed"
+  qf "$EDB" "$SQLD/plan_view.sql" > /dev/null 2>&1
 
   # ---- round A: first run, every comment shape
-  qin "$EDB" > "$OUT/edge-expect-A.log" 2>&1 <<'SQL' || die "edge: filing round A's expectations failed"
+  qin "$EDB" > "$OUT/edge-expect-A.log" 2>&1 <<'SQL'
 INSERT INTO proto.expect (round, idx, want, human) VALUES
  ('A','e_none_i','initialize',''),
- ('A','e_human_i','initialize',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.'),
- ('A','e_v1_i','initialize','keep me'),
+ ('A','e_human_i','initialize',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.\n  \n\n'),
+ ('A','e_v1_i','initialize',E'keep me\n'),
  ('A','e_bad_i','initialize',''),
- ('A','e_junk_i','initialize',E'above\nbelow'),
+ ('A','e_junk_i','initialize',E'above\n@nbmaint: not json\nbelow\n'),
+ ('A','e_nest_i','initialize',''),
+ ('A','e_dup_i','initialize',''),
+ ('A','e_two_i','conflict',E'@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}\nhuman\n@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}'),
+ ('A','e_prose_i','initialize',E'see @nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"} for the format\n'),
+ ('A','e_trail_i','initialize',E'human text  \n\n\n'),
+ ('A','e_tailnl_i','initialize',E'note\n\n'),
  ('A','e_mid_i','initialize',''),('A','e_shrink_i','initialize',''),
  ('A','e_sz_i','initialize',''),('A','e_sz_i2','initialize',''),
  ('A','e_t13_i','initialize',''),('A','e_t13_i2','initialize',''),
  ('A','e_t7_i','initialize',''),('A','e_t7_i2','initialize',''),
  ('A','e_zero_i','initialize',''),('A','e_owner_i','initialize',''),
- ('A','e_busy_i','initialize',''),('A','e_surv_i','initialize','kept through both rebuilds'),
+ ('A','e_busy_i','initialize',''),('A','e_surv_i','initialize',E'kept through both rebuilds\n'),
+ ('A','e_hold_i','initialize',''),('A','e_cedit_i','initialize',''),
+ ('A','e_cpay_i','initialize',''),('A','e_ren_i','initialize',''),
+ ('A','e_capok_i','initialize',''),('A','e_capfail_i','initialize',''),
  ('A','e_unk_i','initialize',''),('A','e_part_1_k_idx','initialize',''),
  ('A','e_btree_i','absent',''),('A','e_invalid_i','absent',''),('A','e_part_i','absent','');
 SQL
@@ -6199,7 +7722,7 @@ SQL
   edge_snap A-after
 
   # ---- round B: forged payloads on the boundaries, one lock held elsewhere
-  qin "$EDB" > "$OUT/edge-forge.log" 2>&1 <<'SQL' || die "edge forgery failed"
+  qin "$EDB" > "$OUT/edge-forge.log" 2>&1 <<'SQL'
 CREATE FUNCTION proto.forge(p_idx text, p_before text, p_after text, p_sz numeric, p_tup numeric)
 RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
@@ -6225,7 +7748,7 @@ SELECT proto.forge('e_zero_i',   '', '',           proto.cur('e_zero_i'), 0);
 SELECT proto.forge('e_busy_i',   '', '',           floor(proto.cur('e_busy_i') / 2), proto.curtup('e_busy_i'));
 INSERT INTO e_unk SELECT g, g FROM generate_series(1, 10) g;
 INSERT INTO proto.expect (round, idx, want, human) VALUES
- ('B','e_mid_i','reindex',E'above\nbelow'),
+ ('B','e_mid_i','reindex',E'above\n\nbelow'),
  ('B','e_shrink_i','refresh',''),
  ('B','e_sz_i','reindex',''),('B','e_sz_i2','skip',''),
  ('B','e_t13_i','reindex',''),('B','e_t13_i2','skip',''),
@@ -6233,18 +7756,21 @@ INSERT INTO proto.expect (round, idx, want, human) VALUES
  ('B','e_zero_i','reindex',''),
  ('B','e_busy_i','reindex',''),
  ('B','e_unk_i','skip',''),
- ('B','e_none_i','skip',''),('B','e_v1_i','skip','keep me'),
- ('B','e_human_i','skip',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.'),
- ('B','e_bad_i','skip',''),('B','e_junk_i','skip',E'above\nbelow'),('B','e_owner_i','skip',''),
- ('B','e_surv_i','skip','kept through both rebuilds'),('B','e_part_1_k_idx','skip','');
+ ('B','e_none_i','skip',''),('B','e_v1_i','skip',E'keep me\n'),
+ ('B','e_human_i','skip',E'Search index used by the application.\nSecond line: an @ sign, a { and a } brace.\n  \n\n'),
+ ('B','e_bad_i','skip',''),('B','e_junk_i','skip',E'above\n@nbmaint: not json\nbelow\n'),
+ ('B','e_nest_i','skip',''),('B','e_dup_i','skip',''),
+ ('B','e_two_i','conflict',E'@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}\nhuman\n@nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"}'),
+ ('B','e_prose_i','skip',E'see @nbmaint:{"v":2,"sz":1,"tup":1,"at":"2026-01-01T00:00:00+00"} for the format\n'),
+ ('B','e_trail_i','skip',E'human text  \n\n\n'),('B','e_tailnl_i','skip',E'note\n\n'),
+ ('B','e_owner_i','skip',''),('B','e_surv_i','skip',E'kept through both rebuilds\n'),
+ ('B','e_hold_i','skip',''),('B','e_cedit_i','skip',''),('B','e_cpay_i','skip',''),
+ ('B','e_ren_i','skip',''),('B','e_capok_i','skip',''),('B','e_capfail_i','skip',''),
+ ('B','e_part_1_k_idx','skip','');
 SQL
   edge_bg holder "BEGIN;" "LOCK TABLE e_busy IN ROW EXCLUSIVE MODE;" \
     "SELECT /* wiki_nbmaint_edge_holder */ pg_sleep(300);" "COMMIT;"
-  local n=0
-  until [ "$(q "$EDB" "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
-                        WHERE c.relname = 'e_busy' AND l.mode = 'RowExclusiveLock' AND l.granted")" = 1 ]; do
-    n=$((n + 1)); [ "$n" -gt 60 ] && die "edge: the lock holder never took its lock"; sleep 0.5
-  done
+  edge_wait_lock e_busy RowExclusiveLock true
   run_plan "$EDB" edgeB || die "edge round B: step 1 failed"
   edge_seen B
   edge_snap B-before
@@ -6279,13 +7805,73 @@ SQL
     "INSERT INTO e_tmp SELECT g FROM generate_series(1, 1000) g;" \
     "CREATE INDEX e_tmp_i ON e_tmp USING hash (k);" \
     "SELECT /* wiki_nbmaint_edge_temp */ pg_sleep(300);"
-  n=0
+  local n=0
   until [ "$(q "$EDB" "SELECT count(*) FROM pg_class WHERE relname = 'e_tmp_i'")" = 1 ]; do
     n=$((n + 1)); [ "$n" -gt 60 ] && die "edge: the temporary index never appeared"; sleep 0.5
   done
   run_plan "$EDB" edgeF || die "edge round F: step 1 failed"
   edge_seen F
+  run_apply "$EDB" edgeF || die "edge round F: step 2 failed"
   edge_kill temp
+
+  # ---- round H: another session holds ACCESS EXCLUSIVE on one index for the
+  # whole run: step 1, one statement, is cancelled by its lock_timeout; step 2
+  # counts that index failed and finishes every other one
+  edge_snap H-before
+  edge_bg hold "BEGIN;" "REINDEX INDEX e_hold_i;" \
+    "SELECT /* wiki_nbmaint_edge_hold */ pg_sleep(300);" "COMMIT;"
+  edge_wait_lock e_hold_i AccessExclusiveLock true
+  local rc_h1
+  run_plan "$EDB" edgeH; rc_h1=$?
+  run_apply "$EDB" edgeH || die "edge round H: step 2 failed"
+  edge_kill hold
+  edge_snap H-after
+
+  # ---- round I: a person rewrites the comment while step 2 waits for its
+  # table lock; step 2 re-reads it under its locks and keeps the new text
+  q "$EDB" "SELECT proto.forge('e_cedit_i', 'old human text', '', proto.cur('e_cedit_i') * 2,
+                               proto.curtup('e_cedit_i'))" > /dev/null
+  edge_snap I-before
+  edge_during I e_cedit "SELECT format('COMMENT /* wiki_nbmaint_edge_edit */ ON INDEX e_cedit_i IS %L',
+                           E'new human text, written while step 2 waited\n'
+                           || substring(description from '(?n)^(@nbmaint:\{.*\})\$'))
+                           FROM pg_description WHERE objoid = 'e_cedit_i'::regclass
+                         \\gexec"
+  edge_snap I-after
+
+  # ---- round J: another run rewrites the payload to the file's true size
+  # while step 2 waits; step 2's second read under the locks says skip
+  q "$EDB" "SELECT proto.forge('e_cpay_i', '', '', floor(proto.cur('e_cpay_i') / 2),
+                               proto.curtup('e_cpay_i'))" > /dev/null
+  edge_snap J-before
+  edge_during J e_cpay "SELECT proto.forge('e_cpay_i', '', '', proto.cur('e_cpay_i'), proto.curtup('e_cpay_i'));"
+  edge_snap J-after
+
+  # ---- round K: the index is renamed, and a new index takes its name, while
+  # step 2 waits; step 2 finds the name no longer names the index it read
+  q "$EDB" "SELECT proto.forge('e_ren_i', '', '', floor(proto.cur('e_ren_i') / 2),
+                               proto.curtup('e_ren_i'))" > /dev/null
+  edge_snap K-before
+  edge_during K e_ren "ALTER INDEX e_ren_i RENAME TO e_ren_i_old;
+                       CREATE INDEX e_ren_i ON e_ren2 USING hash (k);"
+  edge_snap K-after
+  run_apply "$EDB" edgeK2 || die "edge round K: the settling run of step 2 failed"
+  edge_snap K2-after
+
+  # ---- round G: max_reindex 1, and the first rebuild fails.  Step 2 runs with
+  # one documented edit, that cap; the failed rebuild uses up the cap, so the
+  # next index due is capped instead of rebuilt
+  sed 's/^    max_reindex integer := 1000;   -- cap on the rebuilds one run may start$/    max_reindex integer := 1;      -- cap on the rebuilds one run may start/' \
+    "$SQLD/apply.sql" > "$SQLD/apply-cap1.sql"
+  [ "$(diff "$SQLD/apply.sql" "$SQLD/apply-cap1.sql" | grep -c '^[<>]')" = 2 ] \
+    || die "edge round G: the documented edit did not change exactly one line"
+  q "$EDB" "CREATE OR REPLACE FUNCTION e_fail_f(bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS
+              'SELECT 1 / (\$1 - \$1)'" > /dev/null
+  q "$EDB" "SELECT proto.forge('e_capfail_i', '', '', floor(proto.cur('e_capfail_i') / 2), proto.curtup('e_capfail_i')),
+                   proto.forge('e_capok_i', '', '', floor(proto.cur('e_capok_i') / 2), proto.curtup('e_capok_i'))" > /dev/null
+  edge_snap G-before
+  APPLY_FILE="$SQLD/apply-cap1.sql" run_apply "$EDB" edgeG || die "edge round G: step 2 failed"
+  edge_snap G-after
 
   # ---- the verdicts
   qat "$EDB" /dev/stdin > "$OUT/edge.txt" 2>&1 <<'SQL'
@@ -6294,50 +7880,47 @@ WITH pa AS (
          coalesce((SELECT s.action FROM proto.seen_plan s WHERE s.round = e.round AND s.idx = e.idx), 'absent') AS seen
     FROM proto.expect e
 )
-SELECT format('%-6s %-16s want=%-10s seen=%-10s %s', 'plan ' || round, idx, want, seen,
+SELECT format('plan %-2s %-16s want=%-10s seen=%-10s %s', round, idx, want, seen,
               CASE WHEN want = seen THEN 'ok' ELSE 'DIFFERS' END)
   FROM pa ORDER BY round, idx;
 SQL
   qat "$EDB" /dev/stdin >> "$OUT/edge.txt" 2>&1 <<'SQL'
--- every comment step 2 wrote in round A: the human part, exactly one payload,
--- at the end, with sz and tup equal to what the index and the table read
-WITH a AS (SELECT * FROM proto.seen_cmt WHERE label = 'A-after'),
+-- every comment step 2 wrote in round A: the human text byte for byte where
+-- it was, exactly one reserved line, and a version-2 payload whose sz and
+-- tup are the file and the table count; a conflict left exactly as it was
+WITH b AS (SELECT * FROM proto.seen_cmt WHERE label = 'A-before'),
+     a AS (SELECT * FROM proto.seen_cmt WHERE label = 'A-after'),
      e AS (SELECT * FROM proto.expect WHERE round = 'A' AND want <> 'absent')
-SELECT format('write A %-16s human=%s one_payload=%s at_end=%s values=%s %s', e.idx,
-         h_ok, one, at_end, vals, CASE WHEN h_ok AND one AND at_end AND vals THEN 'ok' ELSE 'DIFFERS' END)
-  FROM e JOIN a ON a.idx = e.idx
-  CROSS JOIN LATERAL (SELECT
-     rtrim(regexp_replace(a.cmt, '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'), E' \t\r\n') = e.human AS h_ok,
-     (length(a.cmt) - length(replace(a.cmt, '@nbmaint:', ''))) / 9 = 1 AS one,
-     a.cmt ~ '@nbmaint:\{[^}]*\}$' AS at_end,
-     (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'v') = '2'
-       AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric = a.bytes
-       AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'tup')::numeric
-           = round(greatest(a.tbl_tuples, -1)) AS vals) v
+SELECT format('write A %-15s %s', e.idx,
+         CASE WHEN e.want = 'conflict' THEN
+                CASE WHEN a.cmt = b.cmt AND a.cmt = e.human AND a.filenode = b.filenode
+                     THEN 'ok (untouched)' ELSE 'DIFFERS: ' || coalesce(a.cmt, '<none>') END
+              WHEN proto.human(a.cmt) = e.human AND proto.nres(a.cmt) = 1
+                   AND proto.valid(a.cmt, a.bytes, a.tbl_tuples) AND a.filenode = b.filenode THEN 'ok'
+              ELSE 'DIFFERS: ' || coalesce(replace(a.cmt, E'\n', '\n'), '<none>') END)
+  FROM e JOIN a ON a.idx = e.idx JOIN b ON b.idx = e.idx
  ORDER BY e.idx;
 SQL
   qat "$EDB" /dev/stdin >> "$OUT/edge.txt" 2>&1 <<'SQL'
--- round B: a rebuild changes the file and rewrites the payload; a refresh
--- rewrites the payload only; a skip changes nothing; the locked table's index
--- keeps its file and its forged payload
+-- round B: a rebuild changes the file and rewrites the payload in place; a
+-- refresh rewrites the payload only; a skip changes nothing; the locked
+-- table's index keeps its file and its forged payload
 WITH b AS (SELECT * FROM proto.seen_cmt WHERE label = 'B-before'),
      a AS (SELECT * FROM proto.seen_cmt WHERE label = 'B-after'),
      e AS (SELECT * FROM proto.expect WHERE round = 'B')
-SELECT format('write B %-16s want=%-8s file_changed=%s comment_changed=%s human=%s %s', e.idx, e.want,
-         a.filenode <> b.filenode, a.cmt IS DISTINCT FROM b.cmt,
-         rtrim(regexp_replace(a.cmt, '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'), E' \t\r\n') = e.human,
+SELECT format('write B %-15s want=%-8s %s', e.idx, e.want,
          CASE WHEN e.idx = 'e_busy_i' THEN
                 CASE WHEN a.filenode = b.filenode AND a.cmt = b.cmt THEN 'ok (lock timed out, nothing written)' ELSE 'DIFFERS' END
               WHEN e.want = 'reindex' THEN
-                CASE WHEN a.filenode <> b.filenode AND a.cmt <> b.cmt
-                          AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric = a.bytes
-                          AND rtrim(regexp_replace(a.cmt, '[[:space:]]*@nbmaint:\{[^}]*\}', '', 'g'), E' \t\r\n') = e.human
-                     THEN 'ok' ELSE 'DIFFERS' END
+                CASE WHEN a.filenode <> b.filenode AND proto.human(a.cmt) = e.human
+                          AND proto.human(a.cmt) = proto.human(b.cmt) AND proto.nres(a.cmt) = 1
+                          AND proto.valid(a.cmt, a.bytes, a.tbl_tuples) THEN 'ok' ELSE 'DIFFERS' END
               WHEN e.want = 'refresh' THEN
-                CASE WHEN a.filenode = b.filenode AND a.cmt <> b.cmt
-                          AND (substring(a.cmt from '@nbmaint:(\{[^}]*\})')::jsonb ->> 'sz')::numeric = a.bytes
-                     THEN 'ok' ELSE 'DIFFERS' END
-              ELSE CASE WHEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt THEN 'ok' ELSE 'DIFFERS' END
+                CASE WHEN a.filenode = b.filenode AND a.cmt <> b.cmt AND proto.human(a.cmt) = proto.human(b.cmt)
+                          AND proto.valid(a.cmt, a.bytes, a.tbl_tuples) THEN 'ok' ELSE 'DIFFERS' END
+              ELSE CASE WHEN a.filenode = b.filenode AND a.cmt IS NOT DISTINCT FROM b.cmt
+                             AND (e.want = 'conflict' AND a.cmt = e.human OR proto.human(a.cmt) = e.human)
+                        THEN 'ok' ELSE 'DIFFERS' END
          END)
   FROM e JOIN a ON a.idx = e.idx JOIN b ON b.idx = e.idx
  ORDER BY e.idx;
@@ -6345,32 +7928,41 @@ SQL
   # the run-level verdicts: each line states what it expected and ends in ok
   # or DIFFERS
   verdict() {   # <label> <expected> <observed>
-    printf 'run    %-58s want=[%s] seen=[%s] %s\n' "$1" "$2" "$3" "$([ "$2" = "$3" ] && echo ok || echo DIFFERS)"
+    printf 'run    %-62s want=[%s] seen=[%s] %s\n' "$1" "$2" "$3" "$([ "$2" = "$3" ] && echo ok || echo DIFFERS)"
+  }
+  summary() { apply_summary "$1" | sed 's/^nbmaint: //'; }
+  unchanged() {  # <index> <label before> <label after>: file and comment both unchanged
+    q "$EDB" "SELECT coalesce(bool_and(a.cmt IS NOT DISTINCT FROM b.cmt AND a.filenode = b.filenode), false)
+                FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
+               WHERE a.idx = '$1' AND b.label = '$2' AND a.label = '$3'"
   }
   local ncand
   ncand=$(q "$EDB" "SELECT count(*) FROM proto.expect WHERE round = 'A' AND want <> 'absent'")
   {
+    verdict 'A: step 2 counts' \
+      "reindex=0 initialize=$((ncand - 1)) refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f" \
+      "$(summary edgeA)"
     verdict 'B: step 2 counts, one rebuild refused by the lock' \
-      'reindex=5 initialize=0 refresh=1 blocked=0 failed=1 gone=0 capped=0 dry_run=f' \
-      "$(apply_summary edgeB | sed 's/^nbmaint: //')"
+      'reindex=5 initialize=0 refresh=1 blocked=0 conflict=1 failed=1 gone=0 capped=0 started=5 changed=0 dry_run=f' \
+      "$(summary edgeB)"
     verdict 'B: the refused rebuild is a lock timeout, SQLSTATE 55P03' 'e_busy_i 55P03' \
-      "$(grep -Eo 'nbmaint: public\.e_busy_i reindex: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeB.log" \
-           | sed -E 's/^nbmaint: public\.(e_busy_i).*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+      "$(grep -Eo 'nbmaint: e_busy_i: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeB.log" \
+           | sed -E 's/^nbmaint: (e_busy_i):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
     verdict 'C1: the lock is gone, so the refused rebuild happens' \
-      'reindex=1 initialize=0 refresh=0 blocked=0 failed=0 gone=0 capped=0 dry_run=f' \
-      "$(apply_summary edgeC1 | sed 's/^nbmaint: //')"
+      'reindex=1 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=1 changed=0 dry_run=f' \
+      "$(summary edgeC1)"
     verdict 'C2: a settled database: nothing to do' \
-      'reindex=0 initialize=0 refresh=0 blocked=0 failed=0 gone=0 capped=0 dry_run=f' \
-      "$(apply_summary edgeC2 | sed 's/^nbmaint: //')"
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeC2)"
     verdict 'C2: every comment and every file unchanged by that run' 't' \
       "$(q "$EDB" "SELECT bool_and(a.cmt IS NOT DISTINCT FROM b.cmt AND a.filenode = b.filenode)
                      FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
                     WHERE a.label = 'C2-after' AND b.label = 'C1-after'")"
     verdict 'D: step 1 as a role that owns nothing: every row blocked' "$ncand blocked, 0 other" \
-      "$(grep -Ec '\| blocked +\|' "$OUT/plan-edgeD.txt") blocked, $(grep -Ec '\| (initialize|refresh|reindex|skip) +\|' "$OUT/plan-edgeD.txt") other"
+      "$(grep -Ec '\| blocked +\|' "$OUT/plan-edgeD.txt") blocked, $(grep -Ec '\| (initialize|refresh|reindex|skip|conflict) +\|' "$OUT/plan-edgeD.txt") other"
     verdict 'D: step 2 as that role' \
-      "reindex=0 initialize=0 refresh=0 blocked=$ncand failed=0 gone=0 capped=0 dry_run=f" \
-      "$(apply_summary edgeD | sed 's/^nbmaint: //')"
+      "reindex=0 initialize=0 refresh=0 blocked=$ncand conflict=0 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f" \
+      "$(summary edgeD)"
     verdict 'D: nothing written by it' 't' \
       "$(q "$EDB" "SELECT bool_and(a.cmt IS NOT DISTINCT FROM b.cmt AND a.filenode = b.filenode)
                      FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
@@ -6392,31 +7984,88 @@ SQL
       "$(q "$EDB" "SELECT action FROM proto.seen_plan WHERE round = 'E' AND idx = 'e_surv_i'")"
     verdict 'F: rows naming another session'"'"'s temporary index' '0' \
       "$(q "$EDB" "SELECT count(*) FROM proto.seen_plan WHERE round = 'F' AND idx = 'e_tmp_i'")"
+    verdict 'F: step 2 passes it by without counting it' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeF)"
+    verdict 'H: step 1 under a lock held on one index is cancelled' 'exit 3, canceling statement due to lock timeout' \
+      "exit $rc_h1, $(grep -Eo 'canceling statement due to lock timeout' "$OUT/plan-edgeH.txt" | head -1)"
+    verdict 'H: step 2 counts that index failed and finishes the others' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=1 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeH)"
+    verdict 'H: the failure is a lock timeout on that index' 'e_hold_i 55P03' \
+      "$(grep -Eo 'nbmaint: e_hold_i: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeH.log" \
+           | sed -E 's/^nbmaint: (e_hold_i):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+    verdict 'H: nothing written to it' 't' "$(unchanged e_hold_i H-before H-after)"
+    verdict 'I: step 2 refreshes the index that waited' \
+      'reindex=0 initialize=0 refresh=1 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeI)"
+    verdict 'I: the text written while it waited is the text kept' 't' \
+      "$(q "$EDB" "SELECT proto.human(cmt) = E'new human text, written while step 2 waited\n'
+                          AND proto.nres(cmt) = 1 AND proto.valid(cmt, bytes, tbl_tuples)
+                     FROM proto.seen_cmt WHERE idx = 'e_cedit_i' AND label = 'I-after'")"
+    verdict 'J: the decision is taken again under the locks' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=0 changed=1 dry_run=f' \
+      "$(summary edgeJ)"
+    verdict 'J: reindex before the locks, skip under them' 'e_cpay_i reindex skip' \
+      "$(grep -Eo 'nbmaint: public\.e_cpay_i was [a-z]+ before the locks and [a-z]+ under them' "$OUT/apply-edgeJ.log" \
+           | sed -E 's/^nbmaint: public\.(e_cpay_i) was ([a-z]+) before the locks and ([a-z]+) under them$/\1 \2 \3/')"
+    verdict 'J: no rebuild, and the comment is the one written meanwhile' 't' \
+      "$(q "$EDB" "SELECT a.filenode = b.filenode AND a.cmt <> b.cmt AND proto.valid(a.cmt, a.bytes, a.tbl_tuples)
+                          AND a.cmt ~ '\"at\":\"2026-01-01T00:00:00\+00\"'
+                     FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.idx = a.idx
+                    WHERE a.idx = 'e_cpay_i' AND b.label = 'J-before' AND a.label = 'J-after'")"
+    verdict 'K: the renamed index is refused, and nothing else is touched' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=1 gone=0 capped=0 started=0 changed=0 dry_run=f' \
+      "$(summary edgeK)"
+    verdict 'K: the refusal names it under its new name, SQLSTATE 55000' 'e_ren_i_old 55000' \
+      "$(grep -Eo 'nbmaint: e_ren_i_old: nothing written: renamed, dropped or re-created since it was read .SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeK.log" \
+           | sed -E 's/^nbmaint: (e_ren_i_old):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+    verdict 'K: the renamed index keeps its file and comment' 't' \
+      "$(q "$EDB" "SELECT a.filenode = b.filenode AND a.cmt = b.cmt
+                     FROM proto.seen_cmt a JOIN proto.seen_cmt b ON b.oid = a.oid
+                    WHERE b.idx = 'e_ren_i' AND b.label = 'K-before' AND a.label = 'K-after'")"
+    verdict 'K: the index that took the name was never written' 't' \
+      "$(q "$EDB" "SELECT cmt IS NULL FROM proto.seen_cmt WHERE idx = 'e_ren_i' AND label = 'K-after'")"
+    verdict 'K2: the next run rebuilds one and initializes the other' \
+      'reindex=1 initialize=1 refresh=0 blocked=0 conflict=1 failed=0 gone=0 capped=0 started=1 changed=0 dry_run=f' \
+      "$(summary edgeK2)"
+    verdict 'G: a failed rebuild uses up max_reindex 1' \
+      'reindex=0 initialize=0 refresh=0 blocked=0 conflict=1 failed=1 gone=0 capped=1 started=1 changed=0 dry_run=f' \
+      "$(summary edgeG)"
+    verdict 'G: the failure is the rebuild itself, SQLSTATE 22012' 'e_capfail_i 22012' \
+      "$(grep -Eo 'nbmaint: e_capfail_i: nothing written: .*SQLSTATE [0-9A-Z]+' "$OUT/apply-edgeG.log" \
+           | sed -E 's/^nbmaint: (e_capfail_i):.*SQLSTATE ([0-9A-Z]+)$/\1 \2/')"
+    verdict 'G: the next index due is capped, not rebuilt' 'e_capok_i capped, t t' \
+      "$(grep -Eo 'nbmaint: public\.e_capok_i needs a rebuild, max_reindex 1 reached' "$OUT/apply-edgeG.log" \
+           | sed -E 's/^nbmaint: public\.(e_capok_i) needs.*$/\1 capped/'), $(unchanged e_capok_i G-before G-after) $(unchanged e_capfail_i G-before G-after)"
     q "$EDB" "SELECT format('info   E %-11s oid=%s filenode=%s comment_md5=%s', label, oid, filenode, md5(cmt))
                FROM proto.seen_cmt WHERE idx = 'e_surv_i' AND label IN ('E-before','E-plain','E-concurrent')
               ORDER BY CASE label WHEN 'E-before' THEN 1 WHEN 'E-plain' THEN 2 ELSE 3 END"
     q "$EDB" "SELECT 'info   B e_unk_i notes: ' || notes FROM proto.seen_plan WHERE round = 'B' AND idx = 'e_unk_i'"
     q "$EDB" "SELECT 'info   B e_t13_i and e_t7_i notes: ' || string_agg(idx || ': ' || notes, '; ' ORDER BY idx)
                FROM proto.seen_plan WHERE round = 'B' AND idx IN ('e_t13_i','e_t13_i2','e_t7_i','e_t7_i2','e_sz_i','e_sz_i2')"
-    q "$EDB" "SELECT 'info   payload bytes after round C: ' || min(length(substring(cmt from '@nbmaint:\{[^}]*\}')))
-               || ' to ' || max(length(substring(cmt from '@nbmaint:\{[^}]*\}')))
-               FROM proto.seen_cmt WHERE label = 'C2-after' AND cmt LIKE '%@nbmaint:%'"
+    q "$EDB" "SELECT 'info   payload bytes after round C: ' || min(length(substring(cmt from '(?n)^(@nbmaint:\{.*\})\$')))
+               || ' to ' || max(length(substring(cmt from '(?n)^(@nbmaint:\{.*\})\$')))
+               FROM proto.seen_cmt WHERE label = 'C2-after' AND proto.nres(cmt) = 1"
     q "$EDB" "SELECT 'info   e_human_i as stored: ' || replace(cmt, chr(10), ' \\n ')
                FROM proto.seen_cmt WHERE label = 'C2-after' AND idx = 'e_human_i'"
   } >> "$OUT/edge.txt" 2>&1
-  printf 'edge verdicts: %s ok, %s DIFFERS\n' "$(grep -Ec ' ok( \(.*\))?$' "$OUT/edge.txt")" "$(grep -c 'DIFFERS' "$OUT/edge.txt")" \
-    | tee -a "$OUT/edge.txt"
+  local n_ok n_diff
+  n_ok=$(grep -Ec ' ok( \(.*\))?$' "$OUT/edge.txt"); n_diff=$(grep -c 'DIFFERS' "$OUT/edge.txt")
+  printf 'edge verdicts: %s ok, %s different\n' "$n_ok" "$n_diff" | tee -a "$OUT/edge.txt"
   q postgres "DROP DATABASE IF EXISTS $EDB" > /dev/null
   q postgres "DROP ROLE IF EXISTS nbmaint_other" > /dev/null
+  [ "$n_diff" = 0 ] || die "$n_diff edge cases differ from what was filed for them (see $OUT/edge.txt)"
 }
 
 # ------------------------------------------------------------- stage: defeat
 # The no-defeat rule, shown working.  A throwaway fixture's churn commits while
 # an undeclared snapshot is held, and it then gets the same checked
 # maintenance step every scored fixture gets.  The check must stop the run, so
-# here it is called in a subshell and its exit status and message are what the
-# stage records.  Its own database, its proofs under out/defeat, and nothing
-# scored.
+# here it is called in a subshell, the one place a die is expected, and its
+# exit status and message are what the stage records.  Its own database, its
+# proofs under out/defeat, and nothing scored.  A check that did not fire
+# fails the run.
 stage_defeat() {
   say "defeat: an undeclared snapshot across one maintenance step must stop the run"
   local ddb=defeat keep=$OUT rc
@@ -6433,7 +8082,7 @@ SQL
   printf 'DELETE FROM f_zz WHERE id %% 2 = 0;\n' | qin "$ddb" > "$OUT/defeat-churn.log" 2>&1 \
     || die "defeat: churn failed"
   OUT="$keep/defeat"; mkdir -p "$OUT"; : > "$OUT/maintenance-proof.txt"
-  ( run_maint zz "$ddb" maint ) > "$keep/defeat-run.log" 2>&1; rc=$?
+  ( EXPECT_DIE=1; run_maint zz "$ddb" maint ) > "$keep/defeat-run.log" 2>&1; rc=$?
   OUT=$keep
   release_snapshot "$ddb" zz
   { printf 'exit status of the checked maintenance step: %s, %s\n' "$rc" \
@@ -6443,13 +8092,16 @@ SQL
   } > "$OUT/defeat.txt"
   q postgres "DROP DATABASE IF EXISTS $ddb" > /dev/null
   cat "$OUT/defeat.txt"
+  [ "$rc" -ne 0 ] || die "defeat: a defeated maintenance step was not caught"
 }
 
 # -------------------------------------------------------------- stage: verify
-# The page against what ran: the two texts re-extracted and hashed, and this
-# script's own block diffed against the file that is running.
+# The page against what ran: the two texts re-extracted and compared with the
+# files that ran, and this script's own block with the file that is running.
+# Any difference fails the run.
 stage_verify() {
   say "verify: the page's texts and this script, against what ran"
+  need_texts
   local x
   : > "$OUT/verify.txt"
   md_block_with sql wiki_nbmaint_plan_12_17 "$PAGE" > "$OUT/x-plan.sql"
@@ -6468,26 +8120,29 @@ stage_verify() {
       printf 'script DIFFERS from the file that ran\n' >> "$OUT/verify.txt"
     fi
   else
-    printf 'script not found in the page\n' >> "$OUT/verify.txt"
+    printf 'script NOT FOUND in the page\n' >> "$OUT/verify.txt"
   fi
   cat "$OUT/verify.txt"
+  ! grep -Eq 'DIFFERS|NOT FOUND' "$OUT/verify.txt" || die "the page is not what ran (see $OUT/verify.txt)"
 }
 
 # ------------------------------------------------------------ stage: criteria
 # The errors a run provokes on purpose.  Everything else in the server log is
-# reported as unexpected.
-DELIBERATE='contains unexpected zero page|invalid transaction termination|REINDEX CONCURRENTLY cannot be executed from a function|syntax error at or near "\|\|"|canceling statement due to statement timeout|division by zero|terminating connection due to administrator command|is not a btree index|is not a GIN index|is not a hash index|is not supported|REINDEX is not yet implemented for partitioned indexes'
+# unexpected, and an unexpected error or a maintenance skip line fails the run.
+DELIBERATE='contains unexpected zero page|invalid transaction termination|REINDEX CONCURRENTLY cannot be executed from a function|syntax error at or near "\|\|"|canceling statement due to statement timeout|canceling statement due to lock timeout|division by zero|terminating connection due to administrator command|is not a btree index|is not a GIN index|is not a hash index|is not supported|REINDEX is not yet implemented for partitioned indexes'
 stage_criteria() {
   say "criteria: everything a reader checks first, in one file"
-  local all unexpected
+  local all unexpected skips
   grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+ UTC \[[0-9]+\] (ERROR|FATAL|PANIC):' "$OUT/server.log" \
     > "$OUT/server-errors-all.txt" 2>/dev/null
   grep -Ev "$DELIBERATE" "$OUT/server-errors-all.txt" > "$OUT/server-errors-unexpected.txt"
   all=$(grep -c '' "$OUT/server-errors-all.txt"); unexpected=$(grep -c '' "$OUT/server-errors-unexpected.txt")
   grep -E 'skipping (vacuum|analyze) of|canceling autovacuum task' "$OUT/server.log" > "$OUT/server-maint-skips.txt"
+  skips=$(grep -c '' "$OUT/server-maint-skips.txt")
   {
     printf '1. texts\n';            sed 's/^/   /' "$OUT/hashes.txt"
     printf '2. engine checks\n';    sed 's/^/   /' "$OUT/checks.txt"
+    printf '2b. build\n';           sed 's/^/   /' "$OUT/pin.txt"
     printf '3. fixtures built: %s; not built: %s\n' "$(printf '%s\n' $SCORED | grep -c .)" "${SKIPPED:-none}"
     printf '4. maintenance proofs: %s ok, %s DEFEATED\n' \
       "$(grep -c ' ok ' "$OUT/maintenance-proof.txt")" "$(grep -c 'DEFEATED' "$OUT/maintenance-proof.txt")"
@@ -6500,12 +8155,14 @@ stage_criteria() {
     printf '10. exact\n';           sed 's/^/   /' "$OUT/exact.txt"
     printf '10b. defeat\n';         sed 's/^/   /' "$OUT/defeat.txt" 2>/dev/null
     printf '11. server log: %s ERROR/FATAL/PANIC lines, %s deliberate, %s unexpected; %s maintenance skip lines\n' \
-      "$all" "$((all - unexpected))" "$unexpected" "$(grep -c '' "$OUT/server-maint-skips.txt")"
+      "$all" "$((all - unexpected))" "$unexpected" "$skips"
     sed 's/^/   unexpected: /' "$OUT/server-errors-unexpected.txt" | head -5
     printf '12. verify\n';          sed 's/^/   /' "$OUT/verify.txt" 2>/dev/null
     printf '13. stage timings (seconds)\n'; sed 's/^/   /' "$OUT/timing.txt" 2>/dev/null
   } > "$OUT/criteria.txt" 2>&1
   cat "$OUT/criteria.txt"
+  [ "$unexpected" = 0 ] || die "the server log has $unexpected unexpected error lines"
+  [ "$skips" = 0 ] || die "the server log has $skips maintenance skip lines"
 }
 
 stage_report() {
@@ -6518,9 +8175,11 @@ stage_report() {
 # -m fast disconnects clients and writes a shutdown checkpoint.  The stop is
 # then confirmed the way the teardown rule asks, and the stage dies rather
 # than report a stop that did not happen, so clean never deletes a live
-# cluster.
+# cluster.  Both run only on a sandbox the guard has checked and found to be
+# this script's own.
 stage_stop() {
   say "stop: the sandbox cluster, cleanly"
+  if [ "$SANDBOX_STATE" != ours ]; then note "no sandbox at $SANDBOX: nothing to stop"; return 0; fi
   if [ -x "$BIN/pg_ctl" ] && [ -s "$DATA/postmaster.pid" ] \
        && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
     "$BIN/pg_ctl" -D "$DATA" -m fast -w stop > /dev/null 2>&1 || die "pg_ctl -m fast stop failed"
@@ -6532,19 +8191,16 @@ stage_stop() {
   [ -z "$(ls -A "$SOCK" 2>/dev/null)" ] || die "socket directory $SOCK is not empty"
   note "confirmed: no postmaster.pid, no postgres process on $DATA, socket directory empty"
 }
-# Containment before any rm -rf: SANDBOX comes from the environment, so
-# refuse to delete anything outside this repository's .wiki-runtime/tmp tree.
-inside_tmp() {
-  case ${1%/} in
-    "$WIKI_ROOT/.wiki-runtime/tmp"/?*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 stage_clean() {
+  if [ "$SANDBOX_STATE" != ours ]; then say "clean"; note "no sandbox at $SANDBOX: nothing to delete"; return 0; fi
   stage_stop
-  inside_tmp "$SANDBOX" || die "refusing to delete $SANDBOX: it is outside .wiki-runtime/tmp/"
-  rm -rf "$SANDBOX"
-  [ -d "$SANDBOX" ] && die "the sandbox is still there"
+  # the guard ran before anything else; check once more that the path about
+  # to be deleted is still the canonical, marked sandbox
+  [ "$(canon_dir "$SANDBOX")" = "$SANDBOX" ] && [ -f "$SANDBOX/$MARKER_NAME" ] \
+    || die "refusing to delete $SANDBOX: it is no longer the marked sandbox"
+  rm -rf -- "$SANDBOX"
+  [ -e "$SANDBOX" ] && die "the sandbox is still there"
+  SANDBOX_STATE=absent
   note "sandbox deleted: $SANDBOX"
 }
 stage_reset() {
@@ -6562,20 +8218,36 @@ need_server() {
 
 ALL="build check cluster texts exact facts declare fixtures churn autoanalyze crosscheck decide oracle act score probes edge defeat verify criteria report"
 
+# The dispatcher: the guard first, then every stage in turn.  A stage that
+# returns non-zero, or dies inside a subshell, stops the run with exit status
+# 1, and the EXIT trap stops the cluster.
 main() {
-  local stages="$*" s t0
+  local stages="$*" s t0 rc
   [ -z "$stages" ] && stages="$ALL"
   for s in $stages; do
     declare -F "stage_$s" > /dev/null || die "no such stage: $s (have: $ALL start stop reset clean)"
   done
+  case " $stages " in
+    " clean "|" stop "|" stop clean ") sandbox_guard existing ;;
+    *) sandbox_guard create ;;
+  esac
+  trap on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  [ "$SANDBOX_STATE" = ours ] && rm -f -- "$FAILMARK"
   for s in $stages; do
     case "$s" in
       build|check|cluster|start|stop|clean) : ;;
       *) need_server ;;
     esac
     t0=$(date +%s)
-    "stage_$s"
-    [ -d "$OUT" ] && printf '%-12s %s\n' "$s" "$(( $(date +%s) - t0 ))" >> "$OUT/timing.txt"
+    "stage_$s"; rc=$?
+    [ "$rc" = 0 ] || die "stage $s failed with exit status $rc"
+    if [ "$SANDBOX_STATE" = ours ] && [ -s "$FAILMARK" ]; then
+      die "stage $s: a check inside a subshell failed: $(head -1 "$FAILMARK")"
+    fi
+    [ "$SANDBOX_STATE" = ours ] && [ -d "$OUT" ] \
+      && printf '%-12s %s\n' "$s" "$(( $(date +%s) - t0 ))" >> "$OUT/timing.txt"
   done
   say "done: $stages"
 }
@@ -6620,14 +8292,35 @@ main "$@"
 - **The instruments.** `pgstat_hash_page`, and the 17 branch's history for commit
   `036decbba2`; `gistchoose`'s random tie-break; the `pgstattuple`, `pgstatindex`,
   `pgstathashindex` and `pgstatginindex`
-  refusal messages the instrument matrix provokes.
-- **Parsing without raising.** `textregexsubstr`'s NULL on no match; the
-  `pg_input_is_valid` and `pg_stat_force_next_flush` catalog entries.
+  refusal messages the instrument matrix provokes; `get_raw_page_internal`'s superuser
+  check.
+- **The reserved line.** `parse_re_flags`' `n` flag and the newline-sensitive mode the
+  functions chapter describes; `textregexsubstr`'s and `regexp_match`'s NULL on no match;
+  the `pg_input_is_valid` and `pg_stat_force_next_flush` catalog entries.
+- **Step 2's locks, identity check and isolation.** `pg_relation_size`'s lock through
+  `try_relation_open`; the `set_config` and `current_setting` catalog entries;
+  `ReindexIndex`'s table-before-index order and `RangeVarCallbackForReindexIndex`'s table
+  lock mode; `AlterTableGetLockLevel`'s level for an owner change,
+  `RangeVarCallbackForAlterRelation`'s ownership check, and `ATExecChangeOwner`'s index
+  branch and no-op path; `RenameRelation`'s two lock modes; `LockTableAclCheck`; the lock
+  conflict table; the PL/pgSQL chapter on trapping errors and on the isolation level of a
+  transaction started inside a procedure; the MVCC chapter's read committed and repeatable
+  read; `default_transaction_isolation`'s GUC entry; the `ALTER INDEX` command tag.
+- **The protocol cross-checks.** The `index scan needed:` line; hash's bulk-delete
+  statistics; `gistvacuumpage`'s page classes and `gistdeletepage`'s counters;
+  `spgvacuumpage`'s free pages, SP-GiST's final statistics and fixed blocks, and
+  `PageIsEmpty`; `brinvacuumcleanup`; `ginvacuumcleanup`'s free pages;
+  `br_page_get_freespace`, the FSM's categories and their two conversions, and
+  `BrinSpecialSpace`; `brin_vacuum_scan` and `brin_page_cleanup`; and the three BRIN paths
+  that write or skip a page's FSM entry, in `brin_doinsert`, `brin_doupdate` and
+  `brin_getinsertbuffer`.
+- **The cluster settings.** The `guc_tables.c` entry of every setting the legs change.
 - **Read-only servers.** `ClassifyUtilityCommandAsReadOnly` for `COMMENT` and the
   read-only and recovery gate in `standard_ProcessUtility`.
 - **Tests.** No shipped test covers a COMMENT-stored baseline or this method. The engine's
-  regression suite and the three contrib suites the cross-checks read passed on both
-  builds; 12.2's `pg_freespacemap` has no suite.
+  regression suite passed on both builds, as did the suites of the contrib modules the
+  cross-checks read: `pageinspect`, `pgstattuple` and `pg_freespacemap` on 17.11, and the
+  first two on 12.2, whose `pg_freespacemap` declares no suite.
 
 ## Evidence Map
 
@@ -6639,6 +8332,14 @@ main "$@"
 | the comment survives both `REINDEX` forms | [index.c#reindex_index-rebuild](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789), [index.c#index_concurrently_swap-comment](../../../../raw/postgres-17/src/backend/catalog/index.c#L1740-L1784); measured: edge round E, both legs |
 | a rebuild recounts the table, so step 2 reads the baseline after it | [index.c#index_build-update-stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L3126-L3135), [index.c#index_update_stats](../../../../raw/postgres-17/src/backend/catalog/index.c#L2789-L2842); measured: P1 |
 | `REINDEX` locks | [index.c#reindex_index-locks](../../../../raw/postgres-17/src/backend/catalog/index.c#L3601-L3614), [index.c#reindex_index-index-lock](../../../../raw/postgres-17/src/backend/catalog/index.c#L3647-L3654), [indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2857-L2912) |
+| reading an index's size locks it, so step 2's scan reads only the catalogs | [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L371), [relation.c#try_relation_open](../../../../raw/postgres-17/src/backend/access/common/relation.c#L88-L108); measured: edge round H, both legs |
+| a setting made with `set_config(..., true)` ends with its transaction, and a missing one reads as NULL | [pg_proc.dat#set_config](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6270-L6273), [pg_proc.dat#current_setting-missing_ok](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6268-L6269); measured: facts, both legs |
+| step 2 takes `REINDEX INDEX`'s two locks, table first, before it decides | [indexcmds.c#ReindexIndex-lock-order](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2812-L2829), [indexcmds.c#RangeVarCallbackForReindexIndex-table-lockmode](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2871-L2872), [index.c#reindex_index-locks](../../../../raw/postgres-17/src/backend/catalog/index.c#L3601-L3614), [lockcmds.c#LockTableAclCheck](../../../../raw/postgres-17/src/backend/commands/lockcmds.c#L280-L299) |
+| `ALTER INDEX ... OWNER TO` its current owner takes `AccessExclusiveLock`, checks ownership, and writes and prints nothing | [tablecmds.c#AlterTableGetLockLevel-ChangeOwner](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4542-L4547), [tablecmds.c#RangeVarCallbackForAlterRelation-ownership](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L17904-L17906), [tablecmds.c#ATExecChangeOwner-index](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14543-L14562), [tablecmds.c#ATExecChangeOwner-noop](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14614-L14618); measured: facts, both legs |
+| no comment and no rename lands on an index while step 2 holds its locks | [comment.c#CommentObject-ownership](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L76), [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L64-L104), [tablecmds.c#RenameRelation-lockmode](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4101-L4106); measured: edge rounds I, J and K, both legs |
+| a rebuild that fails still uses up its place under `max_reindex` | [plpgsql.sgml#trapping-errors](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L2856-L2860); measured: edge round G, both legs |
+| step 2 needs read committed, and sets it for its session | [plpgsql.sgml#transaction-defaults](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L3743-L3744), [mvcc.sgml#read-committed](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L317-L333), [mvcc.sgml#repeatable-read](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L508-L513), [guc_tables.c#default_transaction_isolation](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4820-L4827) |
+| `ALTER INDEX` fires DDL event triggers | [cmdtag.h#PG_CMDTAG](../../../../raw/postgres-17/src/include/tcop/cmdtag.h#L19), [cmdtaglist.h#ALTER-INDEX](../../../../raw/postgres-17/src/include/tcop/cmdtaglist.h#L42) |
 | `REINDEX CONCURRENTLY` cannot run from a `DO` block | [indexcmds.c#ExecReindex-concurrently](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2736-L2738), [xact.c#PreventInTransactionBlock](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L3594-L3633); measured: facts, both legs |
 | a `DO` block commits only outside a transaction block | [utility.c#isAtomicContext](../../../../raw/postgres-17/src/backend/tcop/utility.c#L551), [utility.c#DoStmt](../../../../raw/postgres-17/src/backend/tcop/utility.c#L706-L708), [spi.c#_SPI_commit](../../../../raw/postgres-17/src/backend/executor/spi.c#L227-L241); measured: facts, both legs |
 | `WHEN OTHERS` does not catch a statement timeout, and does catch a lock timeout | [pl_exec.c#exception_matches_conditions](../../../../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1583-L1597); measured: facts and edge rounds B and C, both legs |
@@ -6647,17 +8348,23 @@ main "$@"
 | a dropped index reads as NULL size | [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L371) |
 | the size is the main fork | [system_functions.sql#pg_relation_size](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L285-L289) |
 | none of these index files is truncated by `VACUUM` | [spgvacuum.c#truncation-disabled](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L877-L900), [README#no-shrink](../../../../raw/postgres-17/src/backend/access/hash/README#L31-L34), [ginvacuum.c#ginvacuumcleanup-relength](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L794-L802); measured: invariant I1, both legs |
-| a regex `substring` returns NULL instead of raising | [regexp.c#textregexsubstr](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L583-L604) |
+| the payload is one whole line, found in newline-sensitive mode, and a regex that does not match returns NULL instead of raising | [regexp.c#parse_re_flags-n](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L418-L420), [func.sgml#newline-sensitive](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L7449-L7458), [regexp.c#textregexsubstr](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L583-L604), [regexp.c#regexp_match](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L1367-L1390); measured: edge round A, both legs |
 | `pg_input_is_valid` exists on 17; absent on 12.2 | [pg_proc.dat#pg_input_is_valid](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7202-L7204); measured: facts |
-| `reltuples` is `-1` when unknown, and `TRUNCATE` writes `-1` | [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66), [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3943-L3954); measured: P1, and `0` on 12.2 |
+| `reltuples` is `-1` when unknown, `TRUNCATE` writes `-1`, and a build on an empty table leaves it | [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66), [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3943-L3954), [index.c#index_update_stats-empty-table](../../../../raw/postgres-17/src/backend/catalog/index.c#L2825-L2842); measured: P1, and `0` on 12.2 |
 | `ANALYZE` and `VACUUM` write the table's count | [analyze.c#table-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L632-L645), [vacuumlazy.c#new_live_tuples](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1034-L1037), [vacuumlazy.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L572-L575), [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1300-L1366) |
 | an index's own count means entries, rows or ranges depending on the writer | [gininsert.c#indtuples](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L271), [gininsert.c#index_tuples](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L425), [brin.c#brinbuild-index_tuples](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1248-L1258), [analyze.c#index-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663), [brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332); measured: P1 |
-| six-digit rounding of `reltuples` | [numeric.c#float4_numeric](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4708-L4740); measured: facts |
+| six-digit rounding of `reltuples`, applied to each of the two counts separately | [numeric.c#float4_numeric](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4708-L4740); measured: facts |
+| the pay-off threshold is applied to the unrounded reclaimed fraction | the `score` stage of both leg scripts, under [Measurement Script](#measurement-script) |
 | a BRIN index grows with its heap | [README#brin-summary](../../../../raw/postgres-17/src/backend/access/brin/README#L6-L13), [brin_revmap.c#HEAPBLK_TO_REVMAP](../../../../raw/postgres-17/src/backend/access/brin/brin_revmap.c#L40-L43), [brin_revmap.c#brinRevmapExtend](../../../../raw/postgres-17/src/backend/access/brin/brin_revmap.c#L108-L121), [brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332), [brin.c#brinsummarize-partial](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1916-L1925); measured: `b10` to `b13` |
 | a hash rebuild is sized from the heap's estimate | [hash.c#hashbuild-estimate](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L133-L137), [hashpage.c#_hash_init_metabuffer](../../../../raw/postgres-17/src/backend/access/hash/hashpage.c#L509-L523); measured: P2, `h04`, `h12` |
 | `INDEX_CLEANUP OFF` leaves the index untouched | [vacuumlazy.c#do_index_cleanup-init](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L387-L397); no longer measured, since `h06` and `n11` were removed |
 | the no-defeat proofs | [vacuum.c#vacuum_get_cutoffs-OldestXmin](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1109-L1122), [vacuumlazy.c#lazy_vacuum-gate](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1047-L1052), [vacuumlazy.c#verbose-tuples-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L657-L663), [vacuumlazy.c#verbose-index-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), [hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663); measured: every maintenance step, and the defeat stage |
-| timeouts forced to 0, as autovacuum does | [autovacuum.c#worker-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470), [autovacuum.c#launcher-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L518-L526), the four GUC entries; measured: every `VACUUM` and `ANALYZE` session |
+| the `VERBOSE` index line, count by count, for each AM | [vacuumlazy.c#verbose-index-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), [vacuumlazy.c#index-scan-needed](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L695-L700), [hash.c#hashbulkdelete-stats](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L631-L637), [hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663), [gistvacuum.c#gistvacuumpage-classes](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L309), [gistvacuum.c#gistdeletepage-counters](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L655-L658), [spgvacuum.c#spgvacuumpage-fsm](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L665-L683), [spgvacuum.c#final-stats](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L902-L905), [spgist_private.h#fixed-blocks](../../../../raw/postgres-17/src/include/access/spgist_private.h#L47-L53), [bufpage.h#PageIsEmpty](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214-L224), [brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332), [ginvacuum.c#ginvacuumcleanup-free](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L794); measured: invariant I9, both legs |
+| a deleted GiST page stays unrecyclable until its deletion XID is older than every snapshot's horizon, so `g08` does not reach that row | [gistvacuum.c#gistdeletepage-deletexid](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L641-L656), [gistutil.c#gistPageRecyclable](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908); measured: `g08`'s two `VACUUM`s, both legs |
+| a BRIN page's own free space against its FSM entry, and where the two must agree | [brin_pageops.c#br_page_get_freespace](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L913-L927), [freespace.c#FSM_CATEGORIES](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L64-L66), [freespace.c#fsm_space_avail_to_cat](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L402-L421), [freespace.c#fsm_space_cat_to_avail](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L427-L435), [brin_page.h#BrinSpecialSpace](../../../../raw/postgres-17/src/include/access/brin_page.h#L29-L60), [brin.c#brin_vacuum_scan](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L2154-L2193), [brin_pageops.c#brin_page_cleanup](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L609-L661), [brin_pageops.c#brin_getinsertbuffer-fsm-policy](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L679-L682), [brin_pageops.c#brin_doinsert-extended-freespace](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L417-L419), [brin_pageops.c#brin_doinsert-fsm](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L460-L464), [brin_pageops.c#brin_doupdate-move](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L244-L313), [brin_pageops.c#brin_getinsertbuffer-record](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L861-L865); measured: invariant I18, both legs |
+| timeouts forced to 0, as autovacuum does | [autovacuum.c#worker-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470), [autovacuum.c#launcher-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L518-L526), [guc_tables.c#statement_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620), [guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631), [guc_tables.c#idle_in_transaction_session_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2633-L2642), [guc_tables.c#transaction_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2644-L2653); measured: every `VACUUM` and `ANALYZE` session |
+| the context of every other setting the legs change | [guc_tables.c#autovacuum](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1449-L1457), [guc_tables.c#fsync](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1096-L1107), [guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2261-L2270), [guc_tables.c#work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2447-L2458), [guc_tables.c#maintenance_work_mem](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2465-L2474), [guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3409-L3417), [guc_tables.c#log_timezone](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4104-L4112), [guc_tables.c#TimeZone](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4394-L4403); measured: `settings.txt`, both legs |
+| the raw-page reader needs superuser | [rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L199) |
 | 17's `pgstattuple` reads an all-zero hash page as free space; 12.2 refuses it | [pgstattuple.c#pgstat_hash_page](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L453-L495), [hashpage.c#_hash_alloc_buckets](../../../../raw/postgres-17/src/backend/access/hash/hashpage.c#L967-L1037), commit `036decbba2` in the 17 checkout's history; measured: 12.2's instrument matrix and hash censuses |
 | `g09`'s size moves between passes | [gistutil.c#gistchoose-random](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L406-L429), [gistutil.c#gistchoose-prng](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L505-L511); measured: this run beside the run filed before the removal, an earlier pass and the source page |
 | a standby can run step 1 only | [utility.c#comment-not-read-only](../../../../raw/postgres-17/src/backend/tcop/utility.c#L164-L217), [utility.c#recovery-gate](../../../../raw/postgres-17/src/backend/tcop/utility.c#L570-L583) |
@@ -6674,31 +8381,34 @@ main "$@"
 3. **The coverage row "a BRIN summary that moved to another page" is not reached on
    12.2.** On 17.11 it is reached by `b11`, which 12.2 cannot build, and `b10` and `b12`
    left no orphaned line pointer on either leg.
-4. **One decision sits within 2 points of the pay-off threshold.** `n05` returned 21.45 %
-   against 23.08 %. The threshold was declared before the run and is not moved here; a
-   reader with a different pay-off should rescore it first.
+4. **One decision sits within 2 points of the pay-off threshold.** `n05` returned
+   21.45 % against 23.08 %. The threshold was declared before the run and is not
+   moved here; a reader with a different pay-off should rescore it first.
 5. **Which untouched table the census analyzes depends on timing.** In the recorded run
    the census analyzed `tc_past` alone on both legs. An earlier development pass of the
    same census code on 17.11 also analyzed `h00`, whose build-phase inserts had reached
    the shared statistics after its build-phase `ANALYZE`: the publication hazard the
    concept pages describe. No decision depends on it, because `h00`'s count is the same
    either way, but the census's list of tables is not a fixed output.
-6. **`g09`'s size moves between passes.** On 17.11 this run read `C` as 453,812,224 bytes.
-   The run filed before the removal, from the same fixture code, read 449,568,768; an
-   earlier development pass read 452,902,912; and the source page filed 454,885,376. Only
-   the insert-grown file moves on 17.11: the sorted build `B` and the sorted rebuild `R`
-   were byte-identical in both recorded runs. On 12.2, where the build and the rebuild are
-   insert-driven too, all three moved between the two recorded runs: `B` read 97,968,128
-   against 98,041,856, `C` 482,336,768 against 488,620,032, and `R` 78,053,376 against
-   78,061,568. GiST's `gistchoose` breaks ties between equally good subtrees at random,
-   so a GiST index grown by inserts of many equally placed keys, as `g09`'s grid of points
-   is, is not the same size twice
+6. **`g09`'s size moves between passes.** On 17.11 this run read `C` as 456,310,784 bytes.
+   The two filings before this revision, from the same fixture recipe, read 453,812,224
+   (commit `d69c03b`) and 449,568,768 (commit `9b535e2`); an earlier development pass read
+   452,902,912; and the source page filed 454,885,376. Only the insert-grown file moves on
+   17.11: the sorted build `B` and the sorted rebuild `R` were byte-identical in all three
+   recorded runs. On 12.2, where the build and the rebuild are insert-driven too, all three
+   move from run to run: this run read `B`, `C` and `R` as 97,902,592, 487,817,216 and
+   78,102,528; the first 12 run of this revision, set aside for its reporting defect, read
+   97,935,360, 488,275,968 and 78,028,800; `d69c03b` read 97,968,128, 482,336,768 and
+   78,053,376; and `9b535e2` read 98,041,856, 488,620,032 and 78,061,568. GiST's
+   `gistchoose` breaks ties between equally good subtrees at random, so a GiST index grown
+   by inserts of many equally placed keys, as `g09`'s grid of points is, is not the same
+   size twice
    ([gistutil.c#gistchoose-random](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L406-L429),
    [gistutil.c#gistchoose-prng](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L505-L511)).
    That is the likely cause, and the split between the sorted files, which held still, and
    the insert-grown ones, which moved, fits it; no run isolated it. Neither the decision
    nor the score moved: `g09` read `reindex` and `PASS` on every pass, with a rebuild
-   returning 83.8 to 84.4 %.
+   returning 83.8 to 84.5 % in the recorded runs.
 7. **The 12 leg's publication wait is a second, not an interlock.** Without
    `pg_stat_force_next_flush()`, each churn session exits and the leg waits one second
    before the maintenance step. The census verdicts on 12.2 came out as designed, but
@@ -6716,6 +8426,31 @@ main "$@"
    must reach. Its only fixtures, `h06` and `n11`, were removed at the asker's request,
    so neither leg conforms on that row. The filing before the removal, commit `9b535e2`,
    scored both of them `FALSE NEGATIVE`.
+12. **No fixture reaches a GiST page that is deleted but not recyclable under a held
+   snapshot.** `g08`'s snapshot is taken before its churn commits, so the deleted rows
+   stay visible to it, and the `VACUUM` under it removes none of them and deletes no page.
+   A deleted page stays unrecyclable
+   until its deletion XID, the next-XID counter when it was deleted, is older than every
+   snapshot's horizon
+   ([gistvacuum.c#gistdeletepage-deletexid](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L641-L656),
+   [gistutil.c#gistPageRecyclable](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908)),
+   so a snapshot taken after one `VACUUM` deletes pages and held through a second one
+   would reach the row. The ported corpus has no such fixture, and this revision files the
+   row as not reached instead of adding one.
+13. **I18 is scored only on the BRIN pages the `VACUUM` did not write.** That was 2 pages
+   on each leg, so the invariant is a narrow check. The pages the `VACUUM`'s own
+   summarization wrote are compared and reported, not scored: on 17.11, 13 of 18 read
+   their exact category, 3 higher and 2 lower; on 12.2, 4 of 6, 2 higher and 0 lower. The source explains both
+   directions, but no run tied a page's reading to the insert or the move behind it. By the
+   same reading, a second `VACUUM` with no writes since the first would record every
+   regular page's free space in its scan and then summarize nothing, so a census after it
+   could score every page; this run does not take one.
+14. **Step 1 is one statement, so one locked index cancels the whole plan.** Edge round H
+   measured it on both legs. A plan that survives it needs an exception block per index,
+   which only a PL/pgSQL block has
+   ([plpgsql.sgml#trapping-errors](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L2856-L2860));
+   this revision keeps step 1 a single read-only `SELECT` and lists the limit under
+   [Known limitations](#known-limitations).
 
 ## Source References
 
@@ -6740,7 +8475,12 @@ main "$@"
 - [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2803-L2850)
 - [indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2857-L2912)
 - [indexcmds.c#RangeVarCallbackForReindexIndex-table-lockmode](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2871-L2872)
+- [indexcmds.c#ReindexIndex-lock-order](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2812-L2829)
 - [tablecmds.c#ATExecChangeOwner-index](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14543-L14562)
+- [tablecmds.c#ATExecChangeOwner-noop](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14614-L14618)
+- [tablecmds.c#AlterTableGetLockLevel-ChangeOwner](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4542-L4547)
+- [tablecmds.c#RangeVarCallbackForAlterRelation-ownership](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L17904-L17906)
+- [tablecmds.c#RenameRelation-lockmode](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L4101-L4106)
 - [relcache.c#RelationSetNewRelfilenumber-reltuples](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L3943-L3954)
 - [pg_class.h#reltuples](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L62-L66)
 - [analyze.c#table-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L632-L645)
@@ -6751,13 +8491,18 @@ main "$@"
 - [vacuumlazy.c#verbose-index-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732)
 - [vacuumlazy.c#new_live_tuples](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1034-L1037)
 - [vacuumlazy.c#lazy_vacuum-gate](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1047-L1052)
+- [vacuumlazy.c#index-scan-needed](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L695-L700)
 - [vacuum.c#vacuum_get_cutoffs-OldestXmin](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1109-L1122)
 - [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1300-L1366)
 - [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L371)
 - [system_functions.sql#pg_relation_size](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L285-L289)
 - [regexp.c#textregexsubstr](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L583-L604)
+- [regexp.c#parse_re_flags-n](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L418-L420)
+- [regexp.c#regexp_match](../../../../raw/postgres-17/src/backend/utils/adt/regexp.c#L1367-L1390)
 - [numeric.c#float4_numeric](../../../../raw/postgres-17/src/backend/utils/adt/numeric.c#L4708-L4740)
 - [pg_proc.dat#pg_input_is_valid](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L7202-L7204)
+- [pg_proc.dat#current_setting-missing_ok](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6268-L6269)
+- [pg_proc.dat#set_config](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6270-L6273)
 - [spi.c#_SPI_commit](../../../../raw/postgres-17/src/backend/executor/spi.c#L227-L241)
 - [utility.c#comment-not-read-only](../../../../raw/postgres-17/src/backend/tcop/utility.c#L164-L217)
 - [utility.c#isAtomicContext](../../../../raw/postgres-17/src/backend/tcop/utility.c#L551)
@@ -6778,13 +8523,18 @@ main "$@"
 - [guc_tables.c#max_parallel_maintenance_workers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3409-L3417)
 - [guc_tables.c#log_timezone](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4104-L4112)
 - [guc_tables.c#TimeZone](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4394-L4403)
+- [guc_tables.c#default_transaction_isolation](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4820-L4827)
 - [autovacuum.c#launcher-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L518-L526)
 - [autovacuum.c#worker-timeouts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470)
 - [spgvacuum.c#truncation-disabled](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L877-L900)
+- [spgvacuum.c#final-stats](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L902-L905)
+- [spgvacuum.c#spgvacuumpage-fsm](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L665-L683)
 - [README#no-shrink](../../../../raw/postgres-17/src/backend/access/hash/README#L31-L34)
 - [ginvacuum.c#ginvacuumcleanup-relength](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L794-L802)
+- [ginvacuum.c#ginvacuumcleanup-free](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L794)
 - [hash.c#hashbuild-estimate](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L133-L137)
 - [hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663)
+- [hash.c#hashbulkdelete-stats](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L631-L637)
 - [hashpage.c#_hash_init_metabuffer](../../../../raw/postgres-17/src/backend/access/hash/hashpage.c#L509-L523)
 - [hashpage.c#_hash_alloc_buckets](../../../../raw/postgres-17/src/backend/access/hash/hashpage.c#L967-L1037)
 - [README#brin-summary](../../../../raw/postgres-17/src/backend/access/brin/README#L6-L13)
@@ -6793,12 +8543,40 @@ main "$@"
 - [brin.c#brinbuild-index_tuples](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1248-L1258)
 - [brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332)
 - [brin.c#brinsummarize-partial](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1916-L1925)
+- [brin.c#brin_vacuum_scan](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L2154-L2193)
 - [gininsert.c#indtuples](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L271)
 - [gininsert.c#index_tuples](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L425)
 - [gistutil.c#gistchoose-random](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L406-L429)
 - [gistutil.c#gistchoose-prng](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L505-L511)
 - [pgstattuple.c#pgstat_hash_page](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L453-L495)
 - [rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L199)
+- [brin_page.h#BrinSpecialSpace](../../../../raw/postgres-17/src/include/access/brin_page.h#L29-L60)
+- [brin_pageops.c#br_page_get_freespace](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L913-L927)
+- [brin_pageops.c#brin_doinsert-extended-freespace](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L417-L419)
+- [brin_pageops.c#brin_doinsert-fsm](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L460-L464)
+- [brin_pageops.c#brin_getinsertbuffer-fsm-policy](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L679-L682)
+- [brin_pageops.c#brin_doupdate-move](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L244-L313)
+- [brin_pageops.c#brin_getinsertbuffer-record](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L861-L865)
+- [brin_pageops.c#brin_page_cleanup](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L609-L661)
+- [bufpage.h#PageIsEmpty](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214-L224)
+- [cmdtag.h#PG_CMDTAG](../../../../raw/postgres-17/src/include/tcop/cmdtag.h#L19)
+- [cmdtaglist.h#ALTER-INDEX](../../../../raw/postgres-17/src/include/tcop/cmdtaglist.h#L42)
+- [freespace.c#FSM_CATEGORIES](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L64-L66)
+- [freespace.c#fsm_space_avail_to_cat](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L402-L421)
+- [freespace.c#fsm_space_cat_to_avail](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L427-L435)
+- [func.sgml#newline-sensitive](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L7449-L7458)
+- [gistvacuum.c#gistdeletepage-counters](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L655-L658)
+- [gistvacuum.c#gistdeletepage-deletexid](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L641-L656)
+- [gistvacuum.c#gistvacuumpage-classes](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L309)
+- [gistutil.c#gistPageRecyclable](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908)
+- [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L64-L104)
+- [lockcmds.c#LockTableAclCheck](../../../../raw/postgres-17/src/backend/commands/lockcmds.c#L280-L299)
+- [mvcc.sgml#read-committed](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L317-L333)
+- [mvcc.sgml#repeatable-read](../../../../raw/postgres-17/doc/src/sgml/mvcc.sgml#L508-L513)
+- [plpgsql.sgml#transaction-defaults](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L3743-L3744)
+- [plpgsql.sgml#trapping-errors](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L2856-L2860)
+- [relation.c#try_relation_open](../../../../raw/postgres-17/src/backend/access/common/relation.c#L88-L108)
+- [spgist_private.h#fixed-blocks](../../../../raw/postgres-17/src/include/access/spgist_private.h#L47-L53)
 
 ## Navigation
 

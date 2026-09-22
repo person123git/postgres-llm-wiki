@@ -13551,3 +13551,99 @@ blocks. Verified after teardown: no `postgres` process, ports 55417 and 55412 fr
 the asker said `commit and push`, on top of the filing it revises, commit `9b535e2`. A
 fetch just before the commit showed no new commit on `origin/master`, so no rebase was
 needed.
+
+## [2026-09-22] review v17 | non-B-tree COMMENT-baseline heuristic: twelve reported defects fixed, both legs re-measured
+
+- Follow-up in the same session to the removal of `h06` and `n11`, commit `d69c03b`. The
+  asker pasted a twelve-finding review of the page and asked for the findings to be
+  fixed, in the review's own order: harden both scripts, repair step 2 and the payload,
+  complete the protocol checks and correct the coverage labels, then re-measure both legs
+  and update the prose, the usage, the bookkeeping and lint, keeping `h06` and `n11`
+  removed and the common-concept pages unchanged. Prompt hygiene was asked once and
+  answered **correct silently**, so only the corrected form of the request is recorded,
+  here and in the page's new `### Second revision: twelve reported defects`: "Follow
+  `AGENTS.md`, in PostgreSQL 17, for the question "A COMMENT-Stored Baseline Non-B-Tree
+  Index-Maintenance Heuristic for PostgreSQL 12 Through 17 (unverified)": fix these
+  issues." The page's other `## Question` text is untouched.
+- Target:
+  [A COMMENT-Stored Baseline Non-B-Tree Index-Maintenance Heuristic for PostgreSQL 12
+  Through 17 (unverified)](v17/questions/indexing/non-btree-comment-baseline-maintenance-heuristic.md)
+  at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and
+  `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+
+**Every finding was confirmed against the pin before it was fixed.**
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | `clean` accepted a sandbox path that `..` took out of `.wiki-runtime/tmp`, and stopped the cluster before checking it | both scripts canonicalize every path, require a plain directory directly under this repository's `.wiki-runtime/tmp` carrying the script's own marker file, and check before any write, stop or delete; four refusal cases were exercised by hand, all refused before anything was touched |
+| 2 | a failed stage, a failed suite or a page mismatch still produced a successful run | the dispatcher stops on any stage's non-zero status or on a `die` inside a subshell (a failure marker file), exits 1 and stops its cluster; every suite must exit 0 with all tests passed; `texts`, `exact` and `verify` fail the run on any difference, and `criteria` on an unexpected server error or a maintenance skip line |
+| 3 | step 2 read names and human text before locking, then ran DDL by name | per index: pass 1 unlocked; then `LOCK TABLE ... IN SHARE MODE` and `ALTER INDEX ... OWNER TO` its current owner (the `REINDEX INDEX` lock pair, table first; a no-op that neither writes nor warns, measured on both servers); an identity check of both names against the OIDs read; pass 2 under the locks decides and supplies the comment's human text; one commit per index |
+| 4 | one index held in `ACCESS EXCLUSIVE` aborted step 2's scan | the scan reads `pg_class` and `pg_am` only, and every size read is inside the per-index exception block |
+| 5 | re-run stages appended records, and the documented `decide score` re-run re-decided on rebuilt indexes | unique keys per fixture, phase and metric; fixture-changing stages run once and in order; read-only stages replace their own records; the documented re-score is now `score criteria` |
+| 6 | human text was altered around a stray marker, and whitespace trimmed | the payload is one reserved line, `@nbmaint:{...}` on a line of its own; everything else is kept byte for byte; two reserved lines are `conflict`, and nothing is written |
+| 7 | independent regexes accepted nested or repeated fields | one anchored grammar match of the whole reserved line supplies `sz` and `tup` |
+| 8 | an existing install was reused without provenance | the build refuses any commit but the pin or a changed tracked file, and writes a manifest (pin, flags, `config.status` hash, installed-file inventory hash); a reused install must match all four |
+| 9 | `max_reindex` capped successes | it counts a rebuild before it starts; edge round G sets it to 1 and fails the first rebuild |
+| 10 | BRIN FSM compared as a count; the `VERBOSE` invariant checked presence only; `g08` mislabelled | invariant I18 compares each regular BRIN page's own free space with its FSM category, scored on pages the `VACUUM` did not write (LSN at or below the insert position read before it); I9 compares every count on each line with the censuses around its `VACUUM`, per AM; the `g08` coverage row is filed as not reached, with a new open question |
+| 11 | the threshold was applied to a rounded fraction | the score compares the unrounded `truth_exact`; two decimals are display only |
+| 12 | the rounding bound and the `n05`/`n12` "larger" figures were wrong | both counts are rounded independently, so the tuple ratio can move by about 1 x 10^-5 of itself; `n05` and `n12` are 27.31 % and 12.99 % larger than their rebuilds, which return 21.45 % and 11.50 % |
+
+**Step 1 and step 2** changed together: the shared 104-line pipeline, byte-identical in
+both, now parses the reserved line and adds the `ambiguous` state; step 1 prints
+`conflict` for it, ordered after `initialize`; step 2 sets `default_transaction_isolation
+= 'read committed'` for its session, because each transaction it starts after a `COMMIT`
+takes the default level and only read committed re-reads under the locks. New SHA-256:
+step 1 `89293844...`, step 2 `52bcbea7...`, pipeline `4e22b4c2...`.
+
+**Edge cases** grew from 91 to 158 verdicts per leg: new comment shapes (a nested payload,
+a repeated field, two reserved lines, a payload-shaped string in prose, trailing spaces,
+a trailing newline), a lock held on one index for a whole round (H), the human text
+edited (I), the payload rewritten (J) and the index renamed with a new index under its
+old name (K) while step 2 waits for its locks, and the rebuild cap reached by a failed
+rebuild (G).
+
+**Re-measurement.** Both legs from empty sandboxes on Darwin 27.0.0 arm64, Apple clang
+21.0.0, `JOBS=8`. The 17 leg ran 21:30:43Z to 21:45:08Z beside a first 12 run; that 12
+run's `invariant-detail.txt` printed no `VERBOSE` counts, because 12.2 has no
+newly-deleted count and the NULL blanked the line, so the 12 script's detail query was
+fixed and the 12 leg re-run alone, 21:49:47Z to 22:02:41Z. New script SHA-256: `7cf38509...`
+(17) and `8fc8c78f...` (12). Engine tests **All 225** and **All 192**; every stage and
+check passed, and `verify` confirmed both texts and both script blocks byte-identical to
+what ran.
+
+| Result | 17.11 | 12.2 |
+|---|---|---|
+| pass / false positive / false negative | 22 / 7 / 0 | 22 / 6 / 0 |
+| rebuilds ordered, mean share of the file returned | 21, 48.8 % | 20, 51.2 % |
+| predictions filed before the run that held | 29 of 29 | 28 of 28 |
+| invariants held | 18 of 18 | 18 of 18 |
+| edge-case verdicts | 158 of 158 | 158 of 158 |
+| I18: pages the `VACUUM` did not write, exact / its own pages exact, higher, lower | 2 of 2 / 13, 3, 2 of 18 | 2 of 2 / 4, 2, 0 of 6 |
+
+Every decision and score is unchanged from `d69c03b`; the sizes moved only on `g09`, and
+the tuple ratios only where `ANALYZE`'s sample moved them.
+
+**Bookkeeping.** The page's bullets in `wiki/index.md` and `wiki/v17/index.md`, the v17
+row clause in `wiki/versions.md` and a new 2026-09-22 coverage note. `verified_by_agent:`
+stays `not yet`. Lint run: **9 errors / 2 warnings**, this host's pre-existing baseline and the same findings as a run taken before this revision's wiki edits, none of them on this page or on any file this revision touched.
+
+**No common concept page was touched.** Both still list "a `VACUUM` whose index cleanup
+did not run" as required coverage, and the non-B-tree page also lists "GiST: a
+deleted-but-not-recyclable page under a held snapshot"; the page files the first as
+skipped at the asker's request and the second as not reached.
+
+**Teardown.** Every cluster this revision started was stopped with `pg_ctl -m fast -w stop` through
+its leg's `clean` stage after its output directory was copied out: the first 12 run's,
+then the 17 leg's, then the recorded 12 run's. Each `clean` confirmed no `postmaster.pid`,
+no matching process and an empty socket directory, then deleted
+`.wiki-runtime/tmp/nbmaint12/` or `.wiki-runtime/tmp/nbmaint17/`. The development
+sandboxes `nbdev17`, `nbdev12`, `nbrun17` and `nbrun12` had been stopped and deleted
+before the recorded runs, the last two through `clean`. The two leg script files were
+deleted from `.wiki-runtime/tmp/` after a last byte comparison with the page's blocks.
+Verified after teardown: no `postgres` process, ports 55417 and 55412 free,
+`.wiki-runtime/tmp/` empty. `raw/postgres-17/` and `raw/postgres-12/` were read only.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once
+the asker said `commit and push`, on top of the revision it follows, commit `d69c03b`. A
+fetch just before the commit showed no new commit on `origin/master`, so no rebase was
+needed.
