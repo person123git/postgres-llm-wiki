@@ -6,6 +6,7 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 
 - Read `wiki/versions.md` before modifying or answering from the wiki.
 - Read `wiki/index.md`.
+- Read `wiki/glossary.md` and review the entries relevant to the interaction; see `MANDATORY Shared Glossary`.
 - Read the last ~20 entries of `wiki/log.md`.
 - For version-local work, read `wiki/vNN/index.md`.
 - Read the `wiki/vNN/common-concepts/` pages that cover concepts your work touches, and link them instead of re-explaining them.
@@ -42,6 +43,7 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - Do not use model memory, external websites, external package docs, or uncited prior wiki prose as factual support.
 - If implementation source conflicts with docs or tests, source wins. Put the discrepancy under `## Open Questions`.
 - Never answer one PostgreSQL version with evidence from another version.
+- The shared glossary may cite multiple pinned checkouts, but each definition or version-specific qualification must identify the version its evidence supports; see `MANDATORY Shared Glossary`. A glossary link never replaces matching-version source evidence on a consumer page.
 
 ## MANDATORY Prompt Hygiene
 
@@ -95,9 +97,9 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
   - URL: page-relative path to the file in the matching `raw/postgres-NN/` checkout, with a `#Lstart-Lend` line-range fragment. Single-line citations use `#L42`.
   - Use enough `../` segments to make the link open from the current wiki page in VS Code. For root-level version pages such as `wiki/vNN/codebase-navigation-guide.md`, that prefix is `../../raw/postgres-NN/...`. For question pages under `wiki/vNN/questions/<category>/`, that prefix is `../../../../raw/postgres-NN/...`; see `MANDATORY Question Categories`. For common concept pages under `wiki/vNN/common-concepts/`, that prefix is `../../../raw/postgres-NN/...`; see `MANDATORY Common Concept Documents`.
   - New or edited source citations must use this page-relative format. `scripts/wiki_lint` may normalize repo-relative `raw/postgres-NN/...` URLs for validation, but that is compatibility behavior, not the citation style for new work.
-  - Line numbers are stable because every page pins an exact commit via `pinned_commit:`; they jump correctly in VS Code and editors that understand Markdown line fragments.
+  - Line numbers are stable because each version-local page pins an exact commit via `pinned_commit:`; the shared glossary records its per-version commits under `## Source Pins`. They jump correctly in VS Code and editors that understand Markdown line fragments.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
-- Cite from the `raw/postgres-NN/` checkout matching the page `version:`. Never cite across versions.
+- Cite from the `raw/postgres-NN/` checkout matching the page `version:`. Never cite across versions on a version-local page. The shared glossary follows its explicit per-entry version scope and `## Source Pins` instead.
 - Use one citation style per page. Don't mix Markdown citations with the old `[[raw/...]]` wikilink form on the same page.
 - Page-to-page wiki navigation uses the same page-relative Markdown link syntax so it opens in plain VS Code Markdown preview. Do not use Obsidian wikilinks for wiki page navigation.
 - Do not state a claim as fact unless it is backed by a source file, symbol, test file, documentation page, commit, or saved design discussion.
@@ -118,7 +120,7 @@ Migration note: existing pages that still use `[[raw/postgres-NN/...]]` wikilink
 
 - Lead with the answer.
 - Use plain language and short sentences.
-- Define PostgreSQL terms of art on first use or link to an existing page.
+- Link PostgreSQL jargon, acronyms, and advanced concepts on first substantive use to their entry in `wiki/glossary.md`; add or improve the entry when needed. Also link an existing matching-version common concept page for deeper explanation; see `MANDATORY Shared Glossary` and `MANDATORY Common Concept Documents`.
 - Use active voice and name concrete subjects.
 - Use lists, tables, and small code blocks for dense material.
 - Name conditions precisely. Avoid vague hedges.
@@ -229,6 +231,8 @@ verified_by_agent: not yet
 
 - Legacy `type: answer` pages use the same field order with `type: answer`. Do not file new answer pages; see `MANDATORY Question Documents`.
 
+- The shared glossary uses `type: glossary`, `verified:`, and `verified_by_agent:` in that order. It has no single `version:` or `pinned_commit:`; its exact per-version pins belong in `## Source Pins`. See `MANDATORY Shared Glossary` for its full shape. The human-only verification rule and unverified title/link hints still apply.
+
 - Do not set the timestamp form if any claim is unverified. Fix it, move it under `## Open Questions`, or leave `verified_by_agent: not yet`.
 - Unverified managed pages must show `(unverified)` in the visible title and in index/landing-page link text until `verified: true`.
 
@@ -251,10 +255,72 @@ The timestamp form is `<model-name> <ISO-8601-UTC>`: a single space separator, t
 - `wiki/versions.md` is the source pin manifest.
 - Each supported version has `wiki/vNN/index.md`.
 - Each supported version has `wiki/vNN/codebase-navigation-guide.md`.
+- All supported versions share exactly one `wiki/glossary.md`; never create a per-version glossary.
 - Default new ingests and answers to the primary version unless the user specifies another.
 - If the user omits a version, assume the primary version and state that assumption.
 - Every source citation must use the matching `raw/postgres-NN/` checkout.
-- Never use citations from another PostgreSQL version.
+- Never use citations from another PostgreSQL version to support a claim about the target version. The shared glossary labels evidence by version rather than declaring one target version for the whole document.
+
+## MANDATORY Shared Glossary
+
+The wiki must have exactly one glossary at `wiki/glossary.md`, shared by every PostgreSQL version. It explains the vocabulary a reader who is not a PostgreSQL source-code developer needs to follow the wiki and the pinned source trees.
+
+Scope and entries:
+
+- Include PostgreSQL-specific jargon, acronyms, source-code terminology, and advanced database or systems concepts encountered in wiki work. Cover the terms needed to understand the current interaction rather than adding an unrelated vocabulary dump.
+- Keep one canonical entry per term, with aliases and expanded acronyms in the same entry. Use alphabetical `###` term headings under `## Terms` and keep their anchors stable. If a term is renamed or merged, preserve its old anchor or repair every incoming link.
+- Lead each entry with a short, plain-language definition. Explain why it matters when reading PostgreSQL source, name the relevant symbols or structures, and cite the evidence. Distinguish easily confused meanings and link related glossary entries when useful.
+- State the PostgreSQL versions checked for each entry. Keep a shared definition where the evidence supports it, and place version-specific meanings or implementation differences inside that same entry with matching-version citations. Do not infer that a definition or behavior applies to every version merely because the glossary is shared.
+- Keep entries concise and source-backed. Detailed engine walkthroughs, user questions, operational SQL, and measurements belong on their existing document types. Link matching-version common concept pages for deeper treatment when they exist; the glossary does not replace them.
+
+Maintenance on every wiki interaction:
+
+1. Review the glossary before answering, ingesting, creating, editing, reviewing, verifying, measuring, reorganizing, adding a version, or repinning. This also applies to wiki questions answered in chat without filing a page. If the glossary does not exist, create it as part of the next authorized wiki-content task.
+2. Identify the jargon and advanced concepts the interaction uses. Check the relevant entries for missing definitions, unexplained acronyms, misleading wording, stale source links, and missing version qualifications.
+3. Add or revise the affected entries in the same task. Glossary maintenance is mandatory and does not require a separate user request. Reuse existing entries; do not create duplicate glossaries or a new common concept page as a side effect.
+4. Verify additions and corrections against the relevant pinned `raw/postgres-NN/` checkout. Put unresolved meanings or unsupported version applicability under `## Open Questions`; do not publish guesses as definitions. When a version is repinned, re-check every glossary citation and qualification for that version before updating its recorded pin.
+5. Add or repair glossary links on the documents being worked on. Check term anchors, the glossary Contents, source references, and its pin table before finishing.
+6. Record the glossary changes in the task's `wiki/log.md` entry. If the review finds nothing to change, record that outcome instead of making a cosmetic edit. For an interaction that otherwise needs no log entry, state the glossary review outcome briefly in the response; any actual glossary edit still requires normal bookkeeping and lint.
+
+Links from wiki documents:
+
+- Every content page other than the glossary itself must link the glossary in `## Navigation` and link relevant term entries on first substantive use in explanatory prose. Preserve verbatim `## Question` text and executable code blocks; put links in the surrounding explanation. A glossary navigation link alone does not replace useful term links.
+- Link the glossary from `wiki/index.md`, `wiki/overview.md`, `wiki/versions.md`, and every `wiki/vNN/index.md`. Use `(unverified)` in navigation link text while the glossary's `verified:` is not `true`.
+- Use complete page-relative Markdown links. From a categorized question page: `[MVCC](../../../glossary.md#mvcc)` and `[Wiki Glossary (unverified)](../../../glossary.md)`. From a common concept page use `../../glossary.md`; from a version-root guide or landing page use `../glossary.md`; from a wiki-root page use `glossary.md`.
+- Check that each linked entry exists and that any version qualification fits the consumer page. A link supplies vocabulary, not proof of behavior: the consumer still needs its own matching-version raw citations.
+- Existing pages gain the navigation link and relevant term links when next worked on. Do not mass-edit unrelated pages solely to backfill glossary links. Common concept pages gain links only during their own authorized work or a repin, preserving their read-only rule.
+
+Evidence and document shape:
+
+- Use `type: glossary`. This is the only shared glossary, not a question page or a version-local common concept page. Do not put it under `wiki/vNN/`, and do not copy its entries into per-version glossaries.
+- Use implementation source as primary evidence and only the pinned checkouts listed in `wiki/versions.md`. Same-checkout docs, tests, and history may support definitions. Do not use model memory, external websites, or prior wiki prose as factual evidence.
+- Cite every definition and behavioral qualification with a complete Markdown link. From this page the source prefix is `../raw/postgres-NN/`, for example `[file.c#Symbol](../raw/postgres-NN/path/file.c#L42-L58)`. Each citation must match the version stated for the claim it supports.
+- Record every cited version and its full exact commit in `## Source Pins`, matching `wiki/versions.md`. A pin table entry does not imply that every term was checked on that version; each term carries its own checked-version scope.
+- Use this front matter, in this exact order, when creating the document:
+
+```yaml
+type: glossary
+verified: false
+verified_by_agent: not yet
+```
+
+- Use these required headings in order, with a Contents entry for every `##` and `###` heading except Contents itself:
+
+```md
+# Wiki Glossary (unverified)
+
+## Contents
+## Scope
+## Source Pins
+## Terms
+## Open Questions
+## Source References
+## Navigation
+```
+
+- Keep `## Terms` and `## Source References` non-empty. `## Scope` explains the audience, shared-document scope, and per-entry version qualifications. `## Navigation` links the global index and version manifest.
+- Preserve the human-only `verified:` field. After changing definitions or their evidence, set `verified_by_agent: not yet` unless every glossary claim has been re-checked against its recorded pins. Updating a few entries does not justify an agent-verification timestamp for the entire glossary.
+- Run `scripts/wiki_lint` after glossary edits. Its current checks do not enforce the glossary's existence, type, shape, pin table, per-entry evidence scope, required inbound links, or term anchors; verify those by hand rather than treating a clean lint result as complete verification.
 
 ## MANDATORY Codebase Navigation Guide
 
@@ -337,7 +403,7 @@ All question pages were migrated into categories on 2026-08-06. No uncategorized
 
 ## MANDATORY Common Concept Documents
 
-A common concept document is the wiki's single shared explanation of one PostgreSQL concept. Other pages link it as the source for that concept instead of explaining the concept again. It is the third document type, alongside `type: question` and `type: codebase-navigation-guide`.
+A common concept document is the wiki's detailed explanation of one PostgreSQL concept for one version. Other pages link it instead of repeating that explanation. The shared glossary supplies concise vocabulary across versions; common concept pages retain their version-local depth and read-only rules.
 
 - Use `type: common-concept`.
 - File it at `wiki/vNN/common-concepts/<concept-slug>.md`.
@@ -375,7 +441,7 @@ Read-only from other work. A common concept page changes only when the user asks
 Use the concept layer when you file a document:
 
 - Before drafting any page, list the concepts the answer leans on, then read `wiki/vNN/common-concepts/` for that version and link the pages that already cover them.
-- Link the concept page on first use of the term instead of restating the definition; see `MANDATORY Writing Style`. Keep the consumer page's own coverage to what its question needs.
+- Link the glossary entry on first substantive use of the term and also link the matching-version concept page for its deeper explanation; see `MANDATORY Writing Style`. Keep the consumer page's own coverage to what its question needs.
 - Link only your own version's concept page. If the concept has no page for that version, explain what the consumer page needs inline and do not link another version's page.
 - When a document needs a concept that has no page yet, say so in your response and propose the page. Do not create it as a side effect of the other document's work.
 
@@ -429,7 +495,7 @@ Retirement note: `type: concept` under `wiki/vNN/concepts/` is retired and repla
 
 ## MANDATORY Table of Contents
 
-- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: common-concept`, and legacy `type: answer` pages, regardless of page length.
+- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: common-concept`, `type: glossary`, and legacy `type: answer` pages, regardless of page length.
 - Navigation pages are exempt: `wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, and the `wiki/vNN/index.md` version landing pages.
 - Place the `## Contents` block between the page title (`# ...`) and the first content section. On a question-style page, including `type: codebase-navigation-guide`, that means immediately before `## Question`.
 - List every `##` and `###` section in document order as a nested Markdown bullet list: each `##` is a top-level bullet and its `###` subsections are indented two spaces beneath it. Do not list `####` or deeper headings.
@@ -462,6 +528,7 @@ Migration note: existing content pages without a `## Contents` block remain vali
 
 ## MANDATORY Wiki Structure
 
+- Keep the mandatory shared glossary at `wiki/glossary.md`, with `type: glossary`. It is the single vocabulary reference for the entire wiki; see `MANDATORY Shared Glossary`.
 - Keep version-specific pages under `wiki/vNN/`.
 - Each `wiki/vNN/` root must contain `index.md` and the mandatory `codebase-navigation-guide.md`.
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
@@ -482,6 +549,7 @@ Migration note: existing content pages without a `## Contents` block remain vali
 
 After each meaningful wiki change:
 
+- Maintain the shared glossary and record the review outcome; see `MANDATORY Shared Glossary`. Review is required even when the interaction produces no document change.
 - Update `wiki/index.md` for created or substantially changed pages.
 - Update `wiki/versions.md` for supported-version lifecycle, repin, or meaningful coverage changes.
 - Update `wiki/vNN/index.md` for created or substantially changed version-local pages.
@@ -505,15 +573,16 @@ Log heading format:
 3. Add it to `wiki/versions.md`.
 4. Create `wiki/vNN/index.md`.
 5. Create `wiki/vNN/codebase-navigation-guide.md`.
-6. Update `wiki/index.md`.
-7. Append to `wiki/log.md`.
+6. Review the shared glossary for the new version, adding source-backed terms or version qualifications as needed; link it from the new landing page and guide.
+7. Update `wiki/index.md`.
+8. Append to `wiki/log.md` and run `scripts/wiki_lint`.
 
 ### MANDATORY Answer And File
 
 1. Assume the primary version unless the user specifies another.
 2. Use `wiki/versions.md`, `wiki/index.md`, and the version landing page as navigation only.
 3. Build the deep-inquiry context envelope from the pinned checkout.
-4. List the concepts the answer leans on, read `wiki/vNN/common-concepts/` for that version, and plan to link the pages that already cover them; see `MANDATORY Common Concept Documents`.
+4. List the jargon and concepts the answer leans on, review `wiki/glossary.md`, and read `wiki/vNN/common-concepts/` for that version. Maintain the relevant glossary entries and plan links to both vocabulary and existing deeper explanations; see `MANDATORY Shared Glossary` and `MANDATORY Common Concept Documents`.
 5. Draft a claim-to-source map.
 6. Move unverified claims to `## Open Questions`.
 7. Answer with matching-version raw citations, linking the concept pages instead of re-explaining their concepts. Do not edit a concept page as part of this work.
@@ -521,25 +590,27 @@ Log heading format:
 9. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
 10. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
 11. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
-12. Update indexes and log. Name any missing or wrong concept page in your response instead of changing it.
+12. Check glossary term links and the glossary link in `## Navigation`, then update indexes and log. Name any missing or wrong common concept page in your response instead of changing it; glossary maintenance remains part of this task.
 
 ### MANDATORY File Or Change A Common Concept Document
 
 Run this workflow only when the user asks for the concept page itself. Never as a step inside another document's work.
 
 1. Confirm the target version and the exact concept boundary with the user.
-2. Read `wiki/vNN/common-concepts/` for that version to check the concept has no page and no overlapping page.
+2. Read `wiki/vNN/common-concepts/` for that version to check the concept has no page and no overlapping page. Review the shared glossary's related entries so its concise definitions and the concept page's deeper explanation agree.
 3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map.
 4. File or edit `wiki/vNN/common-concepts/<concept-slug>.md` with `type: common-concept`, the required headings, and matching-version raw citations only; see `MANDATORY Common Concept Documents`.
 5. Keep it source-only. Move anything unresolved to `## Open Questions`, and leave measurements to the question page that ran them.
 6. Re-read the pages that link the concept page and report, without editing them, any consumer the change now contradicts.
-7. Link it from `wiki/vNN/index.md` under `## Common Concepts` and from `wiki/index.md`, then append to `wiki/log.md` and run `scripts/wiki_lint`.
+7. Maintain the relevant glossary entries and add the concept page's term and glossary navigation links. Link the concept page from `wiki/vNN/index.md` under `## Common Concepts` and from `wiki/index.md`, then append to `wiki/log.md` and run `scripts/wiki_lint`.
 
 ## MANDATORY Lint
 
 Lint is required after every wiki-facing change. Do not treat it as optional or only for new pages; run it before the final response whenever any wiki document changed.
 
 Check broken links, orphan pages, missing source references, stale pins, wrong-version citations, invalid verification fields, unverified title hints, required common-concept sections, and version landing-page links.
+
+Also perform the manual glossary checks in `MANDATORY Shared Glossary`; the current linter does not enforce those requirements.
 
 Use the project venv:
 
