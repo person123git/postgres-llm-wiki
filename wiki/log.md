@@ -13897,3 +13897,98 @@ checked by hand as above.
 
 **Teardown.** No PostgreSQL server or other service was started. Nothing was created under
 `.wiki-runtime/tmp/`. Draft batches lived in the session scratchpad, outside the repo.
+
+## [2026-09-23] glossary | re-check all 134 terms on 12, 14, 18 and 19, and add 93 terms checked on all five versions
+
+**Prompts.** Both were corrected silently with the asker's agreement. The first was "Follow
+AGENTS.md: for all versions, update or generate glossary information." The asker chose the
+broad scope from three options: re-check every existing entry on each other version, add the
+terms those versions' pages use, and add glossary links to each version's codebase navigation
+guide. While the pass was running, the asker sent "Follow AGENTS.md: in PostgreSQL 17, update or
+generate glossary information." They chose to fold it into the running pass: v17 pages were
+mined for terms the glossary still lacked. The same v17 prompt arrived a second time and was
+treated as already covered.
+
+**Evidence base.** At the start, only v12 and v17 were on their pins. The v14 checkout was 133
+commits behind `a92fbdf`. The v18 and v19 pin commits (`baa7b14`, `135b867`) were not in the
+local clones. With the asker's agreement, the two missing commits were fetched from the existing
+`git.postgresql.org` origin. Then `raw/postgres-14`, `-18` and `-19` were checked out, detached, at
+their pins. No tracked file in any checkout was modified. The pins in `wiki/versions.md` did not
+change. As a result, `wiki_lint` on this host dropped from its 9-error baseline to 0 errors. The
+2 warnings are untracked `.DS_Store` files in the v12 and v14 checkouts.
+
+**Glossary changes (`wiki/glossary.md`).**
+- **Existing 134 entries.** Each `**Checked on:**` line now reads PostgreSQL 12, 14, 17, 18,
+  19. Each entry gained a `**Version notes:**` list with one line per other version, citing only
+  that version's checkout. Totals per version:
+
+  | Version | Holds | Differs | Not present |
+  |---|---|---|---|
+  | 12 | 100 | 30 | 4 |
+  | 14 | 120 | 13 | 1 |
+  | 18 | 131 | 3 | 0 |
+  | 19 | 129 | 5 | 0 |
+
+  - The four features absent from 12 are allequalimage, bottom-up index deletion, deduplication
+    and injection points. Injection points are the one feature absent from 14.
+  - The 14 figure counts 102 plain holds plus 18 that hold with a stated qualification.
+  - Examples of differences:
+    - 12 and 14 use a UDP stats collector, and EXPLAIN `BUFFERS` needs `ANALYZE`.
+    - 18 and 19 turn `BUFFERS` on by default with `ANALYZE`.
+    - 19 defines GUCs in `guc_parameters.dat`.
+    - 19 warns about wraparound 100M XIDs early, not 40M.
+    - 19 allows logical decoding at `wal_level = replica` via `effective_wal_level`.
+- **One v17 correction.** pg_freespacemap now states that default version 1.2 grants
+  `EXECUTE` to `pg_stat_scan_tables`. The v19 re-check flagged the omission. Two other
+  flags, on clock sweep and on the wraparound figure, were correct for v17 as written. The
+  v19 notes carry those differences.
+- **93 new entries,** each checked on all five versions, bringing the glossary to 227 terms.
+  - 68 were mined from v12, v14, v18 and v19 pages. Examples: asynchronous I/O, custom and generic
+    plan, row-level security, leakproof function, SLRU, REPACK, pg_plan_advice, pgs_mask,
+    pg_stat_statements, query jumbling, WAL sender and receiver.
+  - 25 came from v17 pages. Examples: alignment, amcheck, deadlock, lock mode, sequential scan,
+    storage parameter, tuplesort.
+  - pg_settings and relation kind were not added, because they are already aliases on the GUC
+    and pg_class entries.
+  - A main paragraph cites 17 unless the concept is absent there: asynchronous I/O and conflict
+    detection cite 18, and pgs_mask, pg_plan_advice and REPACK cite 19.
+- **Other sections.** Scope now documents the Version-notes convention. Source Pins lists all
+  five pins. Source References lists one representative citation per cited file, grouped by
+  version. Navigation links every version's landing page and guide. Contents was rebuilt
+  (233 entries). `verified_by_agent` stays `not yet`, and Open Questions records the
+  verification depth.
+
+**Method.** Thirteen forks did the work, all on the orchestrator's model (`claude-opus-5-5`). That is
+above the usual guideline of fewer than 10; each fork took a separate version or term batch.
+- Four re-checked the existing entries, one per version. The v19 fork hit its turn limit at
+  93 of 134 entries and was resumed.
+- Two mined pages for missing terms, and four drafted the new entries.
+- Two cross-reviewed batches they had not written.
+  - They re-opened about a third of the new-entry citations, including every citation behind
+    a "differs", "not present" or version-change claim.
+  - They spot-checked 15 to 28 re-check lines per version.
+  - They fixed about 20 claims or ranges and cut about 15 unsupported sentences. Examples: CTE
+    materialization, the memoize trigger condition, v19 foreign-key batching, and when v19
+    switches logical decoding off.
+  - They cited all four open absence claims to lines: v12 has no `shmem_request_hook`, no SLRU
+    stats message and no failsafe GUCs, and v19 has no `get_relation_info_hook`.
+  - The second reviewer was interrupted by a session rate limit and resumed.
+- One fork linked the four guides.
+- One drafting fork ran host `python3` once, by mistake, with an empty script. That breaks
+  `MANDATORY Environment Isolation`, but it had no effect. Merge tooling used the project venv.
+- A final mechanical check covered all 4,273 citations. Every file exists at its pin, every
+  range is in bounds, and every version note cites only its own version. No anchor is
+  duplicated, every `#` link resolves, and Contents matches the headings in order.
+
+**Links.** Each of the v12, v14, v18 and v19 codebase navigation guides gained a glossary
+`## Navigation` link and first-use term links: 36 in v12, 29 in v14, 29 in v18 and 21 in v19. Only
+existing words were wrapped; no claim or citation changed. The glossary descriptions in
+`wiki/index.md` and all five landing pages now say "PostgreSQL 12, 14, 17, 18 and 19; 227
+terms". Question pages and common concept pages were not touched.
+
+**Lint.** 0 errors / 2 warnings (the `.DS_Store` files above). Glossary shape, pins, anchors and
+inbound links were checked by hand as described.
+
+**Teardown.** No PostgreSQL server or other service was started. Nothing was created under
+`.wiki-runtime/tmp/`. Drafts and merge scripts lived in the session scratchpad, outside the repo.
+The v14, v18 and v19 checkouts were left detached at their pins.

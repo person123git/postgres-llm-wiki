@@ -12,7 +12,7 @@
 Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](codebase-navigation-guide.md) - Reviewed root-level map of the pinned v12 tree: build ownership; backend and standalone entry; simple and extended Parse/Bind/Execute/Sync flow; raw parse, analysis, RIR rewrite, planning, portal strategies, and full executor lifecycle; utility/event-trigger routing and error recovery; plan-cache, portal, planner, executor, relcache, GUC, and AM structures; custom AM registration and packaged/core extension boundaries; generated catalog/parser/fmgr/LWLock artifacts; and regression, isolation, TAP, module, and doc surfaces.
-- [Wiki Glossary (unverified)](../glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 17 so far).
+- [Wiki Glossary (unverified)](../glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 227 terms).
 
 ## Questions
 
