@@ -14,7 +14,7 @@
 Behavioral claims cite the matching pinned checkout under `raw/postgres-14/`. The 2026-08-17 repin from 14.23 `5c00f4e2e3b` to 14.24 `a92fbdfb830` reviewed all 133 commits in the range. Claim-changing commits: `f4174aa84a3` (CVE-2026-14666) registers `PlanCacheRoleCallback` on `pg_auth_members`/`pg_authid`/`pg_database`, which closes the former same-role RLS plan-cache staleness window for saved plans; `1a358b8f2a2` (CVE-2026-6470) requires `USAGE` on types used by policy, index, default, CHECK and partition-key expressions; `155dacbc547` (CVE-2026-14680) rejects calls to functions taking or returning type `internal`; `802dc79df63` removed replication-slot advice from the MultiXact wraparound hints and documented that slots do not hold back multixact cleanup; and `2bb60eb4fea` moved `RecordNewMultiXact()`'s SLRU lock acquisition later to fix a replay self-deadlock. Nothing was re-measured on 14.24, so previous-pin measurements are labelled as such.
 
 - [PostgreSQL 14 Codebase Navigation Guide (unverified)](codebase-navigation-guide.md) - Mandatory root-level question-style map for navigating the pinned v14 source tree: layout, SQL statement flow, utility dispatch, generated/catalog artifacts, key structs, contrib boundaries, tests, and docs.
-- [Wiki Glossary (unverified)](../glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 227 terms).
+- [Wiki Glossary (unverified)](../glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 233 terms).
 
 ## Questions
 

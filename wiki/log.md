@@ -13992,3 +13992,78 @@ inbound links were checked by hand as described.
 **Teardown.** No PostgreSQL server or other service was started. Nothing was created under
 `.wiki-runtime/tmp/`. Drafts and merge scripts lived in the session scratchpad, outside the repo.
 The v14, v18 and v19 checkouts were left detached at their pins.
+
+## [2026-09-23] glossary | review every entry claim by claim, fix 420 of 421 findings and add six terms
+
+**Prompt.** Corrected silently with the asker's agreement: "Follow AGENTS.md and review the glossary,
+Wiki Glossary (unverified)." The findings were shown in chat first. The asker then chose to fix
+everything and to add all six missing terms that were offered.
+
+**Review.** A mechanical checker covered the page shape, Contents, anchors, Source Pins, Source
+References, inbound links, and every citation's file, range and label. A second script compared
+every stated GUC context with each version's GUC table; all matched. Eight review forks, each on
+the orchestrator's model (`claude-opus-5-5`), then read all 4,273 citations of the 227 entries
+claim by claim against the five pinned checkouts, one batch of about 28 entries each. They reported
+421 defects: 24 high, 127 medium and 270 low. Two medium findings were raised to high because they
+repeat a high one. The orchestrator re-checked all 24 high findings and about 15 medium ones in the
+source; all held. Examples of high findings:
+- Autovacuum said it runs only while `autovacuum` and `track_counts` are on. The postmaster still
+  starts it to prevent transaction ID wraparound.
+- Apply worker and Logical replication said the launcher starts tablesync and parallel apply
+  workers. The apply worker starts them.
+- Crash recovery said `PerformWalRecovery()` never runs after a clean shutdown. A recovery signal
+  file forces it.
+- Several v19 notes presented changes from 18 as new, and two invented a `pd_lsn` type change.
+
+The structure passed: front matter, heading order, all Contents links, term order, anchors, pins
+and inbound links.
+
+**Changes to `wiki/glossary.md`.**
+- 420 findings were fixed. One was skipped: TAP is not expanded, because no pinned checkout spells
+  it out. While fixing, the forks found and fixed further defects, each checked in the source. For
+  example, `pg_cast.castfunc` is also 0 for I/O conversion casts, and 19 adds relkind `g`.
+- Every version note now opens with Holds, Differs or Not present (736, 160 and 36 of 932 notes).
+  A change that first appears in 18 now sits in the 18 note, and the 19 note says "as in 18".
+- Every citation sits in a parenthetical, every label names a real symbol, SGML id or README
+  heading or uses `file.ext:a-b`, and every single-line citation uses `file.ext:line`. Ranges over
+  80 lines were narrowed. Term citations grew from 4,273 to 5,833.
+- Six entries were added, each checked on all five versions: Buffer pin, Checkpointer, Leaf page,
+  Lossy bitmap, ProcArray and Relation. The glossary now has 233 terms.
+- Each alias now has one home. `relation` moved to the new Relation entry. `indisvalid`,
+  `indisready` and `indislive` stay on Invalid index, `proleakproof` on Leakproof function,
+  `provolatile` on Function volatility, `n_dead_tup` on Dead tuple, `pg_multixact` on MultiXact,
+  `CachedPlanSource` on Custom and generic plan, `default partition` on Partition bound, and
+  `io_combine_limit` on its own entry.
+- pg_plan_advice and REPACK lost their surplus v19 notes, and those facts moved into the main
+  paragraph. Pruning and Partition pruning now point to each other. VACUUM and Truncation, Table
+  rewrite and VACUUM FULL, and Cumulative statistics and Shared-memory statistics now agree.
+- COMMENT ON now says that plain `REINDEX` keeps the index OID, which closes that open question.
+- Scope now documents the note openers and this review. Open Questions records the verification
+  depth, the `AGENTS.md` GUC wording question, the unexpanded TAP, one absence with no line to cite,
+  and 14 places where a code comment, README or doc disagrees with the code. Contents and Source
+  References were rebuilt: 352, 345, 419, 349 and 378 files for 12, 14, 17, 18 and 19.
+- `verified_by_agent` stays `not yet`. The corrected text has been checked once, by the agent that
+  wrote it, plus the orchestrator's spot checks.
+
+**Method.** The same eight forks made the fixes, each editing only a copy of its own batch, and
+the orchestrator merged the copies. A session rate limit and then capacity stalls stopped all
+eight forks twice; they were resumed with at most four running at once. Each fork re-read the source
+for every claim it changed. After the merge, the orchestrator re-read all 24 high-severity fixes
+and the six new entries against the pins. That pass found one misplaced citation, in the WAL
+receiver v12 note, which was moved to the sentence it supports. There were three isolation slips.
+One fork ran host `python3` once on an empty script, with no effect. Another wrote two temporary
+files to `/tmp` through a mistyped command and deleted them at once. The orchestrator's final
+re-check used a small read-only helper script in the session scratchpad, outside the repo; it was
+deleted afterwards. Four `.DS_Store` blobs also appeared in `.git/objects` during the run; no commit
+references them.
+
+**Links.** The glossary descriptions in `wiki/index.md` and the five landing pages now say 233
+terms. No question page, codebase navigation guide or common concept page was touched.
+
+**Lint.** 0 errors / 2 warnings (the untracked `.DS_Store` files in the v12 and v14 checkouts).
+The glossary's shape, pins, anchors, links and citations were also checked with the review's own
+checker, which reported no issues.
+
+**Teardown.** No PostgreSQL server or other service was started. The review workspace
+`.wiki-runtime/tmp/glossary-review/` (scripts, batch copies and findings) was deleted after the
+final checks.
