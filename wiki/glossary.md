@@ -17,6 +17,7 @@ verified_by_agent: not yet
   - [allequalimage](#allequalimage)
   - [amcheck](#amcheck)
   - [Apply worker](#apply-worker)
+  - [Asynchronous commit](#asynchronous-commit)
   - [Asynchronous I/O](#asynchronous-io)
   - [Autovacuum](#autovacuum)
   - [Backend](#backend)
@@ -93,6 +94,7 @@ verified_by_agent: not yet
   - [Hash index](#hash-index)
   - [Heap](#heap)
   - [Heavyweight lock](#heavyweight-lock)
+  - [Hint bits](#hint-bits)
   - [Hook](#hook)
   - [HOT](#hot)
   - [Hot standby](#hot-standby)
@@ -168,6 +170,7 @@ verified_by_agent: not yet
   - [Posting list](#posting-list)
   - [Posting tree](#posting-tree)
   - [Postmaster](#postmaster)
+  - [Prefetch](#prefetch)
   - [Prepared statement](#prepared-statement)
   - [ProcArray](#procarray)
   - [Progress reporting](#progress-reporting)
@@ -201,6 +204,7 @@ verified_by_agent: not yet
   - [shared_preload_libraries](#shared_preload_libraries)
   - [Shared-memory statistics](#shared-memory-statistics)
   - [ShareUpdateExclusiveLock](#shareupdateexclusivelock)
+  - [Sibling link](#sibling-link)
   - [Simple index deletion](#simple-index-deletion)
   - [SLRU](#slru)
   - [Snapshot](#snapshot)
@@ -240,6 +244,7 @@ verified_by_agent: not yet
   - [WAL level](#wal-level)
   - [WAL receiver](#wal-receiver)
   - [WAL sender](#wal-sender)
+  - [WAL writer](#wal-writer)
   - [work_mem](#work_mem)
   - [Wraparound](#wraparound)
   - [xmin and xmax](#xmin-and-xmax)
@@ -355,6 +360,20 @@ An apply worker is the subscriber-side process that receives a subscription's ch
 - PostgreSQL 19: Holds, except that 19 adds a fourth worker type, the sequencesync worker, with entry point `SequenceSyncWorkerMain`. The apply worker starts it, as it starts tablesync workers, through `launch_sync_worker()` ([worker_internal.h#LogicalRepWorkerType](../raw/postgres-19/src/include/replication/worker_internal.h#L27-L35), [launcher.c#logicalrep_worker_launch](../raw/postgres-19/src/backend/replication/logical/launcher.c#L529-L542), [sequencesync.c:89-97](../raw/postgres-19/src/backend/replication/logical/sequencesync.c#L89-L97), [syncutils.c:141](../raw/postgres-19/src/backend/replication/logical/syncutils.c#L141)). The launcher starts one apply worker per enabled subscription with entry point `ApplyWorkerMain`, `run_apply_worker()` sets up the origin before streaming, and `apply_dispatch()` routes messages ([worker.c:10-16](../raw/postgres-19/src/backend/replication/logical/worker.c#L10-L16), [launcher.c#logicalrep_worker_launch](../raw/postgres-19/src/backend/replication/logical/launcher.c#L509-L517), [launcher.c:1370](../raw/postgres-19/src/backend/replication/logical/launcher.c#L1370), [worker.c#run_apply_worker](../raw/postgres-19/src/backend/replication/logical/worker.c#L5701-L5730), [worker.c#apply_dispatch](../raw/postgres-19/src/backend/replication/logical/worker.c#L3802-L3805)).
 
 Related: [Background worker](#background-worker), [Logical replication](#logical-replication), [Replication origin](#replication-origin), [Subscription](#subscription)
+
+### Asynchronous commit
+
+**Aliases:** `synchronous_commit = off`, async commit, `XLogSetAsyncXactLSN()`, `TransactionIdAsyncCommitTree()`, `CLOG_XACTS_PER_LSN_GROUP`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+Asynchronous commit lets a transaction report success before its commit record has been flushed to durable storage. A crash can then lose the most recent committed transactions, but it cannot leave the database inconsistent, because recovery replays WAL in commit order up to the last flushed record ([wal.sgml:363-383](../raw/postgres-17/doc/src/sgml/wal.sgml#L363-L383), [wal.sgml:398-410](../raw/postgres-17/doc/src/sgml/wal.sgml#L398-L410)). It is what `synchronous_commit = off` selects: `off` is the only level below `SYNCHRONOUS_COMMIT_LOCAL_FLUSH`, and every other level, including the default `on`, flushes the local WAL before the commit returns ([xact.h:68-80](../raw/postgres-17/src/include/access/xact.h#L68-L80), [xact.c:1487-1498](../raw/postgres-17/src/backend/access/transam/xact.c#L1487-L1498)). The setting has context `user`, so a session or a single transaction can change it without a reload, and the value in force when commit begins decides ([guc_tables.c:4925-4933](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4925-L4933), [wal.sgml:412-422](../raw/postgres-17/doc/src/sgml/wal.sgml#L412-L422)). A transaction that wrote no WAL or took no transaction ID skips the flush whatever the setting, while one that deletes non-temporary relation files, or that a command forced to be synchronous, flushes anyway ([xact.c:1462-1489](../raw/postgres-17/src/backend/access/transam/xact.c#L1462-L1489), [wal.sgml:424-431](../raw/postgres-17/doc/src/sgml/wal.sgml#L424-L431)). On the asynchronous path `RecordTransactionCommit()` skips `XLogFlush()`, reports the commit record's end with `XLogSetAsyncXactLSN()` so that the [WAL writer](#wal-writer) will flush it, and records the commit in the commit log together with that LSN through `TransactionIdAsyncCommitTree()` ([xact.c:1499-1521](../raw/postgres-17/src/backend/access/transam/xact.c#L1499-L1521)). The commit log, an [SLRU](#slru), keeps one such LSN per group of 32 consecutive transaction IDs (`CLOG_XACTS_PER_LSN_GROUP`) and raises it whenever a commit in the group reports a higher one ([clog.c:91-96](../raw/postgres-17/src/backend/access/transam/clog.c#L91-L96), [clog.c:702-716](../raw/postgres-17/src/backend/access/transam/clog.c#L702-L716)). The LSN that `TransactionIdGetCommitLSN()` returns for a transaction can therefore belong to a later transaction in the same group ([transam.c#TransactionIdGetCommitLSN](../raw/postgres-17/src/backend/access/transam/transam.c#L367-L405)). That is the LSN [hint bits](#hint-bits) wait for, so a later asynchronous commit in the group can hold back hint bits, and the all-visible marks that depend on them, for an earlier transaction whose own commit record is already flushed ([heapam_visibility.c#SetHintBits](../raw/postgres-17/src/backend/access/heap/heapam_visibility.c#L82-L132), [pruneheap.c:1371-1387](../raw/postgres-17/src/backend/access/heap/pruneheap.c#L1371-L1387)). The documentation bounds the risk window at three times `wal_writer_delay` ([wal.sgml:433-445](../raw/postgres-17/doc/src/sgml/wal.sgml#L433-L445)).
+
+**Version notes:**
+- PostgreSQL 12: Holds. The commit levels, the flush decision and the asynchronous branch of `RecordTransactionCommit()`, the 32-transaction LSN groups, the documented risk window and the `user` context match 17 ([xact.h:68-79](../raw/postgres-12/src/include/access/xact.h#L68-L79), [xact.c:1367-1401](../raw/postgres-12/src/backend/access/transam/xact.c#L1367-L1401), [clog.c:69-70](../raw/postgres-12/src/backend/access/transam/clog.c#L69-L70), [clog.c:601-615](../raw/postgres-12/src/backend/access/transam/clog.c#L601-L615), [clog.c:618-628](../raw/postgres-12/src/backend/access/transam/clog.c#L618-L628), [wal.sgml:385-397](../raw/postgres-12/doc/src/sgml/wal.sgml#L385-L397), [guc.c:4353-4361](../raw/postgres-12/src/backend/utils/misc/guc.c#L4353-L4361)).
+- PostgreSQL 14: Holds ([xact.h:68-80](../raw/postgres-14/src/include/access/xact.h#L68-L80), [xact.c:1409-1443](../raw/postgres-14/src/backend/access/transam/xact.c#L1409-L1443), [clog.c:70-71](../raw/postgres-14/src/backend/access/transam/clog.c#L70-L71), [clog.c:607-621](../raw/postgres-14/src/backend/access/transam/clog.c#L607-L621), [clog.c:624-634](../raw/postgres-14/src/backend/access/transam/clog.c#L624-L634), [wal.sgml:432-444](../raw/postgres-14/doc/src/sgml/wal.sgml#L432-L444), [guc.c:4800-4808](../raw/postgres-14/src/backend/utils/misc/guc.c#L4800-L4808)).
+- PostgreSQL 18: Holds ([xact.h:68-80](../raw/postgres-18/src/include/access/xact.h#L68-L80), [xact.c:1498-1532](../raw/postgres-18/src/backend/access/transam/xact.c#L1498-L1532), [clog.c:91-92](../raw/postgres-18/src/backend/access/transam/clog.c#L91-L92), [clog.c:702-716](../raw/postgres-18/src/backend/access/transam/clog.c#L702-L716), [clog.c:719-729](../raw/postgres-18/src/backend/access/transam/clog.c#L719-L729), [wal.sgml:431-443](../raw/postgres-18/doc/src/sgml/wal.sgml#L431-L443), [guc_tables.c:5188-5196](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L5188-L5196)).
+- PostgreSQL 19: Holds. `synchronous_commit` is declared in `guc_parameters.dat` and keeps context `user` ([guc_parameters.dat:2958-2964](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2958-L2964), [xact.h:69-81](../raw/postgres-19/src/include/access/xact.h#L69-L81), [xact.c:1540-1574](../raw/postgres-19/src/backend/access/transam/xact.c#L1540-L1574), [clog.c:93-94](../raw/postgres-19/src/backend/access/transam/clog.c#L93-L94), [clog.c:711-725](../raw/postgres-19/src/backend/access/transam/clog.c#L711-L725), [clog.c:728-738](../raw/postgres-19/src/backend/access/transam/clog.c#L728-L738), [wal.sgml:592-604](../raw/postgres-19/doc/src/sgml/wal.sgml#L592-L604)).
+
+Related: [WAL writer](#wal-writer), [Hint bits](#hint-bits), [WAL](#wal), [LSN](#lsn), [SLRU](#slru), [Transaction ID](#transaction-id), [Crash recovery](#crash-recovery), [Synchronous replication](#synchronous-replication), [GUC context](#guc-context)
 
 ### Asynchronous I/O
 
@@ -550,7 +569,7 @@ B-tree page deletion is how [VACUUM](#vacuum) removes a [leaf page](#leaf-page) 
 - PostgreSQL 18: Holds ([nbtree/README:232-260](../raw/postgres-18/src/backend/access/nbtree/README#L232-L260), [nbtree/README:279](../raw/postgres-18/src/backend/access/nbtree/README#L279), [nbtree.h:292](../raw/postgres-18/src/include/access/nbtree.h#L292), [nbtpage.c:1802](../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L1802)).
 - PostgreSQL 19: Holds ([nbtree/README:232-260](../raw/postgres-19/src/backend/access/nbtree/README#L232-L260), [nbtree/README:279](../raw/postgres-19/src/backend/access/nbtree/README#L279), [nbtree.h:292](../raw/postgres-19/src/include/access/nbtree.h#L292), [nbtpage.c:1832](../raw/postgres-19/src/backend/access/nbtree/nbtpage.c#L1832)).
 
-Related: [B-tree](#b-tree), [VACUUM](#vacuum), [Free space map](#free-space-map), [Bloat](#bloat), [xmin horizon](#xmin-horizon)
+Related: [B-tree](#b-tree), [VACUUM](#vacuum), [Free space map](#free-space-map), [Bloat](#bloat), [xmin horizon](#xmin-horizon), [Sibling link](#sibling-link)
 
 ### btree_gin and btree_gist
 
@@ -1004,7 +1023,7 @@ Related: [Cost](#cost), [shared_buffers](#shared_buffers), [Planner](#planner), 
 
 **Aliases:** `maintenance_io_concurrency`, prefetch depth, I/O concurrency. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-`effective_io_concurrency` tells PostgreSQL how many read requests the storage can usefully handle at once. PostgreSQL uses it to decide how far ahead to issue reads before it needs the data ([guc_tables.c:3109-3120](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3109-L3120)). `maintenance_io_concurrency` is the same knob for maintenance work ([guc_tables.c:3123-3135](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3123-L3135)). In PostgreSQL 17 the defaults are 1 and 10 on platforms with prefetch support, and 0 elsewhere ([bufmgr.h:156-163](../raw/postgres-17/src/include/storage/bufmgr.h#L156-L163)). A [read stream](#read-stream) takes its maximum number of in-flight I/Os from `effective_io_concurrency`, or from `maintenance_io_concurrency` when the caller passes `READ_STREAM_MAINTENANCE` ([read_stream.c:420-438](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L420-L438)). Index-entry deletion in the heap uses the maintenance value as its prefetch distance ([heapam.c:8548-8558](../raw/postgres-17/src/backend/access/heap/heapam.c#L8548-L8558)). A tablespace can override either value, which `spccache.c` looks up ([spccache.c:219-236](../raw/postgres-17/src/backend/utils/cache/spccache.c#L219-L236)). Both have context `user`, so they can be set per session without a reload ([guc_tables.c:3109-3135](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3109-L3135)).
+`effective_io_concurrency` tells PostgreSQL how many read requests the storage can usefully handle at once. PostgreSQL uses it to decide how far ahead to issue reads before it needs the data ([guc_tables.c:3109-3120](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3109-L3120)). `maintenance_io_concurrency` is the same knob for maintenance work ([guc_tables.c:3123-3135](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3123-L3135)). In PostgreSQL 17 the defaults are 1 and 10 on platforms with prefetch support, and 0 elsewhere ([bufmgr.h:156-163](../raw/postgres-17/src/include/storage/bufmgr.h#L156-L163)). A [read stream](#read-stream) takes its maximum number of in-flight I/Os from `effective_io_concurrency`, or from `maintenance_io_concurrency` when the caller passes `READ_STREAM_MAINTENANCE` ([read_stream.c:420-438](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L420-L438)). Bitmap heap scans take their [prefetch](#prefetch) distance from it as well ([nodeBitmapHeapscan.c:760-764](../raw/postgres-17/src/backend/executor/nodeBitmapHeapscan.c#L760-L764)). Index-entry deletion in the heap uses the maintenance value as its prefetch distance ([heapam.c:8548-8558](../raw/postgres-17/src/backend/access/heap/heapam.c#L8548-L8558)). A tablespace can override either value, which `spccache.c` looks up ([spccache.c:219-236](../raw/postgres-17/src/backend/utils/cache/spccache.c#L219-L236)). Both have context `user`, so they can be set per session without a reload ([guc_tables.c:3109-3135](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3109-L3135)).
 
 **Version notes:**
 - PostgreSQL 12: Differs: only `effective_io_concurrency` exists, and it means a number of drives. `ComputeIoConcurrency()` converts it into a prefetch distance of n times the n-th harmonic number, so 2 drives give 3 pages and 4 drives about 8 ([guc.c:2759-2772](../raw/postgres-12/src/backend/utils/misc/guc.c#L2759-L2772), [bufmgr.c#ComputeIoConcurrency](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L463-L509)). Its context is `user`, its default is 1 where prefetch is supported, and its main consumer is bitmap heap scan prefetching ([nodeBitmapHeapscan.c:803-810](../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L803-L810)).
@@ -1012,7 +1031,7 @@ Related: [Cost](#cost), [shared_buffers](#shared_buffers), [Planner](#planner), 
 - PostgreSQL 18: Differs: both defaults rise to 16, with no dependence on prefetch support ([bufmgr.h:161-162](../raw/postgres-18/src/include/storage/bufmgr.h#L161-L162)). Read streams still take their I/O depth from these settings, and the context stays `user` ([read_stream.c:582-587](../raw/postgres-18/src/backend/storage/aio/read_stream.c#L582-L587), [guc_tables.c:3250-3274](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3250-L3274)).
 - PostgreSQL 19: Differs, as in 18: both defaults are 16, and read streams use the settings the same way ([bufmgr.h:170-171](../raw/postgres-19/src/include/storage/bufmgr.h#L170-L171), [read_stream.c:803-808](../raw/postgres-19/src/backend/storage/aio/read_stream.c#L803-L808)). Both have context `user` and are declared in `guc_parameters.dat` ([guc_parameters.dat:847](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L847), [guc_parameters.dat:1937](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1937)).
 
-Related: [io_combine_limit](#io_combine_limit), [Read stream](#read-stream), [Bitmap scan](#bitmap-scan), [GUC context](#guc-context)
+Related: [io_combine_limit](#io_combine_limit), [Read stream](#read-stream), [Bitmap scan](#bitmap-scan), [GUC context](#guc-context), [Prefetch](#prefetch)
 
 ### ereport
 
@@ -1420,6 +1439,20 @@ A heavyweight lock, also called a regular lock, is a lock taken through the lock
 
 Related: [AccessExclusiveLock](#accessexclusivelock), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [LWLock](#lwlock)
 
+### Hint bits
+
+**Aliases:** `HEAP_XMIN_COMMITTED`, `HEAP_XMIN_INVALID`, `HEAP_XMAX_COMMITTED`, `HEAP_XMAX_INVALID`, `SetHintBits()`, `MarkBufferDirtyHint()`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+Hint bits are flag bits in a heap [tuple](#tuple)'s header that record whether the transactions that inserted and deleted it committed or aborted, so later visibility checks can skip looking those transactions up in the commit log. `HEAP_XMIN_COMMITTED`, `HEAP_XMIN_INVALID`, `HEAP_XMAX_COMMITTED` and `HEAP_XMAX_INVALID` live in `t_infomask`, and both xmin bits together mean the tuple is frozen ([htup_details.h:204-208](../raw/postgres-17/src/include/access/htup_details.h#L204-L208)). The `HeapTupleSatisfies*` visibility routines set them as a side effect once they learn a transaction's outcome, and then call `MarkBufferDirtyHint()` on the page ([heapam_visibility.c:6-11](../raw/postgres-17/src/backend/access/heap/heapam_visibility.c#L6-L11)). That call makes the buffer [dirty](#dirty-buffer) without logging the change; it may write a [full-page image](#full-page-image), and only when `XLogHintBitIsNeeded()`, that is when [data checksums](#data-checksums) or `wal_log_hints` are on ([bufmgr.c:5036-5049](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L5036-L5049), [bufmgr.c:5090-5100](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L5090-L5100), [xlog.h:118](../raw/postgres-17/src/include/access/xlog.h#L118)). `wal_log_hints` has context `postmaster`, so changing it needs a restart ([guc_tables.c:1170-1178](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1170-L1178)). `SetHintBits()` refuses to set a committed hint on a permanent relation while the commit record might not be durable: it asks `TransactionIdGetCommitLSN()` for an LSN and skips the hint when `XLogNeedsFlush()` says that LSN is not flushed and the page's own LSN is older ([heapam_visibility.c#SetHintBits](../raw/postgres-17/src/backend/access/heap/heapam_visibility.c#L82-L132)). With [asynchronous commit](#asynchronous-commit) that window is real, and it can outlast the transaction's own commit record, because the commit log stores one LSN per group of 32 transaction IDs ([clog.c:719-730](../raw/postgres-17/src/backend/access/transam/clog.c#L719-L730)). VACUUM marks a heap page all-visible only if every live tuple on it carries `HEAP_XMIN_COMMITTED`, a check whose comment names asynchronous commit as the reason ([pruneheap.c:1371-1387](../raw/postgres-17/src/backend/access/heap/pruneheap.c#L1371-L1387), [vacuumlazy.c:1524-1556](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1524-L1556)). A page whose tuples were committed asynchronously, and whose commit LSN is not yet flushed when VACUUM reaches it, therefore stays out of the [visibility map](#visibility-map) until VACUUM examines it again after the flush, and an [index-only scan](#index-only-scan) has to visit the heap for every entry that points into it ([nodeIndexonlyscan.c:161-170](../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L161-L170)).
+
+**Version notes:**
+- PostgreSQL 12: Holds. VACUUM's all-visible check sits in `lazy_scan_heap()` and has the same comment ([htup_details.h:203-207](../raw/postgres-12/src/include/access/htup_details.h#L203-L207), [heapam_visibility.c:6-11](../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L6-L11), [heapam_visibility.c#SetHintBits](../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L81-L131), [clog.c:618-628](../raw/postgres-12/src/backend/access/transam/clog.c#L618-L628), [vacuumlazy.c:1097-1114](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1097-L1114), [bufmgr.c:3407-3420](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3407-L3420), [bufmgr.c:3461-3471](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3461-L3471), [xlog.h:192](../raw/postgres-12/src/include/access/xlog.h#L192), [guc.c:1177-1185](../raw/postgres-12/src/backend/utils/misc/guc.c#L1177-L1185)).
+- PostgreSQL 14: Holds. VACUUM's all-visible check sits in `lazy_scan_prune()` ([htup_details.h:203-207](../raw/postgres-14/src/include/access/htup_details.h#L203-L207), [heapam_visibility.c:6-11](../raw/postgres-14/src/backend/access/heap/heapam_visibility.c#L6-L11), [heapam_visibility.c#SetHintBits](../raw/postgres-14/src/backend/access/heap/heapam_visibility.c#L81-L131), [clog.c:624-634](../raw/postgres-14/src/backend/access/transam/clog.c#L624-L634), [vacuumlazy.c:1850-1866](../raw/postgres-14/src/backend/access/heap/vacuumlazy.c#L1850-L1866), [bufmgr.c:3913-3926](../raw/postgres-14/src/backend/storage/buffer/bufmgr.c#L3913-L3926), [bufmgr.c:3967-3977](../raw/postgres-14/src/backend/storage/buffer/bufmgr.c#L3967-L3977), [xlog.h:211](../raw/postgres-14/src/include/access/xlog.h#L211), [guc.c:1301-1309](../raw/postgres-14/src/backend/utils/misc/guc.c#L1301-L1309)).
+- PostgreSQL 18: Holds ([htup_details.h:204-208](../raw/postgres-18/src/include/access/htup_details.h#L204-L208), [heapam_visibility.c:6-11](../raw/postgres-18/src/backend/access/heap/heapam_visibility.c#L6-L11), [heapam_visibility.c#SetHintBits](../raw/postgres-18/src/backend/access/heap/heapam_visibility.c#L82-L132), [clog.c:719-729](../raw/postgres-18/src/backend/access/transam/clog.c#L719-L729), [pruneheap.c:1371-1387](../raw/postgres-18/src/backend/access/heap/pruneheap.c#L1371-L1387), [bufmgr.c:5438-5451](../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L5438-L5451), [bufmgr.c:5492-5502](../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L5492-L5502), [xlog.h:120](../raw/postgres-18/src/include/access/xlog.h#L120), [guc_tables.c:1209-1217](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1209-L1217)).
+- PostgreSQL 19: Differs: setting a hint now needs the right to set hints on the page. `BufferBeginSetHintBits()` grants it by holding or upgrading to a share-exclusive content lock, which keeps a write-out of the page from running at the same time and lets one backend set hints at a time ([heapam_visibility.c:106-113](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L106-L113), [bufmgr.c#BufferBeginSetHintBits](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L7061-L7108)). Batched callers take that right once per page through `SetHintBitsExt()`, and a single hint goes through `BufferSetHintBits16()`; the commit-flush rule is unchanged ([heapam_visibility.c:141-192](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L141-L192), [bufmgr.c#BufferSetHintBits16](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L7129-L7175)). The full-page-image test, now in `MarkSharedBufferDirtyHint()`, reads `wal_log_hints || DataChecksumsNeedWrite()`, and `wal_log_hints` keeps context `postmaster` ([bufmgr.c:5745-5754](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L5745-L5754), [xlog.h:136](../raw/postgres-19/src/include/access/xlog.h#L136), [guc_parameters.dat:3512-3516](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L3512-L3516)). VACUUM's check now clears `set_all_visible` and `set_all_frozen` ([pruneheap.c:1900-1913](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L1900-L1913)). The flag bits and the 32-transaction LSN groups are unchanged ([htup_details.h:204-208](../raw/postgres-19/src/include/access/htup_details.h#L204-L208), [clog.c:728-738](../raw/postgres-19/src/backend/access/transam/clog.c#L728-L738)).
+
+Related: [Asynchronous commit](#asynchronous-commit), [Visibility map](#visibility-map), [VACUUM](#vacuum), [xmin and xmax](#xmin-and-xmax), [Freezing](#freezing), [Dirty buffer](#dirty-buffer), [Full-page image](#full-page-image), [Data checksums](#data-checksums), [Index-only scan](#index-only-scan)
+
 ### Hook
 
 **Aliases:** `ProcessUtility_hook`, `planner_hook`, `_PG_init`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1648,7 +1681,7 @@ Related: [Executor](#executor), [PlannedStmt](#plannedstmt), [Cost](#cost), [GUC
 
 **Aliases:** B-tree leaf level, level 0, `BTP_LEAF`, `P_ISLEAF`, high key. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-A leaf page is a page on the bottom level of a [B-tree](#b-tree), level 0, whose items point at table rows. Each data item on a leaf page is an index tuple that holds key values and the [TID](#tid) of a heap tuple; the pages above hold only pivot tuples, which guide the descent ([nbtree/README:1070-1071](../raw/postgres-17/src/backend/access/nbtree/README#L1070-L1071), [nbtree/README:31-35](../raw/postgres-17/src/backend/access/nbtree/README#L31-L35)). Each page's opaque area stores the page's level, which counts up from zero at the leaf level, its left and right sibling links, and flags. `BTP_LEAF` marks a leaf page, and `P_ISLEAF()` tests for it ([nbtree.h#BTPageOpaqueData](../raw/postgres-17/src/include/access/nbtree.h#L62-L69), [nbtree.h:76](../raw/postgres-17/src/include/access/nbtree.h#L76), [nbtree.h:220](../raw/postgres-17/src/include/access/nbtree.h#L220), [nbtree/README:1047-1051](../raw/postgres-17/src/backend/access/nbtree/README#L1047-L1051)). A page that is not rightmost on its level keeps a high key in item 1, an upper bound on the page's keys, and its data items start at item 2 ([nbtree.h:348-369](../raw/postgres-17/src/include/access/nbtree.h#L348-L369)). An ordered scan descends the tree once and then moves along the leaf level through the sibling links ([nbtree/README:70-77](../raw/postgres-17/src/backend/access/nbtree/README#L70-L77)). Leaf pages are where space is reclaimed before a [page split](#page-split). When a new tuple does not fit, `_bt_delete_or_dedup_one_page()` first tries [simple index deletion](#simple-index-deletion), then [bottom-up index deletion](#bottom-up-index-deletion) or [deduplication](#deduplication); the page splits only if they free too little space ([nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2655-L2663), [nbtinsert.c:2698](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2698)). Other tree-shaped access methods mark their leaves too, for example GiST with `F_LEAF` ([gist.h:46](../raw/postgres-17/src/include/access/gist.h#L46)).
+A leaf page is a page on the bottom level of a [B-tree](#b-tree), level 0, whose items point at table rows. Each data item on a leaf page is an index tuple that holds key values and the [TID](#tid) of a heap tuple; the pages above hold only pivot tuples, which guide the descent ([nbtree/README:1070-1071](../raw/postgres-17/src/backend/access/nbtree/README#L1070-L1071), [nbtree/README:31-35](../raw/postgres-17/src/backend/access/nbtree/README#L31-L35)). Each page's opaque area stores the page's level, which counts up from zero at the leaf level, its left and right [sibling links](#sibling-link), and flags. `BTP_LEAF` marks a leaf page, and `P_ISLEAF()` tests for it ([nbtree.h#BTPageOpaqueData](../raw/postgres-17/src/include/access/nbtree.h#L62-L69), [nbtree.h:76](../raw/postgres-17/src/include/access/nbtree.h#L76), [nbtree.h:220](../raw/postgres-17/src/include/access/nbtree.h#L220), [nbtree/README:1047-1051](../raw/postgres-17/src/backend/access/nbtree/README#L1047-L1051)). A page that is not rightmost on its level keeps a high key in item 1, an upper bound on the page's keys, and its data items start at item 2 ([nbtree.h:348-369](../raw/postgres-17/src/include/access/nbtree.h#L348-L369)). An ordered scan descends the tree once and then moves along the leaf level through the sibling links ([nbtree/README:70-77](../raw/postgres-17/src/backend/access/nbtree/README#L70-L77)). Leaf pages are where space is reclaimed before a [page split](#page-split). When a new tuple does not fit, `_bt_delete_or_dedup_one_page()` first tries [simple index deletion](#simple-index-deletion), then [bottom-up index deletion](#bottom-up-index-deletion) or [deduplication](#deduplication); the page splits only if they free too little space ([nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2655-L2663), [nbtinsert.c:2698](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2698)). Other tree-shaped access methods mark their leaves too, for example GiST with `F_LEAF` ([gist.h:46](../raw/postgres-17/src/include/access/gist.h#L46)).
 
 **Version notes:**
 - PostgreSQL 12: Differs: 12 has no deduplication and no bottom-up index deletion. When a new tuple does not fit on a full leaf page flagged `BTP_HAS_GARBAGE`, `_bt_vacuum_one_page()` removes its `LP_DEAD` items; otherwise the page splits ([nbtinsert.c:752-760](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L752-L760), [nbtinsert.c#_bt_vacuum_one_page](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L2243-L2251)). The level shares a union with a deleted page's transaction ID (`btpo.level`), while `BTP_LEAF`, `P_ISLEAF()`, the sibling links, the high key, the leaf tuples' heap TIDs and leaf-level scans are as in 17 ([nbtree.h#BTPageOpaqueData](../raw/postgres-12/src/include/access/nbtree.h#L55-L66), [nbtree.h:71](../raw/postgres-12/src/include/access/nbtree.h#L71), [nbtree.h:189](../raw/postgres-12/src/include/access/nbtree.h#L189), [nbtree.h:199-219](../raw/postgres-12/src/include/access/nbtree.h#L199-L219), [nbtree/README:700-704](../raw/postgres-12/src/backend/access/nbtree/README#L700-L704), [nbtree/README:715-724](../raw/postgres-12/src/backend/access/nbtree/README#L715-L724), [nbtree/README:73-80](../raw/postgres-12/src/backend/access/nbtree/README#L73-L80)). GiST marks its leaves with `F_LEAF` ([gist.h:43](../raw/postgres-12/src/include/access/gist.h#L43)).
@@ -1656,7 +1689,7 @@ A leaf page is a page on the bottom level of a [B-tree](#b-tree), level 0, whose
 - PostgreSQL 18: Holds ([nbtree.h#BTPageOpaqueData](../raw/postgres-18/src/include/access/nbtree.h#L63-L70), [nbtree.h:77](../raw/postgres-18/src/include/access/nbtree.h#L77), [nbtree.h:221](../raw/postgres-18/src/include/access/nbtree.h#L221), [nbtree.h:350-370](../raw/postgres-18/src/include/access/nbtree.h#L350-L370), [nbtree/README:1047-1051](../raw/postgres-18/src/backend/access/nbtree/README#L1047-L1051), [nbtree/README:1062-1071](../raw/postgres-18/src/backend/access/nbtree/README#L1062-L1071), [nbtree/README:70-77](../raw/postgres-18/src/backend/access/nbtree/README#L70-L77), [nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L2655-L2663), [gist.h:49](../raw/postgres-18/src/include/access/gist.h#L49)).
 - PostgreSQL 19: Holds ([nbtree.h#BTPageOpaqueData](../raw/postgres-19/src/include/access/nbtree.h#L63-L70), [nbtree.h:77](../raw/postgres-19/src/include/access/nbtree.h#L77), [nbtree.h:221](../raw/postgres-19/src/include/access/nbtree.h#L221), [nbtree.h:350-370](../raw/postgres-19/src/include/access/nbtree.h#L350-L370), [nbtree/README:1046-1050](../raw/postgres-19/src/backend/access/nbtree/README#L1046-L1050), [nbtree/README:1061-1070](../raw/postgres-19/src/backend/access/nbtree/README#L1061-L1070), [nbtree/README:70-77](../raw/postgres-19/src/backend/access/nbtree/README#L70-L77), [nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L2702-L2710), [gist.h:49](../raw/postgres-19/src/include/access/gist.h#L49)).
 
-Related: [B-tree](#b-tree), [Page split](#page-split), [Deduplication](#deduplication), [Bottom-up index deletion](#bottom-up-index-deletion), [Simple index deletion](#simple-index-deletion), [Fast root](#fast-root), [TID](#tid)
+Related: [B-tree](#b-tree), [Page split](#page-split), [Deduplication](#deduplication), [Bottom-up index deletion](#bottom-up-index-deletion), [Simple index deletion](#simple-index-deletion), [Fast root](#fast-root), [TID](#tid), [Sibling link](#sibling-link)
 
 ### Leakproof function
 
@@ -1978,7 +2011,7 @@ A page split happens when a new entry does not fit on an index page. In a B-tree
 - PostgreSQL 18: Holds ([nbtinsert.c:1210-1241](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L1210-L1241), [nbtinsert.c#_bt_split](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L1440-L1470), [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-18/src/backend/access/nbtree/nbtsplitloc.c#L86-L102)).
 - PostgreSQL 19: Holds. `_bt_insertonpg()` still calls `_bt_split()` when `PageGetFreeSpace()` is too small, `_bt_insert_parent()` still adds the downlink, `_bt_findsplitloc()` still equalizes free space except on the rightmost page, and the pre-split steps are unchanged ([nbtinsert.c:1220-1236](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L1220-L1236), [nbtinsert.c:1489](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L1489), [nbtinsert.c:2130](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L2130), [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-19/src/backend/access/nbtree/nbtsplitloc.c#L90-L99), [nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L2702-L2714), [nbtinsert.c:2821-2828](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L2821-L2828)).
 
-Related: [Fillfactor](#fillfactor), [Simple index deletion](#simple-index-deletion), [Bottom-up index deletion](#bottom-up-index-deletion), [Deduplication](#deduplication), [Bloat](#bloat)
+Related: [Fillfactor](#fillfactor), [Simple index deletion](#simple-index-deletion), [Bottom-up index deletion](#bottom-up-index-deletion), [Deduplication](#deduplication), [Bloat](#bloat), [Sibling link](#sibling-link)
 
 ### pageinspect
 
@@ -2342,7 +2375,7 @@ Related: [pg_plan_advice](#pg_plan_advice), [Planner](#planner), [Path](#path), 
 - PostgreSQL 18: Holds, except that leaf free space is summed with `PageGetExactFreeSpace()` instead of `PageGetFreeSpace()`, new in 18. It no longer subtracts one line pointer per page, so `avg_leaf_density` can read slightly lower than in 17 for the same page ([pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L297-L324)). The rejection rules, the density formula, and the grant are unchanged ([pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L213-L247), [pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L346-L369), [pgstattuple--1.4--1.5.sql:36-37](../raw/postgres-18/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L36-L37)).
 - PostgreSQL 19: Holds, except that, as in 18, leaf free space is summed with `PageGetExactFreeSpace()` ([pgstatindex.c:331](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L331)). New in 19, it reads the blocks after the metapage through a [read stream](#read-stream) ([pgstatindex.c:280-309](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L280-L309)). It still rejects non-B-tree and invalid indexes, still counts deleted, half-dead, leaf and internal pages, computes `avg_leaf_density` and `leaf_fragmentation` with the same formulas, and is still granted to `pg_stat_scan_tables` ([pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L214-L250), [pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L301-L345), [pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L381-L392), [pgstattuple--1.4--1.5.sql:37](../raw/postgres-19/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
 
-Related: [pgstattuple](#pgstattuple), [B-tree](#b-tree), [Metapage](#metapage), [Bloat](#bloat), [Invalid index](#invalid-index)
+Related: [pgstattuple](#pgstattuple), [B-tree](#b-tree), [Metapage](#metapage), [Bloat](#bloat), [Invalid index](#invalid-index), [Sibling link](#sibling-link)
 
 ### pgstattuple
 
@@ -2470,6 +2503,20 @@ The postmaster is the first process of a server instance. It starts the auxiliar
 
 Related: [Backend](#backend), [Background worker](#background-worker), [Crash recovery](#crash-recovery)
 
+### Prefetch
+
+**Aliases:** prefetch advice, `PrefetchBuffer()`, `PrefetchSharedBuffer()`, `PrefetchLocalBuffer()`, `smgrprefetch()`, `FilePrefetch()`, `posix_fadvise(POSIX_FADV_WILLNEED)`, `USE_PREFETCH`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+Prefetching is PostgreSQL asking the kernel to start reading a block before the code that needs it calls `ReadBuffer()`. It allocates no buffer and waits for nothing, and it does nothing when the block is already in shared buffers ([bufmgr.c:620-643](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L620-L643), [bufmgr.c#PrefetchSharedBuffer](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L554-L618)). `PrefetchBuffer()` hands temporary relations to `PrefetchLocalBuffer()` and all others to `PrefetchSharedBuffer()`, which call `smgrprefetch()` ([bufmgr.c#PrefetchBuffer](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L644-L666)). That reaches `mdprefetch()` and then `FilePrefetch()`, whose only implementation in 17 is `posix_fadvise(..., POSIX_FADV_WILLNEED)` ([smgr.c#smgrprefetch](../raw/postgres-17/src/backend/storage/smgr/smgr.c#L577-L589), [md.c#mdprefetch](../raw/postgres-17/src/backend/storage/smgr/md.c#L721-L763), [fd.c#FilePrefetch](../raw/postgres-17/src/backend/storage/file/fd.c#L2068-L2107)). The code is compiled only when `USE_PREFETCH` is defined, which 17 does only where `posix_fadvise()` exists; on other platforms `effective_io_concurrency` and `maintenance_io_concurrency` must be 0 ([pg_config_manual.h:150-163](../raw/postgres-17/src/include/pg_config_manual.h#L150-L163), [variable.c:1222-1246](../raw/postgres-17/src/backend/commands/variable.c#L1222-L1246)). In 17 the callers are bitmap heap scans, heap index-entry deletion, VACUUM's truncation scan, recovery prefetching and `pg_prewarm`'s `prefetch` mode ([nodeBitmapHeapscan.c:500](../raw/postgres-17/src/backend/executor/nodeBitmapHeapscan.c#L500), [nodeBitmapHeapscan.c:551](../raw/postgres-17/src/backend/executor/nodeBitmapHeapscan.c#L551), [heapam.c:8416](../raw/postgres-17/src/backend/access/heap/heapam.c#L8416), [vacuumlazy.c:2758](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2758), [xlogprefetcher.c:769](../raw/postgres-17/src/backend/access/transam/xlogprefetcher.c#L769), [pg_prewarm.c:227](../raw/postgres-17/contrib/pg_prewarm/pg_prewarm.c#L227)). A [read stream](#read-stream) gives the same advice through `StartReadBuffers()` when prefetching is compiled in, direct I/O is off and the next read does not continue a sequential run ([read_stream.c:508-520](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L508-L520), [read_stream.c:235-244](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L235-L244), [bufmgr.c:1326-1343](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L1326-L1343)). No B-tree index scan prefetches: `_bt_readnextpage()` reads each leaf with `_bt_getbuf()`, which is a plain `ReadBuffer()` ([nbtsearch.c:2207-2208](../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2207-L2208), [nbtpage.c#_bt_getbuf](../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L844-L857)). Prefetch advice is not the kernel's own read-ahead, which the source counts on for physically sequential reads, for example in VACUUM's truncation scan, in B-tree VACUUM's physical-order pass and in the planner's page-cost model ([vacuumlazy.c:2690-2695](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2690-L2695), [nbtree.c:989-992](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L989-L992), [costsize.c:17-20](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L17-L20)). `recovery_prefetch` has context `sighup`, so it changes with a reload; `effective_io_concurrency` and `maintenance_io_concurrency` have context `user`, so they can be set per session ([guc_tables.c:5079](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L5079), [guc_tables.c:3109-3136](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3109-L3136)).
+
+**Version notes:**
+- PostgreSQL 12: Differs: `PrefetchBuffer()` returns nothing, its whole body sits under `USE_PREFETCH`, and it does the shared-buffer lookup itself, handing temporary relations to `LocalPrefetchBuffer()` ([bufmgr.c#PrefetchBuffer](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L521-L587), [localbuf.c#LocalPrefetchBuffer](../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L57-L90)). It reaches `posix_fadvise()` one block at a time through `mdprefetch()` and `FilePrefetch()`, and `USE_PREFETCH` again depends only on `posix_fadvise()` ([md.c#mdprefetch](../raw/postgres-12/src/backend/storage/smgr/md.c#L500-L518), [fd.c#FilePrefetch](../raw/postgres-12/src/backend/storage/file/fd.c#L1799-L1834), [pg_config_manual.h:126-145](../raw/postgres-12/src/include/pg_config_manual.h#L126-L145)). The callers are bitmap heap scans, VACUUM's truncation scan, the heap helper that computes the removal horizon when B-tree index entries are deleted, and `pg_prewarm` ([nodeBitmapHeapscan.c:508](../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L508), [nodeBitmapHeapscan.c:559](../raw/postgres-12/src/backend/executor/nodeBitmapHeapscan.c#L559), [vacuumlazy.c:2078](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L2078), [heapam.c:7032-7039](../raw/postgres-12/src/backend/access/heap/heapam.c#L7032-L7039), [pg_prewarm.c:162](../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L162)). Without `posix_fadvise()`, `effective_io_concurrency` must be 0 ([guc.c#check_effective_io_concurrency](../raw/postgres-12/src/backend/utils/misc/guc.c#L11326-L11350)). B-tree pages are read with `_bt_getbuf()`, a plain `ReadBuffer()` ([nbtpage.c#_bt_getbuf](../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L759-L769)).
+- PostgreSQL 14: Differs: `PrefetchBuffer()` and `PrefetchSharedBuffer()` work as in 17 ([bufmgr.c#PrefetchBuffer](../raw/postgres-14/src/backend/storage/buffer/bufmgr.c#L569-L615), [bufmgr.c#PrefetchSharedBuffer](../raw/postgres-14/src/backend/storage/buffer/bufmgr.c#L503-L567)), and `maintenance_io_concurrency` exists with the same must-be-0 rule; both settings have context `user`, so session scope ([guc.c:12126-12149](../raw/postgres-14/src/backend/utils/misc/guc.c#L12126-L12149), [guc.c:3045-3066](../raw/postgres-14/src/backend/utils/misc/guc.c#L3045-L3066)). The callers are bitmap heap scans, `ANALYZE`'s block sampling, heap index-entry deletion, VACUUM's truncation scan and `pg_prewarm` ([nodeBitmapHeapscan.c:507](../raw/postgres-14/src/backend/executor/nodeBitmapHeapscan.c#L507), [analyze.c:1189-1194](../raw/postgres-14/src/backend/commands/analyze.c#L1189-L1194), [analyze.c:1225](../raw/postgres-14/src/backend/commands/analyze.c#L1225), [heapam.c:7848](../raw/postgres-14/src/backend/access/heap/heapam.c#L7848), [vacuumlazy.c:3391](../raw/postgres-14/src/backend/access/heap/vacuumlazy.c#L3391), [pg_prewarm.c:199](../raw/postgres-14/contrib/pg_prewarm/pg_prewarm.c#L199)). B-tree pages are read with `_bt_getbuf()`, a plain `ReadBuffer()` ([nbtpage.c#_bt_getbuf](../raw/postgres-14/src/backend/access/nbtree/nbtpage.c#L871-L881)).
+- PostgreSQL 18: Differs: new in 18, macOS builds define `USE_PREFETCH` and `FilePrefetch()` uses `fcntl(F_RDADVISE)` there, while other platforms keep `posix_fadvise()` ([darwin.h:10-13](../raw/postgres-18/src/include/port/darwin.h#L10-L13), [fd.c#FilePrefetch](../raw/postgres-18/src/backend/storage/file/fd.c#L2074-L2136)). Bitmap heap scans now read through a read stream instead of calling `PrefetchBuffer()` ([heapam.c:1230-1240](../raw/postgres-18/src/backend/access/heap/heapam.c#L1230-L1240)). When `io_method` is not `sync`, `StartReadBuffers()` starts the read asynchronously, and only the synchronous path still issues `smgrprefetch()` advice; `io_method` has context `postmaster`, so changing it needs a restart ([bufmgr.c:1419-1467](../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1419-L1467), [guc_tables.c:5444-5451](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L5444-L5451)). `PrefetchBuffer()` remains, and its callers are heap index-entry deletion, VACUUM's truncation scan, recovery prefetching and `pg_prewarm` ([bufmgr.c#PrefetchBuffer](../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L650-L672), [heapam.c:8295](../raw/postgres-18/src/backend/access/heap/heapam.c#L8295), [vacuumlazy.c:3432](../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3432), [xlogprefetcher.c:767](../raw/postgres-18/src/backend/access/transam/xlogprefetcher.c#L767), [pg_prewarm.c:211](../raw/postgres-18/contrib/pg_prewarm/pg_prewarm.c#L211)). `recovery_prefetch` still has context `sighup`, and B-tree index scans still read each leaf with `_bt_getbuf()` ([guc_tables.c:5352](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L5352), [nbtsearch.c:2408-2413](../raw/postgres-18/src/backend/access/nbtree/nbtsearch.c#L2408-L2413)).
+- PostgreSQL 19: Differs, as in 18: macOS prefetches through `fcntl(F_RDADVISE)`, bitmap heap scans use a read stream, and only the `io_method = sync` path issues `smgrprefetch()` advice from `StartReadBuffers()` ([darwin.h:10-13](../raw/postgres-19/src/include/port/darwin.h#L10-L13), [fd.c#FilePrefetch](../raw/postgres-19/src/backend/storage/file/fd.c#L2058-L2120), [heapam.c:1306-1316](../raw/postgres-19/src/backend/access/heap/heapam.c#L1306-L1316), [bufmgr.c:1539-1587](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L1539-L1587)). `io_method` has context `postmaster` and `recovery_prefetch` context `sighup` ([guc_parameters.dat:1401](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1401), [guc_parameters.dat:2452](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2452)). The `PrefetchBuffer()` callers are the same four as in 18 ([bufmgr.c#PrefetchBuffer](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L786-L808), [heapam.c:8253](../raw/postgres-19/src/backend/access/heap/heapam.c#L8253), [vacuumlazy.c:3375](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L3375), [xlogprefetcher.c:772](../raw/postgres-19/src/backend/access/transam/xlogprefetcher.c#L772), [pg_prewarm.c:211](../raw/postgres-19/contrib/pg_prewarm/pg_prewarm.c#L211)), and B-tree index scans still read each leaf with `_bt_getbuf()` ([nbtsearch.c:1886-1890](../raw/postgres-19/src/backend/access/nbtree/nbtsearch.c#L1886-L1890)).
+
+Related: [Read stream](#read-stream), [effective_io_concurrency](#effective_io_concurrency), [io_combine_limit](#io_combine_limit), [Asynchronous I/O](#asynchronous-io), [OS page cache](#os-page-cache), [Bitmap scan](#bitmap-scan), [Buffer manager](#buffer-manager), [Index scan](#index-scan), [Sibling link](#sibling-link)
+
 ### Prepared statement
 
 **Aliases:** `PREPARE`, `EXECUTE`, `DEALLOCATE`, extended query protocol, unnamed statement. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2586,7 +2633,7 @@ Related: [Parse tree](#parse-tree), [Planner](#planner), [RelOptInfo](#reloptinf
 
 **Aliases:** streaming read, `ReadStream`, `read_stream.c`, `read_stream_begin_relation()`, `read_stream_next_buffer()`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-A read stream is a helper that reads a [relation](#relation)'s blocks ahead of the code that uses them. The caller supplies a callback that yields block numbers. The stream merges neighbouring blocks into reads of up to [io_combine_limit](#io_combine_limit) and starts them early through `StartReadBuffers()`, with a look-ahead distance that adapts to whether I/O is needed ([read_stream.c:3-42](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L3-L42)). This replaces calling `ReadBuffer()` one block at a time. The caller opens a stream with `read_stream_begin_relation()` and takes [pinned](#buffer-pin) buffers from it with `read_stream_next_buffer()`. Flags tune it: `READ_STREAM_MAINTENANCE` makes it follow `maintenance_io_concurrency` for maintenance work such as VACUUM, and `READ_STREAM_SEQUENTIAL` marks sequential access ([read_stream.h:22-59](../raw/postgres-17/src/include/storage/read_stream.h#L22-L59)). In PostgreSQL 17, heap sequential scans and ANALYZE use it ([heapam.c:1252](../raw/postgres-17/src/backend/access/heap/heapam.c#L1252), [analyze.c:1199](../raw/postgres-17/src/backend/commands/analyze.c#L1199)). `io_combine_limit` has context `user`, so it can be set per session ([guc_tables.c:3139-3140](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3139-L3140)).
+A read stream is a helper that reads a [relation](#relation)'s blocks ahead of the code that uses them. The caller supplies a callback that yields block numbers. The stream merges neighbouring blocks into reads of up to [io_combine_limit](#io_combine_limit) and starts them early through `StartReadBuffers()`, with a look-ahead distance that adapts to whether I/O is needed ([read_stream.c:3-42](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L3-L42)). This replaces calling `ReadBuffer()` one block at a time. The caller opens a stream with `read_stream_begin_relation()` and takes [pinned](#buffer-pin) buffers from it with `read_stream_next_buffer()`. Flags tune it: `READ_STREAM_MAINTENANCE` makes it follow `maintenance_io_concurrency` for maintenance work such as VACUUM, and `READ_STREAM_SEQUENTIAL` marks sequential access ([read_stream.h:22-59](../raw/postgres-17/src/include/storage/read_stream.h#L22-L59)). In PostgreSQL 17, heap sequential scans, ANALYZE and `pg_prewarm`'s `buffer` mode use it; B-tree index scans do not, and read each page with `_bt_getbuf()` ([heapam.c:1252](../raw/postgres-17/src/backend/access/heap/heapam.c#L1252), [analyze.c:1199](../raw/postgres-17/src/backend/commands/analyze.c#L1199), [pg_prewarm.c:263](../raw/postgres-17/contrib/pg_prewarm/pg_prewarm.c#L263), [nbtpage.c#_bt_getbuf](../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L844-L857)). `io_combine_limit` has context `user`, so it can be set per session ([guc_tables.c:3139-3140](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3139-L3140)).
 
 **Version notes:**
 - PostgreSQL 12: Not present in PostgreSQL 12. There is no `storage/aio/` directory, and heap scans read one block at a time with `ReadBufferExtended()` ([heapam.c:381](../raw/postgres-12/src/backend/access/heap/heapam.c#L381)).
@@ -2594,7 +2641,7 @@ A read stream is a helper that reads a [relation](#relation)'s blocks ahead of t
 - PostgreSQL 18: Differs: new in 18, the same API sits beside the [asynchronous I/O](#asynchronous-io) subsystem in `storage/aio/` ([read_stream.c:3-18](../raw/postgres-18/src/backend/storage/aio/read_stream.c#L3-L18), [aio.c:1-11](../raw/postgres-18/src/backend/storage/aio/aio.c#L1-L11)). VACUUM's heap scan and B-tree vacuum also use streams ([vacuumlazy.c:1236](../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L1236), [nbtree.c:1270](../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1270)). `io_combine_limit` is still `user` context, so session scope. It is capped by the new `io_max_combine_limit`, which is `postmaster` context, so changing it needs a restart ([guc_tables.c:3279-3295](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3279-L3295)).
 - PostgreSQL 19: Differs: as in 18, VACUUM's heap scan and B-tree vacuum use streams, and the `postmaster`-context `io_max_combine_limit` caps `io_combine_limit` ([vacuumlazy.c:1314](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L1314), [nbtree.c:1324](../raw/postgres-19/src/backend/access/nbtree/nbtree.c#L1324), [guc_parameters.dat:1374](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1374)). New in 19, more callers use streams, including hash and GIN vacuum and `pgstatindex` ([hash.c:524](../raw/postgres-19/src/backend/access/hash/hash.c#L524), [ginvacuum.c:829](../raw/postgres-19/src/backend/access/gin/ginvacuum.c#L829), [pgstatindex.c:292](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L292)). `io_combine_limit` is `PGC_USERSET`, so session scope ([guc_parameters.dat:1364](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1364)).
 
-Related: [Buffer manager](#buffer-manager), [Asynchronous I/O](#asynchronous-io), [Ring buffer](#ring-buffer), [VACUUM](#vacuum)
+Related: [Buffer manager](#buffer-manager), [Asynchronous I/O](#asynchronous-io), [Ring buffer](#ring-buffer), [VACUUM](#vacuum), [Prefetch](#prefetch)
 
 ### Regression test
 
@@ -2940,6 +2987,20 @@ A table [lock mode](#lock-mode) that conflicts with itself and with the stronger
 - PostgreSQL 19: Holds. Mode 4 still conflicts with itself and stronger modes, the documented takers are unchanged, and `vacuum_rel()` still picks it for every non-FULL VACUUM ([lockdefs.h#ShareUpdateExclusiveLock](../raw/postgres-19/src/include/storage/lockdefs.h#L39-L40), [lock.c#LockConflicts](../raw/postgres-19/src/backend/storage/lmgr/lock.c#L81-L84), [mvcc.sgml#SHARE UPDATE EXCLUSIVE](../raw/postgres-19/doc/src/sgml/mvcc.sgml#L991-L1010), [vacuum.c:2084-2085](../raw/postgres-19/src/backend/commands/vacuum.c#L2084-L2085)). `REPACK (CONCURRENTLY)` also holds it for most of its run ([repack.c:12-21](../raw/postgres-19/src/backend/commands/repack.c#L12-L21), [repack.c#RepackLockLevel](../raw/postgres-19/src/backend/commands/repack.c#L456-L463)).
 
 Related: [Heavyweight lock](#heavyweight-lock), [AccessExclusiveLock](#accessexclusivelock), [CONCURRENTLY](#concurrently), [VACUUM](#vacuum)
+
+### Sibling link
+
+**Aliases:** left link, right link, left-link, right-link, `btpo_prev`, `btpo_next`, `P_NONE`, `P_LEFTMOST()`, `P_RIGHTMOST()`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+A sibling link is the block number of a [B-tree](#b-tree) page's left or right neighbour on the same tree level, kept in the page's opaque area as `btpo_prev` and `btpo_next` ([nbtree.h#BTPageOpaqueData](../raw/postgres-17/src/include/access/nbtree.h#L62-L69)). `P_NONE`, block 0, marks a missing neighbour, and `P_LEFTMOST()` and `P_RIGHTMOST()` test for it ([nbtree.h:204-219](../raw/postgres-17/src/include/access/nbtree.h#L204-L219)). The right link comes from the Lehman and Yao design, so a search that lands on a page split under it can move right; PostgreSQL adds the left link so that scans can also run backwards ([nbtree/README:17-29](../raw/postgres-17/src/backend/access/nbtree/README#L17-L29), [nbtree/README:74-86](../raw/postgres-17/src/backend/access/nbtree/README#L74-L86)). The links follow key order, not block order. A [page split](#page-split) keeps the left half on the original block and puts the right half on the block `_bt_allocbuf()` returns, which is either a page recycled through the [free space map](#free-space-map) or a new block at the end of the file; the split then points the original page, the new page and the old right neighbour at each other ([nbtpage.c:901-907](../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L901-L907), [nbtpage.c:971-978](../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L971-L978), [nbtinsert.c:1720-1746](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1720-L1746), [nbtinsert.c:1934-1951](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1934-L1951)). [B-tree page deletion](#b-tree-page-deletion) splices a page out by pointing its two neighbours at each other ([nbtpage.c:2597-2612](../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L2597-L2612)). A forward scan saves a page's right link when it reads the page and steps to it later; a backward scan follows the left link and then looks for the page whose right link points back where it came from, because that page may have split in the meantime ([nbtree/README:99-104](../raw/postgres-17/src/backend/access/nbtree/README#L99-L104), [nbtsearch.c:1625-1630](../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L1625-L1630), [nbtsearch.c#_bt_walk_left](../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2377-L2434)). Both directions read one page per link with `_bt_getbuf()`, whatever the block numbers are ([nbtsearch.c:2207-2208](../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2207-L2208), [nbtsearch.c:2406](../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2406)). [pgstatindex](#pgstatindex)'s `leaf_fragmentation` counts leaves whose right link points to a lower block number, and [pageinspect](#pageinspect)'s `bt_page_stats()` and `bt_multi_page_stats()` report both links ([pgstatindex.c:318-323](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L318-L323), [btreefuncs.c:165-167](../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L165-L167), [pageinspect--1.11--1.12.sql:9-23](../raw/postgres-17/contrib/pageinspect/pageinspect--1.11--1.12.sql#L9-L23)).
+
+**Version notes:**
+- PostgreSQL 12: Differs: the two links, `P_NONE` and the tests are the same, but the tree level shares a union with a deleted page's transaction ID ([nbtree.h#BTPageOpaqueData](../raw/postgres-12/src/include/access/nbtree.h#L55-L66), [nbtree.h:181](../raw/postgres-12/src/include/access/nbtree.h#L181), [nbtree.h:187-188](../raw/postgres-12/src/include/access/nbtree.h#L187-L188)). A split takes its new right page from `_bt_getbuf(rel, P_NEW, BT_WRITE)` and sets the same links ([nbtinsert.c:1416](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1416), [nbtinsert.c:1427](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1427), [nbtinsert.c:1436-1437](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1436-L1437), [nbtinsert.c:1626](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L1626)). Scans save the right link and walk left with `_bt_walk_left()`, deletion splices the page out, and `leaf_fragmentation` counts the same backward right links ([nbtsearch.c:1455](../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1455), [nbtsearch.c:1992](../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1992), [nbtpage.c:1977-1982](../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L1977-L1982), [pgstatindex.c:306](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L306)). `pageinspect` reports the links through `bt_page_stats()`; 12's extension scripts define no `bt_multi_page_stats()` ([btreefuncs.c:125-126](../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L125-L126), [pageinspect--1.5.sql:160-174](../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L160-L174)).
+- PostgreSQL 14: Holds, except that a split still takes its new right page from `_bt_getbuf(rel, P_NEW, BT_WRITE)` and `pageinspect` has only `bt_page_stats()` ([nbtree.h#BTPageOpaqueData](../raw/postgres-14/src/include/access/nbtree.h#L62-L69), [nbtree.h:211-218](../raw/postgres-14/src/include/access/nbtree.h#L211-L218), [nbtinsert.c:1717](../raw/postgres-14/src/backend/access/nbtree/nbtinsert.c#L1717), [nbtinsert.c:1731](../raw/postgres-14/src/backend/access/nbtree/nbtinsert.c#L1731), [nbtinsert.c:1740-1741](../raw/postgres-14/src/backend/access/nbtree/nbtinsert.c#L1740-L1741), [nbtinsert.c:1946](../raw/postgres-14/src/backend/access/nbtree/nbtinsert.c#L1946), [nbtsearch.c:1591](../raw/postgres-14/src/backend/access/nbtree/nbtsearch.c#L1591), [nbtsearch.c:2253](../raw/postgres-14/src/backend/access/nbtree/nbtsearch.c#L2253), [nbtpage.c:2604-2609](../raw/postgres-14/src/backend/access/nbtree/nbtpage.c#L2604-L2609), [pgstatindex.c:322](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L322), [btreefuncs.c:149-150](../raw/postgres-14/contrib/pageinspect/btreefuncs.c#L149-L150)).
+- PostgreSQL 18: Differs: new in 18, `_bt_readpage()` saves both links, and a backward scan steps to the saved left link through `_bt_lock_and_validate_left()`, which replaces `_bt_walk_left()` and still checks that the page's right link points back to the page just read ([nbtree.h:967-969](../raw/postgres-18/src/include/access/nbtree.h#L967-L969), [nbtsearch.c:1663-1668](../raw/postgres-18/src/backend/access/nbtree/nbtsearch.c#L1663-L1668), [nbtsearch.c:2229-2234](../raw/postgres-18/src/backend/access/nbtree/nbtsearch.c#L2229-L2234), [nbtsearch.c#_bt_lock_and_validate_left](../raw/postgres-18/src/backend/access/nbtree/nbtsearch.c#L2496-L2541)). Splits through `_bt_allocbuf()`, deletion, `leaf_fragmentation` and the two `pageinspect` functions are as in 17 ([nbtinsert.c:1720](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L1720), [nbtinsert.c:1734](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L1734), [nbtinsert.c:1743-1744](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L1743-L1744), [nbtinsert.c:1949](../raw/postgres-18/src/backend/access/nbtree/nbtinsert.c#L1949), [nbtpage.c:2607-2612](../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L2607-L2612), [pgstatindex.c:319](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L319), [btreefuncs.c:166-167](../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L166-L167), [pageinspect--1.11--1.12.sql:9-23](../raw/postgres-18/contrib/pageinspect/pageinspect--1.11--1.12.sql#L9-L23)).
+- PostgreSQL 19: Differs, as in 18: `_bt_readpage()` saves both links and backward scans use `_bt_lock_and_validate_left()`; new in 19, `_bt_readpage()` lives in `nbtreadpage.c` ([nbtreadpage.c:149-154](../raw/postgres-19/src/backend/access/nbtree/nbtreadpage.c#L149-L154), [nbtsearch.c:1708-1711](../raw/postgres-19/src/backend/access/nbtree/nbtsearch.c#L1708-L1711), [nbtsearch.c#_bt_lock_and_validate_left](../raw/postgres-19/src/backend/access/nbtree/nbtsearch.c#L1974-L2012)). Splits, deletion, `leaf_fragmentation` and `pageinspect` are as in 17 ([nbtinsert.c:1741](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L1741), [nbtinsert.c:1762](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L1762), [nbtinsert.c:1771-1772](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L1771-L1772), [nbtinsert.c:1979](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L1979), [nbtpage.c:2645-2650](../raw/postgres-19/src/backend/access/nbtree/nbtpage.c#L2645-L2650), [pgstatindex.c:339](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L339), [btreefuncs.c:167-168](../raw/postgres-19/contrib/pageinspect/btreefuncs.c#L167-L168), [pageinspect--1.11--1.12.sql:9-23](../raw/postgres-19/contrib/pageinspect/pageinspect--1.11--1.12.sql#L9-L23)).
+
+Related: [B-tree](#b-tree), [Leaf page](#leaf-page), [Page split](#page-split), [B-tree page deletion](#b-tree-page-deletion), [Free space map](#free-space-map), [pgstatindex](#pgstatindex), [pageinspect](#pageinspect), [Index scan](#index-scan), [Prefetch](#prefetch)
 
 ### Simple index deletion
 
@@ -3415,7 +3476,7 @@ The visibility map (VM) is a relation [fork](#fork) with two bits per heap page 
 - PostgreSQL 18: Holds ([visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-18/src/include/access/visibilitymapdefs.h#L20-L21), [visibilitymap.c#NOTES](../raw/postgres-18/src/backend/access/heap/visibilitymap.c#L22-L50), [visibilitymap.c:323](../raw/postgres-18/src/backend/access/heap/visibilitymap.c#L323), [nodeIndexonlyscan.c#IndexOnlyNext](../raw/postgres-18/src/backend/executor/nodeIndexonlyscan.c#L162-L169)).
 - PostgreSQL 19: Differs in WAL logging. Setting a bit is no longer a WAL record of its own: the `XLOG_HEAP2_VISIBLE` record is gone, and, like clearing, setting is replayed from the record of the operation that made the page all-visible or all-frozen, such as a prune/freeze record that carries the VM flags ([visibilitymap.c:37-41](../raw/postgres-19/src/backend/access/heap/visibilitymap.c#L37-L41), [heapam_xlog.h:63](../raw/postgres-19/src/include/access/heapam_xlog.h#L63), [heapam_xlog.h:362-369](../raw/postgres-19/src/include/access/heapam_xlog.h#L362-L369)). On-access pruning by a read-only scan can also set VM bits, not only VACUUM ([pruneheap.c:359-361](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L359-L361)). The two bits, the rule that a set bit is always true, and the index-only-scan check are unchanged ([glossary.sgml#glossary-vm](../raw/postgres-19/doc/src/sgml/glossary.sgml#L2240-L2253), [visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-19/src/include/access/visibilitymapdefs.h#L20-L21), [visibilitymap.c:25-35](../raw/postgres-19/src/backend/access/heap/visibilitymap.c#L25-L35), [nodeIndexonlyscan.c#IndexOnlyNext](../raw/postgres-19/src/backend/executor/nodeIndexonlyscan.c#L165-L173)).
 
-Related: [Fork](#fork), [Freezing](#freezing), [Free space map](#free-space-map), [Index-only scan](#index-only-scan), [VACUUM](#vacuum)
+Related: [Fork](#fork), [Freezing](#freezing), [Free space map](#free-space-map), [Index-only scan](#index-only-scan), [VACUUM](#vacuum), [Hint bits](#hint-bits), [Asynchronous commit](#asynchronous-commit)
 
 ### Wait event
 
@@ -3443,7 +3504,7 @@ The write-ahead log (WAL) is the sequential journal of changes to the cluster. I
 - PostgreSQL 18: Holds ([glossary.sgml#glossary-wal](../raw/postgres-18/doc/src/sgml/glossary.sgml#L2318-L2328), [transam/README:402-415](../raw/postgres-18/src/backend/access/transam/README#L402-L415), [rel.h#RelationNeedsWAL](../raw/postgres-18/src/include/utils/rel.h#L628-L642), [transam/README:437-466](../raw/postgres-18/src/backend/access/transam/README#L437-L466)).
 - PostgreSQL 19: Holds, except that the WAL level actually in effect can be `logical` while `wal_level` is `replica`; see [WAL level](#wal-level) ([logicalctl.c:5-22](../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L5-L22)). The glossary and README definitions, `RelationNeedsWAL()`, the XLOG name and the lock / critical section / change / `MarkBufferDirty()` / `XLogInsert()` / `PageSetLSN()` recipe are unchanged ([glossary.sgml#glossary-wal](../raw/postgres-19/doc/src/sgml/glossary.sgml#L2416-L2428), [transam/README:399-416](../raw/postgres-19/src/backend/access/transam/README#L399-L416), [rel.h#RelationNeedsWAL](../raw/postgres-19/src/include/utils/rel.h#L628-L642), [transam/README:437-466](../raw/postgres-19/src/backend/access/transam/README#L437-L466)).
 
-Related: [LSN](#lsn), [Checkpoint](#checkpoint), [Full-page image](#full-page-image), [Crash recovery](#crash-recovery), [Critical section](#critical-section), [Logical decoding](#logical-decoding), [WAL level](#wal-level)
+Related: [LSN](#lsn), [Checkpoint](#checkpoint), [Full-page image](#full-page-image), [Crash recovery](#crash-recovery), [Critical section](#critical-section), [Logical decoding](#logical-decoding), [WAL level](#wal-level), [WAL writer](#wal-writer), [Asynchronous commit](#asynchronous-commit)
 
 ### WAL level
 
@@ -3486,6 +3547,20 @@ A WAL sender is a primary-side process that streams [WAL](#wal) to one client, e
 - PostgreSQL 19: Holds; the GUCs are defined in `guc_parameters.dat` with the same contexts ([walsender.c#exec_replication_command](../raw/postgres-19/src/backend/replication/walsender.c#L2155-L2173), [walsender.c:2966](../raw/postgres-19/src/backend/replication/walsender.c#L2966), [guc_parameters.dat#max_wal_senders](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2177-L2183), [guc_parameters.dat#wal_sender_timeout](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L3578-L3585)).
 
 Related: [WAL receiver](#wal-receiver), [Replication slot](#replication-slot), [Logical decoding](#logical-decoding), [Synchronous replication](#synchronous-replication), [Backend](#backend)
+
+### WAL writer
+
+**Aliases:** walwriter, `WalWriterMain()`, `XLogBackgroundFlush()`, `wal_writer_delay`, `wal_writer_flush_after`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+The WAL writer is a background process that writes and flushes [WAL](#wal) so that ordinary backends rarely have to, and that bounds how long an [asynchronous commit](#asynchronous-commit) can stay unflushed; backends still write and flush WAL themselves when it does not keep up ([walwriter.c:5-15](../raw/postgres-17/src/backend/postmaster/walwriter.c#L5-L15)). The [postmaster](#postmaster) starts it once the startup process has finished ([walwriter.c:23-24](../raw/postgres-17/src/backend/postmaster/walwriter.c#L23-L24)). Its loop calls `XLogBackgroundFlush()` and then sleeps for `wal_writer_delay`; after 50 cycles with nothing to do it hibernates, sleeping 25 times as long ([walwriter.c:74-80](../raw/postgres-17/src/backend/postmaster/walwriter.c#L74-L80), [walwriter.c:218-272](../raw/postgres-17/src/backend/postmaster/walwriter.c#L218-L272)). `XLogBackgroundFlush()` normally writes only completed WAL pages, and when there are none it writes through the latest asynchronous commit; it flushes when `wal_writer_delay` has passed since its last flush or when at least `wal_writer_flush_after` blocks are unflushed, so an asynchronous commit reaches disk within three cycles ([xlog.c:2941-2964](../raw/postgres-17/src/backend/access/transam/xlog.c#L2941-L2964), [xlog.c:3029-3059](../raw/postgres-17/src/backend/access/transam/xlog.c#L3029-L3059)). A backend that commits asynchronously wakes the writer through `XLogSetAsyncXactLSN()` when the writer is hibernating, or when at least `wal_writer_flush_after` blocks are unflushed or that setting is 0; a commit whose LSN is not newer than one already reported wakes nobody ([xlog.c#XLogSetAsyncXactLSN](../raw/postgres-17/src/backend/access/transam/xlog.c#L2607-L2657)). Until a commit record is flushed, [hint bits](#hint-bits) that would record the commit are not set ([heapam_visibility.c#SetHintBits](../raw/postgres-17/src/backend/access/heap/heapam_visibility.c#L82-L132)). `wal_writer_delay` (default 200 ms) and `wal_writer_flush_after` (default 1 MB, `DEFAULT_WAL_WRITER_FLUSH_AFTER`) have context `sighup`, so changing either needs a reload ([guc_tables.c:2902-2911](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2902-L2911), [guc_tables.c:2913-2922](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2913-L2922), [walwriter.h:15](../raw/postgres-17/src/include/postmaster/walwriter.h#L15)). It is a different process from the [background writer](#background-writer), which writes dirty shared buffers rather than WAL ([bgwriter.c:5-11](../raw/postgres-17/src/backend/postmaster/bgwriter.c#L5-L11)).
+
+**Version notes:**
+- PostgreSQL 12: Holds, except that `XLogSetAsyncXactLSN()` wakes the writer whenever it is hibernating or a completed WAL page lies beyond the flushed position, with no `wal_writer_flush_after` test and no check for an already-reported LSN ([xlog.c#XLogSetAsyncXactLSN](../raw/postgres-12/src/backend/access/transam/xlog.c#L2630-L2670)). The loop, the hibernation constants, the flush rule and the two `sighup` settings match 17; the flush-after default is written inline as `(1024 * 1024) / XLOG_BLCKSZ` ([walwriter.c:5-15](../raw/postgres-12/src/backend/postmaster/walwriter.c#L5-L15), [walwriter.c:71-77](../raw/postgres-12/src/backend/postmaster/walwriter.c#L71-L77), [walwriter.c:220-282](../raw/postgres-12/src/backend/postmaster/walwriter.c#L220-L282), [xlog.c:2962-2985](../raw/postgres-12/src/backend/access/transam/xlog.c#L2962-L2985), [guc.c:2613-2622](../raw/postgres-12/src/backend/utils/misc/guc.c#L2613-L2622), [guc.c:2624-2633](../raw/postgres-12/src/backend/utils/misc/guc.c#L2624-L2633)).
+- PostgreSQL 14: Holds, except for the same wake rule as 12 ([xlog.c#XLogSetAsyncXactLSN](../raw/postgres-14/src/backend/access/transam/xlog.c#L2746-L2786)). The rest matches 17 ([walwriter.c:5-15](../raw/postgres-14/src/backend/postmaster/walwriter.c#L5-L15), [walwriter.c:73-79](../raw/postgres-14/src/backend/postmaster/walwriter.c#L73-L79), [walwriter.c:223-277](../raw/postgres-14/src/backend/postmaster/walwriter.c#L223-L277), [xlog.c:3075-3098](../raw/postgres-14/src/backend/access/transam/xlog.c#L3075-L3098), [guc.c:2839-2848](../raw/postgres-14/src/backend/utils/misc/guc.c#L2839-L2848), [guc.c:2850-2859](../raw/postgres-14/src/backend/utils/misc/guc.c#L2850-L2859)).
+- PostgreSQL 18: Holds, except that the writer advertises its process number (`walwriterProc`) instead of a latch pointer, and `XLogSetAsyncXactLSN()` sets that process's latch ([walwriter.c:212-216](../raw/postgres-18/src/backend/postmaster/walwriter.c#L212-L216), [xlog.c:2651-2658](../raw/postgres-18/src/backend/access/transam/xlog.c#L2651-L2658)). The wake rule, the loop, the flush rule and the settings match 17 ([xlog.c#XLogSetAsyncXactLSN](../raw/postgres-18/src/backend/access/transam/xlog.c#L2603-L2659), [walwriter.c:5-15](../raw/postgres-18/src/backend/postmaster/walwriter.c#L5-L15), [walwriter.c:73-79](../raw/postgres-18/src/backend/postmaster/walwriter.c#L73-L79), [walwriter.c:218-272](../raw/postgres-18/src/backend/postmaster/walwriter.c#L218-L272), [xlog.c:2943-2966](../raw/postgres-18/src/backend/access/transam/xlog.c#L2943-L2966), [guc_tables.c:3030-3039](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3030-L3039), [guc_tables.c:3041-3050](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3041-L3050)).
+- PostgreSQL 19: Holds, as in 18: the writer advertises `walwriterProc` and is woken through that process's latch ([walwriter.c:209-213](../raw/postgres-19/src/backend/postmaster/walwriter.c#L209-L213), [xlog.c:2680-2687](../raw/postgres-19/src/backend/access/transam/xlog.c#L2680-L2687)). Both settings are declared in `guc_parameters.dat` and keep context `sighup` ([guc_parameters.dat:3614-3621](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L3614-L3621), [guc_parameters.dat:3623-3630](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L3623-L3630), [walwriter.c:5-15](../raw/postgres-19/src/backend/postmaster/walwriter.c#L5-L15), [walwriter.c:74-80](../raw/postgres-19/src/backend/postmaster/walwriter.c#L74-L80), [walwriter.c:215-269](../raw/postgres-19/src/backend/postmaster/walwriter.c#L215-L269), [xlog.c:2987-3010](../raw/postgres-19/src/backend/access/transam/xlog.c#L2987-L3010)).
+
+Related: [WAL](#wal), [Asynchronous commit](#asynchronous-commit), [Hint bits](#hint-bits), [Background writer](#background-writer), [Postmaster](#postmaster), [fsync](#fsync), [GUC context](#guc-context)
 
 ### work_mem
 
@@ -3545,7 +3620,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 ## Open Questions
 
-- Verification depth. On 2026-09-23, eight review agents read all 4,273 citations against their pinned checkouts and reported 421 defects, 24 of them factual errors. All were corrected, and six entries were added. The agent that made each correction re-read the source for it. The orchestrator re-checked every high-severity correction and a sample of the others. No second full pass has read the corrected text, so `verified_by_agent` stays `not yet`.
+- Verification depth. On 2026-09-23, eight review agents read all 4,273 citations against their pinned checkouts and reported 421 defects, 24 of them factual errors. All were corrected, and six entries were added. The agent that made each correction re-read the source for it. The orchestrator re-checked every high-severity correction and a sample of the others. No second full pass has read the corrected text, so `verified_by_agent` stays `not yet`. Later the same day five entries were added for a PostgreSQL 17 question page: [Asynchronous commit](#asynchronous-commit), [Hint bits](#hint-bits), [Prefetch](#prefetch), [Sibling link](#sibling-link) and [WAL writer](#wal-writer). Two agents drafted them on all five checkouts and checked every citation's file and range mechanically; the orchestrator re-read a sample of their citations against the source.
 - GUC context wording. The `AGENTS.md` GUC rule groups the `backend`, `superuser` and `user` contexts as session or transaction scope. In the source, a `backend` or `superuser-backend` setting is fixed once a session starts ([guc.c#set_config_with_handle](../raw/postgres-17/src/backend/utils/misc/guc.c#L3526-L3587)). The [GUC context](#guc-context) entry states what the source does. Whether the rule's wording should change is for the maintainers.
 - TAP is not expanded. No pinned checkout spells out the acronym, so the [TAP test](#tap-test) entry gives no expansion.
 - One absence has no line to cite. The [work_mem](#work_mem) v12 note says that 12's hash aggregation cannot spill to disk at run time. That rests on a search of 12's `nodeAgg.c` that finds no spill code; only the plan-time memory check is cited.
@@ -3563,13 +3638,16 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
   - ShareUpdateExclusiveLock, 12: the lock-mode docs leave out `COMMENT ON`, but `CommentObject()` takes that lock ([mvcc.sgml:927-933](../raw/postgres-12/doc/src/sgml/mvcc.sgml#L927-L933), [comment.c:72-73](../raw/postgres-12/src/backend/commands/comment.c#L72-L73)).
   - Replication slot, 17: a `slot.c` comment says slots need to be permanent and crash-safe, but temporary and ephemeral slots are dropped ([slot.c:19-20](../raw/postgres-17/src/backend/replication/slot.c#L19-L20), [slot.h:23-26](../raw/postgres-17/src/include/replication/slot.h#L23-L26)).
   - varlena, 17 and 18: a `c.h` comment sends readers to `postgres.h` for the TOASTed form, but those details are in `varatt.h`; 19 corrects the comment ([c.h:700](../raw/postgres-17/src/include/c.h#L700), [varatt.h:142-145](../raw/postgres-17/src/include/varatt.h#L142-L145), [c.h:669](../raw/postgres-18/src/include/c.h#L669), [c.h:779](../raw/postgres-19/src/include/c.h#L779)).
+  - effective_io_concurrency, 17: `config.sgml` says the setting "only affects bitmap heap scans", but `read_stream_begin_relation()` takes its I/O depth from it for every stream not flagged `READ_STREAM_MAINTENANCE`, such as sequential scans ([config.sgml:2718-2726](../raw/postgres-17/doc/src/sgml/config.sgml#L2718-L2726), [read_stream.c:420-442](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L420-L442), [heapam.c:1252](../raw/postgres-17/src/backend/access/heap/heapam.c#L1252)).
+  - Sibling link, 17: `_bt_split()` says the new right page "was initialized by `_bt_getbuf`" one line after taking it from `_bt_allocbuf()` ([nbtinsert.c:1720-1723](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1720-L1723)).
+  - Hint bits, 19: the `heapam_visibility.c` header says hint-bit changes call `MarkBufferDirtyHint`, but a single hint goes through `BufferSetHintBits16()`, which dirties the page with `MarkSharedBufferDirtyHint()` ([heapam_visibility.c:6-11](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L6-L11), [heapam_visibility.c:141-192](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L141-L192), [bufmgr.c#BufferSetHintBits16](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L7129-L7175)).
   - TAP test, 17: `regress.sgml` and the recovery test README name only configure's `--enable-tap-tests`, but Meson builds have a `tap_tests` option that defaults to `auto` ([regress.sgml:827-828](../raw/postgres-17/doc/src/sgml/regress.sgml#L827-L828), [recovery/README:11](../raw/postgres-17/src/test/recovery/README#L11), [meson_options.txt:43-44](../raw/postgres-17/meson_options.txt#L43-L44)).
 
 ## Source References
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (352 files):
+**PostgreSQL 12** (361 files):
 
 - [configure.in#blocksize](../raw/postgres-12/configure.in#L250-L277)
 - [contrib/Makefile:31-37](../raw/postgres-12/contrib/Makefile#L31-L37)
@@ -3580,14 +3658,17 @@ One representative citation per cited source file, grouped by version:
 - [verify_nbtree.c#bt_index_parent_check](../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L171-L218)
 - [btree_gin.control:1-5](../raw/postgres-12/contrib/btree_gin/btree_gin.control#L1-L5)
 - [btree_gist.control:1-5](../raw/postgres-12/contrib/btree_gist/btree_gist.control#L1-L5)
+- [btreefuncs.c:125-126](../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L125-L126)
 - [ginfuncs.c header](../raw/postgres-12/contrib/pageinspect/ginfuncs.c#L1-L3)
 - [heapfuncs.c header](../raw/postgres-12/contrib/pageinspect/heapfuncs.c#L1-L4)
 - [pageinspect--1.5--1.6.sql:88](../raw/postgres-12/contrib/pageinspect/pageinspect--1.5--1.6.sql#L88)
+- [pageinspect--1.5.sql:160-174](../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L160-L174)
 - [pageinspect.control](../raw/postgres-12/contrib/pageinspect/pageinspect.control#L1-L5)
 - [rawpage.c#get_raw_page_internal](../raw/postgres-12/contrib/pageinspect/rawpage.c#L95-L106)
 - [pg_freespacemap--1.1.sql](../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap--1.1.sql#L12-L25)
 - [pg_freespacemap.c#pg_freespace](../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap.c#L24-L38)
 - [pg_freespacemap.control](../raw/postgres-12/contrib/pg_freespacemap/pg_freespacemap.control#L1-L5)
+- [pg_prewarm.c:162](../raw/postgres-12/contrib/pg_prewarm/pg_prewarm.c#L162)
 - [pg_stat_statements.c:437](../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L437)
 - [pgstatapprox.c:224](../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L224)
 - [pgstatindex.c#pgstatindex_impl](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L238)
@@ -3659,11 +3740,13 @@ One representative citation per cited source file, grouped by version:
 - [nbtinsert.c:753-759](../raw/postgres-12/src/backend/access/nbtree/nbtinsert.c#L753-L759)
 - [nbtpage.c#_bt_page_recyclable](../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L941-L963)
 - [nbtree.c#bthandler](../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L106-L108)
+- [nbtsearch.c:1455](../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1455)
 - [nbtsort.c:728](../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L728)
 - [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-12/src/backend/access/nbtree/nbtsplitloc.c#L97-L127)
 - [spgist/README:1-25](../raw/postgres-12/src/backend/access/spgist/README#L1-L25)
 - [spgutils.c:58](../raw/postgres-12/src/backend/access/spgist/spgutils.c#L58)
 - [transam/README:411-413](../raw/postgres-12/src/backend/access/transam/README#L411-L413)
+- [clog.c:69-70](../raw/postgres-12/src/backend/access/transam/clog.c#L69-L70)
 - [multixact.c:5-16](../raw/postgres-12/src/backend/access/transam/multixact.c#L5-L16)
 - [parallel.c:294](../raw/postgres-12/src/backend/access/transam/parallel.c#L294)
 - [slru.c:3-22](../raw/postgres-12/src/backend/access/transam/slru.c#L3-L22)
@@ -3671,6 +3754,7 @@ One representative citation per cited source file, grouped by version:
 - [transam.c#TransactionIdPrecedes](../raw/postgres-12/src/backend/access/transam/transam.c#L296-L313)
 - [twophase.c:24-26](../raw/postgres-12/src/backend/access/transam/twophase.c#L24-L26)
 - [varsup.c:76](../raw/postgres-12/src/backend/access/transam/varsup.c#L76)
+- [xact.c:1367-1401](../raw/postgres-12/src/backend/access/transam/xact.c#L1367-L1401)
 - [xlog.c#ReadControlFile](../raw/postgres-12/src/backend/access/transam/xlog.c#L4661-L4667)
 - [xloginsert.c:917](../raw/postgres-12/src/backend/access/transam/xloginsert.c#L917)
 - [bootparse.y:1-5](../raw/postgres-12/src/backend/bootstrap/bootparse.y#L1-L5)
@@ -3741,6 +3825,7 @@ One representative citation per cited source file, grouped by version:
 - [checkpointer.c:481](../raw/postgres-12/src/backend/postmaster/checkpointer.c#L481)
 - [pgstat.c:3522](../raw/postgres-12/src/backend/postmaster/pgstat.c#L3522)
 - [postmaster.c:5193-5205](../raw/postgres-12/src/backend/postmaster/postmaster.c#L5193-L5205)
+- [walwriter.c:5-15](../raw/postgres-12/src/backend/postmaster/walwriter.c#L5-L15)
 - [logical/Makefile#OBJS](../raw/postgres-12/src/backend/replication/logical/Makefile#L17-L18)
 - [decode.c:3-8](../raw/postgres-12/src/backend/replication/logical/decode.c#L3-L8)
 - [launcher.c#logicalrep_worker_launch](../raw/postgres-12/src/backend/replication/logical/launcher.c#L424-L431)
@@ -3760,6 +3845,7 @@ One representative citation per cited source file, grouped by version:
 - [buffer/README:12-26](../raw/postgres-12/src/backend/storage/buffer/README#L12-L26)
 - [bufmgr.c:15-30](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L15-L30)
 - [freelist.c:113](../raw/postgres-12/src/backend/storage/buffer/freelist.c#L113)
+- [localbuf.c#LocalPrefetchBuffer](../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L57-L90)
 - [fd.c:333](../raw/postgres-12/src/backend/storage/file/fd.c#L333)
 - [freespace.c:16-20](../raw/postgres-12/src/backend/storage/freespace/freespace.c#L16-L20)
 - [ipc/Makefile:11-13](../raw/postgres-12/src/backend/storage/ipc/Makefile#L11-L13)
@@ -3884,6 +3970,7 @@ One representative citation per cited source file, grouped by version:
 - [cost.h:32](../raw/postgres-12/src/include/optimizer/cost.h#L32)
 - [kwlist.h:333-334](../raw/postgres-12/src/include/parser/kwlist.h#L333-L334)
 - [parsetree.h#rt_fetch](../raw/postgres-12/src/include/parser/parsetree.h#L31-L32)
+- [pg_config_manual.h:126-145](../raw/postgres-12/src/include/pg_config_manual.h#L126-L145)
 - [pgstat.h:1027](../raw/postgres-12/src/include/pgstat.h#L1027)
 - [postgres.h#Datum](../raw/postgres-12/src/include/postgres.h#L357-L367)
 - [postgres_ext.h:27-37](../raw/postgres-12/src/include/postgres_ext.h#L27-L37)
@@ -3924,7 +4011,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-12/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-12/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 14** (345 files):
+**PostgreSQL 14** (352 files):
 
 - [configure.ac#blocksize](../raw/postgres-14/configure.ac#L255-L267)
 - [contrib/Makefile:32-38](../raw/postgres-14/contrib/Makefile#L32-L38)
@@ -3933,6 +4020,7 @@ One representative citation per cited source file, grouped by version:
 - [verify_nbtree.c#bt_index_check](../raw/postgres-14/contrib/amcheck/verify_nbtree.c#L206-L229)
 - [btree_gin.control:1-6](../raw/postgres-14/contrib/btree_gin/btree_gin.control#L1-L6)
 - [btree_gist.control:1-6](../raw/postgres-14/contrib/btree_gist/btree_gist.control#L1-L6)
+- [btreefuncs.c:149-150](../raw/postgres-14/contrib/pageinspect/btreefuncs.c#L149-L150)
 - [ginfuncs.c header](../raw/postgres-14/contrib/pageinspect/ginfuncs.c#L1-L3)
 - [heapfuncs.c header](../raw/postgres-14/contrib/pageinspect/heapfuncs.c#L1-L4)
 - [pageinspect--1.5--1.6.sql](../raw/postgres-14/contrib/pageinspect/pageinspect--1.5--1.6.sql#L88-L90)
@@ -3941,6 +4029,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_freespacemap--1.1.sql](../raw/postgres-14/contrib/pg_freespacemap/pg_freespacemap--1.1.sql#L12-L25)
 - [pg_freespacemap.c#pg_freespace](../raw/postgres-14/contrib/pg_freespacemap/pg_freespacemap.c#L25-L49)
 - [pg_freespacemap.control](../raw/postgres-14/contrib/pg_freespacemap/pg_freespacemap.control#L1-L2)
+- [pg_prewarm.c:199](../raw/postgres-14/contrib/pg_prewarm/pg_prewarm.c#L199)
 - [pg_stat_statements.c:467](../raw/postgres-14/contrib/pg_stat_statements/pg_stat_statements.c#L467)
 - [pgstatapprox.c:227](../raw/postgres-14/contrib/pgstattuple/pgstatapprox.c#L227)
 - [pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L224-L250)
@@ -4013,6 +4102,7 @@ One representative citation per cited source file, grouped by version:
 - [nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-14/src/backend/access/nbtree/nbtinsert.c#L2746-L2771)
 - [nbtpage.c#_bt_upgrademetapage](../raw/postgres-14/src/backend/access/nbtree/nbtpage.c#L109-L133)
 - [nbtree.c#bthandler](../raw/postgres-14/src/backend/access/nbtree/nbtree.c#L95-L144)
+- [nbtsearch.c:1591](../raw/postgres-14/src/backend/access/nbtree/nbtsearch.c#L1591)
 - [nbtsort.c:375-378](../raw/postgres-14/src/backend/access/nbtree/nbtsort.c#L375-L378)
 - [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-14/src/backend/access/nbtree/nbtsplitloc.c#L95-L98)
 - [nbtutils.c:2721-2731](../raw/postgres-14/src/backend/access/nbtree/nbtutils.c#L2721-L2731)
@@ -4020,6 +4110,7 @@ One representative citation per cited source file, grouped by version:
 - [spgutils.c:63](../raw/postgres-14/src/backend/access/spgist/spgutils.c#L63)
 - [tableam.c:746](../raw/postgres-14/src/backend/access/table/tableam.c#L746)
 - [transam/README:420-422](../raw/postgres-14/src/backend/access/transam/README#L420-L422)
+- [clog.c:70-71](../raw/postgres-14/src/backend/access/transam/clog.c#L70-L71)
 - [multixact.c:5-20](../raw/postgres-14/src/backend/access/transam/multixact.c#L5-L20)
 - [parallel.c:318](../raw/postgres-14/src/backend/access/transam/parallel.c#L318)
 - [slru.c:3-22](../raw/postgres-14/src/backend/access/transam/slru.c#L3-L22)
@@ -4027,6 +4118,7 @@ One representative citation per cited source file, grouped by version:
 - [transam.c#TransactionIdPrecedes](../raw/postgres-14/src/backend/access/transam/transam.c#L305-L318)
 - [twophase.c:24-26](../raw/postgres-14/src/backend/access/transam/twophase.c#L24-L26)
 - [varsup.c:78](../raw/postgres-14/src/backend/access/transam/varsup.c#L78)
+- [xact.c:1409-1443](../raw/postgres-14/src/backend/access/transam/xact.c#L1409-L1443)
 - [xlog.c#ReadControlFile](../raw/postgres-14/src/backend/access/transam/xlog.c#L4902-L4908)
 - [xloginsert.c:941](../raw/postgres-14/src/backend/access/transam/xloginsert.c#L941)
 - [bootparse.y:4-5](../raw/postgres-14/src/backend/bootstrap/bootparse.y#L4-L5)
@@ -4098,6 +4190,7 @@ One representative citation per cited source file, grouped by version:
 - [checkpointer.c:454](../raw/postgres-14/src/backend/postmaster/checkpointer.c#L454)
 - [pgstat.c:3451-3453](../raw/postgres-14/src/backend/postmaster/pgstat.c#L3451-L3453)
 - [postmaster.c:5296-5308](../raw/postgres-14/src/backend/postmaster/postmaster.c#L5296-L5308)
+- [walwriter.c:5-15](../raw/postgres-14/src/backend/postmaster/walwriter.c#L5-L15)
 - [logical/Makefile#OBJS](../raw/postgres-14/src/backend/replication/logical/Makefile#L17-L29)
 - [decode.c:3-8](../raw/postgres-14/src/backend/replication/logical/decode.c#L3-L8)
 - [launcher.c#logicalrep_worker_launch](../raw/postgres-14/src/backend/replication/logical/launcher.c#L393-L405)
@@ -4183,6 +4276,7 @@ One representative citation per cited source file, grouped by version:
 - [spgist_private.h:47](../raw/postgres-14/src/include/access/spgist_private.h#L47)
 - [transam.h#FrozenTransactionId](../raw/postgres-14/src/include/access/transam.h#L24-L33)
 - [visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-14/src/include/access/visibilitymapdefs.h#L20-L21)
+- [xact.h:68-80](../raw/postgres-14/src/include/access/xact.h#L68-L80)
 - [xlog.h:200](../raw/postgres-14/src/include/access/xlog.h#L200)
 - [xlog_internal.h:165](../raw/postgres-14/src/include/access/xlog_internal.h#L165)
 - [xlogdefs.h:21](../raw/postgres-14/src/include/access/xlogdefs.h#L21)
@@ -4272,7 +4366,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (419 files):
+**PostgreSQL 17** (430 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4282,8 +4376,10 @@ One representative citation per cited source file, grouped by version:
 - [verify_nbtree.c:1-14](../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L1-L14)
 - [btree_gin.control:1-6](../raw/postgres-17/contrib/btree_gin/btree_gin.control#L1-L6)
 - [btree_gist.control:1-6](../raw/postgres-17/contrib/btree_gist/btree_gist.control#L1-L6)
+- [btreefuncs.c:165-167](../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L165-L167)
 - [ginfuncs.c header](../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L1-L3)
 - [heapfuncs.c header](../raw/postgres-17/contrib/pageinspect/heapfuncs.c#L1-L4)
+- [pageinspect--1.11--1.12.sql:9-23](../raw/postgres-17/contrib/pageinspect/pageinspect--1.11--1.12.sql#L9-L23)
 - [pageinspect--1.5--1.6.sql](../raw/postgres-17/contrib/pageinspect/pageinspect--1.5--1.6.sql#L88-L90)
 - [pageinspect.control:1-5](../raw/postgres-17/contrib/pageinspect/pageinspect.control#L1-L5)
 - [rawpage.c#get_raw_page_internal](../raw/postgres-17/contrib/pageinspect/rawpage.c#L150-L153)
@@ -4291,6 +4387,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_freespacemap--1.1.sql](../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap--1.1.sql#L12-L20)
 - [pg_freespacemap.c#pg_freespace](../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.c#L24-L48)
 - [pg_freespacemap.control](../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.control#L1-L2)
+- [pg_prewarm.c:227](../raw/postgres-17/contrib/pg_prewarm/pg_prewarm.c#L227)
 - [pg_stat_statements.c#_PG_init](../raw/postgres-17/contrib/pg_stat_statements/pg_stat_statements.c#L479-L480)
 - [pgstatapprox.c:227](../raw/postgres-17/contrib/pgstattuple/pgstatapprox.c#L227)
 - [pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L216-L250)
@@ -4388,6 +4485,7 @@ One representative citation per cited source file, grouped by version:
 - [nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L2757-L2781)
 - [nbtpage.c#_bt_upgrademetapage](../raw/postgres-17/src/backend/access/nbtree/nbtpage.c#L106-L126)
 - [nbtree.c#bthandler](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L96-L117)
+- [nbtsearch.c:2207-2208](../raw/postgres-17/src/backend/access/nbtree/nbtsearch.c#L2207-L2208)
 - [nbtsort.c:370-375](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L370-L375)
 - [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L86-L102)
 - [nbtutils.c#_bt_allequalimage](../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5129-L5140)
@@ -4397,6 +4495,7 @@ One representative citation per cited source file, grouped by version:
 - [tableam.c:666-667](../raw/postgres-17/src/backend/access/table/tableam.c#L666-L667)
 - [transam/README:420-422](../raw/postgres-17/src/backend/access/transam/README#L420-L422)
 - [README.parallel#Overview](../raw/postgres-17/src/backend/access/transam/README.parallel#L1-L12)
+- [clog.c:91-96](../raw/postgres-17/src/backend/access/transam/clog.c#L91-L96)
 - [multixact.c:6-8](../raw/postgres-17/src/backend/access/transam/multixact.c#L6-L8)
 - [parallel.c:323](../raw/postgres-17/src/backend/access/transam/parallel.c#L323)
 - [slru.c:3-10](../raw/postgres-17/src/backend/access/transam/slru.c#L3-L10)
@@ -4404,8 +4503,10 @@ One representative citation per cited source file, grouped by version:
 - [transam.c#TransactionIdPrecedes](../raw/postgres-17/src/backend/access/transam/transam.c#L276-L293)
 - [twophase.c:12-22](../raw/postgres-17/src/backend/access/transam/twophase.c#L12-L22)
 - [varsup.c:443](../raw/postgres-17/src/backend/access/transam/varsup.c#L443)
+- [xact.c:1487-1498](../raw/postgres-17/src/backend/access/transam/xact.c#L1487-L1498)
 - [xlog.c#ReadControlFile](../raw/postgres-17/src/backend/access/transam/xlog.c#L4385-L4391)
 - [xloginsert.c#XLogSaveBufferForHint](../raw/postgres-17/src/backend/access/transam/xloginsert.c#L1055-L1089)
+- [xlogprefetcher.c:769](../raw/postgres-17/src/backend/access/transam/xlogprefetcher.c#L769)
 - [xlogrecovery.c:911-928](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L911-L928)
 - [bootparse.y:4-5](../raw/postgres-17/src/backend/bootstrap/bootparse.y#L4-L5)
 - [catalog.c#IsPinnedObject](../raw/postgres-17/src/backend/catalog/catalog.c#L334-L392)
@@ -4431,6 +4532,7 @@ One representative citation per cited source file, grouped by version:
 - [tablecmds.c#CreateFKCheckTrigger](../raw/postgres-17/src/backend/commands/tablecmds.c#L12345-L12351)
 - [vacuum.c:2054-2055](../raw/postgres-17/src/backend/commands/vacuum.c#L2054-L2055)
 - [vacuumparallel.c:893-897](../raw/postgres-17/src/backend/commands/vacuumparallel.c#L893-L897)
+- [variable.c:1222-1246](../raw/postgres-17/src/backend/commands/variable.c#L1222-L1246)
 - [view.c#DefineViewRules](../raw/postgres-17/src/backend/commands/view.c#L331-L344)
 - [executor/README#Plan Trees and State Trees](../raw/postgres-17/src/backend/executor/README#L47-L59)
 - [execAmi.c#ExecReScan](../raw/postgres-17/src/backend/executor/execAmi.c#L95-L109)
@@ -4487,6 +4589,7 @@ One representative citation per cited source file, grouped by version:
 - [bgwriter.c:5-13](../raw/postgres-17/src/backend/postmaster/bgwriter.c#L5-L13)
 - [checkpointer.c:462-471](../raw/postgres-17/src/backend/postmaster/checkpointer.c#L462-L471)
 - [postmaster.c:3780-3793](../raw/postgres-17/src/backend/postmaster/postmaster.c#L3780-L3793)
+- [walwriter.c:5-15](../raw/postgres-17/src/backend/postmaster/walwriter.c#L5-L15)
 - [logical/Makefile#OBJS](../raw/postgres-17/src/backend/replication/logical/Makefile#L17-L31)
 - [applyparallelworker.c:438](../raw/postgres-17/src/backend/replication/logical/applyparallelworker.c#L438)
 - [decode.c#LogicalDecodingProcessRecord](../raw/postgres-17/src/backend/replication/logical/decode.c#L87-L88)
@@ -4646,11 +4749,13 @@ One representative citation per cited source file, grouped by version:
 - [kwlist.h:374-375](../raw/postgres-17/src/include/parser/kwlist.h#L374-L375)
 - [parser.h:24-28](../raw/postgres-17/src/include/parser/parser.h#L24-L28)
 - [parsetree.h#rt_fetch](../raw/postgres-17/src/include/parser/parsetree.h#L26-L32)
+- [pg_config_manual.h:150-163](../raw/postgres-17/src/include/pg_config_manual.h#L150-L163)
 - [pgstat.h#PgStat_Kind](../raw/postgres-17/src/include/pgstat.h#L33-L54)
 - [pg_iovec.h:43](../raw/postgres-17/src/include/port/pg_iovec.h#L43)
 - [postgres.h#Datum](../raw/postgres-17/src/include/postgres.h#L54-L64)
 - [postgres_ext.h:27-37](../raw/postgres-17/src/include/postgres_ext.h#L27-L37)
 - [bgworker.h#BackgroundWorker](../raw/postgres-17/src/include/postmaster/bgworker.h#L89-L101)
+- [walwriter.h:15](../raw/postgres-17/src/include/postmaster/walwriter.h#L15)
 - [output_plugin.h#OutputPluginCallbacks](../raw/postgres-17/src/include/replication/output_plugin.h#L216-L243)
 - [slot.h#ReplicationSlotPersistency](../raw/postgres-17/src/include/replication/slot.h#L20-L38)
 - [block.h#BlockNumber](../raw/postgres-17/src/include/storage/block.h#L17-L35)
@@ -4694,7 +4799,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-17/src/test/regress/pg_regress.c#L3)
 - [030_origin.pl:24-75](../raw/postgres-17/src/test/subscription/t/030_origin.pl#L24-L75)
 
-**PostgreSQL 18** (349 files):
+**PostgreSQL 18** (359 files):
 
 - [configure.ac#blocksize](../raw/postgres-18/configure.ac#L248-L279)
 - [contrib/Makefile:32-40](../raw/postgres-18/contrib/Makefile#L32-L40)
@@ -4703,6 +4808,8 @@ One representative citation per cited source file, grouped by version:
 - [verify_gin.c:1-12](../raw/postgres-18/contrib/amcheck/verify_gin.c#L1-L12)
 - [btree_gin.control:1-6](../raw/postgres-18/contrib/btree_gin/btree_gin.control#L1-L6)
 - [btree_gist.control:1-6](../raw/postgres-18/contrib/btree_gist/btree_gist.control#L1-L6)
+- [btreefuncs.c:166-167](../raw/postgres-18/contrib/pageinspect/btreefuncs.c#L166-L167)
+- [pageinspect--1.11--1.12.sql:9-23](../raw/postgres-18/contrib/pageinspect/pageinspect--1.11--1.12.sql#L9-L23)
 - [pageinspect--1.5--1.6.sql](../raw/postgres-18/contrib/pageinspect/pageinspect--1.5--1.6.sql#L88-L90)
 - [pageinspect.control:1-5](../raw/postgres-18/contrib/pageinspect/pageinspect.control#L1-L5)
 - [rawpage.c#get_raw_page_internal](../raw/postgres-18/contrib/pageinspect/rawpage.c#L153-L156)
@@ -4711,6 +4818,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_freespacemap--1.2--1.3.sql:6-13](../raw/postgres-18/contrib/pg_freespacemap/pg_freespacemap--1.2--1.3.sql#L6-L13)
 - [pg_freespacemap.c#pg_freespace](../raw/postgres-18/contrib/pg_freespacemap/pg_freespacemap.c#L27-L51)
 - [pg_freespacemap.control:3](../raw/postgres-18/contrib/pg_freespacemap/pg_freespacemap.control#L3)
+- [pg_prewarm.c:211](../raw/postgres-18/contrib/pg_prewarm/pg_prewarm.c#L211)
 - [pg_stat_statements.c:1169-1176](../raw/postgres-18/contrib/pg_stat_statements/pg_stat_statements.c#L1169-L1176)
 - [pgstatapprox.c:214](../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L214)
 - [pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L297-L324)
@@ -4780,6 +4888,7 @@ One representative citation per cited source file, grouped by version:
 - [nbtpage.c#_bt_upgrademetapage](../raw/postgres-18/src/backend/access/nbtree/nbtpage.c#L106-L126)
 - [nbtpreprocesskeys.c:128-135](../raw/postgres-18/src/backend/access/nbtree/nbtpreprocesskeys.c#L128-L135)
 - [nbtree.c:1479-1485](../raw/postgres-18/src/backend/access/nbtree/nbtree.c#L1479-L1485)
+- [nbtsearch.c:2408-2413](../raw/postgres-18/src/backend/access/nbtree/nbtsearch.c#L2408-L2413)
 - [nbtsort.c:372-377](../raw/postgres-18/src/backend/access/nbtree/nbtsort.c#L372-L377)
 - [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-18/src/backend/access/nbtree/nbtsplitloc.c#L86-L102)
 - [nbtutils.c#_bt_allequalimage](../raw/postgres-18/src/backend/access/nbtree/nbtutils.c#L4248-L4259)
@@ -4787,6 +4896,7 @@ One representative citation per cited source file, grouped by version:
 - [spgutils.c:67](../raw/postgres-18/src/backend/access/spgist/spgutils.c#L67)
 - [tableam.c:711-747](../raw/postgres-18/src/backend/access/table/tableam.c#L711-L747)
 - [transam/README:420-422](../raw/postgres-18/src/backend/access/transam/README#L420-L422)
+- [clog.c:91-92](../raw/postgres-18/src/backend/access/transam/clog.c#L91-L92)
 - [multixact.c:5-16](../raw/postgres-18/src/backend/access/transam/multixact.c#L5-L16)
 - [parallel.c:327](../raw/postgres-18/src/backend/access/transam/parallel.c#L327)
 - [slru.c:17-31](../raw/postgres-18/src/backend/access/transam/slru.c#L17-L31)
@@ -4794,8 +4904,10 @@ One representative citation per cited source file, grouped by version:
 - [transam.c#TransactionIdPrecedes](../raw/postgres-18/src/backend/access/transam/transam.c#L276-L293)
 - [twophase.c:24-26](../raw/postgres-18/src/backend/access/transam/twophase.c#L24-L26)
 - [varsup.c:443](../raw/postgres-18/src/backend/access/transam/varsup.c#L443)
+- [xact.c:1498-1532](../raw/postgres-18/src/backend/access/transam/xact.c#L1498-L1532)
 - [xlog.c#ReadControlFile](../raw/postgres-18/src/backend/access/transam/xlog.c#L4434-L4443)
 - [xloginsert.c:1089](../raw/postgres-18/src/backend/access/transam/xloginsert.c#L1089)
+- [xlogprefetcher.c:767](../raw/postgres-18/src/backend/access/transam/xlogprefetcher.c#L767)
 - [xlogrecovery.c:929-946](../raw/postgres-18/src/backend/access/transam/xlogrecovery.c#L929-L946)
 - [bootparse.y:4-5](../raw/postgres-18/src/backend/bootstrap/bootparse.y#L4-L5)
 - [catalog.c:370-378](../raw/postgres-18/src/backend/catalog/catalog.c#L370-L378)
@@ -4866,6 +4978,7 @@ One representative citation per cited source file, grouped by version:
 - [checkpointer.c:480](../raw/postgres-18/src/backend/postmaster/checkpointer.c#L480)
 - [pmchild.c:1-20](../raw/postgres-18/src/backend/postmaster/pmchild.c#L1-L20)
 - [postmaster.c:3764-3776](../raw/postgres-18/src/backend/postmaster/postmaster.c#L3764-L3776)
+- [walwriter.c:212-216](../raw/postgres-18/src/backend/postmaster/walwriter.c#L212-L216)
 - [applyparallelworker.c:438](../raw/postgres-18/src/backend/replication/logical/applyparallelworker.c#L438)
 - [conflict.c:1-12](../raw/postgres-18/src/backend/replication/logical/conflict.c#L1-L12)
 - [decode.c:3-8](../raw/postgres-18/src/backend/replication/logical/decode.c#L3-L8)
@@ -4959,6 +5072,7 @@ One representative citation per cited source file, grouped by version:
 - [transam.h#FrozenTransactionId](../raw/postgres-18/src/include/access/transam.h#L20-L35)
 - [tupdesc.h#CompactAttribute](../raw/postgres-18/src/include/access/tupdesc.h#L60-L75)
 - [visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-18/src/include/access/visibilitymapdefs.h#L20-L21)
+- [xact.h:68-80](../raw/postgres-18/src/include/access/xact.h#L68-L80)
 - [xlog.h#WalLevel](../raw/postgres-18/src/include/access/xlog.h#L71-L77)
 - [xlog_internal.h:166](../raw/postgres-18/src/include/access/xlog_internal.h#L166)
 - [xlogdefs.h#XLogRecPtr](../raw/postgres-18/src/include/access/xlogdefs.h#L17-L21)
@@ -5005,6 +5119,7 @@ One representative citation per cited source file, grouped by version:
 - [kwlist.h:376-377](../raw/postgres-18/src/include/parser/kwlist.h#L376-L377)
 - [parser.h:24-28](../raw/postgres-18/src/include/parser/parser.h#L24-L28)
 - [pgstat.h#IOOBJECT_WAL](../raw/postgres-18/src/include/pgstat.h#L277-L286)
+- [darwin.h:10-13](../raw/postgres-18/src/include/port/darwin.h#L10-L13)
 - [pg_iovec.h:47](../raw/postgres-18/src/include/port/pg_iovec.h#L47)
 - [postgres.h#Datum](../raw/postgres-18/src/include/postgres.h#L59-L69)
 - [postgres_ext.h:28-37](../raw/postgres-18/src/include/postgres_ext.h#L28-L37)
@@ -5046,7 +5161,7 @@ One representative citation per cited source file, grouped by version:
 - [parallel_schedule:12-17](../raw/postgres-18/src/test/regress/parallel_schedule#L12-L17)
 - [pg_regress.c:3](../raw/postgres-18/src/test/regress/pg_regress.c#L3)
 
-**PostgreSQL 19** (378 files):
+**PostgreSQL 19** (389 files):
 
 - [configure.ac#blocksize](../raw/postgres-19/configure.ac#L248-L274)
 - [contrib/Makefile:36-40](../raw/postgres-19/contrib/Makefile#L36-L40)
@@ -5056,6 +5171,8 @@ One representative citation per cited source file, grouped by version:
 - [verify_nbtree.c:252](../raw/postgres-19/contrib/amcheck/verify_nbtree.c#L252)
 - [btree_gin--1.3--1.4.sql:6-20](../raw/postgres-19/contrib/btree_gin/btree_gin--1.3--1.4.sql#L6-L20)
 - [btree_gin.control:1-6](../raw/postgres-19/contrib/btree_gin/btree_gin.control#L1-L6)
+- [btreefuncs.c:167-168](../raw/postgres-19/contrib/pageinspect/btreefuncs.c#L167-L168)
+- [pageinspect--1.11--1.12.sql:9-23](../raw/postgres-19/contrib/pageinspect/pageinspect--1.11--1.12.sql#L9-L23)
 - [pageinspect--1.5.sql:178](../raw/postgres-19/contrib/pageinspect/pageinspect--1.5.sql#L178)
 - [pageinspect.control:1-5](../raw/postgres-19/contrib/pageinspect/pageinspect.control#L1-L5)
 - [rawpage.c#get_raw_page_internal](../raw/postgres-19/contrib/pageinspect/rawpage.c#L145-L156)
@@ -5067,6 +5184,7 @@ One representative citation per cited source file, grouped by version:
 - [README:18-27](../raw/postgres-19/contrib/pg_plan_advice/README#L18-L27)
 - [pg_plan_advice.c#_PG_init](../raw/postgres-19/contrib/pg_plan_advice/pg_plan_advice.c#L127-L138)
 - [pgpa_planner.c#pgpa_planner_install_hooks](../raw/postgres-19/contrib/pg_plan_advice/pgpa_planner.c#L180-L194)
+- [pg_prewarm.c:211](../raw/postgres-19/contrib/pg_prewarm/pg_prewarm.c#L211)
 - [pg_stat_statements.c:492](../raw/postgres-19/contrib/pg_stat_statements/pg_stat_statements.c#L492)
 - [pgstatapprox.c:279](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L279)
 - [pgstatindex.c:331](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L331)
@@ -5148,7 +5266,9 @@ One representative citation per cited source file, grouped by version:
 - [nbtinsert.c#_bt_delete_or_dedup_one_page](../raw/postgres-19/src/backend/access/nbtree/nbtinsert.c#L2803-L2828)
 - [nbtpage.c#_bt_upgrademetapage](../raw/postgres-19/src/backend/access/nbtree/nbtpage.c#L100-L127)
 - [nbtpreprocesskeys.c:130-137](../raw/postgres-19/src/backend/access/nbtree/nbtpreprocesskeys.c#L130-L137)
+- [nbtreadpage.c:149-154](../raw/postgres-19/src/backend/access/nbtree/nbtreadpage.c#L149-L154)
 - [nbtree.c#bthandler](../raw/postgres-19/src/backend/access/nbtree/nbtree.c#L118-L121)
+- [nbtsearch.c:1886-1890](../raw/postgres-19/src/backend/access/nbtree/nbtsearch.c#L1886-L1890)
 - [nbtsort.c:375-380](../raw/postgres-19/src/backend/access/nbtree/nbtsort.c#L375-L380)
 - [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-19/src/backend/access/nbtree/nbtsplitloc.c#L90-L99)
 - [nbtutils.c#_bt_allequalimage](../raw/postgres-19/src/backend/access/nbtree/nbtutils.c#L1165-L1175)
@@ -5156,13 +5276,16 @@ One representative citation per cited source file, grouped by version:
 - [spgutils.c:67](../raw/postgres-19/src/backend/access/spgist/spgutils.c#L67)
 - [tableam.c#table_block_relation_estimate_size](../raw/postgres-19/src/backend/access/table/tableam.c#L718-L778)
 - [transam/README:420-422](../raw/postgres-19/src/backend/access/transam/README#L420-L422)
+- [clog.c:93-94](../raw/postgres-19/src/backend/access/transam/clog.c#L93-L94)
 - [multixact.c:5-17](../raw/postgres-19/src/backend/access/transam/multixact.c#L5-L17)
 - [slru.c:17-31](../raw/postgres-19/src/backend/access/transam/slru.c#L17-L31)
 - [timeline.c:4-22](../raw/postgres-19/src/backend/access/transam/timeline.c#L4-L22)
 - [twophase.c:24-26](../raw/postgres-19/src/backend/access/transam/twophase.c#L24-L26)
 - [varsup.c:438](../raw/postgres-19/src/backend/access/transam/varsup.c#L438)
+- [xact.c:1540-1574](../raw/postgres-19/src/backend/access/transam/xact.c#L1540-L1574)
 - [xlog.c#ReadControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4505-L4514)
 - [xloginsert.c:1161](../raw/postgres-19/src/backend/access/transam/xloginsert.c#L1161)
+- [xlogprefetcher.c:772](../raw/postgres-19/src/backend/access/transam/xlogprefetcher.c#L772)
 - [xlogrecovery.c:867-884](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L867-L884)
 - [bootparse.y:4-5](../raw/postgres-19/src/backend/bootstrap/bootparse.y#L4-L5)
 - [catalog.c:370-378](../raw/postgres-19/src/backend/catalog/catalog.c#L370-L378)
@@ -5233,6 +5356,7 @@ One representative citation per cited source file, grouped by version:
 - [datachecksum_state.c:1-40](../raw/postgres-19/src/backend/postmaster/datachecksum_state.c#L1-L40)
 - [pmchild.c:6-16](../raw/postgres-19/src/backend/postmaster/pmchild.c#L6-L16)
 - [postmaster.c:3848-3860](../raw/postgres-19/src/backend/postmaster/postmaster.c#L3848-L3860)
+- [walwriter.c:209-213](../raw/postgres-19/src/backend/postmaster/walwriter.c#L209-L213)
 - [applyparallelworker.c:441](../raw/postgres-19/src/backend/replication/logical/applyparallelworker.c#L441)
 - [conflict.c#ReportApplyConflict](../raw/postgres-19/src/backend/replication/logical/conflict.c#L105-L133)
 - [decode.c:3-8](../raw/postgres-19/src/backend/replication/logical/decode.c#L3-L8)
@@ -5328,6 +5452,7 @@ One representative citation per cited source file, grouped by version:
 - [transam.h#FrozenTransactionId](../raw/postgres-19/src/include/access/transam.h#L23-L33)
 - [tupdesc.h#CompactAttribute](../raw/postgres-19/src/include/access/tupdesc.h#L68-L70)
 - [visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-19/src/include/access/visibilitymapdefs.h#L20-L21)
+- [xact.h:69-81](../raw/postgres-19/src/include/access/xact.h#L69-L81)
 - [xlog.h:136](../raw/postgres-19/src/include/access/xlog.h#L136)
 - [xlog_internal.h:165](../raw/postgres-19/src/include/access/xlog_internal.h#L165)
 - [xlogdefs.h:39-47](../raw/postgres-19/src/include/access/xlogdefs.h#L39-L47)
@@ -5380,6 +5505,7 @@ One representative citation per cited source file, grouped by version:
 - [parser.h:24-28](../raw/postgres-19/src/include/parser/parser.h#L24-L28)
 - [pg_config_manual.h#USE_FLOAT8_BYVAL](../raw/postgres-19/src/include/pg_config_manual.h#L86-L92)
 - [pgstat.h#IOObject](../raw/postgres-19/src/include/pgstat.h#L281-L286)
+- [darwin.h:10-13](../raw/postgres-19/src/include/port/darwin.h#L10-L13)
 - [pg_iovec.h:47](../raw/postgres-19/src/include/port/pg_iovec.h#L47)
 - [postgres.h#Datum](../raw/postgres-19/src/include/postgres.h#L58-L76)
 - [postgres_ext.h:29-37](../raw/postgres-19/src/include/postgres_ext.h#L29-L37)

@@ -14067,3 +14067,105 @@ checker, which reported no issues.
 **Teardown.** No PostgreSQL server or other service was started. The review workspace
 `.wiki-runtime/tmp/glossary-review/` (scripts, batch copies and findings) was deleted after the
 final checks.
+
+## [2026-09-23] answer v17 | B-tree leaf density versus fragmentation for index scan I/O, measured at the pin
+
+- Filed
+  [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 17 (unverified)](v17/questions/indexing/leaf-density-vs-fragmentation-index-scan-io.md)
+  at pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11). New page; `verified_by_agent:`
+  stays `not yet`. Category `indexing` by rule 1: the question is about the B-tree access method,
+  and `pgstatindex` only supplies the numbers.
+- Prompt hygiene was asked once. The instruction around the question had four defects (`17 ,`,
+  two `NN` placeholders, and `17 guc tables`). The asker chose **correct silently**. The
+  question sentence, which had no defect, is filed verbatim under `## Question`. A
+  `### Filing note` gives the corrected instruction and its thirteen scope items, with no defect
+  list. The prompt set its own scope, so no scope question was asked.
+
+**What the page answers.** Leaf density has the larger effect on the index I/O that PostgreSQL 17
+can see, count and price. Fragmentation changes only the order of the same page visits. The
+planner never reads it, and no B-tree read path in 17 prefetches or stream-reads an index page. The
+page lists every `PrefetchBuffer`, `PrefetchSharedBuffer` and `read_stream_begin_relation` call
+site with its fork. Fragmentation's cost falls on the kernel and the device, where the page offers
+a model and no measurement.
+
+**Measured.** One full run of the published script from an empty sandbox, 2026-09-23 21:51:48Z to
+21:55:13Z, exit 0. The core suite (225 tests) and the four contrib suites passed.
+
+| Index state | `leaf_pages` | `avg_leaf_density` | `leaf_fragmentation` | Warm buffers | Index blocks |
+|---|---:|---:|---:|---:|---:|
+| built at fillfactor 90 | 2,733 | 90.06 | 0 | 2,736 | 2,735 |
+| built at fillfactor 60 | 4,116 | 59.9 | 0 | 4,119 | 4,118 |
+| random-order inserts, `setseed(0.5)` | 3,701 | 66.58 | 49.45 | 3,704 | 3,703 |
+| the same index rebuilt at fillfactor 67 | 3,677 | 67.02 | 0 | 3,680 | 3,679 |
+
+- The serial and parallel cost gap between the density pair is exactly 1,388 blocks times
+  `random_page_cost` 4.0, or 5,552.00.
+- The `pageinspect` census found `N`, the share of right links that skip the next block, at 100 %
+  on the random-order index and 0.35 % rebuilt. The mean jump was 1,845.4 blocks against 1.0. A
+  descending-order index read 99.96 `leaf_fragmentation`, yet 4,876 of its 4,901 right links step
+  back exactly one block.
+- Backward plain index scans read every leaf twice: 5,468 and 8,234 index buffers. Index-only
+  scans read each leaf once in either direction.
+- 90 % density was reported with 180,000 of 200,000 entries dead. After `VACUUM` it fell to 9.26 %.
+  271 deleted pages in a 551-block file were skipped by the scan (278 blocks read) but still
+  priced by the planner.
+- `synchronous_commit = off` still keeps `VACUUM` from setting visibility-map bits in 17 while
+  the relevant commit record is unflushed: in P1 through the commit log's shared group LSN, and in
+  P2 in 5 of 5 trials.
+- The production survey was measured against a database that holds every kind of index. That
+  covered each refusal it filters out and three privilege paths: no grant, `pg_stat_scan_tables`,
+  and a direct `GRANT EXECUTE`.
+- Premise findings recorded on the page. The 17.11 docs give no SSD `random_page_cost` value;
+  commit `3f0b994cf3` removed it, first reached at `Stamp 17.7.` `_bt_getbuf(P_NEW)` does not
+  exist in 17. The `effective_io_concurrency` docs contradict the read-stream source.
+
+**Final pass.** A last read-through before filing changed nineteen places, each re-checked in
+the source:
+- four statements that were wrong: an asynchronous commit reaches disk within at most three
+  `wal_writer_delay` cycles, not about one; `AccessShareLock` also waits behind a queued
+  `ACCESS EXCLUSIVE` request; `track_io_timing` is not the only in-server view of storage time;
+  and the descending-order index sits in almost, not exactly, reverse key order;
+- six conditions made precise: the parallel divisor's leader share, the early return before
+  bottom-up deletion and deduplication, the bottom-up prefetch cap, the rightmost-split case, the
+  descending census's 24 longer steps, and what `ALTER INDEX ... SET` does per `alter_index.sgml`;
+- four wording fixes: the matrix conclusion now says it concerns cold device time, and the
+  plain-scan costs, the refill's block choice and the fillfactor trade-off were reworded;
+- citations for five claims that had none: four rows of the settings table and the rebuild's
+  key-order layout.
+
+The page now has 561 citations over 221 distinct ranges. Every range is in bounds, each label has
+one range, and every Contents entry and anchor resolves.
+
+**Glossary.** Five terms were added, each checked on all five versions: Asynchronous commit, Hint
+bits, Prefetch, Sibling link and WAL writer. The glossary now has 238 terms.
+- Related-term links were added on Visibility map, Page split, B-tree page deletion, pgstatindex,
+  Read stream, effective_io_concurrency, Leaf page and WAL.
+- Read stream now names `pg_prewarm`'s buffer mode and says that B-tree scans use no stream.
+  effective_io_concurrency now cites the bitmap heap scan prefetch distance.
+- Open Questions gained a verification-depth note for the five new entries. It also gained three
+  places where docs or comments disagree with the code: `effective_io_concurrency` on 17, a stale
+  `_bt_split()` comment on 17, and the Hint bits header on 19.
+- Source References gained 48 files, for 361, 352, 430, 359 and 389 files on 12, 14, 17, 18
+  and 19.
+- The glossary checker reported no problems. `verified_by_agent` stays `not yet`.
+
+**Links.** The page is listed under Indexing in `wiki/index.md` and `wiki/v17/index.md`. The
+glossary descriptions in `wiki/index.md` and the five landing pages now say 238 terms.
+`wiki/versions.md` gained a coverage note and a clause on the v17 row. No common concept page was
+touched. The page links
+[Mandatory B-Tree Bloat Tests (unverified)](v17/common-concepts/mandatory-btree-bloat-tests.md)
+and says why its dead-space fixture does not follow that protocol. No concept page covers leaf
+sibling links, the visibility map with index-only scans, or asynchronous commit with hint bits.
+Those pages were proposed to the asker and not created.
+
+**Lint.** 0 errors / 2 warnings (uncommitted changes in the v12 and v14 checkouts, the baseline).
+
+**Teardown.** The run's final `stop` stage stopped the server. It confirmed that `pg_ctl` found no
+server and that no `postmaster.pid`, no process naming the data directory and no socket for
+port 55471 was left. The `clean` stage then repeated those checks and deleted
+`.wiki-runtime/tmp/ldfrag/`. The runtime copy of the script and its three run logs under
+`.wiki-runtime/tmp/` were deleted. Nothing from this task is running or kept.
+
+A PostgreSQL 12 server that this task did not start was running before and after it: pid 90110,
+data directory `.wiki-runtime/tmp/ldf12-review/data`, port 55412. It was left untouched and
+reported to the asker.
