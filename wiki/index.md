@@ -5,6 +5,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 ## Entry Points
 
 - [versions](versions.md) - PostgreSQL version index and source pin manifest.
+- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 17 so far).
 - [overview](overview.md) - Cross-version architecture overview.
 - [log](log.md) - Chronological activity log.
 

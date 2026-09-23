@@ -14,6 +14,8 @@ Use the matching pinned checkout under `raw/postgres-NN/` for source evidence.
 
 Behavioral claims still need citations to matching raw source files or symbols under `raw/postgres-NN/`.
 
+Use the [Wiki Glossary (unverified)](glossary.md) for PostgreSQL jargon and source-code terms. It is shared by every version, and each entry names the pinned checkout it was checked on.
+
 ## Source Checkouts
 
 - PostgreSQL 18: `raw/postgres-18/`, branch `REL_18_STABLE`, pinned commit `6cb307251c5c6261286c1566496920976640108e`.

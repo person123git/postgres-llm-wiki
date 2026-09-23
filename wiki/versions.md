@@ -2,6 +2,8 @@
 
 This page indexes the PostgreSQL versions covered by the wiki.
 
+Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](glossary.md). Each entry names the pinned checkout it was checked on.
+
 ## Supported Versions
 
 | Version | Status | Wiki Home | Branch | Pinned Commit | Coverage |

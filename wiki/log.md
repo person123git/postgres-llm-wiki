@@ -13845,3 +13845,55 @@ and `raw/postgres-12/` were read only.
 **Version control.** Committed and pushed straight to `master` and `origin/master` once the
 asker said `commit and push`, on top of commit `af6d7dd`. A fetch just before the commit
 showed no new commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-23] glossary v17 | create the shared wiki glossary, 134 terms checked on PostgreSQL 17
+
+**Prompt.** Corrected silently with the asker's agreement: "Follow AGENTS.md, in PostgreSQL
+17, update or generate glossary information." Scope, chosen by the asker from three offered
+readings: the broad set of about 120 terms (terms that appear on even one or two v17 pages),
+with the mandatory navigation links and term links on the v17 codebase navigation guide only.
+v17 question pages gain glossary links when they are next edited, as `MANDATORY Shared
+Glossary` says.
+
+**What was created.** `wiki/glossary.md` did not exist (the rule arrived in `fdb212a`). It is
+now filed with `type: glossary`, `verified: false`, `verified_by_agent: not yet`, the required
+headings in order, a Contents entry for all 7 `##` and 134 `###` headings, and a `## Source
+Pins` row for v17 `786db8dcf168bd9df8f55047337525ac19118b1c` only. There are 134 alphabetical
+term entries across storage and buffers, MVCC, transactions and locks, WAL, index access
+methods, planner and executor, catalogs and build files, server infrastructure, tests, and
+logical replication. Each entry carries `**Checked on:** PostgreSQL 17`. No entry claims any
+other version. The Scope section and `## Open Questions` say that v12, v14, v18 and v19
+still need their own review. Bloat links the three v17 bloat-test concept pages. Those pages
+were not edited.
+
+**Evidence.** 844 citations (571 unique ranges), all into `raw/postgres-17/`, which was
+confirmed on the pin and read only. Six forks, each running on the orchestrator's model
+(`claude-opus-5-5`), drafted the entries in batches. Three more forks then cross-reviewed
+batches they had not written. They cited or cut about 43 uncited sentences, re-opened at
+least a third of every batch's citations, and fixed about 20 claims or ranges:
+- Truncation retries a conditional `AccessExclusiveLock` every 50 ms for 5 s. It does not
+  give up at once.
+- The WAL entry's second use is PITR and hot standby, not logical decoding.
+- The literal 50 is now named as `DEFAULT_PAGE_CPU_MULTIPLIER`.
+- Seven GUC statements gained their session-scope wording.
+
+A final mechanical check confirmed that every cited file exists, every line range is in
+bounds, no anchor is duplicated, and every in-page `#` link resolves to a heading.
+
+**Links added.** The glossary link was added to `wiki/index.md` (Entry Points),
+`wiki/versions.md`, `wiki/overview.md`, and all five landing pages (`wiki/v12`, `v14`, `v17`,
+`v18` and `v19/index.md`), each worded `Wiki Glossary (unverified)`. The v17 codebase
+navigation guide gained 21 first-use term links and a glossary `## Navigation` link. Its
+claims and citations are unchanged. `wiki/overview.md` still lists stale v18 source pins and
+omits v17. That was left alone as out of scope.
+
+**Not touched.** Common concept pages (read-only rule), v17 question pages, and every other
+version's content.
+
+**Lint.** 9 errors / 2 warnings, this host's baseline (v18/v19 pins missing from the local
+checkouts, v14 off-pin, v18 injection-point citations). None is in a file this pass touched.
+`wiki_lint` does not check the glossary's shape, pins, anchors or inbound links, so those were
+checked by hand as above.
+
+**Teardown.** No PostgreSQL server or other service was started. Nothing was created under
+`.wiki-runtime/tmp/`. Draft batches lived in the session scratchpad, outside the repo.
