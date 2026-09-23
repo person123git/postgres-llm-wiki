@@ -13740,3 +13740,108 @@ decoy directories made to test the path checks were removed. Verified after tear
 **Version control.** Committed and pushed straight to `master` and `origin/master` once
 the asker said `commit and push`, on top of commit `ddcdf74`. A fetch just before the
 commit showed no new commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-23] review v17 | planner penalties for bloated indexes: about fifty defects fixed, the answer restructured, the script hardened and re-run
+
+- Asked, per `AGENTS.md`, to review
+  [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11; checkout at the pin, no tracked file
+  changed). Prompt hygiene and scope were asked once, after the review was shown in chat, and
+  answered **correct silently** and **fix everything, re-run**. Only the corrected prompt is
+  recorded, here and in the page's new `### Reviews after filing`: "Follow `AGENTS.md`. In
+  PostgreSQL 17, review the question "Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)"."
+
+**The review.** The filed script was first re-run unchanged from an empty sandbox (md5
+`b35725e3756274148cf90ed6573e2eb1`, 1 min 45 s, exit 0, `make check` All 225, All 1 / 8 / 30
+on `pgstattuple`, `pageinspect` and `btree_gin`): every number on the page reproduced,
+including the values the script printed only to its console. Six forked checkers, on the
+orchestrator's own model, then went through the page's slices claim by claim against the
+pin, and every material finding was re-verified before it was reported. All 547 citations
+were in bounds and from `raw/postgres-17/` only. The prose did not hold:
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | "between one row and `pages` rows, a selective lookup is charged one page" | backwards: `ceil(numIndexTuples * pages / tuples)` gives at least 2 pages there, and fixture F is charged 3 at 1,000 rows |
+| 2 | a planning-only backend "can go on charging for a level VACUUM has already removed" | VACUUM's in-place `pg_class` update queues a relcache invalidation that the planner's index lock absorbs, as the nbtree README says; the stale window is a root split or a VACUUM that writes no statistics |
+| 3 | "split policy sets the ceiling on density" | fillfactor applies at build and on rightmost splits; fixture P reads 98.01% at 90 |
+| 4 | `5bf748b86bc` "moved `num_sa_scans` into `GenericCosts`" | `REL_12_0`'s `selfuncs.h` already had the field; the commit made it an input |
+| 5 | a never-analyzed partial index takes a different fallback in v17 than in v12 | builds write `reltuples`; an index holds `-1` only while empty; the v12 side is filed as open |
+| 6 | a changed `fillfactor` "governs the next split" | only rightmost and split-after-new-item splits |
+| 7 | `INDEX_CLEANUP` "can force cleanup back on" | it forces index vacuuming; the 2% bypass never skipped cleanup |
+| 8 | `genericcostestimate()` reads `tree_height`, and only the three `IndexOptInfo` fields | it never reads `tree_height`, and it reads `rel->tuples` and the tablespace |
+| 9 | the stats hooks serve "correlation only"; "three hooks" | they feed every selectivity; `set_rel_pathlist_hook` added |
+| 10 | "GIN and BRIN do not" get the page penalty | BRIN charges every index page on every scan |
+| 11 | deduplication happens only "lazily, at a split" | index builds deduplicate too, and fixture N measures that path |
+| 12 | a custom AM is priced "entirely" through `amcostestimate` | `cost_index()` feeds `index->pages` to the heap-side cache model for every AM |
+| 13 | "nothing on this path depends on a generated catalog artifact" | `BTREE_AM_OID` and `RELKIND_*` reach `plancat.c` through `pg_am_d.h` and `pg_class_d.h` |
+| 14 | the seven-step `gincostestimate()` recipe | two terms missing, a per-search-entry charge and double-counted descent and entry-page CPU; the steps summed to about 12.56, not 12.97 |
+| 15 | "watch for `= ANY` regressions on v17" | the clamp is a discount against v12, not a surcharge |
+| 16-30 | the page about itself: L3 "the only" two-clause fixture; L3's match "because independent" (the seed's luck; independence predicts 12.49); fixture P "never packed tightly enough"; fixture N "uses `REINDEX`"; "3 pages once the list is gone" (4); a stale run date and counts; a pin-range list naming 5 of the 9 touched files; a default-cost serial-plan claim no stage measured; GIN closed forms "in SQL" the script never ran; F-one's unrecorded `885 / 200000`; "the one case" of a lone selective lookup; "plateau at 3 versus 19"; "measured as `disable_cost` scans"; "the same 100,000 rows"; "no test exercises" | each corrected; the unmeasured values are now measured |
+| 31-36 | the script: unknown stages "rejected before anything runs" (they were not); several quoted values reached only the console; the snapshot holder ran at `statement_timeout=0` without `lock_timeout` or `ON_ERROR_STOP`; no pin check; `clean` had no path guard; `diag` inherited the caller's `PGOPTIONS` | all fixed in place |
+| rest | smaller precision, citation-range and label items, and structure | fixed; the answer now sits under `## Answer` (13 sections down one level), the closing sections follow `templates/question.md`, and `## Related Pages` folded into `## Navigation` |
+
+**Script.** Edited in place, no second script: 1,167 lines, md5
+`a7b99e2260848bdcbfa4dcc1f76bfc35`. It checks the pin and a clean worktree in `build` and
+`check` and records the pin beside the binaries; resolves `SANDBOX` and refuses anything not
+directly inside `.wiki-runtime/tmp`, marks the sandbox it creates, and lets `stop` and `clean`
+touch only a marked one, with the `EXIT` trap stopping a server only in a claimed sandbox;
+checks every stage name before running any; records every value the page quotes in a new `fx`
+table that `summary` prints; runs the snapshot holder with the session timeouts and
+`ON_ERROR_STOP` and checks that exactly one live holder was ended; follows every `psql` call
+in `$(...)` with `|| die`; and plans the 50% and 20% parallel scans at default parallel costs
+as well. Stub tests confirmed the stage pre-check and every sandbox refusal (outside the tree,
+`..`, a symbolic link out, an unmarked directory, a missing one) and the pin check; the decoy
+directories were removed. The two filed diagnostic blocks gained tags on every `SET` and
+`RESET`, moved their `EXPLAIN` tags after the verb and dropped the no-op `TIMING OFF`. One fix
+run failed on its own new code: `predict()` called `rint()`, which SQL does not have; stage
+`fb` stopped the run with status 1 and the `EXIT` trap stopped the server. `round()`, which is
+`rint()` for a `float8`, replaced it.
+
+**Re-measurement.** On Darwin 27.0.0 arm64, Apple clang 21, bash 5.3.15, `JOBS=8`: a full run
+of the final text from an empty sandbox (12:45:39Z to 12:47:38Z, 1 min 59 s, of which 1 min
+29 s is the build and the four suites; `make check` All 225, All 1 / 8 / 30), then a pass over
+every fixture stage with the cluster stopped at the start (24 s). Both exit 0 and wrote a
+byte-identical `summary.txt` apart from its two timestamps: 35 index rows, 11 GIN rows, 7 of 7
+predictions, 27 fixture tables, 29 facts, 126 plans, four error messages and both diagnostic
+outputs. All 121 plans and every index, GIN and prediction row of the unchanged run came back
+identical. An earlier pass of the edited script had recorded the holder's `backend_xmin`,
+which moves with every run; the fact now records only that it is set.
+
+**New results.** At default parallel costs the 50% and 20% partial scans choose the same
+parallel plans and worker counts as with zeroed costs (3 and 2 on the dense index, 5 and 5 on
+the bloated one), which overturns an Open Questions claim. Fixture D's `cat = 7` clause is
+estimated at 19,999 after the plain `VACUUM`, because VACUUM extrapolated `reltuples` to
+399,985, and at 20,000 once `CREATE INDEX` rewrote it to 400,000, which also explains the
+`255.81` against `255.82` the page left unexplained. F-one's built-state catalog row is now
+recorded (`885 / 200000`).
+
+**Citations.** 699 occurrences over 295 distinct ranges in 85 files, all inside their files,
+all from `raw/postgres-17/`, none as a bare path; no label now carries two ranges, and no
+`#Symbol` label points at a single line. `## Source References` grew from 105 to 154 entries.
+All 66 in-page anchor links resolve; `## Contents` lists the 26 `##` and `###` headings.
+Open Questions 12 -> 14: a docs-versus-source discrepancy on `gin_pending_list_limit`, and the
+claims this pass read from source with no fixture. `verified_by_agent` stays `not yet`.
+
+**Bookkeeping.** Both index blurbs (`wiki/index.md`, `wiki/v17/index.md`): the B-tree
+qualifier, "116 plans" for the first pass, the dense index's plateau, three plan-shape cases,
+and a 2026-09-23 sentence. `wiki/versions.md`: the v17 row's plateau clause and a dated
+coverage note. Lint: **9 errors / 2 warnings**, this host's baseline, none in a file this pass
+touched.
+
+**No common concept page was touched.** The three v17 concept pages are bloat-test
+protocols; none defines a concept this page explains, so none is linked.
+
+**Teardown.** Four sandboxes were created under `.wiki-runtime/tmp/bloatplan`, each stopped
+and deleted through a `clean` stage: the unchanged review run's (the old script's `clean`),
+the failed fix run's (server already stopped by the `EXIT` trap), the first full run of the
+edited script with its fixture pass, and the final pair. Each `stop` asserted that `pg_ctl`
+found no server and that no `postmaster.pid`, process or socket was left. Verified at the end:
+no `postgres` process, port 55437 free; the extracted script, the run logs and the checkers'
+scratch files under `.wiki-runtime/tmp/` were deleted, leaving it empty. `raw/postgres-17/`
+and `raw/postgres-12/` were read only.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once the
+asker said `commit and push`, on top of commit `af6d7dd`. A fetch just before the commit
+showed no new commit on `origin/master`, so no rebase was needed.
