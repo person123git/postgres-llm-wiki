@@ -14351,3 +14351,76 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - **Checks.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted changes in the v12 and v14 checkouts. All 28 and 32 in-page anchors on the two pages resolve. Every range the new bullets cite was re-read at the pin.
 - **Teardown.** No server or other service was started, and nothing was created under `.wiki-runtime/tmp/`. The link helper lives in the session scratchpad, outside the repo, and ran from the project venv. `raw/postgres-17` was read only.
 - **Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `5915174`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-24] revise v17 | GIN contrib waste page: the index-cleanup-disabled fixture removed, both legs re-run on a second platform
+
+- **Prompt.** The asker chose to have it corrected silently: "Follow AGENTS.md. In PostgreSQL 17, remove the invalid test from the question Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17 (unverified), and re-run all tests." The analysis was shown in chat first, then prompt hygiene and scope were asked in one question call.
+- **Scope.** The asker chose **remove `f9c_cleanup` only** (recommended) over also bringing the page onto the protocol's no-defeat rule. They also chose **add a 12.2 leg** over the recommended v17-only re-run.
+- **Target.** [Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on PostgreSQL 17 (unverified)](v17/questions/indexing/gin-index-wasted-space-contrib.md), at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+
+**The invalid test.** `f9c_cleanup` ran the `f5` recipe at 100,000 rows under `VACUUM (INDEX_CLEANUP OFF)` and then under the `vacuum_index_cleanup = off` reloption. Earlier the same day, [Mandatory GIN Bloat Tests (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) dropped "a `VACUUM` whose index cleanup did not run" from its required coverage and from its declared exceptions, so the fixture now defeats the maintenance step. It was removed from the build SQL, the fixture registry and the coverage stage. The page's paragraph and table on it went, and so did every sentence that still called that `VACUUM`, the failsafe spelling included, a protocol requirement: open question 15, the failsafe row of *What this pass removed*, and the plan-review and revised-plan notes. The held-snapshot fixture `f8_horizon` and the measurement-lock cases are the concept page's two remaining declared exceptions, and stay.
+
+**Script defects fixed in the 17.11 leg, in place.**
+- BSD `dd` rejects `oflag=append`, so on macOS `s5_gin` silently got no zero pages. The append now uses shell redirection.
+- The corrupt stage ran the entry-tuple probe without its `:tbl` destination and discarded the error, so no filed run since 2026-09-16 produced the page's `s5` and `s7` probe results. The stage now passes `tbl`, writes the probe text itself, and stops on failure.
+- The `clean` stage's `pgrep -a postgres | grep` check cannot match on macOS. It is now `pgrep -f` on the data and standby directories.
+- Five kinds of numbers the page reported were written by no stage:
+  - the declaration and first-census timestamps to the millisecond;
+  - the stage log `run.log`;
+  - every census the build and churn phases stored, now in `20-phases.txt`;
+  - the rebuilt-index census, now in `05-oracle.txt`;
+  - the distinct keys two tables hold, now in `11-entry-tuple-probe.txt`.
+  `m1_pair`'s as-built catalog row is now recorded too.
+- New: a `portability` stage, outside the protocol, whose text is byte-identical to the new 12.2 leg's battery.
+
+**The new 12.2 leg,** `gin_portability_12.sh`, builds 12.2 out of tree and runs that battery. The battery covers the four published statements with and without the three 12.x edits, the derived probe, the decoders on an all-zero page, the refusals, `VACUUM VERBOSE`'s index report and the two missing harness constructs. It uses its own fixtures in two databases.
+
+**Runs**, all on Darwin 27.0.0 arm64 with Apple clang 21.0.0 and `JOBS=8`, each from an empty sandbox:
+- a baseline pass of the filed script, unchanged: 13.5 minutes, exit 0;
+- a pass of the edited script before its report files: 11 min 36 s, exit 0;
+- the recorded 17.11 run, 13:49:56 to 14:01:15 EDT, exit 0, SHA-256 `d5412b84...`;
+- a trial 12.2 run, then the recorded one, 13:28:49 to 13:31:02 EDT, exit 0, SHA-256 `24d24801...`.
+
+`make check` passed All 225 plus `pageinspect` 8, `pgstattuple` 1, `pg_freespacemap` 1, `btree_gin` 30 and `pg_trgm` 4 on 17.11, and All 192 plus `pageinspect` 5 and `pgstattuple` 1 on 12.2, which ships no `pg_freespacemap` suite.
+
+**Results.**
+- The recorded run and the baseline pass reproduced every scored cell of the 2026-09-16 Linux filing, `f9c` aside: 19 scored fixtures, 17 of 19 lower bounds held, 19 of 19 upper bounds, 0 bracket failures. Also 24 of 24 FSM checks, 24 of 24 `n_data_pages` identities, and 23 of 26 metapage entry counts, where the three misses are the same stale-metapage indexes as before.
+- The middle pass moved `g50_gin` by one page. `s50`'s maintenance VACUUM printed `index scan bypassed: 2 pages from table (0.07% of total) have 272 dead item identifiers`: the index-vacuum bypass left 272 dead TIDs in the index. Its rebuilt size, `truth_pct` and both verdicts did not move, and the recorded run read the filed values again. Why the settle step left those dead items is open question 23. A cleanup-lock miss would explain it, but the settle VACUUMs are not VERBOSE, so no output shows one.
+- The 12.2 leg confirmed the section's measurements and corrected three claims. The invalid-index refusal is not v17-only: `13503eb5905` was back-patched to v11, and the 12-branch copy `975ae05537` is first tagged `REL_12_17`. The short-`bytea` difference belongs to `page_header` alone. Three "earliest tag" citations named `.0` tags instead of the first beta.
+- Three filed errors were corrected besides:
+  - `m1_pair`'s as-built `reltuples` is 100,000, not 50,000;
+  - the payload model predicts within 3.2% on eleven fixtures, not ten;
+  - the decide pass covered 26 indexes and 23,743 blocks. The page had given the sweep stage's post-rebuild 28 and 15,201.
+- The standby stage's 6 min 25 s is two spread checkpoints, the one the churn's WAL started and `pg_basebackup`'s own, not the copy.
+
+**Page changes.**
+- `## Question` gained the tenth follow-up note.
+- The Answer intro now describes six passes on two platforms.
+- *Outside the protocol* was rewritten from the two legs' outputs.
+- `## Measurement Script` has two leg subsections and a two-column usage table. The seven `#the-script` links now point to `#the-postgresql-1711-leg`.
+- Open questions 5, 8, 15, 17, 20 and 21 were revised, and 22 to 24 are new: historical numbers without a script, the `g50` bypass, and the unadopted no-defeat rule.
+- 7 Evidence Map rows were updated, 8 rewritten for the 12.2 section and 4 added. *Source References* gained 5 entries, and *Context Reviewed* a 2026-09-24 bullet.
+- The glossary link was added to `## Navigation`, plus 78 first-use term links. A venv helper placed them; each was reviewed by hand, and three wrong-sense first hits were moved. `verified_by_agent` stays `not yet`, and `verified:` was not touched.
+
+**Checks.**
+- 640 citations over 292 ranges in 81 files, all from `raw/postgres-17/` and all in bounds.
+- The 48 Contents entries match the headings, and every in-page anchor resolves.
+- Stripping the new glossary links gives back the pre-link text exactly.
+- Both fenced scripts are byte-identical to the files that ran, and contain no Markdown fence.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted `.DS_Store` files in the v12 and v14 checkouts.
+
+**Glossary.**
+- [Base backup](glossary.md#base-backup) gained a PostgreSQL 17 check, claim by claim against the pin. Its main paragraph now cites 17, and a "PostgreSQL 19: Holds" note keeps the 19 evidence.
+- Scope now lists nine 19-only entries plus that one. Open Questions records the 17 check, and the v17 *Source References* block went from 440 to 443 files.
+- INDEX_CLEANUP, Index vacuuming, Vacuum failsafe, VACUUM, GIN, Pending list, Posting tree, Metapage, Free space map, Hot standby and Checkpoint were reviewed for this interaction and needed no change.
+- All 78 entries the page links were checked on 17. The term count stays 253.
+
+**Concept pages.** Read and not edited. For the asker: *The settle step, and proving it ran* says the index-vacuum bypass does not cost the settle step, which holds; this run showed it can still leave dead TIDs in a maintained GIN fixture. That may be worth a note on the concept page, as its own task.
+
+**Teardown.**
+- Every cluster this task started was stopped with `pg_ctl -m fast -w stop` through its own script's `clean` stage, each confirming no `postmaster.pid` and no process with its data directory in its arguments.
+- Stopped and deleted in turn: the baseline `ginbase`, the trial and recorded `ginp12`, and the middle and recorded `ginw5`.
+- Verified afterwards: no `postgres` process, ports 55417, 55418 and 55412 free, `.wiki-runtime/tmp/` empty.
+- `raw/postgres-17/` and `raw/postgres-12/` were read only. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `a2f6f7e`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.

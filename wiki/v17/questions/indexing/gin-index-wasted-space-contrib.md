@@ -51,7 +51,8 @@ verified_by_agent: not yet
   - [Prerequisites](#prerequisites)
   - [Where the results land](#where-the-results-land)
   - [The last run](#the-last-run)
-  - [The script](#the-script)
+  - [The PostgreSQL 17.11 leg](#the-postgresql-1711-leg)
+  - [The PostgreSQL 12.2 leg](#the-postgresql-122-leg)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -376,59 +377,114 @@ hole rather than a claim: the *after `REINDEX`* entry-tuple column was published
 without a stage that produces it, so the probe now runs a second pass after the
 oracle (`probe_after`), and it returns the filed dead-key counts exactly.
 
+Tenth follow-up prompt, corrected with the asker's agreement:
+
+> Follow AGENTS.md. In PostgreSQL 17, remove the invalid test from the question
+> Measuring Wasted and Reclaimable Bytes in a GIN Index With Contrib Extensions on
+> PostgreSQL 17 (unverified), and re-run all tests.
+
+Two scoping answers were taken before any edit. The invalid test is **`f9c_cleanup`
+alone**: the fixture that ran a `VACUUM` with index cleanup switched off, which
+[Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md)
+stopped requiring on 2026-09-24 and no longer declares as an exception to its rule
+that no fixture may defeat the maintenance step. The rest of the script was **not**
+brought onto that rule; see open question 24. And "all tests" **includes the
+PostgreSQL 12.2 section**, which gained a script of its own.
+
+What this pass did: removed `f9c_cleanup` in both its spellings, and every sentence
+that still treated a `VACUUM` without index cleanup, the wraparound failsafe
+included, as a protocol requirement. It fixed the published script where a run on a
+second platform showed it wrong:
+
+- `dd oflag=append`, which BSD `dd` rejects, so the appended-zero-page case ran
+  without its zero pages;
+- a corrupt-stage probe that never passed its `:tbl` destination, so the `s5` and
+  `s7` probe results the page quoted were not produced by the filed script's last
+  run;
+- a teardown check that cannot fire on macOS;
+- five kinds of numbers the page reported but no stage wrote to a file: the
+  millisecond timestamps, the stage log, every census the build and churn phases
+  stored, the census of the rebuilt indexes, and the distinct keys two tables hold.
+
+It added a `portability` stage to the 17.11 script and a 12.2 script that runs the
+same battery, and ran both legs end to end from empty sandboxes on Darwin 27 arm64,
+this page's first platform other than Linux x86_64. A baseline pass of the filed
+script, unchanged, ran first on the same machine.
+
+Every scored cell of the 2026-09-16 filing reproduced in the recorded run and in the
+baseline pass, so the headline verdicts stand: 17 of 19 lower bounds held, 19 of 19
+upper bounds. One earlier pass the same day moved one fixture by one page, through
+VACUUM's own index-vacuum bypass (open question 23). The new reports corrected one
+filed number, `m1_pair`'s as-built `reltuples`, and the recount corrected two more:
+the payload model's "within 3.2% on ten" fixtures, which is eleven, and the decide
+pass's "28 GIN indexes and 15,201 blocks", which are the sweep stage's counts after
+the rebuilds. The 12.2 leg
+confirmed the section's measurements and corrected three of its claims: the
+invalid-index refusal is not v17-only, because it was back-patched and reached the
+12 branch in 12.17; the difference on a short `bytea` belongs to `page_header`
+alone; and three "earliest tag" citations named a release tag rather than the first
+beta.
+
 Version scope, stated once: this page may cite only `raw/postgres-17/`, so every
 12.2 statement below rests on exact-pin execution against a 12.2 server built from
-this repo's v12 pin, plus this checkout's own commit history. No v12 source file is
-cited, and none of the 12.2 findings should be read as v12 source analysis. The
-12.2 leg is **outside** the protocol, which is a v17 protocol, and it was not
-re-run in this pass; see
+this repo's v12 pin, plus commit history. No v12 source file is cited, and none of
+the 12.2 findings should be read as v12 source analysis. Master commits are read in
+either checkout; the 12 branch's back-patches only in the v12 checkout, because the
+v17 checkout does not carry that branch. The 12.2 leg is **outside** the protocol,
+which is a v17 protocol. Since 2026-09-24 it has a script of its own; see
 [Outside the protocol: the four statements on PostgreSQL 12](#outside-the-protocol-the-four-statements-on-postgresql-12).
 
 ## Answer
 
 [Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md) is
-where this wiki defines the protocol a GIN waste claim is scored under: the five
+where this wiki defines the protocol a [GIN](../../../glossary.md#gin) waste claim is scored under: the five
 phases, the settle step and its proof obligations, the maintenance step and the
-simulated auto-analyze census, the measurement lock, the `REINDEX INDEX` oracle, the
+simulated auto-analyze census, the measurement lock, the [`REINDEX INDEX`](../../../glossary.md#reindex) oracle, the
 declare-then-score rule, the four cross-checks and the reading rules. This page is a
 consumer of that page. The procedure, the four statements, the fixtures and every
 number below are page-local, and the sections that used to define the protocol here
 link it instead.
 
-**Every number on this page was produced under that protocol on 2026-09-16**, by the
-one script filed under [Measurement Script](#measurement-script): declarations filed
-first, then build, baseline, churn ending in settle → maintenance → census, a decide
-pass under one `SHARE ROW EXCLUSIVE` transaction, and a measured rebuild. The two
-headline results are that the page's **upper-bound** claim held on 19 of 19 scored
-fixtures and its **lower-bound** claim failed on 2 of 19 - so `whole_page_waste_pct`
-is demoted to a level in [Reading rules](#reading-rules), which is what the
-protocol's declare-then-score rule requires of a violated bound.
+**Every scored number on this page, and every number dated 2026-09-24, was produced
+on 2026-09-24** by the two scripts filed under [Measurement Script](#measurement-script).
+The 17.11 leg ran the protocol: declarations filed first, then build, baseline, churn
+ending in settle → maintenance → census, a decide pass under one [`SHARE ROW EXCLUSIVE`](../../../glossary.md#lock-mode)
+transaction, and a measured rebuild. The 12.2 leg re-checked the statements'
+portability. The two headline results are unchanged: the page's **upper-bound** claim
+held on 19 of 19 scored fixtures and its **lower-bound** claim failed on 2 of 19 - so
+`whole_page_waste_pct` is demoted to a level in [Reading rules](#reading-rules), which
+is what the protocol's declare-then-score rule requires of a violated bound. Numbers
+the page dates to an earlier pass are that pass's record; see open question 22.
 
-That run is the second full pass over the same pin. Every scored fixture came out
-**identical to the 2026-09-15 numbers** - the same page classes, the same slack
-bytes, the same `truth_pct`, the same two violations - which is the strongest
-reproduction claim this page can make: two clusters, built from scratch from one
-checkout, agreeing cell for cell. What is *not* stable between runs is timing:
-the concurrency cases, the lock-timeout cancellations and the elapsed-time columns
-move by a few milliseconds and, in the writer case, by a census or two.
+Six full passes of the fixture programme have now run on this pin: three on Linux
+x86_64 (2026-09-15, and twice on 2026-09-16) and three on Darwin 27 arm64 on
+2026-09-24. Today's were a baseline pass of the filed script unchanged, a pass of the
+new script before it gained its report files, and the recorded run. The recorded run
+and the baseline pass both came out **identical to the 2026-09-16 numbers** in every
+scored cell - the same page classes, the same slack bytes, the same `truth_pct`, the
+same two violations - on a different operating system, compiler and CPU architecture
+with the same [`block_size`](../../../glossary.md#blcksz) and alignment. The middle pass moved one fixture by one
+[page](../../../glossary.md#page), through [VACUUM](../../../glossary.md#vacuum)'s own [index-vacuum](../../../glossary.md#index-vacuuming) bypass; see open question 23. What is *not*
+stable between runs is timing: the concurrency cases, the lock-timeout cancellations
+and the elapsed-time columns move, and in the writer case by a few censuses.
 
 ### Short answer
 
-Build a **page census** from `pageinspect`, and report three separate quantities.
+Build a **page census** from [`pageinspect`](../../../glossary.md#pageinspect), and report three separate quantities.
 They describe page allocation and free gaps; they do not determine how many bytes
-a rebuild will return. GIN can retain entry tuples with empty posting lists, while
-a rebuild constructs a new index from the heap
+a rebuild will return. GIN can retain entry [tuples](../../../glossary.md#tuple) with empty [posting lists](../../../glossary.md#posting-list), while
+a rebuild constructs a new index from the [heap](../../../glossary.md#heap)
 ([ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558),
 [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406)).
 
 | Class | How it is measured | What it means |
 |---|---|---|
 | Whole-page waste | count of pages whose `gin_page_opaque_info` flags contain `deleted`, plus uninitialized pages, times `block_size` | marked-deleted or uninitialized bytes inside the file; the deleted flag alone does not establish immediate recyclability |
-| Live-page slack | `page_header.upper - page_header.lower` summed over live pages, split into entry-tree and posting-tree (data) pages | free bytes inside live pages; on entry pages this is mostly *growth room*, not waste |
-| Pending-list bytes | count of pages flagged `list`, times `block_size` | deferred insert work, not waste; flushing it frees pages inside the file and can grow it |
+| Live-page slack | `page_header.upper - page_header.lower` summed over live pages, split into entry-tree and [posting-tree](../../../glossary.md#posting-tree) (data) pages | free bytes inside live pages; on entry pages this is mostly *growth room*, not waste |
+| [Pending-list](../../../glossary.md#pending-list) bytes | count of pages flagged `list`, times `block_size` | deferred insert work, not waste; flushing it frees pages inside the file and can grow it |
 
 The flags and uninitialized-page result come from `gin_page_opaque_info`;
-recycling additionally tests the deletion transaction ID. Live-page gap and
+recycling additionally tests the deletion [transaction ID](../../../glossary.md#transaction-id). Live-page gap and
 pending-list definitions come from GIN's page layout and cleanup path
 ([ginfuncs.c#gin_page_opaque_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L98-L171),
 [ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829),
@@ -443,7 +499,7 @@ never-churned control reads **48.09** while `REINDEX` returns **nothing**, and a
 index on an empty table reads **49.80**. See
 [The bloat percentage column](#the-bloat-percentage-column).
 
-**Scored on 2026-09-16 under [Mandatory GIN Bloat
+**Scored on 2026-09-24 under [Mandatory GIN Bloat
 Tests](../../common-concepts/mandatory-gin-bloat-tests.md)**, on an isolated 17.11
 server, with the declared kind of every column filed before the first fixture
 existed and `REINDEX INDEX` as the oracle over **19 fixtures**:
@@ -481,27 +537,27 @@ the existing experimental tables are historical results, not new measurements.
    tuple even when its posting list becomes empty. Those retained bytes are
    outside `waste + slack`, and adding pending bytes does not account for them.
    Rebuilds scan the heap and insert accumulated entries in batches controlled by
-   `maintenance_work_mem`. Report the census and measured rebuild reduction as
+   [`maintenance_work_mem`](../../../glossary.md#maintenance_work_mem). Report the census and measured rebuild reduction as
    distinct outputs, and report failed bound hypotheses as failures
    ([bufpage.c#PageGetFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L898-L923),
    [ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558),
    [gininsert.c#ginBuildCallback](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L276-L314),
    [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L378-L406)).
    The 2026-09-07 pass exercised the suppressed-slack branch by patching a scratch
-   index's metapage `ginVersion` to 1: the guarded statement reported
+   index's [metapage](../../../glossary.md#metapage) `ginVersion` to 1: the guarded statement reported
    `unsupported format: version 1` and withheld every slack-derived field, while
    the published statement printed `entry_slack` 19,372 beside a NULL `bloat_pct`.
-   A genuine version-1 index with uncompressed posting-tree leaves is still
+   A genuine version-1 index with uncompressed posting-tree [leaves](../../../glossary.md#leaf-page) is still
    unproduced, so the `uncompressed_pages` class remains unexercised.
 
 2. **Step 2: distinguish marked-deleted bytes from recyclable bytes.**
    `GinPageIsRecyclable` accepts an uninitialized page immediately. For a deleted
    page, it accepts an invalid deletion transaction ID or requires
    `GlobalVisCheckRemovableXid(NULL, delete_xid)` to succeed. This uses the most
-   conservative visibility horizon, the boundary needed to protect older scans.
+   conservative visibility [horizon](../../../glossary.md#xmin-horizon), the boundary needed to protect older scans.
    The census does not evaluate that predicate. Its `whole_page_waste_bytes`
    therefore measures a page class, not the number of bytes immediately available
-   for reuse. `GinNewBuffer` rechecks eligibility even after the free space map
+   for reuse. `GinNewBuffer` rechecks eligibility even after the [free space map](../../../glossary.md#free-space-map)
    supplies a candidate
    ([ginvacuum.c#GinPageIsRecyclable](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829),
    [procarray.c#GlobalVisHorizonKindForRel](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1966-L1991),
@@ -512,7 +568,7 @@ the existing experimental tables are historical results, not new measurements.
    entire index or refresh `n_entry_pages` and `n_data_pages`. That refresh is in
    `ginvacuumcleanup`. A table VACUUM can skip this callback when index cleanup is
    disabled, including through the table's `vacuum_index_cleanup` option, or when
-   the wraparound failsafe disables it. Thus neither a pending-list flush nor a
+   the [wraparound failsafe](../../../glossary.md#vacuum-failsafe) disables it. Thus neither a pending-list flush nor a
    successful VACUUM command alone establishes refreshed page counts. Record the
    maintenance outcome and any failsafe warning before interpreting cross-checks
    ([ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1031-L1091),
@@ -522,18 +578,22 @@ the existing experimental tables are historical results, not new measurements.
    [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066),
    [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335)).
    Since 2026-09-07 the size-bracket snippet and the guarded statement derive the
-   block size from `block_size`; the entry-tuple probe still divides by 8192 and
+   [block](../../../glossary.md#block) size from `block_size`; the entry-tuple probe still divides by 8192 and
    subtracts a literal 24-byte header, and the guarded statement's 8-byte
    special-area constant is checked by the metapage decode rather than derived.
-   **Closed on 2026-09-08**: the failsafe path is now exercised, and it is the one
-   bypass that VACUUM's own output *does* distinguish
+   **Closed on 2026-09-08**: the failsafe path was exercised that day, and it is the
+   one bypass that VACUUM's own output *does* distinguish
    (`index scan bypassed by failsafe:`), while the census and the metapage still
    cannot tell afterwards; every remaining literal is derived or measured. See
-   [Adversarial and acceptance cases](#adversarial-and-acceptance-cases) and
-   [The derived-arithmetic statements](#the-derived-arithmetic-statements).
+   [The derived-arithmetic statements](#the-derived-arithmetic-statements). The
+   2026-09-15 pass removed the failsafe run, and the 2026-09-24 pass removed the
+   [`INDEX_CLEANUP OFF`](../../../glossary.md#index_cleanup) fixture that stood in for it, so no test on this page now
+   reaches a `VACUUM` that skipped index cleanup. The finding itself still binds the
+   settle step: a run must see its index cleanup happen, not assume it
+   ([vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066)).
 
 4. **Step 3: treat consistency checks as diagnostics.** `get_raw_page` opens the
-   named relation, locks and copies one buffer, then releases both locks before
+   named [relation](../../../glossary.md#relation), locks and copies one buffer, then releases both locks before
    returning. Sharing its result between decoders gives one page image; it does
    not give an index-wide snapshot. The filed `census_total_pages = blocks` is
    principally an accounting identity: `generate_series` uses the captured size
@@ -579,7 +639,7 @@ the existing experimental tables are historical results, not new measurements.
    [ginfuncs.c#gin_metapage_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L30-L95),
    [ginfuncs.c#gin_page_opaque_info](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L98-L171),
    [amcheck/Makefile](../../../../raw/postgres-17/contrib/amcheck/Makefile#L3-L13)).
-   Narrowed on 2026-09-07: the guarded statement reads `pg_stat_progress_vacuum`,
+   Narrowed on 2026-09-07: the guarded statement reads [`pg_stat_progress_vacuum`](../../../glossary.md#progress-reporting),
    `pg_stat_progress_analyze` and `pg_stat_progress_create_index` before and after
    its scan and flagged every in-flight census in the re-run (3 of 3 under a
    VACUUM, 2 of 2 under a concurrent rebuild). A maintenance run that starts and
@@ -590,12 +650,12 @@ the existing experimental tables are historical results, not new measurements.
    derived terms rather than a literal 8, a wrong metapage special area is named
    in `status`, and the probe reports `malformed_pages` and `undecoded_pages`. One
    limit is now measured rather than assumed: a page whose header breaks
-   `pd_upper <= pd_special` is refused by the buffer manager, so **no** SQL guard
+   `pd_upper <= pd_special` is refused by the [buffer manager](../../../glossary.md#buffer-manager), so **no** SQL guard
    can classify it. See
    [Adversarial and acceptance cases](#adversarial-and-acceptance-cases).
 
 7. **Step 4: name the measured size precisely.** A before/after comparison of
-   `pg_relation_size(index, 'main')` measures the reduction in the main fork's
+   [`pg_relation_size(index, 'main')`](../../../glossary.md#relation-size-functions) measures the reduction in the [main fork](../../../glossary.md#fork)'s
    file lengths. The implementation sums `stat.st_size` for that fork's segments;
    it does not measure filesystem allocation, other forks, or the rebuild's peak
    disk demand. Keep this denominator throughout the experiment, record signed
@@ -605,11 +665,11 @@ the existing experimental tables are historical results, not new measurements.
    [index.c:3781-3789](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789)).
 
 **Retain step 1 and the privilege split in step 5.** The GIN rejection in
-`pgstattuple`, the three-field metapage-only result from `pgstatginindex`, and the
+[`pgstattuple`](../../../glossary.md#pgstattuple), the three-field metapage-only result from `pgstatginindex`, and the
 superuser requirement in raw-page readers are correctly identified. The
 `pg_stat_scan_tables` grant in pgstattuple 1.5 does not satisfy the raw readers'
-own superuser checks. Keep the `OFFSET 0` page-read boundary: the planner rejects
-pull-up of a subquery with an offset or a volatile target list
+own superuser checks. Keep the `OFFSET 0` page-read boundary: the [planner](../../../glossary.md#planner) rejects
+pull-up of a subquery with an offset or a [volatile](../../../glossary.md#function-volatility) target list
 ([pgstattuple.c#pgstat_relation](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L260-L296),
 [pgstatindex.c#pgstatginindex_internal](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L507-L577),
 [pgstattuple--1.4--1.5.sql:49-57](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L49-L57),
@@ -647,16 +707,24 @@ Status on 2026-09-15: **the plan is superseded by the protocol.** Step 1's outpu
 are the declared columns of
 [The declarations, filed before the run](#the-declarations-filed-before-the-run);
 step 2's controlled interval, step 4's cases and step 5's rebuild comparisons are
-what [the script](#the-script) now runs on every fixture, under the phase
+what [the script](#the-postgresql-1711-leg) now runs on every fixture, under the phase
 boundaries of
 [Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md);
 and step 6's filing checks were applied to this revision. What the plan asked for
 and the protocol does not supply is unchanged: a second `BLCKSZ`, a 12.x leg, and
 the bound questions themselves, which are open questions 3, 8 and 13.
 
+Status on 2026-09-24: step 4's "disabled index cleanup" case is no longer run. The
+protocol dropped it from its required coverage and now treats a fixture that
+switches index cleanup off as defeating the maintenance step, so the page's one
+fixture for it was removed; see
+[What this pass removed, and why](#what-this-pass-removed-and-why). The 12.x leg
+the plan wanted is now a script of its own, limited to statement portability; see
+[Outside the protocol](#outside-the-protocol-the-four-statements-on-postgresql-12).
+
 1. **Specify the outputs and scope.** Select one physical GIN index and record
    its identity, definition, main-fork size, block size, GIN format version, and
-   installed extension versions. Define marked-deleted/uninitialized bytes,
+   installed [extension](../../../glossary.md#extension) versions. Define marked-deleted/uninitialized bytes,
    entry-page gaps, posting-tree gaps, pending bytes, and measured main-fork
    reduction separately. Keep `bloat_pct` as the existing accounting formula
    without promising a reclaimable percentage or either bound. See findings 1,
@@ -676,7 +744,7 @@ the bound questions themselves, which are open questions 3, 8 and 13.
    diagnostics. See findings 4 through 6.
 4. **Validate ordinary and adversarial cases on the exact pin.** Run the final
    statement extracted from this page on an isolated build. Include fresh and
-   empty controls, posting-tree deletions with a held old snapshot, key-replacement
+   empty controls, posting-tree deletions with a held old [snapshot](../../../glossary.md#snapshot), key-replacement
    churn, a live pending list, cleanup-only versus full VACUUM, and disabled index
    cleanup. Test reader privileges, invalid and temporary targets, malformed or
    uninitialized page inputs, and unsupported-format handling. Exercise concurrent
@@ -723,7 +791,7 @@ Three items in the plan did not survive contact with the source or the server.
    ([freespace.c:66](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L66)), which is
    `BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData))`
    ([htup_details.h#MaxHeapTupleSize](../../../../raw/postgres-17/src/include/access/htup_details.h#L563)) —
-   **8160** on the pinned build with `block_size` 8192 and 8-byte MAXALIGN. The
+   **8160** on the pinned build with `block_size` 8192 and 8-byte [MAXALIGN](../../../glossary.md#alignment). The
    server agrees: the FSM census of the deleted-pages fixture reads
    `avail = 8160 -> 768 blocks, avail = 0 -> 130 blocks`, and the maximum `avail`
    observed over every GIN index was 8160. The cross-check therefore tests
@@ -748,7 +816,7 @@ Three items in the plan did not survive contact with the source or the server.
    ([ginvacuum.c:234-235](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L234-L235)) and in
    `shiftList` ([ginfast.c:590-591](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L590-L591)).
    The server shows the difference inside one VACUUM: on the run that finally
-   recycled the pages, the B-tree on the same table reported
+   recycled the pages, the [B-tree](../../../glossary.md#b-tree) on the same table reported
    `551 in total, 0 newly deleted, 520 currently deleted, 520 reusable` while its
    GIN sibling reported `898 in total, 0 newly deleted, 0 currently deleted,
    768 reusable`.
@@ -789,7 +857,7 @@ size; the documentation lists exactly those three output columns
 Measured consequence: on the flushed pending-list fixture, whose file was 64.64%
 dead pages, `pgstatginindex` returned `version 2 | pending_pages 0 | pending_tuples 0`.
 
-There is no GIN equivalent of `pgstatindex`/`pgstathashindex`, and `contrib/amcheck`
+There is no GIN equivalent of [`pgstatindex`](../../../glossary.md#pgstatindex)/`pgstathashindex`, and [`contrib/amcheck`](../../../glossary.md#amcheck)
 in this checkout ships only B-tree and heap verifiers — `bt_index_check`,
 `bt_index_parent_check`
 ([amcheck--1.0.sql:9-20](../../../../raw/postgres-17/contrib/amcheck/amcheck--1.0.sql#L9-L20),
@@ -799,7 +867,7 @@ in this checkout ships only B-tree and heap verifiers — `bt_index_check`,
 there is no structural verifier to borrow page counts from either.
 
 That leaves `pageinspect`, whose three GIN functions plus `page_header` are enough,
-and `pg_freespacemap` as an independent check.
+and [`pg_freespacemap`](../../../glossary.md#pg_freespacemap) as an independent check.
 
 ### The three waste classes, from GIN's own definitions
 
@@ -824,7 +892,7 @@ recyclable count as `pages_free`
 pages are reusable **only inside the index**: `GinNewBuffer` takes them back from
 the FSM before extending the file
 ([ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335)), and nothing
-under `src/backend/access/gin/` truncates a relation — a grep for `RelationTruncate`
+under `src/backend/access/gin/` [truncates](../../../glossary.md#truncation) a relation — a grep for `RelationTruncate`
 and `smgrtruncate` across that directory returns zero hits, and `ginvacuumcleanup`
 ends by re-reading, not shortening, the file length
 ([ginvacuum.c:796-802](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L796-L802)).
@@ -832,7 +900,7 @@ ends by re-reading, not shortening, the file length
 **Live-page slack.** GIN's own free-space test on a data leaf is
 `GinDataLeafPageGetFreeSpace`, defined as `PageGetExactFreeSpace`
 ([ginblock.h:287](../../../../raw/postgres-17/src/include/access/ginblock.h#L287)), which is exactly
-`pd_upper - pd_lower` with no allowance for a line pointer
+`pd_upper - pd_lower` with no allowance for a [line pointer](../../../glossary.md#line-pointer)
 ([bufpage.c#PageGetExactFreeSpace](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L952-L973)).
 `page_header` exposes both fields
 ([pageinspect--1.9--1.10.sql#page_header](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.9--1.10.sql#L10-L21)),
@@ -862,7 +930,7 @@ The protocol these eight steps implement is not defined here. [Mandatory GIN Blo
 Tests](../../common-concepts/mandatory-gin-bloat-tests.md) defines the five phases,
 the settle step, the maintenance step, the census, the lock, the oracle, the
 declare-then-score rule, the cross-checks and the reading rules; what follows is
-this page's own instantiation, with the extension versions, the standby and bypass
+this page's own instantiation, with the extension versions, the [standby](../../../glossary.md#hot-standby) and bypass
 observations, and the statements that are local to it. Steps 2 and 5 through 7 are
 what the 2026-09-15 re-run added: the previous six-step procedure had no maintenance
 step, ran no census, and declared nothing before it scored.
@@ -908,7 +976,7 @@ step, ran no census, and declared nothing before it scored.
    `VACUUM (VERBOSE, ANALYZE)` on every table the churn touched. The order is not
    cosmetic: `pgstat_report_analyze` zeroes `mod_since_analyze`
    ([pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337))
-   while a backend's own counts reach the shared entry only when
+   while a [backend](../../../glossary.md#backend)'s own counts reach the shared entry only when
    `pgstat_report_stat` flushes them, unforced at most once per 1000 ms
    ([pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L117-L122),
    [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L583-L600),
@@ -927,12 +995,13 @@ step, ran no census, and declared nothing before it scored.
 
 The protocol's declare-then-score rule says every published column is filed as a
 lower bound, an upper bound or a level *before* the run. This run's `declare` stage
-wrote the table below into the fixture database at **14:17:54.267**, the `fixtures`
+wrote the table below into the fixture database at **13:52:33.716**, the `fixtures`
 stage started only after that stage returned, and the first census of a fixture ran
-at **14:18:09.165** - fifteen seconds later - so the declaration cannot have been
+at **13:52:50.295** - 16.6 seconds later - so the declaration cannot have been
 written around the results. The claim column below is the `claim` text the stage
 filed, shortened where a cell would not fit; the artefact is
-`out/00-declarations.txt`.
+`out/00-declarations.txt`, and the `fixtures` stage prints both timestamps to the
+millisecond at the end of `out/01-fixtures.txt`.
 
 | Column | Declared kind | The claim that was scored |
 |---|---|---|
@@ -1065,20 +1134,21 @@ index.
 
 Two things in that text are there so the same statement runs on PostgreSQL 12 as
 well as 17: the `h.pagesize = 0` arm and the `b.blkno::int` cast. Both are no-ops on
-17.11 — the edited and unedited texts returned identical output on every index where
-both were run there, including one carrying two all-zero pages, because the
-`pagesize = 0` arm and the `flags IS NULL` arm fire on exactly the same pages — and
-both are load-bearing on 12.2. See
+17.11. In the 2026-09-24 run's portability stage, the text with either edit removed
+returned output identical to the filed text on all four indexes of its database,
+`pt_zero_gin`'s two all-zero pages included, because the `pagesize = 0` arm and the
+`flags IS NULL` arm fire on exactly the same pages there. Both are load-bearing on
+12.2. See
 [Outside the protocol](#outside-the-protocol-the-four-statements-on-postgresql-12).
 
 Design points that are not cosmetic:
 
 - **`OFFSET 0` keeps the page read single.** `get_raw_page` is volatile and the
   subquery is not flattened, so the page is fetched once and the same value feeds
-  both LATERAL calls. Measured with `EXPLAIN (ANALYZE, BUFFERS)` on the 1,236-block
+  both LATERAL calls. Measured with [`EXPLAIN (ANALYZE, BUFFERS)`](../../../glossary.md#explain-buffers) on the 1,236-block
   `f3_fresh_gin`: this form reports **1265** shared hits, the naive form that calls
   `get_raw_page` inside each function reports **2499** — one read per block against
-  two, plus the same catalog reads either way. See
+  two, plus the same [catalog](../../../glossary.md#catalog) reads either way. See
   [Cost of the census](#cost-of-the-census).
 - **A NULL result means `PageIsNew`, which tests `pd_upper == 0`.** This is not
   a check that every byte is zero
@@ -1111,7 +1181,7 @@ Design points that are not cosmetic:
   including rows assigned by the fallback `ELSE`. Equality does not prove correct
   classification or an unchanged index; the raw reader locks one page at a time
   ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L141-L198)).
-  It held on **27 of 27** censused indexes in this run, as it has in every run this
+  It held on **26 of 26** censused indexes in this run, as it has in every run this
   page records. Entry-tree *internal* pages are the class that makes the
   `ELSE` arm necessary: their flags word is 0, so `gin_page_opaque_info` returns
   an empty array rather than a NULL row, and they are the difference between the
@@ -1520,7 +1590,7 @@ census.
 
 The tested text is [The guarded census statement](#the-guarded-census-statement)
 with seven substitutions, and nothing else. **Since 2026-09-15 it is also the text
-this page scores**, carried in full by [the script](#the-script) as the `CENSUS`
+this page scores**, carried in full by [the script](#the-postgresql-1711-leg) as the `CENSUS`
 variable its every stage reads, so the substitution list below is a description of
 how it differs from the guarded block rather than the only copy of it:
 
@@ -1573,8 +1643,8 @@ derived text alone, so none has a new cell-for-cell comparison to add; what they
 add is the eight corruption shapes, where the derived text survived all seven
 SQL-visible patches in one multi-index report and the baseline text cannot
 ([Adversarial and acceptance cases](#adversarial-and-acceptance-cases)). Its cost
-on this run's 28-index corpus is in [Cost of the census](#cost-of-the-census): the
-derived arithmetic is one extra one-row CTE.
+on this run's database is in [Cost of the census](#cost-of-the-census): the derived
+arithmetic is one extra one-row CTE.
 
 #### The entry-tuple probe, with the constants derived
 
@@ -1636,7 +1706,7 @@ Four things to note about it.
 - **`malformed_pages` catches a corrupted `pd_lower` that the census absorbs
   silently.** With one entry page's `pd_lower` patched up by one byte, the census
   still says `ok` and reports one byte less entry slack than its untouched twin —
-  25,659 against 25,660 on the 2026-09-16 pair — and the published probe returns
+  25,659 against 25,660 on the 2026-09-24 pair — and the published probe returns
   byte-identical output. The derived probe reports `malformed_pages 1`.
 - **The counter is restricted to entry-class pages on purpose.** On posting-tree
   pages `pd_lower` is a data-area offset, not a line-pointer count: compressed
@@ -1649,11 +1719,11 @@ Four things to note about it.
   residue 2 — measured in the 2026-09-08 pass with an unrestricted variant of the
   probe, which the published script deliberately does not carry. The restriction to
   `{leaf}` and `{}` is what the script runs, and it read `malformed_pages` 0 on all
-  19 scored fixtures of the 2026-09-16 run, and 1 on the one index whose `pd_lower`
+  19 scored fixtures of the 2026-09-24 run, and 1 on the one index whose `pd_lower`
   was patched.
 - **Every published column is unchanged.** The derived probe reproduced all four
   columns of the published probe exactly when the revision was filed, and it is the
-  text the 2026-09-16 run used on all 19 scored fixtures: `entry_leaf_tuples`
+  text the 2026-09-24 run used on all 19 scored fixtures: `entry_leaf_tuples`
   100,056 on `f1_churn_gin` and 50,028 on `f3_fresh_gin`, the same two numbers the
   published probe read in every earlier run of those fixtures.
 
@@ -1690,16 +1760,16 @@ first:
 
 | Second session ran | Result |
 |---|---|
-| `INSERT INTO tl_lock VALUES (-1, '{1}')` | blocked, cancelled at **2006 ms** |
-| `VACUUM tl_lock` | blocked, **2006 ms** |
-| `ANALYZE tl_lock` | blocked, **2006 ms** |
-| `REINDEX INDEX l1_lock_gin` | blocked, **2005 ms** |
-| `REINDEX INDEX CONCURRENTLY l1_lock_gin` | blocked, **2005 ms** |
-| `VACUUM FULL tl_lock` | blocked, **2006 ms** |
-| `DROP INDEX l1_lock_gin` | blocked, **2005 ms** |
-| `CLUSTER tl_lock USING tl_lock_pkey` | blocked, **2005 ms** |
-| `SELECT count(*) FROM tl_lock` | **succeeded**, 6 ms, 20,000 rows |
-| `SELECT gin_clean_pending_list('l1_lock_gin')` | **succeeded**, 4 ms, returning 0 |
+| `INSERT INTO tl_lock VALUES (-1, '{1}')` | blocked, cancelled at **2022 ms** |
+| `VACUUM tl_lock` | blocked, **2018 ms** |
+| `ANALYZE tl_lock` | blocked, **2021 ms** |
+| `REINDEX INDEX l1_lock_gin` | blocked, **2020 ms** |
+| `REINDEX INDEX CONCURRENTLY l1_lock_gin` | blocked, **2019 ms** |
+| [`VACUUM FULL tl_lock`](../../../glossary.md#vacuum-full) | blocked, **2024 ms** |
+| `DROP INDEX l1_lock_gin` | blocked, **2024 ms** |
+| [`CLUSTER tl_lock USING tl_lock_pkey`](../../../glossary.md#cluster) | blocked, **2021 ms** |
+| `SELECT count(*) FROM tl_lock` | **succeeded**, 16 ms, 20,000 rows |
+| `SELECT gin_clean_pending_list('l1_lock_gin')` | **succeeded**, 13 ms, returning 0 |
 
 Every cancellation reported `canceling statement due to lock timeout`. The lock
 experiment runs on its own fixture rather than on a scored one, because one of the
@@ -1712,8 +1782,8 @@ vacuumed yet:
 
 | Loop | Censuses | What they read |
 |---|---|---|
-| no lock, censuses back to back across one VACUUM of `tr_race` | 5 during the VACUUM, 3 after | the 5 read **five different** deleted-page counts between 0 and 768 on a file that stayed at 898 blocks, and 4 of the 5 were flagged `vacuum or analyze in progress`; the 3 after read `ok, 768` |
-| protocol lock held on `tr2_race`, its VACUUM queued behind | 20 | **20 of 20 identical**, `ok` with 0 deleted pages. The queued VACUUM waited **3395 ms**, then reported `898 in total, 768 newly deleted, 768 currently deleted, 0 reusable`, and the next census read 768 |
+| no lock, censuses back to back across one VACUUM of `tr_race` | 4 during the VACUUM, 3 after | the 4 read **four different** deleted-page counts between 0 and 768 on a file that stayed at 898 blocks, and 3 of the 4 were flagged `vacuum or analyze in progress`; the 3 after read `ok, 768` |
+| protocol lock held on `tr2_race`, its VACUUM queued behind | 20 | **20 of 20 identical**, `ok` with 0 deleted pages. The queued VACUUM waited **3219 ms**, then reported `898 in total, 768 newly deleted, 768 currently deleted, 0 reusable`, and the next census read 768 |
 
 That is the difference between detecting a mixed-instant reading and not producing
 one, and the queued VACUUM shows the protocol delays maintenance rather than
@@ -1745,10 +1815,13 @@ on a production box it is a matter of not running it
 ([ginfast.c:1061-1064](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1061-L1064)).
 
 Two costs to weigh before using it. The lock blocks every writer on the table for
-the whole census — this run's locked decide pass over 28 GIN indexes and 15,201
-blocks held `ShareRowExclusiveLock` on every table in the database for **172 ms**,
+the whole census — this run's locked decide pass over 26 GIN indexes and 23,743
+blocks held `ShareRowExclusiveLock` on every table in the database for **214 ms**,
 but the census is one buffer read per block, so a multi-GB index is a different
-proposition — so `lock_timeout` and a maintenance window matter. And the privilege
+proposition — so [`lock_timeout`](../../../glossary.md#statement_timeout-and-lock_timeout) and a maintenance window matter. Before 2026-09-24
+this sentence gave the corpus as 28 indexes over 15,201 blocks: that is the database
+after the oracle's rebuilds, the [invalid index](../../../glossary.md#invalid-index) included, as the sweep stage counts
+it, not the decide pass. And the privilege
 is not `SELECT`: `LockTableAclCheck` accepts `MAINTAIN`, `UPDATE`, `DELETE` or
 `TRUNCATE` for every mode above `ROW EXCLUSIVE`, adding `SELECT` only at
 `ACCESS SHARE`
@@ -1760,9 +1833,11 @@ practice the census already needs superuser for its raw reads, so this binds onl
 ### Adversarial and acceptance cases
 
 One section replaces the two earlier pass-by-pass records, because the cases that
-survived the re-port were re-run and the ones that could not be re-run are gone; see
+survived the re-port were re-run and the ones that could not be re-run are gone. The
+`VACUUM` whose index cleanup did not run left on 2026-09-24, because the protocol no
+longer allows a fixture to switch index cleanup off; see
 [What this pass removed, and why](#what-this-pass-removed-and-why). Every result
-below is from the 2026-09-16 run described under
+below is from the 2026-09-24 run described under
 [Measurement Script](#measurement-script), and the statement under test is the
 derived census unless a row says otherwise.
 
@@ -1785,7 +1860,7 @@ metapage fields
 | `s5_gin` | two all-zero blocks appended | 9 blocks, `new_pages` 2, waste **22.22%**, `bloat_pct` 57.03, status `metapage page counts predate the file length` |
 | `s6_gin` | block 0 `pd_upper` and `pd_special` both 8184 -> 8176 | `metapage unreadable; metapage special area 16 bytes, expected 8` |
 | `s7_gin` | block 1 `pd_lower` +1 | **`ok`**, and one byte less entry slack than its twin (25,659 against 25,660) — no signal at all from the census |
-| `s8_gin` | block 0 `pd_special` 8184 -> 8168, `pd_upper` left at 8184 | `ERROR: invalid page in block 0 of relation base/17536/18557` — the read never reaches any SQL guard, and it takes the whole multi-index report with it. The path is a database OID and a relfilenode, so it is the one literal in this table that moves between runs |
+| `s8_gin` | block 0 `pd_special` 8184 -> 8168, `pd_upper` left at 8184 | `ERROR: invalid page in block 0 of relation base/17536/18549` — the read never reaches any SQL guard, and it takes the whole multi-index report with it. The path is a database [OID](../../../glossary.md#oid) and a [relfilenode](../../../glossary.md#relfilenumber), so it is the one literal in this table that moves between runs |
 
 Three things follow. The derived statement **survived all seven SQL-visible patches
 in one multi-index report**, which is the difference the guards buy: the baseline
@@ -1797,7 +1872,7 @@ only when `pd_lower <= pd_upper <= pd_special <= BLCKSZ` and `pd_special` is
 `MAXALIGN`ed, so breaking `pd_upper <= pd_special` makes the buffer manager raise
 before `pageinspect` sees anything
 ([bufpage.c#PageIsVerifiedExtended](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L88-L124)).
-The only way past it is `zero_damaged_pages`, which is `PGC_SUSET` — session scope
+The only way past it is `zero_damaged_pages`, which is [`PGC_SUSET`](../../../glossary.md#guc-context) — session scope
 for a superuser, no reload — and which the documentation is explicit about: it
 "will destroy data, namely all the rows on the damaged page"
 ([guc_tables.c#zero_damaged_pages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1123-L1136)).
@@ -1812,39 +1887,13 @@ never to get a census out of a production index.
 derived probe, which is the only column on the page that can report them. The FSM
 cannot see them at all.
 
-**A `VACUUM` whose index cleanup did not run**, in both spellings, on
-`f9c_cleanup_gin` (the `f5` recipe at 100,000 rows with 95% of the heap deleted, 482
-blocks):
-
-| Step | What VACUUM printed | census `deleted_pages` | metapage data / total | `vacuum_count` |
-|---|---|---|---|---|
-| before | | 0 | 480 / 482 | 1 |
-| `VACUUM (INDEX_CLEANUP OFF, VERBOSE)` | `index scans: 0`, `index scan bypassed: 2210 pages from table (95.01% of total) have 95000 dead item identifiers` | 0 | 480 / 482 | 2 |
-| `vacuum_index_cleanup = off` reloption, plain `VACUUM (VERBOSE)` | the same two lines | 0 | 480 / 482 | 3 |
-| reloption reset, plain `VACUUM (VERBOSE)` | `index scans: 1`, then `index "f9c_cleanup_gin": pages: 482 in total, 352 newly deleted, 352 currently deleted, 0 reusable` | **352** | 480 / 482 | 4 |
-| the maintenance step, `VACUUM (VERBOSE, ANALYZE)` | `482 in total, 0 newly deleted, 0 currently deleted, 352 reusable` | 352 | 480 / 482 | 5 |
-
-Two successful VACUUMs, each counted in `pg_stat_all_tables`, changed nothing in the
-index: the census and the metapage read exactly as before them, and the only
-evidence is the `index scan bypassed` line in VACUUM's own output. Neither the
-census nor the statistics views can tell afterwards that a VACUUM skipped the index
-([vacuumlazy.c:392-396](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L396),
-[vacuumlazy.c:696-712](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L696-L712),
-[vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178),
-[system_views.sql#pg_stat_all_tables](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L670-L703)).
-The reloption is an `ALTER TABLE` taking `ShareUpdateExclusiveLock`
-([reloptions.c#vacuum_index_cleanup](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L509-L520)),
-and the metapage's data-page count stays 480 through all of it because a deleted
-page that is not yet recyclable is counted as a data page; see
-[Four cross-checks](#four-cross-checks).
-
-**An invalid index, and both temporary cases.** A `CREATE INDEX CONCURRENTLY` whose
-expression divided by zero on one row left `tinv_bad` with `indisvalid` false,
+**An invalid index, and both temporary cases.** A [`CREATE INDEX CONCURRENTLY`](../../../glossary.md#concurrently) whose
+expression divided by zero on one row left `tinv_bad` with [`indisvalid`](../../../glossary.md#pg_index) false,
 `indisready` false and `indislive` true. The census excludes it (0 rows), while
 `gin_metapage_info(get_raw_page('tinv_bad', 0))` reads `version 2`,
 `pgstatginindex` refuses with `index "tinv_bad" is not valid`, and
 `gin_clean_pending_list` returns 0 on the `DEBUG1` no-op path. Another session's
-temporary GIN index appeared in the catalogs as `pg_temp_87.ott_gin`: the census
+temporary GIN index appeared in the catalogs as `pg_temp_74.ott_gin`: the census
 excludes it, `get_raw_page` refuses with
 `cannot access temporary tables of other sessions`, `pgstatginindex` with
 `cannot access temporary indexes of other sessions`, and `pg_freespace` answers
@@ -1897,7 +1946,7 @@ Four things the column does not mean:
    **0 bytes** — the same 10,125,312 bytes before and after. `f4_empty_gin` indexes
    an empty table — one metapage and one entry page — and reads **49.80**, because
    that entry page is 8,160 bytes empty. The floor is structural rather than
-   accidental: `entrySplitPage` splits a full entry page by equalizing data size, so
+   accidental: `entrySplitPage` [splits](../../../glossary.md#page-split) a full entry page by equalizing data size, so
    a fresh build leaves its pages about half full
    ([ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691)).
    Over-read across the 19 scored fixtures ran from **+5.01 to +49.80 points**, and
@@ -1935,8 +1984,9 @@ any GIN build.
 All four are required by [The four mandatory
 cross-checks](../../common-concepts/mandatory-gin-bloat-tests.md#the-four-mandatory-cross-checks),
 which defines what each one compares and in which direction it can fail. Below is
-the SQL this page runs for them, and what they read on the 25 censused indexes of
-the 2026-09-16 run.
+the SQL this page runs for them, and what they read in the 2026-09-24 run: the FSM
+check and the identity on its 24 fixture indexes, the metapage counts on all 26
+indexes the decide census saw.
 
 **FSM.** `pg_freespace` reports the recorded value per block
 ([pg_freespacemap.c#pg_freespace](../../../../raw/postgres-17/contrib/pg_freespacemap/pg_freespacemap.c#L24-L50)),
@@ -1967,17 +2017,17 @@ SELECT /* wiki_gin_waste_fsm_check */
 FROM pg_freespace('myschema.myindex');
 ```
 
-On the pinned build that expression returned **8160** on all 25 indexes, equal to
+On the pinned build that expression returned **8160** on all 24 indexes, equal to
 the value the [layout probe](#an-empty-gin-index-measures-the-page-format) reaches
 from its two measured struct sizes. Do not take the number from the category
 table's own comment, which is illustrative and stale; see
 [Deviations from the brief](#deviations-from-the-brief-and-why). The check is
-one-directional and behaved that way: `fsm_free_pages <= deleted + new` held **25 of
-25**, with exact equality on the ten fixtures whose deleted pages had become
-recyclable — `f2` 490/490, `f5` 768/768, `f8` 768/768, `f9c` 352/352, `f15` 197/197,
-`a1` 49/49, `f7` 66 of 144, `g25` 46/46, `g50` 39/39, `g75` 45/45, `g100` 39/39 —
-and a deliberate shortfall on the four whose pages were deleted but not yet
-recyclable: `f1` 14 deleted against 0 free, `f12` 282 against 0, `f14` 14 against 0,
+one-directional and behaved that way: `fsm_free_pages <= deleted + new` held **24 of
+24**, with exact equality on the nine fixtures whose deleted pages had all become
+recyclable — `f2` 490/490, `f5` 768/768, `f8` 768/768, `f15` 197/197, `a1` 49/49,
+`g25` 46/46, `g50` 39/39, `g75` 45/45, `g100` 39/39 — a partial count on `f7`,
+whose FSM holds 66 of its 144 deleted pages, and a deliberate shortfall on the four
+whose pages were deleted but not yet recyclable: `f1` 14 deleted against 0 free, `f12` 282 against 0, `f14` 14 against 0,
 `g0` 46 against 0.
 
 **Size bracket.** Read `pg_relation_size` again after the census and compare it
@@ -1993,7 +2043,7 @@ The guarded and derived statements take this second reading themselves and print
 as `blocks_after_census`, flagging any difference in `status`. Under the protocol
 lock it held on **19 of 19** scored fixtures, and the oracle's before-size equalled
 the decide census's `main_fork_bytes` on 19 of 19 as well, which is the same bracket
-one step wider. Without the lock it is the check that earns its place: 11 of 33
+one step wider. Without the lock it is the check that earns its place: 10 of 30
 censuses taken under a writer stream were flagged `size changed during scan`; see
 [Concurrency](#concurrency-a-census-of-a-busy-index-is-a-mixed-instant-reading).
 
@@ -2023,7 +2073,7 @@ deleted, 520 reusable` — the shape GIN never prints, because GIN increments
 **Metapage page-type counts.** After a VACUUM, `n_entry_pages` and `n_data_pages`
 are `ginvacuumcleanup`'s own census
 ([ginvacuum.c:766-789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L766-L789)), so they must
-match the SQL census of live pages. `n_entry_pages` matched **24 of 27** censused
+match the SQL census of live pages. `n_entry_pages` matched **23 of 26** censused
 indexes, and all three misses are indexes whose metapage is stale by construction —
 each grew, or had its pending list flushed, after its last cleanup. Two are off by
 exactly one page: the auto-analyze stand-in `a1_analyze_gin` (42 against 43) and the
@@ -2031,7 +2081,8 @@ census table `c1_analyzed_gin` (5 against 6). The third is the lock fixture
 `l1_lock_gin` (**9 against 34**), whose 293 pending pages were flushed by
 `gin_clean_pending_list()` with no VACUUM after it; that is the same mechanism as
 `a1`, at a size where it is impossible to miss. The 2026-09-15 filing counted two
-misses and 25 agreements; this run counts three and 24, on both of its passes.
+misses and 25 agreements, and both 2026-09-16 passes three and 24; this run, which no
+longer builds `f9c_cleanup_gin`, counts three and 23.
 
 The data-page bucket needs both of the code's caveats, and together they make an
 exact identity rather than a rule of thumb. `GinPageIsRecyclable` is tested before
@@ -2044,22 +2095,22 @@ So:
 n_data_pages = live data pages + (deleted_pages - fsm_free_pages)
 ```
 
-That held on **25 of 25** indexes: plain agreement where nothing was deleted (`f6`
+That held on **24 of 24** indexes: plain agreement where nothing was deleted (`f6`
 896, `m1` 480, `f5` 128), the deleted pages folded in where none was recyclable
 (`f1` 63 + 14 = 77, `f12` 1401 + 282 = 1683, `f14` 63 + 14 = 77, `g0` 87 + 46 =
 133), and the partial case where some were (`f7` 111 + 144 − 66 = 189). A live
 `list` page is counted in no bucket at all, which is why `n_total_pages` can exceed
-`1 + n_entry_pages + n_data_pages`; `n_total_pages = blocks` on **24 of 27**, failing
+`1 + n_entry_pages + n_data_pages`; `n_total_pages = blocks` on **23 of 26**, failing
 only on the same three stale-metapage indexes (43 against 93, 6 against 7, and 10
 against 328).
 
 ### The fixtures
 
-**19 scored fixtures and 6 coverage fixtures, and the only copy of their SQL is the
+**19 scored fixtures and 5 coverage fixtures, and the only copy of their SQL is the
 published script.** That is the change this pass made to the corpus: the recipes are
 no longer prose that a reader has to reassemble, they are the `10_build.sql` and
 `20_churn.sql` heredocs of
-[the script](#the-script), which is what produced every number below. The
+[the script](#the-postgresql-1711-leg), which is what produced every number below. The
 generators are deterministic — no `random()`, no ordering dependence — and every
 recipe ends in the protocol's fixed order: the writes, the settle step, then the
 maintenance step, then the census.
@@ -2068,32 +2119,34 @@ maintenance step, then the census.
 |---|---|---|---|---|
 | `f1_churn` | `tsvector` over 200,000 rows, `fastupdate = off` | every row's term set replaced | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `f2_pending` | `int[]`, `fastupdate = on`, built at 150,000 rows | 50,000 rows left in the pending list, then `gin_clean_pending_list()` | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
-| `f3_fresh` | untouched twin holding `f1`'s post-churn content | none | build-phase `VACUUM ANALYZE` | build-phase `ANALYZE` |
+| `f3_fresh` | untouched twin holding `f1`'s post-churn content | none | build-phase `VACUUM ANALYZE` | build-phase [`ANALYZE`](../../../glossary.md#statistics) |
 | `f4_empty` | empty table | none | build-phase `VACUUM ANALYZE` | build-phase `ANALYZE` |
 | `f5_deleted` | 32 keys per row over 200,000 rows, plus a B-tree sibling | first 95% of the heap deleted | 3 VACUUMs with 3 transaction ids burned between the first and second | `VACUUM (VERBOSE, ANALYZE)` |
 | `f6_slack` | same shape | every other row deleted | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `f7_reupdate` | `tsvector`, same terms rewritten three times | three rewrite passes | a VACUUM after each pass, then one more | `VACUUM (VERBOSE, ANALYZE)` |
 | `f11_json` | `jsonb_path_ops` over 200,000 rows | every key replaced | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `f12_trgm` | `gin_trgm_ops` over 200,000 text rows | every trigram source replaced | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
-| `f13_btgin` | `btree_gin` over `int` mod 20011 | every value moved into a disjoint range | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
+| `f13_btgin` | [`btree_gin`](../../../glossary.md#btree_gin-and-btree_gist) over `int` mod 20011 | every value moved into a disjoint range | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `f14_multi` | multicolumn `gin (tags, to_tsvector(...))` | both key columns replaced | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `f15_partial` | `gin (tags) WHERE live`, 10% of rows live | keys replaced and the predicate column rewritten | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `g0` `g25` `g50` `g75` `g100` | the churn sweep: keys owned by groups of four consecutive ids | 100% of rows updated, p% of the key population replaced | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `m1_pair` | the maintenance pair, `int[]` at 100,000 rows | every other row deleted, censused after the writes, after the settle and after the maintenance | 2 VACUUMs | `VACUUM (VERBOSE, ANALYZE)` |
 | `a1_analyze` | the auto-analyze stand-in, `fastupdate = on` at 20,000 rows | 4,999 inserts, which cross the analyze verdict and neither vacuum verdict | **none — it may not claim the settle step** | `ANALYZE` + `gin_clean_pending_list()` |
 
-The six coverage fixtures are not scored against the oracle, because each one exists
+The five coverage fixtures are not scored against the oracle, because each one exists
 to hold a state the protocol names rather than to be measured for waste:
-`f8_horizon` (a snapshot held across the settling VACUUM), `f9c_cleanup` (a VACUUM
-whose index cleanup did not run), `c1_analyzed`, `c2_declined`, `c3_boundary` and
-`c4_hazard` (the census's four verdict cases), plus the `tl_lock`, `tr_race`,
-`tr2_race`, `tw_race`, `an_cat` and `s1`-`s8` fixtures that belong to the lock,
-concurrency, catalog and corruption cases in their own sections.
+`f8_horizon` (a snapshot held across the settling VACUUM) and `c1_analyzed`,
+`c2_declined`, `c3_boundary` and `c4_hazard` (the census's four verdict cases), plus
+the `tl_lock`, `tr_race`, `tr2_race`, `tw_race`, `an_cat` and `s1`-`s8` fixtures that
+belong to the lock, concurrency, catalog and corruption cases in their own sections,
+and the `pt_*` and `pm_*` fixtures of the portability stage, which is outside the
+protocol. A sixth coverage fixture, `f9c_cleanup`, was removed on 2026-09-24; see
+[What this pass removed, and why](#what-this-pass-removed-and-why).
 
 `f1` and `f7` are the two churn shapes that matter, and the difference is the key
 population: `f1` replaces every term, so the old terms keep entry tuples with empty
 posting lists, while `f7` rewrites the same terms three times and only churns their
-TIDs. They score very differently below.
+[TIDs](../../../glossary.md#tid). They score very differently below.
 
 **What reproduced from the superseded corpus, and what did not.** Six of the seven
 core fixtures came out byte-identical to the numbers this page has carried since
@@ -2201,7 +2254,7 @@ reading has to be judged against rather than against zero.
 The census's fourth number, `payload_bytes` (size minus dead pages minus pending
 pages minus slack), is the quantity that is *supposed* to survive a rebuild.
 Dividing it by the fill fraction of the rebuilt index predicts the rebuilt size
-within 3.2% on ten of the nineteen fixtures and misses by up to +50.19% on the rest:
+within 3.2% on eleven of the nineteen fixtures and misses by up to +50.19% on the rest:
 
 | Prediction error | Fixtures |
 |---|---|
@@ -2233,10 +2286,15 @@ deleted:
 
 | Reading | blocks | data_slack | `bloat_pct` | index `relpages` / `reltuples` |
 |---|---|---|---|---|
-| baseline, as built | 482 | 548,608 | 14.08 | 482 / 50,000 |
+| baseline, as built | 482 | 548,608 | 14.08 | 482 / 100,000 |
 | after the writes, before the settle step | 482 | 548,608 | **14.08** | — |
 | after the settle step (2 VACUUMs) | 482 | 2,146,368 | **54.55** | 482 / 50,000 |
 | after the maintenance step (`VACUUM (VERBOSE, ANALYZE)`) | 482 | 2,146,368 | **54.55** | 482 / 50,000 |
+
+The four readings and the catalog column are read from the run's `20-phases.txt`.
+Before 2026-09-24 the first catalog cell read 482 / 50,000; the as-built index covers
+all 100,000 rows, and the settle step's VACUUM is what brought [`reltuples`](../../../glossary.md#reltuples-and-relpages) down to
+the 50,000 that survive the delete.
 
 Two results, and they point in opposite directions.
 
@@ -2250,14 +2308,14 @@ the settle step inside the churn phase and forbids scoring anything before it.
 **The `ANALYZE` half of the maintenance step cannot un-settle the index, and here it
 could not move the catalog either.** `vacuum()` vacuums then analyzes each relation
 ([vacuum.c#vacuum-then-analyze](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L618-L650)),
-and `analyze_rel` enters the index AM's ANALYZE-only cleanup **only when the command
+and `analyze_rel` enters the [index AM](../../../glossary.md#access-method)'s ANALYZE-only cleanup **only when the command
 is not a `VACUUM ANALYZE`** — the comment there names GIN as the one core index AM
 that does not treat that mode as a no-op
 ([analyze.c#analyze-only-cleanup](../../../../raw/postgres-17/src/backend/commands/analyze.c#L694-L721)).
 So under the maintenance step the GIN callback is reached by the `VACUUM` half
 alone, and the page census is identical on both sides of it, as the table shows.
 
-What the `ANALYZE` half always does write is the measured index's own `pg_class`
+What the `ANALYZE` half always does write is the measured index's own [`pg_class`](../../../glossary.md#pg_class)
 row, from a live `RelationGetNumberOfBlocks` and a scaled row estimate
 ([analyze.c#index-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663),
 [vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1409-L1416)).
@@ -2286,7 +2344,7 @@ the one census an `ANALYZE` cannot refresh at all.
 On a GIN index an auto-analyze is not a statistics-only event, so the protocol's
 stand-in for it is `ANALYZE` **plus** `gin_clean_pending_list()`: a worker's bare
 `ANALYZE` reaches `ginvacuumcleanup` with `analyze_only` set and, because the caller
-is an autovacuum worker, flushes the pending list before returning, while the same
+is an [autovacuum](../../../glossary.md#autovacuum) worker, flushes the pending list before returning, while the same
 call from any other backend returns immediately
 ([ginvacuum.c#analyze_only-worker](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L705-L729)).
 `a1_analyze` is the fixture: 20,000 rows, `fastupdate = on`, then 4,999 inserts and
@@ -2334,7 +2392,7 @@ Three things the protocol predicts, all of them visible here.
 Two of the stand-in's three differences from the worker's path stand unclosed, as
 the protocol says they must: `gin_clean_pending_list` passes `full_clean` true where
 the worker's analyze passes false, and it holds `RowExclusiveLock` on the index
-where the worker holds `ShareUpdateExclusiveLock` on the table
+where the worker holds [`ShareUpdateExclusiveLock`](../../../glossary.md#shareupdateexclusivelock) on the table
 ([ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1030-L1091),
 [ginfast.c#ginInsertCleanup](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L776-L783),
 [analyze.c#analyze-lockmode](../../../../raw/postgres-17/src/backend/commands/analyze.c#L135-L145)). The
@@ -2346,27 +2404,27 @@ no page past the remembered tail.
 After the maintenance step and before the decide phase, the run recomputes the
 launcher's analyze verdict for every table it would have walked and analyzes the
 ones it names. The rule is the engine's own strictly-greater test on the effective
-reloption-or-GUC values, with `reltuples` clamped at zero and `autovacuum_enabled`
+[reloption](../../../glossary.md#storage-parameter)-or-[GUC](../../../glossary.md#guc) values, with `reltuples` clamped at zero and `autovacuum_enabled`
 short-circuiting the whole thing
 ([autovacuum.c#anl-effective-values](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3011-L3017),
 [autovacuum.c#census-inputs](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3072),
 [autovacuum.c#av_enabled-return](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3048-L3054)),
-read from `pg_stat_all_tables`
+read from [`pg_stat_all_tables`](../../../glossary.md#pg_stat_all_tables)
 ([system_views.sql#launcher-counters](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L688-L690))
 under `stats_fetch_consistency = snapshot` with `pg_stat_clear_snapshot()` between
 the two reads, which is the sequence the engine's own statistics test uses
 ([guc_tables.c#stats_fetch_consistency](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4966-L4974),
 [stats.sql#force-flush](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L101-L110)).
 
-The census walked **102 tables** — `relkind` `r` and `m` in every schema, which is
+The census walked **101 tables** — `relkind` `r` and `m` in every schema, which is
 `do_autovacuum`'s own filter, minus `pg_statistic`, which ANALYZE refuses to work
 with
 ([autovacuum.c#do_autovacuum-relkind](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1984-L1992),
 [autovacuum.c#pg_statistic](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3108-L3110))
 — and analyzed **10**: four of this page's own fixture tables and six catalog tables
 (`pg_amop`, `pg_amproc`, `pg_attribute`, `pg_class`, `pg_depend`, `pg_index`), which
-is what a real worker would have done to a database that has just had 30 indexes
-built in it. It recorded **0** vacuum verdicts and **3** insert-vacuum verdicts, and
+is what a real worker would have done to a database that has just had this page's
+fixture tables and indexes built in it. It recorded **0** vacuum verdicts and **3** insert-vacuum verdicts, and
 applied none of them.
 
 The four fixture tables are the four cases the protocol asks for, and the last one
@@ -2380,7 +2438,7 @@ is a hazard reproduced on purpose:
 | `tc4_hazard` | 10,000 | **10,500** | 1,050 | analyzed, for the wrong reason |
 
 `tc4_hazard` differs from `tc2_declined` in one line: its build-phase `ANALYZE` ran
-**without** a `pg_stat_force_next_flush()` in front of it. Both tables were loaded
+**without** a [`pg_stat_force_next_flush()`](../../../glossary.md#cumulative-statistics) in front of it. Both tables were loaded
 with 10,000 rows, analyzed, then given 500 more. `tc2` reads 500 and is declined;
 `tc4` reads **10,500**, because the first load was still sitting in the session's
 local counts when `pgstat_report_analyze` zeroed the shared counter, and the flush
@@ -2417,10 +2475,13 @@ The increments are +12.53, +12.54, +12.53 and +12.50 points per 25 points of `p`
 so on this shape the model over-predicts by very close to **half a point per
 percent of the key population replaced**. Every churned size, every prediction, every
 error and every dead-tuple count in that table is byte-for-byte and digit-for-digit
-what the superseded corpus recorded, on a cluster built from scratch, which makes
-the sweep the most reproducible thing on this page. The rebuilds are the same too:
-7,749,632 bytes for four of the five and 7,806,976 for `g50`, a difference of
-exactly 57,344 bytes, or seven blocks.
+what the superseded corpus recorded, on a cluster built from scratch, and the
+2026-09-24 run on a second platform read the same again. The rebuilds are the same
+too: 7,749,632 bytes for four of the five and 7,806,976 for `g50`, a difference of
+exactly 57,344 bytes, or seven blocks. The one exception in six passes is the reason
+this is not called deterministic: in one 2026-09-24 pass, `g50_gin` kept one more
+live posting-tree page than every other pass, because VACUUM's index-vacuum bypass
+left 272 dead TIDs in it; see open question 23.
 
 ### Counting entry tuples, and what that fixes
 
@@ -2465,7 +2526,8 @@ all — the `s7_gin` corruption, `malformed_pages 1` against a census that said 
 
 `entry_leaf_tuples` is the number of keys the index holds, live or dead, and the
 identity is exact on the two shapes where a live key count can be computed
-independently:
+independently. Since 2026-09-24 the probe stage counts those keys from the tables
+themselves, without the index, into `11-entry-tuple-probe.txt`:
 
 | Index | `entry_leaf_tuples` | distinct keys in the table |
 |---|---|---|
@@ -2480,7 +2542,7 @@ Subtract the live key count and you have the dead-key population that the payloa
 model trips over. Since 2026-09-16 the *after* column is a second probe pass rather
 than a remembered number: the `probe_after` stage runs the same text again once the
 oracle has rebuilt every scored index, so `dead_entry_tuples` is
-`before − after` on the same index ([the script](#the-script), artefact
+`before − after` on the same index ([the script](#the-postgresql-1711-leg), artefact
 `out/18-entry-tuple-probe-after.txt`). It separates the two churn shapes exactly:
 
 | Index | entry tuples before | after `REINDEX` | dead | model error |
@@ -2608,7 +2670,7 @@ just as easily *grow* it, because the merge allocates through `GinNewBuffer` and
 extends when the FSM has nothing to give — the stand-in fixture grew by exactly one
 block doing this. The settle step changed **no page count and no byte**, and changed
 the `status` from a flagged metapage to `ok`, which is the cleanest demonstration on
-this page of what settling is for: it does not move the bloat, it makes the reading
+this page of what settling is for: it does not move the [bloat](../../../glossary.md#bloat), it makes the reading
 comparable. The census's `pending_pages` matched the metapage's `n_pending_pages`
 exactly (490) while the list was live, which is a free correctness check on the
 classification. `pgstatginindex` is blind in four of the five states. And the
@@ -2654,7 +2716,7 @@ never shrank at any step, and stayed at 7,356,416 bytes throughout.
 
 **One idle transaction is enough to freeze that indefinitely.** `f8_horizon_gin`
 repeats the sequence with a `REPEATABLE READ` snapshot held open in a second
-session, whose `backend_xmin` read 928:
+session, whose `backend_xmin` read 925:
 
 | Step | VACUUM VERBOSE index line | census `deleted_pages` | FSM free pages |
 |---|---|---|---|
@@ -2676,20 +2738,22 @@ with its `status` column:
 
 | Case | Censuses during the work | Flagged | What they read |
 |---|---|---|---|
-| A: one VACUUM deleting 768 posting-tree pages of an 898-block index | 5 | 4 of 5, `vacuum or analyze in progress` | **five different** deleted-page counts between 0 and 768 on a file that never changed size |
-| B: the same deletions with the protocol lock held | 20 | 0 of 20 | **20 of 20 identical**; the VACUUM waited 3395 ms and ran after `COMMIT` |
+| A: one VACUUM deleting 768 posting-tree pages of an 898-block index | 4 | 3 of 4, `vacuum or analyze in progress` | **four different** deleted-page counts between 0 and 768 on a file that never changed size |
+| B: the same deletions with the protocol lock held | 20 | 0 of 20 | **20 of 20 identical**; the VACUUM waited 3219 ms and ran after `COMMIT` |
 | C: `REINDEX INDEX CONCURRENTLY` | 3 | 2 of 3, `index build in progress` | 898 blocks with 768 deleted, then the swapped-in 98-block index with 0 deleted; no error, and no census straddled the swap |
-| D: a writer stream into a `fastupdate` index | 33 | **33 of 33** | the file grew 59 → 662 blocks, 20 distinct deleted-page readings; 11 censuses were flagged `size changed during scan`, 29 `pending count disagrees with metapage`, and all 33 `metapage page counts predate the file length` |
+| D: a writer stream into a `fastupdate` index | 30 | **30 of 30** | the file grew 60 → 663 blocks, 20 distinct deleted-page readings; 10 censuses were flagged `size changed during scan`, 20 `pending count disagrees with metapage`, and all 30 `metapage page counts predate the file length` |
 
-Case D is the one row of the four that does not repeat: the writer stream races the
-census loop, so how many censuses land and what they see is a property of the
-machine. The first of this review's two passes read 34 censuses, 21 distinct
-deleted-page readings and a 58-block start; the second read the 33, 20 and 59 above.
-Cases A, B and C came out identical on both passes.
+Case D does not repeat, and neither does case A's census count: the writer stream and
+the VACUUM race the census loop, so how many censuses land and what they see is a
+property of the machine. The two 2026-09-16 passes on Linux read 34 and 33 censuses in
+case D, with 21 and 20 distinct deleted-page readings, from 58 and 59 blocks; this run
+read the 30, 20 and 60 above. Case A read 5 censuses with 4 flagged, and then 4 with 4,
+on those passes, and 4 with 3 here. Case B's 20 identical censuses and case C's
+reading came out the same on every pass; only case B's wait moves.
 
 Case A is the one the page used to call undetectable by every cross-check, and the
 progress views do catch it whenever the VACUUM is running at either end of the scan
-— here 4 of the 5 that overlapped it. The one it missed is the shape the protocol
+— here 3 of the 4 that overlapped it. The one it missed is the shape the protocol
 warns about: a maintenance command that starts and finishes between the statement's
 two progress reads leaves no trace in either. Case D is where the size bracket earns
 its keep, and case C is a trap rather than a wrong number: `get_raw_page` resolves
@@ -2704,41 +2768,44 @@ is the only loop of the four in which every census agreed with every other.
 ### Cost of the census
 
 The scan is one buffer read per block, through the ordinary buffer manager with no
-ring buffer: `get_raw_page_internal` calls `ReadBufferExtended(..., RBM_NORMAL, NULL)`
+[ring buffer](../../../glossary.md#ring-buffer): `get_raw_page_internal` calls `ReadBufferExtended(..., RBM_NORMAL, NULL)`
 ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L181-L196)),
 where `pgstattuple` and `pgstatindex` both allocate a `BAS_BULKREAD` strategy
 ([pgstattuple.c:544](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L544),
 [pgstatindex.c:222](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L222)). A census of a large
-index therefore pulls the whole index into `shared_buffers` with no limiter, which
+index therefore pulls the whole index into [`shared_buffers`](../../../glossary.md#shared_buffers) with no limiter, which
 is the one real operational cost of this approach.
 
 Measured on the run's own database, `shared_buffers = 256MB`, everything warm:
 
 | What | Buffers | Elapsed |
 |---|---|---|
-| the whole database: 28 GIN indexes, 15,201 blocks | `shared hit=15816` | 119.0 / 119.7 / 119.6 ms over three runs |
-| one 1,236-block index, single-read form | `shared hit=1265` | 10.0 ms |
-| the same index, naive form calling `get_raw_page` inside each function | `shared hit=2499` | 6.8 ms |
+| the whole database after the oracle's rebuilds: 27 GIN indexes over 14,719 blocks, 26 of them valid and censused | `shared hit=15313` | 63.2 / 62.9 / 65.3 ms over three runs |
+| one 1,236-block index, single-read form | `shared hit=1265` | 5.7 ms |
+| the same index, naive form calling `get_raw_page` inside each function | `shared hit=2499` | 4.2 ms |
 
 The buffer count is the point of the `OFFSET 0` subquery: 1,265 against 2,499 is one
-read per block against two, and 15,816 over a 15,201-block corpus is one read per
-block plus the catalog. All three buffer counts are the same on every run this page
-records; the elapsed times are not, and moved by up to 35% between this review's two
-passes. What the single-read form is **not** is a time saving — on a fully cached
-index the naive form was the faster of the two on both passes, because it trades a
-second buffer pin for a simpler plan. Choose the single-read form for the I/O, not
-for the latency.
+read per block against two, and 15,313 over a database holding 14,719 GIN blocks is
+one read per block plus the catalog. The two one-index counts are the same on every
+run this page records; the whole-database count follows the corpus, and was 15,816
+over 15,201 blocks while `f9c_cleanup_gin` was still built. The elapsed times do not
+repeat: on the 2026-09-16 Linux passes the whole-database census took 119 to 120 ms,
+and the same stage in this session's earlier pass on this machine took 141 to 147 ms,
+against 63 to 65 ms in the recorded run. What the single-read form is **not** is a
+time saving — on a fully cached index the naive form was the faster of the two on
+every pass, because it trades a second [buffer pin](../../../glossary.md#buffer-pin) for a simpler plan. Choose the
+single-read form for the I/O, not for the latency.
 
 Two costs the run did not re-measure, and they are not the same thing. The first is
 the write-blocking cost of the protocol lock, which is measured in
-[The measurement protocol](#the-measurement-protocol): 172 ms for this
-15,201-block corpus, and one buffer read per block on anything larger. The second is
+[The measurement protocol](#the-measurement-protocol): 214 ms for this run's
+23,743-block decide pass, and one buffer read per block on anything larger. The second is
 what a census does to a production cache: this pass did not re-run the
 `pg_buffercache` experiment the page used to carry, because it was a synthetic
 workload on a deleted sandbox and the protocol does not cover it; see
 [What this pass removed, and why](#what-this-pass-removed-and-why). The source
 argument stands on its own — the census takes no `BAS_BULKREAD` ring and reads each
-page once, so its own pages sit at the bottom of the clock sweep
+page once, so its own pages sit at the bottom of the [clock sweep](../../../glossary.md#clock-sweep)
 ([bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705),
 [freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341)).
 
@@ -2770,7 +2837,7 @@ help: the check is not an ACL. By contrast `pgstatginindex` dropped its
 `gin_clean_pending_list` requires ownership, "comparable to privileges needed for
 VACUUM" ([ginfast.c:1061-1064](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1061-L1064)).
 
-Verified on 2026-09-16 with a role holding only `pg_stat_scan_tables` and `USAGE` on
+Verified on 2026-09-24 with a role holding only `pg_stat_scan_tables` and `USAGE` on
 the schema: on `f6_slack_gin`, `pgstatginindex` returned `2 | 0 | 0` and
 `pg_freespace` returned all **898** rows, while `get_raw_page` returned
 `ERROR: must be superuser to use raw page functions` at the census's first read.
@@ -2780,11 +2847,14 @@ constant but not the census.
 
 ### Refusals, silent answers, and other traps
 
-Every row of this table is a source claim with a citation; the rows the 2026-09-16
-run re-executed are `pgstattuple` on a valid GIN index, `pgstatginindex` and
-`gin_clean_pending_list` on an invalid one, both temporary cases and the recovery
-refusals, and they answered exactly as filed. The partitioned-index and
-wrong-size-`bytea` rows were not re-run in this pass.
+Every row of this table is a source claim with a citation. The 2026-09-24 run
+re-executed, in the 17.11 leg's main programme, `pgstattuple` on a valid GIN index,
+`pgstatginindex` and `gin_clean_pending_list` on an invalid one, both temporary cases
+and the recovery refusals; and, in its portability stage, `pgstattuple` on an invalid
+index, `get_raw_page` on a [partitioned index](../../../glossary.md#partitioned-index) and a two-byte `bytea`. They answered
+exactly as filed. The rows for `pgstatginindex` and `pg_freespace` on a partitioned
+index, `get_raw_page` past the end of the index and `gin_leafpage_items` were not
+re-run in this pass.
 
 | Case | Behavior |
 |---|---|
@@ -2822,7 +2892,7 @@ Also worth knowing: an index whose `indisvalid` is false is still fully readable
 `get_raw_page`, which has no validity check. The census statement filters those
 indexes out to keep its results interpretable, but dropping `AND x.indisvalid`
 makes it the only working way to size the waste in a failed
-`CREATE INDEX CONCURRENTLY` leftover — re-verified on 2026-09-16 against
+`CREATE INDEX CONCURRENTLY` leftover — re-verified on 2026-09-24 against
 `tinv_bad`, left `indisvalid` false, `indisready` false and `indislive` true by a
 concurrent build whose expression divided by zero: the census returned no row for
 it, `pgstatginindex` refused with `index "tinv_bad" is not valid`,
@@ -2839,11 +2909,11 @@ it, `pgstatginindex` refused with `index "tinv_bad" is not valid`,
 
 `lock_timeout = '2s'` was exercised ten times in this run, from the other side of
 the protocol lock: every one of the eight conflicting commands was cancelled between
-**2005 and 2006 ms** with `canceling statement due to lock timeout`, while
-`SELECT count(*)` went through in 6 ms and `gin_clean_pending_list()` in 4 ms
+**2018 and 2024 ms** with `canceling statement due to lock timeout`, while
+`SELECT count(*)` went through in 16 ms and `gin_clean_pending_list()` in 13 ms
 ([The measurement protocol](#the-measurement-protocol)). With `lock_timeout = 0` the
 same kind of wait is a wait and not an error: the queued VACUUM of the race fixture
-sat for **3395 ms** behind a census transaction and then ran normally. The
+sat for **3219 ms** behind a census transaction and then ran normally. The
 `statement_timeout` leg — cancelling a census mid-scan rather than mid-wait — was
 not re-run in this pass.
 
@@ -2851,143 +2921,188 @@ not re-run in this pass.
 
 **Read this section with a different warrant from the rest of the page.** The
 protocol is a PostgreSQL 17 protocol, so nothing here is a scored GIN waste claim:
-what follows is *statement portability*, measured in the two-major pass of
-2026-09-11 against a 12.2 server built from this repo's v12 pin, and **not re-run**
-by the 2026-09-16 protocol run, nor by the 2026-09-15 one. Every per-fixture 12.2 number the page used to carry
-was scored against the superseded corpus and is gone with it; what is kept below is
-the part that is about the statements rather than about the fixtures.
+what follows is *statement portability*. Since 2026-09-24 it has a script of its
+own. The [12.2 leg](#the-postgresql-122-leg) builds 12.2 from this repo's v12 pin and
+runs the portability battery, and the 17.11 leg runs the same battery, byte for
+byte, as its `portability` stage. So every 17.11 cell below comes from the 17.11
+leg, and every 12.2 cell from the 12.2 leg, both run on 2026-09-24. The battery
+builds its own fixtures in two databases of its own:
+
+- `pt_ok_gin` and its twin `pt_zero_gin`, 4,000 `int[]` rows and 7 blocks each as
+  built, with two all-zero blocks appended to `pt_zero_gin` while the server is
+  stopped;
+- a partitioned GIN index, and an invalid one left by a failed
+  `CREATE INDEX CONCURRENTLY`;
+- `pt_f5_gin`, the `f5` recipe, for `VACUUM VERBOSE`;
+- in the second database, `pm_ok_gin` and `pm_meta_gin`, whose block 0 is zeroed
+  the same way.
+
+Every per-fixture 12.2 number of the superseded two-major corpus stays gone; see
+[What this pass removed, and why](#what-this-pass-removed-and-why).
 
 **Three edits make all four statements run on 12.2**, two in the census and one in
 the entry-tuple probe. The FSM cross-check and the size bracket need none.
 
-| Statement | Runs unchanged on 12.2? | Edit needed |
-|---|---|---|
-| census | no | `b.blkno::int`, and a `pagesize = 0` arm ahead of the flags tests |
-| FSM check | **yes** | none — `pg_control_init()` has both columns on both, and the derived value is **8160** on both |
-| size bracket | **yes** | none |
-| entry-tuple probe | no | `b.blkno::int`, and `AND pagesize > 0` on the `'{}'` filter |
+| Statement | Runs unchanged on 12.2? | Edit needed | What both legs read with the edits in place |
+|---|---|---|---|
+| census | no | `b.blkno::int`, and a `pagesize = 0` arm ahead of the flags tests | the same four rows on both majors, byte for byte |
+| FSM check | **yes** | none | `8160 \| 0 \| 9` on `pt_zero_gin`: `pg_control_init()` has both columns on both |
+| size bracket | **yes** | none | `9` on both |
+| entry-tuple probe | no | `b.blkno::int`, and `AND pagesize > 0` on the `'{}'` filter | `5 \| 300 \| 22000 \| 5` on `pt_zero_gin` on both |
 
-**Edit 1: the block number is an `int4` on 12.** Without a cast, 12.2 answers
-`ERROR: function get_raw_page(text, bigint) does not exist`, because
-`generate_series` hands it a `bigint` and `pageinspect` on that server declares
-`get_raw_page(text, int4)`. v17 declares the `int8` form — the widening is
-`pageinspect--1.8--1.9.sql`, which drops the `int4` signatures and creates `int8`
-ones
-([pageinspect--1.8--1.9.sql#get_raw_page](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L46-L58)),
-committed as `f18aa1b2039` "pageinspect: Change block number arguments to bigint"
-(2021-01-19, earliest containing tag `REL_14_0`, no backpatch line), whose message
-gives the reason: block numbers are 32-bit *unsigned*, so `bigint` is the smallest
-SQL type that holds them. `::int` is the portable spelling, and it is a no-op on
-17.11. The residual limitation is v12's own: a fork past 2^31 blocks cannot be
-addressed there at all.
+**Edit 1: the block number is an `int4` on 12.** Without the cast, 12.2 answers
+`ERROR: function get_raw_page(text, bigint) does not exist`, or
+`get_raw_page(unknown, bigint)` in the probe, whose index name is a literal. The
+cause is that `generate_series` hands it a `bigint`, and `pageinspect` 1.7 on that
+server declares `get_raw_page(text, int4)`. v17 declares the `int8` form. The
+widening is `pageinspect--1.8--1.9.sql`, which drops the `int4` signatures and
+creates `int8` ones
+([pageinspect--1.8--1.9.sql#get_raw_page](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L46-L58)).
+It was committed as `f18aa1b2039` "pageinspect: Change block number arguments to
+bigint" on 2021-01-19, first released in `REL_14_0` (earliest tag `REL_14_BETA1`),
+with no back-patch line. Its message gives the reason: block numbers are 32-bit
+*unsigned*, so `bigint` is the smallest SQL type that holds them. `::int` is the
+portable spelling, and it is a no-op on 17.11: there the census and the probe
+without the cast returned exactly what the filed texts return. The remaining limit
+is v12's own: a fork past 2^31 blocks cannot be addressed there at all.
 
 **Edit 2: `flags IS NULL` does not mean "all-zero page" on 12.2.** On 17.11 both GIN
 inspection functions return early on `PageIsNew`
 ([ginfuncs.c:49-50](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L49-L50),
-[ginfuncs.c:119-120](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L119-L120)); on 12.2 they
-do not, and the whole difference follows:
+[ginfuncs.c:119-120](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L119-L120)).
+On 12.2 they do not, and the whole difference follows:
 
 | Call, fed one all-zero `bytea` | 17.11 | 12.2 |
 |---|---|---|
-| `gin_page_opaque_info` | a row of NULLs | a row: `flags = {}`, `rightlink 0`, `maxoff 0` |
+| `gin_page_opaque_info` | a row of NULLs | a row: `rightlink 0`, `maxoff 0`, `flags {}` |
 | `gin_metapage_info` | a row of NULLs | `ERROR: input page is not a GIN metapage`, `DETAIL: Flags 0000, expected 0008` |
 | `page_header` | `lower 0 / upper 0 / special 0 / pagesize 0` | identical |
 
-So on 12.2 the unedited census folds zeroed blocks into the entry-page count and
-reports their waste as zero — a silent under-count of exactly
-`new_pages * block_size`, with `census_total_pages = blocks` still passing — and a
-**zeroed metapage aborts the whole multi-index report** there, where 17.11 returns
-NULLs for that one index and lists the rest. On 12.x, census a suspect index on its
-own. The NULL behaviour is `cd4868a5700` "pageinspect: Fix handling of all-zero
-pages" (2022-04-14), which chooses NULL over an error so a full-relation scan still
-returns a batch and carries `Backpatch-through: 10`; in this checkout's history the
-12-branch backport is `5378d55cb2f`, whose earliest `REL_12_*` tag is **`REL_12_11`**,
-and this repo's v12 pin is an ancestor of it. A 12.11-or-later server should behave
-like 17.11 here; that was never tested.
+So on 12.2 the census without its `pagesize = 0` arm folds zeroed blocks into the
+entry-page count and reports their waste as zero. `pt_zero_gin` read **8 entry pages,
+0 new pages and 0 bytes** of whole-page waste, where the filed text reads 6, 2 and
+16,384 (22.22%). `census_total_pages = blocks` still passed, at 9. That is a silent
+under-count of exactly `new_pages * block_size`. On 17.11 the same text returned the
+filed row, because its `flags IS NULL` arm catches the page there. And **a zeroed
+metapage aborts the whole multi-index report** on 12.2: the census over the second
+database stopped with `input page is not a GIN metapage`. On 17.11 it returned a row
+for `pm_meta_gin` with NULL metapage columns, and listed `pm_ok_gin` beside it. On
+12.x, census a suspect index on its own.
 
-**Edit 3** is the same cause inside the probe: on 12.2 an all-zero page reports
-`flags = '{}'` and contributes `(0 - 24) / 4 = -6` downlinks, so the unguarded
-probe read 41 internal downlinks against 53 on 17.11 for the same index. The derived
-probe closes this structurally by gating its decoder on the page header, which is
-why it needs no `pagesize > 0` guard on either server.
+The NULL behaviour is `cd4868a5700` "pageinspect: Fix handling of all-zero pages"
+(2022-04-14). Its message chooses NULL over an error so that a scan of a whole
+relation still returns a batch, and it carries `Backpatch-through: 10`. Its 12-branch
+back-patch is `5378d55cb2f`, whose earliest `REL_12_*` tag is **`REL_12_11`**, and
+this repo's v12 pin is an ancestor of it. Both facts come from the v12 checkout's
+history, because the v17 checkout does not carry the 12 branch. A 12.11-or-later
+server should behave like 17.11 here; that was never tested.
 
-One difference needs no edit at `block_size` 8192: `page_header` returns `lower`,
-`upper`, `special` and `pagesize` as `int` on 17.11
+**Edit 3** is the same cause inside the probe. On 12.2 each all-zero page reports
+`flags = '{}'` and contributes `(0 - 24) / 4 = -6` downlinks. So the probe without
+its `pagesize > 0` guard read **-7** internal downlinks on `pt_zero_gin`, against 5
+with the guard and 5 on its untouched twin `pt_ok_gin`. On 17.11 all three read 5.
+The derived probe closes this structurally, by gating its decoder on the page header,
+which is why it needs no `pagesize > 0` guard on either server: it read 5 downlinks
+and `undecoded_pages 2` on `pt_zero_gin` on both.
+
+One difference needs no edit at `block_size` 8192. `page_header` returns `lower`,
+`upper`, `special` and `pagesize` as `integer` on 17.11
 ([pageinspect--1.9--1.10.sql#page_header](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.9--1.10.sql#L10-L21))
-and as `smallint` on 12.2 — commit `127404fbe28` "pageinspect: Improve
-page_header() for pages of 32kB" (2021-07-12, earliest tag `REL_15_0`). Every value
-fits in a signed 16-bit integer at 8 kB pages, so the arithmetic is unaffected; at
-`BLCKSZ` 32768 the 12.2 columns would overflow and the statement would need casts
-there. Untested, and in [Open Questions](#open-questions).
+and as `smallint` on 12.2; both legs read the column types back. The change is
+`127404fbe28` "pageinspect: Improve page_header() for pages of 32kB" (2021-07-12,
+first released in `REL_15_0`, earliest tag `REL_15_BETA1`). Every value fits in a
+signed 16-bit integer at 8 kB pages, so the arithmetic is unaffected. At `BLCKSZ`
+32768 the 12.2 columns would overflow and the statement would need casts there.
+That is untested, and in [Open Questions](#open-questions).
 
-**Refusals that differ.** Reproduced on both servers in the two-major pass:
+**Refusals that differ.** Both legs' batteries ran each case:
 
 | Case | 17.11 | 12.2 |
 |---|---|---|
 | `pgstatginindex` on an **invalid** GIN index | `ERROR: index "..." is not valid` | **returns a row**: `2 \| 0 \| 0` |
-| `pgstattuple` on an invalid GIN index | `ERROR: index "..." is not valid` | `ERROR: "..." (gin index) is not supported` — no validity check, so it falls through to the AM refusal |
-| `get_raw_page` on a partitioned index | the message plus `DETAIL: This operation is not supported for partitioned indexes.` | `ERROR: cannot get raw page from partitioned index "..."`, no DETAIL |
-| a `bytea` that is not one block long | `ERROR: invalid page size` + `DETAIL: Expected 8192 bytes, got 2.` | `ERROR: input page too small (2 bytes)` |
+| `pgstattuple` on an invalid GIN index | `ERROR: index "..." is not valid` | `ERROR: "..." (gin index) is not supported`: no validity check, so it falls through to the AM refusal |
+| `get_raw_page` on a partitioned index | `ERROR: cannot get raw page from relation "..."`, `DETAIL: This operation is not supported for partitioned indexes.` | `ERROR: cannot get raw page from partitioned index "..."`, no DETAIL |
+| `page_header` on a `bytea` two bytes long | `ERROR: invalid page size`, `DETAIL: Expected 8192 bytes, got 2.` | `ERROR: input page too small (2 bytes)` |
+| `gin_page_opaque_info` on the same `bytea` | `ERROR: invalid page size`, `DETAIL: Expected 8192 bytes, got 2.` | identical |
 | `gin_metapage_info` on an all-zero page | a row of NULLs | `ERROR: input page is not a GIN metapage` |
 
-The invalid-index refusal is the one with operational weight, and it is v17-only:
-commit `13503eb5905` "Diagnose !indisvalid in more SQL functions." (2023-10-30,
-earliest containing tag `REL_17_0`) added the check
-([pgstatindex.c:538-543](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L538-L543),
-[pgstattuple.c:263-267](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L263-L267)). On 12.2 a
-failed `CREATE INDEX CONCURRENTLY` leftover therefore *answers* `pgstatginindex`
-with a metapage reading rather than refusing — a number that looks healthy and means
-nothing.
+The short-`bytea` rows correct an older one that named no function. The difference
+belongs to `page_header` alone: on 17.11 it decodes through `get_page_from_raw`, like
+the GIN decoders
+([rawpage.c:266](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L266),
+[rawpage.c#get_page_from_raw](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L214-L234)),
+while on 12.2 the GIN decoder already gave 17.11's answer and only `page_header`
+answered differently.
 
-**The VACUUM VERBOSE cross-check has to be parsed differently.** The numbers agreed
-on the `f5` three-VACUUM sequence; the message did not. 12.2 prints the counts in a
-`DETAIL` block (`768 index pages have been deleted, 0 are currently reusable.`)
-rather than in a one-line index summary, and it has no `newly deleted` versus
-`currently deleted` split at all — one "have been deleted" number, which is
+The invalid-index refusal is the one with operational weight, and **it is not
+v17-only**. Commit `13503eb5905` "Diagnose !indisvalid in more SQL functions."
+(2023-10-30) added the check to `pgstatginindex` and `pgstattuple` on master
+([pgstatindex.c:538-543](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L538-L543),
+[pgstattuple.c:263-267](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L263-L267)),
+and its earliest tag is `REL_17_BETA1`. Its message says "Back-patch to v11 (all
+supported versions)". The 12-branch copy is `975ae05537`, first tagged `REL_12_17`
+and a descendant of this repo's 12.2 pin, per the v12 checkout's history. So a
+12.17-or-later server should refuse too; it is the pin, 12.2, that predates the
+check. On 12.2 a failed `CREATE INDEX CONCURRENTLY` leftover therefore *answers*
+`pgstatginindex` with a metapage reading rather than refusing: a number that looks
+healthy and means nothing. Before 2026-09-24 this paragraph called the check
+v17-only and gave `REL_17_0` as its earliest tag.
+
+**The VACUUM VERBOSE cross-check has to be parsed differently.** Both legs ran the
+`f5` three-VACUUM sequence on the battery's `pt_f5_gin`, 898 blocks on both. The
+numbers agree: 768 pages deleted and none reusable after the first VACUUM, then 768
+reusable after the second and after the third. The message does not. 12.2 prints the
+counts in a `DETAIL` block under an `INFO: index "pt_f5_gin" now contains ... row
+versions in 898 pages` line, as `768 index pages have been deleted, 0 are currently
+reusable.`, rather than in a one-line index summary. It has no `newly deleted` versus
+`currently deleted` split at all: one "have been deleted" number, which is
 `pages_deleted`, the per-run counter this page warns is not a census
 ([ginvacuum.c:234-235](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L234-L235),
-[ginfast.c:590-591](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L590-L591)). So on 12.x the
-"reusable" number is the only census-like figure available
+[ginfast.c:590-591](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L590-L591)).
+So on 12.x the "reusable" number is the only census-like figure available
 ([ginvacuum.c:786-794](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L786-L794)).
 
 Two constructs the *harness* needs are v12-relevant even though no published
-statement uses them: `pg_current_xact_id()` does not exist on 12.2 — the horizon
-sequence used `txid_current()` there — and the reloption
-`autovacuum_vacuum_insert_threshold`, which the census's recorded insert verdict
-reads, does not exist on that server either, so the census of
-[the protocol](#the-simulated-auto-analyze-census) would need its own port before it
-could run there at all.
+statement uses them. `pg_current_xact_id()` does not exist on 12.2, which answered
+`function pg_current_xact_id() does not exist`; that is why the battery burns its
+three xids with `txid_current()` on both legs. And `autovacuum_vacuum_insert_threshold`,
+which the census's recorded insert verdict reads, is an `unrecognized configuration
+parameter` there. So the census of [the protocol](#the-simulated-auto-analyze-census)
+would need its own port before it could run on 12.2 at all.
 
 ### What this pass removed, and why
 
-The instruction this pass answers was to update or remove every test that does not
-follow the protocol. These were removed rather than updated, and the reason is the
-same in every case: nothing on the page could re-run them.
+The instruction the 2026-09-15 pass answered was to update or remove every test that
+does not follow the protocol. Those were removed rather than updated, and the reason
+is the same in every case: nothing on the page could re-run them. The last row is the
+2026-09-24 pass's one removal, made for a different reason: the protocol changed.
 
 | Removed | What it was | Why |
 |---|---|---|
 | `k1`-`k3` | `jsonb_ops`, `text[] array_ops` and weighted-`tsvector` fixtures | their table shapes existed only as trailing comments and their churn statement was never published; there was nothing to re-run |
-| `k4`, `k5` | the same opclass at 50,000 and 800,000 rows, the scale check | the recipe was a one-line description, and `k5` was the page's headline upper-bound violation, so its loss is recorded as an open question rather than as a result |
+| `k4`, `k5` | the same [opclass](../../../glossary.md#operator-class) at 50,000 and 800,000 rows, the scale check | the recipe was a one-line description, and `k5` was the page's headline upper-bound violation, so its loss is recorded as an open question rather than as a result |
 | `fh1`-`fh3`, `fg_flush` | four pending-list-grown fixtures | recipes were one-line descriptions; `fh2` was the second lower-bound violation and `fg_flush` carried the flush-growth and round-five findings, so three sections went with them |
 | `fa`, `fb`, `fz`, `fw1`-`fw4`, `f10_race`, `f16_zero` | concurrency, rebuild-comparison and crash fixtures | replaced by the four concurrency cases and the deterministic zero-page case of this run, which have published recipes |
 | `tn_null` / `fn_null_gin` | the null-category entry-tuple fixture | its `+3` identity was a good finding and is not re-run; the source claim about `GinNullCategory` stands without it |
-| the wraparound failsafe case | a *successful* VACUUM that never calls `ginvacuumcleanup` | reaching it needs `autovacuum_freeze_max_age` at its 100,000 minimum, which is `PGC_POSTMASTER`, plus a 120,000-transaction burn; the run covers the same protocol requirement with `INDEX_CLEANUP OFF` and the reloption |
+| the wraparound failsafe case | a *successful* VACUUM that never calls `ginvacuumcleanup` | reaching it needs `autovacuum_freeze_max_age` at its 100,000 minimum, which is `PGC_POSTMASTER`, plus a 120,000-transaction burn. The 2026-09-15 run reached the same kind of `VACUUM` with `INDEX_CLEANUP OFF` and the reloption instead, until that fixture went too; see the last row |
 | the four crash rounds | `pg_ctl stop -m immediate` during an insert | the result was a *rate* on one machine (2 of 4, then 0 of 2), not a rule; the appended-zero-block case reaches the same page state deterministically |
 | the `pg_buffercache` eviction experiment | what a census costs a hot working set | a synthetic workload, outside the protocol, and its conclusion had already been corrected once |
 | every per-fixture 12.2 number | the two-major corpus comparison, including "26 of 27 byte-identical" | it compared against the superseded 17.11 corpus, which this run replaced; the statement-portability findings are kept above |
+| `f9c_cleanup`, on 2026-09-24 | the `f5` recipe at 100,000 rows, vacuumed once with `INDEX_CLEANUP OFF` and once under the `vacuum_index_cleanup = off` reloption: two successful VACUUMs that never called `ginvacuumcleanup` | not a re-run problem this time. The protocol no longer requires "a `VACUUM` whose index cleanup did not run" and declares no exception for one, so a fixture that switches index cleanup off now defeats the maintenance step it is scored under ([Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md#what-the-protocol-does-not-cover)). The engine fact it showed stays in [the procedure](#the-procedure)'s step 3 |
 
 Four sections went with them: the two pass-by-pass acceptance records (folded into
 [Adversarial and acceptance cases](#adversarial-and-acceptance-cases)), *Why a flush
 sometimes grows the file*, *Why round five splits the entry tree*, *Two more bound
 failures*, and the 12.2 corpus and eviction sections. What survived the cut is
-everything whose recipe now lives in [the script](#the-script).
+everything whose recipe now lives in [the script](#the-postgresql-1711-leg).
 
 ### Reading rules
 
 The rules that bind any v17 GIN waste claim are defined under [The reading
 rules](../../common-concepts/mandatory-gin-bloat-tests.md#the-reading-rules). The
 list below is this page's own: the same rules as this page measured them on
-2026-09-16, with the two changes the 2026-09-15 run forced and this run reproduced.
+2026-09-24, with the two changes the 2026-09-15 run forced and every run since
+reproduced.
 
 - **`whole_page_waste_pct` is a level, not a lower bound.** This is the change. The
   run declared it a lower bound and it failed on 2 of 19 fixtures — `f2_pending_gin`
@@ -3018,7 +3133,7 @@ list below is this page's own: the same rules as this page measured them on
   chosen after the results is not a scored run.
 - **Score nothing that has not been settled and maintained.** A census taken after
   the writes and before the settle step read the *as-built* numbers on `m1_pair` —
-  14.08 against the 54.55 the same fixture reads eight seconds later — so an
+  14.08 against the 54.55 the same fixture reads once its settle step has run — so an
   unsettled reading is not a weak reading, it is the wrong file
   ([The maintenance step, measured](#the-maintenance-step-measured)).
 - **`entry_slack` on a healthy index is a large fraction of an entry-tree-dominated
@@ -3033,14 +3148,14 @@ list below is this page's own: the same rules as this page measured them on
   (51.34 against 46.33, and 54.55 against 46.47).
 - **If the comparison has to be exact, take a lock instead of reading a flag.** One
   `SHARE ROW EXCLUSIVE` transaction around the census blocked eight conflicting
-  commands and turned a loop that read five different dead-page counts into 20
+  commands and turned a loop that read four different dead-page counts into 20
   identical censuses. Its one hole is a direct `gin_clean_pending_list()` by the
   index's owner, which locks only the index and moved `bloat_pct` from 1.46 to 92.00
   between two censuses in the same locked transaction
   ([The measurement protocol](#the-measurement-protocol)).
 - **Read a busy index twice, and re-read `pg_relation_size` after the census.** The
-  bracket caught 11 of 33 censuses taken under a writer stream; the progress views
-  caught 4 of the 5 that overlapped a VACUUM and 2 of the 3 that overlapped a
+  bracket caught 10 of 30 censuses taken under a writer stream; the progress views
+  caught 3 of the 4 that overlapped a VACUUM and 2 of the 3 that overlapped a
   concurrent rebuild. A maintenance command that starts and finishes between the two
   progress reads is still invisible.
 - **Publish the statistics before you analyze, or the census reads your own history
@@ -3069,7 +3184,7 @@ list below is this page's own: the same rules as this page measured them on
   is not 2 or any page could not be decoded or classified, which the version-1
   corruption fixture confirms.
 - **If `uncompressed_pages > 0`, the index carries pre-9.4 posting-tree leaves and
-  its `data_slack` is understated.** It read 0 on all 25 censused indexes of this
+  its `data_slack` is understated.** It read 0 on all 26 censused indexes of this
   run, as it has in every run this page records.
 - **Report the `maintenance_work_mem` a rebuild comparison was measured at.** The
   same churned index rebuilt to **7,880,704 bytes at 4MB** and **10,125,312 at both
@@ -3083,89 +3198,104 @@ list below is this page's own: the same rules as this page measured them on
 
 ## Measurement Script
 
-Every number on this page comes from one script, `gin_waste_protocol.sh`, filed in
-full under [The script](#the-script). It is Bash and SQL only: a reviewer needs a C
-toolchain, a shell and this page.
+The page's measured numbers come from two scripts, one per version leg, both filed in
+full below. `gin_waste_protocol.sh`, the
+[PostgreSQL 17.11 leg](#the-postgresql-1711-leg), runs the whole protocol programme
+and the 17.11 half of the portability battery. `gin_portability_12.sh`, the
+[PostgreSQL 12.2 leg](#the-postgresql-122-leg), runs the same battery, byte for byte,
+on 12.2. Both are Bash and SQL only: a reviewer needs a C toolchain, a shell and this
+page. Numbers the page dates to an earlier pass are that pass's record, and open
+question 22 says which parts of the page carry them.
 
 ### How to use it
 
-| Item | What to give |
-|---|---|
-| Purpose | Builds PostgreSQL 17.11 out of tree from this repository's pinned checkout and runs this page's whole GIN waste programme under the five phases of [Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md): the filed declarations, 19 scored fixtures and 6 coverage fixtures, the simulated auto-analyze census, the locked decide pass, a measured `REINDEX INDEX` oracle per fixture, the four cross-checks, the entry-tuple and layout probes, eight corruption shapes, four concurrency cases, a physical standby, and the privilege, refusal, timeout, budget-sweep and cost cases |
-| Invocation | `bash .wiki-runtime/tmp/ginw5/gin_waste_protocol.sh [stage ...]`, run from the repository root. With no arguments it runs every stage except `clean`. Extract the fenced script below to that path first |
-| Stages | Default order: `build check init declare fixtures coverage census decide crosscheck probe standby oracle probe_after score sweep race corrupt report`. `build` configures and installs out of tree and skips when the binary exists; `check` runs `make check` plus the five contrib suites this page uses; `init` initdbs, writes the four cluster settings and creates the three databases and five extensions; `declare` files the declared kind of every published column **before any fixture exists**; `fixtures` runs the build phase, the baseline census, then the churn phase (writes, settle, maintenance) and the late baseline; `coverage` runs the held-snapshot, disabled-cleanup, stale-catalog, privilege, refusal, measurement-lock and pending-list-hole cases; `census` recomputes the launcher's analyze verdict for every table and analyzes the ones it names; `decide` takes `SHARE ROW EXCLUSIVE` on every fixture table in one transaction and censuses inside it; `crosscheck` runs the FSM, metapage and identity checks; `probe` runs the entry-tuple probe per fixture and the layout probe once; `standby` takes a `pg_basebackup` replica and tries the three refusals on it; `oracle` rebuilds each scored index between two `pg_relation_size` readings; `probe_after` runs the entry-tuple probe a second time on the rebuilt indexes, so the dead-key population is `before − after` rather than a remembered number; `score` joins the declarations to the oracle and prints the verdicts; `sweep` rebuilds one index at three memory budgets and measures the census's cost; `race` runs the four concurrency cases in their own database; `corrupt` patches eight index files with the server stopped, in two cycles; `report` collects everything into `out/summary.txt`. `clean` is not in the default order and must be run last |
-| Environment | `REPO` (`$PWD`), `SRC17` (`$REPO/raw/postgres-17`), `SANDBOX` (`$REPO/.wiki-runtime/tmp/ginw5`), `JOBS` (`8`), `PORT` (`55417`, and the standby takes `PORT + 1`), `ROWS` (`200000`), `MWM` (`64MB`), `STMT_TIMEOUT` (`600s`), `LOCK_TIMEOUT` (`2s`), `RACE_LOOPS` (`40`) |
-| Prerequisites | See [Prerequisites](#prerequisites) |
-| Output | Everything lands under `$SANDBOX/out/`; see [Where the results land](#where-the-results-land). Read `out/summary.txt` first |
-| Runtime | About 12.5 minutes from an empty sandbox on the recorded host: 56 s for the build, 22 s for the six regression suites, 65 s for the fixtures, 34 s for the coverage cases, under a second each for the census, decide, crosscheck and probe stages, 9 s for the oracle, under a second for `probe_after` and `score`, 5 s for the sweep, 7 s for the race cases — and **8.5 minutes for the standby stage**, nearly all of it `pg_basebackup -X stream` copying the cluster. Skip `standby` and a re-run from a built tree is about 2.5 minutes |
-| Cleanup | `bash gin_waste_protocol.sh clean` stops the standby if one is still present, stops the primary, reports whether any `postmaster.pid` or matching `postgres` process survived, and deletes the whole sandbox |
+| Item | 17.11 leg, `gin_waste_protocol.sh` | 12.2 leg, `gin_portability_12.sh` |
+|---|---|---|
+| Purpose | Builds PostgreSQL 17.11 out of tree from this repository's pinned checkout and runs this page's whole GIN waste programme under the five phases of [Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md): the filed declarations, 19 scored fixtures and 5 coverage fixtures, the simulated auto-analyze census, the locked decide pass, a measured `REINDEX INDEX` oracle per fixture, the four cross-checks, the entry-tuple and layout probes, eight corruption shapes, four concurrency cases, a physical standby, and the privilege, refusal, timeout, budget-sweep and cost cases. Outside the protocol, its `portability` stage is the 17.11 half of the battery that [Outside the protocol](#outside-the-protocol-the-four-statements-on-postgresql-12) reports | Builds PostgreSQL 12.2 out of tree from this repository's pinned v12 checkout and runs the same battery: the four published statements with and without the three edits, the derived probe, the decoders on an all-zero page, the refusals, `VACUUM VERBOSE`'s index report and the two harness constructs 12.2 lacks |
+| Invocation | `bash .wiki-runtime/tmp/ginw5/gin_waste_protocol.sh [stage ...]`, run from the repository root. With no arguments it runs every stage except `clean`. Extract the fenced script to that path first | `bash .wiki-runtime/tmp/ginp12/gin_portability_12.sh [stage ...]`, the same way |
+| Stages | Default order: `build check init declare fixtures coverage census decide crosscheck probe standby oracle probe_after score sweep race corrupt portability report`. `build` configures and installs out of tree and skips when the binary exists; `check` runs [`make check`](../../../glossary.md#regression-test) plus the five [contrib](../../../glossary.md#contrib) suites this page uses; `init` initdbs, writes the cluster settings and creates the three databases and five extensions; `declare` files the declared kind of every published column **before any fixture exists**; `fixtures` runs the build phase, the baseline census, then the churn phase (writes, settle, maintenance) and the late baseline, and writes every census and phase note it stored to `20-phases.txt`; `coverage` runs the held-snapshot, stale-catalog, privilege, refusal, measurement-lock and pending-list-hole cases; `census` recomputes the launcher's analyze verdict for every table and analyzes the ones it names; `decide` takes `SHARE ROW EXCLUSIVE` on every fixture table in one transaction and censuses inside it; `crosscheck` runs the FSM, metapage and identity checks; `probe` runs the entry-tuple probe per fixture, counts the distinct keys two tables hold without the index, and runs the layout probe once; `standby` takes a [`pg_basebackup`](../../../glossary.md#base-backup) replica and tries the three refusals on it; `oracle` rebuilds each scored index between two `pg_relation_size` readings and prints the rebuilt census; `probe_after` runs the entry-tuple probe a second time on the rebuilt indexes, so the dead-key population is `before − after`; `score` joins the declarations to the oracle and prints the verdicts; `sweep` rebuilds one index at three memory budgets and measures the census's cost; `race` runs the four concurrency cases in their own database; `corrupt` patches eight index files with the server stopped, in two cycles; `portability` runs the battery in two databases of its own, stopping the server once to patch two index files; `report` collects everything into `out/summary.txt`. `clean` is not in the default order and must be run last | Default order: `build check init portability report`. `build` configures with the same flags and installs `pageinspect`, `pgstattuple` and `pg_freespacemap`; `check` runs `make check` plus the `pageinspect` and `pgstattuple` suites, and records that `pg_freespacemap` 1.2 declares none in this tree; `init` initdbs with the 17.11 leg's settings minus the standby's; `portability` is the battery, the same stage text as the 17.11 leg's; `report` writes `out/summary.txt`. `clean` is not in the default order |
+| Environment | `REPO` (`$PWD`), `SRC17` (`$REPO/raw/postgres-17`), `SANDBOX` (`$REPO/.wiki-runtime/tmp/ginw5`), `JOBS` (`8`), `PORT` (`55417`, and the standby takes `PORT + 1`), `ROWS` (`200000`), `MWM` (`64MB`), `STMT_TIMEOUT` (`600s`), `LOCK_TIMEOUT` (`2s`). `RACE_LOOPS` (`40`) is declared, but no stage reads it; each race loop stops at 300 censuses | `REPO` (`$PWD`), `SRC12` (`$REPO/raw/postgres-12`), `SANDBOX` (`$REPO/.wiki-runtime/tmp/ginp12`), `JOBS` (`8`), `PORT` (`55412`), `STMT_TIMEOUT` (`600s`), `LOCK_TIMEOUT` (`2s`) |
+| Prerequisites | See [Prerequisites](#prerequisites) | the same |
+| Output | Everything lands under `$SANDBOX/out/`; see [Where the results land](#where-the-results-land). Read `out/summary.txt` first | Everything lands under `$SANDBOX/out/`. Read `out/19-portability.txt` first, and compare it line by line with the 17.11 leg's |
+| Runtime | About 11.5 minutes from an empty sandbox on the recorded host: 1 min 36 s for the build, 60 s for the six regression suites, 1 min 18 s for the fixtures, 34 s for the coverage cases, 3 s for the census, decide, crosscheck and probe stages together, 10 s for the oracle, 1 s for `probe_after` and `score`, 3 s for the sweep, 6 s for the race cases and a second each for `corrupt` and `portability` - and **6 min 25 s for the standby stage**. Nearly all of that is two spread [checkpoints](../../../glossary.md#checkpoint): one the churn's WAL had already started, then the one `pg_basebackup` asks for, at its default `spread` pace ([pg_basebackup.sgml:499-504](../../../../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L499-L504), [pg_basebackup.sgml:968-971](../../../../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L968-L971), [xlog.c:8940-8959](../../../../raw/postgres-17/src/backend/access/transam/xlog.c#L8940-L8959)). Skip `standby` and a run from an empty sandbox takes about 5 minutes; skip `build` as well, on a built tree, and it takes about 3.3 minutes | 2 min 13 s from an empty sandbox on the recorded host: 1 min 34 s for the build, 35 s for the three regression suites, 1 s to initdb and 3 s for the battery |
+| Cleanup | `bash gin_waste_protocol.sh clean` stops the standby if one is still present, stops the primary, reports whether a `postmaster.pid` or a process with the data directory in its arguments survived, and deletes the whole sandbox | `bash gin_portability_12.sh clean` does the same for its one cluster |
 
 ### Prerequisites
 
-- A C toolchain, `make`, `flex`, `bison` and `perl`. The recorded run used gcc
-  13.3.0 on `Linux x86_64`. The script builds its own server; no installed
-  PostgreSQL is used, and it never touches a cluster it did not create.
-- No ICU, readline or zlib development headers are needed: the build configures
+- A C toolchain, `make`, `flex`, `bison` and `perl`. The recorded runs used Apple
+  clang 21.0.0 on Darwin 27.0.0 arm64, with GNU Make 3.81, bison 2.3 and flex 2.6.4;
+  the 2026-09-16 runs used gcc 13.3.0 on Linux x86_64. Each script builds its own
+  server; no installed PostgreSQL is used, and neither touches a cluster it did not
+  create.
+- No ICU, readline or zlib development headers are needed: both legs configure
   `--without-icu --without-readline --without-zlib`, and `initdb` runs with
   `--locale=C --encoding=UTF8`, which is what makes the `pg_trgm` and `tsvector`
   fixtures deterministic.
-- The pinned checkout present at `raw/postgres-17`, read-only. The script builds out
-  of tree and writes nothing inside it.
-- Ports 55417 and 55418 free, and about 4 GB under `.wiki-runtime/tmp/`.
-- `dd` and `printf`, which the `corrupt` stage uses to patch single bytes, and a
-  `psql` reachable only through the sandbox's own socket directory. Every call is
-  `psql -X -v ON_ERROR_STOP=1`, so a stray `~/.psqlrc` cannot change a result and no
-  error passes silently; the handful of statements whose *error text* is the result
-  being measured go through a second wrapper without `ON_ERROR_STOP`.
+- The pinned checkouts at `raw/postgres-17` and, for the 12.2 leg, `raw/postgres-12`,
+  read-only. Both scripts build out of tree and write nothing inside them.
+- Ports 55417 and 55418 free for the 17.11 leg and 55412 for the 12.2 leg, and about
+  4 GB under `.wiki-runtime/tmp/`.
+- `dd` and `printf`, which the `corrupt` and `portability` stages use to patch pages
+  with the server stopped. Appends go through shell redirection, because BSD `dd`, as
+  on macOS, has no `oflag=append`. `psql` is reached only through the sandbox's own
+  socket directory. Every call is `psql -X -v ON_ERROR_STOP=1`, so a stray
+  `~/.psqlrc` cannot change a result and no error passes silently; the statements
+  whose *error text* is the result being measured go through a second wrapper
+  without `ON_ERROR_STOP`.
 
 ### Where the results land
 
 | File | What is in it |
 |---|---|
 | `summary.txt` | every file below, in one place; read this first |
-| `00-declarations.txt` | the declared kind of every published column, with the timestamp it was filed at |
-| `01-fixtures.txt` | the fixture registry: which are scored, which claim the settle step, and what each one's maintenance was |
+| `00-declarations.txt` | the declared kind of every published column, with the second it was filed at |
+| `01-fixtures.txt` | the fixture registry: which are scored, which claim the settle step, and what each one's maintenance was; then the declarations' and the first fixture census's timestamps to the millisecond |
 | `02-census.txt` | the simulated auto-analyze census, its recheck, and the walked/analyzed/verdict counts |
 | `03-decide-pages.txt`, `04-decide-bytes.txt` | the locked decide census, page classes and byte columns, plus the interval the lock was held |
-| `05-oracle.txt`, `06-score.txt`, `07-payload-model.txt` | the rebuild results, the scored bounds with their verdicts, and the payload/fill predictions |
-| `08-crosscheck-fsm.txt`, `09-crosscheck-metapage.txt`, `10-crosscheck-verbose.txt` | the three cross-checks that are not the size bracket, including the `n_data_pages` identity and every `VACUUM VERBOSE` index line the run printed |
-| `11-entry-tuple-probe.txt`, `12-layout-probe.txt` | the per-fixture entry-tuple counts, and the four page-format constants measured on the build |
+| `05-oracle.txt`, `06-score.txt`, `07-payload-model.txt` | the rebuild results and the census of the rebuilt indexes, the scored bounds with their verdicts, and the payload/fill predictions |
+| `08-crosscheck-fsm.txt`, `09-crosscheck-metapage.txt`, `10-crosscheck-verbose.txt` | the three cross-checks that are not the size bracket, including the `n_data_pages` identity and every `VACUUM VERBOSE` index line the churn printed |
+| `11-entry-tuple-probe.txt`, `12-layout-probe.txt` | the per-fixture entry-tuple counts and the distinct keys two tables hold, and the four page-format constants measured on the build |
+| `13-coverage.txt` | the held snapshot, stale catalog row, privileges, refusals, the ten locked commands and the pending-list hole |
+| `14-race.txt`, `15-corrupt.txt`, `16-standby.txt`, `17-sweep.txt` | the four concurrency cases, the eight corruption shapes with the derived probe on two of them, the standby refusals, and the budget sweep with the cost measurements |
 | `18-entry-tuple-probe-after.txt` | the same probe on the rebuilt indexes, with `dead_entry_tuples` as the difference |
-| `13-coverage.txt` | the held snapshot, disabled cleanup, stale catalog row, privileges, refusals, the ten locked commands and the pending-list hole |
-| `14-race.txt`, `15-corrupt.txt`, `16-standby.txt`, `17-sweep.txt` | the four concurrency cases, the eight corruption shapes, the standby refusals, and the budget sweep with the cost measurements |
-| `checks.txt`, `check_*.log` | the six regression suites and their logs |
+| `19-portability.txt` | the portability battery; the 12.2 leg writes the same file |
+| `20-phases.txt` | every census the build and churn phases stored (the baseline and late baseline of every fixture, and the mid-churn readings of `f2`, `m1` and `a1`), then every phase note: catalog rows, counters and metapage readings |
+| `checks.txt`, `check_*.log` | the regression suites and their logs |
 | `platform.txt`, `server_version.txt`, `version.txt` | `pg_control_init()`, the settings the run fixes, the installed extension versions |
-| `churn.txt`, `decide.txt`, `run.log`, `server.log` | the churn phase's own output including every VERBOSE line, the decide transaction, the stage log and the server log |
+| `churn.txt`, `decide.txt`, `run.log`, `server.log` | the churn phase's own output including every VERBOSE line, the decide transaction, the stage log the script writes, and the server log |
 | `configure.log`, `make.log`, `install.log`, `contrib.log`, `initdb.log` | build diagnostics |
+
+The 12.2 leg writes `19-portability.txt`, `checks.txt` and `check_*.log`,
+`platform.txt`, `server_version.txt`, `version.txt`, `run.log`, `server.log`, the build
+logs and `summary.txt` into its own `out/`.
 
 ### The last run
 
-| Fact | Value |
-|---|---|
-| Date | 2026-09-16, the review re-run; the whole default order, twice |
-| Host | `Linux x86_64` (WSL2 kernel 6.18), gcc 13.3.0, 22 cores, `JOBS=20` for the build |
-| Server | 17.11 from `786db8dcf168bd9df8f55047337525ac19118b1c`, `--enable-debug --without-icu --without-readline --without-zlib` |
-| Regression | `make check` **All 225 tests passed**; `pageinspect` **All 8**, `pgstattuple` **All 1**, `pg_freespacemap` **All 1**, `btree_gin` **All 30**, `pg_trgm` **All 4** ([regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59)) |
-| Platform facts | `block_size` 8192, `max_data_alignment` 8, `data_page_checksum_version` 0, `MaxFSMRequestSize` 8160 derived and measured two ways |
-| Cluster | `initdb --locale=C --encoding=UTF8`; `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`, `max_wal_size = 2GB`, `wal_level = replica` set in `postgresql.conf` before the first start; port 55417, socket and data directory inside the sandbox |
-| Extensions | `pageinspect` 1.12, `pgstattuple` 1.5, `pg_freespacemap` 1.2, `btree_gin` 1.3, `pg_trgm` 1.6 |
-| Declarations | filed at 14:17:54.267; the first fixture census ran at 14:18:09.165 |
-| Corpus | 19 scored fixtures, 6 coverage fixtures, 28 GIN indexes over 15,201 blocks in the scored database, plus 3 in the race database and 8 in the corruption database |
-| Result | 17 lower-bound HELD / 2 VIOLATED, 19 upper-bound HELD, 0 size-bracket failures, 25 of 25 FSM checks within the census, 25 of 25 `n_data_pages` identities exact, 24 of 27 metapage entry-page counts |
-| Reproduction | the two passes of 2026-09-16 and the 2026-09-15 pass agree on every scored cell; only the timing figures and concurrency case D move |
-| Teardown | the `clean` stage stopped the server and deleted the sandbox; see the log entry for the confirmation |
+| Fact | 17.11 leg | 12.2 leg |
+|---|---|---|
+| Date | 2026-09-24, 13:49:56 to 14:01:15 EDT, from an empty sandbox | 2026-09-24, 13:28:49 to 13:31:02 EDT, from an empty sandbox |
+| Host | Darwin 27.0.0 arm64 (macOS 27.0), Apple clang 21.0.0, 10 cores, `JOBS=8` | the same |
+| Server | 17.11 from `786db8dcf168bd9df8f55047337525ac19118b1c`, `--enable-debug --without-icu --without-readline --without-zlib` | 12.2 from `45b88269a353ad93744772791feb6d01bc7e1e42`, the same flags |
+| Regression | `make check` **All 225 tests passed**; `pageinspect` **All 8**, `pgstattuple` **All 1**, `pg_freespacemap` **All 1**, `btree_gin` **All 30**, `pg_trgm` **All 4** ([regress.sgml#make-check](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59)) | `make check` **All 192 tests passed**; `pageinspect` **All 5**, `pgstattuple` **All 1**; no `pg_freespacemap` suite |
+| Platform facts | `block_size` 8192, `max_data_alignment` 8, [`data_page_checksum_version`](../../../glossary.md#data-checksums) 0, `MaxFSMRequestSize` 8160 derived and measured two ways | `block_size` 8192, `max_data_alignment` 8, `data_page_checksum_version` 0, and 8160 from the FSM check |
+| Cluster | `initdb --locale=C --encoding=UTF8`; `autovacuum = off`, `fsync = off`, `shared_buffers = 256MB`, `max_wal_size = 2GB`, [`wal_level = replica`](../../../glossary.md#wal-level), `max_wal_senders = 4` set in `postgresql.conf` before the first start; port 55417, socket and data directory inside the sandbox | the same, without the two replication settings; port 55412 |
+| Extensions | `pageinspect` 1.12, `pgstattuple` 1.5, `pg_freespacemap` 1.2, `btree_gin` 1.3, `pg_trgm` 1.6 | `pageinspect` 1.7, `pgstattuple` 1.5, `pg_freespacemap` 1.2 |
+| Declarations | filed at 13:52:33.716; the first fixture census ran at 13:52:50.295, 16.6 seconds later | - |
+| Corpus | 19 scored fixtures and 5 coverage fixtures; the decide census covered 26 GIN indexes over 23,743 blocks; the database held 27 GIN indexes over 14,719 blocks after the oracle's rebuilds, the invalid `tinv_bad` included; plus 3 GIN indexes in the race database, 8 in the corruption database and 8 in the two portability databases | the battery's 8 GIN indexes in its two databases, 6 of which a census can see: 4 in `port` and 2 in `portmeta`; the invalid and the partitioned index are excluded |
+| Result | 17 lower-bound HELD / 2 VIOLATED, 19 upper-bound HELD, 0 size-bracket failures, 24 of 24 FSM checks within the census, 24 of 24 `n_data_pages` identities exact, 23 of 26 metapage entry-page counts | every portability difference the section reports, and no other line of `19-portability.txt` differs between the legs except the version strings |
+| Reproduction | every scored cell equals the 2026-09-16 filing, `f9c_cleanup` aside. So did a baseline pass of the filed script on the same host, and a third pass that day moved `g50_gin` by one page (open question 23) | - |
+| Script | SHA-256 `d5412b8463b653ebb963f6a653f4bcc84a32e7c4c42ecc913a2e80f73fbb8267`; the fenced block below is byte-identical to the file that ran | SHA-256 `24d248019268024b9ba1bd31679d66a993a2e93a074ccf775fac3770c064ea01`; the same |
+| Teardown | the `clean` stage stopped the server and deleted the sandbox; see the log entry for the confirmation | the same |
 
-The numbers on this page and the script text below come from the second of those two
-passes, which is the one the script text below produced; the first differs from it
-only in the `probe_after` stage, which it did not have. If the script is edited
-afterwards, re-run it before changing any number.
+If a script is edited after this, re-run it before changing any number it produced.
 
-### The script
+### The PostgreSQL 17.11 leg
 
 ```bash
 #!/usr/bin/env bash
 #
-# gin_waste_protocol.sh - the measurement script for the wiki page
+# gin_waste_protocol.sh - the PostgreSQL 17.11 leg of the measurement script
+# for the wiki page
 #   wiki/v17/questions/indexing/gin-index-wasted-space-contrib.md
 #
 # It builds PostgreSQL 17.11 out of tree from this repository's pinned
@@ -3178,6 +3308,10 @@ afterwards, re-run it before changing any number.
 #
 # Every declared kind is filed by the "declare" stage before any fixture is
 # built, so the declaration cannot be rewritten after the results.
+#
+# The "portability" stage is outside the protocol: it is the 17.11 half of the
+# page's PostgreSQL 12 portability battery, and gin_portability_12.sh, the
+# 12.2 leg, runs the same stage text on a 12.2 build.
 #
 # Everything it creates is disposable.  It runs its own cluster, on a
 # non-default port, under its own sandbox, and never touches a cluster it did
@@ -3206,8 +3340,11 @@ BIN="$INST/bin"; SOCK="$SANDBOX/sock"; OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"
 STANDBY="$SANDBOX/standby"; SBSOCK="$SANDBOX/sbsock"; SBPORT=$((PORT + 1))
 DB=waste; RACEDB=race; CORRDB=corrupt
 
-note() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
-die()  { printf '[%s] FATAL: %s\n' "$(date +%H:%M:%S)" "$*" >&2; exit 1; }
+# Both also append to $OUT/run.log, the stage log, whenever $OUT exists.
+note() { local m; m=$(printf '[%s] %s' "$(date +%H:%M:%S)" "$*")
+         printf '%s\n' "$m" >&2; [ -d "$OUT" ] && printf '%s\n' "$m" >>"$OUT/run.log"; return 0; }
+die()  { local m; m=$(printf '[%s] FATAL: %s' "$(date +%H:%M:%S)" "$*")
+         printf '%s\n' "$m" >&2; [ -d "$OUT" ] && printf '%s\n' "$m" >>"$OUT/run.log"; exit 1; }
 
 # psql wrappers.  -X ignores ~/.psqlrc, ON_ERROR_STOP=1 lets no error pass
 # silently, and both timeouts are PGC_USERSET, so session-scoped.
@@ -3745,6 +3882,10 @@ CREATE INDEX /* wiki_gin_fixture_build */ m1_pair_gin
     ON tm1_pair USING gin (tags) WITH (fastupdate = off);
 SELECT /* wiki_gin_publish */ pg_stat_force_next_flush();
 VACUUM /* wiki_gin_fixture_build */ ANALYZE tm1_pair;
+INSERT INTO wiki.phase_note (fixture, phase, note)
+SELECT 'm1_pair', 'as-built catalog',
+       'relpages=' || c.relpages || ' reltuples=' || c.reltuples
+FROM pg_class c WHERE c.relname = 'm1_pair_gin';
 
 -- a1: the auto-analyze stand-in.  Insert-only, so it stays under both vacuum
 -- verdicts while crossing the analyze verdict, and fastupdate is on so the
@@ -3797,15 +3938,6 @@ CREATE INDEX /* wiki_gin_fixture_build */ f8_horizon_gin
 SELECT /* wiki_gin_publish */ pg_stat_force_next_flush();
 VACUUM /* wiki_gin_fixture_build */ ANALYZE t8_horizon;
 
--- f9c: the disabled-index-cleanup fixture, churned in the coverage stage
-CREATE TABLE /* wiki_gin_fixture_build */ t9c_cleanup (id int primary key, tags int[]);
-INSERT INTO /* wiki_gin_fixture_build */ t9c_cleanup
-SELECT i, ARRAY(SELECT generate_series(0, 31)) FROM generate_series(1, :rows / 2) i;
-CREATE INDEX /* wiki_gin_fixture_build */ f9c_cleanup_gin
-    ON t9c_cleanup USING gin (tags) WITH (fastupdate = off);
-SELECT /* wiki_gin_publish */ pg_stat_force_next_flush();
-VACUUM /* wiki_gin_fixture_build */ ANALYZE t9c_cleanup;
-
 INSERT INTO wiki.fixture (fixture, idx, tbl, scored, settled, maintenance, note) VALUES
  ('f1_churn',   'f1_churn_gin',   't1_churn',   true,  true,  'VACUUM ANALYZE', 'tsvector, every term replaced'),
  ('f2_pending', 'f2_pending_gin', 't2_pending', true,  true,  'VACUUM ANALYZE', 'fastupdate, pending list filled then flushed'),
@@ -3830,8 +3962,7 @@ INSERT INTO wiki.fixture (fixture, idx, tbl, scored, settled, maintenance, note)
  ('c2_declined','c2_declined_gin','tc2_declined',false,true,  'VACUUM ANALYZE (build phase)', 'census table: below its analyze threshold'),
  ('c3_boundary','c3_boundary_gin','tc3_boundary',false,true,  'VACUUM ANALYZE (build phase)', 'census table: exactly on its analyze threshold'),
  ('c4_hazard',  'c4_hazard_gin',  'tc4_hazard', false, true,  'VACUUM ANALYZE (build phase), unpublished', 'census table: the publication hazard on purpose'),
- ('f8_horizon', 'f8_horizon_gin', 't8_horizon', false, true,  'VACUUM ANALYZE', 'coverage: a snapshot held across the settling VACUUM'),
- ('f9c_cleanup','f9c_cleanup_gin','t9c_cleanup',false, false, 'VACUUM ANALYZE', 'coverage: a VACUUM whose index cleanup did not run');
+ ('f8_horizon', 'f8_horizon_gin', 't8_horizon', false, true,  'VACUUM ANALYZE', 'coverage: a snapshot held across the settling VACUUM');
 
 SELECT /* wiki_gin_publish */ pg_stat_force_next_flush();
 SQL
@@ -4054,10 +4185,28 @@ stage_fixtures() {
     -f "$SQLD/20_churn.sql" >"$OUT/churn.txt" 2>&1 || { tail -20 "$OUT/churn.txt"; die "churn phase failed"; }
   note "late baseline census, for the fixtures built during the churn stage"
   p "$DB" -q -v run=baseline_late -f "$SQLD/census_insert.sql" || die "late baseline failed"
+  # every census the build and churn phases stored, and every phase note, so
+  # the before-and-after readings are in a file and not only in tables the
+  # clean stage deletes
+  p "$DB" -c "SELECT /* wiki_gin_phases */ run, index_name, status, main_fork_bytes, blocks,
+                     entry_pages, pending_pages, deleted_pages, whole_page_waste_bytes,
+                     pending_pct, bloat_pct, entry_slack, data_slack,
+                     meta_pending_pages, meta_entry_pages, meta_total_pages
+              FROM wiki.census_run
+              WHERE run IN ('baseline', 'baseline_late') OR run LIKE 'churn_%'
+              ORDER BY index_name, taken_at" >"$OUT/20-phases.txt" || die "phase report failed"
+  p "$DB" -c "SELECT /* wiki_gin_phases */ fixture, phase, note FROM wiki.phase_note
+              WHERE fixture <> '*' ORDER BY ran_at" >>"$OUT/20-phases.txt" || die "phase notes failed"
   grep -E 'index "f5_deleted|index "m1_pair|pages_flushed|^ *[0-9]+$' "$OUT/churn.txt" \
     > "$OUT/churn_lines.txt"
   p "$DB" -c "SELECT /* wiki_gin_fixtures */ fixture, idx, scored, settled, maintenance
               FROM wiki.fixture ORDER BY fixture" | tee "$OUT/01-fixtures.txt"
+  # the declare-then-score order, from the two stored timestamps
+  p "$DB" -c "SELECT /* wiki_gin_fixtures */
+                     (SELECT to_char(max(declared_at), 'YYYY-MM-DD HH24:MI:SS.MS') FROM wiki.declaration)
+                       AS declarations_filed,
+                     (SELECT to_char(min(taken_at), 'YYYY-MM-DD HH24:MI:SS.MS') FROM wiki.census_run
+                       WHERE run = 'baseline') AS first_fixture_census" | tee -a "$OUT/01-fixtures.txt"
 }
 
 # ------------------------------------------------------- the simulated census
@@ -4244,6 +4393,10 @@ stage_oracle() {
   p "$DB" -q -v run=rebuilt -f "$SQLD/census_insert.sql" || die "rebuilt census failed"
   p "$DB" -c "SELECT /* wiki_gin_oracle */ fixture, bytes_before, bytes_after, truth_pct, elapsed_ms
               FROM wiki.oracle WHERE mwm = '$MWM' ORDER BY fixture" | tee "$OUT/05-oracle.txt"
+  p "$DB" -c "SELECT /* wiki_gin_oracle */ index_name, status, main_fork_bytes, blocks, entry_pages,
+                     data_leaf_pages, data_internal_pages, pending_pages, deleted_pages,
+                     entry_slack, data_slack, bloat_pct
+              FROM wiki.census_run WHERE run = 'rebuilt' ORDER BY index_name" | tee -a "$OUT/05-oracle.txt"
 }
 
 stage_score() {
@@ -4420,6 +4573,13 @@ stage_probe() {
   p "$DB" -c "SELECT /* wiki_gin_probe */ fixture, entry_leaf_pages, entry_leaf_tuples,
                      entry_leaf_tuple_bytes, internal_downlinks, malformed_pages, undecoded_pages
               FROM wiki.probe ORDER BY fixture" | tee "$OUT/11-entry-tuple-probe.txt"
+  # distinct keys the tables hold, counted without the index
+  p "$DB" -c "SELECT /* wiki_gin_probe */ 'f3_fresh' AS fixture,
+                     count(DISTINCT l.lexeme) AS distinct_keys_in_table
+              FROM t3_fresh t CROSS JOIN LATERAL unnest(to_tsvector('simple', t.doc)) l
+              UNION ALL
+              SELECT 'f6_slack', count(DISTINCT k)
+              FROM t6_slack t CROSS JOIN LATERAL unnest(t.tags) k" | tee -a "$OUT/11-entry-tuple-probe.txt"
   # the layout probe: the page-format constants, measured on this build
   p "$DB" <<'SQL' | tee "$OUT/12-layout-probe.txt"
 SET /* wiki_gin_layout_guards */ statement_timeout = '600s';
@@ -4544,34 +4704,7 @@ stage_coverage() {
   pe "$DB" -c "VACUUM /* wiki_gin_maintenance */ (VERBOSE, ANALYZE) t8_horizon" 2>&1 \
     | grep -F 'index "f8' | tee -a "$OUT/13-coverage.txt"
 
-  # (2) a VACUUM whose index cleanup did not run -----------------------------
-  cov "f9c_cleanup: two successful VACUUMs that changed nothing in the index"
-  q "$DB" "DELETE /* wiki_gin_coverage */ FROM t9c_cleanup WHERE id <= ($ROWS / 2 * 95) / 100" \
-    | tee -a "$OUT/13-coverage.txt"
-  f9c_state() {
-    q "$DB" "SELECT '$1: deleted_pages=' || c.deleted_pages || ' meta_data=' || c.meta_data_pages
-                    || ' meta_total=' || c.meta_total_pages || ' blocks=' || c.blocks
-                    || ' vacuum_count=' || (SELECT vacuum_count FROM pg_stat_all_tables WHERE relname='t9c_cleanup')
-             FROM wiki.census_run c WHERE c.run = '$2' AND c.index_name = 'f9c_cleanup_gin'" \
-      | tee -a "$OUT/13-coverage.txt"; }
-  p "$DB" -q -v run=f9c_before -f "$SQLD/census_insert.sql"; f9c_state before f9c_before
-  pe "$DB" -c "VACUUM /* wiki_gin_coverage */ (INDEX_CLEANUP OFF, VERBOSE) t9c_cleanup" 2>&1 \
-    | grep -E 'index scan|index "f9c' | tee -a "$OUT/13-coverage.txt"
-  p "$DB" -q -v run=f9c_cleanup_off -f "$SQLD/census_insert.sql"; f9c_state "INDEX_CLEANUP OFF" f9c_cleanup_off
-  # the reloption spelling: ALTER TABLE takes ShareUpdateExclusiveLock
-  q "$DB" "ALTER /* wiki_gin_coverage */ TABLE t9c_cleanup SET (vacuum_index_cleanup = off)" >/dev/null
-  pe "$DB" -c "VACUUM /* wiki_gin_coverage */ (VERBOSE) t9c_cleanup" 2>&1 \
-    | grep -E 'index scan|index "f9c' | tee -a "$OUT/13-coverage.txt"
-  p "$DB" -q -v run=f9c_reloption_off -f "$SQLD/census_insert.sql"; f9c_state "reloption off" f9c_reloption_off
-  q "$DB" "ALTER /* wiki_gin_coverage */ TABLE t9c_cleanup RESET (vacuum_index_cleanup)" >/dev/null
-  pe "$DB" -c "VACUUM /* wiki_gin_coverage */ (VERBOSE) t9c_cleanup" 2>&1 \
-    | grep -E 'index scan|index "f9c' | tee -a "$OUT/13-coverage.txt"
-  p "$DB" -q -v run=f9c_cleanup_on -f "$SQLD/census_insert.sql"; f9c_state "cleanup ran" f9c_cleanup_on
-  q "$DB" "SELECT pg_stat_force_next_flush()" >/dev/null
-  pe "$DB" -c "VACUUM /* wiki_gin_maintenance */ (VERBOSE, ANALYZE) t9c_cleanup" 2>&1 \
-    | grep -F 'index "f9c' | tee -a "$OUT/13-coverage.txt"
-
-  # (3) does the ANALYZE half rewrite the measured index's catalog row? ------
+  # (2) does the ANALYZE half rewrite the measured index's catalog row? ------
   cov "the ANALYZE half of the maintenance step, against a stale index catalog row"
   q "$DB" "DROP TABLE IF EXISTS tan_cat" >/dev/null
   p "$DB" -q <<'SQL'
@@ -4605,7 +4738,7 @@ SQL
                   || (pg_relation_size('an_cat_gin','main') / current_setting('block_size')::bigint)
            FROM gin_metapage_info(get_raw_page('an_cat_gin', 0)) m" | tee -a "$OUT/13-coverage.txt"
 
-  # (4) privileges and refusals ---------------------------------------------
+  # (3) privileges and refusals ---------------------------------------------
   cov "privileges: a role holding only pg_stat_scan_tables"
   q "$DB" "DROP ROLE IF EXISTS wiki_scan" >/dev/null
   q "$DB" "CREATE ROLE wiki_scan LOGIN IN ROLE pg_stat_scan_tables" >/dev/null
@@ -4660,7 +4793,7 @@ SQL
                SELECT 'own temp index readable: ' || (get_raw_page('own_gin', 0) IS NOT NULL)" 2>&1 \
     | tail -3 | tee -a "$OUT/13-coverage.txt"
 
-  # (6) the measurement lock, and what it holds off --------------------------
+  # (4) the measurement lock, and what it holds off --------------------------
   # On its own fixture, because one of the commands below is a DROP INDEX and
   # a scored fixture must not depend on the lock actually holding.
   cov "the measurement lock: what SHARE ROW EXCLUSIVE holds off, lock_timeout 2s"
@@ -4703,7 +4836,7 @@ CMDS
   q "$DB" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='wiki_locker'" >/dev/null
   wait 2>/dev/null
 
-  # (7) the one hole a table lock cannot close ------------------------------
+  # (5) the one hole a table lock cannot close ------------------------------
   cov "the hole: an owner's gin_clean_pending_list() between two censuses in one locked transaction"
   p "$DB" -q <<'SQL'
 SET /* wiki_gin_coverage */ gin_pending_list_limit = '1GB';
@@ -4937,7 +5070,8 @@ SQL
   dd if=/dev/zero of="${path[2]}" bs=8192 count=1 seek=0 conv=notrunc status=none  # block 0 zeroed
   printf '\001'    | dd of="${path[3]}" bs=1 seek=16383 conv=notrunc status=none   # unknown flag bit on block 1
   printf '\350'    | dd of="${path[4]}" bs=1 seek=8208  conv=notrunc status=none   # block 1 pd_special 8184 -> 8168
-  dd if=/dev/zero of="${path[5]}" bs=8192 count=2 oflag=append conv=notrunc status=none  # two all-zero blocks
+  # two all-zero blocks, appended by the shell: BSD dd, as on macOS, has no oflag=append
+  dd if=/dev/zero bs=8192 count=2 status=none >>"${path[5]}"
   printf '\360'    | dd of="${path[6]}" bs=1 seek=14    conv=notrunc status=none   # block 0 pd_upper -> 8176
   printf '\360'    | dd of="${path[6]}" bs=1 seek=16    conv=notrunc status=none   # block 0 pd_special -> 8176
   printf "\\$(printf '%03o' $((lower7 + 1)))" \
@@ -4978,8 +5112,14 @@ SQL
   p "$CORRDB" -q -c "CREATE TABLE IF NOT EXISTS wiki.probe (fixture text, idx text,
         entry_leaf_pages bigint, entry_leaf_tuples bigint, entry_leaf_tuple_bytes bigint,
         internal_downlinks bigint, malformed_pages bigint, undecoded_pages bigint)" 2>/dev/null
-  p "$CORRDB" -v fx=s5 -v idx=s5_gin -f "$SQLD/70_probe.sql" >/dev/null 2>&1
-  p "$CORRDB" -v fx=s7 -v idx=s7_gin -f "$SQLD/70_probe.sql" >/dev/null 2>&1
+  # the probe's text inserts into :tbl, so the destination is passed like the
+  # two probe stages pass it; a failure here stops the run instead of leaving
+  # an empty table behind
+  write_probe_sql
+  p "$CORRDB" -q -v tbl=wiki.probe -v fx=s5 -v idx=s5_gin -f "$SQLD/70_probe.sql" \
+    || die "probe failed for s5_gin"
+  p "$CORRDB" -q -v tbl=wiki.probe -v fx=s7 -v idx=s7_gin -f "$SQLD/70_probe.sql" \
+    || die "probe failed for s7_gin"
   p "$CORRDB" -c "SELECT * FROM wiki.probe ORDER BY fixture" >>"$OUT/15-corrupt.txt" 2>&1
   cat "$OUT/15-corrupt.txt"
 }
@@ -5013,6 +5153,335 @@ CONF
   note "standby stopped and its data directory removed"
 }
 
+# ------------------------------------------------------- portability stage
+#
+# Outside the protocol, and the same text in both leg scripts: the 17.11 leg
+# runs it as its "portability" stage, the 12.2 leg as its only measuring stage,
+# so the two out/19-portability.txt files compare line by line.  It carries the
+# page's four published statements and the derived entry-tuple probe verbatim,
+# runs them with and without the three edits the page made for PostgreSQL 12,
+# and adds the decoders' answers on an all-zero page, the refusals that differ
+# between majors, VACUUM VERBOSE's index report and the two harness constructs
+# 12.2 lacks.  It builds everything it reads in two databases of its own,
+# "port" and "portmeta"; every object in them is disposable.
+
+read -r -d '' PUB_CENSUS <<'PUB_CENSUS_SQL'
+WITH /* wiki_gin_waste_census */ gin_idx AS (
+    SELECT c.oid                                  AS idx,
+           c.oid::regclass::text                  AS idx_name,
+           pg_relation_size(c.oid, 'main')         AS main_bytes,
+           current_setting('block_size')::bigint   AS bs
+    FROM pg_class c
+         JOIN pg_am a    ON a.oid = c.relam
+         JOIN pg_index x ON x.indexrelid = c.oid
+    WHERE a.amname = 'gin'
+      AND c.relkind = 'i'            -- 'I' (partitioned) has no storage
+      AND x.indisvalid               -- an invalid index is still readable, see notes
+      AND c.relpersistence <> 't'    -- another session's temp index is refused
+),
+meta AS (
+    SELECT g.*, m.version, m.n_pending_pages, m.n_pending_tuples,
+           m.n_total_pages, m.n_entry_pages, m.n_data_pages
+    FROM gin_idx g
+         CROSS JOIN LATERAL gin_metapage_info(get_raw_page(g.idx_name, 0)) m
+),
+pages AS (
+    SELECT g.idx,
+           CASE
+               WHEN h.pagesize = 0                      THEN 'new'   -- all-zero page
+               WHEN o.flags IS NULL                     THEN 'new'
+               WHEN o.flags @> '{meta}'                 THEN 'meta'
+               WHEN o.flags @> '{deleted}'              THEN 'deleted'
+               WHEN o.flags @> '{list}'                 THEN 'pending'
+               WHEN o.flags @> '{data,leaf,compressed}' THEN 'data_leaf'
+               WHEN o.flags @> '{data,leaf}'            THEN 'data_leaf_uncompressed'
+               WHEN o.flags @> '{data}'                 THEN 'data_internal'
+               ELSE                                          'entry'
+           END                                          AS page_class,
+           COALESCE(h.upper - h.lower, 0)               AS slack
+    FROM gin_idx g
+         CROSS JOIN LATERAL generate_series(1, g.main_bytes / g.bs - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page(g.idx_name, b.blkno::int) AS pg
+                             OFFSET 0) AS r          -- read each page exactly once
+         LEFT JOIN LATERAL gin_page_opaque_info(r.pg) AS o ON true
+         LEFT JOIN LATERAL page_header(r.pg)          AS h ON true
+),
+census AS (
+    SELECT idx,
+           count(*) FILTER (WHERE page_class = 'entry')                  AS entry_pages,
+           count(*) FILTER (WHERE page_class = 'data_leaf')              AS data_leaf_pages,
+           count(*) FILTER (WHERE page_class = 'data_internal')          AS data_internal_pages,
+           count(*) FILTER (WHERE page_class = 'data_leaf_uncompressed') AS uncompressed_pages,
+           count(*) FILTER (WHERE page_class = 'pending')                AS pending_pages,
+           count(*) FILTER (WHERE page_class = 'deleted')                AS deleted_pages,
+           count(*) FILTER (WHERE page_class = 'new')                    AS new_pages,
+           count(*) FILTER (WHERE page_class = 'meta')                   AS stray_meta_pages,
+           COALESCE(sum(slack) FILTER (WHERE page_class = 'entry'), 0)   AS entry_slack,
+           COALESCE(sum(slack) FILTER (WHERE page_class IN ('data_leaf',
+                                            'data_internal')), 0)        AS data_slack
+    FROM pages
+    GROUP BY idx
+)
+SELECT m.idx_name                                       AS index_name,
+       m.version                                        AS gin_version,
+       m.main_bytes                                     AS main_fork_bytes,
+       m.main_bytes / m.bs                              AS blocks,
+       c.entry_pages, c.data_leaf_pages, c.data_internal_pages,
+       c.uncompressed_pages, c.pending_pages, c.deleted_pages, c.new_pages,
+       (c.deleted_pages + c.new_pages) * m.bs           AS whole_page_waste_bytes,
+       round(100.0 * (c.deleted_pages + c.new_pages) * m.bs
+             / nullif(m.main_bytes, 0), 2)              AS whole_page_waste_pct,
+       CASE WHEN m.version = 2 THEN c.entry_slack + c.data_slack END
+                                                        AS live_page_slack_bytes,
+       CASE WHEN m.version = 2
+            THEN round(100.0 * (c.entry_slack + c.data_slack)
+                       / nullif(m.main_bytes, 0), 2) END AS live_page_slack_pct,
+       CASE WHEN m.version = 2
+            THEN round(100.0 * ((c.deleted_pages + c.new_pages) * m.bs
+                                + c.entry_slack + c.data_slack)
+                       / nullif(m.main_bytes, 0), 2) END AS bloat_pct,
+       c.entry_slack, c.data_slack,
+       c.pending_pages * m.bs                           AS pending_bytes,
+       round(100.0 * c.pending_pages * m.bs
+             / nullif(m.main_bytes, 0), 2)              AS pending_pct,
+       m.main_bytes - (c.deleted_pages + c.new_pages + c.pending_pages) * m.bs
+                    - c.entry_slack - c.data_slack      AS payload_bytes,
+       m.n_pending_pages                                AS meta_pending_pages,
+       m.n_entry_pages                                  AS meta_entry_pages,
+       m.n_data_pages                                   AS meta_data_pages,
+       m.n_total_pages                                  AS meta_total_pages,
+       1 + c.entry_pages + c.data_leaf_pages + c.data_internal_pages
+         + c.uncompressed_pages + c.pending_pages + c.deleted_pages
+         + c.new_pages + c.stray_meta_pages             AS census_total_pages
+FROM meta m JOIN census c ON c.idx = m.idx
+ORDER BY 1;
+PUB_CENSUS_SQL
+read -r -d '' PUB_PROBE <<'PUB_PROBE_SQL'
+WITH /* wiki_gin_entry_probe */ pages AS (
+    SELECT o.flags, h.lower, h.upper, h.special, h.pagesize
+    FROM generate_series(1, pg_relation_size('myschema.myindex','main') / 8192 - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page('myschema.myindex', b.blkno::int) AS pg
+                             OFFSET 0) AS r
+         LEFT JOIN LATERAL gin_page_opaque_info(r.pg) AS o ON true
+         LEFT JOIN LATERAL page_header(r.pg)          AS h ON true
+)
+SELECT count(*)                 FILTER (WHERE flags = '{leaf}') AS entry_leaf_pages,
+       sum((lower - 24) / 4)    FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuples,
+       sum(special - upper)     FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuple_bytes,
+       sum((lower - 24) / 4)    FILTER (WHERE flags = '{}'
+                                        AND pagesize > 0)       AS internal_downlinks
+FROM pages;
+PUB_PROBE_SQL
+read -r -d '' DER_PROBE <<'DER_PROBE_SQL'
+WITH /* wiki_gin_entry_probe_derived */ ctl AS (
+    -- bs and al are build-dependent and come from pg_control_init().  hdr and
+    -- iid are page-format constants: SizeOfPageHeaderData is
+    -- offsetof(PageHeaderData, pd_linp) over fixed-width fields, and ItemIdData
+    -- is three bit-fields totalling 32 bits.  The layout probe measures all
+    -- four on the running build.
+    SELECT database_block_size::bigint                          AS bs,
+           24::bigint                                           AS hdr,
+           4::bigint                                            AS iid,
+           ((8 + max_data_alignment - 1) / max_data_alignment)
+             * max_data_alignment                               AS gin_special
+    FROM pg_control_init()
+),
+pages AS (
+    SELECT c.hdr, c.iid, o.flags, h.lower, h.upper, h.special, h.pagesize
+    FROM ctl c
+         CROSS JOIN LATERAL generate_series(
+               1, pg_relation_size('myschema.myindex', 'main') / c.bs - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page('myschema.myindex', b.blkno::int) AS pg
+                             OFFSET 0) AS r
+         LEFT JOIN LATERAL page_header(r.pg) AS h ON true
+         LEFT JOIN LATERAL gin_page_opaque_info(
+               CASE WHEN h.upper > 0 AND h.pagesize = c.bs
+                     AND h.pagesize - h.special = c.gin_special
+                    THEN r.pg END)           AS o ON true
+)
+SELECT count(*)                        FILTER (WHERE flags = '{leaf}') AS entry_leaf_pages,
+       sum((lower - hdr) / iid)        FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuples,
+       sum(special - upper)            FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuple_bytes,
+       sum((lower - hdr) / iid)        FILTER (WHERE flags = '{}')     AS internal_downlinks,
+       count(*) FILTER (WHERE flags <@ '{leaf,incomplete_split}'::text[]
+                          AND (lower < hdr OR (lower - hdr) % iid <> 0))
+                                                                       AS malformed_pages,
+       count(*) FILTER (WHERE flags IS NULL)                           AS undecoded_pages
+FROM pages;
+DER_PROBE_SQL
+read -r -d '' FSM_CHECK <<'FSM_CHECK_SQL'
+SELECT /* wiki_gin_waste_fsm_check */
+       (SELECT database_block_size
+               - ((28 + max_data_alignment - 1) / max_data_alignment)
+                 * max_data_alignment          -- 28 = SizeOfPageHeaderData + sizeof(ItemIdData)
+        FROM pg_control_init())                          AS free_page_avail,
+       count(*) FILTER (WHERE avail = (SELECT database_block_size
+               - ((28 + max_data_alignment - 1) / max_data_alignment)
+                 * max_data_alignment FROM pg_control_init())) AS fsm_free_pages,
+       count(*)                                          AS blocks
+FROM pg_freespace('myschema.myindex');
+FSM_CHECK_SQL
+read -r -d '' SIZE_BRACKET <<'SIZE_BRACKET_SQL'
+SELECT /* wiki_gin_waste_size_bracket */
+       pg_relation_size('myschema.myindex','main') / current_setting('block_size')::bigint
+       AS blocks_after_census;
+SIZE_BRACKET_SQL
+
+# swap <text> <old> <new>: one literal substitution, refused if <old> is absent,
+# so a later edit of a published text cannot turn a variant into a copy
+swap() {
+  local t="$1" old="$2" new="$3"
+  case "$t" in *"$old"*) ;; *) die "portability: text to replace not found: $old" ;; esac
+  printf '%s' "${t/"$old"/"$new"}"
+}
+on_index() { local t="$1" ix="$2"; printf '%s' "${t//myschema.myindex/$ix}"; }
+
+stage_portability() {
+  local PDB=port MDB=portmeta out="$OUT/19-portability.txt" bs d f zero_path meta_path
+  local arm guard census_no_cast census_no_arm probe_no_guard probe_no_cast
+  arm="               WHEN h.pagesize = 0                      THEN 'new'   -- all-zero page"
+  guard=$'\n'"                                        AND pagesize > 0)"
+  census_no_cast=$(swap "$PUB_CENSUS" "b.blkno::int" "b.blkno") || exit 1
+  census_no_arm=$(swap "$PUB_CENSUS" "$arm"$'\n' "") || exit 1
+  probe_no_guard=$(swap "$PUB_PROBE" "$guard" ")") || exit 1
+  probe_no_cast=$(swap "$PUB_PROBE" "b.blkno::int" "b.blkno") || exit 1
+  : >"$out"
+  sec() { printf '\n=== %s\n' "$*" >>"$out"; }
+  for d in "$PDB" "$MDB"; do
+    q postgres "DROP DATABASE IF EXISTS $d" >/dev/null || die "DROP DATABASE $d failed"
+    q postgres "CREATE DATABASE $d" >/dev/null || die "CREATE DATABASE $d failed"
+    for e in pageinspect pgstattuple pg_freespacemap; do
+      q "$d" "CREATE EXTENSION $e" >/dev/null || die "CREATE EXTENSION $e failed on $d"
+    done
+  done
+  note "portability fixtures"
+  p "$PDB" -q <<'SQL' || die "portability fixtures failed"
+SET /* wiki_gin_portability */ statement_timeout = '600s';
+SET /* wiki_gin_portability */ lock_timeout = '2s';
+-- Disposable fixtures: created and read here, on a cluster the script owns.
+CREATE TABLE /* wiki_gin_portability */ pt_ok (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pt_ok
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pt_ok_gin ON pt_ok USING gin (tags) WITH (fastupdate = off);
+-- the twin that gets two all-zero blocks appended with the server stopped
+CREATE TABLE /* wiki_gin_portability */ pt_zero (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pt_zero
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pt_zero_gin ON pt_zero USING gin (tags) WITH (fastupdate = off);
+-- a partitioned GIN index, relkind 'I', which has no storage of its own
+CREATE TABLE /* wiki_gin_portability */ pt_part (id int, tags int[]) PARTITION BY RANGE (id);
+CREATE TABLE /* wiki_gin_portability */ pt_part_1 PARTITION OF pt_part FOR VALUES FROM (0) TO (100000);
+INSERT INTO /* wiki_gin_portability */ pt_part SELECT g, ARRAY[g % 300] FROM generate_series(1, 1000) g;
+CREATE INDEX /* wiki_gin_portability */ pt_part_gin ON pt_part USING gin (tags);
+-- the table whose concurrent build is made to fail below
+CREATE TABLE /* wiki_gin_portability */ pt_inv (id int, v int);
+INSERT INTO /* wiki_gin_portability */ pt_inv VALUES (1, 2), (2, 1);
+-- the f5 recipe: every row carries all 32 keys
+CREATE TABLE /* wiki_gin_portability */ pt_f5 (id int primary key, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pt_f5
+SELECT i, ARRAY(SELECT generate_series(0, 31)) FROM generate_series(1, 200000) i;
+CREATE INDEX /* wiki_gin_portability */ pt_f5_gin ON pt_f5 USING gin (tags) WITH (fastupdate = off);
+VACUUM /* wiki_gin_portability */ ANALYZE pt_ok, pt_zero, pt_f5;
+SQL
+  # CREATE INDEX CONCURRENTLY cannot run inside psql's -c transaction with
+  # other statements, and the division by zero is the point: it leaves the
+  # index invalid
+  pe "$PDB" -c "CREATE INDEX /* wiki_gin_portability */ CONCURRENTLY pt_inv_gin
+                ON pt_inv USING gin ((ARRAY[10 / (v - 1)]))" >/dev/null 2>&1
+  p "$MDB" -q <<'SQL' || die "portmeta fixtures failed"
+SET /* wiki_gin_portability */ statement_timeout = '600s';
+SET /* wiki_gin_portability */ lock_timeout = '2s';
+CREATE TABLE /* wiki_gin_portability */ pm_ok (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pm_ok
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pm_ok_gin ON pm_ok USING gin (tags) WITH (fastupdate = off);
+-- the twin whose block 0, the metapage, is zeroed with the server stopped
+CREATE TABLE /* wiki_gin_portability */ pm_meta (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pm_meta
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pm_meta_gin ON pm_meta USING gin (tags) WITH (fastupdate = off);
+SQL
+
+  sec "server and extensions"
+  q "$PDB" "SELECT version()" >>"$out"
+  pe "$PDB" -A -c "SELECT extname, extversion FROM pg_extension ORDER BY 1" >>"$out"
+
+  # every index line is kept: 12.2 prints the page counts on DETAIL lines that
+  # carry no index name, so they are read against the INFO line above them
+  sec "VACUUM VERBOSE on the f5 recipe: 95% deleted, VACUUM, three xids, VACUUM twice"
+  q "$PDB" "DELETE /* wiki_gin_portability */ FROM pt_f5 WHERE id <= 190000" >>"$out"
+  for f in 1 2 3; do
+    if [ "$f" = 2 ]; then
+      q "$PDB" "SELECT txid_current()" >/dev/null
+      q "$PDB" "SELECT txid_current()" >/dev/null
+      q "$PDB" "SELECT txid_current()" >/dev/null
+    fi
+    printf -- '--- VACUUM %s\n' "$f" >>"$out"
+    pe "$PDB" -c "VACUUM /* wiki_gin_portability */ (VERBOSE) pt_f5" \
+      | grep -E 'index "|index row versions|index pages' >>"$out"
+  done
+
+  # the two patches, with the server stopped: two all-zero blocks appended to
+  # pt_zero_gin, and block 0 of pm_meta_gin zeroed
+  bs=$(q "$PDB" "SELECT current_setting('block_size')")
+  zero_path="$DATA/$(q "$PDB" "SELECT pg_relation_filepath('pt_zero_gin')")"
+  meta_path="$DATA/$(q "$MDB" "SELECT pg_relation_filepath('pm_meta_gin')")"
+  pgstop
+  dd if=/dev/zero bs="$bs" count=2 status=none >>"$zero_path" || die "append to pt_zero_gin failed"
+  dd if=/dev/zero of="$meta_path" bs="$bs" count=1 seek=0 conv=notrunc status=none \
+    || die "zeroing block 0 of pm_meta_gin failed"
+  pgstart || die "server did not restart after the portability patches"
+
+  sec "the published census, as filed: the ::int cast and the pagesize = 0 arm in place"
+  pe "$PDB" -A -c "$PUB_CENSUS" >>"$out"
+  sec "the published census without the ::int cast, the pre-edit form"
+  pe "$PDB" -A -c "$census_no_cast" >>"$out"
+  sec "the published census without the pagesize = 0 arm"
+  pe "$PDB" -A -c "$census_no_arm" >>"$out"
+  sec "the published census over portmeta, whose pm_meta_gin has an all-zero block 0"
+  pe "$MDB" -A -c "$PUB_CENSUS" >>"$out"
+  sec "the FSM check on pt_zero_gin, as filed"
+  pe "$PDB" -A -c "$(on_index "$FSM_CHECK" pt_zero_gin)" >>"$out"
+  sec "the size bracket on pt_zero_gin, as filed"
+  pe "$PDB" -A -c "$(on_index "$SIZE_BRACKET" pt_zero_gin)" >>"$out"
+  for f in pt_ok_gin pt_zero_gin; do
+    sec "the published entry-tuple probe on $f, as filed"
+    pe "$PDB" -A -c "$(on_index "$PUB_PROBE" "$f")" >>"$out"
+    sec "the published entry-tuple probe on $f without the pagesize > 0 guard"
+    pe "$PDB" -A -c "$(on_index "$probe_no_guard" "$f")" >>"$out"
+    sec "the published entry-tuple probe on $f without the ::int cast"
+    pe "$PDB" -A -c "$(on_index "$probe_no_cast" "$f")" >>"$out"
+    sec "the derived entry-tuple probe on $f, as filed"
+    pe "$PDB" -A -c "$(on_index "$DER_PROBE" "$f")" >>"$out"
+  done
+
+  sec "the three decoders on one all-zero page"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM gin_page_opaque_info(
+                     decode(repeat('00', current_setting('block_size')::int), 'hex'))" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM gin_metapage_info(
+                     decode(repeat('00', current_setting('block_size')::int), 'hex'))" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ lower, upper, special, pagesize FROM page_header(
+                     decode(repeat('00', current_setting('block_size')::int), 'hex'))" >>"$out"
+  sec "page_header's column types"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ pg_typeof(lower), pg_typeof(upper),
+                          pg_typeof(special), pg_typeof(pagesize)
+                   FROM page_header(get_raw_page('pt_ok_gin', 0))" >>"$out"
+
+  sec "refusals"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ indisvalid, indisready, indislive
+                   FROM pg_index WHERE indexrelid = 'pt_inv_gin'::regclass" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM pgstatginindex('pt_inv_gin')" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM pgstattuple('pt_inv_gin')" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ get_raw_page('pt_part_gin', 0) IS NOT NULL" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM gin_page_opaque_info(decode('0000', 'hex'))" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM page_header(decode('0000', 'hex'))" >>"$out"
+
+  sec "the two constructs the harness needs"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ pg_current_xact_id() IS NOT NULL AS has_pg_current_xact_id" >>"$out"
+  pe "$PDB" -A -c "SHOW autovacuum_vacuum_insert_threshold" >>"$out"
+  cat "$out"
+}
+
 # ------------------------------------------------------------ report + clean
 
 stage_report() {
@@ -5026,7 +5495,7 @@ stage_report() {
     printf 'pin: %s\n' "$(git -C "$SRC17" rev-parse HEAD 2>/dev/null)"
     printf 'rows: %s  maintenance_work_mem: %s  port: %s\n\n' "$ROWS" "$MWM" "$PORT"
   } >>"$OUT/summary.txt"
-  for f in "$OUT"/0*.txt "$OUT"/1*.txt "$OUT"/checks.txt "$OUT"/platform.txt; do
+  for f in "$OUT"/0*.txt "$OUT"/1*.txt "$OUT"/2*.txt "$OUT"/checks.txt "$OUT"/platform.txt; do
     [ -f "$f" ] || continue
     printf '\n\n########## %s\n\n' "$(basename "$f")" >>"$OUT/summary.txt"
     cat "$f" >>"$OUT/summary.txt"
@@ -5045,21 +5514,542 @@ stage_clean() {
   else
     note "no postmaster.pid in $DATA"
   fi
-  pgrep -a postgres | grep -F "$SANDBOX" && note "WARNING: a sandbox postgres process survived" \
-    || note "no sandbox postgres process in pgrep -a postgres"
+  # pgrep -f matches the whole argument list on Linux and on macOS alike, and a
+  # postmaster keeps the -D data directory pg_ctl started it with; pgrep -a
+  # prints command lines on Linux only.
+  if pgrep -f -- "$DATA|$STANDBY" >/dev/null; then
+    note "WARNING: a sandbox postgres process survived: $(pgrep -f -- "$DATA|$STANDBY" | tr '\n' ' ')"
+  else
+    note "no process with $DATA or $STANDBY in its arguments (pgrep -f)"
+  fi
   rm -rf "$SANDBOX"
   [ -d "$SANDBOX" ] && note "WARNING: $SANDBOX still exists" || note "sandbox deleted: $SANDBOX"
 }
 
 # ------------------------------------------------------------------ dispatch
 
-DEFAULT_STAGES="build check init declare fixtures coverage census decide crosscheck probe standby oracle probe_after score sweep race corrupt report"
+DEFAULT_STAGES="build check init declare fixtures coverage census decide crosscheck probe standby oracle probe_after score sweep race corrupt portability report"
 STAGES="${*:-$DEFAULT_STAGES}"
 mkdir -p "$OUT" "$SQLD" 2>/dev/null
 note "stages: $STAGES"
 for st in $STAGES; do
   case "$st" in
-    build|check|init|declare|fixtures|coverage|census|decide|crosscheck|probe|probe_after|oracle|score|sweep|race|corrupt|standby|report|clean)
+    build|check|init|declare|fixtures|coverage|census|decide|crosscheck|probe|probe_after|oracle|score|sweep|race|corrupt|portability|standby|report|clean)
+      note "--- stage $st"
+      "stage_$st" || die "stage $st failed" ;;
+    *) die "unknown stage: $st" ;;
+  esac
+done
+note "done: $STAGES"
+```
+
+### The PostgreSQL 12.2 leg
+
+```bash
+#!/usr/bin/env bash
+#
+# gin_portability_12.sh - the PostgreSQL 12.2 leg of the measurement script for
+#   wiki/v17/questions/indexing/gin-index-wasted-space-contrib.md
+#
+# It builds PostgreSQL 12.2 out of tree from this repository's pinned v12
+# checkout and runs the page's portability battery: the four published
+# statements with and without the three edits the page made for 12, the
+# derived entry-tuple probe, the decoders on an all-zero page, the refusals
+# that differ between majors, VACUUM VERBOSE's index report, and the two
+# harness constructs 12.2 lacks.  The 17.11 leg, gin_waste_protocol.sh, runs
+# the same battery, byte for byte, as its "portability" stage, so the two
+# legs' out/19-portability.txt files compare line by line.  Nothing here is
+# scored under the v17 protocol.
+#
+# Everything it creates is disposable.  It runs its own cluster, on a
+# non-default port, under its own sandbox, and never touches a cluster it did
+# not create.  The "clean" stage stops it and deletes the sandbox.
+#
+# Usage:
+#   bash gin_portability_12.sh                # every stage except clean
+#   bash gin_portability_12.sh portability    # selected stages, in order given
+#   bash gin_portability_12.sh clean          # stop server, delete sandbox
+#
+set -uo pipefail
+
+REPO="${REPO:-$PWD}"
+SRC12="${SRC12:-$REPO/raw/postgres-12}"
+SANDBOX="${SANDBOX:-$REPO/.wiki-runtime/tmp/ginp12}"
+JOBS="${JOBS:-8}"
+PORT="${PORT:-55412}"
+STMT_TIMEOUT="${STMT_TIMEOUT:-600s}"
+LOCK_TIMEOUT="${LOCK_TIMEOUT:-2s}"
+
+BUILD="$SANDBOX/build"; INST="$SANDBOX/install"; DATA="$SANDBOX/data"
+BIN="$INST/bin"; SOCK="$SANDBOX/sock"; OUT="$SANDBOX/out"; SQLD="$SANDBOX/sql"
+
+# Both also append to $OUT/run.log, the stage log, whenever $OUT exists.
+note() { local m; m=$(printf '[%s] %s' "$(date +%H:%M:%S)" "$*")
+         printf '%s\n' "$m" >&2; [ -d "$OUT" ] && printf '%s\n' "$m" >>"$OUT/run.log"; return 0; }
+die()  { local m; m=$(printf '[%s] FATAL: %s' "$(date +%H:%M:%S)" "$*")
+         printf '%s\n' "$m" >&2; [ -d "$OUT" ] && printf '%s\n' "$m" >>"$OUT/run.log"; exit 1; }
+
+# psql wrappers.  -X ignores ~/.psqlrc, ON_ERROR_STOP=1 lets no error pass
+# silently, and both timeouts are PGC_USERSET, so session-scoped.
+p() { local db="$1"; shift
+  PGOPTIONS="-c statement_timeout=$STMT_TIMEOUT -c lock_timeout=$LOCK_TIMEOUT" \
+  "$BIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -p "$PORT" -d "$db" "$@"; }
+q() { local db="$1"; shift; p "$db" -At -c "$*"; }
+# the same, without ON_ERROR_STOP: for the statements whose error text is the
+# result being measured (refusals and the pre-edit statements)
+pe() { local db="$1"; shift
+  PGOPTIONS="-c statement_timeout=$STMT_TIMEOUT -c lock_timeout=$LOCK_TIMEOUT" \
+  "$BIN/psql" -X -h "$SOCK" -p "$PORT" -d "$db" "$@" 2>&1; }
+
+pgstart() { "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w -o "-p $PORT -k $SOCK" start; }
+pgstop()  { [ -f "$DATA/postmaster.pid" ] && "$BIN/pg_ctl" -D "$DATA" -m fast -w stop; true; }
+
+# ---------------------------------------------------------------- build stages
+
+stage_build() {
+  [ -x "$BIN/postgres" ] && { note "12.2 already built, skipping"; return 0; }
+  [ -d "$SRC12" ] || die "no pinned checkout at $SRC12"
+  mkdir -p "$BUILD" "$OUT" || die "mkdir failed"
+  note "configuring 12.2 out of tree (read-only source at $SRC12)"
+  ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" --enable-debug \
+      --without-icu --without-readline --without-zlib ) >"$OUT/configure.log" 2>&1 \
+    || die "configure failed, see $OUT/configure.log"
+  note "make -j$JOBS"
+  make -C "$BUILD" -j"$JOBS" >"$OUT/make.log" 2>&1 || die "make failed, see $OUT/make.log"
+  make -C "$BUILD" install >"$OUT/install.log" 2>&1 || die "make install failed"
+  note "make -j$JOBS the three contrib modules the battery uses"
+  local c
+  for c in pageinspect pgstattuple pg_freespacemap; do
+    make -C "$BUILD/contrib/$c" -j"$JOBS" install >>"$OUT/contrib.log" 2>&1 \
+      || die "contrib $c build failed, see $OUT/contrib.log"
+  done
+  "$BIN/postgres" --version | tee "$OUT/version.txt"
+}
+
+stage_check() {
+  note "make check (core) plus the contrib suites the battery's modules ship"
+  : >"$OUT/checks.txt"
+  make -C "$BUILD" check >"$OUT/check_core.log" 2>&1
+  tail -3 "$OUT/check_core.log" | tee -a "$OUT/checks.txt"
+  local c
+  for c in pageinspect pgstattuple; do
+    make -C "$BUILD/contrib/$c" check >"$OUT/check_$c.log" 2>&1
+    printf '%s: ' "$c" >>"$OUT/checks.txt"
+    tail -3 "$OUT/check_$c.log" | tr -d '\n' | tee -a "$OUT/checks.txt"
+    printf '\n' >>"$OUT/checks.txt"
+  done
+  # pg_freespacemap 1.2 in this tree declares no REGRESS target
+  grep -q '^REGRESS' "$SRC12/contrib/pg_freespacemap/Makefile" \
+    && note "pg_freespacemap declares a suite; add it to this list" \
+    || printf 'pg_freespacemap: no suite, its Makefile declares no REGRESS\n' >>"$OUT/checks.txt"
+  cat "$OUT/checks.txt"
+}
+
+stage_init() {
+  pgstop
+  rm -rf "$DATA" "$SOCK"
+  mkdir -p "$SOCK" "$OUT" "$SQLD" || die "mkdir failed"
+  "$BIN/initdb" -D "$DATA" --locale=C --encoding=UTF8 >"$OUT/initdb.log" 2>&1 \
+    || die "initdb failed, see $OUT/initdb.log"
+  # The same cluster settings as the 17.11 leg, minus the standby's: all are
+  # PGC_SIGHUP or PGC_POSTMASTER, so they go in postgresql.conf before the
+  # first start.
+  cat >>"$DATA/postgresql.conf" <<CONF
+autovacuum = off
+fsync = off
+shared_buffers = 256MB
+max_wal_size = 2GB
+logging_collector = off
+log_min_messages = warning
+CONF
+  pgstart || die "server did not start"
+  q postgres "SELECT version()" | tee "$OUT/server_version.txt"
+  p postgres -c "SELECT /* wiki_gin_platform */ * FROM pg_control_init()" >"$OUT/platform.txt"
+  p postgres -c "SELECT /* wiki_gin_platform */ name, setting, source
+                 FROM pg_settings
+                 WHERE name IN ('block_size','autovacuum','fsync','shared_buffers')
+                 ORDER BY 1" >>"$OUT/platform.txt"
+  cat "$OUT/platform.txt"
+}
+
+# ------------------------------------------------------- portability stage
+#
+# Outside the protocol, and the same text in both leg scripts: the 17.11 leg
+# runs it as its "portability" stage, the 12.2 leg as its only measuring stage,
+# so the two out/19-portability.txt files compare line by line.  It carries the
+# page's four published statements and the derived entry-tuple probe verbatim,
+# runs them with and without the three edits the page made for PostgreSQL 12,
+# and adds the decoders' answers on an all-zero page, the refusals that differ
+# between majors, VACUUM VERBOSE's index report and the two harness constructs
+# 12.2 lacks.  It builds everything it reads in two databases of its own,
+# "port" and "portmeta"; every object in them is disposable.
+
+read -r -d '' PUB_CENSUS <<'PUB_CENSUS_SQL'
+WITH /* wiki_gin_waste_census */ gin_idx AS (
+    SELECT c.oid                                  AS idx,
+           c.oid::regclass::text                  AS idx_name,
+           pg_relation_size(c.oid, 'main')         AS main_bytes,
+           current_setting('block_size')::bigint   AS bs
+    FROM pg_class c
+         JOIN pg_am a    ON a.oid = c.relam
+         JOIN pg_index x ON x.indexrelid = c.oid
+    WHERE a.amname = 'gin'
+      AND c.relkind = 'i'            -- 'I' (partitioned) has no storage
+      AND x.indisvalid               -- an invalid index is still readable, see notes
+      AND c.relpersistence <> 't'    -- another session's temp index is refused
+),
+meta AS (
+    SELECT g.*, m.version, m.n_pending_pages, m.n_pending_tuples,
+           m.n_total_pages, m.n_entry_pages, m.n_data_pages
+    FROM gin_idx g
+         CROSS JOIN LATERAL gin_metapage_info(get_raw_page(g.idx_name, 0)) m
+),
+pages AS (
+    SELECT g.idx,
+           CASE
+               WHEN h.pagesize = 0                      THEN 'new'   -- all-zero page
+               WHEN o.flags IS NULL                     THEN 'new'
+               WHEN o.flags @> '{meta}'                 THEN 'meta'
+               WHEN o.flags @> '{deleted}'              THEN 'deleted'
+               WHEN o.flags @> '{list}'                 THEN 'pending'
+               WHEN o.flags @> '{data,leaf,compressed}' THEN 'data_leaf'
+               WHEN o.flags @> '{data,leaf}'            THEN 'data_leaf_uncompressed'
+               WHEN o.flags @> '{data}'                 THEN 'data_internal'
+               ELSE                                          'entry'
+           END                                          AS page_class,
+           COALESCE(h.upper - h.lower, 0)               AS slack
+    FROM gin_idx g
+         CROSS JOIN LATERAL generate_series(1, g.main_bytes / g.bs - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page(g.idx_name, b.blkno::int) AS pg
+                             OFFSET 0) AS r          -- read each page exactly once
+         LEFT JOIN LATERAL gin_page_opaque_info(r.pg) AS o ON true
+         LEFT JOIN LATERAL page_header(r.pg)          AS h ON true
+),
+census AS (
+    SELECT idx,
+           count(*) FILTER (WHERE page_class = 'entry')                  AS entry_pages,
+           count(*) FILTER (WHERE page_class = 'data_leaf')              AS data_leaf_pages,
+           count(*) FILTER (WHERE page_class = 'data_internal')          AS data_internal_pages,
+           count(*) FILTER (WHERE page_class = 'data_leaf_uncompressed') AS uncompressed_pages,
+           count(*) FILTER (WHERE page_class = 'pending')                AS pending_pages,
+           count(*) FILTER (WHERE page_class = 'deleted')                AS deleted_pages,
+           count(*) FILTER (WHERE page_class = 'new')                    AS new_pages,
+           count(*) FILTER (WHERE page_class = 'meta')                   AS stray_meta_pages,
+           COALESCE(sum(slack) FILTER (WHERE page_class = 'entry'), 0)   AS entry_slack,
+           COALESCE(sum(slack) FILTER (WHERE page_class IN ('data_leaf',
+                                            'data_internal')), 0)        AS data_slack
+    FROM pages
+    GROUP BY idx
+)
+SELECT m.idx_name                                       AS index_name,
+       m.version                                        AS gin_version,
+       m.main_bytes                                     AS main_fork_bytes,
+       m.main_bytes / m.bs                              AS blocks,
+       c.entry_pages, c.data_leaf_pages, c.data_internal_pages,
+       c.uncompressed_pages, c.pending_pages, c.deleted_pages, c.new_pages,
+       (c.deleted_pages + c.new_pages) * m.bs           AS whole_page_waste_bytes,
+       round(100.0 * (c.deleted_pages + c.new_pages) * m.bs
+             / nullif(m.main_bytes, 0), 2)              AS whole_page_waste_pct,
+       CASE WHEN m.version = 2 THEN c.entry_slack + c.data_slack END
+                                                        AS live_page_slack_bytes,
+       CASE WHEN m.version = 2
+            THEN round(100.0 * (c.entry_slack + c.data_slack)
+                       / nullif(m.main_bytes, 0), 2) END AS live_page_slack_pct,
+       CASE WHEN m.version = 2
+            THEN round(100.0 * ((c.deleted_pages + c.new_pages) * m.bs
+                                + c.entry_slack + c.data_slack)
+                       / nullif(m.main_bytes, 0), 2) END AS bloat_pct,
+       c.entry_slack, c.data_slack,
+       c.pending_pages * m.bs                           AS pending_bytes,
+       round(100.0 * c.pending_pages * m.bs
+             / nullif(m.main_bytes, 0), 2)              AS pending_pct,
+       m.main_bytes - (c.deleted_pages + c.new_pages + c.pending_pages) * m.bs
+                    - c.entry_slack - c.data_slack      AS payload_bytes,
+       m.n_pending_pages                                AS meta_pending_pages,
+       m.n_entry_pages                                  AS meta_entry_pages,
+       m.n_data_pages                                   AS meta_data_pages,
+       m.n_total_pages                                  AS meta_total_pages,
+       1 + c.entry_pages + c.data_leaf_pages + c.data_internal_pages
+         + c.uncompressed_pages + c.pending_pages + c.deleted_pages
+         + c.new_pages + c.stray_meta_pages             AS census_total_pages
+FROM meta m JOIN census c ON c.idx = m.idx
+ORDER BY 1;
+PUB_CENSUS_SQL
+read -r -d '' PUB_PROBE <<'PUB_PROBE_SQL'
+WITH /* wiki_gin_entry_probe */ pages AS (
+    SELECT o.flags, h.lower, h.upper, h.special, h.pagesize
+    FROM generate_series(1, pg_relation_size('myschema.myindex','main') / 8192 - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page('myschema.myindex', b.blkno::int) AS pg
+                             OFFSET 0) AS r
+         LEFT JOIN LATERAL gin_page_opaque_info(r.pg) AS o ON true
+         LEFT JOIN LATERAL page_header(r.pg)          AS h ON true
+)
+SELECT count(*)                 FILTER (WHERE flags = '{leaf}') AS entry_leaf_pages,
+       sum((lower - 24) / 4)    FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuples,
+       sum(special - upper)     FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuple_bytes,
+       sum((lower - 24) / 4)    FILTER (WHERE flags = '{}'
+                                        AND pagesize > 0)       AS internal_downlinks
+FROM pages;
+PUB_PROBE_SQL
+read -r -d '' DER_PROBE <<'DER_PROBE_SQL'
+WITH /* wiki_gin_entry_probe_derived */ ctl AS (
+    -- bs and al are build-dependent and come from pg_control_init().  hdr and
+    -- iid are page-format constants: SizeOfPageHeaderData is
+    -- offsetof(PageHeaderData, pd_linp) over fixed-width fields, and ItemIdData
+    -- is three bit-fields totalling 32 bits.  The layout probe measures all
+    -- four on the running build.
+    SELECT database_block_size::bigint                          AS bs,
+           24::bigint                                           AS hdr,
+           4::bigint                                            AS iid,
+           ((8 + max_data_alignment - 1) / max_data_alignment)
+             * max_data_alignment                               AS gin_special
+    FROM pg_control_init()
+),
+pages AS (
+    SELECT c.hdr, c.iid, o.flags, h.lower, h.upper, h.special, h.pagesize
+    FROM ctl c
+         CROSS JOIN LATERAL generate_series(
+               1, pg_relation_size('myschema.myindex', 'main') / c.bs - 1) AS b(blkno)
+         CROSS JOIN LATERAL (SELECT get_raw_page('myschema.myindex', b.blkno::int) AS pg
+                             OFFSET 0) AS r
+         LEFT JOIN LATERAL page_header(r.pg) AS h ON true
+         LEFT JOIN LATERAL gin_page_opaque_info(
+               CASE WHEN h.upper > 0 AND h.pagesize = c.bs
+                     AND h.pagesize - h.special = c.gin_special
+                    THEN r.pg END)           AS o ON true
+)
+SELECT count(*)                        FILTER (WHERE flags = '{leaf}') AS entry_leaf_pages,
+       sum((lower - hdr) / iid)        FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuples,
+       sum(special - upper)            FILTER (WHERE flags = '{leaf}') AS entry_leaf_tuple_bytes,
+       sum((lower - hdr) / iid)        FILTER (WHERE flags = '{}')     AS internal_downlinks,
+       count(*) FILTER (WHERE flags <@ '{leaf,incomplete_split}'::text[]
+                          AND (lower < hdr OR (lower - hdr) % iid <> 0))
+                                                                       AS malformed_pages,
+       count(*) FILTER (WHERE flags IS NULL)                           AS undecoded_pages
+FROM pages;
+DER_PROBE_SQL
+read -r -d '' FSM_CHECK <<'FSM_CHECK_SQL'
+SELECT /* wiki_gin_waste_fsm_check */
+       (SELECT database_block_size
+               - ((28 + max_data_alignment - 1) / max_data_alignment)
+                 * max_data_alignment          -- 28 = SizeOfPageHeaderData + sizeof(ItemIdData)
+        FROM pg_control_init())                          AS free_page_avail,
+       count(*) FILTER (WHERE avail = (SELECT database_block_size
+               - ((28 + max_data_alignment - 1) / max_data_alignment)
+                 * max_data_alignment FROM pg_control_init())) AS fsm_free_pages,
+       count(*)                                          AS blocks
+FROM pg_freespace('myschema.myindex');
+FSM_CHECK_SQL
+read -r -d '' SIZE_BRACKET <<'SIZE_BRACKET_SQL'
+SELECT /* wiki_gin_waste_size_bracket */
+       pg_relation_size('myschema.myindex','main') / current_setting('block_size')::bigint
+       AS blocks_after_census;
+SIZE_BRACKET_SQL
+
+# swap <text> <old> <new>: one literal substitution, refused if <old> is absent,
+# so a later edit of a published text cannot turn a variant into a copy
+swap() {
+  local t="$1" old="$2" new="$3"
+  case "$t" in *"$old"*) ;; *) die "portability: text to replace not found: $old" ;; esac
+  printf '%s' "${t/"$old"/"$new"}"
+}
+on_index() { local t="$1" ix="$2"; printf '%s' "${t//myschema.myindex/$ix}"; }
+
+stage_portability() {
+  local PDB=port MDB=portmeta out="$OUT/19-portability.txt" bs d f zero_path meta_path
+  local arm guard census_no_cast census_no_arm probe_no_guard probe_no_cast
+  arm="               WHEN h.pagesize = 0                      THEN 'new'   -- all-zero page"
+  guard=$'\n'"                                        AND pagesize > 0)"
+  census_no_cast=$(swap "$PUB_CENSUS" "b.blkno::int" "b.blkno") || exit 1
+  census_no_arm=$(swap "$PUB_CENSUS" "$arm"$'\n' "") || exit 1
+  probe_no_guard=$(swap "$PUB_PROBE" "$guard" ")") || exit 1
+  probe_no_cast=$(swap "$PUB_PROBE" "b.blkno::int" "b.blkno") || exit 1
+  : >"$out"
+  sec() { printf '\n=== %s\n' "$*" >>"$out"; }
+  for d in "$PDB" "$MDB"; do
+    q postgres "DROP DATABASE IF EXISTS $d" >/dev/null || die "DROP DATABASE $d failed"
+    q postgres "CREATE DATABASE $d" >/dev/null || die "CREATE DATABASE $d failed"
+    for e in pageinspect pgstattuple pg_freespacemap; do
+      q "$d" "CREATE EXTENSION $e" >/dev/null || die "CREATE EXTENSION $e failed on $d"
+    done
+  done
+  note "portability fixtures"
+  p "$PDB" -q <<'SQL' || die "portability fixtures failed"
+SET /* wiki_gin_portability */ statement_timeout = '600s';
+SET /* wiki_gin_portability */ lock_timeout = '2s';
+-- Disposable fixtures: created and read here, on a cluster the script owns.
+CREATE TABLE /* wiki_gin_portability */ pt_ok (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pt_ok
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pt_ok_gin ON pt_ok USING gin (tags) WITH (fastupdate = off);
+-- the twin that gets two all-zero blocks appended with the server stopped
+CREATE TABLE /* wiki_gin_portability */ pt_zero (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pt_zero
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pt_zero_gin ON pt_zero USING gin (tags) WITH (fastupdate = off);
+-- a partitioned GIN index, relkind 'I', which has no storage of its own
+CREATE TABLE /* wiki_gin_portability */ pt_part (id int, tags int[]) PARTITION BY RANGE (id);
+CREATE TABLE /* wiki_gin_portability */ pt_part_1 PARTITION OF pt_part FOR VALUES FROM (0) TO (100000);
+INSERT INTO /* wiki_gin_portability */ pt_part SELECT g, ARRAY[g % 300] FROM generate_series(1, 1000) g;
+CREATE INDEX /* wiki_gin_portability */ pt_part_gin ON pt_part USING gin (tags);
+-- the table whose concurrent build is made to fail below
+CREATE TABLE /* wiki_gin_portability */ pt_inv (id int, v int);
+INSERT INTO /* wiki_gin_portability */ pt_inv VALUES (1, 2), (2, 1);
+-- the f5 recipe: every row carries all 32 keys
+CREATE TABLE /* wiki_gin_portability */ pt_f5 (id int primary key, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pt_f5
+SELECT i, ARRAY(SELECT generate_series(0, 31)) FROM generate_series(1, 200000) i;
+CREATE INDEX /* wiki_gin_portability */ pt_f5_gin ON pt_f5 USING gin (tags) WITH (fastupdate = off);
+VACUUM /* wiki_gin_portability */ ANALYZE pt_ok, pt_zero, pt_f5;
+SQL
+  # CREATE INDEX CONCURRENTLY cannot run inside psql's -c transaction with
+  # other statements, and the division by zero is the point: it leaves the
+  # index invalid
+  pe "$PDB" -c "CREATE INDEX /* wiki_gin_portability */ CONCURRENTLY pt_inv_gin
+                ON pt_inv USING gin ((ARRAY[10 / (v - 1)]))" >/dev/null 2>&1
+  p "$MDB" -q <<'SQL' || die "portmeta fixtures failed"
+SET /* wiki_gin_portability */ statement_timeout = '600s';
+SET /* wiki_gin_portability */ lock_timeout = '2s';
+CREATE TABLE /* wiki_gin_portability */ pm_ok (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pm_ok
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pm_ok_gin ON pm_ok USING gin (tags) WITH (fastupdate = off);
+-- the twin whose block 0, the metapage, is zeroed with the server stopped
+CREATE TABLE /* wiki_gin_portability */ pm_meta (id int, tags int[]);
+INSERT INTO /* wiki_gin_portability */ pm_meta
+SELECT g, ARRAY[g % 300, (g * 7) % 300] FROM generate_series(1, 4000) g;
+CREATE INDEX /* wiki_gin_portability */ pm_meta_gin ON pm_meta USING gin (tags) WITH (fastupdate = off);
+SQL
+
+  sec "server and extensions"
+  q "$PDB" "SELECT version()" >>"$out"
+  pe "$PDB" -A -c "SELECT extname, extversion FROM pg_extension ORDER BY 1" >>"$out"
+
+  # every index line is kept: 12.2 prints the page counts on DETAIL lines that
+  # carry no index name, so they are read against the INFO line above them
+  sec "VACUUM VERBOSE on the f5 recipe: 95% deleted, VACUUM, three xids, VACUUM twice"
+  q "$PDB" "DELETE /* wiki_gin_portability */ FROM pt_f5 WHERE id <= 190000" >>"$out"
+  for f in 1 2 3; do
+    if [ "$f" = 2 ]; then
+      q "$PDB" "SELECT txid_current()" >/dev/null
+      q "$PDB" "SELECT txid_current()" >/dev/null
+      q "$PDB" "SELECT txid_current()" >/dev/null
+    fi
+    printf -- '--- VACUUM %s\n' "$f" >>"$out"
+    pe "$PDB" -c "VACUUM /* wiki_gin_portability */ (VERBOSE) pt_f5" \
+      | grep -E 'index "|index row versions|index pages' >>"$out"
+  done
+
+  # the two patches, with the server stopped: two all-zero blocks appended to
+  # pt_zero_gin, and block 0 of pm_meta_gin zeroed
+  bs=$(q "$PDB" "SELECT current_setting('block_size')")
+  zero_path="$DATA/$(q "$PDB" "SELECT pg_relation_filepath('pt_zero_gin')")"
+  meta_path="$DATA/$(q "$MDB" "SELECT pg_relation_filepath('pm_meta_gin')")"
+  pgstop
+  dd if=/dev/zero bs="$bs" count=2 status=none >>"$zero_path" || die "append to pt_zero_gin failed"
+  dd if=/dev/zero of="$meta_path" bs="$bs" count=1 seek=0 conv=notrunc status=none \
+    || die "zeroing block 0 of pm_meta_gin failed"
+  pgstart || die "server did not restart after the portability patches"
+
+  sec "the published census, as filed: the ::int cast and the pagesize = 0 arm in place"
+  pe "$PDB" -A -c "$PUB_CENSUS" >>"$out"
+  sec "the published census without the ::int cast, the pre-edit form"
+  pe "$PDB" -A -c "$census_no_cast" >>"$out"
+  sec "the published census without the pagesize = 0 arm"
+  pe "$PDB" -A -c "$census_no_arm" >>"$out"
+  sec "the published census over portmeta, whose pm_meta_gin has an all-zero block 0"
+  pe "$MDB" -A -c "$PUB_CENSUS" >>"$out"
+  sec "the FSM check on pt_zero_gin, as filed"
+  pe "$PDB" -A -c "$(on_index "$FSM_CHECK" pt_zero_gin)" >>"$out"
+  sec "the size bracket on pt_zero_gin, as filed"
+  pe "$PDB" -A -c "$(on_index "$SIZE_BRACKET" pt_zero_gin)" >>"$out"
+  for f in pt_ok_gin pt_zero_gin; do
+    sec "the published entry-tuple probe on $f, as filed"
+    pe "$PDB" -A -c "$(on_index "$PUB_PROBE" "$f")" >>"$out"
+    sec "the published entry-tuple probe on $f without the pagesize > 0 guard"
+    pe "$PDB" -A -c "$(on_index "$probe_no_guard" "$f")" >>"$out"
+    sec "the published entry-tuple probe on $f without the ::int cast"
+    pe "$PDB" -A -c "$(on_index "$probe_no_cast" "$f")" >>"$out"
+    sec "the derived entry-tuple probe on $f, as filed"
+    pe "$PDB" -A -c "$(on_index "$DER_PROBE" "$f")" >>"$out"
+  done
+
+  sec "the three decoders on one all-zero page"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM gin_page_opaque_info(
+                     decode(repeat('00', current_setting('block_size')::int), 'hex'))" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM gin_metapage_info(
+                     decode(repeat('00', current_setting('block_size')::int), 'hex'))" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ lower, upper, special, pagesize FROM page_header(
+                     decode(repeat('00', current_setting('block_size')::int), 'hex'))" >>"$out"
+  sec "page_header's column types"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ pg_typeof(lower), pg_typeof(upper),
+                          pg_typeof(special), pg_typeof(pagesize)
+                   FROM page_header(get_raw_page('pt_ok_gin', 0))" >>"$out"
+
+  sec "refusals"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ indisvalid, indisready, indislive
+                   FROM pg_index WHERE indexrelid = 'pt_inv_gin'::regclass" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM pgstatginindex('pt_inv_gin')" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM pgstattuple('pt_inv_gin')" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ get_raw_page('pt_part_gin', 0) IS NOT NULL" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM gin_page_opaque_info(decode('0000', 'hex'))" >>"$out"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ * FROM page_header(decode('0000', 'hex'))" >>"$out"
+
+  sec "the two constructs the harness needs"
+  pe "$PDB" -A -c "SELECT /* wiki_gin_portability */ pg_current_xact_id() IS NOT NULL AS has_pg_current_xact_id" >>"$out"
+  pe "$PDB" -A -c "SHOW autovacuum_vacuum_insert_threshold" >>"$out"
+  cat "$out"
+}
+
+# ------------------------------------------------------------ report + clean
+
+stage_report() {
+  local f
+  : >"$OUT/summary.txt"
+  {
+    printf '=== gin_portability_12.sh summary\n'
+    printf 'date: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'host: %s\n' "$(uname -srm)"
+    printf 'server: %s\n' "$("$BIN/postgres" --version)"
+    printf 'pin: %s\n' "$(git -C "$SRC12" rev-parse HEAD 2>/dev/null)"
+    printf 'port: %s\n\n' "$PORT"
+  } >>"$OUT/summary.txt"
+  for f in "$OUT"/1*.txt "$OUT"/checks.txt "$OUT"/platform.txt; do
+    [ -f "$f" ] || continue
+    printf '\n\n########## %s\n\n' "$(basename "$f")" >>"$OUT/summary.txt"
+    cat "$f" >>"$OUT/summary.txt"
+  done
+  note "summary at $OUT/summary.txt ($(wc -l <"$OUT/summary.txt") lines)"
+}
+
+stage_clean() {
+  pgstop
+  sleep 1
+  if [ -f "$DATA/postmaster.pid" ]; then
+    note "WARNING: $DATA/postmaster.pid still present"
+  else
+    note "no postmaster.pid in $DATA"
+  fi
+  # pgrep -f matches the whole argument list on Linux and on macOS alike, and a
+  # postmaster keeps the -D data directory pg_ctl started it with.
+  if pgrep -f -- "$DATA" >/dev/null; then
+    note "WARNING: a sandbox postgres process survived: $(pgrep -f -- "$DATA" | tr '\n' ' ')"
+  else
+    note "no process with $DATA in its arguments (pgrep -f)"
+  fi
+  rm -rf "$SANDBOX"
+  [ -d "$SANDBOX" ] && note "WARNING: $SANDBOX still exists" || note "sandbox deleted: $SANDBOX"
+}
+
+# ------------------------------------------------------------------ dispatch
+
+DEFAULT_STAGES="build check init portability report"
+STAGES="${*:-$DEFAULT_STAGES}"
+mkdir -p "$OUT" "$SQLD" 2>/dev/null
+note "stages: $STAGES"
+for st in $STAGES; do
+  case "$st" in
+    build|check|init|portability|report|clean)
       note "--- stage $st"
       "stage_$st" || die "stage $st failed" ;;
     *) die "unknown stage: $st" ;;
@@ -5070,6 +6060,24 @@ note "done: $STAGES"
 
 ## Context Reviewed
 
+- **2026-09-24 pass:** re-read at the pin the source behind every new or reworded
+  claim. That is the index-cleanup gate and the three ways it is cleared
+  ([vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178),
+  [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401),
+  [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066),
+  [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335)),
+  the index-vacuum bypass, the cleanup-lock fallback and its VERBOSE report, the
+  backup checkpoint's `spread` default and `page_header`'s decode path. It read the
+  history of the five commits the 12.2 section cites: master commits in either
+  checkout, the 12-branch back-patches `5378d55cb2f` and `975ae05537` only in the v12
+  one, each with its earliest tag. Then three full passes on Darwin 27 arm64 with
+  Apple clang 21: the filed script unchanged, the edited script before its report
+  files, and the recorded run of the script filed now. The 12.2 leg ran from an
+  empty sandbox as well. The recorded run's scored output files were diffed one by
+  one against the baseline pass's, and both fenced scripts were compared byte for
+  byte with the files that ran. The concept page
+  [Mandatory GIN Bloat Tests](../../common-concepts/mandatory-gin-bloat-tests.md)
+  was read, as changed on 2026-09-24, and not edited.
 - **2026-09-16 review:** re-read every source citation the page carried at review
   time against the pin - **605 citations over 284 distinct file-and-line ranges in
   79 files**, and **607 over 283** once this pass had added two and merged one - by
@@ -5367,19 +6375,23 @@ note "done: $STAGES"
 | The `ANALYZE` half rewrites the measured index's `relpages`/`reltuples`, while a VACUUM that skipped a page does not | [analyze.c#index-relstats](../../../../raw/postgres-17/src/backend/commands/analyze.c#L647-L663), [vacuum.c#vac_update_relstats](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1409-L1416), [vacuumlazy.c#estimated_count](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2352-L2356), [vacuumlazy.c#update_index_statistics](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L3081-L3098); run: `an_cat_gin` 4 -> 23 relpages |
 | The census's analyze test is strictly greater, on reloption-or-GUC values with `reltuples` clamped at zero | [autovacuum.c#anl-effective-values](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3011-L3017), [autovacuum.c#census-inputs](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3063-L3072), [autovacuum.c#vacthresh-anlthresh](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3074-L3076), [autovacuum.c#verdicts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3092-L3095); run: `tc3_boundary` at 1,050 against 1,050 declined |
 | `autovacuum_enabled = false` short-circuits both verdicts, and the reloptions arrive as `AutoVacOpts` where an unset member reads below zero | [autovacuum.c#av_enabled-return](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3048-L3054), [autovacuum.c#extract_autovac_opts](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L2704-L2723), [rel.h#AutoVacOpts](../../../../raw/postgres-17/src/include/utils/rel.h#L308-L326), [reloptions.c#autovacuum_enabled](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L105-L113) |
-| The launcher walks plain tables and matviews only, and never analyzes `pg_statistic` | [autovacuum.c#do_autovacuum-relkind](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1984-L1992), [autovacuum.c#pg_statistic](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3108-L3110); run: 102 tables walked |
+| The launcher walks plain tables and matviews only, and never analyzes `pg_statistic` | [autovacuum.c#do_autovacuum-relkind](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1984-L1992), [autovacuum.c#pg_statistic](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3108-L3110); run 2026-09-24: 101 tables walked |
 | Churn reaches `mod_since_analyze` only on a flush, and `ANALYZE` zeroes the counter, so publication order decides what the census reads | [pgstat.c#PGSTAT_MIN_INTERVAL](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L117-L122), [pgstat.c#pgstat_report_stat](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L583-L600), [pgstat_relation.c#mod_since_analyze](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L855-L860), [pgstat_relation.c#report_analyze-reset](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L331-L337), [pg_proc.dat#pg_stat_force_next_flush](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L5916-L5920); run: `tc4_hazard` 10,500 against `tc2_declined` 500 |
 | The census reads `n_mod_since_analyze` from `pg_stat_all_tables` under a snapshot it discards between reads | [system_views.sql#launcher-counters](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L688-L690), [guc_tables.c#stats_fetch_consistency](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4966-L4974), [pg_proc.dat#pg_stat_clear_snapshot](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L5911-L5915), [stats.sql#force-flush](../../../../raw/postgres-17/src/test/regress/sql/stats.sql#L101-L110) |
-| `n_data_pages` equals live data pages plus deleted-but-not-recyclable ones, because recyclability is tested first | [ginvacuum.c#ginvacuumcleanup-census](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L789); run: the identity held on 25 of 25 indexes |
-| A metapage's entry-page count goes stale on any growth or flush its last cleanup did not see | [ginvacuum.c:786-789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L786-L789), [ginutil.c#ginUpdateStats](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L645-L650); run 2026-09-16: `n_entry_pages` matched 24 of 27, missing on `a1_analyze_gin` 42/43, `c1_analyzed_gin` 5/6 and `l1_lock_gin` 9/34 |
-| The dead-key population is the difference between two probe passes, not an inference | run 2026-09-16 (`probe_after`): `f1` 100,056 → 50,028, `f14` 102,056 → 51,028, `f11` 297,385 → 148,694, `g100` 200,020 → 100,010, against `f7` 50,030 → 50,029 and seven fixtures at 0 |
+| `n_data_pages` equals live data pages plus deleted-but-not-recyclable ones, because recyclability is tested first | [ginvacuum.c#ginvacuumcleanup-census](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L789); run 2026-09-24: the identity held on 24 of 24 indexes |
+| A metapage's entry-page count goes stale on any growth or flush its last cleanup did not see | [ginvacuum.c:786-789](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L786-L789), [ginutil.c#ginUpdateStats](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L645-L650); run 2026-09-24: `n_entry_pages` matched 23 of 26, missing on `a1_analyze_gin` 42/43, `c1_analyzed_gin` 5/6 and `l1_lock_gin` 9/34 |
+| The dead-key population is the difference between two probe passes, not an inference | run 2026-09-24 (`probe_after`), as on 2026-09-16: `f1` 100,056 → 50,028, `f14` 102,056 → 51,028, `f11` 297,385 → 148,694, `g100` 200,020 → 100,010, against `f7` 50,030 → 50,029 and seven fixtures at 0 |
 | Whole-page waste is not a lower bound on what a rebuild returns | [index.c:3781-3789](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789), [ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691); run: `f2_pending` 64.64 against 58.05 and `a1_analyze` 52.69 against 45.16 |
 | A page that breaks `pd_upper <= pd_special` is refused by the buffer manager before any SQL guard | [bufpage.c#PageIsVerifiedExtended](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L88-L124), [guc_tables.c#zero_damaged_pages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1123-L1136); run: `s8_gin` |
 | Waste is a lower bound only when the in-use core is at least the rebuild | server 2026-09-15: `f2_pending_gin` 64.64% dead against 58.05% returned with a 2,195,456-byte core under a 2,605,056-byte rebuild, and `a1_analyze_gin` 52.69% against 45.16% with 360,448 under 417,792 |
-| A concurrent VACUUM can make a census read anything between 0 and the truth | server 2026-09-16: five censuses across one VACUUM of an unchanging 898-block file read five different deleted-page counts from 0 to 768; four of the five were flagged, one was not |
-| The protocol lock removes that case | server 2026-09-16: 20 censuses inside one `SHARE ROW EXCLUSIVE` transaction were identical, and the queued VACUUM waited 3395 ms and then deleted 768 pages |
+| A concurrent VACUUM can make a census read anything between 0 and the truth | server 2026-09-24: four censuses across one VACUUM of an unchanging 898-block file read four different deleted-page counts from 0 to 768; three of the four were flagged, one was not |
+| The protocol lock removes that case | server 2026-09-24: 20 censuses inside one `SHARE ROW EXCLUSIVE` transaction were identical, and the queued VACUUM waited 3219 ms and then deleted 768 pages |
 | The corpus reproduces from the published script | server 2026-09-15: `f1` 17,571,840 churned, `f2` 2,195,456 then 6,209,536 with 490 pending flushed, `f4` 16,384, `f5` and `f6` 7,356,416, `f7` 11,927,552, and all five churn-sweep sizes and dead-tuple counts, byte for byte and digit for digit against the superseded corpus; `f3` and `f1`'s rebuild came out one entry page larger |
-| The whole scored corpus reproduces across clusters | server 2026-09-16: two full passes on two freshly initdb'd clusters from the same pin returned the same 27-index page census, the same byte and percentage columns, the same 19 `truth_pct` values and the same two lower-bound violations as 2026-09-15; the only movements are elapsed times, three lock-timeout cancellations by 1 ms, the queued-VACUUM wait, and concurrency case D |
+| The whole scored corpus reproduces across clusters and platforms | server 2026-09-16: two full passes on two freshly initdb'd Linux x86_64 clusters returned the same 27-index page census, byte and percentage columns, 19 `truth_pct` values and two lower-bound violations as 2026-09-15; server 2026-09-24: the recorded run on Darwin 27 arm64 and a baseline pass of the filed script there returned the same scored cells again, `f9c_cleanup_gin` aside, while a third pass that day moved `g50_gin` by one page (open question 23); the movements are elapsed times, the lock-timeout cancellations, the queued-VACUUM wait and concurrency cases A and D |
+| VACUUM skips index vacuuming when fewer than 2% of heap pages carry dead line pointers, and those TIDs stay in the index | [vacuumlazy.c:89](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L89), [vacuumlazy.c:1899-1948](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1948); server 2026-09-24, one pass, earlier script revision: `s50`'s maintenance VACUUM printed `index scan bypassed: 2 pages from table (0.07% of total) have 272 dead item identifiers`, ANALYZE counted 272 dead rows, and `g50_gin` read 93 / 38 data-leaf / deleted pages against 92 / 39 |
+| A VACUUM that cannot take a page's cleanup lock leaves that page's dead tuples unpruned, and says so only when VERBOSE | [vacuumlazy.c:923-952](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L923-L952), [vacuumlazy.c:1761-1768](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1761-L1768), [vacuumlazy.c:664-668](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L664-L668) |
+| The standby stage's time is two spread checkpoints, not the copy | [pg_basebackup.sgml:499-504](../../../../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L499-L504), [pg_basebackup.sgml:968-971](../../../../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L968-L971), [xlog.c:8940-8959](../../../../raw/postgres-17/src/backend/access/transam/xlog.c#L8940-L8959); server 2026-09-24: a WAL-triggered checkpoint ran 13:53:55 to 13:58:25, the backup's `force wait` checkpoint 13:58:25 to 14:00:50, and the stage 13:54:28 to 14:00:53 |
+| `page_header` checks a short `bytea` through `get_page_from_raw` on 17.11 | [rawpage.c:266](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L266), [rawpage.c#get_page_from_raw](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L214-L234); run 2026-09-24: `invalid page size` from both `page_header` and `gin_page_opaque_info` on 17.11, `input page too small (2 bytes)` from `page_header` alone on 12.2 |
 | Plan review: page gaps exclude retained empty-key entry tuples; a rebuild builds from the heap | [ginvacuum.c:507-558](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L507-L558), [gininsert.c#ginbuild](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L317-L406) |
 | Plan review: a pending flush does not perform the full metapage-count refresh | [ginfast.c#gin_clean_pending_list](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1031-L1091), [ginvacuum.c:754-802](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L754-L802) |
 | Plan review: disabled cleanup and the failsafe can prevent the GIN cleanup callback | [vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178), [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401), [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066), [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335) |
@@ -5427,7 +6439,7 @@ note "done: $STAGES"
 | Real all-zero pages exist after a crash | [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335), [bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234); server: 4 and 7 all-zero pages after two `-m immediate` crashes during a bulk insert |
 | `REINDEX CONCURRENTLY` gives the same size as `REINDEX` | server: 7,356,416 -> 3,948,544 bytes either way on the same fixture recipe, 379 ms against 151 ms, and 3,276,800 -> 2,662,400 either way under a 100,000-row insert stream (1901 ms against 2013 ms) |
 | The published fixtures reproduce across runs | server: the published SQL re-run in two virgin databases gave all seven filed sizes, page-class counts, slack bytes, lifecycle states and `REINDEX` results byte for byte; only `f5`'s `prune_xid` moved (953 against 791 and 870) |
-| Entry-leaf `pd_lower` counts the index's keys | [ginentrypage.c:561-568](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L561-L568), [ginentrypage.c:683-691](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L683-L691), [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L211-L214); server: 50,028 = 50,028 lexemes, 32 = 32 tags, and 53 = 50 tags + 3 null categories ([ginblock.h#GinNullCategory](../../../../raw/postgres-17/src/include/access/ginblock.h#L204-L213)) |
+| Entry-leaf `pd_lower` counts the index's keys | [ginentrypage.c:561-568](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L561-L568), [ginentrypage.c:683-691](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L683-L691), [bufpage.h#SizeOfPageHeaderData](../../../../raw/postgres-17/src/include/storage/bufpage.h#L211-L214); run 2026-09-24: 50,028 entry tuples against 50,028 distinct lexemes and 32 against 32 tags, both key counts taken from the tables without the index; the 53 = 50 tags + 3 null categories reading is from a fixture removed on 2026-09-15 ([ginblock.h#GinNullCategory](../../../../raw/postgres-17/src/include/access/ginblock.h#L204-L213)) |
 | The payload model's error is linear in the dead-key share | [README:389-396](../../../../raw/postgres-17/src/backend/access/gin/README#L389-L396); server: +0.09 / +12.62 / +25.16 / +37.69 / +50.19% at 0 / 25 / 50 / 75 / 100% of the key population replaced, increments of +12.53, +12.54, +12.53, +12.50 |
 | Dead entry tuples are smaller than live ones, so the average over-corrects | server: average entry tuple 32.0 bytes at `p = 0` falling to 24.0 at `p = 100`, putting dead tuples at 16 bytes; corrected estimate −7.48 to −18.44% on the sweep and −36.80% on `f1` |
 | A pending list is built from the FSM's free stock, the merge is not | [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L299-L328), [indexfsm.c#GetFreeIndexPage](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L37-L46); server: 0 free pages -> the file grew by exactly the 736 pending pages, 736 free -> zero growth on four consecutive rounds, and `pg_freespace` read 0 at every flush |
@@ -5437,20 +6449,20 @@ note "done: $STAGES"
 | A census strips usage count rather than evicting a hot set | [bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705), [buf_internals.h#BM_MAX_USAGE_COUNT](../../../../raw/postgres-17/src/include/storage/buf_internals.h#L72-L79), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341); server at 16,384 buffers: a 26,195-block census left a hot 3,704-page set fully resident at usagecount 1 (from 5) and destroyed a once-read set of the same size; a second census took the hot set too |
 | The FSM free-page value is derivable, not a constant to type | [pg_controldata.c#pg_control_init](../../../../raw/postgres-17/src/backend/utils/misc/pg_controldata.c#L203-L228), [func.sgml#pg_control_init](../../../../raw/postgres-17/doc/src/sgml/func.sgml#L27721-L27742), [htup_details.h#MaxHeapTupleSize](../../../../raw/postgres-17/src/include/access/htup_details.h#L563); server: the derived expression returned 8160, equal to the largest `avail` over 3,478 free GIN pages, and `pg_control_init()` is executable by `PUBLIC` |
 | Fresh-build fill is opclass-dependent but scale-insensitive | server: 50.16% to 72.11% across nine opclasses and shapes, while the same opclass at 50,000 and 800,000 rows read 51.12% and 50.92% with model errors of +33.18% and +33.60% |
-| The census statement needs a block-number cast to run on 12 | [pageinspect--1.8--1.9.sql#get_raw_page](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L46-L58) (`f18aa1b2039`, earliest tag `REL_14_0`); 12.2: `ERROR: function get_raw_page(text, bigint) does not exist`, and `::int` makes both servers produce byte-identical output |
-| `page_header`'s width columns are narrower on 12 | [pageinspect--1.9--1.10.sql#page_header](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.9--1.10.sql#L10-L21) (`127404fbe28`, earliest tag `REL_15_0`); 12.2 returns `smallint` for `lower`/`upper`/`special`/`pagesize`, which is harmless at `block_size` 8192 |
-| 12.2 does not return NULL for an all-zero page | [ginfuncs.c:49-50](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L49-L50), [ginfuncs.c:119-120](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L119-L120); `cd4868a5700` carries `Backpatch-through: 10` and its 12-branch backport `5378d55cb2f` is first tagged `REL_12_11`, after this repo's 12.2 pin; 12.2 returned `flags = {}` where 17.11 returned a NULL row |
-| Without the `pagesize` guard the 12.2 census hides zeroed pages | server: two appended all-zero blocks read 54 entry / 2 new / 16,384 waste bytes on 17.11 and 56 entry / 0 new / 0 bytes on 12.2 from the same text, with the self-check passing; the probe's downlinks read 41 against 53 |
-| A zeroed metapage aborts the whole census on 12.2 | server: `gin_metapage_info` returned a NULL row on 17.11 and `ERROR: input page is not a GIN metapage` on 12.2, killing the multi-index statement |
-| `pgstatginindex` answers for an invalid index on 12.2 | [pgstatindex.c:538-543](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L538-L543), [pgstattuple.c:263-267](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L263-L267) (`13503eb5905`, earliest tag `REL_17_0`); server: 17.11 `index "..." is not valid`, 12.2 returned `2 \| 0 \| 0` on a failed-CIC leftover |
+| The census statement needs a block-number cast to run on 12 | [pageinspect--1.8--1.9.sql#get_raw_page](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.8--1.9.sql#L46-L58) (`f18aa1b2039`, first released in `REL_14_0`, earliest tag `REL_14_BETA1`); run 2026-09-24, both legs: 12.2 `ERROR: function get_raw_page(text, bigint) does not exist` without the cast, and with it the four-row census of the `port` database byte-identical on 12.2 and 17.11 |
+| `page_header`'s width columns are narrower on 12 | [pageinspect--1.9--1.10.sql#page_header](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.9--1.10.sql#L10-L21) (`127404fbe28`, first released in `REL_15_0`, earliest tag `REL_15_BETA1`); run 2026-09-24: `pg_typeof` read `smallint` for `lower`, `upper`, `special` and `pagesize` on 12.2 and `integer` on 17.11, harmless at `block_size` 8192 |
+| 12.2 does not return NULL for an all-zero page | [ginfuncs.c:49-50](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L49-L50), [ginfuncs.c:119-120](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L119-L120); `cd4868a5700` carries `Backpatch-through: 10`, and its 12-branch back-patch `5378d55cb2f` is first tagged `REL_12_11`, after this repo's 12.2 pin (v12 checkout history); run 2026-09-24: on one all-zero `bytea`, 12.2's `gin_page_opaque_info` returned `0 \| 0 \| {}` where 17.11 returned a row of NULLs |
+| Without the `pagesize` guard the 12.2 census hides zeroed pages | run 2026-09-24: with two appended all-zero blocks, the census without its `pagesize = 0` arm read `pt_zero_gin` as 6 entry / 2 new / 16,384 waste bytes on 17.11 and 8 entry / 0 new / 0 bytes on 12.2, `census_total_pages = blocks` = 9 on both; the probe without its guard read -7 internal downlinks on 12.2 against 5 on 17.11 |
+| A zeroed metapage aborts the whole census on 12.2 | run 2026-09-24, the `portmeta` database: 12.2 stopped with `ERROR: input page is not a GIN metapage`, `DETAIL: Flags 0000, expected 0008`; 17.11 returned NULL metapage columns for `pm_meta_gin` and listed `pm_ok_gin` |
+| `pgstatginindex` answers for an invalid index on 12.2, and the check that refuses it was back-patched | [pgstatindex.c:538-543](../../../../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L538-L543), [pgstattuple.c:263-267](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L263-L267) (`13503eb5905`, earliest tag `REL_17_BETA1`, "Back-patch to v11"; the 12-branch copy `975ae05537` is first tagged `REL_12_17` and descends from the 12.2 pin, per v12 checkout history); run 2026-09-24: 17.11 `index "pt_inv_gin" is not valid`, 12.2 returned `2 \| 0 \| 0` for the failed-CIC leftover |
 | 26 of 27 fixtures score identically on the two majors | server: identical size, rebuilt size, waste, slack, pending, reclaimed, both bound verdicts, fill, model error and dead-tuple counts; identical tallies of 24 / 25 / 26 of 27 for the lower bound, upper bound and upper-plus-pending |
 | A fresh GIN build's size is a function of `maintenance_work_mem` | [gininsert.c:290-291](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L290-L291), [gin_private.h:434](../../../../raw/postgres-17/src/include/access/gin_private.h#L434), [ginbulk.c:139](../../../../raw/postgres-17/src/backend/access/gin/ginbulk.c#L139), [mcxt.c#GetMemoryChunkSpace](../../../../raw/postgres-17/src/backend/utils/mmgr/mcxt.c#L718-L730), [guc_tables.c:2466-2474](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2466-L2474); server: one index rebuilt to 34,611,200 at 64MB and 50,814,976 at 96MB and above, on both majors, with payload constant at about 25.6 MB and all the movement in `entry_slack` |
 | The build divergence is a spill effect, not parallelism | server: `max_parallel_maintenance_workers` 0, 2 and 4 gave identical bytes; both majors returned exactly 50,814,976 once the build fitted one flush; v12 at 68MB and 70MB brackets v17 at 64MB |
-| 12.2 prints the VACUUM cross-check differently | [vacuumlazy.c:718-731](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L731), [ginvacuum.c:786-794](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L786-L794); server: 12.2 prints `768 index pages have been deleted, 0 are currently reusable.` in a DETAIL block with no "newly deleted" split, and the same 768 / 0 / 768 sequence |
+| 12.2 prints the VACUUM cross-check differently | [vacuumlazy.c:718-731](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L731), [ginvacuum.c:786-794](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L786-L794); run 2026-09-24 on `pt_f5_gin`, 898 blocks on both: 12.2 printed `768 index pages have been deleted, 0 are currently reusable.` in a DETAIL block with no "newly deleted" split, and both legs read the same 768 / 0 / 768 sequence |
 | Which race detector wins depends on the writer | server: under four writers the metapage check caught 23 of 25 (17.11) and 22 of 25 (12.2) where the size bracket caught 4 and 3; under an insert-and-flush loop 12 and 11 against 11 and 12; the self-check never fired in any census of any case on either server |
 | The round-five split cascade is slack exhaustion | [ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691); server: `entry_slack` fell 2,126,732 -> 1,735,572 -> 1,340,484 -> 945,372 -> 538,900 with the entry tree fixed at 572 pages, then round five added 255 entry pages and slack jumped to 2,223,216 — identical on both majors |
 | A census evicts a hot set once the target exceeds the cache | [bufmgr.c:2700-2705](../../../../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L2700-L2705), [freelist.c#StrategyGetBuffer](../../../../raw/postgres-17/src/backend/storage/buffer/freelist.c#L314-L341), [heapam.c:434-458](../../../../raw/postgres-17/src/backend/access/heap/heapam.c#L434-L458); server at 8,192 buffers: a 9,616-block census took a 1,862-page hot set from `usagecount` 3 to 80 resident pages (17.11) and to 0 (12.2), while a 16k-block seq scan left it intact on both |
-| v13+ also vacuums an insert-only table, which 12.2 does not | [guc_tables.c:3359-3366](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3359-L3366), [ginvacuum.c:705-717](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L705-L717); server: 17.11 recorded `last_autovacuum` until `autovacuum_vacuum_insert_threshold` was set to -1, 12.2 has no such setting, and both then flushed 246 pending pages in under 2 s with `last_autovacuum` null |
+| `autovacuum_vacuum_insert_threshold` does not exist on 12.2 | [guc_tables.c:3359-3366](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3359-L3366); run 2026-09-24: 12.2 `unrecognized configuration parameter "autovacuum_vacuum_insert_threshold"`, 17.11 `1000`; `pg_current_xact_id()` exists on 17.11 and not on 12.2 |
 | Rebuild equivalence holds on both majors | server: `f9` 7,356,416 -> 3,948,544 by either form; of four identical fixtures the two rebuilt under a 100,000-row insert stream both ended at 2,605,056 and the two rebuilt idle both stayed at 1,261,568, all ending valid/ready/live |
 | `bloat_pct` changes nothing else in the statement | server: the filed text and the amended text returned identical values in all 25 pre-existing columns over 7 indexes (175 of 175 cells), the amended text adding only `bloat_pct` |
 | The column reads no extra page | server: `EXPLAIN (ANALYZE, BUFFERS)` reported `shared hit=7568` for both texts over the same seven-index census |
@@ -5463,7 +6475,7 @@ note "done: $STAGES"
 | A NULL page argument skips a `STRICT` decoder instead of erroring | [pageinspect--1.5.sql:246-268](../../../../raw/postgres-17/contrib/pageinspect/pageinspect--1.5.sql#L246-L268), [create_function.sgml#STRICT](../../../../raw/postgres-17/doc/src/sgml/ref/create_function.sgml#L395-L400), [execSRF.c:188-196](../../../../raw/postgres-17/src/backend/executor/execSRF.c#L188-L196); server: `s4_gin` reported as `1 page(s) not decodable` where the published statement failed with `Expected special size 8, got 24.` |
 | The decoders error on a wrong special-area size, and the metapage decoder on any flags but `{meta}` | [ginfuncs.c:52-67](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L52-L67), [ginfuncs.c:122-128](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L122-L128), [bufpage.h#PageGetSpecialSize](../../../../raw/postgres-17/src/include/storage/bufpage.h#L314-L317), [ginblock.h#GinPageOpaqueData](../../../../raw/postgres-17/src/include/access/ginblock.h#L30-L37); server: the published statement aborted on `s4_gin`; the guarded one reported `s2_gin` as `metapage unreadable` |
 | The progress views expose an in-flight VACUUM, ANALYZE or index build for the index's table | [system_views.sql#pg_stat_progress_vacuum](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1209-L1227), [system_views.sql#pg_stat_progress_analyze](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1188-L1207), [system_views.sql#pg_stat_progress_create_index](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1256-L1289); server: 3 of 3 censuses flagged under a VACUUM that read 0, 1,098 and 2,368 deleted pages on an unchanging file, 2 of 2 under a concurrent rebuild |
-| A VACUUM that skips the index leaves the census and metapage untouched while `vacuum_count` advances | [vacuumlazy.c:392-396](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L396), [vacuumlazy.c:696-712](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L696-L712), [vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178); server: two bypassed VACUUMs on `f9c_cleanup_gin` left 0 deleted pages and metapage 480 / 482, the third deleted 352 |
+| Index cleanup runs only while `do_index_cleanup` is set, and `INDEX_CLEANUP` off, as an option or as the `vacuum_index_cleanup` reloption, and the wraparound failsafe each clear it | [vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178), [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401), [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066), [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335); source only since 2026-09-24, when the `f9c_cleanup` fixture that measured it was removed |
 | The guarded statement changes no number the published one prints | server: 208 of 208 shared cells identical over `f1`-`f7` and `p1`, 7,892 shared buffers for both, and the seven filed `REINDEX` results reproduced |
 | A small build budget packs an entry-tree index tighter | [gininsert.c:290-291](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L290-L291), [ginentrypage.c#entrySplitPage](../../../../raw/postgres-17/src/backend/access/gin/ginentrypage.c#L666-L691); server: `f1_churn_gin` rebuilt to 7,880,704 bytes at 4MB against 10,117,120 at 64MB and 1GB |
 | An empty GIN index's root measures `SizeOfPageHeaderData` and the GIN special-area size on the running build | [bufpage.c#PageInit](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L42-L60), [ginutil.c#GinInitPage](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L337-L347), [gininsert.c:348](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L348); server: `page_header_bytes 24`, `gin_special_bytes 8`, `pd_upper = pd_special`, flags `{leaf}` |
@@ -5475,9 +6487,9 @@ note "done: $STAGES"
 | A plain `REINDEX INDEX` would slip past a `SHARE` lock | [indexcmds.c:678-679](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L678-L679), [indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2860-L2872), [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L59-L104) |
 | A table lock cannot stop a pending-list flush | [ginfast.c:1034](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1034), [lockcmds.c#RangeVarCallbackForLockTable](../../../../raw/postgres-17/src/backend/commands/lockcmds.c#L70-L107); server: inside one locked transaction the same index read `bloat_pct` 8.66 with 246 pending pages, then 82.74 with 246 deleted, neither census flagged |
 | Every lock mode above `ROW EXCLUSIVE` needs MAINTAIN, UPDATE, DELETE or TRUNCATE | [lockcmds.c#LockTableAclCheck](../../../../raw/postgres-17/src/backend/commands/lockcmds.c#L279-L299), [lock.sgml#privileges](../../../../raw/postgres-17/doc/src/sgml/ref/lock.sgml#L167-L179) |
-| The wraparound failsafe needs both GUCs and a real xid burn | [vacuum.c#vacuum_xid_failsafe_check](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1251-L1298), [guc_tables.c:2706-2714](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2706-L2714), [guc_tables.c:3376-3387](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3376-L3387); server: `vacuum_failsafe_age = 0` plus `autovacuum_freeze_max_age = 100000` and 120,000 consumed xids |
-| A failsafe VACUUM skips index cleanup, and the census cannot tell afterwards | [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2299-L2348); server: `f9c_cleanup_gin` unchanged at 0 deleted pages and metapage 480 / 482 while `vacuum_count` went 0 -> 1, the control VACUUM then deleting 352 |
-| Only the failsafe bypass is distinguishable in VACUUM's output | [vacuumlazy.c:705-711](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L705-L711); server: `index scan bypassed by failsafe: 2210 pages ... have 95000 dead item identifiers` against the reloption path's `index scan bypassed: ` |
+| The wraparound failsafe needs both GUCs and a real xid burn | [vacuum.c#vacuum_xid_failsafe_check](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1251-L1298), [guc_tables.c:2706-2714](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2706-L2714), [guc_tables.c:3376-3387](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3376-L3387); server 2026-09-08, in a run since removed: `vacuum_failsafe_age = 0` plus `autovacuum_freeze_max_age = 100000` and 120,000 consumed xids |
+| A failsafe VACUUM skips index cleanup, and the census cannot tell afterwards | [vacuumlazy.c#lazy_check_wraparound_failsafe](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2299-L2348); server 2026-09-08, in a run since removed: `f9c_cleanup_gin` unchanged at 0 deleted pages and metapage 480 / 482 while `vacuum_count` went 0 -> 1, the control VACUUM then deleting 352 |
+| Only the failsafe bypass is distinguishable in VACUUM's output | [vacuumlazy.c:705-711](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L705-L711); server 2026-09-08, in a run since removed: `index scan bypassed by failsafe: 2210 pages ... have 95000 dead item identifiers` against the reloption path's `index scan bypassed: ` |
 | A crash leaves all-zero pages at the tail of the file, invisible to the FSM | [ginutil.c#GinNewBuffer](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L294-L335), [bufpage.h#PageIsNew](../../../../raw/postgres-17/src/include/storage/bufpage.h#L226-L234); server: 4 crashes gave 0, 0, 2 and 6 zeroed pages; round 4's six were blocks 1307-1312, byte-for-byte zero, with `pg_freespace` reporting 0 free pages |
 | A page that breaks `pd_upper <= pd_special` is refused before any SQL guard runs | [bufpage.c#PageIsVerifiedExtended](../../../../raw/postgres-17/src/backend/storage/page/bufpage.c#L88-L124), [guc_tables.c#zero_damaged_pages](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1123-L1136); server: `ERROR: invalid page in block 0` from all three statements, becoming `metapage special area 0 bytes, expected 8` with `zero_damaged_pages = on` |
 | A self-consistent 16-byte special area on block 0 kills the published statement | [ginfuncs.c:52-67](../../../../raw/postgres-17/contrib/pageinspect/ginfuncs.c#L52-L67); server: `ERROR: input page is not a valid GIN metapage`, `Expected special size 8, got 16.`, where the derived statement reported it and kept going |
@@ -5489,15 +6501,16 @@ Renumbered on 2026-09-15, when the page was re-run under the protocol. Entries 1
 through 12 are the gaps that survived the re-run; 13 through 18 are new, and five of
 them exist because the re-run **removed** a fixture that used to answer something.
 The two entries the previous list ended on are closed and recorded as 19 and 20.
-Entry 21 is what the 2026-09-16 review added; the numbering of 1 through 20 is
-unchanged so that the references to it in the body still resolve.
+Entry 21 is what the 2026-09-16 review added. Entries 22 to 24 are what the
+2026-09-24 pass added, and it revised 5, 8, 15, 17, 20 and 21. The numbering of 1
+through 21 is unchanged so that the references to it in the body still resolve.
 
 1. **The `ginVersion <> 2` path is untested except by hand.** v17 always writes
    `GIN_CURRENT_VERSION = 2`
    ([ginutil.c:355-382](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L355-L382)), so no
    fixture can exercise the suppressed-slack branch or an uncompressed posting-tree
    leaf on data a server produced. `uncompressed_pages` was 0 and `gin_version` 2 on
-   all 25 censused indexes of this run, as in every earlier one. The only version-1
+   all 26 censused indexes of this run, as in every earlier one. The only version-1
    reading on the page comes from patching a byte in a scratch index file.
 2. **The payload-and-fill model can be diagnosed but not corrected.** The
    entry-tuple probe measures the dead-key population exactly — since 2026-09-16 as
@@ -5523,16 +6536,17 @@ unchanged so that the references to it in the body still resolve.
    still no way to evaluate the rule in advance on an index you have not rebuilt,
    which is why the column is now a level.
 5. **A concurrent VACUUM can still produce an arbitrary reading, and the progress
-   views only usually catch it.** Five censuses across one VACUUM read five
-   different dead-page counts between 0 and 768 on an unchanging file; four were
+   views only usually catch it.** Four censuses across one VACUUM read four
+   different dead-page counts between 0 and 768 on an unchanging file; three were
    flagged and one was not. Nothing was measured for several simultaneous vacuums,
    for a census straddling a `REINDEX CONCURRENTLY` swap (in three attempts here and
    22 across two earlier servers it always landed between censuses, never inside
    one), or for how wrong a single unflagged census can get in the worst case.
    The 2026-09-16 review adds a bound on how repeatable the case itself is: on one
    pass the unlocked loop read 5 censuses with 4 flagged, on the other 4 with 4
-   flagged and a maximum of 721 rather than 768 dead pages, so "four of five" is
-   one machine's arrival pattern and not a property of the engine.
+   flagged and a maximum of 721 rather than 768 dead pages, and the 2026-09-24 run
+   read 4 with 3 flagged. So "three of four" is one machine's arrival pattern and
+   not a property of the engine.
 6. **The opclass sweep is one fixture per opclass.** Six shapes were scored here —
    `array_ops` on `int[]`, `jsonb_path_ops`, `gin_trgm_ops`, `btree_gin`, plain
    `tsvector`, multicolumn and partial. Untested: `jsonb_ops`, `text[]`, weighted
@@ -5544,11 +6558,14 @@ unchanged so that the references to it in the body still resolve.
    allocator overhead in the budget), but attributing it to a release would need
    per-major builds of the intermediate versions.
 8. **Only 12.2 and 17.11 have ever been run, so every cross-major difference is a
-   range, not a boundary.** v13 through v16 were not built, and the 12.2 leg was not
-   re-run in this pass at all. The most consequential untested inference is that a
+   range, not a boundary.** v13 through v16 were not built. The 12.2 leg has had its
+   own script since 2026-09-24 and was re-run that day, but as a portability battery,
+   not the corpus. The two most consequential untested inferences are that a
    12.11-or-later server behaves like 17.11 on all-zero pages, which follows from
    `cd4868a5700`'s `Backpatch-through: 10` and the `REL_12_11` tag on its 12-branch
-   backport but was never executed.
+   back-patch, and that a 12.17-or-later server refuses `pgstatginindex` on an
+   invalid index, which follows from `13503eb5905`'s back-patch `975ae05537` and its
+   `REL_12_17` tag. Neither was executed.
 9. **The census of the protocol has no 12.x port.** It reads
    `autovacuum_vacuum_insert_threshold`, which does not exist on 12.2, and uses
    `pg_current_xact_id()` in the horizon sequence beside it, which does not either.
@@ -5565,7 +6582,7 @@ unchanged so that the references to it in the body still resolve.
     locked transaction, neither of them flagged for it. Also untested: whether
     autovacuum is cancelled or merely queued when the protocol lock is requested
     while it runs, the protocol under several simultaneous vacuums, and the
-    write-blocking cost on a multi-GB index, where the 190 ms measured here is not a
+    write-blocking cost on a multi-GB index, where the 214 ms measured here is not a
     guide.
 12. **A standby is outside the protocol and stays a spot check.** The three
     refusals were reproduced on a `pg_basebackup` replica and the census answered
@@ -5585,14 +6602,23 @@ unchanged so that the references to it in the body still resolve.
     fixture this page cannot rebuild. The source arguments behind them are intact
     and cited elsewhere on the page; the measurements are gone. Re-deriving any of
     them needs a new fixture with a published recipe.
-15. **The wraparound failsafe and the crash path were not re-run.** The third
-    spelling of "a VACUUM whose index cleanup did not run" needs
-    `autovacuum_freeze_max_age` at its 100,000 minimum, which is `PGC_POSTMASTER`,
-    plus a 120,000-transaction burn; the crash path produced zeroed pages in 2 of 4
-    attempts once and 0 of 2 on another machine, which is a rate and not a rule.
-    This run covers the same two protocol requirements by other means — the
-    `INDEX_CLEANUP OFF` and reloption spellings, and an appended zero block — so
-    what is unknown is only whether those two paths still behave as filed.
+15. **The crash path is not re-run, and no test reaches a `VACUUM` that skipped
+    index cleanup.** The crash path produced zeroed pages in 2 of 4 attempts once and
+    0 of 2 on another machine, which is a rate and not a rule; the appended-zero-block
+    case reaches the same page state deterministically, so what is unknown is only
+    whether a real crash still leaves such pages as filed. Since 2026-09-24 the
+    protocol requires no "`VACUUM` whose index cleanup did not run" in any of its
+    three spellings - `INDEX_CLEANUP OFF`, the `vacuum_index_cleanup` reloption, or the
+    wraparound failsafe - and this page's fixture for the first two was removed. What
+    that leaves unmeasured on this pin is the claim the fixture used to carry: that a
+    census and the metapage cannot tell afterwards that such a `VACUUM` ran. The page
+    now states it from source alone: the cleanup call is made only while
+    `do_index_cleanup` is set, and both spellings of `INDEX_CLEANUP` off and the
+    failsafe clear it
+    ([vacuum.c:2155-2178](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L2155-L2178),
+    [vacuumlazy.c:392-401](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L392-L401),
+    [vacuumlazy.c:1064-1066](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1064-L1066),
+    [vacuumlazy.c:2323-2335](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2323-L2335)).
 16. **What a census costs a production cache is unmeasured on this pin.** The
     `pg_buffercache` experiment was removed as a synthetic workload outside the
     protocol. The source argument stands — no ring buffer, one read per page, so the
@@ -5605,40 +6631,87 @@ unchanged so that the references to it in the body still resolve.
     account for it is the protocol's build-phase settle step, which moves where
     `f1`'s churn puts its new heap tuples and therefore which TIDs a later fresh
     build sees. That was not tested by holding the settle step out, so it is an
-    inference. The 2026-09-16 review makes the *new* number the stable one — both
-    of its passes read 10,125,312 again — which rules out a one-off and leaves the
-    mechanism still untested.
+    inference. The 2026-09-16 review and the 2026-09-24 passes make the *new* number
+    the stable one - every pass since has read 10,125,312 - which rules out a one-off
+    and leaves the mechanism still untested.
 18. **The `statement_timeout` leg was not re-run.** This run exercised
     `lock_timeout` ten times from the other side of the protocol lock, but not a
     census cancelled mid-scan, which is the case that matters on a multi-GB index.
 19. **Closed: the published SQL now reproduces the page.** Every fixture recipe,
     every published statement and every stage of the programme lives in
-    [the script](#the-script), so the corpus is rebuildable from this page alone.
+    [the script](#the-postgresql-1711-leg), so the corpus is rebuildable from this page alone.
     Two fixture families that could not be expressed that way were removed rather
     than described; see
     [What this pass removed, and why](#what-this-pass-removed-and-why).
 20. **Closed: the page is scored under the shared protocol.** [Mandatory GIN Bloat
     Tests](../../common-concepts/mandatory-gin-bloat-tests.md) defines the phases,
     the settle and maintenance steps, the census, the lock, the oracle, the
-    declare-then-score rule and the cross-checks, and the 2026-09-15 and 2026-09-16
-    runs performed all of them: declarations filed before the first fixture existed, a recorded
+    declare-then-score rule and the cross-checks, and the 2026-09-15, 2026-09-16 and
+    2026-09-24 runs performed all of them: declarations filed before the first fixture existed, a recorded
     baseline per fixture, the churn phase ending in settle → maintenance → census, a
     decide pass under one `SHARE ROW EXCLUSIVE` transaction, and a measured rebuild
     with `truth_pct` published beside every scored column. What conformance does
     **not** claim: the protocol's vacuum side is recorded and never simulated, two
     of the stand-in's three differences from an autovacuum worker stand, and the
     coverage row for a second `maintenance_work_mem` is satisfied by one index
-    rather than by the corpus.
-21. **Run-to-run stability is now measured, on one machine and one kernel.** Three
-    full passes over this pin — 2026-09-15 and the two of 2026-09-16 — agree on
-    every scored cell, which is the page's reproduction claim. But all three ran on
-    Linux x86_64 with `block_size` 8192 and the same `initdb` locale, so what a
-    different page size, filesystem, core count or kernel does to the *fixture*
-    sizes is still unknown, and the three quantities that did move between the two
-    2026-09-16 passes — elapsed times, three of the eight lock-timeout
-    cancellations, and concurrency case D's census count — have a sample of two.
-    What would settle it is a pass on unlike hardware, which is also what open
-    question 3 wants for `BLCKSZ`.
+    rather than by the corpus, and the page has not adopted the protocol's no-defeat
+    rule (open question 24).
+21. **Run-to-run stability is now measured on two platforms.** Six full passes of
+    the fixture programme have run on this pin: three on Linux x86_64 (2026-09-15, and
+    two on 2026-09-16) and three on Darwin 27 arm64 (2026-09-24). The recorded
+    2026-09-24 run agrees with the 2026-09-16 filing on every scored cell, and so did
+    that day's baseline pass of the filed script, so at `block_size` 8192 and
+    `MAXALIGN` 8 the fixture sizes did not depend on the operating system, compiler,
+    CPU architecture or core count. One pass moved one fixture by one page; see open
+    question 23. What moves between passes is elapsed time, the lock-timeout
+    cancellations, the queued VACUUM's wait and concurrency cases A and D. Two limits
+    stand: the baseline and middle passes ran earlier revisions of the script - the
+    filed one, and one before its report files - so their numbers predate the script
+    text filed now and only the recorded run's come from it; and a second `BLCKSZ`,
+    which open question 3 wants, is still unbuilt.
+22. **Numbers from earlier passes stay on the page without a script.** The sections
+    kept as history - *Plan review*, *Deviations from the brief*, the guarded and
+    derived statements' agreement counts, the *Context Reviewed* bullets - and many
+    Evidence Map rows whose evidence is a `server:` note from an earlier pass report
+    numbers that no script on this page reproduces, because their fixtures or
+    experiments were removed. They are that pass's record, not re-measured claims.
+    Scripting or removing each of them is a larger revision than this pass made.
+23. **One pass in six moved `g50_gin` by one page, and why is not established.** In
+    the middle 2026-09-24 pass, whose fixture recipes are the ones filed below, the
+    maintenance step's VACUUM of `s50` printed `index scan bypassed: 2 pages from table
+    (0.07% of total) have 272 dead item identifiers`, and its ANALYZE then counted 272
+    dead rows. So the two settle VACUUMs had left dead line pointers on two heap pages,
+    and each later VACUUM skipped index vacuuming because fewer than 2% of the table's
+    pages held them
+    ([vacuumlazy.c:89](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L89),
+    [vacuumlazy.c:1899-1948](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1948)).
+    The bypass keeps index cleanup, so the settle step's proofs still pass, but the
+    272 TIDs stayed in `g50_gin`. It read 93 data-leaf and 38 deleted pages against
+    92 and 39 on every other pass, `bloat_pct` 57.05 against 57.07 and a payload-model
+    error of +25.23% against +25.16%; its rebuilt size, its `truth_pct` of 34.37 and
+    both bound verdicts did not move. The baseline and recorded passes' maintenance
+    VACUUM of `s50` read `index scan not needed`. A settle VACUUM that could not take a cleanup lock
+    on two heap pages would explain it: it processes such a page without pruning and
+    counts its dead tuples as missed, leaving them for the next VACUUM to turn into
+    dead line pointers
+    ([vacuumlazy.c:923-952](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L923-L952),
+    [vacuumlazy.c:1761-1768](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1761-L1768)).
+    But only a VERBOSE VACUUM prints the `tuples missed` line that would show it
+    ([vacuumlazy.c:664-668](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L664-L668)), and
+    the settle VACUUMs are not VERBOSE. Those numbers come from a script revision
+    earlier than the one filed below, whose churn is the same.
+24. **The page has not adopted the protocol's no-defeat rule.** [Mandatory GIN Bloat
+    Tests](../../common-concepts/mandatory-gin-bloat-tests.md) gained *The maintenance
+    must not be defeated* on 2026-09-15, after this page's last protocol re-port. The
+    other consumer pages adopted it on 2026-09-16 and 2026-09-17; on 2026-09-24 the
+    asker scoped this pass to removing the one test the rule's newest revision
+    forbids. So the script's settle and maintenance statements still run in sessions
+    with `statement_timeout = 600s` and `lock_timeout = 2s`, and the run records none
+    of the rule's four proofs per fixture: the completed statement with no skip line,
+    VERBOSE's `dead but not yet removable` count, the horizon holders, and an
+    entry-side reading. The recorded run's churn output does show `0 are dead but not
+    yet removable` on all 37 of its VERBOSE VACUUMs, but the script neither checks
+    that nor fails on it.
 
 ## Source References
 
@@ -5757,12 +6830,18 @@ unchanged so that the references to it in the body still resolve.
 - [contrib/pgstattuple/sql/pgstattuple.sql](../../../../raw/postgres-17/contrib/pgstattuple/sql/pgstattuple.sql#L47-L63) — the shipped `pgstattuple` tests, which cover metapage reads and wrong access methods and not this report.
 - [doc/src/sgml/regress.sgml](../../../../raw/postgres-17/doc/src/sgml/regress.sgml#L40-L59) — `make check`, which the measurement script runs on the build it measures.
 - [src/backend/parser/gram.y](../../../../raw/postgres-17/src/backend/parser/gram.y#L12305-L12320) — the `LOCK TABLE` grammar the measurement protocol uses.
+- [src/backend/access/heap/vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L89) and [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1899-L1948) — `BYPASS_THRESHOLD_PAGES` and the index-vacuum bypass that keeps index cleanup.
+- [src/backend/access/heap/vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L923-L952), [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1761-L1768) and [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L664-L668) — the cleanup-lock fallback, the dead tuples it leaves unpruned, and the `tuples missed` line only VERBOSE prints.
+- [doc/src/sgml/ref/pg_basebackup.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L499-L504) and [pg_basebackup.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L968-L971) — `--checkpoint`'s `spread` default, and the idle wait for the starting checkpoint.
+- [src/backend/access/transam/xlog.c](../../../../raw/postgres-17/src/backend/access/transam/xlog.c#L8940-L8959) — `do_pg_backup_start` requests an immediate checkpoint only when asked for a fast one.
+- [contrib/pageinspect/rawpage.c](../../../../raw/postgres-17/contrib/pageinspect/rawpage.c#L266) — `page_header` decodes its input through `get_page_from_raw`.
 
 ## Navigation
 
 - [v17/index](../../index.md)
 - [wiki index](../../../index.md)
 - [versions](../../../versions.md)
+- [Wiki Glossary (unverified)](../../../glossary.md) - the shared vocabulary this page links on first use
 - [PostgreSQL 17 Codebase Navigation Guide (unverified)](../../codebase-navigation-guide.md)
 - [v17 common concept: Mandatory GIN Bloat Tests (unverified)](../../common-concepts/mandatory-gin-bloat-tests.md) — the protocol every number on this page was scored under
 - [Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17 (unverified)](non-btree-index-inflation-comment-baseline.md)
