@@ -14557,3 +14557,68 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - `raw/postgres-17/` was read only. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv. The throwaway directory used to test the new port check was deleted in the same command.
 
 **Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `82d797c`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-24] revise v17 | non-B-tree COMMENT-baseline maintenance heuristic: the invalid coverage rows removed, both legs re-run
+
+- **Prompt.** The asker chose to have it corrected silently: "Follow `AGENTS.md`, in PostgreSQL 17. Remove the invalid tests from the question "A COMMENT-Stored Baseline Non-B-Tree Index-Maintenance Heuristic for PostgreSQL 12 Through 17", and re-run all tests." The analysis, including a baseline pass of both filed leg scripts, was shown in chat first; prompt hygiene and scope were then asked in one question call.
+- **Scope.** The asker chose all three recommended options:
+  - **correct silently**;
+  - remove **the two coverage rows**, over also removing the `defeat` stage or the held-snapshot fixtures `g08` and `n10`;
+  - **both glossary changes, checked on PostgreSQL 17 only**: a new Isolation level entry, and a 17 check of the Back-patch entry, which had been checked on 19 only.
+- **Target.** [A COMMENT-Stored Baseline Non-B-Tree Index-Maintenance Heuristic for PostgreSQL 12 Through 17 (unverified)](v17/questions/indexing/non-btree-comment-baseline-maintenance-heuristic.md), at unchanged pins `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11) and `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
+
+**The invalid tests.** Earlier the same day both governing concept pages dropped "a `VACUUM` whose index cleanup did not run" from their required coverage and from their declared exceptions. This page had already removed that case's fixtures, `h06` and `n11`, on 2026-09-22. What was left of the test were two declared coverage rows per leg, one for each protocol, filed `skipped` by the `declare` stage, and the prose that still called the case a requirement of both protocols. No other test in either script switches index vacuuming off: every maintenance step is `VACUUM (VERBOSE, ANALYZE)`, probe P1 runs a plain `VACUUM`, and `h05` and `n12` are the required `ANALYZE`-only stand-ins. The held snapshots of `g08` and `n10` are the one exception both protocols still declare, and the `defeat` stage is the brief's proof that a defeated step stops the run; both stay.
+
+**Scripts, both legs, edited in place.**
+- The two coverage rows left the `declare` stage.
+- `SKIPPED` no longer names `h06` and `n11`: the 17 leg's criteria now print "not built: none", and the 12 leg's name `b11` only.
+- The header and recipe comments now count the source page's 29 fixtures. That page removed `h06` and `n11` itself earlier the same day.
+- The `score` stage of both legs now also writes every census reading to `meas.csv`; see the defect below.
+- New SHA-256: `f8f2e4f00f45...` (17 leg, 3,239 lines) and `13845e3cbb4e...` (12 leg, 3,271 lines). The two filed texts are unchanged: step 1 `89293844...`, step 2 `52bcbea7...`.
+
+**The script defect the re-run exposed, fixed in both legs.** The coverage table quotes `h01`'s 2,402 overflow pages with 46 free bitmap bits and `g07`'s 10,037 live leaves. The census stores those readings only in `proto.meas`, in the fixture database, which no stage printed and `clean` deletes, so the outputs of a finished run could not show them. The `score` stage now writes the whole table to `out/meas.csv` with `COPY ... TO STDOUT (FORMAT csv, HEADER)` through `psql -q`: 3,968 rows on 17.11 and 3,731 on 12.2, carrying all three readings, which match the page. After the fix, every number of three or more digits in the Answer appears in a file the final runs wrote, a commit date aside.
+
+**Runs**, all on Darwin 27.0.0 arm64 (macOS 27.0) with Apple clang 21.0.0, Homebrew `bash` 5.3.15 and `JOBS=8`, both legs side by side from empty sandboxes each time:
+- the baseline pass of the filed scripts, unchanged (SHA-256 `7cf38509...` and `8fc8c78f...`): 20:10:08Z to 20:20:38Z (17) and 20:21:06Z (12), exit 0;
+- a pass of the edited scripts before the `meas.csv` dump (`f454c25c...` and `57e6ee3f...`): 20:30:33Z to 20:40:12Z (17) and 20:41:00Z (12), exit 0;
+- the recorded run of the final scripts: 20:44:46Z to 20:55:08Z (17) and 20:55:40Z (12), exit 0.
+
+`make check` passed All 225 plus `pageinspect` 8, `pgstattuple` 1 and `pg_freespacemap` 1 on 17.11, and All 192 plus `pageinspect` 5 and `pgstattuple` 1 on 12.2, on every pass. `verify` read 3 of 3 on every pass, and the page's two script blocks are byte-identical to the recorded run's files.
+
+**Results.**
+- All three passes reproduced every decision, score, prediction, invariant and edge verdict of the 2026-09-22 filing. That is 22 / 7 / 0 on 17.11 and 22 / 6 / 0 on 12.2; 29 of 29 and 28 of 28 predictions; 18 of 18 invariants; 158 of 158 edge verdicts; 27 and 26 maintenance steps checked, none defeated; and the `defeat` stage stopping its step with exit status 1.
+- Every as-built, maintained and rebuilt size reproduced except `g09`'s. On 17.11 its churned file read 454,500,352, 450,707,456 and 453,828,608 bytes over the three passes, against 456,310,784 filed. On 12.2 all three of its sizes moved, as open question 6 says they do.
+- `ANALYZE`-sampled tuple ratios moved on seven fixtures per leg. Over the fixtures whose row count ended where it began they now span 0.9777 (`s08` on 17.11) to 1.0068 (`s08` on 12.2), against 0.9962 to 1.0185 filed. Step 1 took 22.9 ms and 17.6 ms under the lock.
+- The removal changed only the declared coverage plan, 31 rows per leg instead of 33, and each leg's "not built" line.
+- The 17 leg's simulated auto-analyze census also analyzed `h00` in the baseline pass and the recorded run, but not in the middle pass; the 12 leg never did. This is the publication-timing case that open question 5 describes, and that question now records all six passes.
+- Server log: 31 and 33 `ERROR` and `FATAL` lines on every pass, all deliberate, and 0 maintenance skip lines.
+
+**Page changes.**
+- `## Question` gained `### Third revision: the invalid tests removed`, holding the corrected prompt and a four-item scope note, with no defect list. *Revision after filing* now says the row was dropped by both concept pages and removed by this revision.
+- The coverage row and open question 11 went; open questions 12 to 14 are now 11 to 13. The Verdict's false-negative bullet, the corpus paragraph, the known limitation on dead entries, the Evidence Map's `INDEX_CLEANUP OFF` row and the usage table's Purpose row no longer call the case a protocol requirement or count 31 fixtures.
+- Updated to the recorded run: both results tables (regenerated from `score-table.txt`; only `g09` and seven sampled tuple ratios per leg changed), step 1's duration, the tuple-ratio range, open questions 5 and 6, the usage table's Runtime row and `### The last run`, which now describes all three passes.
+- The stage table, the results-file table and the prerequisites gained the `meas.csv` dump and a `bash` and `grep` bullet. The coverage section's lead now says where the dropped row went, and *Context Reviewed* gained a bullet on the protocols as they stood on 2026-09-24.
+- `## Navigation` gained the glossary link, and the explanatory prose gained 83 first-use term links. A venv helper proposed them and each was reviewed by hand. Four proposals were changed: "`DO` block" is not a disk block, three first hits of "page" meant a wiki page, "GiST" first sat inside the phrase linked to GiST build method, and `max_parallel_maintenance_workers` and `pgstathashindex` were left unlinked because Parallel vacuum and pgstatindex do not cover them. The invalid-index link was placed by hand. No link sits in a heading, a fence or `## Question`.
+- `verified_by_agent` stays `not yet`, and `verified:` was not touched.
+
+**Checks.**
+- 391 raw citations over 52 files, all under `raw/postgres-17/` and all in bounds; this revision added none to the page.
+- The 43 Contents entries match the headings, and every in-page anchor resolves.
+- All 83 glossary anchors exist and none repeats; none sits in a heading, a fence or `## Question`. Stripping them gives back the pre-link text exactly.
+- Both fenced scripts are byte-identical to the files that ran and contain no Markdown fence; the two SQL texts still hash to `89293844...` and `52bcbea7...`.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted `.DS_Store` files in the v12 and v14 checkouts.
+
+**Glossary.**
+- Added, checked on PostgreSQL 17 only at the asker's choice: [Isolation level](glossary.md#isolation-level), with ten citations. Its evidence is `xact.h`'s four levels and `IsolationUsesXactSnapshot()`, the isolation-level GUC options, `GetTransactionSnapshot()`, the MVCC chapter, the two isolation GUCs, `StartTransaction()`'s copy of the default, and `check_transaction_isolation()`.
+- [Back-patch](glossary.md#back-patch) gained a PostgreSQL 17 check. Its main paragraph now cites `RELEASE_CHANGES` and `git_changelog` at the 17 pin, and a "PostgreSQL 19: Holds" note keeps the four 19 citations. Every cited range was read at the pin.
+- The Contents, the Scope bullet and two Open Questions bullets name them. The v17 *Source References* block went from 459 to 461 files and stays sorted by path. The term count went from 259 to 260, in the glossary blurbs on `wiki/index.md` and all five version landing pages.
+- Reviewed for this interaction and unchanged: INDEX_CLEANUP, Index vacuuming, COMMENT ON, REINDEX, CONCURRENTLY, Snapshot, PL/pgSQL, Parallel vacuum, pgstatindex, Utility command, Cumulative statistics, xmin and xmax, Role membership, Truncation and Relfilenumber. All 83 entries the page links were checked for existence and a PostgreSQL 17 check.
+
+**Concept pages.** Read and not edited. The page's coverage table now matches both protocols' current lists row for row, with `bloom`, the undecodable-page row and the concurrency row skipped and two rows not reached, as before.
+
+**Teardown.**
+- Every cluster this task started was stopped with `pg_ctl -m fast -w stop` through its own script's `clean` stage: the baseline `nbbase17` and `nbbase12`, the middle pass's `nbmaint17` and `nbmaint12`, and the recorded `nbmaint17` and `nbmaint12`. Each `clean` confirmed no `postmaster.pid`, no `postgres` process on its data directory and an empty socket directory, then deleted its sandbox, 5.5 to 6.6 GB each.
+- Verified afterwards: no `postgres` process, no socket for ports 55417 and 55412, and `.wiki-runtime/tmp/` empty.
+- `raw/postgres-17/` and `raw/postgres-12/` were read only, with every build out of tree. The frozen page copy, the four script files and the two run logs under `.wiki-runtime/tmp/` were deleted after the last byte comparison with the page's blocks. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `96de7cf`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.

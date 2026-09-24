@@ -14,6 +14,7 @@ verified_by_agent: not yet
   - [Scope settled before drafting](#scope-settled-before-drafting)
   - [Revision after filing](#revision-after-filing)
   - [Second revision: twelve reported defects](#second-revision-twelve-reported-defects)
+  - [Third revision: the invalid tests removed](#third-revision-the-invalid-tests-removed)
 - [Answer](#answer)
   - [Verdict](#verdict)
   - [What is stored, and where](#what-is-stored-and-where)
@@ -124,10 +125,11 @@ After this page was filed and pushed on 2026-09-22, the asker wrote:
 The quoted bullet summarized fixtures `h06` and `n11`, the only two whose maintenance step
 was `VACUUM (ANALYZE, INDEX_CLEANUP OFF)`. Both were removed from both leg scripts, with
 their recipes, their predictions and their two declared exceptions, and both legs were
-re-measured end to end. Neither concept page names a fixture, but both list "a `VACUUM`
-whose index cleanup did not run" as coverage a conforming run must reach. This run
-therefore declares that row skipped under both protocols; see
-[Coverage the protocols require, and what this run skipped](#coverage-the-protocols-require-and-what-this-run-skipped).
+re-measured end to end. Neither concept page named a fixture, but both then listed "a
+`VACUUM` whose index cleanup did not run" as coverage a conforming run must reach, so that
+revision declared the row skipped under both protocols. Both concept pages dropped the row
+on 2026-09-24, and the third revision took it out of both scripts; see
+[Third revision: the invalid tests removed](#third-revision-the-invalid-tests-removed).
 
 ### Second revision: twelve reported defects
 
@@ -158,16 +160,56 @@ changed.
 | 11 | the score rounded the reclaimed fraction to two decimals before comparing it with the threshold | the threshold is applied to the unrounded fraction; the two decimals are display only |
 | 12 | the rounding bound on the tuple test ignored that both counts are rounded, and `n05` and `n12` were called 21.45 % and 11.50 % larger than their rebuilds | both explanations corrected; see [The two tests, and the states that disable them](#the-two-tests-and-the-states-that-disable-them) and [Why the two tests miss where they miss](#why-the-two-tests-miss-where-they-miss) |
 
-Every number on this page now comes from the re-measurement that followed; see
-[The last run](#the-last-run).
+The numbers that revision's re-measurement produced were replaced by the third revision's
+run.
+
+### Third revision: the invalid tests removed
+
+The request, on 2026-09-24:
+
+> Follow `AGENTS.md`, in PostgreSQL 17. Remove the invalid tests from the question "A
+> COMMENT-Stored Baseline Non-B-Tree Index-Maintenance Heuristic for PostgreSQL 12 Through
+> 17", and re-run all tests.
+
+Scope, settled with the asker before any edit:
+
+- **The invalid tests are the two coverage rows for "a `VACUUM` whose index cleanup did not
+  run"**, one per protocol, which both leg scripts filed before the first fixture existed.
+  Earlier that day both governing concept pages stopped listing that case as required
+  coverage and stopped declaring it an exception to the no-defeat rule. Its two fixtures,
+  `h06` and `n11`, had left this page on 2026-09-22; see
+  [Revision after filing](#revision-after-filing). The scripts still declared the case as a
+  required row they skipped, and the page still called it a requirement both protocols
+  make. The rows left both scripts, and every such sentence was corrected.
+- **Kept:** `g08` and `n10`, whose held snapshots are the one exception both protocols
+  still declare, and the `defeat` stage, which proves that a defeated maintenance step
+  stops the run.
+- **"All tests" is both legs' whole default order**, from empty sandboxes: the builds, the
+  engine and contrib regression suites, and every stage.
+- **Glossary:** the page gained its glossary links. The shared glossary gained an Isolation
+  level entry, checked on PostgreSQL 17 only, and a PostgreSQL 17 check of its Back-patch
+  entry, which had been checked on 19 only, so this page can link both.
+
+**What the re-run found.** Both legs ran their whole default order three times on Darwin
+27 arm64, each time from empty sandboxes and side by side: the filed scripts as a
+baseline, the edited scripts, and the edited scripts again once their `score` stage also
+wrote `meas.csv`. All three passes agree with the filing on every decision, score,
+prediction, invariant and edge verdict, and on every size but `g09`'s, which moves on every
+pass. The removal changed only what the `declare` stage files, 31 coverage rows per leg
+instead of 33, and the "not built" line of each leg's criteria file. The second pass
+showed that `h01`'s overflow and bitmap counts and `g07`'s leaf count, which the coverage
+table quotes, were kept only in the fixture database that `clean` deletes. The `score`
+stage now writes every census reading to `meas.csv`, and the third pass is the recorded
+run. Every number on this page now comes from it, except the earlier passes' figures that
+[The last run](#the-last-run) and [Open Questions](#open-questions) name as such.
 
 ## Answer
 
 ### Verdict
 
 Two texts do it, and both run unchanged on 12.2 and 17.11: step 1, a read-only statement
-that decides and prints the commands, and step 2, a `DO` block that carries the decision
-out, one index per transaction, deciding each index again under `REINDEX INDEX`'s own two
+that decides and prints the commands, and step 2, a [`DO`](../../../glossary.md#plpgsql) block that carries the decision
+out, one index per transaction, deciding each index again under [`REINDEX INDEX`](../../../glossary.md#reindex)'s own two
 locks before it writes. The baseline is one reserved line of about 70 bytes in the index's
 own comment, `@nbmaint:{"v":2,"sz":...,"tup":...,"at":...}`, and any human text in the
 comment survives every write and both `REINDEX` forms byte for byte.
@@ -177,7 +219,7 @@ of 23.08 %:
 
 | Result | 17.11 | 12.2 |
 |---|---|---|
-| fixtures scored | 29 | 28; `b11` needs an operator class 12.2 lacks |
+| fixtures scored | 29 | 28; `b11` needs an [operator class](../../../glossary.md#operator-class) 12.2 lacks |
 | `PASS` | **22** | **22** |
 | `FALSE POSITIVE`: rebuilt, and the rebuild returned less than 23.08 % | **7** | **6** |
 | `FALSE NEGATIVE`: skipped, and a rebuild would have returned 23.08 % or more | **0** | **0** |
@@ -191,23 +233,24 @@ of 23.08 %:
 
 **The two tests measure growth, not waste, so every miss is a false positive.**
 
-- **Every false positive is legitimate growth.** The BRIN indexes grow with the heap's
-  block count and rebuild to the same size (`b10`, `b11`, `b12`, `b13`); `h04` grew 40 %
-  by insertion; `n05` took 50 % more rows through its pending list; `n12` took 20 % more
+- **Every false positive is legitimate growth.** The [BRIN](../../../glossary.md#brin) indexes grow with the [heap](../../../glossary.md#heap)'s
+  [block](../../../glossary.md#block) count and rebuild to the same size (`b10`, `b11`, `b12`, `b13`); `h04` grew 40 %
+  by insertion; `n05` took 50 % more rows through its [pending list](../../../glossary.md#pending-list); `n12` took 20 % more
   rows and crossed 1.30x. Each rebuild returned between 0 and 21.45 % of its file.
 - **No fixture left is a false negative.** The only two that were, `h06` and `n11`, were
-  removed at the asker's request; see [Revision after filing](#revision-after-filing). A
-  `VACUUM` that skips index cleanup still leaves dead entries neither test can see; see
+  removed at the asker's request; see [Revision after filing](#revision-after-filing).
+  Neither protocol has required their case since 2026-09-24. A [`VACUUM`](../../../glossary.md#vacuum) that skips [index
+  cleanup](../../../glossary.md#index_cleanup) still leaves dead entries neither test can see; see
   [Known limitations](#known-limitations).
-- **The tuple test is right in one direction only.** It fired on a fall three times
+- **The [tuple](../../../glossary.md#tuple) test is right in one direction only.** It fired on a fall three times
   (`g08`, `n10`, `s10`) and every rebuild paid off; it fired on a rise three times (`b13`,
   `h04`, `n05`) and none did. Both legs agree.
 - **The size test alone fired 15 times on 17.11 and 14 on 12.2.** Eleven paid off on each
   leg; the rest are the BRIN indexes and `n12`.
 
 The two legs agree fixture by fixture: every as-built, maintained and rebuilt size is
-byte-identical on 12.2 and 17.11 except `g09`, which is a sorted GiST build on 17 and an
-insert-driven one on 12, and the empty hash index `h07`. On 17.11 every size also equals
+byte-identical on 12.2 and 17.11 except `g09`, which is a [sorted GiST build](../../../glossary.md#gist-build-method) on 17 and an
+insert-driven one on 12, and the empty [hash index](../../../glossary.md#hash-index) `h07`. On 17.11 every size also equals
 the source page's own 17.11 filing except `g09`'s churned file, which that page recorded as
 varying between passes.
 
@@ -217,15 +260,15 @@ of indexes whose rebuilt file was not smaller than the as-built baseline; see
 [After an out-of-band rebuild](#after-an-out-of-band-rebuild).
 
 **The maintenance was not defeated, and the rule has teeth.** Every `VACUUM` and
-`ANALYZE` session of both runs read its settable timeouts back at 0, every maintenance
-step outside the two declared snapshots left 0 tuples dead but not yet removable, and a
+[`ANALYZE`](../../../glossary.md#statistics) session of both runs read its settable timeouts back at 0, every maintenance
+step outside the two declared [snapshots](../../../glossary.md#snapshot) left 0 tuples [dead but not yet removable](../../../glossary.md#dead-tuple), and a
 deliberately defeated step stopped the run with exit status 1; see
 [The maintenance was not defeated](#the-maintenance-was-not-defeated).
 
 ### What is stored, and where
 
-`COMMENT ON INDEX` stores one string per index in `pg_description`, keyed by the index's
-OID, the `pg_class` class OID and `objsubid = 0`, and a new comment replaces the old one
+[`COMMENT ON INDEX`](../../../glossary.md#comment-on) stores one string per index in `pg_description`, keyed by the index's
+[OID](../../../glossary.md#oid), the [`pg_class`](../../../glossary.md#pg_class) class OID and `objsubid = 0`, and a new comment replaces the old one
 whole ([pg_description.h#FormData](../../../../raw/postgres-17/src/include/catalog/pg_description.h#L48-L57),
 [comment.c#CreateComments](../../../../raw/postgres-17/src/backend/commands/comment.c#L133-L171),
 [comment.sgml#replaces](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml#L87-L93)).
@@ -246,8 +289,8 @@ Second line: an @ sign, a { and a } brace.
 | Field | Meaning | Why it is there |
 |---|---|---|
 | `v` | payload format version, `2` | a payload of any other version is unreadable by definition, so it is re-initialized rather than half-read |
-| `sz` | `pg_relation_size(index)` when the baseline was written, bytes | the brief's first value; the main fork only ([system_functions.sql#pg_relation_size](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L285-L289)) |
-| `tup` | the table's `pg_class.reltuples` then, rounded | the brief's second value |
+| `sz` | [`pg_relation_size(index)`](../../../glossary.md#relation-size-functions) when the baseline was written, bytes | the brief's first value; the [main fork](../../../glossary.md#fork) only ([system_functions.sql#pg_relation_size](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L285-L289)) |
+| `tup` | the table's [`pg_class.reltuples`](../../../glossary.md#reltuples-and-relpages) then, rounded | the brief's second value |
 | `at` | when the baseline was written | staleness is otherwise invisible; it takes no part in any decision |
 
 What the comment holds decides what happens to it:
@@ -459,14 +502,14 @@ SELECT /* wiki_nbmaint_plan_12_17 */
           s.cur_bytes DESC, s.schema_name, s.index_name;
 ```
 
-`statement_timeout` and `lock_timeout` are both `PGC_USERSET`, so the two `SET` lines
+[`statement_timeout`](../../../glossary.md#statement_timeout-and-lock_timeout) and `lock_timeout` are both [`PGC_USERSET`](../../../glossary.md#guc-context), so the two `SET` lines
 apply at session scope and need neither a reload nor a restart
 ([guc_tables.c#statement_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2611-L2620),
 [guc_tables.c#lock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2622-L2631)).
-Step 1 reads catalogs and file sizes only; over the suite database it took 23.3 ms on
-17.11 and 16.4 ms on 12.2, measured under the lock. It is one statement, and reading a
+Step 1 reads [catalogs](../../../glossary.md#catalog) and file sizes only; over the suite database it took 22.9 ms on
+17.11 and 17.6 ms on 12.2, measured under the lock. It is one statement, and reading a
 size waits for any lock that excludes `AccessShareLock`, so one candidate index held in
-`ACCESS EXCLUSIVE` for longer than `lock_timeout` cancels step 1 as a whole: edge round H
+[`ACCESS EXCLUSIVE`](../../../glossary.md#accessexclusivelock) for longer than `lock_timeout` cancels step 1 as a whole: edge round H
 measured `canceling statement due to lock timeout`, from its 5-second `lock_timeout`, on
 both servers. Step 2 reads sizes one index at a time and carries on; see
 [What step 2 locks, and what it checks under the locks](#what-step-2-locks-and-what-it-checks-under-the-locks).
@@ -474,8 +517,8 @@ both servers. Step 2 reads sizes one index at a time and carries on; see
 ### Step 2: carrying it out
 
 Run it at the top level, not inside `BEGIN`. It commits once per index, and a `DO` block
-can commit only when it is not inside a transaction block: `ProcessUtility` marks the
-`DO` atomic otherwise, and `_SPI_commit` refuses an atomic context with `invalid
+can commit only when it is not inside a transaction block: [`ProcessUtility`](../../../glossary.md#utility-command) marks the
+`DO` atomic otherwise, and [`_SPI_commit`](../../../glossary.md#spi) refuses an atomic context with `invalid
 transaction termination`, which both servers returned when the block was run inside
 `BEGIN`
 ([utility.c#isAtomicContext](../../../../raw/postgres-17/src/backend/tcop/utility.c#L551),
@@ -778,7 +821,7 @@ END
 $nbmaint$;
 ```
 
-The pipeline in step 2, from `WITH params AS (` through the end of the `staged` CTE, is
+The pipeline in step 2, from `WITH params AS (` through the end of the `staged` [CTE](../../../glossary.md#common-table-expression), is
 byte-identical to the same region of step 1: 104 lines, SHA-256 `4e22b4c2f2757314…` in
 both texts, checked by both leg scripts on every run. Only what surrounds it differs, so
 the two tests, the payload grammar and the rule for keeping the human text are each
@@ -798,7 +841,7 @@ twice. Per index, in its own transaction:
    and the earlier text read every candidate's size in its scan, outside any exception
    block, so one index held in `ACCESS EXCLUSIVE` elsewhere cancelled the whole run.
 2. **Pass 1, unlocked.** The pipeline runs narrowed to this one index by
-   `nbmaint.only_index`, a custom setting step 2 sets for its own transaction only
+   `nbmaint.only_index`, a [custom setting](../../../glossary.md#guc) step 2 sets for its own transaction only
    ([pg_proc.dat#set_config](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6270-L6273),
    [pg_proc.dat#current_setting-missing_ok](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L6268-L6269)).
    Step 1, in any other session, reads it as unset, or as empty once a transaction that
@@ -810,7 +853,7 @@ twice. Per index, in its own transaction:
 3. **The two locks `REINDEX INDEX` takes, in its order.** `LOCK TABLE ... IN SHARE MODE`,
    then `ALTER INDEX ... OWNER TO` the owner the index already has. `ReindexIndex` locks
    the table before the index "to avoid deadlock hazard", and the plain form's pair is
-   `ShareLock` on the table and `AccessExclusiveLock` on the index
+   [`ShareLock`](../../../glossary.md#lock-mode) on the table and `AccessExclusiveLock` on the index
    ([indexcmds.c#ReindexIndex-lock-order](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2812-L2829),
    [indexcmds.c#RangeVarCallbackForReindexIndex-table-lockmode](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2871-L2872),
    [index.c#reindex_index-locks](../../../../raw/postgres-17/src/backend/catalog/index.c#L3601-L3614)).
@@ -821,7 +864,7 @@ twice. Per index, in its own transaction:
    [tablecmds.c#ATExecChangeOwner-index](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14543-L14562),
    [tablecmds.c#ATExecChangeOwner-noop](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14614-L14618)).
    Both servers measured it: `AccessExclusiveLock` held, nothing printed, and the index's
-   `pg_class` row kept its `xmin`. Every `COMMENT` takes `ShareUpdateExclusiveLock` on its
+   `pg_class` row kept its [`xmin`](../../../glossary.md#xmin-and-xmax). Every `COMMENT` takes [`ShareUpdateExclusiveLock`](../../../glossary.md#shareupdateexclusivelock) on its
    object, which that lock excludes
    ([comment.c#CommentObject-ownership](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L76),
    [lock.c#LockConflicts](../../../../raw/postgres-17/src/backend/storage/lmgr/lock.c#L64-L104)),
@@ -849,7 +892,7 @@ twice. Per index, in its own transaction:
    then the rebuild, then the size and count read again, then the comment. One commit
    ends the index's transaction and releases both locks.
 
-**Read committed is required, and step 2 sets it.** Each transaction step 2 starts after a
+**[Read committed](../../../glossary.md#isolation-level) is required, and step 2 sets it.** Each transaction step 2 starts after a
 `COMMIT` takes the default isolation level
 ([plpgsql.sgml#transaction-defaults](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L3743-L3744)),
 and only read committed takes a new snapshot for each statement; repeatable read fixes the
@@ -864,7 +907,7 @@ setting, for the session
 transaction: for `initialize` and `refresh` only while the comment is written, for
 `reindex` for the whole rebuild, as the plain form always holds it. While step 2 waits for
 that lock, queries that would use the index wait behind it, for up to `lock_timeout`.
-`ALTER INDEX` is DDL that fires event triggers, as `COMMENT` and `REINDEX` already are
+`ALTER INDEX` is DDL that fires [event triggers](../../../glossary.md#event-trigger), as `COMMENT` and `REINDEX` already are
 ([cmdtag.h#PG_CMDTAG](../../../../raw/postgres-17/src/include/tcop/cmdtag.h#L19),
 [cmdtaglist.h#ALTER-INDEX](../../../../raw/postgres-17/src/include/tcop/cmdtaglist.h#L42)),
 so a database with DDL event triggers sees one per index step 2 writes to.
@@ -900,15 +943,15 @@ The first rule that matches decides. This is the order of the `staged` CTE.
 one is its own, so it writes neither and reports the index until a person removes one.
 
 **Rule 4 is not in the brief, and it is needed.** A `VACUUM` never shortens one of these
-index files. The only call to `RelationTruncate` in the hash, GiST, SP-GiST, GIN, BRIN and
-B-tree directories of the pinned tree is SP-GiST's, and it sits inside `#ifdef NOT_USED`;
+index files. The only call to [`RelationTruncate`](../../../glossary.md#truncation) in the hash, [GiST](../../../glossary.md#gist), [SP-GiST](../../../glossary.md#sp-gist), [GIN](../../../glossary.md#gin), BRIN and
+[B-tree](../../../glossary.md#b-tree) directories of the pinned tree is SP-GiST's, and it sits inside `#ifdef NOT_USED`;
 the hash README says only `REINDEX` shrinks a hash index; and GIN's cleanup re-reads the
 relation length rather than shortening it
 ([spgvacuum.c#truncation-disabled](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L877-L900),
 [README#no-shrink](../../../../raw/postgres-17/src/backend/access/hash/README#L31-L34),
 [ginvacuum.c#ginvacuumcleanup-relength](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L794-L802)).
 So an index smaller than its baseline was given a new file by something else, such as a
-hand-run `REINDEX`, which builds into a new relation file
+hand-run `REINDEX`, which builds into a new [relation file](../../../glossary.md#relfilenumber)
 ([index.c#reindex_index-rebuild](../../../../raw/postgres-17/src/backend/catalog/index.c#L3781-L3789)).
 A stored size that is now too high would hide the next 30 % of growth. Rule 4 rewrites it,
 and it runs before rule 5, so an index rebuilt elsewhere is not rebuilt again. The payload
@@ -935,8 +978,8 @@ fired`.
 | Filter | Because | Evidence |
 |---|---|---|
 | `a.amname <> 'btree'` | the brief's scope | - |
-| `c.relkind = 'i'` | a partitioned index (`'I'`) has no storage of its own: both servers measured its size as 0. Its leaf indexes are ordinary `'i'` indexes and are candidates themselves. `REINDEX INDEX` on the parent is refused on 12.2 (measured) and on 17 goes to `ReindexPartitions` | [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2803-L2850) |
-| `x.indisvalid AND x.indisready AND x.indislive` | an index left behind by a failed `CREATE INDEX CONCURRENTLY` says nothing about what a rebuild of the live index would return | measured: the edge case's failed build is never a candidate |
+| `c.relkind = 'i'` | a [partitioned index](../../../glossary.md#partitioned-index) (`'I'`) has no storage of its own: both servers measured its size as 0. Its leaf indexes are ordinary `'i'` indexes and are candidates themselves. `REINDEX INDEX` on the parent is refused on 12.2 (measured) and on 17 goes to `ReindexPartitions` | [indexcmds.c#ReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2803-L2850) |
+| `x.indisvalid AND x.indisready AND x.indislive` | an [index left behind](../../../glossary.md#invalid-index) by a failed `CREATE INDEX CONCURRENTLY` says nothing about what a rebuild of the live index would return | measured: the edge case's failed build is never a candidate |
 | `NOT pg_is_other_temp_schema(c.relnamespace)` | `REINDEX` refuses another session's temporary index | [index.c#reindex_index-other-temp](../../../../raw/postgres-17/src/backend/catalog/index.c#L3697-L3704), [namespace.c#isOtherTempNamespace](../../../../raw/postgres-17/src/backend/catalog/namespace.c#L3706-L3720) |
 | `n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')` | keeps the sweep away from the installation's own objects | - |
 | `c.cur_bytes IS NOT NULL` | `pg_relation_size` opens the relation with `try_relation_open` and returns NULL for one dropped since the catalog read, instead of raising | [dbsize.c#pg_relation_size](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L345-L371) |
@@ -998,9 +1041,9 @@ the rebuilt file and a counted table, not the estimate the decision was made on.
 
 | Need | Rule on 17 | What the method does |
 |---|---|---|
-| write the comment | `COMMENT` requires ownership of the index, and a superuser passes every ownership check ([comment.c#CommentObject-ownership](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L76), [objectaddress.c#check_object_ownership](../../../../raw/postgres-17/src/backend/catalog/objectaddress.c#L2382-L2401), [aclchk.c#object_ownercheck](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L4146-L4214)) | `pg_has_role(relowner, 'USAGE')` is the same test, `has_privs_of_role`, made in SQL ([acl.c#pg_has_role_id](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L4779-L4793), [acl.c#pg_role_aclcheck](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L4877-L4900)); a row that fails it is `blocked` and nothing is attempted |
+| write the comment | `COMMENT` requires ownership of the index, and a superuser passes every ownership check ([comment.c#CommentObject-ownership](../../../../raw/postgres-17/src/backend/commands/comment.c#L66-L76), [objectaddress.c#check_object_ownership](../../../../raw/postgres-17/src/backend/catalog/objectaddress.c#L2382-L2401), [aclchk.c#object_ownercheck](../../../../raw/postgres-17/src/backend/catalog/aclchk.c#L4146-L4214)) | [`pg_has_role(relowner, 'USAGE')`](../../../glossary.md#role-membership) is the same test, `has_privs_of_role`, made in SQL ([acl.c#pg_has_role_id](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L4779-L4793), [acl.c#pg_role_aclcheck](../../../../raw/postgres-17/src/backend/utils/adt/acl.c#L4877-L4900)); a row that fails it is `blocked` and nothing is attempted |
 | rebuild the index | `REINDEX INDEX` checks `MAINTAIN` on the table ([indexcmds.c#RangeVarCallbackForReindexIndex](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2857-L2912)) | an index's owner is its table's owner: `index_create` copies it, and `ALTER INDEX ... OWNER` only warns and changes nothing ([index.c#index_create-owner](../../../../raw/postgres-17/src/backend/catalog/index.c#L1008-L1014), [tablecmds.c#ATExecChangeOwner-index](../../../../raw/postgres-17/src/backend/commands/tablecmds.c#L14543-L14562)). So a session that passes the comment test owns the table as well |
-| rebuild without blocking writes | not possible from step 2: `REINDEX CONCURRENTLY` inside a `DO` block is refused with `cannot be executed from a function`, measured on both servers ([indexcmds.c#ExecReindex-concurrently](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2736-L2738), [xact.c#PreventInTransactionBlock](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L3594-L3633)) | step 2 runs the plain form. To rebuild a busy table's index concurrently, run step 1, run its `reindex_command` with `CONCURRENTLY` added at the top level, and let the next run's `refresh` rewrite the baseline if the file shrank |
+| rebuild without blocking writes | not possible from step 2: [`REINDEX CONCURRENTLY`](../../../glossary.md#concurrently) inside a `DO` block is refused with `cannot be executed from a function`, measured on both servers ([indexcmds.c#ExecReindex-concurrently](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L2736-L2738), [xact.c#PreventInTransactionBlock](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L3594-L3633)) | step 2 runs the plain form. To rebuild a busy table's index concurrently, run step 1, run its `reindex_command` with `CONCURRENTLY` added at the top level, and let the next run's `refresh` rewrite the baseline if the file shrank |
 
 The plain form takes `ShareLock` on the table, which blocks every writer for the whole
 rebuild, and `AccessExclusiveLock` on the index, which blocks every query that would use
@@ -1036,7 +1079,7 @@ discovered by the scripts' `facts` stage on the running server.
 |---|---|---|---|
 | both texts run unmodified | yes | yes | the compatibility claim; the `exact` stage ran each twice on each server |
 | `WITH ... AS MATERIALIZED` | accepted | accepted | the pipeline's optimization fences |
-| `pg_input_is_valid()` | 1 `pg_proc` row | 0 | the payload is parsed by regex, not by a guarded cast |
+| `pg_input_is_valid()` | 1 [`pg_proc`](../../../glossary.md#pg_proc) row | 0 | the payload is parsed by regex, not by a guarded cast |
 | `regexp_match()` | 2 `pg_proc` rows | 2 | the payload grammar is matched whole, with its fields read from that one match |
 | `ALTER INDEX ... OWNER TO` the owner it has | holds `AccessExclusiveLock`, prints nothing, and leaves the index's `pg_class` row with its `xmin` | the same | step 2's lock on the index |
 | `nbmaint.only_index` after a transaction that set it locally, and in a fresh session | `''`, and NULL | the same | step 1 reads every candidate |
@@ -1049,20 +1092,20 @@ discovered by the scripts' `facts` stage on the running server.
 | size of a partitioned index | 0 | 0 | the same |
 | `reltuples` of a table nothing has counted | `-1` | `0` | the unknown-count note fires only from 14 on; on 12 a zero is ambiguous |
 | `1234567::float4::numeric` | `1234570` | `1234570` | the same six-digit rounding on both |
-| `transaction_timeout` | exists | absent | forced to 0 on 17 only |
-| `pg_stat_force_next_flush()` | 1 `pg_proc` row | 0 | the 12 leg ends each churn session and waits a second instead |
+| [`transaction_timeout`](../../../glossary.md#transaction_timeout-and-idle_in_transaction_session_timeout) | exists | absent | forced to 0 on 17 only |
+| [`pg_stat_force_next_flush()`](../../../glossary.md#cumulative-statistics) | 1 `pg_proc` row | 0 | the 12 leg ends each churn session and waits a second instead |
 | `pg_stat_progress_analyze` | exists | absent | the 12 census reads two progress views |
 | `int8_minmax_multi_ops` | exists | absent | fixture `b11` is not built on 12 |
 | GiST `point_ops` support function 11 | present | absent | `g09` is a sorted build on 17 and insert-driven on 12 |
-| `pgstattuple()` on a hash index holding an all-zero page | reads it as free space | refused: `index "..." contains unexpected zero page at block ...` | the 12 census records the refusal instead of the number |
+| [`pgstattuple()`](../../../glossary.md#pgstattuple) on a hash index holding an all-zero [page](../../../glossary.md#page) | reads it as free space | refused: `index "..." contains unexpected zero page at block ...` | the 12 census records the refusal instead of the number |
 
 The last row is the one this run found. On 17, `pgstat_hash_page` reads each block with
 `ReadBufferExtended` and counts an all-zero page as free space
 ([pgstattuple.c#pgstat_hash_page](../../../../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L453-L495)).
 That is the 17 branch's commit `036decbba2` of 2025-10-02, first released in 17.7, whose
 message says the previous reader went through `_hash_checkpage()`, failed on empty
-pages, and was fixed and back-patched down to 13. A hash index gets all-zero pages from
-its splitpoint allocation, which writes only the last page of a new batch
+pages, and was fixed and [back-patched](../../../glossary.md#back-patch) down to 13. A hash index gets all-zero pages from
+its [splitpoint](../../../glossary.md#hash-splitpoint) allocation, which writes only the last page of a new batch
 ([hashpage.c#_hash_alloc_buckets](../../../../raw/postgres-17/src/backend/access/hash/hashpage.c#L967-L1037)).
 
 The v12 side of each behavior is on the v12 pages rather than cited here, because this
@@ -1085,7 +1128,7 @@ Partitioned Table in PostgreSQL 12
 
 The tuple test compares two readings of the table's `pg_class.reltuples`, and that column
 is an estimate written by whichever command touched the table last. The `probes` stage
-measured every writer on one 200,000-row table carrying one index of each access method.
+measured every writer on one 200,000-row table carrying one index of each [access method](../../../glossary.md#access-method).
 Where the two servers differ, a cell reads `17.11 / 12.2`:
 
 | After | table | hash index | GIN index | GiST index | SP-GiST index | BRIN index |
@@ -1109,7 +1152,7 @@ Where the two servers differ, a cell reads `17.11 / 12.2`:
 Most maintenance steps are a `VACUUM ANALYZE`, which vacuums first and analyzes second, so
 the count the method compares is `ANALYZE`'s sample estimate on both sides of the
 comparison. That estimate moves even when the rows do not: on the fixtures whose row count
-ended where it began, the tuple ratio read between 0.9962 (`g06` on 12.2) and 1.0185 (`g09` on 17.11). Only a fixture sitting on
+ended where it began, the tuple ratio read between 0.9777 (`s08` on 17.11) and 1.0068 (`s08` on 12.2). Only a fixture sitting on
 the 30 % boundary could flip on that, and the one that does, `s10` at a 30 % delete, is
 also opened by its size test.
 
@@ -1129,11 +1172,13 @@ changed, with no physical change at all. See also
 
 ### The ported fixtures, and the protocols they ran under
 
-The corpus is 29 of the source page's 31 numbered fixtures, recipe for recipe, with its
-ids and its sizes. `h06` and `n11` were removed after the first filing; see
-[Revision after filing](#revision-after-filing). The sizes are 1,000,000 rows for the hash, GiST and SP-GiST families, 2,000,000 for BRIN
-and the partial index, 600,000 for GIN and 300,000 for the small ones. Every table is
-created with `autovacuum_enabled = off`, and every recipe is a line of the published
+The corpus is the source page's 29 numbered fixtures, recipe for recipe, with its ids and
+its sizes. `h06` and `n11` left this page on 2026-09-22, see
+[Revision after filing](#revision-after-filing), and left the source page on 2026-09-24,
+when both protocols stopped requiring their case. The sizes are 1,000,000 rows for the
+hash, GiST and SP-GiST families, 2,000,000 for BRIN
+and the [partial index](../../../glossary.md#partial-index), 600,000 for GIN and 300,000 for the small ones. Every table is
+created with [`autovacuum_enabled = off`](../../../glossary.md#storage-parameter), and every recipe is a line of the published
 scripts.
 
 | Fixture | AM | What its churn does | Maintenance step |
@@ -1141,9 +1186,9 @@ scripts.
 | `h00` | hash | nothing: the untouched index | none |
 | `h01` | hash | collapses 1,000,000 distinct keys onto 100, so duplicates chain into overflow pages | `VACUUM ANALYZE` |
 | `h02` | hash | grows the table 5x, then deletes back to the baseline rows | `VACUUM ANALYZE` |
-| `h03` | hash | `fillfactor = 50`, updates half the keys | `VACUUM ANALYZE` |
+| `h03` | hash | [`fillfactor = 50`](../../../glossary.md#fillfactor), updates half the keys | `VACUUM ANALYZE` |
 | `h04` | hash | inserts 400,000 rows and nothing else | `VACUUM ANALYZE` |
-| `h05` | hash | inserts 120,000 rows: past the analyze threshold, under the vacuum ones | `ANALYZE` alone, the auto-analyze stand-in |
+| `h05` | hash | inserts 120,000 rows: past the analyze threshold, under the vacuum ones | `ANALYZE` alone, the [auto-analyze](../../../glossary.md#autovacuum) stand-in |
 | `h07` | hash | nothing: an empty table and index | none |
 | `h08` | hash | updates 1 % of the keys | `VACUUM ANALYZE` |
 | `h12` | hash | partial index `WHERE state = 'pending'`, whose population grows 9x | `VACUUM ANALYZE` |
@@ -1157,7 +1202,7 @@ scripts.
 | `b10` | BRIN | minmax at `pages_per_range = 128`, six whole-table value rounds | `VACUUM ANALYZE` |
 | `b11` | BRIN | `int8_minmax_multi_ops(values_per_range = 64)`, correlated, scattered, correlated again; 17 only | `VACUUM ANALYZE` |
 | `b12` | BRIN | minmax at `pages_per_range = 32`, three value rounds | `VACUUM ANALYZE` |
-| `b13` | BRIN | `autosummarize = on`, 1,000,000 appended rows | the summarization stand-in, then `VACUUM ANALYZE` |
+| `b13` | BRIN | `autosummarize = on`, 1,000,000 appended rows | the [summarization](../../../glossary.md#brin-summarization) stand-in, then `VACUUM ANALYZE` |
 | `n03` | GIN | 1,800,000 rows on three hot keys inserted, then deleted | `VACUUM ANALYZE` |
 | `n04` | GIN | six rounds of complete key replacement | `VACUUM ANALYZE` |
 | `n05` | GIN | `fastupdate = on`, 300,000 inserts under a 1 GB pending-list limit | `VACUUM ANALYZE` |
@@ -1182,7 +1227,7 @@ What this run did in each phase:
 | baseline | a census of every fixture under `SHARE ROW EXCLUSIVE`, then **step 2's first run**, which initialized every baseline: 29 of 29 on 17.11 and 28 of 28 on 12.2 wrote a version-2 payload whose `sz` equals the census's size |
 | churn | the recipe's writes, a census of the unmaintained state, the maintenance step and its checks, a census of the maintained state; then the simulated auto-analyze census over every table |
 | decide | **step 1, verbatim**, in one transaction holding `SHARE ROW EXCLUSIVE` on every fixture table; nothing else ran in that phase |
-| oracle | `REINDEX INDEX` at `maintenance_work_mem = 256MB`, with `pg_relation_size(index, 'main')` read before and after, and the heap's `relpages` and `reltuples` recorded because a hash rebuild is sized from them |
+| oracle | `REINDEX INDEX` at [`maintenance_work_mem = 256MB`](../../../glossary.md#maintenance_work_mem), with `pg_relation_size(index, 'main')` read before and after, and the heap's `relpages` and `reltuples` recorded because a hash rebuild is sized from them |
 
 Filed before the first fixture existed, in their own database: the declared kind of every
 column step 1 publishes, all six of them **levels**, because the method publishes a
@@ -1224,14 +1269,14 @@ and the run dies at the first failure rather than score anything:
 | every settable timeout read back as 0 | all 65 `VACUUM` and `ANALYZE` sessions of the run, four timeouts each | all 63, three each |
 | `VERBOSE`'s "dead but not yet removable" count | 0 on all 23 checked `VACUUM`s outside the declared snapshots | 0 on all 22 |
 | the two declared snapshots | 240,000 on `g08` and 960,000 on `n10` while held; 0 on the `VACUUM` after the release | the same |
-| horizon probes with no holder | 50 of 54; the other 4 are the declared snapshot, before and after its step | 48 of 52; the same 4 |
-| replication slots and prepared transactions | 0 and 0 | 0 and 0 |
+| [horizon](../../../glossary.md#xmin-horizon) probes with no holder | 50 of 54; the other 4 are the declared snapshot, before and after its step | 48 of 52; the same 4 |
+| [replication slots](../../../glossary.md#replication-slot) and [prepared transactions](../../../glossary.md#two-phase-commit) | 0 and 0 | 0 and 0 |
 | skip, error or cancellation lines, in the session logs and the server log | 0 | 0 |
 | a census's measurement lock held across a maintenance step | 0 of 91 lock intervals | 0 of 88 |
 
 Why those proofs: `VACUUM` takes its removal horizon from
 `GetOldestNonRemovableTransactionId`, which folds in every backend's `xmin`, and it enters
-index vacuuming only when it collected dead tuples
+[index vacuuming](../../../glossary.md#index-vacuuming) only when it collected dead tuples
 ([vacuum.c#vacuum_get_cutoffs-OldestXmin](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1109-L1122),
 [vacuumlazy.c#lazy_vacuum-gate](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1047-L1052)).
 Under a pinned horizon the churn's rows are only counted, in the `VERBOSE` line's "dead but
@@ -1252,7 +1297,7 @@ FATAL: the maintenance of zz (maint) was defeated; 50000 tuples dead but not yet
 The two declared snapshots are the only other place a horizon was held. On `g08` and
 `n10` the maintenance `VACUUM` under the snapshot reported 240,000 and 960,000 tuples dead
 but not yet removable, then a second `VACUUM` after the release reported 0 and deleted
-2,330 GiST pages and 375 GIN posting-tree pages, none of them free yet. Both fixtures are
+2,330 GiST pages and 375 GIN [posting-tree](../../../glossary.md#posting-tree) pages, none of them free yet. Both fixtures are
 scored on that second state.
 
 ### The protocol cross-checks
@@ -1271,8 +1316,8 @@ before and just after that `VACUUM`:
 | AM | What each count is, in the pinned source | What it is checked against |
 |---|---|---|
 | hash | cleanup returns no statistics, and so no line, unless `hashbulkdelete` ran; when it ran, only `num_pages` is filled ([hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663), [hash.c#hashbulkdelete-stats](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L631-L637)) | no line exactly where `VERBOSE` does not print `index scan needed:`, which it prints only when bulk deletion ran ([vacuumlazy.c#index-scan-needed](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L695-L700)); otherwise the census after, and three zeros |
-| GiST | the scan counts a recyclable or new page as deleted and reusable and records it free, a deleted page not yet recyclable as deleted, and each page it deletes as newly deleted and deleted ([gistvacuum.c#gistvacuumpage-classes](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L309), [gistvacuum.c#gistdeletepage-counters](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L655-L658)) | deleted = deleted-flag plus all-zero pages after; reusable = FSM free pages after; newly deleted = deleted-flag pages after minus before |
-| SP-GiST | a page outside the metapage and the two roots that is left new or empty is recorded free and counted, and the three counts are set equal ([spgvacuum.c#spgvacuumpage-fsm](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L665-L683), [spgvacuum.c#final-stats](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L902-L905), [spgist_private.h#fixed-blocks](../../../../raw/postgres-17/src/include/access/spgist_private.h#L47-L53)) | the new or empty pages after, read from page headers ([bufpage.h#PageIsEmpty](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214-L224)), and FSM free pages after |
+| GiST | the scan counts a [recyclable](../../../glossary.md#index-page-recycling) or new page as deleted and reusable and records it free, a deleted page not yet recyclable as deleted, and each page it deletes as newly deleted and deleted ([gistvacuum.c#gistvacuumpage-classes](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L309), [gistvacuum.c#gistdeletepage-counters](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L655-L658)) | deleted = deleted-flag plus all-zero pages after; reusable = [FSM](../../../glossary.md#free-space-map) free pages after; newly deleted = deleted-flag pages after minus before |
+| SP-GiST | a page outside the [metapage](../../../glossary.md#metapage) and the two roots that is left new or empty is recorded free and counted, and the three counts are set equal ([spgvacuum.c#spgvacuumpage-fsm](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L665-L683), [spgvacuum.c#final-stats](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L902-L905), [spgist_private.h#fixed-blocks](../../../../raw/postgres-17/src/include/access/spgist_private.h#L47-L53)) | the new or empty pages after, read from page headers ([bufpage.h#PageIsEmpty](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214-L224)), and FSM free pages after |
 | BRIN | `num_pages` is read before the scan and the summarization, and the rest stays 0 ([brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332)) | pages in total = the census before |
 | GIN | reusable is the recyclable pages the cleanup scan records free ([ginvacuum.c#ginvacuumcleanup-free](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L794)) | FSM free pages after |
 
@@ -1309,7 +1354,7 @@ summary that moves to another page frees space on its old page and records nothi
 [brin_pageops.c#brin_doinsert-fsm](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L460-L464),
 [brin_pageops.c#brin_doupdate-move](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L244-L313),
 [brin_pageops.c#brin_getinsertbuffer-record](../../../../raw/postgres-17/src/backend/access/brin/brin_pageops.c#L861-L865)).
-So I18 scores the pages the `VACUUM` did not write, found by an LSN no newer than the WAL
+So I18 scores the pages the `VACUUM` did not write, found by an [LSN](../../../glossary.md#lsn) no newer than the [WAL](../../../glossary.md#wal)
 insert position read just before it began, and reports the rest.
 
 That leaves few pages to score, because most of a BRIN index's regular pages take a
@@ -1317,7 +1362,7 @@ summary during its `VACUUM`. On 17.11 the two pages the `VACUUM`s did not write,
 in `b12` and `b13`, read their exact category, and so did 13 of the 18 they wrote. Three
 of the other five read higher, and each is the last page of `b10`, `b11` or `b12`, the page
 that index's summarization extended it onto and went on filling. Two read lower, both on
-`b11`, the one index whose summaries moved between pages: 21 line pointers were left
+`b11`, the one index whose summaries moved between pages: 21 [line pointers](../../../glossary.md#line-pointer) were left
 behind by moves during its churn. A moved summary frees space it does not record, which
 fits, but the census keeps no per-page history, so it does not show which summary left
 which page. On 12.2, where `b11` is not built, the same two unwritten pages read their exact
@@ -1343,19 +1388,19 @@ the stored count. The score compares the decision with `truth %` at 23.08 %.
 | `h07` | hash | 32,768 | 32,768 | 32,768 | 0.00 | 1.0000 | - | - | skip | PASS |
 | `h08` | hash | 33,570,816 | 33,570,816 | 33,570,816 | 0.00 | 1.0000 | 1.0000 | - | skip | PASS |
 | `h12` | hash | 58,736,640 | 66,568,192 | 66,568,192 | 0.00 | 1.1333 | 1.0000 | - | skip | PASS |
-| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 1.0042 | size | reindex | PASS |
+| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 0.9879 | size | reindex | PASS |
 | `g07` | GiST | 81,100,800 | 300,523,520 | 81,100,800 | 73.01 | 3.7056 | 1.0000 | size | reindex | PASS |
 | `g08` | GiST | 24,330,240 | 24,330,240 | 4,866,048 | 80.00 | 1.0000 | 0.2000 | tuples | reindex | PASS |
-| `g09` | GiST | 45,375,488 | 456,310,784 | 70,787,072 | 84.49 | 10.0563 | 1.0185 | size | reindex | PASS |
-| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 1.0057 | size | reindex | PASS |
+| `g09` | GiST | 45,375,488 | 453,828,608 | 70,787,072 | 84.40 | 10.0016 | 1.0062 | size | reindex | PASS |
+| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 0.9777 | size | reindex | PASS |
 | `s09` | SP-GiST | 33,964,032 | 134,873,088 | 33,964,032 | 74.82 | 3.9711 | 1.0000 | size | reindex | PASS |
 | `s10` | SP-GiST | 12,582,912 | 16,957,440 | 9,502,720 | 43.96 | 1.3477 | 0.7000 | both | reindex | PASS |
-| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0050 | size | reindex | **FALSE POSITIVE** |
-| `b11` | BRIN | 49,152 | 114,688 | 114,688 | 0.00 | 2.3333 | 1.0053 | size | reindex | **FALSE POSITIVE** |
-| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 0.9980 | size | reindex | **FALSE POSITIVE** |
+| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0027 | size | reindex | **FALSE POSITIVE** |
+| `b11` | BRIN | 49,152 | 114,688 | 114,688 | 0.00 | 2.3333 | 0.9977 | size | reindex | **FALSE POSITIVE** |
+| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 0.9955 | size | reindex | **FALSE POSITIVE** |
 | `b13` | BRIN | 24,576 | 24,576 | 24,576 | 0.00 | 1.0000 | 1.5000 | tuples | reindex | **FALSE POSITIVE** |
 | `n03` | GIN | 43,106,304 | 50,659,328 | 43,106,304 | 14.91 | 1.1752 | 1.0000 | - | skip | PASS |
-| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0111 | size | reindex | PASS |
+| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0043 | size | reindex | PASS |
 | `n05` | GIN | 43,106,304 | 85,131,264 | 66,871,296 | 21.45 | 1.9749 | 1.5000 | both | reindex | **FALSE POSITIVE** |
 | `n06` | GIN | 43,335,680 | 123,756,544 | 40,034,304 | 67.65 | 2.8558 | 1.0000 | size | reindex | PASS |
 | `n07` | GIN | 43,106,304 | 188,317,696 | 49,135,616 | 73.91 | 4.3687 | 1.0000 | size | reindex | PASS |
@@ -1386,18 +1431,18 @@ The same 29 fixtures but `b11`, on a server built from the 12.2 pin.
 | `h07` | hash | 81,920 | 81,920 | 81,920 | 0.00 | 1.0000 | - | - | skip | PASS |
 | `h08` | hash | 33,570,816 | 33,570,816 | 33,570,816 | 0.00 | 1.0000 | 1.0000 | - | skip | PASS |
 | `h12` | hash | 58,736,640 | 66,568,192 | 66,568,192 | 0.00 | 1.1333 | 1.0000 | - | skip | PASS |
-| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 0.9962 | size | reindex | PASS |
+| `g06` | GiST | 81,100,800 | 393,871,360 | 81,100,800 | 79.41 | 4.8566 | 0.9943 | size | reindex | PASS |
 | `g07` | GiST | 81,100,800 | 300,523,520 | 81,100,800 | 73.01 | 3.7056 | 1.0000 | size | reindex | PASS |
 | `g08` | GiST | 24,330,240 | 24,330,240 | 4,866,048 | 80.00 | 1.0000 | 0.2000 | tuples | reindex | PASS |
-| `g09` | GiST | 97,902,592 | 487,817,216 | 78,102,528 | 83.99 | 4.9827 | 0.9978 | size | reindex | PASS |
-| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 1.0002 | size | reindex | PASS |
+| `g09` | GiST | 97,976,320 | 487,448,576 | 78,086,144 | 83.98 | 4.9752 | 1.0006 | size | reindex | PASS |
+| `s08` | SP-GiST | 33,964,032 | 246,988,800 | 35,258,368 | 85.72 | 7.2721 | 1.0068 | size | reindex | PASS |
 | `s09` | SP-GiST | 33,964,032 | 134,873,088 | 33,964,032 | 74.82 | 3.9711 | 1.0000 | size | reindex | PASS |
 | `s10` | SP-GiST | 12,582,912 | 16,957,440 | 9,502,720 | 43.96 | 1.3477 | 0.7000 | both | reindex | PASS |
-| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0009 | size | reindex | **FALSE POSITIVE** |
-| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 1.0074 | size | reindex | **FALSE POSITIVE** |
+| `b10` | BRIN | 24,576 | 32,768 | 32,768 | 0.00 | 1.3333 | 1.0057 | size | reindex | **FALSE POSITIVE** |
+| `b12` | BRIN | 32,768 | 57,344 | 57,344 | 0.00 | 1.7500 | 0.9986 | size | reindex | **FALSE POSITIVE** |
 | `b13` | BRIN | 24,576 | 24,576 | 24,576 | 0.00 | 1.0000 | 1.5000 | tuples | reindex | **FALSE POSITIVE** |
 | `n03` | GIN | 43,106,304 | 50,659,328 | 43,106,304 | 14.91 | 1.1752 | 1.0000 | - | skip | PASS |
-| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0046 | size | reindex | PASS |
+| `n04` | GIN | 43,106,304 | 324,345,856 | 49,143,808 | 84.85 | 7.5243 | 1.0064 | size | reindex | PASS |
 | `n05` | GIN | 43,106,304 | 85,131,264 | 66,871,296 | 21.45 | 1.9749 | 1.5000 | both | reindex | **FALSE POSITIVE** |
 | `n06` | GIN | 43,335,680 | 123,756,544 | 40,034,304 | 67.65 | 2.8558 | 1.0000 | size | reindex | PASS |
 | `n07` | GIN | 43,106,304 | 188,317,696 | 49,135,616 | 73.91 | 4.3687 | 1.0000 | size | reindex | PASS |
@@ -1523,7 +1568,10 @@ checks that exactly one line differs from the filed text before it runs it.
 ### Coverage the protocols require, and what this run skipped
 
 The coverage plan was filed with the declarations, before any fixture existed. Every row
-reads the same on both legs unless the 12.2 column says otherwise.
+reads the same on both legs unless the 12.2 column says otherwise. The plan no longer has a
+row for a `VACUUM` whose index cleanup did not run: both protocols dropped that row on
+2026-09-24, and so did this page; see
+[Third revision: the invalid tests removed](#third-revision-the-invalid-tests-removed).
 
 | Protocol | Behavior | Fixture | 17.11 | 12.2 |
 |---|---|---|---|---|
@@ -1531,9 +1579,9 @@ reads the same on both legs unless the 12.2 column says otherwise.
 | non-B-tree | hash: a splitpoint allocation | `h02` | reached: 4,098 blocks grew to 20,749 | the same |
 | non-B-tree | hash: an index whose `hashbulkdelete` never ran | `h04` | reached: no `VERBOSE` index line | the same |
 | non-B-tree | GiST: an emptied leaf deleted, and one kept as its parent's last downlink | `g07` | partly: 26,315 pages deleted beside 10,037 live leaves; a page-class census cannot tell a last-downlink leaf from any other | the same |
-| non-B-tree | GiST: a deleted-but-not-recyclable page under a held snapshot | - | **not reached**: `g08`'s snapshot kept its dead rows, so the `VACUUM` under it deleted no page; the 2,330 pages the second `VACUUM` deleted came after the release, and were not yet free only because their deletion XID, taken as they were deleted, was not yet older than every snapshot's horizon; see [Open Questions](#open-questions) | the same |
+| non-B-tree | GiST: a deleted-but-not-recyclable page under a held snapshot | - | **not reached**: `g08`'s snapshot kept its dead rows, so the `VACUUM` under it deleted no page; the 2,330 pages the second `VACUUM` deleted came after the release, and were not yet free only because their deletion [XID](../../../glossary.md#transaction-id), taken as they were deleted, was not yet older than every snapshot's horizon; see [Open Questions](#open-questions) | the same |
 | non-B-tree | GiST: a sorted build beside a non-sorted one | `g09` beside `g06` to `g08` | reached: `point_ops` has support function 11 | **not reachable**: no GiST operator class has it on 12.2 |
-| non-B-tree | SP-GiST: placeholders, a trailing run removed, an interior one kept | `s09` | partly: 109 pages freed, from `VACUUM`'s own counters; no decoder shows the page classes | the same |
+| non-B-tree | SP-GiST: [placeholders](../../../glossary.md#sp-gist-placeholder), a trailing run removed, an interior one kept | `s09` | partly: 109 pages freed, from `VACUUM`'s own counters; no decoder shows the page classes | the same |
 | non-B-tree | SP-GiST: an emptied non-root page and the root | `s09` | partly, the same limit | the same |
 | non-B-tree | BRIN: an unsummarized range before the maintenance step, and after | `b13` | reached: 94 summaries before, 141 after the stand-in and the maintenance step | the same |
 | non-B-tree | BRIN: a desummarized range, and one summarized by the stand-in | `b13` | reached: 3 orphaned line pointers after three ranges were desummarized | the same |
@@ -1542,7 +1590,6 @@ reads the same on both legs unless the 12.2 column says otherwise.
 | both | the maintenance pair, before and after the maintenance step | every churned fixture | reached | the same |
 | non-B-tree | the auto-analyze stand-in, a plain `ANALYZE` | `h05` | reached | the same |
 | both | a table the census analyzed, and one it declined | `tc_past`, and `tc_exact` exactly on its threshold | reached | the same |
-| both | a `VACUUM` whose index cleanup did not run | - | **skipped**: its fixtures, `h06` and `n11`, were removed at the asker's request | the same |
 | non-B-tree | an empty index and an untouched index | `h07`, `h00` | reached | the same |
 | non-B-tree | a non-default `fillfactor` or `pages_per_range` | `h03`, `s10`, `b12` | reached | the same |
 | non-B-tree | a non-core access method under the admission rule | - | **skipped**: the ported corpus has no `bloom` fixture | the same |
@@ -1569,8 +1616,8 @@ reads the same on both legs unless the 12.2 column says otherwise.
   A `VACUUM` run with `INDEX_CLEANUP OFF` leaves them, because it switches off index
   vacuuming and index cleanup before the scan starts
   ([vacuumlazy.c#do_index_cleanup-init](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L387-L397)).
-  This page no longer measures that case: its two fixtures were removed at the asker's
-  request.
+  This page does not measure that case. Its two fixtures were removed at the asker's
+  request, and since 2026-09-24 neither protocol has required a run to reach it.
 - **A rebuild done elsewhere counts only when it shrank the file.** Without a relation
   file number in the payload, an out-of-band `REINDEX` of a grown index is followed by a
   second one.
@@ -1593,7 +1640,7 @@ reads the same on both legs unless the 12.2 column says otherwise.
   already committed keep their baselines when it fires.
 - **PostgreSQL 13 to 16 were not built.** The texts use nothing newer than 12, and the
   facts this page depends on were measured on 12.2 and 17.11 only.
-- **A standby can run step 1 only.** `COMMENT` is classified as not read-only, and a
+- **A [standby](../../../glossary.md#hot-standby) can run step 1 only.** `COMMENT` is classified as not read-only, and a
   server in recovery refuses such a command, so step 2 fails at its first write
   ([utility.c#comment-not-read-only](../../../../raw/postgres-17/src/backend/tcop/utility.c#L164-L217),
   [utility.c#recovery-gate](../../../../raw/postgres-17/src/backend/tcop/utility.c#L570-L583)).
@@ -1608,20 +1655,20 @@ filed texts out of this page, so the text that is scored is the text that is pub
 
 | Item | 17 leg, `nbmaint_suite_v17.sh` | 12 leg, `nbmaint_suite_v12.sh` |
 |---|---|---|
-| Purpose | Build 17.11 out of tree, run the engine and contrib regression suites, start an isolated cluster, run both filed texts on an empty database, discover the version-local facts, file the declarations, build 29 of the source page's 31 fixtures, all but `h06` and `n11`, store their baselines with step 2, churn and maintain them under the no-defeat proofs, run the simulated auto-analyze census, decide with step 1 under the measurement lock, rebuild every fixture as the oracle, run step 2 on the rebuilt state, score, run four probes and the edge cases, and check the page against what ran. Every number in [Answer](#answer) that names 17.11 is one of its outputs | The same on 12.2, with 28 fixtures: `b11` also needs an operator class 12.2 does not have. Every number that names 12.2 is one of its outputs |
+| Purpose | Build 17.11 out of tree, run the engine and [contrib](../../../glossary.md#contrib) [regression suites](../../../glossary.md#regression-test), start an isolated cluster, run both filed texts on an empty database, discover the version-local facts, file the declarations, build the source page's 29 fixtures, store their baselines with step 2, churn and maintain them under the no-defeat proofs, run the simulated auto-analyze census, decide with step 1 under the measurement lock, rebuild every fixture as the oracle, run step 2 on the rebuilt state, score, run four probes and the edge cases, and check the page against what ran. Every number in [Answer](#answer) that names 17.11 is one of its outputs | The same on 12.2, with 28 fixtures: `b11` also needs an operator class 12.2 does not have. Every number that names 12.2 is one of its outputs |
 | Invocation | Save the block to `.wiki-runtime/tmp/nbmaint_suite_v17.sh` and run `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh` from the repository root. It exits 0 only when every stage and every required check passed. To score a finished run again: `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh score criteria`. To run the fixtures again, start at `fixtures`, which rebuilds the fixture database; `reset` drops every database, so a new run starts at `declare` | The same with `nbmaint_suite_v12.sh` |
 | Stages | `build check cluster texts exact facts declare fixtures churn autoanalyze crosscheck decide oracle act score probes edge defeat verify criteria report`, in that default order; `start`, `stop`, `reset` and `clean` run only when named. `churn`, `autoanalyze`, `decide`, `oracle` and `act` change the fixtures: each refuses to run before the stages it depends on, and after a later one has changed what it would read. `crosscheck`, `score` and `probes` may run again, and replace their own records | the same |
 | Environment | `WIKI_ROOT` (`$PWD`), `PAGE` (this page), `SRC` (`$WIKI_ROOT/raw/postgres-17`), `SANDBOX` (`$WIKI_ROOT/.wiki-runtime/tmp/nbmaint17`), `PORT` (`55417`), `JOBS` (`8`), `BASE_ROWS` (`1000000`), `BRIN_ROWS` (`2000000`), `SMALL_ROWS` (`300000`), `GIN_ROWS` (`600000`), `HOT_ROWS` (`1200000`), `A05_INSERTS` (`120000`), `ROUNDS` (`6`), `MWM` (`256MB`) | the same names; `SRC` defaults to `raw/postgres-12`, `SANDBOX` to `.wiki-runtime/tmp/nbmaint12`, `PORT` to `55412` |
 | Prerequisites | See [Prerequisites](#prerequisites) | the same |
 | Output | Everything under `$SANDBOX/out`. Read `criteria.txt` first, then `score-table.txt`, `score-summary.txt`, `invariants.txt` and `maintenance-proof.txt`; see [Where the results land](#where-the-results-land) | the same, under the 12 leg's sandbox |
-| Runtime | 14 min 25 s from an empty sandbox on the recorded host, run alongside the 12 leg: 146 s to build, 70 s of regression suites, 88 s of fixtures, 7 min 15 s of churn, 67 s of oracle. About 12 min from a built tree | 12 min 54 s from an empty sandbox, run alone after the 17 leg: 89 s to build, 40 s of regression suites, 80 s of fixtures, 7 min 15 s of churn including the one-second publication waits, 68 s of oracle. About 11 min 30 s from a built tree |
+| Runtime | 10 min 22 s from an empty sandbox on the recorded host, run alongside the 12 leg: 65 s to build, 32 s of regression suites, 59 s of fixtures, 6 min 10 s of churn, 51 s of oracle. About 9 min from a built tree | 10 min 54 s from an empty sandbox on the recorded host, run alongside the 17 leg: 60 s to build, 26 s of regression suites, 59 s of fixtures, 7 min 02 s of churn, 42 s of oracle. About 10 min from a built tree; the 12 leg's churn includes its one-second publication waits |
 | Cleanup | `bash .wiki-runtime/tmp/nbmaint_suite_v17.sh clean` first checks that the sandbox resolves, with every symbolic link and `..` taken out, to a directory directly under this repository's `.wiki-runtime/tmp` that carries the marker the script wrote when it created it, and refuses anything else before it stops or deletes. It then stops the cluster with `pg_ctl -m fast -w stop`, confirms no `postmaster.pid`, no `postgres` process on the data directory and an empty socket directory, and deletes the sandbox. A run that fails stops its own cluster on the way out. **`out/` is inside the sandbox, so copy it out first** | the same; the two legs have separate sandboxes, so either can be cleaned while the other runs |
 
 ### The stages
 
 | Stage | What it does |
 |---|---|
-| `build` | refuses unless the checkout is the leg's pinned commit with no tracked file changed; configures it out of tree with `--without-icu --without-readline --with-zlib --enable-debug`, builds, installs, installs `pageinspect`, `pgstattuple` and `pg_freespacemap` from the same tree, and writes `nbmaint-build-manifest.txt` into the install: the pin, the flags, a hash of the build tree's `config.status` and a hash of every installed file. An existing install is reused only when all four still match |
+| `build` | refuses unless the checkout is the leg's pinned commit with no tracked file changed; configures it out of tree with `--without-icu --without-readline --with-zlib --enable-debug`, builds, installs, installs [`pageinspect`](../../../glossary.md#pageinspect), `pgstattuple` and [`pg_freespacemap`](../../../glossary.md#pg_freespacemap) from the same tree, and writes `nbmaint-build-manifest.txt` into the install: the pin, the flags, a hash of the build tree's `config.status` and a hash of every installed file. An existing install is reused only when all four still match |
 | `check` | checks the manifest again, then `make check`, then `make check` in each contrib module that has a suite; any suite that does not exit 0 with all its tests passed fails the run |
 | `cluster` | `initdb --locale=C --encoding=UTF8`, the settings below, the start, the `scratch` database, and the settings actually in force with their contexts |
 | `texts` | takes step 1 and step 2 out of this page by their tags, hashes them against the values recorded in the script, checks that their shared pipeline is byte-identical, and builds the one-edit view; a hash that differs, or a pipeline that does, fails the run |
@@ -1635,7 +1682,7 @@ filed texts out of this page, so the text that is scored is the text that is pub
 | `decide` | step 1, verbatim, in one transaction holding `SHARE ROW EXCLUSIVE` on every fixture table, then the same rows through the view and the harness's own reading of every index, in that transaction |
 | `oracle` | `REINDEX INDEX` on every fixture at `maintenance_work_mem = 256MB`, with `pg_relation_size(index, 'main')` and the heap's `relpages` and `reltuples` read before and after |
 | `act` | step 1, step 2 and step 2 again on the state the oracle left; fails the run unless step 2 did what step 1 printed and its second run wrote nothing |
-| `score` | refuses to score if any maintenance proof failed; otherwise scores every decision against the oracle and the filed predictions on the unrounded reclaimed fraction, and evaluates the 18 invariants, failing the run if any declared invariant fails |
+| `score` | refuses to score if any maintenance proof failed; otherwise scores every decision against the oracle and the filed predictions on the unrounded reclaimed fraction, evaluates the 18 invariants, writes every census reading to `meas.csv`, and fails the run if any declared invariant fails |
 | `probes` | who writes `reltuples`, the hash oracle's dependence on the heap estimate, the GIN oracle's dependence on `maintenance_work_mem`, and which GiST operator classes can take a sorted build |
 | `edge` | the comment shapes, the two tests' boundaries, the filters, the lock and concurrency rounds, a role that owns nothing, both `REINDEX` forms, another session's temporary index and the rebuild cap, each with its expected result filed first, in their own database; any difference fails the run |
 | `defeat` | a throwaway fixture whose maintenance is defeated on purpose by an undeclared snapshot; fails the run if the no-defeat check does not stop that step |
@@ -1648,13 +1695,13 @@ filed texts out of this page, so the text that is scored is the text that is pub
 
 | Setting | Value | Context | Apply scope |
 |---|---|---|---|
-| `listen_addresses`, `port`, `unix_socket_directories`, `shared_buffers` | `''`, the leg's port, the sandbox's socket directory, `512MB` | `PGC_POSTMASTER` | restart |
+| `listen_addresses`, `port`, `unix_socket_directories`, [`shared_buffers`](../../../glossary.md#shared_buffers) | `''`, the leg's port, the sandbox's socket directory, `512MB` | `PGC_POSTMASTER` | restart |
 | `autovacuum` | `off` | `PGC_SIGHUP` | reload |
-| `fsync` | `off` | `PGC_SIGHUP` | reload |
+| [`fsync`](../../../glossary.md#fsync) | `off` | `PGC_SIGHUP` | reload |
 | `log_timezone`, `log_line_prefix` | `UTC`, `%m [%p] ` | `PGC_SIGHUP` | reload |
 | `maintenance_work_mem` | `256MB` | `PGC_USERSET` | session or transaction |
 | `max_parallel_maintenance_workers` | `0` | `PGC_USERSET` | session or transaction |
-| `work_mem` | `64MB` | `PGC_USERSET` | session or transaction |
+| [`work_mem`](../../../glossary.md#work_mem) | `64MB` | `PGC_USERSET` | session or transaction |
 | `timezone` | `UTC` | `PGC_USERSET` | session or transaction |
 | `statement_timeout`, `lock_timeout` | `1800s`, `15s` through `PGOPTIONS`, and `0` in every `VACUUM` and `ANALYZE` session | `PGC_USERSET` | session or transaction |
 | `transaction_timeout`, `idle_in_transaction_session_timeout` | `0` in every `VACUUM` and `ANALYZE` session; the first exists on 17 only | `PGC_USERSET` | session or transaction |
@@ -1684,6 +1731,8 @@ and the running servers reported the same contexts.
   the commit each checkout is on and whether a tracked file differs from it, with
   `--no-optional-locks`, so it writes nothing into the checkout.
 - `sha256sum`, `cmp`, `diff`, `find`, `sort`, `sed`, `grep`, `seq`, `pgrep`.
+- `bash`, and a `grep` that takes `-E`. The recorded runs used Homebrew's `bash` 5.3.15
+  and the system BSD `grep` 2.6.0; neither leg was run under macOS's own `/bin/bash` 3.2.
 - The leg's port free, and about 8 GB of disk under `.wiki-runtime/tmp/` per leg. The
   sandbox must be a new directory directly under `.wiki-runtime/tmp`, or one this script
   created; the script refuses any other.
@@ -1704,6 +1753,7 @@ and the running servers reported the same contexts.
 | `baseline-sizes.txt`, `baseline-apply.txt` | the as-built sizes, and step 2's first run |
 | `maintenance-proof.txt`, `horizon-holders.txt`, `maint-*.log`, `settle2-*.log`, `standin-b13.log` | the no-defeat proofs per maintenance step, the horizon readings, and each step's own output with the timeouts it ran under |
 | `census-*.log`, `census-summary.txt`, `maintenance-pair.txt` | one locked census per fixture and phase, and the size before and after each maintenance step |
+| `meas.csv` | every census reading the fixture database stored, one row per fixture, phase and metric, with a header row; the only file that keeps readings no other file prints, such as a hash index's overflow pages and freed bitmap bits and a GiST index's leaf pages |
 | `autoanalyze-verdicts.txt`, `autoanalyze-named.txt` | the simulated auto-analyze census |
 | `verbose-lines.txt`, `instrument-matrix.txt`, `pgstattuple-refusals.txt` | `VACUUM`'s index line per maintenance `VACUUM`, which reader accepted which AM, and every `pgstattuple` refusal |
 | `decide.txt`, `decide-cost.txt` | step 1's own output under the measurement lock, and its duration |
@@ -1719,31 +1769,43 @@ and the running servers reported the same contexts.
 ### The last run
 
 Each leg ran from an empty sandbox through every default stage, with the script text
-published below. The 17 leg ran beside a first run of the 12 leg. That run's
-`invariant-detail.txt` printed no `VERBOSE` counts at all on 12.2, because 12.2 reports no
-newly-deleted count and the missing value blanked the whole line. So the 12 leg's detail
-query was fixed and the 12 leg run again on its own. The second run decided, scored and
-checked exactly as the first; only `g09`'s sizes, the `ANALYZE`-sampled tuple ratios and
-the timings moved. Every 12.2 number on this page is from the second run.
+published below, on 2026-09-24, the two legs side by side. Two passes ran the same way
+before it:
+
+- a baseline pass of the scripts filed on 2026-09-22, unchanged: 10 min 30 s on the 17
+  leg and 10 min 58 s on the 12 leg, both exit status 0. It reproduced every decision,
+  score, prediction, invariant and edge verdict of that filing, and every size but
+  `g09`'s;
+- a pass of the edited scripts before their `score` stage wrote `meas.csv`: 9 min 39 s and
+  10 min 27 s, both exit status 0, with the same result. It showed that two readings in
+  the coverage table, `h01`'s overflow and bitmap counts and `g07`'s leaf count, lived
+  only in the fixture database that `clean` deletes, which is why the stage now writes
+  them out.
+
+The recorded run matched both passes on every decision, score, prediction, invariant and
+edge verdict. Only `g09`'s sizes, the `ANALYZE`-sampled tuple ratios, step 1's duration,
+the timings and whether the 17 leg's census also analyzed `h00` moved between the three;
+see [Open Questions](#open-questions).
 
 | Item | 17 leg | 12 leg |
 |---|---|---|
-| Date | 2026-09-22, 21:30:43Z to 21:45:08Z | 2026-09-22, 21:49:47Z to 22:02:41Z, alone |
+| Date | 2026-09-24, 20:44:46Z to 20:55:08Z | 2026-09-24, 20:44:46Z to 20:55:40Z, beside the 17 leg |
 | Server | PostgreSQL 17.11, built from `786db8dcf168bd9df8f55047337525ac19118b1c` | PostgreSQL 12.2, built from `45b88269a353ad93744772791feb6d01bc7e1e42` |
-| Build manifest | built 21:33:09Z from the pin with no tracked file changed; `config.status` `5c749f3a4554b67c…`; installed files `f60bdcd606e7e1b5…` | built 21:51:16Z from the pin with no tracked file changed; `config.status` `6f7ecc70651c1cba…`; installed files `6d555377ddcdb59e…` |
-| Platform | Darwin 27.0.0 arm64, Apple clang 21.0.0, `JOBS=8` | the same |
-| `block_size`, `max_data_alignment` | 8192, 8 | 8192, 8 |
+| Build manifest | built 20:45:51Z from the pin with no tracked file changed; `config.status` `5c749f3a4554b67c…`; installed files `872a5dbd5770e291…` | built 20:45:46Z from the pin with no tracked file changed; `config.status` `6f7ecc70651c1cba…`; installed files `79499658f933bb0c…` |
+| Platform | Darwin 27.0.0 arm64 (macOS 27.0), Apple clang 21.0.0, 10 cores, `JOBS=8`, Homebrew `bash` 5.3.15 | the same |
+| [`block_size`](../../../glossary.md#blcksz), [`max_data_alignment`](../../../glossary.md#alignment) | 8192, 8 | 8192, 8 |
 | Engine tests | core **All 225**; `pageinspect` All 8; `pgstattuple` All 1; `pg_freespacemap` All 1 | core **All 192**; `pageinspect` All 5; `pgstattuple` All 1; `pg_freespacemap` has no suite in 12.2 |
-| Declarations filed, first baseline payload written | 21:34:26Z, 21:35:54Z | 21:52:01Z, 21:53:22Z |
+| Declarations filed, first baseline payload written | 20:46:26Z, 20:47:25Z | 20:46:16Z, 20:47:15Z |
 | Text hashes | step 1 `89293844dee3972f…`, step 2 `52bcbea7214af4f8…`, both matching the values in the script; shared pipeline identical | the same |
-| Script SHA-256 | `7cf385090b1f2aefd69dd55a251cd24ed671a751f10efa56fed0be08374552d8` | `8fc8c78fce7e96d0d25812ce1e635cf0f87df8b96f18c9a7613192edc67bccff` |
+| Script SHA-256 | `f8f2e4f00f457e4106115245f6589411565a8de87f403e354a29a2ae861931fd` | `13845e3cbb4ead75e0ed33f337243316a4be152020b9c3adea76c4223ed20a1f` |
 | The page against what ran | both texts, and the script block below, byte-identical to the files that ran | the same |
 | Server log | 31 `ERROR` and `FATAL` lines, all 31 deliberate; 0 maintenance skip lines | 33, all deliberate; 0 |
 | Teardown | the `clean` stage: `pg_ctl -m fast` stop, no `postmaster.pid`, no `postgres` process on the data directory, empty socket directory, sandbox deleted | the same |
 
-The timings above are from a host shared with other work; the sizes, the decisions and
+The timings above are from a host running both legs at once; the sizes, the decisions and
 the scores do not depend on them. Every number on this page is from these two runs, except
-the figures from earlier passes that [Open Questions](#open-questions) names as such.
+the figures from earlier passes that this section and [Open Questions](#open-questions)
+name as such.
 
 ### The PostgreSQL 17 leg script
 
@@ -1762,9 +1824,9 @@ the figures from earlier passes that [Open Questions](#open-questions) names as 
 # COMMENT-Stored Baseline in PostgreSQL 17", under both of the wiki's
 # protocols: "Mandatory Non-B-Tree, Non-GIN Bloat Tests" for the hash, GiST,
 # SP-GiST and BRIN fixtures and "Mandatory GIN Bloat Tests" for the GIN ones.
-# 29 of the 31 fixtures are built: h06 and n11, the two whose VACUUM ran with
-# INDEX_CLEANUP OFF, were removed from the corpus at the asker's request on
-# 2026-09-22.
+# All 29 of that page's numbered fixtures are built.  h06 and n11, whose
+# VACUUM ran with INDEX_CLEANUP OFF, left this corpus on 2026-09-22 and that
+# page on 2026-09-24, when both protocols stopped requiring that case.
 #
 # Five phases per fixture.  build: create, load, ANALYZE, create the index,
 # ANALYZE.  baseline: a locked page census, then step 2's first run, which
@@ -1849,7 +1911,7 @@ SPGFX="s08 s09 s10"
 BRINFX="b10 b11 b12 b13"
 GINFX="n03 n04 n05 n06 n07 n08 n09 n10 n12"
 SCORED="$HASHFX $GISTFX $SPGFX $BRINFX $GINFX"
-SKIPPED="h06 and n11: removed from the corpus at the asker's request on 2026-09-22"
+SKIPPED=""
 
 say()  { printf '\n=== %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -2482,7 +2544,6 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('non-btree','all: the maintenance pair','every churned fixture: churn_raw beside churn_maintained'),
  ('non-btree','all: an index maintained by the auto-analyze stand-in, a plain ANALYZE','h05'),
  ('non-btree','all: a table the census analyzed, and one it declined','tc_past and tc_exact'),
- ('non-btree','all: a VACUUM whose index cleanup did not run','skipped: its fixture, h06, was removed from the corpus at the asker''s request'),
  ('non-btree','all: an empty index and an untouched index','h07 and h00'),
  ('non-btree','all: a non-default fillfactor, or for BRIN a non-default pages_per_range','h03, s10 and b12'),
  ('non-btree','a non-core access method under the four-part admission rule','skipped: no bloom fixture is in the ported corpus'),
@@ -2492,7 +2553,6 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('gin','a populated pending list, and the same index after a flush','n05'),
  ('gin','an untouched index and an empty index','n08 and n09'),
  ('gin','a snapshot held across the settling VACUUM','n10: its maintenance VACUUM runs under the snapshot and deletes no page; its posting-tree pages are deleted by the second VACUUM, after the release'),
- ('gin','a VACUUM whose index cleanup did not run','skipped: its fixture, n11, was removed from the corpus at the asker''s request'),
  ('gin','more than one operator class','n06 (jsonb_path_ops) and n07 (tsvector_ops) beside array_ops'),
  ('gin','one rebuild at more than one maintenance_work_mem','probe P3'),
  ('gin','a churned index whose maintenance step ran, beside the same churn before it','every churned GIN fixture'),
@@ -2905,9 +2965,7 @@ SQL
 }
 
 # ---------------------------------------------------------- fixture recipes --
-# 29 of the source page's 31 numbered fixtures, recipe for recipe: h06 and n11,
-# the two whose VACUUM ran with INDEX_CLEANUP OFF, were removed at the asker's
-# request on 2026-09-22.  Every
+# The source page's 29 numbered fixtures, recipe for recipe.  Every
 # statement is DISPOSABLE fixture DDL and DML.  The build phase is: create the
 # table, load it, ANALYZE, create the scored index, ANALYZE again.
 fx_build() {
@@ -4188,6 +4246,14 @@ SQL
              FROM proto.score ORDER BY am, fixture" > "$OUT/phase-sizes.txt"
   q "$DB" "SELECT protocol || ' | ' || behavior || ' -> ' || fixture
              FROM proto.declared_coverage ORDER BY protocol, behavior" > "$OUT/coverage.txt"
+  # Every census reading, as the census stored it: one row per fixture, phase
+  # and metric.  The fixture database goes with the sandbox at clean, so this
+  # file is where a reading that no other file prints - a hash index's
+  # overflow pages and freed bitmap bits, a GiST index's leaf pages - survives.
+  PSQL -d "$DB" -q -c "COPY (SELECT fixture, phase, metric, num, txt FROM proto.meas
+                             ORDER BY fixture, phase, metric) TO STDOUT (FORMAT csv, HEADER)" \
+    > "$OUT/meas.csv" || die "could not write $OUT/meas.csv"
+  printf '    census readings: %s rows in meas.csv\n' "$(( $(grep -c '' "$OUT/meas.csv") - 1 ))"
   ! grep -q ' FAILS: ' "$OUT/invariants.txt" || die "a declared invariant failed (see $OUT/invariants.txt)"
 }
 
@@ -5004,10 +5070,11 @@ main "$@"
 # COMMENT-Stored Baseline in PostgreSQL 17", under the same two protocols the
 # 17 leg follows: "Mandatory Non-B-Tree, Non-GIN Bloat Tests" for the hash,
 # GiST, SP-GiST and BRIN fixtures and "Mandatory GIN Bloat Tests" for the GIN
-# ones.  28 of the 31 fixtures are built.  h06 and n11, the two whose VACUUM
-# ran with INDEX_CLEANUP OFF, were removed from the corpus at the asker's
-# request on 2026-09-22.  b11 needs the minmax_multi BRIN operator classes,
-# which a 12 server does not have, and is recorded as skipped.
+# ones.  28 of that page's 29 numbered fixtures are built.  b11 needs the
+# minmax_multi BRIN operator classes, which a 12 server does not have, and is
+# recorded as skipped.  h06 and n11, whose VACUUM ran with INDEX_CLEANUP OFF,
+# left this corpus on 2026-09-22 and that page on 2026-09-24, when both
+# protocols stopped requiring that case.
 #
 # What this server lacks, and what the leg does instead, all discovered by the
 # facts stage rather than assumed:
@@ -5103,7 +5170,7 @@ SPGFX="s08 s09 s10"
 BRINFX="b10 b12 b13"
 GINFX="n03 n04 n05 n06 n07 n08 n09 n10 n12"
 SCORED="$HASHFX $GISTFX $SPGFX $BRINFX $GINFX"
-SKIPPED="h06 and n11: removed from the corpus at the asker's request on 2026-09-22; b11: needs int8_minmax_multi_ops, which a 12 server does not have"
+SKIPPED="b11: needs int8_minmax_multi_ops, which a 12 server does not have"
 
 say()  { printf '\n=== %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -5744,7 +5811,6 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('non-btree','all: the maintenance pair','every churned fixture: churn_raw beside churn_maintained'),
  ('non-btree','all: an index maintained by the auto-analyze stand-in, a plain ANALYZE','h05'),
  ('non-btree','all: a table the census analyzed, and one it declined','tc_past and tc_exact'),
- ('non-btree','all: a VACUUM whose index cleanup did not run','skipped: its fixture, h06, was removed from the corpus at the asker''s request'),
  ('non-btree','all: an empty index and an untouched index','h07 and h00'),
  ('non-btree','all: a non-default fillfactor, or for BRIN a non-default pages_per_range','h03, s10 and b12'),
  ('non-btree','a non-core access method under the four-part admission rule','skipped: no bloom fixture is in the ported corpus'),
@@ -5754,7 +5820,6 @@ INSERT /* wiki_nbmaint_declare */ INTO declared_coverage (protocol, behavior, fi
  ('gin','a populated pending list, and the same index after a flush','n05'),
  ('gin','an untouched index and an empty index','n08 and n09'),
  ('gin','a snapshot held across the settling VACUUM','n10: its maintenance VACUUM runs under the snapshot and deletes no page; its posting-tree pages are deleted by the second VACUUM, after the release'),
- ('gin','a VACUUM whose index cleanup did not run','skipped: its fixture, n11, was removed from the corpus at the asker''s request'),
  ('gin','more than one operator class','n06 (jsonb_path_ops) and n07 (tsvector_ops) beside array_ops'),
  ('gin','one rebuild at more than one maintenance_work_mem','probe P3'),
  ('gin','a churned index whose maintenance step ran, beside the same churn before it','every churned GIN fixture'),
@@ -6175,9 +6240,8 @@ SQL
 }
 
 # ---------------------------------------------------------- fixture recipes --
-# 28 of the source page's 31 numbered fixtures, recipe for recipe: h06 and n11,
-# the two whose VACUUM ran with INDEX_CLEANUP OFF, were removed at the asker's
-# request on 2026-09-22, and b11 is not built on 12.  Every
+# 28 of the source page's 29 numbered fixtures, recipe for recipe: b11 is not
+# built on 12.  Every
 # statement is DISPOSABLE fixture DDL and DML.  The build phase is: create the
 # table, load it, ANALYZE, create the scored index, ANALYZE again.
 fx_build() {
@@ -7458,6 +7522,14 @@ SQL
              FROM proto.score ORDER BY am, fixture" > "$OUT/phase-sizes.txt"
   q "$DB" "SELECT protocol || ' | ' || behavior || ' -> ' || fixture
              FROM proto.declared_coverage ORDER BY protocol, behavior" > "$OUT/coverage.txt"
+  # Every census reading, as the census stored it: one row per fixture, phase
+  # and metric.  The fixture database goes with the sandbox at clean, so this
+  # file is where a reading that no other file prints - a hash index's
+  # overflow pages and freed bitmap bits, a GiST index's leaf pages - survives.
+  PSQL -d "$DB" -q -c "COPY (SELECT fixture, phase, metric, num, txt FROM proto.meas
+                             ORDER BY fixture, phase, metric) TO STDOUT (FORMAT csv, HEADER)" \
+    > "$OUT/meas.csv" || die "could not write $OUT/meas.csv"
+  printf '    census readings: %s rows in meas.csv\n' "$(( $(grep -c '' "$OUT/meas.csv") - 1 ))"
   ! grep -q ' FAILS: ' "$OUT/invariants.txt" || die "a declared invariant failed (see $OUT/invariants.txt)"
 }
 
@@ -8304,8 +8376,8 @@ main "$@"
   `RangeVarCallbackForAlterRelation`'s ownership check, and `ATExecChangeOwner`'s index
   branch and no-op path; `RenameRelation`'s two lock modes; `LockTableAclCheck`; the lock
   conflict table; the PL/pgSQL chapter on trapping errors and on the isolation level of a
-  transaction started inside a procedure; the MVCC chapter's read committed and repeatable
-  read; `default_transaction_isolation`'s GUC entry; the `ALTER INDEX` command tag.
+  transaction started inside a procedure; the [MVCC](../../../glossary.md#mvcc) chapter's read committed and repeatable
+  read; `default_transaction_isolation`'s GUC entry; the `ALTER INDEX` [command tag](../../../glossary.md#command-tag).
 - **The protocol cross-checks.** The `index scan needed:` line; hash's bulk-delete
   statistics; `gistvacuumpage`'s page classes and `gistdeletepage`'s counters;
   `spgvacuumpage`'s free pages, SP-GiST's final statistics and fixed blocks, and
@@ -8315,6 +8387,10 @@ main "$@"
   that write or skip a page's FSM entry, in `brin_doinsert`, `brin_doupdate` and
   `brin_getinsertbuffer`.
 - **The cluster settings.** The `guc_tables.c` entry of every setting the legs change.
+- **The protocols as they stood on 2026-09-24.** Both concept pages' coverage lists and
+  their two declared exceptions each, re-read after that day's change removed "a `VACUUM`
+  whose index cleanup did not run" from both, and the source page's corpus, which dropped
+  `h06` and `n11` the same day.
 - **Read-only servers.** `ClassifyUtilityCommandAsReadOnly` for `COMMENT` and the
   read-only and recovery gate in `standard_ProcessUtility`.
 - **Tests.** No shipped test covers a COMMENT-stored baseline or this method. The engine's
@@ -8357,7 +8433,7 @@ main "$@"
 | the pay-off threshold is applied to the unrounded reclaimed fraction | the `score` stage of both leg scripts, under [Measurement Script](#measurement-script) |
 | a BRIN index grows with its heap | [README#brin-summary](../../../../raw/postgres-17/src/backend/access/brin/README#L6-L13), [brin_revmap.c#HEAPBLK_TO_REVMAP](../../../../raw/postgres-17/src/backend/access/brin/brin_revmap.c#L40-L43), [brin_revmap.c#brinRevmapExtend](../../../../raw/postgres-17/src/backend/access/brin/brin_revmap.c#L108-L121), [brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332), [brin.c#brinsummarize-partial](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1916-L1925); measured: `b10` to `b13` |
 | a hash rebuild is sized from the heap's estimate | [hash.c#hashbuild-estimate](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L133-L137), [hashpage.c#_hash_init_metabuffer](../../../../raw/postgres-17/src/backend/access/hash/hashpage.c#L509-L523); measured: P2, `h04`, `h12` |
-| `INDEX_CLEANUP OFF` leaves the index untouched | [vacuumlazy.c#do_index_cleanup-init](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L387-L397); no longer measured, since `h06` and `n11` were removed |
+| `INDEX_CLEANUP OFF` leaves the index untouched | [vacuumlazy.c#do_index_cleanup-init](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L387-L397); not measured: `h06` and `n11` were removed, and neither protocol has required the case since 2026-09-24 |
 | the no-defeat proofs | [vacuum.c#vacuum_get_cutoffs-OldestXmin](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1109-L1122), [vacuumlazy.c#lazy_vacuum-gate](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1047-L1052), [vacuumlazy.c#verbose-tuples-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L657-L663), [vacuumlazy.c#verbose-index-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), [hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663); measured: every maintenance step, and the defeat stage |
 | the `VERBOSE` index line, count by count, for each AM | [vacuumlazy.c#verbose-index-line](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L718-L732), [vacuumlazy.c#index-scan-needed](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L695-L700), [hash.c#hashbulkdelete-stats](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L631-L637), [hash.c#hashvacuumcleanup](../../../../raw/postgres-17/src/backend/access/hash/hash.c#L647-L663), [gistvacuum.c#gistvacuumpage-classes](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L309), [gistvacuum.c#gistdeletepage-counters](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L655-L658), [spgvacuum.c#spgvacuumpage-fsm](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L665-L683), [spgvacuum.c#final-stats](../../../../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L902-L905), [spgist_private.h#fixed-blocks](../../../../raw/postgres-17/src/include/access/spgist_private.h#L47-L53), [bufpage.h#PageIsEmpty](../../../../raw/postgres-17/src/include/storage/bufpage.h#L214-L224), [brin.c#brinvacuumcleanup](../../../../raw/postgres-17/src/backend/access/brin/brin.c#L1307-L1332), [ginvacuum.c#ginvacuumcleanup-free](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L752-L794); measured: invariant I9, both legs |
 | a deleted GiST page stays unrecyclable until its deletion XID is older than every snapshot's horizon, so `g08` does not reach that row | [gistvacuum.c#gistdeletepage-deletexid](../../../../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L641-L656), [gistutil.c#gistPageRecyclable](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908); measured: `g08`'s two `VACUUM`s, both legs |
@@ -8385,30 +8461,39 @@ main "$@"
    21.45 % against 23.08 %. The threshold was declared before the run and is not
    moved here; a reader with a different pay-off should rescore it first.
 5. **Which untouched table the census analyzes depends on timing.** In the recorded run
-   the census analyzed `tc_past` alone on both legs. An earlier development pass of the
-   same census code on 17.11 also analyzed `h00`, whose build-phase inserts had reached
-   the shared statistics after its build-phase `ANALYZE`: the publication hazard the
-   concept pages describe. No decision depends on it, because `h00`'s count is the same
-   either way, but the census's list of tables is not a fixed output.
-6. **`g09`'s size moves between passes.** On 17.11 this run read `C` as 456,310,784 bytes.
-   The two filings before this revision, from the same fixture recipe, read 453,812,224
-   (commit `d69c03b`) and 449,568,768 (commit `9b535e2`); an earlier development pass read
-   452,902,912; and the source page filed 454,885,376. Only the insert-grown file moves on
-   17.11: the sorted build `B` and the sorted rebuild `R` were byte-identical in all three
-   recorded runs. On 12.2, where the build and the rebuild are insert-driven too, all three
-   move from run to run: this run read `B`, `C` and `R` as 97,902,592, 487,817,216 and
-   78,102,528; the first 12 run of this revision, set aside for its reporting defect, read
-   97,935,360, 488,275,968 and 78,028,800; `d69c03b` read 97,968,128, 482,336,768 and
-   78,053,376; and `9b535e2` read 98,041,856, 488,620,032 and 78,061,568. GiST's
-   `gistchoose` breaks ties between equally good subtrees at random, so a GiST index grown
-   by inserts of many equally placed keys, as `g09`'s grid of points is, is not the same
-   size twice
+   the census analyzed `h00` as well as `tc_past` on 17.11, and `tc_past` alone on 12.2.
+   Over the three passes of 2026-09-24, the 17 leg analyzed `h00` in the baseline pass and
+   the recorded run but not in the middle pass, and the 12 leg never did; the 2026-09-22
+   recorded runs analyzed `tc_past` alone on both legs, after a development pass that also
+   analyzed `h00`. Each time it happened, `h00`'s build-phase inserts had reached the shared
+   statistics after its build-phase `ANALYZE`, so the census read 1,000,000 modifications
+   against a threshold of 100,050: the publication hazard the concept pages describe. No
+   decision depends on it, because `h00`'s count is the same either way, but the census's
+   list of tables is not a fixed output.
+6. **`g09`'s size moves between passes.** On 17.11 the recorded run of 2026-09-24 read
+   `C` as 453,828,608 bytes. The same day's baseline pass of the filed script read
+   454,500,352, and a pass of the edited script before its `meas.csv` dump read
+   450,707,456. The three filings before this revision, from the same fixture recipe, read
+   456,310,784 (commit `ddcdf74`), 453,812,224 (commit `d69c03b`) and 449,568,768 (commit
+   `9b535e2`); an earlier development pass read 452,902,912; and the source page filed
+   454,885,376 on 2026-09-16 and 451,428,352 on 2026-09-24. Only the insert-grown file
+   moves on 17.11: the sorted build `B` and the sorted rebuild `R` were byte-identical in
+   every recorded run and pass. On 12.2, where the build and the rebuild are insert-driven
+   too, all three move from run to run: the recorded run read `B`, `C` and `R` as
+   97,976,320, 487,448,576 and 78,086,144; the baseline pass read 97,935,360,
+   481,804,288 and 78,118,912; the middle pass read 97,886,208, 482,197,504 and 78,176,256;
+   `ddcdf74` read 97,902,592, 487,817,216 and 78,102,528; its first 12 run, set aside for
+   its reporting defect, read 97,935,360, 488,275,968 and 78,028,800; `d69c03b` read
+   97,968,128, 482,336,768 and 78,053,376; and `9b535e2` read 98,041,856, 488,620,032 and
+   78,061,568. GiST's `gistchoose` breaks ties between equally good subtrees at random, so
+   a GiST index grown by inserts of many equally placed keys, as `g09`'s grid of points is,
+   is not the same size twice
    ([gistutil.c#gistchoose-random](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L406-L429),
    [gistutil.c#gistchoose-prng](../../../../raw/postgres-17/src/backend/access/gist/gistutil.c#L505-L511)).
    That is the likely cause, and the split between the sorted files, which held still, and
    the insert-grown ones, which moved, fits it; no run isolated it. Neither the decision
    nor the score moved: `g09` read `reindex` and `PASS` on every pass, with a rebuild
-   returning 83.8 to 84.5 % in the recorded runs.
+   returning 83.8 to 84.5 % in the recorded runs and passes.
 7. **The 12 leg's publication wait is a second, not an interlock.** Without
    `pg_stat_force_next_flush()`, each churn session exits and the leg waits one second
    before the maintenance step. The census verdicts on 12.2 came out as designed, but
@@ -8421,12 +8506,7 @@ main "$@"
    at two values, so this page does not add it.
 10. **No non-core access method was scored.** The text accepts any non-B-tree index,
    `bloom` included, but the ported corpus has no `bloom` fixture.
-11. **The run no longer reaches one behavior both protocols require.** Both concept pages
-   list "a `VACUUM` whose index cleanup did not run" among the behaviors a conforming run
-   must reach. Its only fixtures, `h06` and `n11`, were removed at the asker's request,
-   so neither leg conforms on that row. The filing before the removal, commit `9b535e2`,
-   scored both of them `FALSE NEGATIVE`.
-12. **No fixture reaches a GiST page that is deleted but not recyclable under a held
+11. **No fixture reaches a GiST page that is deleted but not recyclable under a held
    snapshot.** `g08`'s snapshot is taken before its churn commits, so the deleted rows
    stay visible to it, and the `VACUUM` under it removes none of them and deletes no page.
    A deleted page stays unrecyclable
@@ -8437,7 +8517,7 @@ main "$@"
    so a snapshot taken after one `VACUUM` deletes pages and held through a second one
    would reach the row. The ported corpus has no such fixture, and this revision files the
    row as not reached instead of adding one.
-13. **I18 is scored only on the BRIN pages the `VACUUM` did not write.** That was 2 pages
+12. **I18 is scored only on the BRIN pages the `VACUUM` did not write.** That was 2 pages
    on each leg, so the invariant is a narrow check. The pages the `VACUUM`'s own
    summarization wrote are compared and reported, not scored: on 17.11, 13 of 18 read
    their exact category, 3 higher and 2 lower; on 12.2, 4 of 6, 2 higher and 0 lower. The source explains both
@@ -8445,7 +8525,7 @@ main "$@"
    same reading, a second `VACUUM` with no writes since the first would record every
    regular page's free space in its scan and then summarize nothing, so a census after it
    could score every page; this run does not take one.
-14. **Step 1 is one statement, so one locked index cancels the whole plan.** Edge round H
+13. **Step 1 is one statement, so one locked index cancels the whole plan.** Edge round H
    measured it on both legs. A plan that survives it needs an exception block per index,
    which only a PL/pgSQL block has
    ([plpgsql.sgml#trapping-errors](../../../../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L2856-L2860));
@@ -8584,6 +8664,7 @@ main "$@"
 - [wiki index](../../../index.md)
 - [versions](../../../versions.md)
 - [PostgreSQL 17 Codebase Navigation Guide (unverified)](../../codebase-navigation-guide.md)
+- [Wiki Glossary (unverified)](../../../glossary.md) - the shared vocabulary this page links on first use.
 - [Mandatory Non-B-Tree, Non-GIN Bloat Tests (unverified)](../../common-concepts/mandatory-non-btree-non-gin-bloat-tests.md)
 - [Mandatory GIN Bloat Tests (unverified)](../../common-concepts/mandatory-gin-bloat-tests.md)
 - [Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17 (unverified)](non-btree-index-inflation-comment-baseline.md), the source of the fixtures
