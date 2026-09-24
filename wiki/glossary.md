@@ -23,6 +23,8 @@ verified_by_agent: not yet
   - [Backend](#backend)
   - [Background worker](#background-worker)
   - [Background writer](#background-writer)
+  - [Back-patch](#back-patch)
+  - [Base backup](#base-backup)
   - [Bitmap scan](#bitmap-scan)
   - [BKI](#bki)
   - [BLCKSZ](#blcksz)
@@ -35,7 +37,9 @@ verified_by_agent: not yet
   - [btree_gin and btree_gist](#btree_gin-and-btree_gist)
   - [Buffer manager](#buffer-manager)
   - [Buffer pin](#buffer-pin)
+  - [Buildfarm](#buildfarm)
   - [Catalog](#catalog)
+  - [Catalog version](#catalog-version)
   - [Checkpoint](#checkpoint)
   - [Checkpointer](#checkpointer)
   - [Clock sweep](#clock-sweep)
@@ -47,6 +51,7 @@ verified_by_agent: not yet
   - [Conflict detection](#conflict-detection)
   - [Constraint exclusion](#constraint-exclusion)
   - [Contrib](#contrib)
+  - [Control file](#control-file)
   - [Correlation](#correlation)
   - [Cost](#cost)
   - [Covering index](#covering-index)
@@ -159,6 +164,7 @@ verified_by_agent: not yet
   - [pg_stat_all_tables](#pg_stat_all_tables)
   - [pg_stat_io](#pg_stat_io)
   - [pg_stat_statements](#pg_stat_statements)
+  - [PG_TEST_EXTRA](#pg_test_extra)
   - [pg_upgrade](#pg_upgrade)
   - [pgs_mask](#pgs_mask)
   - [pgstatindex](#pgstatindex)
@@ -174,7 +180,9 @@ verified_by_agent: not yet
   - [Prefetch](#prefetch)
   - [Prepared statement](#prepared-statement)
   - [ProcArray](#procarray)
+  - [ProcSignal barrier](#procsignal-barrier)
   - [Progress reporting](#progress-reporting)
+  - [Promotion](#promotion)
   - [Pruning](#pruning)
   - [Publication](#publication)
   - [Qual](#qual)
@@ -193,6 +201,7 @@ verified_by_agent: not yet
   - [REPACK](#repack)
   - [Replication origin](#replication-origin)
   - [Replication slot](#replication-slot)
+  - [Resource manager](#resource-manager)
   - [Rewriter](#rewriter)
   - [Ring buffer](#ring-buffer)
   - [Role membership](#role-membership)
@@ -252,6 +261,7 @@ verified_by_agent: not yet
   - [WithCheckOption](#withcheckoption)
   - [work_mem](#work_mem)
   - [Wraparound](#wraparound)
+  - [XLOG_PAGE_MAGIC](#xlog_page_magic)
   - [xmin and xmax](#xmin-and-xmax)
   - [xmin horizon](#xmin-horizon)
 - [Open Questions](#open-questions)
@@ -264,9 +274,9 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 
 - Each entry leads with a plain-language definition, then names the source symbols that carry the concept, then cites the evidence.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
-- The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version, which happens only when the concept does not exist in 17.
+- The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only, and their main paragraphs open by naming 19: [Back-patch](#back-patch), [Base backup](#base-backup), [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -450,6 +460,22 @@ The background writer is an auxiliary server process that writes [dirty](#dirty-
 
 Related: [Buffer manager](#buffer-manager), [Checkpoint](#checkpoint), [Checkpointer](#checkpointer), [Dirty buffer](#dirty-buffer), [shared_buffers](#shared_buffers)
 
+### Back-patch
+
+**Aliases:** backpatch, back-patched, back branch, stable branch, `REL_NN_STABLE`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19's source tree, a back-patch is a copy of a `master` commit that is also committed to one or more older stable branches. Each major release gets its own maintenance branch, named like `REL_11_STABLE`; the release checklist creates it from `master` when a new development cycle starts ([RELEASE_CHANGES:90-106](../raw/postgres-19/src/tools/RELEASE_CHANGES#L90-L106)). Each branch copy is a separate commit with its own hash. `git_changelog` merges such copies back into one entry when they carry the same log message and land close together in time, and it prints the branch and hash of each copy ([git_changelog:8-19](../raw/postgres-19/src/tools/git_changelog#L8-L19)). Its comments warn that the merge is imperfect, because a `master` patch can be back-patched later or with a slightly different message ([git_changelog:43-49](../raw/postgres-19/src/tools/git_changelog#L43-L49)). Minor-release notes for each stable branch are built from the commits on that branch, including older-branch commits that the newest branch lacks ([RELEASE_CHANGES:131-151](../raw/postgres-19/src/tools/RELEASE_CHANGES#L131-L151)). When reading history, this means the same fix can appear under a different hash in each branch's log.
+
+Related: [Buildfarm](#buildfarm)
+
+### Base backup
+
+**Aliases:** `BASE_BACKUP`, `pg_basebackup`, `SendBaseBackup()`, `perform_base_backup()`, backup mode. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, a base backup is a file-level copy of a whole running cluster. It is usable only together with the [WAL](#wal) written during and after the copy, and it always covers the entire cluster, never a single database ([backup.sgml:825-831](../raw/postgres-19/doc/src/sgml/backup.sgml#L825-L831), [pg_basebackup.sgml:55-61](../raw/postgres-19/doc/src/sgml/ref/pg_basebackup.sgml#L55-L61)). `pg_basebackup` asks for one by sending the `BASE_BACKUP` replication command, and the [WAL sender](#wal-sender) hands that command to `SendBaseBackup()` ([pg_basebackup.c:1989-1997](../raw/postgres-19/src/bin/pg_basebackup/pg_basebackup.c#L1989-L1997), [protocol.sgml#protocol-replication-base-backup](../raw/postgres-19/doc/src/sgml/protocol.sgml#L3134-L3143), [walsender.c:2237-2243](../raw/postgres-19/src/backend/replication/walsender.c#L2237-L2243)). The server first puts itself into backup mode, so the copy stays usable even though it reads files straight from disk instead of through the [buffer manager](#buffer-manager) ([basebackup.c#SendBaseBackup](../raw/postgres-19/src/backend/backup/basebackup.c#L981-L989)). `perform_base_backup()` calls `do_pg_backup_start()`, which creates the starting [checkpoint](#checkpoint) and records the WAL location a restore must start from ([basebackup.c#perform_base_backup](../raw/postgres-19/src/backend/backup/basebackup.c#L239-L279), [xlog.c#do_pg_backup_start](../raw/postgres-19/src/backend/access/transam/xlog.c#L8984-L9014)). `full_page_writes` is effectively forced on while backup mode lasts ([backup.sgml#backup-base-backup](../raw/postgres-19/doc/src/sgml/backup.sgml#L817-L823)). When [data checksums](#data-checksums) are on, the server also verifies each relation page it sends, unless the client turns `VERIFY_CHECKSUMS` off ([basebackup.c:1610-1617](../raw/postgres-19/src/backend/backup/basebackup.c#L1610-L1617), [protocol.sgml:3329-3336](../raw/postgres-19/doc/src/sgml/protocol.sgml#L3329-L3336)). It skips new pages and pages whose [LSN](#lsn) is at or after the backup start, because such a page may be half-written and WAL replay restores it ([basebackup.c#verify_page_checksum](../raw/postgres-19/src/backend/backup/basebackup.c#L1984-L2018)).
+
+Related: [WAL](#wal), [WAL sender](#wal-sender), [Checkpoint](#checkpoint), [Full-page image](#full-page-image), [Data checksums](#data-checksums), [Progress reporting](#progress-reporting)
+
 ### Bitmap scan
 
 **Aliases:** Bitmap Index Scan, Bitmap Heap Scan, TIDBitmap. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -618,6 +644,14 @@ A buffer pin is a backend's claim on one shared buffer: while any backend holds 
 
 Related: [Buffer manager](#buffer-manager), [Clock sweep](#clock-sweep), [Pruning](#pruning), [VACUUM](#vacuum), [Wait event](#wait-event)
 
+### Buildfarm
+
+**Aliases:** build farm, PostgreSQL Build Farm, buildfarm member, buildfarm animal. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19's source tree, the buildfarm is the set of community test machines that repeatedly build the code and run its regression tests on many platforms. The installation docs say most platform-compatibility testing is done automatically by these machines, and they ask anyone who uses an untested platform to set up a build farm member ([installation.sgml#supported-platforms](../raw/postgres-19/doc/src/sgml/installation.sgml#L3426-L3441)). The CI README says every supported branch of the main repository is tested continuously this way, so the buildfarm cannot test feature work before it is merged ([ci/README:4-14](../raw/postgres-19/src/tools/ci/README#L4-L14)). The test docs call the machines animals. [TAP tests](#tap-test) must pass on Perl as old as 5.14, because some animals run it ([perl/README:102-104](../raw/postgres-19/src/test/perl/README#L102-L104)). When a new stable branch is created, the release checklist asks for the buildfarm's `branches_of_interest.txt` to be updated so the members start testing that branch ([RELEASE_CHANGES:125-128](../raw/postgres-19/src/tools/RELEASE_CHANGES#L125-L128)).
+
+Related: [Regression test](#regression-test), [TAP test](#tap-test), [PG_TEST_EXTRA](#pg_test_extra), [Back-patch](#back-patch)
+
 ### Catalog
 
 **Aliases:** system catalog, `pg_catalog`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -631,6 +665,14 @@ A system catalog is an ordinary table in which PostgreSQL records its own metada
 - PostgreSQL 19: Holds. The glossary and `bki.sgml` definitions are unchanged, and catalogs are still declared with `CATALOG()` in `src/include/catalog/` headers ([glossary.sgml#glossary-system-catalog](../raw/postgres-19/doc/src/sgml/glossary.sgml#L1856-L1880), [bki.sgml:6-24](../raw/postgres-19/doc/src/sgml/bki.sgml#L6-L24), [genbki.h:42](../raw/postgres-19/src/include/catalog/genbki.h#L42), [glossary.sgml#glossary-catalog](../raw/postgres-19/doc/src/sgml/glossary.sgml#L354-L372)).
 
 Related: [pg_class](#pg_class), [pg_index](#pg_index), [BKI](#bki), [Syscache](#syscache), [Relcache](#relcache), [OID](#oid)
+
+### Catalog version
+
+**Aliases:** catversion, catversion bump, `CATALOG_VERSION_NO`, `catalog_version_no`, `catversion.h`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, the catalog version is an internal number that flags incompatible changes to the system [catalogs](#catalog), so that a server binary refuses to run on a data directory whose catalogs it does not match ([catversion.h:6-14](../raw/postgres-19/src/include/catalog/catversion.h#L6-L14)). It is the `CATALOG_VERSION_NO` macro, written in `yyyymmddN` form: the date of the change plus a counter for that day ([catversion.h:51-60](../raw/postgres-19/src/include/catalog/catversion.h#L51-L60)). The header's rule is that a commit whose change requires an initdb should update it. Typical triggers are edits under `include/catalog` and changes to the stored form of parse trees in `primnodes.h` or `parsenodes.h`; this update is what commit messages call a "catversion bump" ([catversion.h:26-38](../raw/postgres-19/src/include/catalog/catversion.h#L26-L38)). `WriteControlFile()` stores the value in the [control file](#control-file) as `catalog_version_no`, and `ReadControlFile()` stops startup with FATAL "database files are incompatible with server" when the stored and compiled numbers differ ([pg_control.h#ControlFileData](../raw/postgres-19/src/include/catalog/pg_control.h#L113-L127), [xlog.c#WriteControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4298-L4308), [xlog.c#ReadControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4484-L4498)). `pg_controldata` prints it as "Catalog version number", and `pg_upgrade` parses that line and compares the old cluster's value with fixed cut-offs such as `DEFAULT_CHAR_SIGNEDNESS_CAT_VER` to decide which format differences apply ([pg_controldata.c:247-248](../raw/postgres-19/src/bin/pg_controldata/pg_controldata.c#L247-L248), [controldata.c:229-237](../raw/postgres-19/src/bin/pg_upgrade/controldata.c#L229-L237), [controldata.c:586-591](../raw/postgres-19/src/bin/pg_upgrade/controldata.c#L586-L591)). The number is also part of each tablespace's version subdirectory name ([relpath.h#TABLESPACE_VERSION_DIRECTORY](../raw/postgres-19/src/include/common/relpath.h#L30-L34)).
+
+Related: [Control file](#control-file), [Catalog](#catalog), [BKI](#bki), [pg_upgrade](#pg_upgrade), [Tablespace](#tablespace), [XLOG_PAGE_MAGIC](#xlog_page_magic)
 
 ### Checkpoint
 
@@ -786,6 +828,14 @@ Contrib is the source directory of optional modules that ship with PostgreSQL bu
 
 Related: [Extension](#extension), [pageinspect](#pageinspect), [pgstattuple](#pgstattuple), [pg_freespacemap](#pg_freespacemap), [Hook](#hook)
 
+### Control file
+
+**Aliases:** `pg_control`, `global/pg_control`, `XLOG_CONTROL_FILE`, `ControlFileData`, `PG_CONTROL_VERSION`, `pg_controldata`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, the control file is the small binary file `global/pg_control`, relative to the data directory, that records cluster-wide state such as format versions and the last checkpoint ([xlog_internal.h:146-149](../raw/postgres-19/src/include/access/xlog_internal.h#L146-L149)). Its layout is `ControlFileData`: the system identifier, the `pg_control_version` and `catalog_version_no` format stamps, the cluster state, the latest [checkpoint](#checkpoint) location with a copy of that checkpoint record, `minRecoveryPoint` and the backup fields, the WAL-related settings, build parameters such as block size and alignment, and a CRC that must come last ([pg_control.h#ControlFileData](../raw/postgres-19/src/include/catalog/pg_control.h#L105-L136), [pg_control.h:169-209](../raw/postgres-19/src/include/catalog/pg_control.h#L169-L209), [pg_control.h:246-248](../raw/postgres-19/src/include/catalog/pg_control.h#L246-L248)). The used part must stay within 512 bytes so that each update is an atomic write, and the file on disk is padded to 8192 bytes ([pg_control.h:250-265](../raw/postgres-19/src/include/catalog/pg_control.h#L250-L265)). `PG_CONTROL_VERSION` is 1905 at the pin, and `ReadControlFile()` stops startup when the stored format version, the CRC or the [catalog version](#catalog-version) does not match the binary ([pg_control.h:24-25](../raw/postgres-19/src/include/catalog/pg_control.h#L24-L25), [xlog.c#ReadControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4446-L4498)). `BootStrapXLOG()` creates the file with `WriteControlFile()`, and `UpdateControlFile()` rewrites and flushes it through the shared `update_controlfile()` routine ([xlog.c:5287-5288](../raw/postgres-19/src/backend/access/transam/xlog.c#L5287-L5288), [xlog.c#UpdateControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4636-L4644), [controldata_utils.c#update_controlfile](../raw/postgres-19/src/common/controldata_utils.c#L180-L200)). Two fields hold the [data checksums](#data-checksums) state: `data_checksum_version` is the current state, and `data_checksum_version_init` keeps the state from cluster initialization, which `pg_control_init()` returns as `data_page_checksum_version` ([pg_control.h:224-231](../raw/postgres-19/src/include/catalog/pg_control.h#L224-L231), [pg_controldata.c#pg_control_init](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L206-L258)). The `pg_controldata` program prints the file, and the SQL functions `pg_control_system()`, `pg_control_checkpoint()`, `pg_control_recovery()` and `pg_control_init()` return most of the same fields ([pg_controldata.sgml#r1-app-pgcontroldata-1](../raw/postgres-19/doc/src/sgml/ref/pg_controldata.sgml#L36-L44), [func-info.sgml#functions-info-controldata](../raw/postgres-19/doc/src/sgml/func/func-info.sgml#L3295-L3306), [pg_controldata.c:32](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L32), [pg_controldata.c:70](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L70), [pg_controldata.c:166](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L166)). An extension's `.control` file is a different thing; see [Extension](#extension).
+
+Related: [Catalog version](#catalog-version), [Checkpoint](#checkpoint), [Crash recovery](#crash-recovery), [Data checksums](#data-checksums), [XLOG_PAGE_MAGIC](#xlog_page_magic), [Extension](#extension)
+
 ### Correlation
 
 **Aliases:** `pg_stats.correlation`, `STATISTIC_KIND_CORRELATION`, physical-order correlation, `indexCorrelation`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -908,9 +958,9 @@ Data checksums are a 16-bit value, stored in each data [page](#page) header, tha
 - PostgreSQL 12: Holds, except that the verify function is `PageIsVerified()` and `data_checksums` is defined in `guc.c` ([bufpage.c:82](../raw/postgres-12/src/backend/storage/page/bufpage.c#L82), [guc.c:1827](../raw/postgres-12/src/backend/utils/misc/guc.c#L1827)). Checksums are off by default, hint bits are logged under the same first-change rule, and `pg_checksums` already works offline ([initdb.c:144](../raw/postgres-12/src/bin/initdb/initdb.c#L144), [xlog.h:192](../raw/postgres-12/src/include/access/xlog.h#L192), [xloginsert.c:917](../raw/postgres-12/src/backend/access/transam/xloginsert.c#L917), [pg_checksums.c:1-5](../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L1-L5)).
 - PostgreSQL 14: Holds. Checksums are off by default, `PageIsVerifiedExtended()` verifies pages, and the hint-bit rule is the same ([initdb.c:146](../raw/postgres-14/src/bin/initdb/initdb.c#L146), [bufpage.c:88](../raw/postgres-14/src/backend/storage/page/bufpage.c#L88), [guc.c:1991](../raw/postgres-14/src/backend/utils/misc/guc.c#L1991), [xloginsert.c:941](../raw/postgres-14/src/backend/access/transam/xloginsert.c#L941)).
 - PostgreSQL 18: Differs: `initdb` turns checksums on by default, and `--no-data-checksums` turns them off ([initdb.c:167](../raw/postgres-18/src/bin/initdb/initdb.c#L167), [initdb.c:2542](../raw/postgres-18/src/bin/initdb/initdb.c#L2542)). Verification is `PageIsVerified()` again ([bufpage.c:94](../raw/postgres-18/src/backend/storage/page/bufpage.c#L94)). The hint-bit rule is unchanged ([xloginsert.c:1089](../raw/postgres-18/src/backend/access/transam/xloginsert.c#L1089)).
-- PostgreSQL 19: Differs: as in 18, `initdb` turns checksums on by default and `PageIsVerified()` verifies pages ([initdb.c:167](../raw/postgres-19/src/bin/initdb/initdb.c#L167), [bufpage.c:94](../raw/postgres-19/src/backend/storage/page/bufpage.c#L94)). `--no-data-checksums` turns them off ([initdb.c:2544](../raw/postgres-19/src/bin/initdb/initdb.c#L2544)). At the pinned 19beta4-era commit, checksums cannot be switched on or off in a running cluster: the online transition (`pg_enable_data_checksums()` and its worker) was reverted, and `data_checksums` is again a `bool` with context `internal` ([guc_parameters.dat#data_checksums](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L581-L586)). Hint-bit logging keys off `DataChecksumsEnabled()`, which reads the control file's `data_checksum_version`, as in 18 ([xlog.h#XLogHintBitIsNeeded](../raw/postgres-19/src/include/access/xlog.h#L135), [xlog.c#DataChecksumsEnabled](../raw/postgres-19/src/backend/access/transam/xlog.c#L4669-L4674), [xloginsert.c:1161](../raw/postgres-19/src/backend/access/transam/xloginsert.c#L1161)).
+- PostgreSQL 19: Differs: as in 18, `initdb` turns checksums on by default and `PageIsVerified()` verifies pages ([initdb.c:167](../raw/postgres-19/src/bin/initdb/initdb.c#L167), [bufpage.c:94](../raw/postgres-19/src/backend/storage/page/bufpage.c#L94)). `--no-data-checksums` turns them off ([initdb.c:2544](../raw/postgres-19/src/bin/initdb/initdb.c#L2544)). At the pinned 19beta4-era commit, checksums cannot be switched on or off in a running cluster: the online transition (`pg_enable_data_checksums()` and its worker) was reverted, and `data_checksums` is again a `bool` with context `internal` ([guc_parameters.dat#data_checksums](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L581-L586)). Hint-bit logging keys off `DataChecksumsEnabled()`, which reads the control file's `data_checksum_version`, as in 18 ([xlog.h#XLogHintBitIsNeeded](../raw/postgres-19/src/include/access/xlog.h#L135), [xlog.c#DataChecksumsEnabled](../raw/postgres-19/src/backend/access/transam/xlog.c#L4669-L4674), [xloginsert.c:1161](../raw/postgres-19/src/backend/access/transam/xloginsert.c#L1161)). The [control file](#control-file) also keeps the initdb-time state in `data_checksum_version_init`, which `pg_control_init()` reports as `data_page_checksum_version` ([pg_control.h:224-231](../raw/postgres-19/src/include/catalog/pg_control.h#L224-L231), [xlog.c:4294-4295](../raw/postgres-19/src/backend/access/transam/xlog.c#L4294-L4295), [pg_controldata.c:257](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L257)).
 
-Related: [Page](#page), [Full-page image](#full-page-image), [WAL](#wal), [GUC context](#guc-context)
+Related: [Page](#page), [Full-page image](#full-page-image), [WAL](#wal), [GUC context](#guc-context), [Control file](#control-file), [ProcSignal barrier](#procsignal-barrier)
 
 ### Datum
 
@@ -1152,7 +1202,7 @@ Related: [Statistics](#statistics), [Selectivity](#selectivity), [Most common va
 
 ### Extension
 
-**Aliases:** `CREATE EXTENSION`, control file. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+**Aliases:** `CREATE EXTENSION`, extension control file (`.control` file). **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
 An extension is a named package of SQL objects that PostgreSQL installs, tracks and drops as a unit. It consists of a script file, a control file, and often a shared library of C code. `DROP EXTENSION` removes all its objects, and `pg_dump` emits only the `CREATE EXTENSION` command instead of the member objects ([extend.sgml:525-556](../raw/postgres-17/doc/src/sgml/extend.sgml#L525-L556), [glossary.sgml#glossary-extension](../raw/postgres-17/doc/src/sgml/glossary.sgml#L693-L705)). `CREATE EXTENSION` reads the control file into an `ExtensionControlFile` struct ([extension.c:1614](../raw/postgres-17/src/backend/commands/extension.c#L1614), [extension.c#ExtensionControlFile](../raw/postgres-17/src/backend/commands/extension.c#L77-L96)). When the script runs, `execute_extension_script()` checks the struct's `superuser` and `trusted` fields. A non-superuser may install an extension marked `superuser` only when it is also marked `trusted` and the user has `CREATE` privilege on the current database ([extension.c#execute_extension_script](../raw/postgres-17/src/backend/commands/extension.c#L1015-L1040), [extension.c#extension_is_trusted](../raw/postgres-17/src/backend/commands/extension.c#L978-L990)). When the extension's shared library loads, its `_PG_init()` function runs ([dfmgr.c:284-289](../raw/postgres-17/src/backend/utils/fmgr/dfmgr.c#L284-L289)). That is where a library installs its [hooks](#hook); for example, a preloaded library registers its `shmem_request_hook` there ([xfunc.sgml:3408-3414](../raw/postgres-17/doc/src/sgml/xfunc.sgml#L3408-L3414)).
 
@@ -2352,6 +2402,14 @@ Related: [Cumulative statistics](#cumulative-statistics), [Buffer manager](#buff
 
 Related: [Query jumbling](#query-jumbling), [Contrib](#contrib), [Extension](#extension), [Cumulative statistics](#cumulative-statistics)
 
+### PG_TEST_EXTRA
+
+**Aliases:** `PG_TEST_EXTRA` environment variable, `-DPG_TEST_EXTRA`, extra test suites. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, `PG_TEST_EXTRA` is a whitespace-separated list of extra test suites to run. Those suites are off by default because they are unsafe on a multiuser system, need special software, or use a lot of resources ([regress.sgml#regress-additional](../raw/postgres-19/doc/src/sgml/regress.sgml#L266-L276)). It can be set as a `make` or environment variable. A value given to `configure` or to Meson setup becomes a default, and an environment variable set when the tests run overrides it ([configure.ac:234-235](../raw/postgres-19/configure.ac#L234-L235), [Makefile.global.in:664-671](../raw/postgres-19/src/Makefile.global.in#L664-L671), [meson_options.txt:49-50](../raw/postgres-19/meson_options.txt#L49-L50), [meson.build:3965-3969](../raw/postgres-19/meson.build#L3965-L3969), [testwrap:48-54](../raw/postgres-19/src/tools/testwrap#L48-L54), [installation.sgml#configure-pg-test-extra-meson](../raw/postgres-19/doc/src/sgml/installation.sgml#L3178-L3191)). A gated test reads the variable itself and skips when its name is missing, as the `xid_wraparound` [TAP tests](#tap-test) do ([001_emergency_vacuum.pl:10-13](../raw/postgres-19/src/test/modules/xid_wraparound/t/001_emergency_vacuum.pl#L10-L13)). The pinned docs list eleven values: `kerberos`, `ldap`, `libpq_encryption`, `load_balance`, `oauth`, `regress_dump_restore`, `saslprep`, `sepgsql`, `ssl`, `wal_consistency_checking` and `xid_wraparound` ([regress.sgml:276-343](../raw/postgres-19/doc/src/sgml/regress.sgml#L276-L343), [regress.sgml:344-395](../raw/postgres-19/doc/src/sgml/regress.sgml#L344-L395)). A listed suite still does not run when the build lacks the feature it tests ([regress.sgml:397-399](../raw/postgres-19/doc/src/sgml/regress.sgml#L397-L399)).
+
+Related: [TAP test](#tap-test), [Regression test](#regression-test), [Buildfarm](#buildfarm)
+
 ### pg_upgrade
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2562,6 +2620,14 @@ The ProcArray is the shared-memory list of every running [backend](#backend)'s `
 
 Related: [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Transaction ID](#transaction-id), [Two-phase commit](#two-phase-commit), [LWLock](#lwlock), [MVCC](#mvcc)
 
+### ProcSignal barrier
+
+**Aliases:** global barrier, procsignal barrier, procsignalbarrier, `EmitProcSignalBarrier()`, `WaitForProcSignalBarrier()`, `ProcessProcSignalBarrier()`, `ProcSignalBarrierType`, `PROCSIG_BARRIER`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, a ProcSignal barrier lets one process make every other PostgreSQL process apply a global state change, and wait until all of them have done so. The ProcSignal code uses it for changes "that cannot be considered complete until all backends have taken notice": the emitter sets a bit in each process slot's `pss_barrierCheckMask` and bumps a shared barrier generation, and each process advertises in `pss_barrierGeneration` the generation it has absorbed ([procsignal.c:60-67](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L60-L67), [procsignal.c:77-93](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L77-L93)). `EmitProcSignalBarrier()` sets the flag bits, increments `psh_barrierGeneration`, sends each process `PROCSIG_BARRIER` through `SIGUSR1`, and returns the new generation ([procsignal.c#EmitProcSignalBarrier](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L350-L427)). `WaitForProcSignalBarrier()` then sleeps on each slot until its generation reaches that value, under the `PROC_SIGNAL_BARRIER` wait event, and logs "still waiting for backend with PID %d to accept ProcSignalBarrier" every five seconds ([procsignal.c#WaitForProcSignalBarrier](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L430-L482), [wait_event_names.txt:148](../raw/postgres-19/src/backend/utils/activity/wait_event_names.txt#L148)). A process absorbs a barrier only during interrupt processing. The signal handler just sets `ProcSignalBarrierPending`, and `ProcessProcSignalBarrier()` runs from `CHECK_FOR_INTERRUPTS()` in backends or from `ProcessMainLoopInterrupts()` in background processes; a barrier type that cannot be absorbed yet stays pending and is retried ([procsignal.c#HandleProcSignalBarrierInterrupt](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L484-L499), [procsignal.c#ProcessProcSignalBarrier](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L501-L521), [procsignal.c:595-630](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L595-L630), [postgres.c:3603-3604](../raw/postgres-19/src/backend/tcop/postgres.c#L3603-L3604), [interrupt.c#ProcessMainLoopInterrupts](../raw/postgres-19/src/backend/postmaster/interrupt.c#L30-L37)). At the pin, `ProcSignalBarrierType` has exactly two members, and neither concerns data checksums: `PROCSIGNAL_BARRIER_SMGRRELEASE` asks processes to close their smgr files, as `dropdb()` and `DropTableSpace()` do, and `PROCSIGNAL_BARRIER_UPDATE_XLOG_LOGICAL_INFO` asks them to update `XLogLogicalInfo` when logical decoding is switched on or off ([procsignal.h#ProcSignalBarrierType](../raw/postgres-19/src/include/storage/procsignal.h#L48-L53), [dbcommands.c:1887-1888](../raw/postgres-19/src/backend/commands/dbcommands.c#L1887-L1888), [tablespace.c:520-528](../raw/postgres-19/src/backend/commands/tablespace.c#L520-L528), [logicalctl.c:365-371](../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L365-L371), [logicalctl.c:583-591](../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L583-L591)).
+
+Related: [Backend](#backend), [Background worker](#background-worker), [Storage manager](#storage-manager), [Logical decoding](#logical-decoding), [Wait event](#wait-event), [Data checksums](#data-checksums)
+
 ### Progress reporting
 
 **Aliases:** `pg_stat_progress_*` views, `pgstat_progress_update_param()`, `PROGRESS_*` constants, `ProgressCommandType`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2575,6 +2641,14 @@ Progress reporting is how a long-running command publishes how far it has got, t
 - PostgreSQL 19: Differs: `PROGRESS_COMMAND_CLUSTER` is replaced by `PROGRESS_COMMAND_REPACK`, so there are still six commands; the data-checksums progress command was reverted with online checksums ([backend_progress.h#ProgressCommandType](../raw/postgres-19/src/include/utils/backend_progress.h#L22-L33)). `pg_stat_progress_cluster` survives as a view over the new `pg_stat_progress_repack` ([system_views.sql#pg_stat_progress_cluster](../raw/postgres-19/src/backend/catalog/system_views.sql#L1380-L1400)).
 
 Related: [Cumulative statistics](#cumulative-statistics), [VACUUM](#vacuum), [REPACK](#repack), [CONCURRENTLY](#concurrently)
+
+### Promotion
+
+**Aliases:** standby promotion, failover, `pg_promote()`, `pg_ctl promote`, promote signal file, `PromoteIsTriggered()`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, promotion turns a standby into a primary: the server leaves standby mode and switches to normal read-write operation. The docs name it as the way to trigger failover ([high-availability.sgml:654-660](../raw/postgres-19/doc/src/sgml/high-availability.sgml#L654-L660), [high-availability.sgml:1567-1573](../raw/postgres-19/doc/src/sgml/high-availability.sgml#L1567-L1573)). Both `pg_ctl promote` and `pg_promote()` create a file named `promote` in the data directory and send `SIGUSR1` to the [postmaster](#postmaster) ([xlog.h:340](../raw/postgres-19/src/include/access/xlog.h#L340), [pg_ctl.c#do_promote](../raw/postgres-19/src/bin/pg_ctl/pg_ctl.c#L1186-L1241), [xlogfuncs.c#pg_promote](../raw/postgres-19/src/backend/access/transam/xlogfuncs.c#L682-L743)). `pg_ctl` refuses when the [control file](#control-file) does not show archive recovery, and `pg_promote()` by default waits up to 60 seconds for recovery to end ([pg_ctl.c:1209-1215](../raw/postgres-19/src/bin/pg_ctl/pg_ctl.c#L1209-L1215), [pg_proc.dat:6788-6792](../raw/postgres-19/src/include/catalog/pg_proc.dat#L6788-L6792)). The postmaster passes the request to the startup process as `SIGUSR2` ([postmaster.c:3941-3953](../raw/postgres-19/src/backend/postmaster/postmaster.c#L3941-L3953), [startup.c#StartupProcTriggerHandler](../raw/postgres-19/src/backend/postmaster/startup.c#L91-L97)). The startup process sees it in `CheckForStandbyTrigger()`, logs "received promote request", removes the file and sets a shared flag that any process can read through `PromoteIsTriggered()` ([xlogrecovery.c#CheckForStandbyTrigger](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L4449-L4468), [xlogrecovery.c#PromoteIsTriggered](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L4407-L4429)). A standby runs archive recovery, and at the end of archive recovery `StartupXLOG()` always picks a new timeline ID, so WAL written after promotion is on a new [timeline](#timeline) ([xlogrecovery.c#readRecoverySignalFile](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L1047-L1062), [xlog.c:6050-6067](../raw/postgres-19/src/backend/access/transam/xlog.c#L6050-L6067)).
+
+Related: [Hot standby](#hot-standby), [Timeline](#timeline), [Crash recovery](#crash-recovery), [Postmaster](#postmaster), [WAL receiver](#wal-receiver), [Control file](#control-file)
 
 ### Pruning
 
@@ -2836,6 +2910,14 @@ A replication slot is server state kept for one replication stream. Its main job
 - PostgreSQL 19: Holds ([slot.h#ReplicationSlotPersistentData](../raw/postgres-19/src/include/replication/slot.h#L95-L162)). The docs now say a new subscription creates and uses its publisher slot by default ([logical-replication.sgml#logical-replication-subscription](../raw/postgres-19/doc/src/sgml/logical-replication.sgml#L232-L235)). As in 18, `idle_replication_slot_timeout` can invalidate idle slots ([guc_parameters.dat#idle_replication_slot_timeout](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1296-L1304)). 19 adds that creating the first logical slot while `wal_level = replica` switches logical decoding on ([logicalctl.c:5-25](../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L5-L25)).
 
 Related: [xmin horizon](#xmin-horizon), [WAL](#wal), [LSN](#lsn), [Logical decoding](#logical-decoding), [Subscription](#subscription)
+
+### Resource manager
+
+**Aliases:** rmgr, WAL resource manager, custom WAL resource manager, `RmgrData`, `RmgrTable`, `RmgrId`, `rmgrlist.h`, `PG_RMGR`, `xl_rmid`, `RegisterCustomRmgr()`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, a resource manager (rmgr) is the module that owns one family of [WAL](#wal) records: it replays them during recovery, describes them for tools, and can decode them for [logical decoding](#logical-decoding). Every WAL record header names its rmgr in `xl_rmid` ([xlogrecord.h#XLogRecord](../raw/postgres-19/src/include/access/xlogrecord.h#L41-L49)). The built-in rmgrs are listed once, in `rmgrlist.h`, through the `PG_RMGR` macro. The list order sets the numeric ID that WAL stores, so new entries go at the end, and the file warns that changes may need an [XLOG_PAGE_MAGIC](#xlog_page_magic) bump ([rmgrlist.h:18-28](../raw/postgres-19/src/include/access/rmgrlist.h#L18-L28)). `rmgr.h` builds the `RmgrIds` enum from that list and reserves IDs 128 to 255 for custom rmgrs ([rmgr.h#RmgrIds](../raw/postgres-19/src/include/access/rmgr.h#L13-L39)). Each entry is an `RmgrData` method table: `rm_redo`, `rm_desc`, `rm_identify`, `rm_startup`, `rm_cleanup`, `rm_mask`, which masks bits that `wal_consistency_checking` must ignore, and `rm_decode`, which receives a logical decoding context ([xlog_internal.h#RmgrData](../raw/postgres-19/src/include/access/xlog_internal.h#L327-L355)). `rmgr.c` expands the list into `RmgrTable[]`, and recovery replays a record by calling `GetRmgr(record->xl_rmid).rm_redo()` ([rmgr.c#RmgrTable](../raw/postgres-19/src/backend/access/transam/rmgr.c#L46-L52), [xlogrecovery.c:1975](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L1975)). An extension can add an rmgr with `RegisterCustomRmgr()`, but only while `shared_preload_libraries` is being loaded and only with an ID in the custom range; `pg_waldump` includes the same `rmgrlist.h` to name built-in records ([rmgr.c#RegisterCustomRmgr](../raw/postgres-19/src/backend/access/transam/rmgr.c#L106-L146), [custom-rmgr.sgml#custom-rmgr](../raw/postgres-19/doc/src/sgml/custom-rmgr.sgml#L3-L24), [rmgrdesc.c:35-40](../raw/postgres-19/src/bin/pg_waldump/rmgrdesc.c#L35-L40)).
+
+Related: [WAL](#wal), [Crash recovery](#crash-recovery), [Logical decoding](#logical-decoding), [shared_preload_libraries](#shared_preload_libraries), [Extension](#extension), [XLOG_PAGE_MAGIC](#xlog_page_magic)
 
 ### Rewriter
 
@@ -3663,6 +3745,14 @@ Wraparound is the danger that 32-bit [transaction IDs](#transaction-id) run all 
 
 Related: [Transaction ID](#transaction-id), [Freezing](#freezing), [Autovacuum](#autovacuum), [MultiXact](#multixact)
 
+### XLOG_PAGE_MAGIC
+
+**Aliases:** WAL page magic number, `xlp_magic`, `XLogPageHeaderData`. **Checked on:** PostgreSQL 19.
+
+In PostgreSQL 19, `XLOG_PAGE_MAGIC` is the 16-bit value stamped at the start of every [WAL](#wal) page header. The source says it "can be used as WAL version indicator", and at the pin it is `0xD122` ([xlog_internal.h:32-39](../raw/postgres-19/src/include/access/xlog_internal.h#L32-L39)). The [control file](#control-file) layout notes that WAL files carry these per-page magic numbers as version cues, next to `PG_CONTROL_VERSION` and the [catalog version](#catalog-version) ([pg_control.h:119-124](../raw/postgres-19/src/include/catalog/pg_control.h#L119-L124)). `AdvanceXLInsertBuffer()` writes it into every new WAL page, `BootStrapXLOG()` into the first page, and `pg_resetwal`'s `WriteEmptyXLOG()` into the segment it creates ([xlog.c:2143-2150](../raw/postgres-19/src/backend/access/transam/xlog.c#L2143-L2150), [xlog.c:5212-5216](../raw/postgres-19/src/backend/access/transam/xlog.c#L5212-L5216), [pg_resetwal.c:1147](../raw/postgres-19/src/bin/pg_resetwal/pg_resetwal.c#L1147)). `XLogReaderValidatePageHeader()` rejects a page whose magic differs from the compiled value, reporting "invalid magic number %04X in WAL segment %s, LSN %X/%08X, offset %u" ([xlogreader.c#XLogReaderValidatePageHeader](../raw/postgres-19/src/backend/access/transam/xlogreader.c#L1236-L1261)). So a server rejects WAL pages that carry another build's value; `rmgrlist.h` reminds developers that changes to the [resource manager](#resource-manager) list may need an `XLOG_PAGE_MAGIC` bump ([rmgrlist.h:24](../raw/postgres-19/src/include/access/rmgrlist.h#L24)).
+
+Related: [WAL](#wal), [Resource manager](#resource-manager), [Control file](#control-file), [Catalog version](#catalog-version), [LSN](#lsn)
+
 ### xmin and xmax
 
 **Aliases:** `t_xmin`, `t_xmax`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3714,12 +3804,14 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
   - effective_io_concurrency, 17: `config.sgml` says the setting "only affects bitmap heap scans", but `read_stream_begin_relation()` takes its I/O depth from it for every stream not flagged `READ_STREAM_MAINTENANCE`, such as sequential scans ([config.sgml:2718-2726](../raw/postgres-17/doc/src/sgml/config.sgml#L2718-L2726), [read_stream.c:420-442](../raw/postgres-17/src/backend/storage/aio/read_stream.c#L420-L442), [heapam.c:1252](../raw/postgres-17/src/backend/access/heap/heapam.c#L1252)).
   - Sibling link, 17: `_bt_split()` says the new right page "was initialized by `_bt_getbuf`" one line after taking it from `_bt_allocbuf()` ([nbtinsert.c:1720-1723](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1720-L1723)).
   - Hint bits, 19: the `heapam_visibility.c` header says hint-bit changes call `MarkBufferDirtyHint`, but a single hint goes through `BufferSetHintBits16()`, which dirties the page with `MarkSharedBufferDirtyHint()` ([heapam_visibility.c:6-11](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L6-L11), [heapam_visibility.c:141-192](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L141-L192), [bufmgr.c#BufferSetHintBits16](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L7129-L7175)).
+  - Control file, 19: a `pg_control.h` comment says the data checksum state "can be changed during runtime", but after the online-checksums revert only `InitControlFile()` and the offline `pg_checksums` write `data_checksum_version` ([pg_control.h:224-228](../raw/postgres-19/src/include/catalog/pg_control.h#L224-L228), [xlog.c:4294](../raw/postgres-19/src/backend/access/transam/xlog.c#L4294), [pg_checksums.c:645-648](../raw/postgres-19/src/bin/pg_checksums/pg_checksums.c#L645-L648)).
   - TAP test, 17: `regress.sgml` and the recovery test README name only configure's `--enable-tap-tests`, but Meson builds have a `tap_tests` option that defaults to `auto` ([regress.sgml:827-828](../raw/postgres-17/doc/src/sgml/regress.sgml#L827-L828), [recovery/README:11](../raw/postgres-17/src/test/recovery/README#L11), [meson_options.txt:43-44](../raw/postgres-17/meson_options.txt#L43-L44)).
 
 - Verification depth for the four entries added on 2026-09-24 (Role membership, Security invoker view, SubLink, WithCheckOption): the agent that wrote them checked each citation against all five pins once, while reviewing the v18 row-level security page. No second reviewer has read them.
 
 - Depth of the 2026-09-24 v19 repin check (`135b867a530` to `dae3463fa96`, stamped 19beta4). `scripts/repin_citations` re-anchored every v19 citation whose cited block was unchanged or had moved. An agent re-read each block whose text changed, the entries that name reverted v19 features (online data checksums, SQL/PGQ property graphs, the RI fast-path batching), and the v19 notes on REPACK, on-access pruning and autovacuum scoring. A v19 note whose cited blocks are byte-identical at the new pin was not re-read claim by claim.
 - The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Its applicability to 12 and 14 has not been checked.
+- Ten entries added on 2026-09-24 for the v19 online data checksums history page were checked on PostgreSQL 19 only, as the asker chose: Back-patch, Base backup, Buildfarm, Catalog version, Control file, PG_TEST_EXTRA, ProcSignal barrier, Promotion, Resource manager and XLOG_PAGE_MAGIC. Their applicability to 12, 14, 17 and 18 has not been checked. Two agents drafted them, each citation was checked for file and range, and the orchestrator re-read a sample of the claims; no second reviewer has read them all. The Back-patch entry does not describe the `Backpatch-through:` commit trailer, because no file in the 19 tree documents it.
 
 ## Source References
 
@@ -5259,7 +5351,7 @@ One representative citation per cited source file, grouped by version:
 - [parallel_schedule:12-17](../raw/postgres-18/src/test/regress/parallel_schedule#L12-L17)
 - [pg_regress.c:3](../raw/postgres-18/src/test/regress/pg_regress.c#L3)
 
-**PostgreSQL 19** (393 files):
+**PostgreSQL 19** (430 files):
 
 - [configure.ac#blocksize](../raw/postgres-19/configure.ac#L248-L274)
 - [contrib/Makefile:36-40](../raw/postgres-19/contrib/Makefile#L36-L40)
@@ -5290,17 +5382,21 @@ One representative citation per cited source file, grouped by version:
 - [pgstattuple.c#pgstattuple_type](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L57-L65)
 - [pgstattuple.control:1-2](../raw/postgres-19/contrib/pgstattuple/pgstattuple.control#L1-L2)
 - [auto-explain.sgml:18-24](../raw/postgres-19/doc/src/sgml/auto-explain.sgml#L18-L24)
+- [backup.sgml#backup-base-backup](../raw/postgres-19/doc/src/sgml/backup.sgml#L817-L823)
 - [bki.sgml:40-61](../raw/postgres-19/doc/src/sgml/bki.sgml#L40-L61)
 - [catalogs.sgml:4646-4649](../raw/postgres-19/doc/src/sgml/catalogs.sgml#L4646-L4649)
 - [config.sgml#guc-huge-pages](../raw/postgres-19/doc/src/sgml/config.sgml#L1844-L1863)
 - [contrib.sgml:7-16](../raw/postgres-19/doc/src/sgml/contrib.sgml#L7-L16)
+- [custom-rmgr.sgml#custom-rmgr](../raw/postgres-19/doc/src/sgml/custom-rmgr.sgml#L3-L24)
 - [datatype.sgml:4807-4821](../raw/postgres-19/doc/src/sgml/datatype.sgml#L4807-L4821)
 - [ddl.sgml#ddl-partitioning-declarative](../raw/postgres-19/doc/src/sgml/ddl.sgml#L4388-L4409)
 - [event-trigger.sgml:10-16](../raw/postgres-19/doc/src/sgml/event-trigger.sgml#L10-L16)
 - [extend.sgml:525-556](../raw/postgres-19/doc/src/sgml/extend.sgml#L525-L556)
+- [func-info.sgml#functions-info-controldata](../raw/postgres-19/doc/src/sgml/func/func-info.sgml#L3295-L3306)
 - [gin.sgml](../raw/postgres-19/doc/src/sgml/gin.sgml#L504-L530)
 - [gist.sgml#gist-intro](../raw/postgres-19/doc/src/sgml/gist.sgml#L11-L25)
 - [glossary.sgml#glossary-autovacuum](../raw/postgres-19/doc/src/sgml/glossary.sgml#L165-L183)
+- [high-availability.sgml:1567-1573](../raw/postgres-19/doc/src/sgml/high-availability.sgml#L1567-L1573)
 - [indexam.sgml:37-44](../raw/postgres-19/doc/src/sgml/indexam.sgml#L37-L44)
 - [indices.sgml#indexes-index-only-scans](../raw/postgres-19/doc/src/sgml/indices.sgml#L1241-L1249)
 - [installation.sgml#configure-option-enable-injection-points](../raw/postgres-19/doc/src/sgml/installation.sgml#L1684-L1696)
@@ -5310,6 +5406,7 @@ One representative citation per cited source file, grouped by version:
 - [mvcc.sgml:1081-1109](../raw/postgres-19/doc/src/sgml/mvcc.sgml#L1081-L1109)
 - [pgplanadvice.sgml#pgplanadvice-getting-started](../raw/postgres-19/doc/src/sgml/pgplanadvice.sgml#L31-L39)
 - [plpgsql.sgml:14-22](../raw/postgres-19/doc/src/sgml/plpgsql.sgml#L14-L22)
+- [protocol.sgml#protocol-replication-base-backup](../raw/postgres-19/doc/src/sgml/protocol.sgml#L3134-L3143)
 - [ref/alter_table.sgml:483-485](../raw/postgres-19/doc/src/sgml/ref/alter_table.sgml#L483-L485)
 - [ref/cluster.sgml:32-40](../raw/postgres-19/doc/src/sgml/ref/cluster.sgml#L32-L40)
 - [ref/create_index.sgml#sql-createindex-concurrently](../raw/postgres-19/doc/src/sgml/ref/create_index.sgml#L618-L646)
@@ -5317,6 +5414,8 @@ One representative citation per cited source file, grouped by version:
 - [ref/create_table.sgml#reloption-fillfactor](../raw/postgres-19/doc/src/sgml/ref/create_table.sgml#L1606-L1625)
 - [ref/drop_index.sgml:46-50](../raw/postgres-19/doc/src/sgml/ref/drop_index.sgml#L46-L50)
 - [ref/explain.sgml:204-209](../raw/postgres-19/doc/src/sgml/ref/explain.sgml#L204-L209)
+- [pg_basebackup.sgml:55-61](../raw/postgres-19/doc/src/sgml/ref/pg_basebackup.sgml#L55-L61)
+- [pg_controldata.sgml#r1-app-pgcontroldata-1](../raw/postgres-19/doc/src/sgml/ref/pg_controldata.sgml#L36-L44)
 - [pgupgrade.sgml:328-337](../raw/postgres-19/doc/src/sgml/ref/pgupgrade.sgml#L328-L337)
 - [ref/reindex.sgml:54-63](../raw/postgres-19/doc/src/sgml/ref/reindex.sgml#L54-L63)
 - [ref/repack.sgml:42-50](../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L42-L50)
@@ -5329,6 +5428,7 @@ One representative citation per cited source file, grouped by version:
 - [xfunc.sgml#xfunc-volatility](../raw/postgres-19/doc/src/sgml/xfunc.sgml#L1613-L1651)
 - [meson.build#bison_kw](../raw/postgres-19/meson.build#L430-L434)
 - [meson_options.txt:43-44](../raw/postgres-19/meson_options.txt#L43-L44)
+- [Makefile.global.in:664-671](../raw/postgres-19/src/Makefile.global.in#L664-L671)
 - [brin/README:1-24](../raw/postgres-19/src/backend/access/brin/README#L1-L24)
 - [brin.c:300](../raw/postgres-19/src/backend/access/brin/brin.c#L300)
 - [relation.c:43-44](../raw/postgres-19/src/backend/access/common/relation.c#L43-L44)
@@ -5375,15 +5475,19 @@ One representative citation per cited source file, grouped by version:
 - [transam/README:420-422](../raw/postgres-19/src/backend/access/transam/README#L420-L422)
 - [clog.c:93-94](../raw/postgres-19/src/backend/access/transam/clog.c#L93-L94)
 - [multixact.c:5-17](../raw/postgres-19/src/backend/access/transam/multixact.c#L5-L17)
+- [rmgr.c#RmgrTable](../raw/postgres-19/src/backend/access/transam/rmgr.c#L46-L52)
 - [slru.c:17-31](../raw/postgres-19/src/backend/access/transam/slru.c#L17-L31)
 - [timeline.c:4-22](../raw/postgres-19/src/backend/access/transam/timeline.c#L4-L22)
 - [twophase.c:24-26](../raw/postgres-19/src/backend/access/transam/twophase.c#L24-L26)
 - [varsup.c:438](../raw/postgres-19/src/backend/access/transam/varsup.c#L438)
 - [xact.c:1544-1584](../raw/postgres-19/src/backend/access/transam/xact.c#L1544-L1584)
 - [xlog.c#ReadControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4499-L4508)
+- [xlogfuncs.c#pg_promote](../raw/postgres-19/src/backend/access/transam/xlogfuncs.c#L682-L743)
 - [xloginsert.c:1161](../raw/postgres-19/src/backend/access/transam/xloginsert.c#L1161)
 - [xlogprefetcher.c:772](../raw/postgres-19/src/backend/access/transam/xlogprefetcher.c#L772)
+- [xlogreader.c#XLogReaderValidatePageHeader](../raw/postgres-19/src/backend/access/transam/xlogreader.c#L1236-L1261)
 - [xlogrecovery.c:867-884](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L867-L884)
+- [basebackup.c#verify_page_checksum](../raw/postgres-19/src/backend/backup/basebackup.c#L1984-L2018)
 - [bootparse.y:4-5](../raw/postgres-19/src/backend/bootstrap/bootparse.y#L4-L5)
 - [catalog.c:370-378](../raw/postgres-19/src/backend/catalog/catalog.c#L370-L378)
 - [genbki.pl:1-7](../raw/postgres-19/src/backend/catalog/genbki.pl#L1-L7)
@@ -5395,6 +5499,7 @@ One representative citation per cited source file, grouped by version:
 - [analyze.c:2917](../raw/postgres-19/src/backend/commands/analyze.c#L2917)
 - [comment.c#CreateComments](../raw/postgres-19/src/backend/commands/comment.c#L145-L166)
 - [createas.c:342](../raw/postgres-19/src/backend/commands/createas.c#L342)
+- [dbcommands.c:1887-1888](../raw/postgres-19/src/backend/commands/dbcommands.c#L1887-L1888)
 - [explain.c:573](../raw/postgres-19/src/backend/commands/explain.c#L573)
 - [explain_state.c#NewExplainState](../raw/postgres-19/src/backend/commands/explain_state.c#L60-L74)
 - [extension.c#ExtensionControlFile](../raw/postgres-19/src/backend/commands/extension.c#L86-L105)
@@ -5406,6 +5511,7 @@ One representative citation per cited source file, grouped by version:
 - [statscmds.c:519-520](../raw/postgres-19/src/backend/commands/statscmds.c#L519-L520)
 - [subscriptioncmds.c:647](../raw/postgres-19/src/backend/commands/subscriptioncmds.c#L647)
 - [tablecmds.c:10136-10145](../raw/postgres-19/src/backend/commands/tablecmds.c#L10136-L10145)
+- [tablespace.c:520-528](../raw/postgres-19/src/backend/commands/tablespace.c#L520-L528)
 - [vacuum.c:2084-2085](../raw/postgres-19/src/backend/commands/vacuum.c#L2084-L2085)
 - [vacuumparallel.c:1103-1107](../raw/postgres-19/src/backend/commands/vacuumparallel.c#L1103-L1107)
 - [execMain.c:1-28](../raw/postgres-19/src/backend/executor/execMain.c#L1-L28)
@@ -5453,8 +5559,10 @@ One representative citation per cited source file, grouped by version:
 - [bgworker.c#RegisterBackgroundWorker](../raw/postgres-19/src/backend/postmaster/bgworker.c#L946-L953)
 - [bgwriter.c:5-13](../raw/postgres-19/src/backend/postmaster/bgwriter.c#L5-L13)
 - [checkpointer.c:502](../raw/postgres-19/src/backend/postmaster/checkpointer.c#L502)
+- [interrupt.c#ProcessMainLoopInterrupts](../raw/postgres-19/src/backend/postmaster/interrupt.c#L30-L37)
 - [pmchild.c:6-16](../raw/postgres-19/src/backend/postmaster/pmchild.c#L6-L16)
 - [postmaster.c:3840-3852](../raw/postgres-19/src/backend/postmaster/postmaster.c#L3840-L3852)
+- [startup.c#StartupProcTriggerHandler](../raw/postgres-19/src/backend/postmaster/startup.c#L91-L97)
 - [walwriter.c:210-214](../raw/postgres-19/src/backend/postmaster/walwriter.c#L210-L214)
 - [applyparallelworker.c:441](../raw/postgres-19/src/backend/replication/logical/applyparallelworker.c#L441)
 - [conflict.c#ReportApplyConflict](../raw/postgres-19/src/backend/replication/logical/conflict.c#L105-L133)
@@ -5486,6 +5594,7 @@ One representative citation per cited source file, grouped by version:
 - [dsm_registry.c:279](../raw/postgres-19/src/backend/storage/ipc/dsm_registry.c#L279)
 - [ipci.c:48](../raw/postgres-19/src/backend/storage/ipc/ipci.c#L48)
 - [procarray.c:7-20](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L7-L20)
+- [procsignal.c#EmitProcSignalBarrier](../raw/postgres-19/src/backend/storage/ipc/procsignal.c#L350-L427)
 - [standby.c:470](../raw/postgres-19/src/backend/storage/ipc/standby.c#L470)
 - [lmgr/README:20-35](../raw/postgres-19/src/backend/storage/lmgr/README#L20-L35)
 - [deadlock.c:220](../raw/postgres-19/src/backend/storage/lmgr/deadlock.c#L220)
@@ -5509,7 +5618,6 @@ One representative citation per cited source file, grouped by version:
 - [acl.c#roles_is_member_of](../raw/postgres-19/src/backend/utils/adt/acl.c#L5178-L5271)
 - [dbsize.c#pg_relation_size](../raw/postgres-19/src/backend/utils/adt/dbsize.c#L364-L389)
 - [ri_triggers.c#RI_FKey_check](../raw/postgres-19/src/backend/utils/adt/ri_triggers.c#L424-L437)
-- [ri_triggers.c#ri_check_fastpath_index](../raw/postgres-19/src/backend/utils/adt/ri_triggers.c#L3013-L3091)
 - [ruleutils.c#T_PartitionBoundSpec](../raw/postgres-19/src/backend/utils/adt/ruleutils.c#L10479-L10528)
 - [selfuncs.c#btcost_correlation](../raw/postgres-19/src/backend/utils/adt/selfuncs.c#L7666-L7677)
 - [inval.c#AtInplace_Inval](../raw/postgres-19/src/backend/utils/cache/inval.c#L1256-L1274)
@@ -5528,13 +5636,21 @@ One representative citation per cited source file, grouped by version:
 - [guc_parameters.dat#io_max_workers](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1393-L1415)
 - [guc_tables.c:1-10](../raw/postgres-19/src/backend/utils/misc/guc_tables.c#L1-L10)
 - [injection_point.c:3-7](../raw/postgres-19/src/backend/utils/misc/injection_point.c#L3-L7)
+- [pg_controldata.c#pg_control_init](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L206-L258)
 - [mmgr/README:9-49](../raw/postgres-19/src/backend/utils/mmgr/README#L9-L49)
 - [tuplesort.c:26-29](../raw/postgres-19/src/backend/utils/sort/tuplesort.c#L26-L29)
 - [tuplesortvariants.c:360](../raw/postgres-19/src/backend/utils/sort/tuplesortvariants.c#L360)
 - [snapmgr.c:337-338](../raw/postgres-19/src/backend/utils/time/snapmgr.c#L337-L338)
 - [initdb.c:167](../raw/postgres-19/src/bin/initdb/initdb.c#L167)
+- [pg_basebackup.c:1989-1997](../raw/postgres-19/src/bin/pg_basebackup/pg_basebackup.c#L1989-L1997)
+- [pg_controldata.c:247-248](../raw/postgres-19/src/bin/pg_controldata/pg_controldata.c#L247-L248)
+- [pg_ctl.c#do_promote](../raw/postgres-19/src/bin/pg_ctl/pg_ctl.c#L1186-L1241)
+- [pg_resetwal.c:1147](../raw/postgres-19/src/bin/pg_resetwal/pg_resetwal.c#L1147)
+- [controldata.c:229-237](../raw/postgres-19/src/bin/pg_upgrade/controldata.c#L229-L237)
 - [pg_upgrade.c:9-21](../raw/postgres-19/src/bin/pg_upgrade/pg_upgrade.c#L9-L21)
 - [pg_upgrade.h#transferMode](../raw/postgres-19/src/bin/pg_upgrade/pg_upgrade.h#L266-L273)
+- [rmgrdesc.c:35-40](../raw/postgres-19/src/bin/pg_waldump/rmgrdesc.c#L35-L40)
+- [controldata_utils.c#update_controlfile](../raw/postgres-19/src/common/controldata_utils.c#L180-L200)
 - [amapi.h:251-255](../raw/postgres-19/src/include/access/amapi.h#L251-L255)
 - [brin.h:40](../raw/postgres-19/src/include/access/brin.h#L40)
 - [brin_page.h:75](../raw/postgres-19/src/include/access/brin_page.h#L75)
@@ -5549,6 +5665,8 @@ One representative citation per cited source file, grouped by version:
 - [htup_details.h#HEAP_ONLY_TUPLE](../raw/postgres-19/src/include/access/htup_details.h#L295-L296)
 - [itup.h#IndexTupleData](../raw/postgres-19/src/include/access/itup.h#L35-L51)
 - [nbtree.h#BTMetaPageData](../raw/postgres-19/src/include/access/nbtree.h#L104-L120)
+- [rmgr.h#RmgrIds](../raw/postgres-19/src/include/access/rmgr.h#L13-L39)
+- [rmgrlist.h:18-28](../raw/postgres-19/src/include/access/rmgrlist.h#L18-L28)
 - [spgist_private.h:47](../raw/postgres-19/src/include/access/spgist_private.h#L47)
 - [transam.h#FrozenTransactionId](../raw/postgres-19/src/include/access/transam.h#L23-L33)
 - [tupdesc.h#CompactAttribute](../raw/postgres-19/src/include/access/tupdesc.h#L68-L70)
@@ -5557,7 +5675,9 @@ One representative citation per cited source file, grouped by version:
 - [xlog.h#XLogHintBitIsNeeded](../raw/postgres-19/src/include/access/xlog.h#L135)
 - [xlog_internal.h:165](../raw/postgres-19/src/include/access/xlog_internal.h#L165)
 - [xlogdefs.h:39-47](../raw/postgres-19/src/include/access/xlogdefs.h#L39-L47)
+- [xlogrecord.h#XLogRecord](../raw/postgres-19/src/include/access/xlogrecord.h#L41-L49)
 - [c.h:896-903](../raw/postgres-19/src/include/c.h#L896-L903)
+- [catversion.h:6-14](../raw/postgres-19/src/include/catalog/catversion.h#L6-L14)
 - [genbki.h:42](../raw/postgres-19/src/include/catalog/genbki.h#L42)
 - [index.h:27](../raw/postgres-19/src/include/catalog/index.h#L27)
 - [pg_am.dat:14-35](../raw/postgres-19/src/include/catalog/pg_am.dat#L14-L35)
@@ -5569,6 +5689,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_class.h:179](../raw/postgres-19/src/include/catalog/pg_class.h#L179)
 - [pg_collation.h#FormData_pg_collation](../raw/postgres-19/src/include/catalog/pg_collation.h#L31-L53)
 - [pg_constraint.h:57](../raw/postgres-19/src/include/catalog/pg_constraint.h#L57)
+- [pg_control.h#ControlFileData](../raw/postgres-19/src/include/catalog/pg_control.h#L105-L136)
 - [pg_description.h:10-21](../raw/postgres-19/src/include/catalog/pg_description.h#L10-L21)
 - [pg_event_trigger.h#FormData_pg_event_trigger](../raw/postgres-19/src/include/catalog/pg_event_trigger.h#L31-L45)
 - [pg_index.h#FormData_pg_index](../raw/postgres-19/src/include/catalog/pg_index.h#L50-L62)
@@ -5630,6 +5751,7 @@ One representative citation per cited source file, grouped by version:
 - [locktag.h#LOCKTAG](../raw/postgres-19/src/include/storage/locktag.h#L64-L72)
 - [lwlock.h#LWLock](../raw/postgres-19/src/include/storage/lwlock.h#L41-L50)
 - [proc.h#PROC_HDR](../raw/postgres-19/src/include/storage/proc.h#L444-L462)
+- [procsignal.h#ProcSignalBarrierType](../raw/postgres-19/src/include/storage/procsignal.h#L48-L53)
 - [relfilelocator.h#RelFileLocator](../raw/postgres-19/src/include/storage/relfilelocator.h#L20-L63)
 - [sinval.h#SharedInvalidationMessage](../raw/postgres-19/src/include/storage/sinval.h#L124-L134)
 - [utility.h:71-78](../raw/postgres-19/src/include/tcop/utility.h#L71-L78)
@@ -5652,9 +5774,15 @@ One representative citation per cited source file, grouped by version:
 - [plpgsql--1.0.sql:3-15](../raw/postgres-19/src/pl/plpgsql/src/plpgsql--1.0.sql#L3-L15)
 - [isolation/README:3-12](../raw/postgres-19/src/test/isolation/README#L3-L12)
 - [injection_points.control:1-4](../raw/postgres-19/src/test/modules/injection_points/injection_points.control#L1-L4)
+- [001_emergency_vacuum.pl:10-13](../raw/postgres-19/src/test/modules/xid_wraparound/t/001_emergency_vacuum.pl#L10-L13)
 - [Cluster.pm:8-12](../raw/postgres-19/src/test/perl/PostgreSQL/Test/Cluster.pm#L8-L12)
+- [perl/README:102-104](../raw/postgres-19/src/test/perl/README#L102-L104)
 - [parallel_schedule:10-18](../raw/postgres-19/src/test/regress/parallel_schedule#L10-L18)
 - [pg_regress.c:3](../raw/postgres-19/src/test/regress/pg_regress.c#L3)
+- [RELEASE_CHANGES:90-106](../raw/postgres-19/src/tools/RELEASE_CHANGES#L90-L106)
+- [ci/README:4-14](../raw/postgres-19/src/tools/ci/README#L4-L14)
+- [git_changelog:8-19](../raw/postgres-19/src/tools/git_changelog#L8-L19)
+- [testwrap:48-54](../raw/postgres-19/src/tools/testwrap#L48-L54)
 
 ## Navigation
 

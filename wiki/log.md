@@ -14273,3 +14273,52 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - **Bookkeeping.** `wiki/versions.md` (pin, coverage cell, coverage note), `wiki/index.md` and `wiki/v19/index.md` (pin, stamp, counts, repin notes).
 - **Services.** No server was started, so nothing needed stopping or deleting.
 - **Lint.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted changes in the v12 and v14 checkouts.
+
+## [2026-09-24] answer v19 | history of online data checksum enabling and disabling: 85 commits, reverted before 19beta4
+
+- **Prompt.** The asker chose to have it corrected silently: "Follow AGENTS.md. In PostgreSQL 19, question: the history of the feature "online enabling and disabling of data checksums"; list all commits." Two scope answers came in the same question call:
+  - Do not fetch. `raw/postgres-19` is a shallow clone, so the 2018 and 2019 commits are listed as its older tags reach them, and their ancestry goes under Open Questions.
+  - Add the ten new glossary terms, each checked on PostgreSQL 19 only.
+- **Filed.** [History of Online Data Checksum Enabling and Disabling in PostgreSQL 19, and All Its Commits (unverified)](v19/questions/storage-and-vacuum/online-data-checksums-history.md), at pin `dae3463fa969931458f1488f9b7af11e3741cd54`, with `verified_by_agent: not yet`.
+  - Category `storage-and-vacuum`, by rule 1: data checksums are a property of data pages.
+- **What the page answers.** At the pin, PostgreSQL 19 cannot change data checksums in a running cluster.
+  - `f19c0eccae9` (2026-04-03) added the feature, and it shipped in 19beta1 to 19beta3.
+  - `c05d5ce1236` reverted it on `REL_19_STABLE` on 2026-09-16, before the 19beta4 stamp.
+  - A first version (`1fde38beaa0`, 2018) was reverted before 11beta1.
+  - The page lists 85 commits: 6 from 2018 and 2019, the 2026 preparation and main commit, 51 follow-ups (29 on master, 22 on `REL_19_STABLE`), 7 release-note commits, 12 tree-wide commits, 4 translation imports, and the revert with its 2 cleanups. It also lists 27 checked-and-excluded commits, each with a reason.
+  - The revert names 30 commits. It also removes the code of the 22 it does not name, except for four small remnants the page lists.
+  - The page explains how the reverted feature worked, citing `c05d5ce1236^` paths, and what the pin still contains.
+  - Findings recorded on the page:
+    - `e3a27cad462` is named in the revert, but all its lines survive.
+    - An unused injection point, `createdb-before-catalog-insert`, is left in `dbcommands.c`.
+    - `ja.po` still has live entries for removed messages.
+    - A `pg_control.h` comment still says the checksum state "can be changed during runtime".
+    - `PG_CONTROL_VERSION` skips 1904.
+    - The hashes `78e950cb8` and `51f55b13a4d`, cited in commit messages, are not in this clone.
+- **Method.** All evidence is from `raw/postgres-19`, which was read only and not fetched. The commit list comes from seven searches:
+  - commit messages;
+  - the feature's own paths;
+  - `-G` over 40 feature symbols;
+  - doc diffs;
+  - a blame of all 6,673 lines the revert removed;
+  - a blame of the lines each of the 277 in-range commits removed from feature files;
+  - a blame of the pin over 247 touched files, to find surviving lines.
+
+  Beta and branch placement comes from `git merge-base --is-ancestor`. The branch point is `9cfd19bc10a`. Two forks on the orchestrator's model (`claude-opus-5-5`) drafted the glossary entries. The orchestrator mechanically checked every citation in the two drafts (143) and on the page (107), and re-read a sample of fork claims in the source.
+- **Glossary.**
+  - Ten entries added, each checked on 19 only: Back-patch, Base backup, Buildfarm, Catalog version, Control file, PG_TEST_EXTRA, ProcSignal barrier, Promotion, Resource manager and XLOG_PAGE_MAGIC. The glossary now has 253 terms.
+  - Data checksums: the v19 note gained `data_checksum_version_init` and `pg_control_init()`, and Related links to Control file and ProcSignal barrier were added.
+  - Extension: the alias "control file" became "extension control file (`.control` file)", so each alias has one home.
+  - Scope now says an entry's main paragraph opens by naming another version when it was checked only there, and lists the ten entries.
+  - Open Questions gained a verification-depth note for the ten entries and a comment-versus-code item: the Control file comment in 19's `pg_control.h`.
+  - Contents gained ten lines.
+  - Source References, 19 block: 37 lines added. One duplicate `ri_triggers.c` line, left by the repin, was removed. The header went from 393 (the old block really had 394 lines) to 430 files.
+  - Every `#` link in the glossary and the page resolves.
+- **Links.**
+  - The page is listed under Storage and Vacuum in `wiki/index.md` and `wiki/v19/index.md`, and the v19 coverage paragraph mentions it.
+  - `wiki/versions.md` gained a coverage note and a clause on the v19 row.
+  - The glossary term count now reads 253 in `wiki/index.md` and all five landing pages. The v12, v14, v17 and v18 pages had still said 242.
+  - PostgreSQL 19 has no common concept pages. A v19 data-checksums concept page was proposed to the asker and not created.
+- **Lint.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted changes in the v12 and v14 checkouts.
+- **Teardown.** No server or other service was started, and nothing was created under `.wiki-runtime/tmp/`. Drafts and helper scripts live in the session scratchpad, outside the repo, and every helper ran from the project venv. `raw/postgres-19` is unchanged: still shallow and detached at the pin.
+- **Isolation slip.** While updating its memory notes outside the repo, the orchestrator ran host `python3` once, by mistake, as a no-op `print()` inside a shell command. That breaks `MANDATORY Environment Isolation`, but it had no effect on any file.
