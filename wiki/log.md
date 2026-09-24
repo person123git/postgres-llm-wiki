@@ -14169,3 +14169,61 @@ port 55471 was left. The `clean` stage then repeated those checks and deleted
 A PostgreSQL 12 server that this task did not start was running before and after it: pid 90110,
 data directory `.wiki-runtime/tmp/ldf12-review/data`, port 55412. It was left untouched and
 reported to the asker.
+
+## [2026-09-24] review v18 | row-level security page: reviewed claim by claim, revised, and measured on 18.6 from a published script
+
+**Prompt.** The asker chose to have it corrected silently: "Follow AGENTS.md, in PostgreSQL 18, review question: Row-Level Security (RLS) in PostgreSQL 18: Implementation, Performance, Settings, and Fixes Since PostgreSQL 14 (unverified)." The findings were shown in chat first. The asker then asked to fix every finding about how the feature works and performs, re-measure on the pin, and publish the script. The page's `## Question` records the corrected prompt in a `### Review after filing` note.
+
+**Review.** Four report-only review forks, each on the orchestrator's model (`claude-opus-5-5`), read the Answer sections claim by claim against `raw/postgres-18` at `baa7b142aac`. The orchestrator re-checked every material finding in source. A mechanical check covered all citations.
+
+**What changed on the page.**
+- Corrected claims:
+  - An owner bypasses even FORCE RLS inside the no-force operation.
+  - RLS write checks are prepended, not appended.
+  - Non-target tables always get their SELECT policies.
+  - SELECT-policy write checks apply whenever SELECT rights are needed, not only with `RETURNING`.
+  - `ON CONFLICT DO UPDATE` and `MERGE` raise an error on an existing row that fails `USING`.
+  - A cross-partition UPDATE uses the target table's remapped UPDATE policies.
+  - `ALTER POLICY` checks type `USAGE` only on the expressions it supplies.
+  - `plan_cache_mode` cannot force custom plans for statements without parameters.
+  - The `CREATE TABLE AS` guard never fires in core.
+  - `enable_partitionwise_aggregate` does not depend on RLS.
+  - Plan-time partition pruning and partial-index proofs need a constant policy value.
+  - `REVOKE INHERIT OPTION FOR` also changes an existing membership edge.
+  - The MultiXact member cache lasts one transaction, and old lock-only MultiXacts skip it.
+  - The `CREATE POLICY` count is 104, not 101.
+- New performance content:
+  - The statistics gate that limits column statistics to leakproof operators on RLS tables.
+  - Policy sublinks never become joins; a correlated `EXISTS` gets a hashed alternative.
+  - Parallel-restricted policy functions and locking policy subqueries limit parallel plans.
+  - 18.6's `PlanCacheRoleCallback` has no role filter, so any role-catalog change and any change to the current database's `pg_database` row, including a `VACUUM` that advances `datfrozenxid`, replans saved RLS statements.
+  - The "must the filter be in the query" answer now names the literal-value exception.
+- Open Question 3 (unsaved plan sources) is answered from `plancache.h`, and the 18.6 plan-cache question is answered by measurement. New Open Questions record the untested workload frequency of those replans and a `create_role.sgml` sentence that is narrower than it reads.
+- Fixes table:
+  - `96a6f11c062` is added to the `a2ab9c06ea` row.
+  - `36c6b499761` is relabelled as consistency hardening.
+  - The `2780538433f` and `0b12f56bfac` rows are qualified.
+  - Tests are cited for the CVE rows that have them.
+  - `f1358ca52d` and `352ea3acf8` are noted as feature changes.
+  - The stale "62,317 commits" count and the unreproducible `git describe` string are replaced.
+- Settings table: gained a `LEAKPROOF` and function-attribute row. Its role, `createuser`, view-option, subscription and dump rows cite source.
+- Citations: labels and ranges repaired. Each label now names one range. The page has 673 citations over 411 ranges in 122 files, all in bounds. Contents, Evidence Map, Context Reviewed and Source References were rebuilt. The glossary Navigation link and 30 term links were added.
+- Scope: as the asker requested, the revision covers how the feature works and performs; it does not assess security defects.
+
+**Measured.** The new `## Measurement Script` (bash and SQL, 305 lines) built the pin out of tree and ran every stage. Run times: 2026-09-24 13:18:20Z to 13:18:21Z on a tree it had built at 13:17Z. Exit 0, 0 `ERROR` lines.
+- Five same-role plan-cache cases, each changing on the next `EXECUTE` without `DISCARD PLANS`: 1 → 0, 0 → 1, 0 → 1, 0 → 1, 0 → 1.
+- A forced-generic RLS statement was replanned after unrelated `CREATE ROLE` and `ALTER ROLE`, after `ALTER DATABASE` on the current database, and after `VACUUM (FREEZE)` moved `datfrozenxid` 744 → 775. It was not replanned after `ALTER DATABASE postgres` or a `VACUUM` that left `datfrozenxid` unchanged.
+- Helper calls: bare 101 (1 while planning), wrapped 1, `EXPLAIN` bare 1 and wrapped 0, two occurrences 2, `IMMUTABLE` 1 then 0.
+- Skewed-column estimates: bare 50 (actual 50), wrapped 100.
+
+These replace the 2026-07-22 previous-pin measurements, which had no published script.
+
+**Glossary.** Four entries were added, each checked on all five versions: Role membership, Security invoker view, SubLink and WithCheckOption. The glossary now has 242 terms. Contents, Source References (15 files) and a verification-depth note in Open Questions were updated. The term counts in `wiki/index.md` and the five landing pages now say 242. Other existing entries used by the page (Row-level security, Security barrier, Leakproof function, SubPlan, Custom and generic plan, Rewriter, Syscache, Prepared statement, Plan cache mode) were reviewed for v18 and needed no change.
+
+**Links.** Updated the page's descriptions in `wiki/index.md` and `wiki/v18/index.md`, dropping "Fully reviewed". `wiki/versions.md` gained a coverage note. PostgreSQL 18 has no common concept pages; none was created.
+
+**Teardown.**
+- The script's `stop` stage asserted no server, `postmaster.pid`, process or socket for port 55482, and `clean` deleted `.wiki-runtime/tmp/rlsperf/`.
+- The review probe cluster (port 55481) was stopped the same way and `.wiki-runtime/tmp/rls18-review/` deleted.
+- With the asker's agreement, the PostgreSQL 12 server another session had left running (pid 90110, `.wiki-runtime/tmp/ldf12-review/data`, port 55412) was stopped with `pg_ctl -m fast stop` and its sandbox deleted.
+- Nothing from this task is running or kept.

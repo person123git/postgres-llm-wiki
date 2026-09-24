@@ -194,10 +194,12 @@ verified_by_agent: not yet
   - [Replication slot](#replication-slot)
   - [Rewriter](#rewriter)
   - [Ring buffer](#ring-buffer)
+  - [Role membership](#role-membership)
   - [Row lock](#row-lock)
   - [Row-level security](#row-level-security)
   - [Security barrier](#security-barrier)
   - [SECURITY DEFINER](#security-definer)
+  - [Security invoker view](#security-invoker-view)
   - [Selectivity](#selectivity)
   - [Sequential scan](#sequential-scan)
   - [shared_buffers](#shared_buffers)
@@ -215,6 +217,7 @@ verified_by_agent: not yet
   - [Statistics](#statistics)
   - [Storage manager](#storage-manager)
   - [Storage parameter](#storage-parameter)
+  - [SubLink](#sublink)
   - [SubPlan](#subplan)
   - [Subscription](#subscription)
   - [Synchronous replication](#synchronous-replication)
@@ -245,6 +248,7 @@ verified_by_agent: not yet
   - [WAL receiver](#wal-receiver)
   - [WAL sender](#wal-sender)
   - [WAL writer](#wal-writer)
+  - [WithCheckOption](#withcheckoption)
   - [work_mem](#work_mem)
   - [Wraparound](#wraparound)
   - [xmin and xmax](#xmin-and-xmax)
@@ -2848,6 +2852,20 @@ A ring buffer is a small set of shared buffers that one large operation reuses o
 
 Related: [Buffer manager](#buffer-manager), [Clock sweep](#clock-sweep), [VACUUM](#vacuum)
 
+### Role membership
+
+**Aliases:** `pg_auth_members`, `GRANT role TO role`, `inherit_option`, `set_option`, `admin_option`, `INHERIT`, `has_privs_of_role`, `roles_is_member_of`, `pg_database_owner`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+Role membership lets one role act with another role's privileges. Each `GRANT role TO member` is a row of `pg_auth_members` that carries three options: `admin_option` (may grant the role onward), `inherit_option` (uses the role's privileges without `SET ROLE`) and `set_option` (may `SET ROLE` to it) ([pg_auth_members.h:36-38](../raw/postgres-17/src/include/catalog/pg_auth_members.h#L36-L38), [grant.sgml:286-290](../raw/postgres-17/doc/src/sgml/ref/grant.sgml#L286-L290)). The role-level `INHERIT` attribute (`pg_authid.rolinherit`) only supplies the default for a new grant that omits the option ([pg_authid.h:36](../raw/postgres-17/src/include/catalog/pg_authid.h#L36)). Privilege checks such as [row-level security](#row-level-security) policy matching call `has_privs_of_role()`, which walks memberships through `roles_is_member_of()` and follows only grants with `inherit_option` ([acl.c#has_privs_of_role](../raw/postgres-17/src/backend/utils/adt/acl.c#L5151-L5168), [acl.c#roles_is_member_of](../raw/postgres-17/src/backend/utils/adt/acl.c#L5019-L5112)). The owner of the current database is also an implicit member of `pg_database_owner`, with no `pg_auth_members` row ([acl.c:5112](../raw/postgres-17/src/backend/utils/adt/acl.c#L5112)).
+
+**Version notes:**
+- PostgreSQL 12: Differs: a membership row has only `admin_option`, and inheritance is decided per role by `rolinherit`; there is no `pg_database_owner` ([pg_auth_members.h:35](../raw/postgres-12/src/include/catalog/pg_auth_members.h#L35), [pg_authid.h:36](../raw/postgres-12/src/include/catalog/pg_authid.h#L36), [acl.c#roles_is_member_of](../raw/postgres-12/src/backend/utils/adt/acl.c#L4830-L4896)).
+- PostgreSQL 14: Differs: as in 12, inheritance is per role, not per grant; `pg_database_owner` implicit membership exists ([pg_auth_members.h:35](../raw/postgres-14/src/include/catalog/pg_auth_members.h#L35), [pg_authid.h:36](../raw/postgres-14/src/include/catalog/pg_authid.h#L36), [acl.c:4828](../raw/postgres-14/src/backend/utils/adt/acl.c#L4828)).
+- PostgreSQL 18: Holds ([pg_auth_members.h:36-38](../raw/postgres-18/src/include/catalog/pg_auth_members.h#L36-L38), [acl.c#roles_is_member_of](../raw/postgres-18/src/backend/utils/adt/acl.c#L5153-L5246)).
+- PostgreSQL 19: Holds; the three options gain `BKI_DEFAULT` markings ([pg_auth_members.h:47-53](../raw/postgres-19/src/include/catalog/pg_auth_members.h#L47-L53), [acl.c#roles_is_member_of](../raw/postgres-19/src/backend/utils/adt/acl.c#L5185-L5278)).
+
+Related: [Row-level security](#row-level-security), [Catalog](#catalog), [Custom and generic plan](#custom-and-generic-plan)
+
 ### Row lock
 
 **Aliases:** tuple lock, row-level lock, `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`, `LockTupleMode`, `heap_lock_tuple`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2903,6 +2921,20 @@ A `SECURITY DEFINER` function runs with the privileges of its owner instead of i
 - PostgreSQL 19: Holds, except for calls in `FROM` ([pg_proc.h:64](../raw/postgres-19/src/include/catalog/pg_proc.h#L64), [fmgr.c:193-207](../raw/postgres-19/src/backend/utils/fmgr/fmgr.c#L193-L207), [fmgr.c:670](../raw/postgres-19/src/backend/utils/fmgr/fmgr.c#L670), [clauses.c#inline_function](../raw/postgres-19/src/backend/optimizer/util/clauses.c#L5361-L5367)). There `inline_function_in_from()` first offers the call to the function's support function, and checks `prosecdef` only in the built-in fallback, `inline_sql_function_in_from()` ([clauses.c:5935-5951](../raw/postgres-19/src/backend/optimizer/util/clauses.c#L5935-L5951), [clauses.c#inline_sql_function_in_from](../raw/postgres-19/src/backend/optimizer/util/clauses.c#L6080-L6088)).
 
 Related: [fmgr](#fmgr), [Row-level security](#row-level-security), [SQL function inlining](#sql-function-inlining), [Hook](#hook)
+
+### Security invoker view
+
+**Aliases:** `security_invoker`, `WITH (security_invoker)`, `RelationHasSecurityInvoker`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+A security invoker view checks privileges and [row-level security](#row-level-security) policies on its underlying tables as the user who runs the query, not as the view's owner. It is the boolean view option `security_invoker`, off by default ([reloptions.c:141-149](../raw/postgres-17/src/backend/access/common/reloptions.c#L141-L149), [create_view.sgml:155-165](../raw/postgres-17/doc/src/sgml/ref/create_view.sgml#L155-L165), [create_view.sgml:292-297](../raw/postgres-17/doc/src/sgml/ref/create_view.sgml#L292-L297)). For an ordinary view the relcache sets the underlying tables' permission-check user to the view owner; with `security_invoker` it leaves it unset, so the current user is checked ([relcache.c:837-845](../raw/postgres-17/src/backend/utils/cache/relcache.c#L837-L845)). An auto-updatable view used as a DML target gets the same treatment ([rewriteHandler.c:3573](../raw/postgres-17/src/backend/rewrite/rewriteHandler.c#L3573)). Without it, a view owned by a table's owner or by a `BYPASSRLS` role reads that table without its policies for every caller, unless the table forces RLS on its owner ([rls.c#check_enable_rls](../raw/postgres-17/src/backend/utils/misc/rls.c#L75-L117)).
+
+**Version notes:**
+- PostgreSQL 12: Not present: views accept only `check_option` and `security_barrier` ([reloptions.c#view_reloptions](../raw/postgres-12/src/backend/access/common/reloptions.c#L1445-L1455)).
+- PostgreSQL 14: Not present, as in 12 ([reloptions.c#view_reloptions](../raw/postgres-14/src/backend/access/common/reloptions.c#L2004-L2012)).
+- PostgreSQL 18: Holds ([reloptions.c:141-149](../raw/postgres-18/src/backend/access/common/reloptions.c#L141-L149), [reloptions.c:2039](../raw/postgres-18/src/backend/access/common/reloptions.c#L2039)).
+- PostgreSQL 19: Holds ([reloptions.c:146-154](../raw/postgres-19/src/backend/access/common/reloptions.c#L146-L154), [reloptions.c:2148](../raw/postgres-19/src/backend/access/common/reloptions.c#L2148)).
+
+Related: [Security barrier](#security-barrier), [Row-level security](#row-level-security), [SECURITY DEFINER](#security-definer)
 
 ### Selectivity
 
@@ -3141,6 +3173,20 @@ A storage parameter is a per-table or per-index setting given with `WITH (...)` 
 - PostgreSQL 19: Holds ([ref/create_table.sgml:1578](../raw/postgres-19/doc/src/sgml/ref/create_table.sgml#L1578), [reloptions.c:1975](../raw/postgres-19/src/backend/access/common/reloptions.c#L1975), [pg_class.h:142](../raw/postgres-19/src/include/catalog/pg_class.h#L142)).
 
 Related: [Fillfactor](#fillfactor), [pg_class](#pg_class), [Relcache](#relcache), [INDEX_CLEANUP](#index_cleanup), [GiST build method](#gist-build-method)
+
+### SubLink
+
+**Aliases:** sublink, `SubLinkType`, `EXPR_SUBLINK`, `EXISTS_SUBLINK`, `ANY_SUBLINK`, `hasSubLinks`, `pull_up_sublinks`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+A SubLink is the parse-tree node for a sub-`SELECT` used inside an expression, such as `EXISTS (...)`, `x IN (...)` or a scalar `(SELECT ...)`. `subLinkType` says which form it is ([primnodes.h#SubLinkType](../raw/postgres-17/src/include/nodes/primnodes.h#L995-L1005), [primnodes.h#SubLink](../raw/postgres-17/src/include/nodes/primnodes.h#L1008-L1019)). The [planner](#planner) handles SubLinks in two ways. `pull_up_sublinks()` turns `EXISTS` and `ANY` SubLinks in `WHERE` and `JOIN/ON` into semi-joins or anti-joins ([prepjointree.c#pull_up_sublinks](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L455-L474)). Any SubLink left in an expression is replaced by a [SubPlan](#subplan) or an InitPlan output parameter through `SS_process_sublinks()` and `make_subplan()` ([subselect.c#SS_process_sublinks](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L1921-L1928), [subselect.c#make_subplan](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L162-L170)). SubLinks in [row-level security](#row-level-security) quals take only the second path, because the join pull-up walks only the query's join tree ([prepjointree.c#pull_up_sublinks](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L455-L474)).
+
+**Version notes:**
+- PostgreSQL 12: Holds ([primnodes.h#SubLink](../raw/postgres-12/src/include/nodes/primnodes.h#L624-L646), [prepjointree.c:197](../raw/postgres-12/src/backend/optimizer/prep/prepjointree.c#L197), [subselect.c:161](../raw/postgres-12/src/backend/optimizer/plan/subselect.c#L161)).
+- PostgreSQL 14: Holds ([primnodes.h#SubLink](../raw/postgres-14/src/include/nodes/primnodes.h#L671-L693), [prepjointree.c:209](../raw/postgres-14/src/backend/optimizer/prep/prepjointree.c#L209), [subselect.c:162](../raw/postgres-14/src/backend/optimizer/plan/subselect.c#L162)).
+- PostgreSQL 18: Holds ([primnodes.h#SubLink](../raw/postgres-18/src/include/nodes/primnodes.h#L1014-L1038), [prepjointree.c:470](../raw/postgres-18/src/backend/optimizer/prep/prepjointree.c#L470), [subselect.c:162](../raw/postgres-18/src/backend/optimizer/plan/subselect.c#L162)).
+- PostgreSQL 19: Holds ([primnodes.h#SubLink](../raw/postgres-19/src/include/nodes/primnodes.h#L1013-L1037), [prepjointree.c:672](../raw/postgres-19/src/backend/optimizer/prep/prepjointree.c#L672), [subselect.c:165](../raw/postgres-19/src/backend/optimizer/plan/subselect.c#L165)).
+
+Related: [SubPlan](#subplan), [Planner](#planner), [Parse tree](#parse-tree)
 
 ### SubPlan
 
@@ -3562,6 +3608,20 @@ The WAL writer is a background process that writes and flushes [WAL](#wal) so th
 
 Related: [WAL](#wal), [Asynchronous commit](#asynchronous-commit), [Hint bits](#hint-bits), [Background writer](#background-writer), [Postmaster](#postmaster), [fsync](#fsync), [GUC context](#guc-context)
 
+### WithCheckOption
+
+**Aliases:** WCO, `WCOKind`, `WCO_VIEW_CHECK`, `WCO_RLS_INSERT_CHECK`, `WCO_RLS_UPDATE_CHECK`, `ExecWithCheckOptions`, `WITH CHECK OPTION`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+A `WithCheckOption` is a condition that each row written by `INSERT`, `UPDATE` or `MERGE` must satisfy, checked by the executor rather than used as a filter. `kind` says where it came from: an auto-updatable view's `WITH CHECK OPTION`, or a [row-level security](#row-level-security) write check for insert, update, `ON CONFLICT DO UPDATE`, or a `MERGE` update or delete ([parsenodes.h#WCOKind](../raw/postgres-17/src/include/nodes/parsenodes.h#L1358-L1366), [parsenodes.h#WithCheckOption](../raw/postgres-17/src/include/nodes/parsenodes.h#L1368-L1376)). The [rewriter](#rewriter) builds view WCOs in `rewriteTargetView()` and RLS WCOs in `add_with_check_options()` ([rewriteHandler.c:3888](../raw/postgres-17/src/backend/rewrite/rewriteHandler.c#L3888), [rowsecurity.c:796](../raw/postgres-17/src/backend/rewrite/rowsecurity.c#L796)). `ExecWithCheckOptions()` evaluates the WCOs of one kind for a row and raises an error naming the view or policy when one fails ([execMain.c:2094](../raw/postgres-17/src/backend/executor/execMain.c#L2094)).
+
+**Version notes:**
+- PostgreSQL 12: Differs: there are four kinds, with no `MERGE` kinds ([parsenodes.h#WCOKind](../raw/postgres-12/src/include/nodes/parsenodes.h#L1155-L1161), [execMain.c:2029](../raw/postgres-12/src/backend/executor/execMain.c#L2029)).
+- PostgreSQL 14: Differs in the same way as 12 ([parsenodes.h#WCOKind](../raw/postgres-14/src/include/nodes/parsenodes.h#L1203-L1209), [execMain.c:1978](../raw/postgres-14/src/backend/executor/execMain.c#L1978)).
+- PostgreSQL 18: Holds ([parsenodes.h#WCOKind](../raw/postgres-18/src/include/nodes/parsenodes.h#L1386-L1394), [execMain.c:2232](../raw/postgres-18/src/backend/executor/execMain.c#L2232)).
+- PostgreSQL 19: Differs: `WCO_RLS_CONFLICT_CHECK` also covers the new `ON CONFLICT DO SELECT` ([parsenodes.h#WCOKind](../raw/postgres-19/src/include/nodes/parsenodes.h#L1447-L1456), [execMain.c:2282](../raw/postgres-19/src/backend/executor/execMain.c#L2282)).
+
+Related: [Row-level security](#row-level-security), [Rewriter](#rewriter), [Executor](#executor)
+
 ### work_mem
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3643,11 +3703,13 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
   - Hint bits, 19: the `heapam_visibility.c` header says hint-bit changes call `MarkBufferDirtyHint`, but a single hint goes through `BufferSetHintBits16()`, which dirties the page with `MarkSharedBufferDirtyHint()` ([heapam_visibility.c:6-11](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L6-L11), [heapam_visibility.c:141-192](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L141-L192), [bufmgr.c#BufferSetHintBits16](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L7129-L7175)).
   - TAP test, 17: `regress.sgml` and the recovery test README name only configure's `--enable-tap-tests`, but Meson builds have a `tap_tests` option that defaults to `auto` ([regress.sgml:827-828](../raw/postgres-17/doc/src/sgml/regress.sgml#L827-L828), [recovery/README:11](../raw/postgres-17/src/test/recovery/README#L11), [meson_options.txt:43-44](../raw/postgres-17/meson_options.txt#L43-L44)).
 
+- Verification depth for the four entries added on 2026-09-24 (Role membership, Security invoker view, SubLink, WithCheckOption): the agent that wrote them checked each citation against all five pins once, while reviewing the v18 row-level security page. No second reviewer has read them.
+
 ## Source References
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (361 files):
+**PostgreSQL 12** (363 files):
 
 - [configure.in#blocksize](../raw/postgres-12/configure.in#L250-L277)
 - [contrib/Makefile:31-37](../raw/postgres-12/contrib/Makefile#L31-L37)
@@ -3866,6 +3928,7 @@ One representative citation per cited source file, grouped by version:
 - [pquery.c:686](../raw/postgres-12/src/backend/tcop/pquery.c#L686)
 - [utility.c:972-973](../raw/postgres-12/src/backend/tcop/utility.c#L972-L973)
 - [Gen_fmgrtab.pl:1-6](../raw/postgres-12/src/backend/utils/Gen_fmgrtab.pl#L1-L6)
+- [acl.c#roles_is_member_of](../raw/postgres-12/src/backend/utils/adt/acl.c#L4830-L4896)
 - [dbsize.c#pg_relation_size](../raw/postgres-12/src/backend/utils/adt/dbsize.c#L311-L336)
 - [pseudotypes.c#pg_node_tree_in](../raw/postgres-12/src/backend/utils/adt/pseudotypes.c#L266-L284)
 - [ri_triggers.c:234](../raw/postgres-12/src/backend/utils/adt/ri_triggers.c#L234)
@@ -3925,6 +3988,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_amop.h#FormData_pg_amop](../raw/postgres-12/src/include/catalog/pg_amop.h#L54-L81)
 - [pg_amproc.h#FormData_pg_amproc](../raw/postgres-12/src/include/catalog/pg_amproc.h#L43-L57)
 - [pg_attribute.h:52-58](../raw/postgres-12/src/include/catalog/pg_attribute.h#L52-L58)
+- [pg_auth_members.h:35](../raw/postgres-12/src/include/catalog/pg_auth_members.h#L35)
 - [pg_authid.h:41](../raw/postgres-12/src/include/catalog/pg_authid.h#L41)
 - [pg_cast.dat:41](../raw/postgres-12/src/include/catalog/pg_cast.dat#L41)
 - [pg_cast.h#FormData_pg_cast](../raw/postgres-12/src/include/catalog/pg_cast.h#L30-L49)
@@ -4011,7 +4075,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-12/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-12/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 14** (352 files):
+**PostgreSQL 14** (355 files):
 
 - [configure.ac#blocksize](../raw/postgres-14/configure.ac#L255-L267)
 - [contrib/Makefile:32-38](../raw/postgres-14/contrib/Makefile#L32-L38)
@@ -4232,6 +4296,7 @@ One representative citation per cited source file, grouped by version:
 - [backend_progress.c:47](../raw/postgres-14/src/backend/utils/activity/backend_progress.c#L47)
 - [backend_status.c:570](../raw/postgres-14/src/backend/utils/activity/backend_status.c#L570)
 - [wait_event.c:93-94](../raw/postgres-14/src/backend/utils/activity/wait_event.c#L93-L94)
+- [acl.c:4828](../raw/postgres-14/src/backend/utils/adt/acl.c#L4828)
 - [dbsize.c#pg_relation_size](../raw/postgres-14/src/backend/utils/adt/dbsize.c#L311-L336)
 - [pseudotypes.c:340](../raw/postgres-14/src/backend/utils/adt/pseudotypes.c#L340)
 - [ri_triggers.c:236](../raw/postgres-14/src/backend/utils/adt/ri_triggers.c#L236)
@@ -4288,6 +4353,8 @@ One representative citation per cited source file, grouped by version:
 - [pg_am.h#FormData_pg_am](../raw/postgres-14/src/include/catalog/pg_am.h#L29-L41)
 - [pg_amop.h#FormData_pg_amop](../raw/postgres-14/src/include/catalog/pg_amop.h#L54-L81)
 - [pg_attribute.h:56-62](../raw/postgres-14/src/include/catalog/pg_attribute.h#L56-L62)
+- [pg_auth_members.h:35](../raw/postgres-14/src/include/catalog/pg_auth_members.h#L35)
+- [pg_authid.h:36](../raw/postgres-14/src/include/catalog/pg_authid.h#L36)
 - [pg_cast.dat:41](../raw/postgres-14/src/include/catalog/pg_cast.dat#L41)
 - [pg_cast.h#FormData_pg_cast](../raw/postgres-14/src/include/catalog/pg_cast.h#L32-L50)
 - [pg_class.h:172](../raw/postgres-14/src/include/catalog/pg_class.h#L172)
@@ -4366,7 +4433,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (430 files):
+**PostgreSQL 17** (436 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4433,8 +4500,10 @@ One representative citation per cited source file, grouped by version:
 - [ref/create_index.sgml#sql-createindex-concurrently](../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L612-L625)
 - [create_subscription.sgml#sql-createsubscription-params-with-origin](../raw/postgres-17/doc/src/sgml/ref/create_subscription.sgml#L400-L411)
 - [ref/create_table.sgml#reloption-fillfactor](../raw/postgres-17/doc/src/sgml/ref/create_table.sgml#L1468-L1476)
+- [create_view.sgml:155-165](../raw/postgres-17/doc/src/sgml/ref/create_view.sgml#L155-L165)
 - [ref/drop_index.sgml:46-50](../raw/postgres-17/doc/src/sgml/ref/drop_index.sgml#L46-L50)
 - [ref/explain.sgml:185-201](../raw/postgres-17/doc/src/sgml/ref/explain.sgml#L185-L201)
+- [grant.sgml:286-290](../raw/postgres-17/doc/src/sgml/ref/grant.sgml#L286-L290)
 - [pgupgrade.sgml:39-58](../raw/postgres-17/doc/src/sgml/ref/pgupgrade.sgml#L39-L58)
 - [prepare_transaction.sgml:41-46](../raw/postgres-17/doc/src/sgml/ref/prepare_transaction.sgml#L41-L46)
 - [ref/reindex.sgml:54-62](../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L54-L62)
@@ -4605,6 +4674,7 @@ One representative citation per cited source file, grouped by version:
 - [walreceiver.c:5-16](../raw/postgres-17/src/backend/replication/walreceiver.c#L5-L16)
 - [walsender.c#PhysicalReplicationSlotNewXmin](../raw/postgres-17/src/backend/replication/walsender.c#L2554-L2580)
 - [rewriteHandler.c#QueryRewrite](../raw/postgres-17/src/backend/rewrite/rewriteHandler.c#L4546-L4596)
+- [rowsecurity.c:796](../raw/postgres-17/src/backend/rewrite/rowsecurity.c#L796)
 - [statistics/README:1-21](../raw/postgres-17/src/backend/statistics/README#L1-L21)
 - [extended_stats.c#statext_store](../raw/postgres-17/src/backend/statistics/extended_stats.c#L825-L833)
 - [aio/Makefile#OBJS](../raw/postgres-17/src/backend/storage/aio/Makefile#L11-L12)
@@ -4642,6 +4712,7 @@ One representative citation per cited source file, grouped by version:
 - [pgstat_shmem.c#StatsShmemInit](../raw/postgres-17/src/backend/utils/activity/pgstat_shmem.c#L169-L184)
 - [wait_event.c#pgstat_get_wait_event_type](../raw/postgres-17/src/backend/utils/activity/wait_event.c#L386-L416)
 - [wait_event_names.txt:278-280](../raw/postgres-17/src/backend/utils/activity/wait_event_names.txt#L278-L280)
+- [acl.c#has_privs_of_role](../raw/postgres-17/src/backend/utils/adt/acl.c#L5151-L5168)
 - [dbsize.c#calculate_relation_size](../raw/postgres-17/src/backend/utils/adt/dbsize.c#L300-L342)
 - [pseudotypes.c#pg_node_tree](../raw/postgres-17/src/backend/utils/adt/pseudotypes.c#L322-L335)
 - [ri_triggers.c:3-6](../raw/postgres-17/src/backend/utils/adt/ri_triggers.c#L3-L6)
@@ -4703,6 +4774,8 @@ One representative citation per cited source file, grouped by version:
 - [pg_amop.h#FormData_pg_amop](../raw/postgres-17/src/include/catalog/pg_amop.h#L54-L81)
 - [pg_amproc.h#FormData_pg_amproc](../raw/postgres-17/src/include/catalog/pg_amproc.h#L43-L57)
 - [pg_attribute.h:37](../raw/postgres-17/src/include/catalog/pg_attribute.h#L37)
+- [pg_auth_members.h:36-38](../raw/postgres-17/src/include/catalog/pg_auth_members.h#L36-L38)
+- [pg_authid.h:36](../raw/postgres-17/src/include/catalog/pg_authid.h#L36)
 - [pg_cast.dat:336-337](../raw/postgres-17/src/include/catalog/pg_cast.dat#L336-L337)
 - [pg_cast.h#FormData_pg_cast](../raw/postgres-17/src/include/catalog/pg_cast.h#L32-L50)
 - [pg_class.h:172](../raw/postgres-17/src/include/catalog/pg_class.h#L172)
@@ -4799,7 +4872,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-17/src/test/regress/pg_regress.c#L3)
 - [030_origin.pl:24-75](../raw/postgres-17/src/test/subscription/t/030_origin.pl#L24-L75)
 
-**PostgreSQL 18** (359 files):
+**PostgreSQL 18** (361 files):
 
 - [configure.ac#blocksize](../raw/postgres-18/configure.ac#L248-L279)
 - [contrib/Makefile:32-40](../raw/postgres-18/contrib/Makefile#L32-L40)
@@ -5028,6 +5101,7 @@ One representative citation per cited source file, grouped by version:
 - [pgstat.c:12-16](../raw/postgres-18/src/backend/utils/activity/pgstat.c#L12-L16)
 - [pgstat_relation.c:582-584](../raw/postgres-18/src/backend/utils/activity/pgstat_relation.c#L582-L584)
 - [wait_event_names.txt:284-286](../raw/postgres-18/src/backend/utils/activity/wait_event_names.txt#L284-L286)
+- [acl.c#roles_is_member_of](../raw/postgres-18/src/backend/utils/adt/acl.c#L5153-L5246)
 - [dbsize.c#pg_relation_size](../raw/postgres-18/src/backend/utils/adt/dbsize.c#L364-L389)
 - [pseudotypes.c:326](../raw/postgres-18/src/backend/utils/adt/pseudotypes.c#L326)
 - [ri_triggers.c:371-372](../raw/postgres-18/src/backend/utils/adt/ri_triggers.c#L371-L372)
@@ -5081,6 +5155,7 @@ One representative citation per cited source file, grouped by version:
 - [index.h:21](../raw/postgres-18/src/include/catalog/index.h#L21)
 - [pg_am.dat:14-35](../raw/postgres-18/src/include/catalog/pg_am.dat#L14-L35)
 - [pg_attribute.h:100](../raw/postgres-18/src/include/catalog/pg_attribute.h#L100)
+- [pg_auth_members.h:36-38](../raw/postgres-18/src/include/catalog/pg_auth_members.h#L36-L38)
 - [pg_cast.dat:41-42](../raw/postgres-18/src/include/catalog/pg_cast.dat#L41-L42)
 - [pg_cast.h#FormData_pg_cast](../raw/postgres-18/src/include/catalog/pg_cast.h#L32-L50)
 - [pg_class.h:175](../raw/postgres-18/src/include/catalog/pg_class.h#L175)
@@ -5161,7 +5236,7 @@ One representative citation per cited source file, grouped by version:
 - [parallel_schedule:12-17](../raw/postgres-18/src/test/regress/parallel_schedule#L12-L17)
 - [pg_regress.c:3](../raw/postgres-18/src/test/regress/pg_regress.c#L3)
 
-**PostgreSQL 19** (389 files):
+**PostgreSQL 19** (391 files):
 
 - [configure.ac#blocksize](../raw/postgres-19/configure.ac#L248-L274)
 - [contrib/Makefile:36-40](../raw/postgres-19/contrib/Makefile#L36-L40)
@@ -5407,6 +5482,7 @@ One representative citation per cited source file, grouped by version:
 - [pgstat_relation.c:583-585](../raw/postgres-19/src/backend/utils/activity/pgstat_relation.c#L583-L585)
 - [wait_event.c:378-379](../raw/postgres-19/src/backend/utils/activity/wait_event.c#L378-L379)
 - [wait_event_names.txt:293-298](../raw/postgres-19/src/backend/utils/activity/wait_event_names.txt#L293-L298)
+- [acl.c#roles_is_member_of](../raw/postgres-19/src/backend/utils/adt/acl.c#L5185-L5278)
 - [dbsize.c#pg_relation_size](../raw/postgres-19/src/backend/utils/adt/dbsize.c#L364-L389)
 - [ri_triggers.c#RI_FKey_check](../raw/postgres-19/src/backend/utils/adt/ri_triggers.c#L509-L527)
 - [ruleutils.c#T_PartitionBoundSpec](../raw/postgres-19/src/backend/utils/adt/ruleutils.c#L11010-L11059)
@@ -5462,6 +5538,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_am.dat:14-35](../raw/postgres-19/src/include/catalog/pg_am.dat#L14-L35)
 - [pg_am.h#FormData_pg_am](../raw/postgres-19/src/include/catalog/pg_am.h#L31-L43)
 - [pg_attribute.h:39](../raw/postgres-19/src/include/catalog/pg_attribute.h#L39)
+- [pg_auth_members.h:47-53](../raw/postgres-19/src/include/catalog/pg_auth_members.h#L47-L53)
 - [pg_cast.dat:41-42](../raw/postgres-19/src/include/catalog/pg_cast.dat#L41-L42)
 - [pg_cast.h#FormData_pg_cast](../raw/postgres-19/src/include/catalog/pg_cast.h#L34-L52)
 - [pg_class.h:179](../raw/postgres-19/src/include/catalog/pg_class.h#L179)

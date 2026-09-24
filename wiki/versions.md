@@ -16,6 +16,15 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-09-24: Reviewed and revised [Row-Level Security (RLS) in PostgreSQL 18: Implementation,
+  Performance, Settings, and Fixes Since PostgreSQL 14
+  (unverified)](v18/questions/server-administration/row-level-security-rls.md) at unchanged pin
+  `baa7b142aace6821ce085906f314a75bcc4d95c8`, with a published measurement script run on 18.6. The
+  page now covers 18.6's plan-cache role invalidation and its replans after unrelated role changes
+  and `datfrozenxid` advances, the statistics and sublink limits RLS puts on the planner, and when a
+  policy value can prune partitions. It also fixes an inverted owner-bypass sentence and about 40 other
+  claims and citations. The shared glossary gained Role membership, Security invoker view, SubLink and
+  WithCheckOption, for 242 terms.
 - 2026-09-23: Filed [B-Tree Leaf Density vs Fragmentation Impact on Index Scan I/O in PostgreSQL 17
   (unverified)](v17/questions/indexing/leaf-density-vs-fragmentation-index-scan-io.md) at pin
   `786db8dcf168bd9df8f55047337525ac19118b1c`, measured on 17.11 from a published script. Density
