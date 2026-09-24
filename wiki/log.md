@@ -14424,3 +14424,63 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - `raw/postgres-17/` and `raw/postgres-12/` were read only. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv.
 
 **Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `a2f6f7e`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-24] revise v17 | COMMENT-baseline GIN heuristic: the index-cleanup-disabled fixture removed, the script re-run on a second platform
+
+- **Prompt.** The asker chose to have it corrected silently: "Follow `AGENTS.md`, in PostgreSQL 17. Remove the invalid test from the question "A COMMENT-Stored Baseline and Normalized Index Growth for Finding GIN Indexes That Need REINDEX CONCURRENTLY in PostgreSQL 17", and re-run all tests." The analysis, including a baseline pass of the filed script, was shown in chat first; prompt hygiene and scope were then asked in one question call.
+- **Scope.** The asker chose all three recommended options: **remove `i01` entirely**, over keeping it as a plain `DELETE` fixture without its `INDEX_CLEANUP OFF` step; **correct silently**; and the two new glossary entries **checked on PostgreSQL 17 only**, over all five versions.
+- **Target.** [A COMMENT-Stored Baseline and Normalized Index Growth for Finding GIN Indexes That Need REINDEX CONCURRENTLY in PostgreSQL 17 (unverified)](v17/questions/indexing/gin-reindex-normalized-growth-comment-baseline.md), at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+
+**The invalid test.** `i01` ran `VACUUM (INDEX_CLEANUP OFF)` between its writes and its settle step. Earlier the same day, [Mandatory GIN Bloat Tests (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md) dropped "a `VACUUM` whose index cleanup did not run" from its required coverage and from its declared exceptions. That `VACUUM` is also not a step of the protocol's churn phase. It was the page's only such test. The fixture left the script (`SCORED`, `build_sql`, `churn_sql`, and the `nocleanup` block of `stage_churn`). From the prose it took its own section, its fixture, result, bound and accuracy rows, its declared exception, its coverage row, its rung-10 and threshold mentions, and the `k01` sentence about it. The three citation ranges that backed only its section (`vacuumlazy.c` 387-397, 1064-1066 and 695-731) left the Evidence Map and Source References. `k01` and `a02` still cover the two behaviors `i01` co-covered.
+
+**Script defects fixed, in place.**
+- BSD `grep` reads the `$` before `\|` in `'^VACUUM$\|^ANALYZE$'` as a literal character, so on macOS `check_maint` never counted a `VACUUM` command tag. The baseline pass read I8 as 3 of 76. The count is now `grep -Ec '^(VACUUM|ANALYZE)$'`. All 76 `VACUUM` logs of the baseline pass end in a `VACUUM` line that the new pattern counts.
+- The `clean` stage's port check, `pgrep -af "port=$PORT"`, could never match on any platform: the port is not on the postmaster's command line. It now checks the socket file and its lock file in `$SOCK`. The process check is `pgrep -f`, because macOS `pgrep -a` also matches the caller's ancestors.
+- Numbers the page quotes were stored only in the fixture database: the `m01`, `s01`, `k01` and `a01`/`a02` metapage and census rows, the payload capture times, the stand-ins' flush counts and the rebuilt indexes' catalog rows. The `reset` before the second pass destroyed the first pass's copy. `score` now writes `proto.meas` to `meas.csv`, and `maint_proofs` writes `proto.maint` to `maint.csv`.
+- The score stage's label said "the six declared invariants"; nine are declared.
+
+**Runs**, all on Darwin 27.0.0 arm64 with Apple clang 21.0.0 and `JOBS=8`, each through the whole default order:
+- a baseline pass of the filed script, unchanged (md5 `188138052edd...`, 1,902 lines), from an empty sandbox: 4 min 12 s, exit 0;
+- two passes of the edited script before the `.csv` dumps: one from an empty sandbox (4 min 14 s), and one after `reset` from the built tree (3 min 28 s);
+- the recorded run of the final text, 14:46:33 to 14:50:49 EDT, from an empty sandbox: 4 min 16 s, exit 0, md5 `d7cbb299c3d3ea7225e009220251d6c7`, 1,913 lines.
+
+`make check` passed All 225 plus `pageinspect` 8, `pgstattuple` 1, `pg_freespacemap` 1, `btree_gin` 30 and `pg_trgm` 4 on every pass.
+
+**Results.**
+- Every scored cell of the 2026-09-17 Linux filing reproduced on every pass, except `c02`'s bound. That bound is decided by an `ANALYZE` sample: `HELD` on the baseline and the recorded run, `VIOLATED` on the two middle passes. The recorded run: 23 scored fixtures; 18 `PASS`, 1 false positive, 0 false negatives, 4 refusals; the upper bound held on 13 of 20.
+- The invariants read 23/23, 24/24, 22/22, 22/22, 20/20, 20/22, 72/72, 72/72 and 26/26. The proofs read 75 steps, 74 of 74 at 0 dead but not yet removable, 75 of 75 at all-zero timeouts and 75 of 75 with their command tag. The settle-step cost, P1 to P5, the edge cases and the verbatim lifecycle are unchanged.
+- From the published formula, `est_reclaimable` = `cur_size - base_size * heap_tuple_ratio`. The bound therefore holds exactly when that implied rebuilt size is no larger than the real one. For `c02` that means `reltuples <= 999,633`, which matches all six recorded readings.
+- `c02`'s table is the only fixture table larger than `ANALYZE`'s 30,000-block sample: `scanned 30000 of 30928 pages`. The other 21 that print a line were read whole and counted exactly. That is why `c02` alone moves.
+- The page claimed P6's error is "one-directional" and always high. Over five passes the 25 readings came out 18 high and 7 low, from −0.18 % to +0.36 %, so the claim and the bias argument built on it were rewritten. Why the readings lean high is open question 21.
+- The filed step breakdown "25 + 22 + 1 + 22 + 1 + 2 + 1 + 3" summed to 77 against the 79 it stated. There were 23 churn settles and 23 maintenances, because `c04` and `e01` run them too. It now reads 24 + 22 + 1 + 22 + 2 + 1 + 3 = 75.
+- `s01`'s holder `xmin` is 1075, not 1083, because fewer transactions precede it without `i01`. The OIDs changed with the platform and the removal.
+
+**Page changes.**
+- `## Question` gained `### The fourth prompt`, holding the corrected text and a three-item scope note, with no defect list.
+- The Verdict, the conformance tables, the proof table, the exceptions (now two), the invariants, the fixture corpus, the results table, the bound section (a formula paragraph and a seven-run `c02` table), the accuracy bands, Third failure (the sampling mechanism and the recorded readings), the ladder, the thresholds, the cross-checks, the census, the lifecycle, the edge cases and the coverage table were updated to the recorded run.
+- *What left the page* gained a 2026-09-24 table. `## Measurement Script` has the new usage rows, prerequisites, output files and last-run table.
+- Open questions 7, 11, 13, 14 and 19 were revised, and 21 to 23 are new: the high lean, the lost cleanup-disabled case, and `max_data_alignment` being read with `pg_controldata` rather than written by the script.
+- Context Reviewed gained two 2026-09-24 bullets. The Evidence Map lost two rows and gained a two-row table. Source References gained `sampling.c`.
+- Glossary: the `## Navigation` link plus 69 first-use term links. A venv helper placed 66; each was reviewed by hand. Four were moved: `leaves` had hit the verb, `partial` a quoted source comment, and `free space map` and `expression` had earlier uses. Three were added by hand where the helper could not match: `invalid GIN index` wrapped across a line, `index cleanup`, and `pgstatginindex` in Open Questions.
+- `verified_by_agent` stays `not yet`, and `verified:` was not touched.
+
+**Checks.**
+- 216 ranged citations over 99 distinct ranges in 33 files, all under `raw/postgres-17/` and all in bounds. The six new ranges were read at the pin.
+- The 54 Contents entries match the headings, and every in-page anchor resolves.
+- All 69 glossary anchors exist and none repeats. Stripping the glossary links gives back the pre-link text exactly, and no link sits in a heading, a fence or `## Question`.
+- The fenced script is byte-identical to the file that ran and contains no Markdown fence.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted `.DS_Store` files in the v12 and v14 checkouts.
+
+**Glossary.**
+- Added, checked on PostgreSQL 17 only, at the asker's choice: [Command tag](glossary.md#command-tag) (13 citations) and [transaction_timeout and idle_in_transaction_session_timeout](glossary.md#transaction_timeout-and-idle_in_transaction_session_timeout) (11 citations). Every cited range was read at the pin.
+- The Contents, the Scope bullet and a new Open Questions bullet name them. The v17 *Source References* block went from 443 to 451 files and stays sorted by path. The term count went from 253 to 255.
+- Reviewed for this interaction and unchanged: INDEX_CLEANUP, VACUUM, GIN, Pending list, Posting list, Posting tree, Metapage, statement_timeout and lock_timeout, Statistics, reltuples and relpages, COMMENT ON, REINDEX and CONCURRENTLY. All 69 entries the page links were checked for existence and a PostgreSQL 17 check.
+
+**Concept pages.** Read and not edited. Nothing this run found contradicts [Mandatory GIN Bloat Tests (unverified)](v17/common-concepts/mandatory-gin-bloat-tests.md).
+
+**Teardown.**
+- Every cluster this task started was stopped with `pg_ctl -m fast -w stop` through the script's `clean` stage: the baseline `ginnormbase`, the two middle passes' `ginnorm`, and the recorded `ginnorm`. Each confirmed no `postmaster.pid`, no process with its data directory on its command line, and, on the last two, no socket or lock file for port 55417.
+- Verified afterwards: no `postgres` process, and `.wiki-runtime/tmp/` empty.
+- `raw/postgres-17/` was read only. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv. One throwaway `mktemp -d` directory under the system temp directory, used to test the new teardown lines, was deleted in the same command.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `44958c8`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed. The untracked and modified `.DS_Store` files were left out of the commit.

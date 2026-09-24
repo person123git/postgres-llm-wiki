@@ -45,6 +45,7 @@ verified_by_agent: not yet
   - [Clock sweep](#clock-sweep)
   - [CLUSTER](#cluster)
   - [Collation](#collation)
+  - [Command tag](#command-tag)
   - [COMMENT ON](#comment-on)
   - [Common table expression](#common-table-expression)
   - [CONCURRENTLY](#concurrently)
@@ -241,6 +242,7 @@ verified_by_agent: not yet
   - [TOAST](#toast)
   - [track_activity_query_size](#track_activity_query_size)
   - [Transaction ID](#transaction-id)
+  - [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout)
   - [Truncation](#truncation)
   - [Tuple](#tuple)
   - [Tuplesort](#tuplesort)
@@ -276,7 +278,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
 - The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Nine of them still are, and their main paragraphs open by naming 19: [Back-patch](#back-patch), [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). The tenth, [Base backup](#base-backup), was also checked on 17 later that day, for the v17 GIN waste page's standby stage, so its main paragraph now cites 17 and a 19 note carries the 19 evidence. On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Nine of them still are, and their main paragraphs open by naming 19: [Back-patch](#back-patch), [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). The tenth, [Base backup](#base-backup), was also checked on 17 later that day, for the v17 GIN waste page's standby stage, so its main paragraph now cites 17 and a 19 note carries the 19 evidence. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -746,6 +748,14 @@ A collation is a named set of rules for sorting and comparing text. Every expres
 - PostgreSQL 19: Holds as in 17 ([pg_collation.h#FormData_pg_collation](../raw/postgres-19/src/include/catalog/pg_collation.h#L31-L53), [pg_collation.h#COLLPROVIDER_DEFAULT](../raw/postgres-19/src/include/catalog/pg_collation.h#L74-L77)).
 
 Related: [Catalog](#catalog), [pg_index](#pg_index), [Operator class](#operator-class), [Planner](#planner)
+
+### Command tag
+
+**Aliases:** completion tag, command status, `CommandTag`, `CMDTAG_*`, `QueryCompletion`, `CommandComplete`, `PQcmdStatus`, `TG_TAG`. **Checked on:** PostgreSQL 17.
+
+A command tag is the short text the server sends back when an SQL statement completes normally, such as `VACUUM`, `ANALYZE` or `INSERT 0 5`. It travels in the protocol's CommandComplete message, whose text the documentation describes as "usually a single word that identifies which SQL command was completed". For `INSERT`, `DELETE`, `UPDATE`, `MERGE`, `SELECT`, `MOVE`, `FETCH` and `COPY` the tag also carries a row count ([protocol.sgml:536-541](../raw/postgres-17/doc/src/sgml/protocol.sgml#L536-L541), [protocol.sgml#CommandComplete-tag](../raw/postgres-17/doc/src/sgml/protocol.sgml#L4251-L4317)). In the source, each tag is one `PG_CMDTAG` line in `cmdtaglist.h`, which gives its enum symbol, its text and three flags, and the list is kept sorted by text ([cmdtaglist.h:21-27](../raw/postgres-17/src/include/tcop/cmdtaglist.h#L21-L27), [cmdtaglist.h:72](../raw/postgres-17/src/include/tcop/cmdtaglist.h#L72), [cmdtaglist.h:219](../raw/postgres-17/src/include/tcop/cmdtaglist.h#L219)). The same list expands into the `CommandTag` enum, and a `QueryCompletion` pairs a tag with a row count ([cmdtag.h:19-33](../raw/postgres-17/src/include/tcop/cmdtag.h#L19-L33)). When a statement finishes, `EndCommand` builds the text with `BuildQueryCompletionString`, which appends the count only for tags whose row-count flag is set, and sends it to the client ([dest.c#EndCommand](../raw/postgres-17/src/backend/tcop/dest.c#L164-L196), [cmdtag.c#BuildQueryCompletionString](../raw/postgres-17/src/backend/tcop/cmdtag.c#L109-L163)). libpq stores the text as the result's command status, which `PQcmdStatus()` returns ([fe-protocol3.c:203-219](../raw/postgres-17/src/interfaces/libpq/fe-protocol3.c#L203-L219), [libpq.sgml#libpq-PQcmdStatus](../raw/postgres-17/doc/src/sgml/libpq.sgml#L4584-L4604)). `psql` prints it on a line of its own unless quiet mode is on. For a statement that returned rows it prints the rows instead, unless the statement is an `INSERT`, `UPDATE`, `DELETE` or `MERGE` with `RETURNING` ([common.c#PrintQueryStatus](../raw/postgres-17/src/bin/psql/common.c#L957-L995)). A script that reads `psql` output can therefore take a bare `VACUUM` line as proof that the statement completed. Event triggers see the tag too, as `TG_TAG` in PL/pgSQL, and a per-tag flag decides which commands may fire one ([plpgsql.sgml#plpgsql-event-trigger-tg-tag](../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L4738-L4745), [cmdtag.c:65-69](../raw/postgres-17/src/backend/tcop/cmdtag.c#L65-L69)).
+
+Related: [Event trigger](#event-trigger), [Utility command](#utility-command)
 
 ### COMMENT ON
 
@@ -3468,6 +3478,14 @@ A transaction ID (xid) is a 32-bit number that a transaction receives the first 
 
 Related: [xmin and xmax](#xmin-and-xmax), [Wraparound](#wraparound), [Freezing](#freezing), [MultiXact](#multixact)
 
+### transaction_timeout and idle_in_transaction_session_timeout
+
+**Aliases:** `transaction_timeout`, `idle_in_transaction_session_timeout`, `TransactionTimeout`, `IdleInTransactionSessionTimeout`, `TRANSACTION_TIMEOUT`, `IDLE_IN_TRANSACTION_SESSION_TIMEOUT`. **Checked on:** PostgreSQL 17.
+
+These two settings end the whole session, not just a statement, when a transaction lasts too long. `idle_in_transaction_session_timeout` terminates a session that has sat idle inside an open transaction, waiting for the client's next query, for longer than the limit ([config.sgml#guc-idle-in-transaction-session-timeout](../raw/postgres-17/doc/src/sgml/config.sgml#L9571-L9595)). `transaction_timeout` terminates a session whose transaction has lasted longer than the limit, whether the transaction was opened with `BEGIN` or is the implicit one of a single statement. Prepared transactions are exempt ([config.sgml#guc-transaction-timeout](../raw/postgres-17/doc/src/sgml/config.sgml#L9498-L9532)). PostgreSQL 17's release notes list `transaction_timeout` as a new server variable ([release-17.sgml:15083-15092](../raw/postgres-17/doc/src/sgml/release-17.sgml#L15083-L15092)). `StartTransaction` arms the transaction timer ([xact.c:2174-2176](../raw/postgres-17/src/backend/access/transam/xact.c#L2174-L2176)). The main loop arms the idle-in-transaction timer each time the backend goes idle inside a transaction, but only when `transaction_timeout` is 0 or longer than the idle limit ([postgres.c:4616-4647](../raw/postgres-17/src/backend/tcop/postgres.c#L4616-L4647)). When either timer fires, `ProcessInterrupts` raises `FATAL` with "terminating connection due to idle-in-transaction timeout" or "terminating connection due to transaction timeout", unless the setting was reset to 0 in the meantime ([postgres.c:3435-3464](../raw/postgres-17/src/backend/tcop/postgres.c#L3435-L3464)). That differs from [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout), which cancel the statement with an `ERROR` and leave the session open ([postgres.c:3396-3409](../raw/postgres-17/src/backend/tcop/postgres.c#L3396-L3409)). Both settings default to 0 (off) and have context `user`, so `SET` or `SET LOCAL` changes them without a reload. An assign hook starts or stops the transaction timer when `transaction_timeout` changes inside a transaction ([guc_tables.c:2633-2653](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2633-L2653), [postgres.c#assign_transaction_timeout](../raw/postgres-17/src/backend/tcop/postgres.c#L3701-L3716)). The documentation adds that an open idle transaction keeps `VACUUM` from removing recently dead tuples ([config.sgml:9586-9592](../raw/postgres-17/doc/src/sgml/config.sgml#L9586-L9592)). An autovacuum worker forces both settings, with `statement_timeout` and `lock_timeout`, to 0 on itself "to avoid letting these settings prevent regular maintenance from being executed" ([autovacuum.c:1462-1470](../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470)).
+
+Related: [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout), [GUC context](#guc-context), [Autovacuum](#autovacuum), [xmin horizon](#xmin-horizon), [Two-phase commit](#two-phase-commit)
+
 ### Truncation
 
 **Aliases:** relation truncation, vacuum truncation, `lazy_truncate_heap`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3815,6 +3833,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 - Depth of the 2026-09-24 v19 repin check (`135b867a530` to `dae3463fa96`, stamped 19beta4). `scripts/repin_citations` re-anchored every v19 citation whose cited block was unchanged or had moved. An agent re-read each block whose text changed, the entries that name reverted v19 features (online data checksums, SQL/PGQ property graphs, the RI fast-path batching), and the v19 notes on REPACK, on-access pruning and autovacuum scoring. A v19 note whose cited blocks are byte-identical at the new pin was not re-read claim by claim.
 - The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Its applicability to 12 and 14 has not been checked.
 - Ten entries added on 2026-09-24 for the v19 online data checksums history page were checked on PostgreSQL 19 only, as the asker chose: Back-patch, Base backup, Buildfarm, Catalog version, Control file, PG_TEST_EXTRA, ProcSignal barrier, Promotion, Resource manager and XLOG_PAGE_MAGIC. Their applicability to 12, 14, 17 and 18 has not been checked, except that Base backup was checked claim by claim on 17 later the same day; 12, 14 and 18 remain unchecked for all ten. Two agents drafted them, each citation was checked for file and range, and the orchestrator re-read a sample of the claims; no second reviewer has read them all. The Back-patch entry does not describe the `Backpatch-through:` commit trailer, because no file in the 19 tree documents it.
+- Two entries added on 2026-09-24 for the v17 COMMENT-baseline GIN page were checked on PostgreSQL 17 only, as the asker chose: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Their applicability to 12, 14, 18 and 19 has not been checked; `transaction_timeout` is new in 17 by 17's own release notes. The orchestrator read every cited range at the pin; no second reviewer has read them.
 
 ## Source References
 
@@ -4544,7 +4563,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (443 files):
+**PostgreSQL 17** (451 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4597,6 +4616,7 @@ One representative citation per cited source file, grouped by version:
 - [indexam.sgml:38-43](../raw/postgres-17/doc/src/sgml/indexam.sgml#L38-L43)
 - [indices.sgml#indexes-index-only-scans](../raw/postgres-17/doc/src/sgml/indices.sgml#L1201-L1209)
 - [installation.sgml#configure-option-enable-injection-points](../raw/postgres-17/doc/src/sgml/installation.sgml#L1657-L1670)
+- [libpq.sgml#libpq-PQcmdStatus](../raw/postgres-17/doc/src/sgml/libpq.sgml#L4584-L4604)
 - [logical-replication.sgml#logical-replication-conflicts](../raw/postgres-17/doc/src/sgml/logical-replication.sgml#L1602-L1612)
 - [maintenance.sgml#routine-reindex](../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1042-L1046)
 - [manage-ag.sgml#manage-ag-tablespaces](../raw/postgres-17/doc/src/sgml/manage-ag.sgml#L380-L392)
@@ -4623,6 +4643,7 @@ One representative citation per cited source file, grouped by version:
 - [ref/truncate.sgml:33](../raw/postgres-17/doc/src/sgml/ref/truncate.sgml#L33)
 - [ref/vacuum.sgml#INDEX_CLEANUP](../raw/postgres-17/doc/src/sgml/ref/vacuum.sgml#L187-L221)
 - [regress.sgml:483-492](../raw/postgres-17/doc/src/sgml/regress.sgml#L483-L492)
+- [release-17.sgml:15083-15092](../raw/postgres-17/doc/src/sgml/release-17.sgml#L15083-L15092)
 - [replication-origins.sgml:22-24](../raw/postgres-17/doc/src/sgml/replication-origins.sgml#L22-L24)
 - [rules.sgml:49-53](../raw/postgres-17/doc/src/sgml/rules.sgml#L49-L53)
 - [spi.sgml:10-18](../raw/postgres-17/doc/src/sgml/spi.sgml#L10-L18)
@@ -4816,6 +4837,8 @@ One representative citation per cited source file, grouped by version:
 - [smgr.c:1-12](../raw/postgres-17/src/backend/storage/smgr/smgr.c#L1-L12)
 - [sync.c:573-603](../raw/postgres-17/src/backend/storage/sync/sync.c#L573-L603)
 - [backend_startup.c#BackendMain](../raw/postgres-17/src/backend/tcop/backend_startup.c#L50-L58)
+- [cmdtag.c#BuildQueryCompletionString](../raw/postgres-17/src/backend/tcop/cmdtag.c#L109-L163)
+- [dest.c#EndCommand](../raw/postgres-17/src/backend/tcop/dest.c#L164-L196)
 - [postgres.c#PostgresMain](../raw/postgres-17/src/backend/tcop/postgres.c#L4247-L4259)
 - [pquery.c#PortalRun](../raw/postgres-17/src/backend/tcop/pquery.c#L662-L689)
 - [utility.c:1106-1113](../raw/postgres-17/src/backend/tcop/utility.c#L1106-L1113)
@@ -4861,6 +4884,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_controldata.c:313](../raw/postgres-17/src/bin/pg_controldata/pg_controldata.c#L313)
 - [pg_upgrade.c:17-20](../raw/postgres-17/src/bin/pg_upgrade/pg_upgrade.c#L17-L20)
 - [pg_upgrade.h#transferMode](../raw/postgres-17/src/bin/pg_upgrade/pg_upgrade.h#L253-L260)
+- [common.c#PrintQueryStatus](../raw/postgres-17/src/bin/psql/common.c#L957-L995)
 - [amapi.h#IndexAmRoutine](../raw/postgres-17/src/include/access/amapi.h#L214-L262)
 - [brin.h:39](../raw/postgres-17/src/include/access/brin.h#L39)
 - [brin_page.h:75](../raw/postgres-17/src/include/access/brin_page.h#L75)
@@ -4963,6 +4987,8 @@ One representative citation per cited source file, grouped by version:
 - [read_stream.h:22-59](../raw/postgres-17/src/include/storage/read_stream.h#L22-L59)
 - [relfilelocator.h#RelFileLocator](../raw/postgres-17/src/include/storage/relfilelocator.h#L20-L63)
 - [sinval.h:49-57](../raw/postgres-17/src/include/storage/sinval.h#L49-L57)
+- [cmdtag.h:19-33](../raw/postgres-17/src/include/tcop/cmdtag.h#L19-L33)
+- [cmdtaglist.h:21-27](../raw/postgres-17/src/include/tcop/cmdtaglist.h#L21-L27)
 - [utility.h:71-78](../raw/postgres-17/src/include/tcop/utility.h#L71-L78)
 - [array.h#ArrayType](../raw/postgres-17/src/include/utils/array.h#L92-L98)
 - [backend_progress.h#PGSTAT_NUM_PROGRESS_PARAM](../raw/postgres-17/src/include/utils/backend_progress.h#L22-L33)
@@ -4979,6 +5005,7 @@ One representative citation per cited source file, grouped by version:
 - [snapshot.h#SNAPSHOT_MVCC](../raw/postgres-17/src/include/utils/snapshot.h#L37-L50)
 - [wait_event.h:18-27](../raw/postgres-17/src/include/utils/wait_event.h#L18-L27)
 - [varatt.h:142-155](../raw/postgres-17/src/include/varatt.h#L142-L155)
+- [fe-protocol3.c:203-219](../raw/postgres-17/src/interfaces/libpq/fe-protocol3.c#L203-L219)
 - [pl_exec.c:4281](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L4281)
 - [pl_handler.c#plpgsql_inline_handler](../raw/postgres-17/src/pl/plpgsql/src/pl_handler.c#L313-L330)
 - [plpgsql--1.0.sql:12-15](../raw/postgres-17/src/pl/plpgsql/src/plpgsql--1.0.sql#L12-L15)
