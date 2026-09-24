@@ -32,6 +32,7 @@ verified_by_agent: not yet
   - [Block](#block)
   - [Bottom-up index deletion](#bottom-up-index-deletion)
   - [BRIN](#brin)
+  - [BRIN summarization](#brin-summarization)
   - [B-tree](#b-tree)
   - [B-tree page deletion](#b-tree-page-deletion)
   - [btree_gin and btree_gist](#btree_gin-and-btree_gist)
@@ -99,6 +100,7 @@ verified_by_agent: not yet
   - [GUC](#guc)
   - [GUC context](#guc-context)
   - [Hash index](#hash-index)
+  - [Hash splitpoint](#hash-splitpoint)
   - [Heap](#heap)
   - [Heavyweight lock](#heavyweight-lock)
   - [Hint bits](#hint-bits)
@@ -106,6 +108,7 @@ verified_by_agent: not yet
   - [HOT](#hot)
   - [Hot standby](#hot-standby)
   - [Huge pages](#huge-pages)
+  - [Index page recycling](#index-page-recycling)
   - [Index scan](#index-scan)
   - [Index vacuuming](#index-vacuuming)
   - [INDEX_CLEANUP](#index_cleanup)
@@ -222,6 +225,7 @@ verified_by_agent: not yet
   - [SLRU](#slru)
   - [Snapshot](#snapshot)
   - [SP-GiST](#sp-gist)
+  - [SP-GiST placeholder](#sp-gist-placeholder)
   - [SPI](#spi)
   - [SQL function inlining](#sql-function-inlining)
   - [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout)
@@ -278,7 +282,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
 - The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Nine of them still are, and their main paragraphs open by naming 19: [Back-patch](#back-patch), [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). The tenth, [Base backup](#base-backup), was also checked on 17 later that day, for the v17 GIN waste page's standby stage, so its main paragraph now cites 17 and a 19 note carries the 19 evidence. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Nine of them still are, and their main paragraphs open by naming 19: [Back-patch](#back-patch), [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). The tenth, [Base backup](#base-backup), was also checked on 17 later that day, for the v17 GIN waste page's standby stage, so its main paragraph now cites 17 and a 19 note carries the 19 evidence. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -578,6 +582,16 @@ A BRIN index stores one small summary per range of consecutive table pages, such
 - PostgreSQL 19: Holds. The README, the 128-page default `pages_per_range`, and bitmap-only access (`amgettuple` NULL) are unchanged ([brin/README:1-24](../raw/postgres-19/src/backend/access/brin/README#L1-L24), [brin.h:40](../raw/postgres-19/src/include/access/brin.h#L40), [brin.c:300-301](../raw/postgres-19/src/backend/access/brin/brin.c#L300-L301)).
 
 Related: [Access method](#access-method), [Bitmap scan](#bitmap-scan), [Metapage](#metapage)
+
+### BRIN summarization
+
+**Aliases:** revmap, range map, unsummarized range, `autosummarize`, `brin_summarize_new_values`, `brin_summarize_range`, `brin_desummarize_range`. **Checked on:** PostgreSQL 17.
+
+Summarization is how a [BRIN](#brin) index gets the summary tuple for one page range. `CREATE INDEX` scans the whole table and summarizes every range, including the partial range at the end ([brin/README:118-121](../raw/postgres-17/src/backend/access/brin/README#L118-L121)). A row added later to a summarized range widens that range's summary; if the wider summary no longer fits where the old one was, a new tuple is written elsewhere and the old one is removed ([brin/README:81-90](../raw/postgres-17/src/backend/access/brin/README#L81-L90)). The first rows of a new range create no summary tuple, so that range stays unsummarized, and a scan returns every page of it as a possible match ([brin/README:92-101](../raw/postgres-17/src/backend/access/brin/README#L92-L101), [brin/README:123-127](../raw/postgres-17/src/backend/access/brin/README#L123-L127)). The revmap, or range map, is how the index knows which ranges have a summary: it stores one [TID](#tid) per page range, pointing at that range's summary tuple, in the first blocks after the [metapage](#metapage), and an invalid TID means the range is not summarized ([brin/README:75-79](../raw/postgres-17/src/backend/access/brin/README#L75-L79), [brin/README:103-106](../raw/postgres-17/src/backend/access/brin/README#L103-L106)).
+
+Every [VACUUM](#vacuum) of the table summarizes all unsummarized ranges. `brin_summarize_new_values()` does the same on demand, `brin_summarize_range()` summarizes only the range that covers one block, and `brin_desummarize_range()` removes one range's summary tuple ([brin/README:129-133](../raw/postgres-17/src/backend/access/brin/README#L129-L133), [func.sgml#brin_summarize_new_values](../raw/postgres-17/doc/src/sgml/func.sgml#L30062-L30100)). With the `autosummarize` [storage parameter](#storage-parameter) on, `brininsert()` notices the first tuple on the first block of a new range and, if the previous range has no summary, asks [autovacuum](#autovacuum) to summarize it. A full request queue drops the request with a `LOG` message ([brin.c:379-411](../raw/postgres-17/src/backend/access/brin/brin.c#L379-L411)). Only an autovacuum worker carries the request out, by calling `brin_summarize_range()` for the recorded block ([autovacuum.c#perform_work_item](../raw/postgres-17/src/backend/postmaster/autovacuum.c#L2635-L2641), [brin.sgml:84-95](../raw/postgres-17/doc/src/sgml/brin.sgml#L84-L95)).
+
+Related: [BRIN](#brin), [Line pointer](#line-pointer), [VACUUM](#vacuum)
 
 ### B-tree
 
@@ -1491,6 +1505,16 @@ A hash index places each entry in a bucket chosen by hashing the key. It support
 
 Related: [Access method](#access-method), [Metapage](#metapage)
 
+### Hash splitpoint
+
+**Aliases:** split point, splitpoint group, splitpoint phase, `hashm_spares`, `hashm_ovflpoint`, `_hash_alloc_buckets`. **Checked on:** PostgreSQL 17.
+
+A splitpoint is a batch of primary bucket pages that a [hash index](#hash-index) allocates at once. Bucket pages come in power-of-2 groups called splitpoints, so each new group doubles the number of buckets. From group 10 on, a group is allocated in four equal phases, and the next phase is allocated only after the buckets of the previous one are in use ([hash/README:60-79](../raw/postgres-17/src/backend/access/hash/README#L60-L79)). The bucket pages of one phase sit next to each other in the file. The [metapage](#metapage)'s `hashm_spares[]` array records how many overflow pages come before each phase, so a bucket's block number is computed from its bucket number ([hash/README:80-95](../raw/postgres-17/src/backend/access/hash/README#L80-L95)). An index build estimates the size it needs and allocates enough phases at once ([hash/README:96-99](../raw/postgres-17/src/backend/access/hash/README#L96-L99)).
+
+Allocating a phase writes only its last page. `_hash_alloc_buckets()` extends the file's end to the end of the new phase by writing one initialized page there and expects the pages in between to read as zeroes, so on a filesystem that allows holes they may not be allocated yet ([hashpage.c#_hash_alloc_buckets](../raw/postgres-17/src/backend/access/hash/hashpage.c#L967-L1037), [hash/README:113-123](../raw/postgres-17/src/backend/access/hash/README#L113-L123)). A hash index's file size therefore jumps by whole phases, and part of the jump may be unused capacity rather than written pages.
+
+Related: [Hash index](#hash-index), [Relation size functions](#relation-size-functions)
+
 ### Heap
 
 **Aliases:** heap table, heap access method, `heapam`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1588,6 +1612,16 @@ Huge pages are operating-system memory pages larger than the normal page size. U
 - PostgreSQL 19: Holds. `huge_pages` still takes `off`, `on` or `try` with default `try`, `huge_page_size` 0 still means the system default, both are still `PGC_POSTMASTER` (restart), and `CreateAnonymousSegment()` still falls back and sets the `PGC_INTERNAL` `huge_pages_status` ([config.sgml#guc-huge-pages](../raw/postgres-19/doc/src/sgml/config.sgml#L1844-L1863), [config.sgml:1874](../raw/postgres-19/doc/src/sgml/config.sgml#L1874), [config.sgml#guc-huge-page-size](../raw/postgres-19/doc/src/sgml/config.sgml#L1915-L1921), [guc_parameters.dat#huge_page_size](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1246-L1262), [guc_parameters.dat#huge_pages_status](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1264-L1270), [guc_tables.c#huge_pages_options](../raw/postgres-19/src/backend/utils/misc/guc_tables.c#L365-L376), [sysv_shmem.c#GetHugePageSize](../raw/postgres-19/src/backend/port/sysv_shmem.c#L491-L542), [sysv_shmem.c#CreateAnonymousSegment](../raw/postgres-19/src/backend/port/sysv_shmem.c#L600-L651), [sysv_shmem.c#PGSharedMemoryCreate](../raw/postgres-19/src/backend/port/sysv_shmem.c#L722-L734)).
 
 Related: [shared_buffers](#shared_buffers), [GUC context](#guc-context)
+
+### Index page recycling
+
+**Aliases:** deleted index page, delete XID, recyclable page, `gistPageRecyclable`, `GinPageIsRecyclable`, `RecordFreeIndexPage`, `GetFreeIndexPage`. **Checked on:** PostgreSQL 17.
+
+Index page recycling is how a deleted [GiST](#gist) or [GIN](#gin) index page becomes reusable. [VACUUM](#vacuum) can delete a page that has become empty, but it cannot reuse the page at once, because a scan that already read a link to it may still arrive. So the page is marked deleted and stamped with the next [transaction ID](#transaction-id) at the moment of deletion ([gistvacuum.c#gistdeletepage](../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L640-L656), [ginvacuum.c#ginDeletePage](../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L187-L192)). A later `VACUUM` treats the page as recyclable only once that XID is older than the [xmin horizon](#xmin-horizon), and only then records it in the index's [free space map](#free-space-map) ([gistutil.c#gistPageRecyclable](../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908), [gistvacuum.c:298-304](../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L298-L304), [ginvacuum.c#GinPageIsRecyclable](../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829), [ginvacuum.c:766-771](../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L766-L771)).
+
+Two consequences matter when reading a page census. A page deleted by one `VACUUM` is still not free when that `VACUUM` ends, so a count of deleted pages and a count of free pages disagree after every deletion. A [snapshot](#snapshot) older than the delete XID keeps the page unrecyclable for as long as it is held. The index free space map records only whether a page is completely free, and the GiST and GIN page allocators take a recorded page before they extend the file ([indexfsm.c:14-19](../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L14-L19), [indexfsm.c#RecordFreeIndexPage](../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55), [gistutil.c#gistNewBuffer](../raw/postgres-17/src/backend/access/gist/gistutil.c#L822-L850), [ginutil.c#GinNewBuffer](../raw/postgres-17/src/backend/access/gin/ginutil.c#L299-L335)). B-tree has its own version of this, described under [B-tree page deletion](#b-tree-page-deletion).
+
+Related: [Free space map](#free-space-map), [xmin horizon](#xmin-horizon), [Posting tree](#posting-tree)
 
 ### Index scan
 
@@ -3198,6 +3232,16 @@ SP-GiST (space-partitioned [GiST](#gist)) is a framework for index structures th
 
 Related: [GiST](#gist), [Access method](#access-method), [Metapage](#metapage)
 
+### SP-GiST placeholder
+
+**Aliases:** placeholder tuple, redirect tuple, `SPGIST_PLACEHOLDER`, `SPGIST_REDIRECT`, `SPGIST_DEAD`, `SPGIST_LIVE`. **Checked on:** PostgreSQL 17.
+
+A placeholder is a dead [SP-GiST](#sp-gist) tuple that stays on its page only to keep its slot. Links inside an SP-GiST index point at tuples by their offset number on the page, so a tuple in the middle of a page cannot be removed without renumbering the tuples after it and breaking those links ([spgist/README:143-150](../raw/postgres-17/src/backend/access/spgist/README#L143-L150)). When a live tuple is deleted or moved away, a placeholder takes its offset, and a new tuple added to the page may reuse the slot ([spgist/README:299-306](../raw/postgres-17/src/backend/access/spgist/README#L299-L306)). Each tuple is in one of four states, `SPGIST_LIVE`, `SPGIST_REDIRECT`, `SPGIST_DEAD` or `SPGIST_PLACEHOLDER` ([spgist_private.h:272-275](../raw/postgres-17/src/include/access/spgist_private.h#L272-L275)).
+
+A redirect tuple is the temporary form. When an insertion moves a tuple or a chain of leaf tuples to another page, it leaves a redirect in the old place for scans already on their way to it, and [VACUUM](#vacuum) turns the redirect into a placeholder once no running transaction can still need it ([spgist/README:260-266](../raw/postgres-17/src/backend/access/spgist/README#L260-L266), [spgist/README:275-288](../raw/postgres-17/src/backend/access/spgist/README#L275-L288)). `VACUUM` physically removes only the placeholders at the end of a page's offset range, because removing an earlier one would change the offsets of the live tuples after it ([spgist/README:323-328](../raw/postgres-17/src/backend/access/spgist/README#L323-L328), [spgvacuum.c#vacuumRedirectAndPlaceholder](../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L569-L590)). A placeholder in the middle of a page therefore stays until an insertion reuses its slot.
+
+Related: [SP-GiST](#sp-gist), [Line pointer](#line-pointer)
+
 ### SPI
 
 **Aliases:** Server Programming Interface. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3834,6 +3878,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 - The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Its applicability to 12 and 14 has not been checked.
 - Ten entries added on 2026-09-24 for the v19 online data checksums history page were checked on PostgreSQL 19 only, as the asker chose: Back-patch, Base backup, Buildfarm, Catalog version, Control file, PG_TEST_EXTRA, ProcSignal barrier, Promotion, Resource manager and XLOG_PAGE_MAGIC. Their applicability to 12, 14, 17 and 18 has not been checked, except that Base backup was checked claim by claim on 17 later the same day; 12, 14 and 18 remain unchecked for all ten. Two agents drafted them, each citation was checked for file and range, and the orchestrator re-read a sample of the claims; no second reviewer has read them all. The Back-patch entry does not describe the `Backpatch-through:` commit trailer, because no file in the 19 tree documents it.
 - Two entries added on 2026-09-24 for the v17 COMMENT-baseline GIN page were checked on PostgreSQL 17 only, as the asker chose: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Their applicability to 12, 14, 18 and 19 has not been checked; `transaction_timeout` is new in 17 by 17's own release notes. The orchestrator read every cited range at the pin; no second reviewer has read them.
+- Four entries added on 2026-09-24 for the v17 COMMENT-baseline non-B-tree inflation page were checked on PostgreSQL 17 only, as the asker chose: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). Their applicability to 12, 14, 18 and 19 has not been checked. The orchestrator read every cited range at the pin; no second reviewer has read them.
 
 ## Source References
 
@@ -4563,7 +4608,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (451 files):
+**PostgreSQL 17** (459 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4597,6 +4642,7 @@ One representative citation per cited source file, grouped by version:
 - [auto-explain.sgml:18-23](../raw/postgres-17/doc/src/sgml/auto-explain.sgml#L18-L23)
 - [backup.sgml#backup-timelines](../raw/postgres-17/doc/src/sgml/backup.sgml#L1409-L1418)
 - [bki.sgml:40-52](../raw/postgres-17/doc/src/sgml/bki.sgml#L40-L52)
+- [brin.sgml:84-95](../raw/postgres-17/doc/src/sgml/brin.sgml#L84-L95)
 - [btree-gin.sgml:9-22](../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L9-L22)
 - [btree-gist.sgml:9-21](../raw/postgres-17/doc/src/sgml/btree-gist.sgml#L9-L21)
 - [catalogs.sgml#catalog-pg-inherits](../raw/postgres-17/doc/src/sgml/catalogs.sgml#L4591-L4594)
@@ -4608,6 +4654,7 @@ One representative citation per cited source file, grouped by version:
 - [event-trigger.sgml:10-16](../raw/postgres-17/doc/src/sgml/event-trigger.sgml#L10-L16)
 - [extend.sgml:775-786](../raw/postgres-17/doc/src/sgml/extend.sgml#L775-L786)
 - [fdwhandler.sgml#fdwhandler](../raw/postgres-17/doc/src/sgml/fdwhandler.sgml#L11-L19)
+- [func.sgml#brin_summarize_new_values](../raw/postgres-17/doc/src/sgml/func.sgml#L30062-L30100)
 - [geqo.sgml#geqo-pg-intro](../raw/postgres-17/doc/src/sgml/geqo.sgml#L109-L125)
 - [gin.sgml](../raw/postgres-17/doc/src/sgml/gin.sgml#L503-L528)
 - [gist.sgml#gist-intro](../raw/postgres-17/doc/src/sgml/gist.sgml#L11-L25)
@@ -4664,13 +4711,17 @@ One representative citation per cited source file, grouped by version:
 - [gininsert.c#buildFreshLeafTuple](../raw/postgres-17/src/backend/access/gin/gininsert.c#L125-L165)
 - [ginpostinglist.c:23-42](../raw/postgres-17/src/backend/access/gin/ginpostinglist.c#L23-L42)
 - [ginutil.c:79](../raw/postgres-17/src/backend/access/gin/ginutil.c#L79)
+- [ginvacuum.c#GinPageIsRecyclable](../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L805-L829)
 - [gist/README:1-25](../raw/postgres-17/src/backend/access/gist/README#L1-L25)
 - [gist.c:79](../raw/postgres-17/src/backend/access/gist/gist.c#L79)
 - [gistbuild.c:888-891](../raw/postgres-17/src/backend/access/gist/gistbuild.c#L888-L891)
 - [gistget.c#gistcanreturn](../raw/postgres-17/src/backend/access/gist/gistget.c#L785-L801)
+- [gistutil.c#gistPageRecyclable](../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908)
+- [gistvacuum.c#gistdeletepage](../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L640-L656)
 - [hash/README:14-29](../raw/postgres-17/src/backend/access/hash/README#L14-L29)
 - [hash.c#hashhandler](../raw/postgres-17/src/backend/access/hash/hash.c#L57-L68)
 - [hashinsert.c#_hash_vacuum_one_page](../raw/postgres-17/src/backend/access/hash/hashinsert.c#L364-L370)
+- [hashpage.c#_hash_alloc_buckets](../raw/postgres-17/src/backend/access/hash/hashpage.c#L967-L1037)
 - [README.HOT:53-60](../raw/postgres-17/src/backend/access/heap/README.HOT#L53-L60)
 - [README.tuplock:1-13](../raw/postgres-17/src/backend/access/heap/README.tuplock#L1-L13)
 - [heapam.c:8548-8558](../raw/postgres-17/src/backend/access/heap/heapam.c#L8548-L8558)
@@ -4695,6 +4746,7 @@ One representative citation per cited source file, grouped by version:
 - [spgist/README:1-12](../raw/postgres-17/src/backend/access/spgist/README#L1-L12)
 - [spgscan.c#spgcanreturn](../raw/postgres-17/src/backend/access/spgist/spgscan.c#L1082-L1095)
 - [spgutils.c:64](../raw/postgres-17/src/backend/access/spgist/spgutils.c#L64)
+- [spgvacuum.c#vacuumRedirectAndPlaceholder](../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L569-L590)
 - [tableam.c:666-667](../raw/postgres-17/src/backend/access/table/tableam.c#L666-L667)
 - [transam/README:420-422](../raw/postgres-17/src/backend/access/transam/README#L420-L422)
 - [README.parallel#Overview](../raw/postgres-17/src/backend/access/transam/README.parallel#L1-L12)
@@ -4821,6 +4873,7 @@ One representative citation per cited source file, grouped by version:
 - [freelist.c#ClockSweepTick](../raw/postgres-17/src/backend/storage/buffer/freelist.c#L103-L125)
 - [fd.c#pg_fsync](../raw/postgres-17/src/backend/storage/file/fd.c#L385-L389)
 - [freespace.c:16-20](../raw/postgres-17/src/backend/storage/freespace/freespace.c#L16-L20)
+- [indexfsm.c#RecordFreeIndexPage](../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55)
 - [dsm.c:3-15](../raw/postgres-17/src/backend/storage/ipc/dsm.c#L3-L15)
 - [dsm_registry.c:3-16](../raw/postgres-17/src/backend/storage/ipc/dsm_registry.c#L3-L16)
 - [ipci.c:77-78](../raw/postgres-17/src/backend/storage/ipc/ipci.c#L77-L78)

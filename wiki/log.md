@@ -14484,3 +14484,76 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - `raw/postgres-17/` was read only. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv. One throwaway `mktemp -d` directory under the system temp directory, used to test the new teardown lines, was deleted in the same command.
 
 **Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `44958c8`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed. The untracked and modified `.DS_Store` files were left out of the commit.
+
+## [2026-09-24] revise v17 | COMMENT-baseline non-B-tree inflation page: the two index-cleanup-disabled fixtures removed, the script re-run on a second platform
+
+- **Prompt.** The asker chose to have it corrected silently: "Follow `AGENTS.md`, in PostgreSQL 17. Remove the invalid tests from the question "Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17", and re-run all tests." The analysis, including a baseline pass of the filed script, was shown in chat first; prompt hygiene and scope were then asked in one question call.
+- **Scope.** The asker chose all four recommended options:
+  - **remove `h06` and `n11` entirely**, over keeping them as ordinary quarter-delete fixtures under the mandatory `VACUUM ANALYZE`;
+  - **correct silently**;
+  - **relabel, add nothing**: file the two coverage rows the re-run showed unreached as not reached, and build no fixture for them;
+  - the four glossary entries the page lacked, **checked on PostgreSQL 17 only**.
+- **Target.** [Detecting Inflated Non-B-Tree Indexes From Catalogs and a COMMENT-Stored Baseline in PostgreSQL 17 (unverified)](v17/questions/indexing/non-btree-index-inflation-comment-baseline.md), at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11).
+
+**The invalid tests.** `h06` (hash) and `n11` (GIN) deleted a quarter of their rows and were maintained by `VACUUM (VERBOSE, ANALYZE, INDEX_CLEANUP OFF)`, declared as exceptions X3 and X4. Earlier the same day both governing concept pages dropped "a `VACUUM` whose index cleanup did not run" from their required coverage and from their declared exceptions. They were the page's only such tests: `g08` and `n10` hold snapshots under the exception that remains, `h05` and `n12` are the required auto-analyze stand-ins, and `b13` is the BRIN stand-in.
+- Out of the script: both fixtures from the lists and the build, churn and maintenance recipes; exceptions X3 and X4, with the measurement-lock exception X5 renumbered X3; both cleanup coverage rows.
+- Out of the prose: Verdict result 5, the section *The one false negative*, known limitation 7 (the rest renumbered), their rows in the fixture, results and bound tables, their I9 mentions, the coverage row, and the `vacuumlazy.c` 387-397 Evidence Map row and Source References mention, which backed only them.
+
+**Claims the page's own numbers did not support, corrected without asking and disclosed.**
+- `g08` was filed as reaching "a deleted-but-not-recyclable GiST page under a held snapshot". Under its snapshot it deletes 0 pages; its 2,330 pages are deleted only after the release and wait on their own delete XID, the one-`VACUUM` lag. Now filed not reached, citing the delete-XID stamps (`gistvacuum.c` 640-656, `ginvacuum.c` 187-192). The same correction runs through *What a defeated VACUUM looks like* and the I5 paragraph. `n10` still reaches the GIN row, which asks only for a snapshot held across the settling `VACUUM`.
+- `n04` was filed as reaching "half-empty posting-tree leaves"; it holds 0 posting-tree pages at every phase. Now not reached, citing `gin/README` 22-26 and `gininsert.c` 118-165 for when a key gets a posting tree.
+- "31 of the 34 behaviors reached" was 30 of 33: 28 reached, 2 partly, 3 skipped. Now 24 reached, 2 partly, 2 not reached and 3 skipped, of 31.
+- Known limitation 16's "26 fixtures whose churn removed rows" was 22. It is now limitation 15 and reads 20.
+- Open question 15 now names `gistchoose`'s random tie-break as the likely cause of `g09`'s drift (`gistutil.c` 415-420 and 510, seeded per process at `postmaster.c` 2042-2063). Its sorted build and sorted rebuild read the same bytes on every pass, so the sorted build is not the cause.
+
+**Script defects fixed, in place.**
+- BSD `grep` reads a `$` placed before `\|` as a literal character, so `grep -c '^VACUUM$\|^ANALYZE$'` never counted a bare `VACUUM` command tag, and the baseline pass's proof table read 0 on every `VACUUM` log. Now `grep -Ec '^(VACUUM|ANALYZE)$'`; the recorded run reads 1 on every log that ran a maintenance statement.
+- `clean`: the process check `pgrep -af "$PGDATA"` became `pgrep -f --`, because macOS `-a` adds the caller's ancestors to the match list. The port check `pgrep -af "port=$PORT"` could never fire, since the port is on no command line; it now reports whether the port's socket or lock file is in the socket directory. Both checks were also exercised on a throwaway directory, and the port check fired on either file.
+- Cosmetic: `wc -l` padding trimmed in the `fixtures` stage message.
+- The coverage plan filed before the run now declares the two unreached rows as not reached. The script went from 2,640 to 2,621 lines, SHA-256 `fbe6b4a0a8a9...`.
+
+**Runs**, both on Darwin 27.0.0 arm64 with Apple clang 21.0.0, Homebrew `bash` 5.3.15 and `JOBS=8`, each through the whole default order from an empty sandbox:
+- the baseline pass of the filed script, unchanged (SHA-256 `e8b48c00e124...`), 19:18:46Z to 19:30:56Z, exit 0;
+- the recorded run of the edited script, 19:34:14Z to 19:46:01Z, exit 0.
+
+`make check` passed All 225 plus `pageinspect` 8, `pgstattuple` 1 and `pg_freespacemap` 1 on both, and `verify` read 3 of 3 on both.
+
+**Results.**
+- The baseline pass reproduced every recommendation and decision of the 2026-09-16 Linux filing on all 31 fixtures, and B, raw, C and R on 30 of them, all but `g09`. A sampled `size_inflation` moved `g06`'s bound to `HELD`, so its bound read 20 held / 11 violated.
+- The recorded run, 29 fixtures: the decision is right on 29 of 29, with 0 false positives, 0 false negatives and 14 flagged. The bound held on 18 and was violated on 11; the worst under-estimate is -10.71 (`h05`) and the worst over-estimate +19.66 (`h01`); estimates land within 1 point on 20 of 27 and within 5 on 24. Every recommendation, decision and bound verdict matches the 2026-09-16 filing on these 29, and B, raw, C and R match on 28; `g09`'s churned file read 451,428,352 bytes this time.
+- Invariants: I1 29/29, I2 90/90, I3 27/27, I4 27/27, I5 13/13, I6 13/13, I7 4/4, I8 23/28 with all five failures stale by construction, I9 22 present and 7 absent, I10 25/25, I11 31/31, I12 0 overlaps over 90 x 31, I13 58/62 with the other 4 the declared snapshots.
+- All 29 fixtures read `dead_ratio` 0.0000 at the decide pass, so none reaches the method's dead-tuple gate any more; that is new open question 21.
+- Readings that vary between passes, recorded as such: `b11`'s orphaned line pointers 13 (baseline 14), P2's parallel BRIN build counts 23 / 44 / 101 (baseline 44 / 98, Linux 45 / 103), and P1's build-time BRIN `reltuples` 43.
+- Server log: 19 `ERROR` and `FATAL` lines, all deliberate: 16 instrument refusals, one division by zero and 2 terminated snapshot holders.
+
+**Page changes.**
+- `## Question` gained `### The 2026-09-24 prompt`, holding the corrected text and a four-item scope note, with no defect list. *Prompt corrections* now counts five prompts.
+- Updated to the recorded run: the Verdict, the conformance table (one new row), the no-defeat tables (three exceptions now), the fixture and results tables (the results regenerated from the run's own outputs), the bound and accuracy sections, the maintenance pair, the BRIN stand-in, the `reltuples` probes, the invariants, the census, the edge cases, the thresholds and the known limitations.
+- The coverage section's lead was rewritten and two rows refiled. *What left the page* gained a 2026-09-24 table, and its reproducibility paragraph now covers five passes.
+- `## Measurement Script`: usage rows, a new prerequisite, the last-run table and three notes.
+- Context Reviewed gained two bullets. The Evidence Map lost one row and gained three. Source References gained `postmaster.c`. Open questions 2, 4, 8, 9, 15, 18 and 20 were revised; 21 and 22 are new.
+- Navigation gained the glossary and the non-B-tree maintenance heuristic page.
+- 76 first-use glossary term links, placed by a venv helper that treats a link wrapped across lines as one token, and reviewed by hand; one wrong-sense hit ("hot keys") and one wiki-sense hit ("this page") were excluded. Stripping them gives back the pre-link text exactly.
+- `verified_by_agent` stays `not yet`, and `verified:` was not touched.
+
+**Checks.**
+- 327 raw citations over 116 ranges in 64 files, all under `raw/postgres-17/` and all in bounds. The new ranges were read at the pin.
+- The 53 Contents entries match the headings, and every in-page anchor resolves.
+- All 76 glossary anchors exist and none repeats; none sits in a heading, a fence or `## Question`.
+- The fenced script is byte-identical to the file that ran and contains no Markdown fence. The three published SQL blocks are unchanged.
+- `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted `.DS_Store` files in the v12 and v14 checkouts.
+
+**Glossary.**
+- Added, checked on PostgreSQL 17 only at the asker's choice: [BRIN summarization](glossary.md#brin-summarization), [Hash splitpoint](glossary.md#hash-splitpoint), [Index page recycling](glossary.md#index-page-recycling) and [SP-GiST placeholder](glossary.md#sp-gist-placeholder). Every cited range was read at the pin.
+- The Contents, the Scope bullet and a new Open Questions bullet name them. The v17 *Source References* block went from 451 to 459 files and stays sorted by path. The term count went from 255 to 259.
+- The glossary blurbs on `wiki/index.md` and all five version landing pages still read 253 terms, stale since the previous additions; all six now read 259.
+- Reviewed for this interaction and unchanged: INDEX_CLEANUP, VACUUM, Hash index, GiST, SP-GiST, BRIN, GIN, Posting tree, Posting list, Pending list, Metapage, Free space map, Line pointer, GiST build method, Snapshot, xmin horizon, Dead tuple, Statistics, reltuples and relpages, COMMENT ON, REINDEX and CONCURRENTLY.
+
+**Concept pages.** Read and not edited. Nothing this run found contradicts either one. The two unreached rows come from this page's fixture design, not from the protocols; open question 22 describes fixtures that would reach them. The sibling [non-B-tree maintenance heuristic page](v17/questions/indexing/non-btree-comment-baseline-maintenance-heuristic.md), which scores this page's fixtures, already filed both rows as not reached and already works on the same 29 fixtures on 17.11; it was not edited.
+
+**Teardown.**
+- Both clusters were stopped with `pg_ctl -m fast -w stop` through the script's own `clean` stage: the baseline `idxnbbase` through the filed script's stage, and the recorded `idxnb` through the edited one, which also reported no socket or lock file for port 55427. Each confirmed no `postmaster.pid` and no matching process, then deleted its sandbox (7.2 GB and 7.1 GB).
+- Verified afterwards: no `postgres` process, no socket for port 55427, and `.wiki-runtime/tmp/` empty.
+- `raw/postgres-17/` was read only. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv. The throwaway directory used to test the new port check was deleted in the same command.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `82d797c`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.
