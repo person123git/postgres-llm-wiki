@@ -14227,3 +14227,49 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - The review probe cluster (port 55481) was stopped the same way and `.wiki-runtime/tmp/rls18-review/` deleted.
 - With the asker's agreement, the PostgreSQL 12 server another session had left running (pid 90110, `.wiki-runtime/tmp/ldf12-review/data`, port 55412) was stopped with `pg_ctl -m fast stop` and its sandbox deleted.
 - Nothing from this task is running or kept.
+
+## [2026-09-24] repin v19 | 19beta3 135b867a530 -> 19beta4 dae3463fa96, 159 commits reviewed
+
+- **Prompt.** "Follow AGENTS.md, update review for version 19 with beta 3." Prompt hygiene and scope were asked together. The asker chose "correct silently", and chose a repin of v19 to the newest `REL_19_STABLE` source over porting the RLS review or re-reviewing at the old pin.
+- **Pin.** `raw/postgres-19/` was fetched and checked out at `dae3463fa969931458f1488f9b7af11e3741cd54` (`REL_19_BETA4-17-gdae3463fa96`, 2026-09-24).
+  - Upstream tagged `REL_19_BETA4` (`b73d13c32c8`, 2026-09-21) after the old pin, so the newest source is past beta3. `configure.ac` and `meson.build` now read `19beta4`.
+  - The old pin is an ancestor, and the checkout's `git status --porcelain` is empty.
+  - The fetch also brought in the `REL_19_BETA3` tag (`3638289fb57`), which was missing locally.
+- **Review.** Four forks ran on the orchestrator's model (`claude-opus-5-5`), one per unit: REPACK page; autovacuum page and navigation guide; `pg_plan_advice` page; glossary v19 content. Each classified all 159 commits against its page.
+- **REPACK page, 58 -> 79 feature-scope commits.** 21 feature-scope commits (9 correct an existing claim, 12 add content), 23 touch a cited file only, and 115 are unrelated.
+  - `REPACK` in either mode fails on an invalid index (`e14a2354d9f`, `0cabab44f12`).
+  - `CONCURRENTLY` rejects non-heap table AMs (`fe7b6072342`), `user_catalog_table` tables (`04bb1500253`), materialized views (`40d811540a5`) and a dropped replica-identity index (`434bde9ce6b`).
+  - The decoding worker: no `CONNECT` needed (`9bf3a414560`), inherits the leader's timeouts (`746a507a391`), gains a two-stage startup/shutdown (`47b5b23a780`), and waits for the initial snapshot (`4a4bf490dc5`).
+  - Progress-reporting fixes, `REPACK (ANALYZE)` rejected in a transaction block, NO_LOGICAL fixes, and the docs rework.
+  - New Open Question: `ref/repack.sgml` does not list the dropped-replica-identity-index refusal.
+- **`pg_plan_advice` page, 28 -> 34 module commits and 20 -> 21 core commits.** 4 commits change a claim, 3 more add history, 7 touch a cited file only, and 145 are unrelated.
+  - Partition names need a schema (`3201ea8f171`).
+  - Empty `JOIN_ORDER` sublists are rejected (`88cbbcb253a`).
+  - `JOIN_ORDER` feedback matching was reworked (`0f433a6b357`).
+  - GEQO: fitness ranks `disabled_nodes` before cost (`d22961bca2c`), and join advice under GEQO is only probabilistic (`9ed2684b89a`).
+  - Three README citations were relocated by hand.
+  - The 2026-09-01 `verified_by_agent` timestamp was reset to `not yet`, because a repin is not a claim-by-claim verification.
+- **Autovacuum page, 9 claims changed.** 21 commits touch a cited file only, and 129 are unrelated.
+  - `13243ae44cf` rewrote the on-access VM safety valve and added the first regression test.
+  - `b3609cd2db8`, `40cc0662ed7`, `41a8548ad41`, `1bda0b23bce` (freeze-score scaling), `XLOG_PAGE_MAGIC` 0xD121 -> 0xD122 (`4a9a6c5a69c`), and the `f94f8b18d3b` release-note rewording.
+  - Redo fixes `d69b06e5abe`, `f4b511ae93a` and `1139b7effdd` added to the history.
+- **Navigation guide.** 1 commit changes a claim (the `19beta4` stamp) and 8 touch a cited file only.
+  - The reverts of SQL/PGQ, FOR PORTION OF, online checksums and `pg_get_*_ddl`: deleted files, dropped catalog headers, and `test_checksums` removed.
+  - Anchors moved for `QueryRewrite`, `ProcessUtility`, `planner` and `RawStmt`.
+- **Glossary.**
+  - Every v19 citation re-checked against the new pin.
+  - Entries corrected for v19: Data checksums (online transitions reverted, `c05d5ce1236`), Hint bits, Page, Foreign key trigger (fast-path batching removed, `25649d6e791`, plus the later RI fast-path fixes), Relation, pg_class and Range table (SQL/PGQ reverted, `2b9e1aff4d3`), Progress reporting, HOT pruning (`41a8548ad41`), Invalid index and REPACK (the new REPACK refusals).
+  - New term: GEQO, checked on 17, 18 and 19, for 243 terms.
+  - v19 Source Pins row moved to `dae3463fa96`. No anchors changed.
+  - Two Open Questions added: v19 notes whose cited blocks are byte-identical were not re-read claim by claim, and GEQO was checked on three versions only.
+- **Tooling.** `scripts/repin_citations`:
+  - New `--include-glossary` flag, so the shared glossary's citations for the repinned version are re-anchored too.
+  - Label sync now also accepts path-prefixed labels such as `parser/meson.build:29-43`.
+  - It re-anchored 629 fragments across 5 pages. The remaining changed and missing blocks were relocated by hand.
+- **Checks.**
+  - All 2,888 v19 citations in `wiki/v19/` and the glossary resolve and sit in range.
+  - Every `## Contents` anchor on the edited pages resolves.
+  - `verified_by_agent` is `not yet` on every v19 page and the glossary. `verified:` was not touched.
+- **Bookkeeping.** `wiki/versions.md` (pin, coverage cell, coverage note), `wiki/index.md` and `wiki/v19/index.md` (pin, stamp, counts, repin notes).
+- **Services.** No server was started, so nothing needed stopping or deleting.
+- **Lint.** `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings. Both warnings are the pre-existing uncommitted changes in the v12 and v14 checkouts.

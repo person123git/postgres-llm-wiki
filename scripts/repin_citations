@@ -40,9 +40,9 @@ from wiki_tooling import (
 
 
 CITATION_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\s]+)\)")
-# Labels that embed their own line numbers, e.g. `index.c:2622-2626` or
+# Labels that embed their own line numbers, e.g. `index.c:2622-2626`, `parser/meson.build:29-43` or
 # `plancache.c#L14-L39`.  These must be kept in step with the URL fragment.
-LABEL_LINES_RE = re.compile(r"^(?P<file>[\w.+-]+?)(?P<sep>#L|:)(?P<start>\d+)(?:(?P<dash>-L?)(?P<end>\d+))?$")
+LABEL_LINES_RE = re.compile(r"^(?P<file>[\w.+/-]+?)(?P<sep>#L|:)(?P<start>\d+)(?:(?P<dash>-L?)(?P<end>\d+))?$")
 CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
 FRAGMENT_RE = re.compile(r"^L(\d+)(?:-L(\d+))?$")
@@ -275,7 +275,7 @@ def resolve(checkout: Checkout, citations: list[Citation]) -> None:
 def synced_label(label: str, path: str, start: int, end: int) -> str:
     """Return the label with any embedded line numbers set to start/end."""
     match = LABEL_LINES_RE.match(label)
-    if not match or match.group("file") != path.rsplit("/", 1)[-1]:
+    if not match or not ("/" + path).endswith("/" + match.group("file")):
         return label
     separator = match.group("sep")
     if separator == "#L":
@@ -398,11 +398,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="also update link labels that embed line numbers, e.g. [index.c:2622-2626]")
     parser.add_argument("--update-pinned-commit", action="store_true", help="also set pinned_commit: in front matter")
     parser.add_argument("--verbose", action="store_true", help="list every moved citation")
+    parser.add_argument("--include-glossary", action="store_true",
+                        help="also re-anchor this version's citations in the shared wiki/glossary.md")
     args = parser.parse_args(argv)
 
     append_tool_log("repin_citations", sys.argv[1:])
     checkout = Checkout(args.version, args.old, args.new)
     pages = version_pages(args.version)
+    glossary = WIKI_ROOT / "glossary.md"
+    if args.include_glossary and glossary.is_file():
+        pages.append(glossary)
     citations = collect_citations(args.version, pages)
     resolve(checkout, citations)
 
