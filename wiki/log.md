@@ -14946,4 +14946,4 @@ page; none of the three was edited.
 
 **Rule conflicts.** During the report-only review, the glossary rule's same-task maintenance yielded to `MANDATORY Review Requests`, so the glossary gaps were reported first and fixed in this pass. The session's scratchpad default yielded to `MANDATORY Environment Isolation`: working files lived under `.wiki-runtime/tmp/` and are deleted.
 
-**Version control.** Nothing was committed or pushed.
+**Version control.** Committed as `59b50e0` and pushed straight to `master` and `origin/master` once the asker said yes, on top of `f89df81`; fetches just before the commit and the push showed no new commit on `origin/master`, so no rebase was needed. This correction to the entry is a follow-up commit.
