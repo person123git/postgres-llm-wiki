@@ -26,6 +26,7 @@ verified_by_agent: not yet
   - [Back-patch](#back-patch)
   - [Base backup](#base-backup)
   - [Bitmap scan](#bitmap-scan)
+  - [BitmapAnd](#bitmapand)
   - [BKI](#bki)
   - [BLCKSZ](#blcksz)
   - [Bloat](#bloat)
@@ -132,6 +133,7 @@ verified_by_agent: not yet
   - [Lossy bitmap](#lossy-bitmap)
   - [LSN](#lsn)
   - [LWLock](#lwlock)
+  - [Mackert-Lohman formula](#mackert-lohman-formula)
   - [maintenance_work_mem](#maintenance_work_mem)
   - [Memoize](#memoize)
   - [Memory context](#memory-context)
@@ -139,6 +141,7 @@ verified_by_agent: not yet
   - [Most common values and histogram](#most-common-values-and-histogram)
   - [MultiXact](#multixact)
   - [MVCC](#mvcc)
+  - [Nested loop join](#nested-loop-join)
   - [NOT VALID](#not-valid)
   - [OID](#oid)
   - [Operator class](#operator-class)
@@ -151,6 +154,7 @@ verified_by_agent: not yet
   - [Parallel vacuum](#parallel-vacuum)
   - [Parse tree](#parse-tree)
   - [Partial index](#partial-index)
+  - [Partial path](#partial-path)
   - [Partition bound](#partition-bound)
   - [Partition pruning](#partition-pruning)
   - [Partitioned index](#partitioned-index)
@@ -177,6 +181,7 @@ verified_by_agent: not yet
   - [Plan cache mode](#plan-cache-mode)
   - [PlannedStmt](#plannedstmt)
   - [Planner](#planner)
+  - [Planner support function](#planner-support-function)
   - [PL/pgSQL](#plpgsql)
   - [Portal](#portal)
   - [Posting list](#posting-list)
@@ -212,6 +217,7 @@ verified_by_agent: not yet
   - [Role membership](#role-membership)
   - [Row lock](#row-lock)
   - [Row-level security](#row-level-security)
+  - [ScalarArrayOpExpr](#scalararrayopexpr)
   - [Security barrier](#security-barrier)
   - [SECURITY DEFINER](#security-definer)
   - [Security invoker view](#security-invoker-view)
@@ -236,6 +242,7 @@ verified_by_agent: not yet
   - [SubLink](#sublink)
   - [SubPlan](#subplan)
   - [Subscription](#subscription)
+  - [Summarizing index](#summarizing-index)
   - [Synchronous replication](#synchronous-replication)
   - [Syscache](#syscache)
   - [Table rewrite](#table-rewrite)
@@ -283,7 +290,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
 - The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -502,6 +509,14 @@ A bitmap scan runs in two steps. First, an index scan collects matching row addr
 - PostgreSQL 19: Holds, with the same split iterator as 18: `tbm_begin_private_iterate()` builds the sorted page lists and `tbm_begin_iterate()` picks a private or shared iterator ([tidbitmap.c#tbm_begin_private_iterate](../raw/postgres-19/src/backend/nodes/tidbitmap.c#L662-L700), [tidbitmap.c#tbm_begin_iterate](../raw/postgres-19/src/backend/nodes/tidbitmap.c#L1560-L1587)). The MVCC-snapshot note, lossy storage and recheck are unchanged, and GIN and BRIN still leave `amgettuple` NULL ([nodeBitmapHeapscan.c:1-16](../raw/postgres-19/src/backend/executor/nodeBitmapHeapscan.c#L1-L16), [tidbitmap.c:3-30](../raw/postgres-19/src/backend/nodes/tidbitmap.c#L3-L30), [ginutil.c:85](../raw/postgres-19/src/backend/access/gin/ginutil.c#L85), [brin.c:300](../raw/postgres-19/src/backend/access/brin/brin.c#L300)).
 
 Related: [TID](#tid), [Index-only scan](#index-only-scan), [GIN](#gin), [BRIN](#brin), [work_mem](#work_mem)
+
+### BitmapAnd
+
+**Aliases:** `BitmapAndPath`, `BitmapAndState`, `choose_bitmap_and()`, bitmap AND. **Checked on:** PostgreSQL 17.
+
+BitmapAnd is the plan node that intersects the row-address bitmaps of two or more index scans, so one [bitmap scan](#bitmap-scan) can apply conditions that different indexes serve. Its children must yield tuple bitmaps, usually Bitmap Index Scans. The Bitmap Heap Scan above it reads the table pages that the combined bitmap names ([plannodes.h#BitmapAnd](../raw/postgres-17/src/include/nodes/plannodes.h#L348-L360), [plannodes.h:506-510](../raw/postgres-17/src/include/nodes/plannodes.h#L506-L510)). BitmapOr is its union counterpart, and [EXPLAIN](#explain) prints the node as `BitmapAnd` ([plannodes.h#BitmapOr](../raw/postgres-17/src/include/nodes/plannodes.h#L362-L375), [explain.c:1430-1431](../raw/postgres-17/src/backend/commands/explain.c#L1430-L1431)). At run time, `MultiExecBitmapAnd()` intersects each child's bitmap into the first one with `tbm_intersect()`, and it stops reading children once the result is empty ([nodeBitmapAnd.c#MultiExecBitmapAnd](../raw/postgres-17/src/backend/executor/nodeBitmapAnd.c#L109-L167)). Where the incoming bitmap has only a [lossy](#lossy-bitmap) entry for a page, the result keeps its own tuples on that page and marks them for recheck ([tidbitmap.c:633-643](../raw/postgres-17/src/backend/nodes/tidbitmap.c#L633-L643)). In the [planner](#planner) the node is a `BitmapAndPath`, which appears only inside a bitmap heap [path](#path) ([pathnodes.h#BitmapAndPath](../raw/postgres-17/src/include/nodes/pathnodes.h#L1791-L1802)). `choose_bitmap_and()` keeps only the cheapest of any candidate paths that use the same set of clauses, and sorts the survivors by index access [cost](#cost). It then takes each path in turn as the group leader and adds a later path only if the estimated total cost of the whole bitmap heap scan drops ([indxpath.c#choose_bitmap_and](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1275-L1489), [indxpath.c#bitmap_scan_cost_est](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1521-L1553)). It skips a path that reuses a clause already in the group, and a [partial index](#partial-index) whose predicate those clauses imply, so that the [selectivity](#selectivity) is not counted twice ([indxpath.c:1327-1350](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1327-L1350), [indxpath.c:1436-1455](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1436-L1455)). `cost_bitmap_and_node()` adds up the input costs, charges `100 * cpu_operator_cost` for each intersection, and multiplies the input selectivities as if they were independent ([costsize.c#cost_bitmap_and_node](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1146-L1192)). An index input's cost is the `indextotalcost` from its access method's estimate, plus a small charge per row for handling the bitmap ([costsize.c:618-629](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L618-L629), [costsize.c:1116-1127](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1116-L1127)). B-tree's `btcostestimate()` builds that estimate on `genericcostestimate()`. For a single scan, `genericcostestimate()` charges a pro-rata share of the index's pages at the tablespace's `random_page_cost` each ([selfuncs.c:7073](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7073), [selfuncs.c:7207](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7207), [selfuncs.c:6729-6737](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6729-L6737), [selfuncs.c:6780-6787](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6780-L6787)). So an index with more pages per tuple, such as a [bloated](#bloat) one, costs more and sorts later. It joins an AND group only if the group's total cost still drops.
+
+Related: [Bitmap scan](#bitmap-scan), [Lossy bitmap](#lossy-bitmap), [Planner](#planner), [Path](#path), [Cost](#cost), [Selectivity](#selectivity), [Partial index](#partial-index), [Bloat](#bloat), [EXPLAIN](#explain)
 
 ### BKI
 
@@ -1943,6 +1958,14 @@ An LWLock (lightweight lock) is a short-term lock that protects a shared-memory 
 
 Related: [Heavyweight lock](#heavyweight-lock), [Wait event](#wait-event)
 
+### Mackert-Lohman formula
+
+**Aliases:** Mackert and Lohman approximation, `index_pages_fetched()`. **Checked on:** PostgreSQL 17.
+
+The Mackert-Lohman formula is the cache model the [planner](#planner) uses to estimate how many pages a scan really reads when it touches the same pages more than once. The source credits it to Mackert and Lohman, "Index Scans Using a Finite LRU Buffer: A Validated I/O Model", ACM Transactions on Database Systems, 1989. Its inputs are T, the object's pages; Ns, the tuples fetched; and b, the cache pages available. If T <= b, it estimates `min(2TNs/(2T+Ns), T)` pages. If T > b, it estimates `2TNs/(2T+Ns)` until Ns reaches `2Tb/(2T-b)`, then b plus `(T-b)/T` of a page per further fetch ([costsize.c:864-877](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L864-L877)). `index_pages_fetched()` implements it. Its b is a pro-rated share of [effective_cache_size](#effective_cache_size), `effective_cache_size * T / total_pages`, rounded up to at least 1, where `total_pages` is `root->total_table_pages` plus the index pages the caller passes in ([costsize.c:879-891](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L879-L891), [costsize.c#index_pages_fetched](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L897-L951)). `total_table_pages` sums the pages of all non-dummy tables in the query ([pathnodes.h:483-484](../raw/postgres-17/src/include/nodes/pathnodes.h#L483-L484), [allpaths.c:185-216](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L185-L216)). So pages of other tables in the query shrink b. A larger index shrinks the heap's b in `cost_index()` and `compute_bitmap_pages()`, which pass the heap as T, and raises its own b in `genericcostestimate()` and `gincostestimate()`, which pass the index pages as T; only the share per page, b/T, falls. `cost_index()` uses the formula for heap pages. For one scan it charges `spc_random_page_cost` per estimated page as the uncorrelated case, then blends that with the correlated case by the squared [correlation](#correlation) ([costsize.c:714-731](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L714-L731), [costsize.c:785-787](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L785-L787)). For a repeated scan it multiplies the fetches by `loop_count`, applies the formula to both cases, and divides each result by `loop_count` ([costsize.c:670-713](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L670-L713)). `genericcostestimate()` applies it to index pages when a nested-loop inner scan or an `= ANY` array (`ScalarArrayOpExpr`) qual repeats the index scan, counting each index page as one tuple ([selfuncs.c:6739-6779](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6739-L6779)). `compute_bitmap_pages()` applies it to heap pages when a [bitmap](#bitmap-scan) heap scan repeats (`loop_count` > 1), and `gincostestimate()` applies it to [GIN](#gin) entry and data pages for nested-loop and array repeats ([costsize.c:6463-6476](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L6463-L6476), [selfuncs.c:7957-7974](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7957-L7974)).
+
+Related: [effective_cache_size](#effective_cache_size), [Cost](#cost), [Correlation](#correlation), [Index scan](#index-scan), [Bitmap scan](#bitmap-scan), [Planner](#planner)
+
 ### maintenance_work_mem
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2040,6 +2063,14 @@ MVCC (multi-version concurrency control) is PostgreSQL's way of letting readers 
 - PostgreSQL 19: Holds. The glossary definition, `t_xmin` and `t_xmax`, and `HeapTupleSatisfiesMVCC()` are unchanged ([glossary.sgml#glossary-mvcc](../raw/postgres-19/doc/src/sgml/glossary.sgml#L1252-L1267), [htup_details.h#HeapTupleFields](../raw/postgres-19/src/include/access/htup_details.h#L122-L132), [heapam_visibility.c:939](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L939), [glossary.sgml#glossary-bloat](../raw/postgres-19/doc/src/sgml/glossary.sgml#L282-L290)). 19 also has a batch variant, `HeapTupleSatisfiesMVCCBatch()`, which checks several tuples of one buffer in one call ([heapam_visibility.c:1673-1690](../raw/postgres-19/src/backend/access/heap/heapam_visibility.c#L1673-L1690)).
 
 Related: [Snapshot](#snapshot), [xmin and xmax](#xmin-and-xmax), [xmin horizon](#xmin-horizon), [Tuple](#tuple), [Bloat](#bloat), [VACUUM](#vacuum)
+
+### Nested loop join
+
+**Aliases:** nestloop, Nested Loop node, `NestLoop`, `NestLoopParam`, `nodeNestloop.c`, `enable_nestloop`, parameterized inner scan, `loop_count`. **Checked on:** PostgreSQL 17.
+
+A nested loop join reads its outer (left) input one row at a time and scans its inner (right) input once for every outer row. The docs call it easy to implement but potentially very slow, and a good strategy when the inner side is an index scan keyed on values from the current outer row ([arch-dev.sgml:401-406](../raw/postgres-17/doc/src/sgml/arch-dev.sgml#L401-L406)). EXPLAIN labels the node `Nested Loop` ([explain.c:1436-1437](../raw/postgres-17/src/backend/commands/explain.c#L1436-L1437)). In the [executor](#executor), `ExecNestLoop()` fetches an outer row, copies the outer values named in the plan's `nestParams` list into executor Params, marks them changed, calls `ExecReScan()` on the inner plan, and then reads inner rows until they run out; in an anti join, a semi join or with a unique inner side it moves to the next outer row after the first match ([nodeNestloop.c:216-229](../raw/postgres-17/src/backend/executor/nodeNestloop.c#L216-L229), [nodeNestloop.c#ExecNestLoop](../raw/postgres-17/src/backend/executor/nodeNestloop.c#L99-L201), [plannodes.h#NestLoop](../raw/postgres-17/src/include/nodes/plannodes.h#L796-L820)). Those Params drive a parameterized inner [index scan](#index-scan): the planner replaces outer-relation Vars in that scan's index conditions with nestloop Params ([createplan.c#create_indexscan_plan](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L3097-L3114)). The [planner](#planner)'s `match_unsorted_outer()` pairs each outer path with the inner relation's cheapest path for every available parameterization, including none, and, where possible, with a [Memoize](#memoize) wrapper on each ([joinpath.c:1848-1886](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L1848-L1886)). Because a parameterized inner scan repeats, it is priced with a `loop_count`: `get_loop_count()` uses the row estimate of the smallest outer relation the scan depends on ([indxpath.c#get_loop_count](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1802-L1872)). When `loop_count` exceeds 1, `cost_index()` (heap pages) and `genericcostestimate()` (index pages) scale one scan's fetches up by the number of scans, pass the total through `index_pages_fetched()`, which discounts repeat reads against a pro-rated share of [effective_cache_size](#effective_cache_size), and divide the resulting I/O cost by `loop_count` ([costsize.c:670-713](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L670-L713), [selfuncs.c:6739-6779](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6739-L6779), [costsize.c#index_pages_fetched](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L897-L928)). In the normal case, where every inner row must be read, the inner side's share of the join's [cost](#cost) is one full inner scan plus one inner rescan per remaining outer row; the outer input's cost comes on top, and `final_cost_nestloop()` adds the per-row CPU cost later ([costsize.c#initial_cost_nestloop](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L3246-L3288)). A nested loop handles only inner, left, semi and anti joins ([joinpath.c:1731-1765](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L1731-L1765)). `enable_nestloop`, on by default, has context `user`, so a session or transaction can `SET` it with no reload or restart. Turning it off does not remove nested loop paths: 17 adds `disable_cost` (1.0e10) to their startup cost ([guc_tables.c#enable_nestloop](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L883-L892), [costsize.c:3342-3348](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L3342-L3348), [costsize.c:130](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L130)).
+
+Related: [Planner](#planner), [Executor](#executor), [Index scan](#index-scan), [Memoize](#memoize), [Cost](#cost), [effective_cache_size](#effective_cache_size), [Path](#path)
 
 ### NOT VALID
 
@@ -2208,6 +2239,14 @@ A partial index covers only the table rows that satisfy a `WHERE` condition, cal
 - PostgreSQL 19: Holds. The predicate is still stored in `pg_index.indpred`, and `check_index_predicates()` still sets `predOK` from `predicate_implied_by()` ([indices.sgml#indexes-partial](../raw/postgres-19/doc/src/sgml/indices.sgml#L841-L870), [pg_index.h:62](../raw/postgres-19/src/include/catalog/pg_index.h#L62), [indxpath.c:3940](../raw/postgres-19/src/backend/optimizer/path/indxpath.c#L3940), [indxpath.c:4045](../raw/postgres-19/src/backend/optimizer/path/indxpath.c#L4045)).
 
 Related: [Expression index](#expression-index), [pg_index](#pg_index), [IndexOptInfo](#indexoptinfo), [Planner](#planner)
+
+### Partial path
+
+**Aliases:** partial paths, `partial_pathlist`, `add_partial_path()`. **Checked on:** PostgreSQL 17.
+
+A partial path is a [path](#path) built to run in several parallel workers at once, each worker producing only a subset of its rows. A `Gather` or `Gather Merge` node above it launches the workers and collects their rows ([pathnode.c:711-713](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L711-L713), [optimizer/README:1405-1412](../raw/postgres-17/src/backend/optimizer/README#L1405-L1412)). It is unrelated to a [partial index](#partial-index). The [planner](#planner) keeps partial paths in their own [RelOptInfo](#reloptinfo) list, `partial_pathlist`, apart from `pathlist`, because their cost does not yet include the Gather ([pathnodes.h:892-894](../raw/postgres-17/src/include/nodes/pathnodes.h#L892-L894), [optimizer/README:1414-1425](../raw/postgres-17/src/backend/optimizer/README#L1414-L1425)). Each one records its planned worker count in `Path.parallel_workers`, and the scan cost functions report its `rows` and CPU cost per worker ([pathnodes.h:1655-1660](../raw/postgres-17/src/include/nodes/pathnodes.h#L1655-L1660), [costsize.c:327-346](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L327-L346), [costsize.c:806-815](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L806-L815), [costsize.c:1087-1096](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1087-L1096)). `add_partial_path()` files them. It compares only sort order (`pathkeys`) and total cost, keeps the cheapest path first, and frees the paths it beats; no partial path is parameterized ([pathnode.c:715-722](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L715-L722), [pathnode.c:732-742](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L732-L742), [pathnode.c#add_partial_path](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L746-L852)). For a table, `create_plain_partial_paths()` adds a parallel sequential scan and `create_partial_bitmap_paths()` a parallel bitmap heap scan ([allpaths.c#create_plain_partial_paths](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L789-L807), [allpaths.c#create_partial_bitmap_paths](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L4162-L4185), [indxpath.c:345-347](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L345-L347)). `build_index_paths()` adds a parallel index scan only when the relation allows parallelism, the scan is unparameterized and not a bitmap index scan, the index's `amcanparallel` flag is set, and `cost_index()` assigns it at least one worker ([indxpath.c:975-1002](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L975-L1002), [costsize.c:749-779](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L749-L779)). The planner copies that flag from the index [access method](#access-method), and of the built-in index access methods only [B-tree](#b-tree) sets it ([plancat.c:325](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L325), [amapi.h:249-250](../raw/postgres-17/src/include/access/amapi.h#L249-L250), [nbtree.c:119](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L119), [brin.c:265](../raw/postgres-17/src/backend/access/brin/brin.c#L265), [ginutil.c:55](../raw/postgres-17/src/backend/access/gin/ginutil.c#L55), [gist.c:77](../raw/postgres-17/src/backend/access/gist/gist.c#L77), [hash.c:75](../raw/postgres-17/src/backend/access/hash/hash.c#L75), [spgutils.c:62](../raw/postgres-17/src/backend/access/spgist/spgutils.c#L62)). `generate_gather_paths()` then puts a `Gather` on the cheapest partial path and a `Gather Merge` on each sorted one, and passes them to `add_path()`. It must run only after all of the relation's partial paths exist ([allpaths.c#generate_gather_paths](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L3035-L3098)).
+
+Related: [Path](#path), [RelOptInfo](#reloptinfo), [Parallel query](#parallel-query), [Planner](#planner), [Partial index](#partial-index), [Access method](#access-method), [B-tree](#b-tree), [Bitmap scan](#bitmap-scan), [Cost](#cost)
 
 ### Partition bound
 
@@ -2566,6 +2605,14 @@ The planner decides how to run a query. It turns an analyzed and rewritten `Quer
 - PostgreSQL 19: Holds. `planner()` still calls `planner_hook` or `standard_planner()`, which still runs `subquery_planner()`, picks the cheapest path and calls `create_plan()`, and `plancat.c` still gathers the size estimates ([glossary.sgml#glossary-planner](../raw/postgres-19/doc/src/sgml/glossary.sgml#L1415-L1426), [planner.c:542-549](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L542-L549), [plancat.c#estimate_rel_size](../raw/postgres-19/src/backend/optimizer/util/plancat.c#L1272-L1293)). As in 18, it reports `planId`. New in 19, `planner()` also receives an `ExplainState` ([planner.c#planner](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L338-L352)). Also new in 19, the `enable_*` GUCs build a per-query strategy mask, `default_pgs_mask`, that extensions such as [pg_plan_advice](#pg_plan_advice) can narrow per relation; see [pgs_mask](#pgs_mask) ([pathnodes.h:25-35](../raw/postgres-19/src/include/nodes/pathnodes.h#L25-L35), [planner.c:503-534](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L503-L534)).
 
 Related: [Path](#path), [RelOptInfo](#reloptinfo), [Cost](#cost), [PlannedStmt](#plannedstmt), [Hook](#hook)
+
+### Planner support function
+
+**Aliases:** `prosupport`, prosupport function, target function, `SUPPORT` clause, `SupportRequestSimplify`, `SupportRequestSelectivity`, `SupportRequestCost`, `SupportRequestRows`, `SupportRequestIndexCondition`. **Checked on:** PostgreSQL 17.
+
+A planner support function is a helper, written in C, that is attached to another SQL function, its target function. It gives the [planner](#planner) knowledge about the target that the constant settings of `CREATE FUNCTION` cannot express ([xfunc.sgml#xfunc-optimization](../raw/postgres-17/doc/src/sgml/xfunc.sgml#L3792-L3809)). The target's [pg_proc](#pg_proc) row names the helper in `prosupport`, which `get_func_support()` reads ([pg_proc.h:55-56](../raw/postgres-17/src/include/catalog/pg_proc.h#L55-L56), [lsyscache.c#get_func_support](../raw/postgres-17/src/backend/utils/cache/lsyscache.c#L1965-L1987)). Only a superuser may attach one, through the `SUPPORT` clause of `CREATE FUNCTION` or `ALTER FUNCTION`, and the helper must take and return `internal` ([functioncmds.c:1441-1445](../raw/postgres-17/src/backend/commands/functioncmds.c#L1441-L1445), [functioncmds.c#interpret_func_support](../raw/postgres-17/src/backend/commands/functioncmds.c#L669-L706)). Every caller fills in one `SupportRequest*` node from `supportnodes.h` and calls the helper. A NULL pointer back means "no help", and the caller falls back to its default ([supportnodes.h:14-23](../raw/postgres-17/src/include/nodes/supportnodes.h#L14-L23)). `simplify_function()` sends `SupportRequestSimplify` during constant folding ([clauses.c:4119-4152](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L4119-L4152)). `function_selectivity()`, `add_function_cost()` and `get_function_rows()` send `SupportRequestSelectivity`, `SupportRequestCost` and `SupportRequestRows`. Without an answer they use a [selectivity](#selectivity) of 0.3333333, `procost` and `prorows` ([plancat.c#function_selectivity](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L2031-L2078), [plancat.c#add_function_cost](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L2093-L2137), [plancat.c#get_function_rows](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L2154-L2198)). `get_index_clause_from_support()` in `indxpath.c` sends `SupportRequestIndexCondition`. The planner tries it for a function clause with an argument that matches an index column, and for an operator clause whose operator is not in the index column's operator family ([indxpath.c#match_funcclause_to_indexcol](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2520-L2546), [indxpath.c:2449-2459](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2449-L2459)). The helper returns conditions the index can run directly. For example, `textlike_support`, the helper of `textlike`, can turn a LIKE with a constant prefix into index conditions such as `x >= prefix` when the index's operator family and collation allow it ([pg_proc.dat:1755-1760](../raw/postgres-17/src/include/catalog/pg_proc.dat#L1755-L1760), [like_support.c#like_regex_support](../raw/postgres-17/src/backend/utils/adt/like_support.c#L156-L234), [like_support.c#match_pattern_prefix](../raw/postgres-17/src/backend/utils/adt/like_support.c#L414-L470)). The request's `lossy` flag starts true, and the helper clears it only when its conditions exactly match the clause. While it is true, the original clause still runs on every row the index returns ([indxpath.c#get_index_clause_from_support](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2556-L2615), [supportnodes.h#SupportRequestIndexCondition](../raw/postgres-17/src/include/nodes/supportnodes.h#L203-L240), [xfunc.sgml:3864-3876](../raw/postgres-17/doc/src/sgml/xfunc.sgml#L3864-L3876)). Do not confuse it with the support functions an [operator class](#operator-class) registers in `pg_amproc`. The index [access method](#access-method) calls those itself, for example to compare B-tree keys ([xindex.sgml#xindex-support](../raw/postgres-17/doc/src/sgml/xindex.sgml#L376-L398)).
+
+Related: [Planner](#planner), [pg_proc](#pg_proc), [Selectivity](#selectivity), [Cost](#cost), [SQL function inlining](#sql-function-inlining), [Operator class](#operator-class), [Index scan](#index-scan)
 
 ### PL/pgSQL
 
@@ -3048,6 +3095,18 @@ Row-level security (RLS) lets a table restrict, per user, which rows normal quer
 
 Related: [Rewriter](#rewriter), [Security barrier](#security-barrier), [Leakproof function](#leakproof-function), [SECURITY DEFINER](#security-definer), [pg_class](#pg_class), [GUC context](#guc-context)
 
+### ScalarArrayOpExpr
+
+**Aliases:** SAOP, `op ANY (array)`, `op ALL (array)`, `SK_SEARCHARRAY`, `amsearcharray`, `num_sa_scans`. **Checked on:** PostgreSQL 17.
+
+A ScalarArrayOpExpr, abbreviated SAOP, is the expression node for `value op ANY (array)` and `value op ALL (array)`. It applies a boolean operator to the left value and each array element, then ORs the results for `ANY` or ANDs them for `ALL`. Its fields hold the operator (`opno`), the choice (`useOr`, true for `ANY`) and both operands (`args`) ([primnodes.h#ScalarArrayOpExpr](../raw/postgres-17/src/include/nodes/primnodes.h#L862-L920), [parse_oper.c#make_scalar_array_op](../raw/postgres-17/src/backend/parser/parse_oper.c#L787-L915)). The parser also turns an `IN (...)` list into one SAOP with `=` and OR, and `NOT IN (...)` into one with `<>` and AND, when more than one item contains no column of the current query level and those items and the left value have a common non-`record` type with an array type. `IN (subquery)` and `op ANY (subquery)` become a [SubLink](#sublink) instead ([gram.y:15108-15170](../raw/postgres-17/src/backend/parser/gram.y#L15108-L15170), [parse_expr.c#transformAExprIn](../raw/postgres-17/src/backend/parser/parse_expr.c#L1127-L1241)).
+
+In index planning, only the `ANY` form can become an index condition: `indexkey op ANY (array)`, with the operator in the column's [operator family](#operator-class) and an array that neither references the indexed table nor calls volatile functions ([indxpath.c#match_saopclause_to_indexcol](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2617-L2678)). The [access method](#access-method)'s `amsearcharray` flag, copied into [IndexOptInfo](#indexoptinfo), says whether the index takes the whole array itself ([amapi.h:239-240](../raw/postgres-17/src/include/access/amapi.h#L239-L240), [plancat.c:323](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L323)). [B-tree](#b-tree) sets it; [GIN](#gin), [GiST](#gist), [hash](#hash-index), [BRIN](#brin) and [SP-GiST](#sp-gist) do not ([nbtree.c:114](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L114), [ginutil.c:50](../raw/postgres-17/src/backend/access/gin/ginutil.c#L50), [gist.c:72](../raw/postgres-17/src/backend/access/gist/gist.c#L72), [hash.c:70](../raw/postgres-17/src/backend/access/hash/hash.c#L70), [brin.c:260](../raw/postgres-17/src/backend/access/brin/brin.c#L260), [spgutils.c:57](../raw/postgres-17/src/backend/access/spgist/spgutils.c#L57)). B-tree receives the array as one scan key flagged `SK_SEARCHARRAY` ([nodeIndexscan.c:1097-1103](../raw/postgres-17/src/backend/executor/nodeIndexscan.c#L1097-L1103)). It advances through the elements as the scan moves through the index and, when the next elements' tuples are close to the current ones, keeps reading instead of starting a new primitive index scan, a fresh descent from the root ([nbtutils.c#_bt_advance_array_keys](../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L1729-L1754), [selfuncs.c:7021-7026](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7021-L7026)). For the other access methods, `get_index_paths()` builds paths without the SAOP, then retries with it for [bitmap scan](#bitmap-scan) paths only ([indxpath.c#get_index_paths](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L696-L767), [indxpath.c:867-879](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L867-L879)). The bitmap index scan then rescans the index once per array element, or once per element combination when there are several arrays ([nodeBitmapIndexscan.c:102-114](../raw/postgres-17/src/backend/executor/nodeBitmapIndexscan.c#L102-L114), [nodeIndexscan.c#ExecIndexAdvanceArrayKeys](../raw/postgres-17/src/backend/executor/nodeIndexscan.c#L732-L777)).
+
+For [cost](#cost) estimates, `estimate_array_length()` counts the elements: exactly for a constant array or an `ARRAY[...]` list, else from the column's average distinct-element statistic, else as 10 ([selfuncs.c#estimate_array_length](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L2131-L2207)). `btcostestimate()` multiplies the counts of the SAOPs among its boundary quals into `num_sa_scans`, the estimated number of descents ([selfuncs.c:6891-6961](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6891-L6961)). It caps that at one third of the index's pages and adds its per-descent CPU charges to the total cost once per estimated descent ([selfuncs.c:7021-7042](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7021-L7042), [selfuncs.c:7075-7106](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7075-L7106)).
+
+Related: [B-tree](#b-tree), [Access method](#access-method), [IndexOptInfo](#indexoptinfo), [Bitmap scan](#bitmap-scan), [Index scan](#index-scan), [SubLink](#sublink), [Qual](#qual), [Cost](#cost)
+
 ### Security barrier
 
 **Aliases:** `security_barrier` view option, security barrier quals, `securityQuals`, `security_level`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3379,6 +3438,14 @@ A subscription is the downstream side of [logical replication](#logical-replicat
 - PostgreSQL 19: Holds. `pg_subscription` still stores the connection string, slot name, publications and `suborigin`, `origin` still defaults to `any`, and `CREATE SUBSCRIPTION` still runs `CreateSubscription()` ([logical-replication.sgml#logical-replication-subscription](../raw/postgres-19/doc/src/sgml/logical-replication.sgml#L207-L215), [pg_subscription.h#FormData_pg_subscription](../raw/postgres-19/src/include/catalog/pg_subscription.h#L45-L117), [create_subscription.sgml#sql-createsubscription-params-with-origin](../raw/postgres-19/doc/src/sgml/ref/create_subscription.sgml#L433-L443), [subscriptioncmds.c:647](../raw/postgres-19/src/backend/commands/subscriptioncmds.c#L647)). 19 adds two things: a subscription can connect through a foreign server (`subserver`) instead of a connection string, and `origin` has no effect for sequences ([pg_subscription.h:95-100](../raw/postgres-19/src/include/catalog/pg_subscription.h#L95-L100), [create_subscription.sgml:443](../raw/postgres-19/doc/src/sgml/ref/create_subscription.sgml#L443)).
 
 Related: [Publication](#publication), [Apply worker](#apply-worker), [Replication origin](#replication-origin), [Replication slot](#replication-slot)
+
+### Summarizing index
+
+**Aliases:** `amsummarizing`, summarized columns, `TU_Summarizing`, `INDEX_ATTR_BITMAP_SUMMARIZED`, `ii_Summarizing`. **Checked on:** PostgreSQL 17.
+
+A summarizing index stores summaries of the data in whole table blocks instead of entries that point at individual rows. An index [access method](#access-method) declares this with the `amsummarizing` flag of its `IndexAmRoutine`, which marks an AM that stores tuple information only at block granularity ([amapi.h:257-258](../raw/postgres-17/src/include/access/amapi.h#L257-L258), [indexam.sgml:257-263](../raw/postgres-17/doc/src/sgml/indexam.sgml#L257-L263)). In core only [BRIN](#brin) sets it; B-tree, hash, GiST, GIN and SP-GiST set it to false ([brin.c:269](../raw/postgres-17/src/backend/access/brin/brin.c#L269), [nbtree.c:123](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L123), [hash.c:79](../raw/postgres-17/src/backend/access/hash/hash.c#L79), [gist.c:81](../raw/postgres-17/src/backend/access/gist/gist.c#L81), [ginutil.c:59](../raw/postgres-17/src/backend/access/gin/ginutil.c#L59), [spgutils.c:66](../raw/postgres-17/src/backend/access/spgist/spgutils.c#L66)). The flag matters for [HOT](#hot) updates. An index that holds no [TIDs](#tid) needs no new pointer to a new row version, only its new column values ([README.HOT:41-46](../raw/postgres-17/src/backend/access/heap/README.HOT#L41-L46)). When reading source, expect the [relcache](#relcache) to keep two column sets. `RelationGetIndexAttrBitmap()` puts every column a summarizing index uses, including its expression and predicate columns, in `INDEX_ATTR_BITMAP_SUMMARIZED`, and every other index's columns in `INDEX_ATTR_BITMAP_HOT_BLOCKING` ([relcache.h#IndexAttrBitmapKind](../raw/postgres-17/src/include/utils/relcache.h#L67-L74), [relcache.c:5390-5398](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5390-L5398), [relcache.c:5438-5442](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5438-L5442)). `heap_update()` tests HOT against the HOT-blocking set only. A same-page update that changes a summarized column is still HOT, but it reports `TU_Summarizing` instead of `TU_None` ([heapam.c#heap_update](../raw/postgres-17/src/backend/access/heap/heapam.c#L4140-L4160), [heapam.c:4421-4429](../raw/postgres-17/src/backend/access/heap/heapam.c#L4421-L4429), [tableam.h#TU_UpdateIndexes](../raw/postgres-17/src/include/access/tableam.h#L113-L127)). The [executor](#executor) then calls `ExecInsertIndexTuples()` with `onlySummarizing` set, and that call skips every index whose `IndexInfo.ii_Summarizing` is false ([nodeModifyTable.c:2160-2166](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2160-L2166), [execIndexing.c#ExecInsertIndexTuples](../raw/postgres-17/src/backend/executor/execIndexing.c#L278-L284), [execIndexing.c:361-366](../raw/postgres-17/src/backend/executor/execIndexing.c#L361-L366)). `pgstat_count_heap_update()` still counts that update as HOT ([heapam.c:4403](../raw/postgres-17/src/backend/access/heap/heapam.c#L4403), [pgstat_relation.c#pgstat_count_heap_update](../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L375-L395)). The index AM documentation says an update of a column that an index predicate references always disables HOT ([indexam.sgml:261-263](../raw/postgres-17/doc/src/sgml/indexam.sgml#L261-L263)). The relcache code above puts a summarizing index's predicate columns in the summarized set instead, and the comment on the `brin_hot_2` regression test says such an update should not block HOT, though the test only checks that the row is then found through the BRIN index ([stats.sql:825-841](../raw/postgres-17/src/test/regress/sql/stats.sql#L825-L841)). The entry follows the code; the discrepancy is under [Open Questions](#open-questions).
+
+Related: [BRIN](#brin), [BRIN summarization](#brin-summarization), [HOT](#hot), [Access method](#access-method), [Relcache](#relcache), [Partial index](#partial-index)
 
 ### Synchronous replication
 
@@ -3871,6 +3938,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
   - GiST build method, 17: the `gistbuild.c` header says the sorted build is used whenever every column's operator class has sort support, but the code also skips it when `buffering = on` ([gistbuild.c:15-16](../raw/postgres-17/src/backend/access/gist/gistbuild.c#L15-L16), [gistbuild.c:228-231](../raw/postgres-17/src/backend/access/gist/gistbuild.c#L228-L231)).
   - pg_cast, all five versions: the `castfunc` comment says 0 means binary-coercible, but I/O conversion casts also store 0, as the docs say ([pg_cast.h:42](../raw/postgres-17/src/include/catalog/pg_cast.h#L42), [pg_cast.dat:336-337](../raw/postgres-17/src/include/catalog/pg_cast.dat#L336-L337), [catalogs.sgml:1817-1818](../raw/postgres-17/doc/src/sgml/catalogs.sgml#L1817-L1818)). The same comment and rows are in 12 ([pg_cast.h:41](../raw/postgres-12/src/include/catalog/pg_cast.h#L41), [pg_cast.dat:318-319](../raw/postgres-12/src/include/catalog/pg_cast.dat#L318-L319)), 14 ([pg_cast.h:42](../raw/postgres-14/src/include/catalog/pg_cast.h#L42), [pg_cast.dat:336-337](../raw/postgres-14/src/include/catalog/pg_cast.dat#L336-L337)), 18 ([pg_cast.h:42](../raw/postgres-18/src/include/catalog/pg_cast.h#L42), [pg_cast.dat:350-351](../raw/postgres-18/src/include/catalog/pg_cast.dat#L350-L351)) and 19 ([pg_cast.h:44](../raw/postgres-19/src/include/catalog/pg_cast.h#L44), [pg_cast.dat:384-385](../raw/postgres-19/src/include/catalog/pg_cast.dat#L384-L385)).
   - RelOptInfo, 17: a `pathnodes.h` comment says the size estimates are derived from `pg_class`, but `pages` comes from the relation's current size ([pathnodes.h:941](../raw/postgres-17/src/include/nodes/pathnodes.h#L941), [plancat.c:1087](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L1087)).
+  - Summarizing index, 17: the index AM documentation says an update of a column an index predicate references always disables HOT, but `RelationGetIndexAttrBitmap()` puts a summarizing index's predicate columns in the summarized set, and the comment on the `brin_hot_2` regression test says such an update should not block HOT, though the test only checks that the row is then found through the BRIN index ([indexam.sgml:261-263](../raw/postgres-17/doc/src/sgml/indexam.sgml#L261-L263), [relcache.c:5390-5398](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5390-L5398), [stats.sql:825-841](../raw/postgres-17/src/test/regress/sql/stats.sql#L825-L841)).
   - Checkpointer, 17: the `checkpointer.c` header says the checkpointer handles all checkpoints, but a standalone backend runs its own ([checkpointer.c:5](../raw/postgres-17/src/backend/postmaster/checkpointer.c#L5), [checkpointer.c:953-962](../raw/postgres-17/src/backend/postmaster/checkpointer.c#L953-L962)).
   - amcheck, 12: the header comment of `bt_index_parent_check()` lists only `heapallindexed`, but the function also accepts `rootdescend` ([verify_nbtree.c:195](../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L195), [verify_nbtree.c:208-213](../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L208-L213)).
   - Inheritance, 12: the catalog docs say `pg_inherits` records table inheritance, but index creation also stores partitioned-index parent links there ([catalogs.sgml:3967-3970](../raw/postgres-12/doc/src/sgml/catalogs.sgml#L3967-L3970), [index.c:1007](../raw/postgres-12/src/backend/catalog/index.c#L1007)).
@@ -3892,6 +3960,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 - Two entries added on 2026-09-24 for the v17 COMMENT-baseline GIN page were checked on PostgreSQL 17 only, as the asker chose: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Their applicability to 12, 14, 18 and 19 has not been checked; `transaction_timeout` is new in 17 by 17's own release notes. The orchestrator read every cited range at the pin; no second reviewer has read them.
 - Four entries added on 2026-09-24 for the v17 COMMENT-baseline non-B-tree inflation page were checked on PostgreSQL 17 only, as the asker chose: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). Their applicability to 12, 14, 18 and 19 has not been checked. The orchestrator read every cited range at the pin; no second reviewer has read them.
 - One entry added on 2026-09-24 for the v17 non-B-tree COMMENT-baseline maintenance heuristic page was checked on PostgreSQL 17 only, as the asker chose: [Isolation level](#isolation-level). Its applicability to 12, 14, 18 and 19 has not been checked. For the same page, [Back-patch](#back-patch) gained a PostgreSQL 17 check, whose four ranges cite the same text as its 19 note, at different lines. The orchestrator read every cited range at the pin; no second reviewer has read either.
+- Seven entries added on 2026-09-25 for the v17 planner-penalties page were checked on PostgreSQL 17 only, as the asker chose: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Their applicability to 12, 14, 18 and 19 has not been checked. Each was drafted by an agent that opened every cited range at the pin; the orchestrator re-read the claims it changed, and a final checker opened every citation in the seven entries and reported six defects, which were corrected.
 
 ## Source References
 
@@ -4621,7 +4690,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (461 files):
+**PostgreSQL 17** (475 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4652,6 +4721,7 @@ One representative citation per cited source file, grouped by version:
 - [postgres_fdw.c:553](../raw/postgres-17/contrib/postgres_fdw/postgres_fdw.c#L553)
 - [acronyms.sgml:728-731](../raw/postgres-17/doc/src/sgml/acronyms.sgml#L728-L731)
 - [amcheck.sgml:10-30](../raw/postgres-17/doc/src/sgml/amcheck.sgml#L10-L30)
+- [arch-dev.sgml:401-406](../raw/postgres-17/doc/src/sgml/arch-dev.sgml#L401-L406)
 - [auto-explain.sgml:18-23](../raw/postgres-17/doc/src/sgml/auto-explain.sgml#L18-L23)
 - [backup.sgml#backup-timelines](../raw/postgres-17/doc/src/sgml/backup.sgml#L1409-L1418)
 - [bki.sgml:40-52](../raw/postgres-17/doc/src/sgml/bki.sgml#L40-L52)
@@ -4805,9 +4875,11 @@ One representative citation per cited source file, grouped by version:
 - [view.c#DefineViewRules](../raw/postgres-17/src/backend/commands/view.c#L331-L344)
 - [executor/README#Plan Trees and State Trees](../raw/postgres-17/src/backend/executor/README#L47-L59)
 - [execAmi.c#ExecReScan](../raw/postgres-17/src/backend/executor/execAmi.c#L95-L109)
+- [execIndexing.c#ExecInsertIndexTuples](../raw/postgres-17/src/backend/executor/execIndexing.c#L278-L284)
 - [execMain.c:1-28](../raw/postgres-17/src/backend/executor/execMain.c#L1-L28)
 - [execPartition.c#ExecFindPartition](../raw/postgres-17/src/backend/executor/execPartition.c#L243-L262)
 - [execProcnode.c:43-61](../raw/postgres-17/src/backend/executor/execProcnode.c#L43-L61)
+- [nodeBitmapAnd.c#MultiExecBitmapAnd](../raw/postgres-17/src/backend/executor/nodeBitmapAnd.c#L109-L167)
 - [nodeBitmapHeapscan.c:1-17](../raw/postgres-17/src/backend/executor/nodeBitmapHeapscan.c#L1-L17)
 - [nodeBitmapIndexscan.c:94](../raw/postgres-17/src/backend/executor/nodeBitmapIndexscan.c#L94)
 - [nodeGather.c header](../raw/postgres-17/src/backend/executor/nodeGather.c#L9-L15)
@@ -4816,6 +4888,8 @@ One representative citation per cited source file, grouped by version:
 - [nodeIndexonlyscan.c#IndexOnlyNext](../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L127-L169)
 - [nodeIndexscan.c#IndexNext](../raw/postgres-17/src/backend/executor/nodeIndexscan.c#L80-L130)
 - [nodeMemoize.c:13-19](../raw/postgres-17/src/backend/executor/nodeMemoize.c#L13-L19)
+- [nodeModifyTable.c:2160-2166](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2160-L2166)
+- [nodeNestloop.c:216-229](../raw/postgres-17/src/backend/executor/nodeNestloop.c#L216-L229)
 - [nodeSeqscan.c:15-26](../raw/postgres-17/src/backend/executor/nodeSeqscan.c#L15-L26)
 - [nodeSort.c#ExecSort](../raw/postgres-17/src/backend/executor/nodeSort.c#L105-L122)
 - [nodeSubplan.c#ExecSetParamPlan](../raw/postgres-17/src/backend/executor/nodeSubplan.c#L1051-L1059)
@@ -4829,6 +4903,7 @@ One representative citation per cited source file, grouped by version:
 - [read.c#stringToNode](../raw/postgres-17/src/backend/nodes/read.c#L86-L93)
 - [readfuncs.c:250](../raw/postgres-17/src/backend/nodes/readfuncs.c#L250)
 - [tidbitmap.c#tbm_begin_iterate](../raw/postgres-17/src/backend/nodes/tidbitmap.c#L710-L747)
+- [optimizer/README:1405-1412](../raw/postgres-17/src/backend/optimizer/README#L1405-L1412)
 - [geqo_eval.c#geqo_eval](../raw/postgres-17/src/backend/optimizer/geqo/geqo_eval.c#L56-L57)
 - [geqo_main.c#geqo](../raw/postgres-17/src/backend/optimizer/geqo/geqo_main.c#L66-L72)
 - [allpaths.c#add_paths_to_append_rel](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L1290-L1302)
@@ -4851,6 +4926,8 @@ One representative citation per cited source file, grouped by version:
 - [analyze.c#parse_analyze_fixedparams](../raw/postgres-17/src/backend/parser/analyze.c#L120-L127)
 - [gram.y:2326-2327](../raw/postgres-17/src/backend/parser/gram.y#L2326-L2327)
 - [parser/meson.build:30-41](../raw/postgres-17/src/backend/parser/meson.build#L30-L41)
+- [parse_expr.c#transformAExprIn](../raw/postgres-17/src/backend/parser/parse_expr.c#L1127-L1241)
+- [parse_oper.c#make_scalar_array_op](../raw/postgres-17/src/backend/parser/parse_oper.c#L787-L915)
 - [parser.c#raw_parser](../raw/postgres-17/src/backend/parser/parser.c#L34-L42)
 - [partprune.c header](../raw/postgres-17/src/backend/partitioning/partprune.c#L3-L25)
 - [sysv_shmem.c#GetHugePageSize](../raw/postgres-17/src/backend/port/sysv_shmem.c#L490-L541)
@@ -4919,12 +4996,14 @@ One representative citation per cited source file, grouped by version:
 - [wait_event_names.txt:278-280](../raw/postgres-17/src/backend/utils/activity/wait_event_names.txt#L278-L280)
 - [acl.c#has_privs_of_role](../raw/postgres-17/src/backend/utils/adt/acl.c#L5151-L5168)
 - [dbsize.c#calculate_relation_size](../raw/postgres-17/src/backend/utils/adt/dbsize.c#L300-L342)
+- [like_support.c#like_regex_support](../raw/postgres-17/src/backend/utils/adt/like_support.c#L156-L234)
 - [pseudotypes.c#pg_node_tree](../raw/postgres-17/src/backend/utils/adt/pseudotypes.c#L322-L335)
 - [ri_triggers.c:3-6](../raw/postgres-17/src/backend/utils/adt/ri_triggers.c#L3-L6)
 - [ruleutils.c#T_PartitionBoundSpec](../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L10121-L10170)
 - [selfuncs.c:7108-7124](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7108-L7124)
 - [catcache.c:3-4](../raw/postgres-17/src/backend/utils/cache/catcache.c#L3-L4)
 - [inval.c:4-35](../raw/postgres-17/src/backend/utils/cache/inval.c#L4-L35)
+- [lsyscache.c#get_func_support](../raw/postgres-17/src/backend/utils/cache/lsyscache.c#L1965-L1987)
 - [plancache.c:6-30](../raw/postgres-17/src/backend/utils/cache/plancache.c#L6-L30)
 - [relcache.c:3772-3787](../raw/postgres-17/src/backend/utils/cache/relcache.c#L3772-L3787)
 - [spccache.c:219-236](../raw/postgres-17/src/backend/utils/cache/spccache.c#L219-L236)
@@ -4967,6 +5046,7 @@ One representative citation per cited source file, grouped by version:
 - [nbtree.h#BTMetaPageData](../raw/postgres-17/src/include/access/nbtree.h#L103-L119)
 - [spgist_private.h:47](../raw/postgres-17/src/include/access/spgist_private.h#L47)
 - [stratnum.h:37-43](../raw/postgres-17/src/include/access/stratnum.h#L37-L43)
+- [tableam.h#TU_UpdateIndexes](../raw/postgres-17/src/include/access/tableam.h#L113-L127)
 - [transam.h#FrozenTransactionId](../raw/postgres-17/src/include/access/transam.h#L20-L35)
 - [visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-17/src/include/access/visibilitymapdefs.h#L20-L21)
 - [xact.h#SyncCommitLevel](../raw/postgres-17/src/include/access/xact.h#L68-L79)
@@ -4997,6 +5077,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_opfamily.h#FormData_pg_opfamily](../raw/postgres-17/src/include/catalog/pg_opfamily.h#L29-L44)
 - [pg_partitioned_table.h#FormData_pg_partitioned_table](../raw/postgres-17/src/include/catalog/pg_partitioned_table.h#L30-L57)
 - [pg_policy.h#FormData_pg_policy](../raw/postgres-17/src/include/catalog/pg_policy.h#L29-L44)
+- [pg_proc.dat:1755-1760](../raw/postgres-17/src/include/catalog/pg_proc.dat#L1755-L1760)
 - [pg_proc.h#PROVOLATILE_IMMUTABLE](../raw/postgres-17/src/include/catalog/pg_proc.h#L158-L166)
 - [pg_publication.h#FormData_pg_publication](../raw/postgres-17/src/include/catalog/pg_publication.h#L29-L57)
 - [pg_statistic.h#STATISTIC_KIND_CORRELATION](../raw/postgres-17/src/include/catalog/pg_statistic.h#L212-L222)
@@ -5024,6 +5105,7 @@ One representative citation per cited source file, grouped by version:
 - [plannodes.h#PlannedStmt](../raw/postgres-17/src/include/nodes/plannodes.h#L31-L35)
 - [primnodes.h#Var](../raw/postgres-17/src/include/nodes/primnodes.h#L251-L255)
 - [queryjumble.h#IsQueryIdEnabled](../raw/postgres-17/src/include/nodes/queryjumble.h#L72-L84)
+- [supportnodes.h:14-23](../raw/postgres-17/src/include/nodes/supportnodes.h#L14-L23)
 - [tidbitmap.h#TBMIterateResult](../raw/postgres-17/src/include/nodes/tidbitmap.h#L39-L47)
 - [cost.h:34](../raw/postgres-17/src/include/optimizer/cost.h#L34)
 - [geqo_gene.h:35](../raw/postgres-17/src/include/optimizer/geqo_gene.h#L35)
@@ -5081,6 +5163,7 @@ One representative citation per cited source file, grouped by version:
 - [recovery/README:3-6](../raw/postgres-17/src/test/recovery/README#L3-L6)
 - [parallel_schedule:12-17](../raw/postgres-17/src/test/regress/parallel_schedule#L12-L17)
 - [pg_regress.c:3](../raw/postgres-17/src/test/regress/pg_regress.c#L3)
+- [stats.sql:825-841](../raw/postgres-17/src/test/regress/sql/stats.sql#L825-L841)
 - [030_origin.pl:24-75](../raw/postgres-17/src/test/subscription/t/030_origin.pl#L24-L75)
 - [RELEASE_CHANGES:86-99](../raw/postgres-17/src/tools/RELEASE_CHANGES#L86-L99)
 - [git_changelog:8-19](../raw/postgres-17/src/tools/git_changelog#L8-L19)

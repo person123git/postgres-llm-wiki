@@ -14622,3 +14622,106 @@ These replace the 2026-07-22 previous-pin measurements, which had no published s
 - `raw/postgres-17/` and `raw/postgres-12/` were read only, with every build out of tree. The frozen page copy, the four script files and the two run logs under `.wiki-runtime/tmp/` were deleted after the last byte comparison with the page's blocks. Run outputs and helper scripts stay in the session scratchpad, outside the repo, and every helper ran from the project venv.
 
 **Version control.** Committed and pushed straight to `master` and `origin/master` once the asker said `commit and push`, on top of commit `96de7cf`. A fetch just before the commit showed no new commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-25] review v17 | planner penalties for bloated indexes: 138 reviewed findings fixed, two missed mechanisms measured, re-run under two bash versions
+
+- Asked, per `AGENTS.md`, to review
+  [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged
+  pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11; checkout at the pin, no tracked file
+  changed). Prompt hygiene and scope were asked once, after the review was shown in chat, in one
+  question call with four answers: **correct silently**; **fix everything, re-run**; **add both
+  fixtures and drop the old numbers**; **add all seven glossary terms, checked on 17 only**. Only
+  the corrected prompt is recorded, here and in the page's `### Reviews after filing`: "Follow
+  `AGENTS.md`. In PostgreSQL 17, review the question "Planner Penalties for Bloated Indexes in
+  PostgreSQL 17 (unverified)"."
+
+**The review.** The filed script (md5 `a7b99e2260848bdcbfa4dcc1f76bfc35`) was first re-run
+unchanged from an empty sandbox (exit 0, 1 min 42 s, `make check` All 225, All 1 / 8 / 30 on
+`pgstattuple`, `pageinspect` and `btree_gin`), and every measured decimal on the page reappeared
+in its output. A second unchanged run under macOS `/bin/bash` 3.2.57 wrote the same summary,
+which confirmed the page's "bash 3.2 or later" claim. A 23-agent workflow on the orchestrator's
+model (11 checkers over page slices and review dimensions, 11 adversarial verifiers, 1 gap
+critic) raised 157 findings; 19 were refuted and 138 survived, 52 medium, 86 low and none high,
+none of them changing a recorded measurement. The material ones were re-checked against the pin by hand, and a
+probe on a throwaway database confirmed the partial-index finding before fixture Q existed.
+
+| Area | What was wrong or missing | Fix |
+|---|---|---|
+| Missing mechanism | a partial index takes `tuples` from its last recorded density times its live blocks, so growth since its `pg_class` row was written is charged only in step with the table's growth | new consequence and fixture Q: 57 -> 113 charged pages while the index grew to 331 blocks, 331 after `ANALYZE`; a plain index on the same table charged its live 825 |
+| Missing mechanism | `get_actual_variable_range()` reads the ends of a B-tree while planning and gives up after 100 heap pages of dead entries (`9c6ad5eaa9`, first in 16, back-patched; in the v12 checkout `ec10b6139c`, first in 12.14, absent from 12.0 and the 12.2 pin) | new mechanism 5, fixture E (four plans marked 22,590 then 22,600 dead entries each and kept a 10-row estimate; the fifth reached a live row and estimated 1), a v16 history subsection |
+| Missing gate | invalid, `indcheckxmin` and unproven partial indexes are skipped before GIN's three gates | new gate 0 |
+| Missing history | `19d8e2308b` (v16, BRIN-only updates can stay HOT), `4b754d6c16e` (v13, GIN whole-index estimate narrowed), the `pg_upgrade` deduplication caveat, `71b66171d0` (v17, no index statistics during binary upgrade) | new subsections and summary rows |
+| Behavior | the `ceil()` rule stated for any selective lookup; BRIN's range-map pages called uncharged; fixture M's planner "right"; nested-loop sensitivity "sub-linear"; the SAOP clamp "never a surcharge"; an index holds `reltuples = -1` "only when empty"; GIN loses "exactly when its estimate is higher"; "every other split divides equally"; the every-GIN-index diagnostic could abort; a lone lookup "blind" to bloat; the pending list called bloat; the rebuild-ranking advice | each corrected against the pin; the rebuild advice is recast as planner pricing and marked unscored against the B-tree protocol, and the pending list is deferred work under the GIN protocol |
+| Measurements | the "Join total" column was the `count(*)` total; "the 90% its build left" (91.47% measured); fixture D's estimates attached to the wrong state; "pure index cost" included `cpu_tuple_cost`; first-filing 17.10 numbers and superseded-fixture numbers from scripts not on the page | corrected, and every number the current script does not produce removed |
+| Script | a caller's `PGSERVICE` or `PGHOSTADDR` could redirect every session, the catalog forgery included; `grej` passed on any four errors; a half-finished install was taken as built; an untagged `PERFORM`; no `pgrep` meant a silent teardown pass; plan width and recheck conditions quoted but not recorded | all fixed in place |
+| Citations and compliance | 33 citation findings, no glossary links, the concept-page scope misdescribed, stale blurbs | fixed; see below |
+
+**Script.** Edited in place, no second script: 1,303 lines, md5
+`1a33c8e4a82da25dde6ed462f6495abf`. New stages `fq` and `fe`; new helper `idxcost()`; `unset
+PGSERVICE PGSERVICEFILE PGHOSTADDR`; `grej` checks that fixture S exists and matches the four
+error texts; `build` treats the build record, written last, as the mark of a finished build and
+rebuilds an install without one; the `xp()` `PERFORM` is tagged; `stop` and `clean` refuse to
+assert a teardown without `pgrep`; `nodes()` records plan width and recheck conditions; the
+socket directory is quoted inside `pg_ctl -o`. Checked on the new code: `grej` without fixture S
+stopped with status 1; `build` on an install whose record was deleted rebuilt it; `stop` with no
+`pgrep` on `PATH` stopped with status 1.
+
+**Re-measurement.** On Darwin 27.0.0 arm64, Apple clang 21, `JOBS=8`: the edited script ran twice
+from empty sandboxes before the prose was revised (bash 5.3.15, 1 min 35 s; bash 3.2.57), then
+twice more side by side after the page was final, one per bash (16:20:37Z to 16:22:49Z and
+16:20:39Z to 16:22:46Z, separate sandboxes and ports). Every run exited 0 with `make check` All 225
+and All 1 / 8 / 30. All four wrote the same `summary.txt` apart from timestamps and the bash
+version: 37 index rows, 11 GIN rows, 7 of 7 predictions, 29 fixture tables, 50 facts and 146
+plans; every row the 2026-09-23 text recorded came back unchanged. The final runs executed the
+revised first diagnostic block, now fenced with `OFFSET 0` and filtered to valid, non-partitioned,
+own-session GIN indexes; it reported the same 340 / 246 / 50000 / 72.35.
+
+**How the fixes were made.** Seven slice editors on the orchestrator's model, each followed by an
+independent checker and a repairer (28 agents); a tail editor, checker and repairer for Context
+Reviewed, Evidence Map, Open Questions and Source References; then a final eight-region check with
+adversarial verification (57 findings, 52 confirmed, all fixed: glossary-link placement, blurb
+clauses, a Mackert-Lohman sentence in the glossary, test-absence headings, and wording that
+overstated the probe, the partial-index charge and the GIN startup split). A session limit
+interrupted the slice workflow once; its agents resumed after the reset. Cross-slice items were settled by hand: two renamed headings and their inbound
+anchors, one range per citation label, the nested-loop cap wording, and fixture E's wording on
+cost.
+
+**Citations.** 2,243 occurrences over 581 distinct ranges in 115 files, all inside their files,
+all from `raw/postgres-17/`, one range per label. Evidence Map 77 -> 144 rows; Open Questions
+14 -> 19; Source References 154 -> 581 entries. The page now has 97 glossary term links, one per term, and a
+glossary link in `## Navigation`, links the B-tree and GIN bloat-test protocol pages, and its
+`## Contents` lists its 25 `##` and `###` headings. `verified_by_agent` stays `not yet`.
+
+**Glossary.** Seven entries added, each checked on PostgreSQL 17 only: BitmapAnd, Mackert-Lohman
+formula, Nested loop join, Partial path, Planner support function, ScalarArrayOpExpr and
+Summarizing index, for 267 terms, with Contents lines, a Scope sentence, an Open Questions item recording their 17-only scope, and
+14 new files in the PostgreSQL 17 Source References (461 -> 475). The Summarizing index
+entry found that the index AM documentation says an update of a predicate column always disables
+HOT, while the relcache code and the `brin_hot_2` regression test treat a summarizing index's
+predicate columns as summarized; the entry follows the code, and the discrepancy is under the
+glossary's Open Questions. Every other entry the page links was already checked on 17.
+
+**Bookkeeping.** Both index blurbs (`wiki/index.md`, `wiki/v17/index.md`): the stale fillfactor,
+`bloom`, stale-height and `num_sa_scans` clauses fixed, fixture L3's superseded numbers removed,
+"non-partial B-tree" in the lead, and a 2026-09-25 summary. `wiki/versions.md`: a
+dated coverage note. Lint: **0 errors / 2 warnings**, this host's baseline.
+
+**No common concept page was touched.** The page now links the B-tree and GIN protocol pages
+where it makes rebuild and pending-list claims; neither was edited.
+
+**Teardown.** Six full runs used two sandboxes in turn, `.wiki-runtime/tmp/bloatplan` (bash
+5.3.15, port 55437) and `.wiki-runtime/tmp/bloatplan32` (bash 3.2.57, port 55438): the two baseline
+runs, the two pre-revision runs and the two final runs. Each sandbox was stopped by its run's
+`stop` stage and deleted by `clean` before the next run or at the end. The two throwaway databases
+(`probe` for the partial-index check, `proto` for prototyping fixtures Q and E) lived in the
+baseline sandbox's cluster, which was started by hand for them, and were dropped before that
+cluster was stopped with `pg_ctl -m fast stop`. The failure-path checks ran on `bloatplan32` and
+the stopped `bloatplan`, and left no server running. Each `stop` asserted that `pg_ctl` found no server and that no
+`postmaster.pid`, process or socket was left. Verified at the end: no `postgres` process, ports
+55437 and 55438 free, `.wiki-runtime/tmp/` empty. `raw/postgres-17/` and `raw/postgres-12/` were
+read only.
+
+**Version control.** Committed and pushed straight to `master` and `origin/master` once the asker
+said `commit and push`, on top of commit `7083250`. A fetch just before the commit showed no new
+commit on `origin/master`, so no rebase was needed.
