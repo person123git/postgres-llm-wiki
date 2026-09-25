@@ -16,6 +16,12 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-09-25: **review v17**, [Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged pin `786db8dcf16` (17.11), for adherence to `AGENTS.md`.
+  - The review found no wrong engine behavior and no wrong number; its findings were against rules added after the page's last revision. The answer was restructured to the Technical Explanations shape, with a value table, a logic map, six mechanism steps, branch and lifecycle tables, formulas, worked measurements and a causal summary, and the GIN follow-up likewise.
+  - The since-v12 history now rests on the v17 checkout's own history from the v12 branch point `9e1c9f9594`; the 12.x-release attribution of the endpoint-probe limit moved to Open Questions, and `3d351d916b2`'s `tableam.c` change, `29cf61ade3` and `587b6aa3f3` were added.
+  - The script gained sandboxed `TMPDIR` and `PG_REGRESS_SOCK_DIR`, `ON_ERROR_STOP` for `grej`, a checked exit-trap teardown and a validated `WIKI_ROOT`, and ran identically under bash 5.3.15 and 3.2.57 with every number unchanged.
+  - The shared glossary gained 13 entries checked on 17 only, for 280 terms, and the Hash splitpoint alias no longer collides with B-tree split points.
+
 - 2026-09-25: **review v17**, [Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) at unchanged pin `786db8dcf16` (17.11).
   - The filed script, re-run unchanged, reproduced every number; 138 of 157 review findings survived an adversarial check and were fixed, none of them a change to a recorded measurement.
   - Two mechanisms the page had missed are now explained and measured. A partial index takes its tuple count from its last recorded density, so its growth since that `pg_class` row was written is charged only in step with the table's (fixture Q: 113 pages charged at 331 live blocks, 331 after `ANALYZE`). The planner reads the ends of a B-tree while planning and gives up after 100 heap pages of dead entries (`9c6ad5eaa9`, first in 16, back-patched; fixture E).

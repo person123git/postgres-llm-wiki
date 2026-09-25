@@ -73,6 +73,7 @@ verified_by_agent: not yet
   - [Dynamic shared memory](#dynamic-shared-memory)
   - [effective_cache_size](#effective_cache_size)
   - [effective_io_concurrency](#effective_io_concurrency)
+  - [Equivalence class](#equivalence-class)
   - [ereport](#ereport)
   - [Event trigger](#event-trigger)
   - [Executor](#executor)
@@ -108,11 +109,15 @@ verified_by_agent: not yet
   - [Hook](#hook)
   - [HOT](#hot)
   - [Hot standby](#hot-standby)
+  - [HOT-blocking column](#hot-blocking-column)
   - [Huge pages](#huge-pages)
+  - [Hypothetical index](#hypothetical-index)
+  - [indcheckxmin](#indcheckxmin)
   - [Index page recycling](#index-page-recycling)
   - [Index scan](#index-scan)
   - [Index vacuuming](#index-vacuuming)
   - [INDEX_CLEANUP](#index_cleanup)
+  - [IndexClause](#indexclause)
   - [Index-only scan](#index-only-scan)
   - [IndexOptInfo](#indexoptinfo)
   - [Inheritance](#inheritance)
@@ -142,6 +147,7 @@ verified_by_agent: not yet
   - [MultiXact](#multixact)
   - [MVCC](#mvcc)
   - [Nested loop join](#nested-loop-join)
+  - [Nondeterministic collation](#nondeterministic-collation)
   - [NOT VALID](#not-valid)
   - [OID](#oid)
   - [Operator class](#operator-class)
@@ -160,6 +166,7 @@ verified_by_agent: not yet
   - [Partitioned index](#partitioned-index)
   - [Partitionwise join](#partitionwise-join)
   - [Path](#path)
+  - [Pathkey](#pathkey)
   - [Pending list](#pending-list)
   - [pg_attribute](#pg_attribute)
   - [pg_cast](#pg_cast)
@@ -178,6 +185,7 @@ verified_by_agent: not yet
   - [pgs_mask](#pgs_mask)
   - [pgstatindex](#pgstatindex)
   - [pgstattuple](#pgstattuple)
+  - [Pivot tuple](#pivot-tuple)
   - [Plan cache mode](#plan-cache-mode)
   - [PlannedStmt](#plannedstmt)
   - [Planner](#planner)
@@ -231,6 +239,7 @@ verified_by_agent: not yet
   - [Simple index deletion](#simple-index-deletion)
   - [SLRU](#slru)
   - [Snapshot](#snapshot)
+  - [SnapshotNonVacuumable](#snapshotnonvacuumable)
   - [SP-GiST](#sp-gist)
   - [SP-GiST placeholder](#sp-gist-placeholder)
   - [SPI](#spi)
@@ -242,6 +251,8 @@ verified_by_agent: not yet
   - [SubLink](#sublink)
   - [SubPlan](#subplan)
   - [Subscription](#subscription)
+  - [Subtransaction](#subtransaction)
+  - [Suffix truncation](#suffix-truncation)
   - [Summarizing index](#summarizing-index)
   - [Synchronous replication](#synchronous-replication)
   - [Syscache](#syscache)
@@ -255,6 +266,8 @@ verified_by_agent: not yet
   - [track_activity_query_size](#track_activity_query_size)
   - [Transaction ID](#transaction-id)
   - [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout)
+  - [TransactionXmin](#transactionxmin)
+  - [Transient plan](#transient-plan)
   - [Truncation](#truncation)
   - [Tuple](#tuple)
   - [Tuplesort](#tuplesort)
@@ -290,7 +303,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
 - The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Thirteen more, added later on 2026-09-25 while that page was revised, were also checked on 17 only: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -1134,6 +1147,16 @@ Related: [Cost](#cost), [shared_buffers](#shared_buffers), [Planner](#planner), 
 
 Related: [io_combine_limit](#io_combine_limit), [Read stream](#read-stream), [Bitmap scan](#bitmap-scan), [GUC context](#guc-context), [Prefetch](#prefetch)
 
+### Equivalence class
+
+**Aliases:** `EquivalenceClass`, EC, `ec_members`, equivalence-derived clause, `generate_join_implied_equalities()`. **Checked on:** PostgreSQL 17.
+
+An equivalence class is the [planner](#planner)'s record that several expressions are known to be equal. When it finds a mergejoinable equality `A = B` that is not an outer-join clause, it puts `A` and `B` in one `EquivalenceClass`; a later `B = C` adds `C` to the same class, merging classes where needed. "Equal" means equal under the B-tree operator families in `ec_opfamilies` and the collation in `ec_collation` ([pathnodes.h#EquivalenceClass-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L1327-L1343), [pathnodes.h#EquivalenceClass](../raw/postgres-17/src/include/nodes/pathnodes.h#L1380-L1400)).
+
+This matters when reading planner code because the original equality clauses leave the normal flow of [quals](#qual). The planner generates the comparisons it needs from each class instead, which can produce a join clause such as `A = C` that the query never wrote; a class that contains a constant yields a restriction such as `A = 42` for every member ([optimizer/README#EquivalenceClasses](../raw/postgres-17/src/backend/optimizer/README#L693-L721)). Code that proves facts about one relation uses these derived clauses too: `check_index_predicates()` adds the equivalence-derivable join clauses to the clauses it tests against a [partial index](#partial-index)'s predicate ([indxpath.c#check_index_predicates-ec-clauses](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3293-L3315)). Every [pathkey](#pathkey) points at an equivalence class, so orderings by equal expressions count as the same ordering ([pathnodes.h#EquivalenceClass-pathkeys](../raw/postgres-17/src/include/nodes/pathnodes.h#L1357-L1360)).
+
+Related: [Pathkey](#pathkey), [Planner](#planner), [Qual](#qual), [Partial index](#partial-index), [Path](#path)
+
 ### ereport
 
 **Aliases:** `elog`, error level, `ERROR`, `FATAL`, `PANIC`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1526,13 +1549,15 @@ Related: [Access method](#access-method), [Metapage](#metapage)
 
 ### Hash splitpoint
 
-**Aliases:** split point, splitpoint group, splitpoint phase, `hashm_spares`, `hashm_ovflpoint`, `_hash_alloc_buckets`. **Checked on:** PostgreSQL 17.
+**Aliases:** hash split point, splitpoint group, splitpoint phase, `hashm_spares`, `hashm_ovflpoint`, `_hash_alloc_buckets`. **Checked on:** PostgreSQL 17.
 
 A splitpoint is a batch of primary bucket pages that a [hash index](#hash-index) allocates at once. Bucket pages come in power-of-2 groups called splitpoints, so each new group doubles the number of buckets. From group 10 on, a group is allocated in four equal phases, and the next phase is allocated only after the buckets of the previous one are in use ([hash/README:60-79](../raw/postgres-17/src/backend/access/hash/README#L60-L79)). The bucket pages of one phase sit next to each other in the file. The [metapage](#metapage)'s `hashm_spares[]` array records how many overflow pages come before each phase, so a bucket's block number is computed from its bucket number ([hash/README:80-95](../raw/postgres-17/src/backend/access/hash/README#L80-L95)). An index build estimates the size it needs and allocates enough phases at once ([hash/README:96-99](../raw/postgres-17/src/backend/access/hash/README#L96-L99)).
 
 Allocating a phase writes only its last page. `_hash_alloc_buckets()` extends the file's end to the end of the new phase by writing one initialized page there and expects the pages in between to read as zeroes, so on a filesystem that allows holes they may not be allocated yet ([hashpage.c#_hash_alloc_buckets](../raw/postgres-17/src/backend/access/hash/hashpage.c#L967-L1037), [hash/README:113-123](../raw/postgres-17/src/backend/access/hash/README#L113-L123)). A hash index's file size therefore jumps by whole phases, and part of the jump may be unused capacity rather than written pages.
 
-Related: [Hash index](#hash-index), [Relation size functions](#relation-size-functions)
+A hash splitpoint is unrelated to the split point of a B-tree [page split](#page-split), which is the position at which `_bt_findsplitloc()` divides one full page between its two halves ([nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L86-L100)).
+
+Related: [Hash index](#hash-index), [Relation size functions](#relation-size-functions), [Page split](#page-split)
 
 ### Heap
 
@@ -1618,6 +1643,16 @@ Hot standby means a server that is still replaying [WAL](#wal), as a replica or 
 
 Related: [WAL](#wal), [Crash recovery](#crash-recovery), [Snapshot](#snapshot), [WAL receiver](#wal-receiver), [xmin horizon](#xmin-horizon)
 
+### HOT-blocking column
+
+**Aliases:** HOT-blocking attribute, `INDEX_ATTR_BITMAP_HOT_BLOCKING`, `hot_attrs`, `hotblockingattrs`, summarized column (contrast), `INDEX_ATTR_BITMAP_SUMMARIZED`. **Checked on:** PostgreSQL 17.
+
+A HOT-blocking column is a table column that a non-summarizing index uses anywhere: as a key or included column, inside an index expression, or in a partial-index predicate. An `UPDATE` that changes one cannot be a [HOT](#hot) update. `RelationGetIndexAttrBitmap()` builds the set from every index on the table ([relcache.c#RelationGetIndexAttrBitmap](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5232-L5249), [relcache.c#RelationGetIndexAttrBitmap-attrs](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5400-L5442)). The columns of an index whose access method sets `amsummarizing` go into a separate summarized set instead, because such an index does not block HOT ([relcache.c#RelationGetIndexAttrBitmap-summarizing](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5390-L5398)); BRIN is the in-core [summarizing index](#summarizing-index) access method ([brin.c:269](../raw/postgres-17/src/backend/access/brin/brin.c#L269)).
+
+`heap_update()` fetches both sets ([heapam.c#heap_update-index-attrs](../raw/postgres-17/src/backend/access/heap/heapam.c#L3434-L3437)). When the new row version stays on the old page and no HOT-blocking column changed, the update is HOT, and only the summarizing indexes get new entries if a summarized column changed ([heapam.c#heap_update-hot-decision](../raw/postgres-17/src/backend/access/heap/heapam.c#L4140-L4166)). Otherwise every index that accepts the new row gets an entry, including indexes whose own columns did not change ([execIndexing.c#ExecInsertIndexTuples-loop](../raw/postgres-17/src/backend/executor/execIndexing.c#L343-L387)). That is why updating any HOT-blocking column adds version-churn entries to unrelated B-trees.
+
+Related: [HOT](#hot), [Summarizing index](#summarizing-index), [Bottom-up index deletion](#bottom-up-index-deletion), [Bloat](#bloat), [Partial index](#partial-index)
+
 ### Huge pages
 
 **Aliases:** `huge_pages`, `huge_page_size`, `MAP_HUGETLB`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1631,6 +1666,26 @@ Huge pages are operating-system memory pages larger than the normal page size. U
 - PostgreSQL 19: Holds. `huge_pages` still takes `off`, `on` or `try` with default `try`, `huge_page_size` 0 still means the system default, both are still `PGC_POSTMASTER` (restart), and `CreateAnonymousSegment()` still falls back and sets the `PGC_INTERNAL` `huge_pages_status` ([config.sgml#guc-huge-pages](../raw/postgres-19/doc/src/sgml/config.sgml#L1844-L1863), [config.sgml:1874](../raw/postgres-19/doc/src/sgml/config.sgml#L1874), [config.sgml#guc-huge-page-size](../raw/postgres-19/doc/src/sgml/config.sgml#L1915-L1921), [guc_parameters.dat#huge_page_size](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1246-L1262), [guc_parameters.dat#huge_pages_status](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1264-L1270), [guc_tables.c#huge_pages_options](../raw/postgres-19/src/backend/utils/misc/guc_tables.c#L365-L376), [sysv_shmem.c#GetHugePageSize](../raw/postgres-19/src/backend/port/sysv_shmem.c#L491-L542), [sysv_shmem.c#CreateAnonymousSegment](../raw/postgres-19/src/backend/port/sysv_shmem.c#L600-L651), [sysv_shmem.c#PGSharedMemoryCreate](../raw/postgres-19/src/backend/port/sysv_shmem.c#L722-L734)).
 
 Related: [shared_buffers](#shared_buffers), [GUC context](#guc-context)
+
+### Hypothetical index
+
+**Aliases:** `IndexOptInfo.hypothetical`, what-if index. **Checked on:** PostgreSQL 17.
+
+A hypothetical index exists only in the [planner](#planner)'s list of a table's indexes; nothing is on disk. The `hypothetical` field of [IndexOptInfo](#indexoptinfo) marks it, with the comment "true if index doesn't really exist" ([pathnodes.h#IndexOptInfo-hypothetical](../raw/postgres-17/src/include/nodes/pathnodes.h#L1186-L1187)). Core code never makes one: `get_relation_info()` sets the field to false for every catalog index ([plancat.c:461](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L461)), and its [hook](#hook) is where a plugin may add a hypothetical index to the list ([plancat.c#get_relation_info_hook](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L570-L576)).
+
+Planner code that would read the index file checks the flag first. The planning-time endpoint probe skips hypothetical indexes ([selfuncs.c#get_actual_variable_range-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6207-L6212)). `gincostestimate()` uses zeroed metapage statistics instead of reading them, and `brincostestimate()` assumes the default pages per range ([selfuncs.c#gincostestimate-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7697-L7711), [selfuncs.c#brincostestimate-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8086-L8112)).
+
+Related: [IndexOptInfo](#indexoptinfo), [Hook](#hook), [Planner](#planner), [GIN](#gin), [BRIN](#brin)
+
+### indcheckxmin
+
+**Aliases:** `pg_index.indcheckxmin`, index usability horizon. **Checked on:** PostgreSQL 17.
+
+`indcheckxmin` is a [`pg_index`](#pg_index) flag that makes an index unusable to some transactions for a while after it is built. Its catalog comment asks "must we wait for xmin to be old?" ([pg_index.h:43](../raw/postgres-17/src/include/catalog/pg_index.h#L43)). A new index's columns may change within an existing [HOT](#hot) chain, a "broken" chain the index cannot represent, so a non-concurrent `CREATE INDEX` makes the index usable only by transactions whose snapshots are not older than it ([README.HOT#create-index](../raw/postgres-17/src/backend/access/heap/README.HOT#L304-L311)). The flag enforces that: a transaction may use the index only once the `xmin` of the index's `pg_index` row is older than its [TransactionXmin](#transactionxmin), so any incompatible rows in HOT chains are dead to it ([README.HOT#indcheckxmin](../raw/postgres-17/src/backend/access/heap/README.HOT#L341-L353)).
+
+`index_build()` sets the flag only for a non-concurrent `CREATE INDEX` that met broken HOT chains ([index.c#index_build-indcheckxmin](../raw/postgres-17/src/backend/catalog/index.c#L3099-L3101)). `reindex_index()` clears it, or keeps or forces it when the rebuild met such chains ([index.c#reindex_index-indcheckxmin](../raw/postgres-17/src/backend/catalog/index.c#L3800-L3850)). While the flag holds, `get_relation_info()` leaves the index out of planning and marks the plan a [transient plan](#transient-plan), so a cached plan is rebuilt once the index becomes usable ([plancat.c#get_relation_info-indcheckxmin](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L269-L281)).
+
+Related: [pg_index](#pg_index), [TransactionXmin](#transactionxmin), [Transient plan](#transient-plan), [HOT](#hot), [Invalid index](#invalid-index), [CONCURRENTLY](#concurrently)
 
 ### Index page recycling
 
@@ -1683,6 +1738,16 @@ Related: [VACUUM](#vacuum), [INDEX_CLEANUP](#index_cleanup), [Access method](#ac
 - PostgreSQL 19: Holds ([ref/vacuum.sgml:33](../raw/postgres-19/doc/src/sgml/ref/vacuum.sgml#L33), [vacuumlazy.c:741-746](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L741-L746), [vacuumlazy.c:187](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L187), [vacuumlazy.c:2449-2451](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L2449-L2451), [vacuumlazy.c:1372](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L1372), [vacuum.c:2186](../raw/postgres-19/src/backend/commands/vacuum.c#L2186), [reloptions.c:555](../raw/postgres-19/src/backend/access/common/reloptions.c#L555)).
 
 Related: [VACUUM](#vacuum), [Index vacuuming](#index-vacuuming), [Storage parameter](#storage-parameter), [Line pointer](#line-pointer)
+
+### IndexClause
+
+**Aliases:** `IndexClause`, `indexclauses`, `indexquals`, index clause. **Checked on:** PostgreSQL 17.
+
+An `IndexClause` is the [planner](#planner)'s note that one condition of the query can be applied to one column of one index. It points at the original `WHERE` or join condition and lists the index conditions derived from it, `indexquals`. Its `lossy` flag says whether those are weaker than the original, as when `x LIKE 'foo%bar'` yields the range `x >= 'foo' AND x < 'fop'` ([pathnodes.h#IndexClause](../raw/postgres-17/src/include/nodes/pathnodes.h#L1722-L1766)). An index [path](#path) holds its list as `indexclauses`, and an empty list means a full index scan ([pathnodes.h#indexclauses](../raw/postgres-17/src/include/nodes/pathnodes.h#L1683-L1685)).
+
+`match_clause_to_indexcol()` builds one when a condition matches an index column. Normally that needs an `indexkey op constant` comparison, in either order, whose operator is in the column's [operator family](#operator-class) and whose collation matches the index; otherwise the function returns NULL, and the condition can never become an index condition on that index ([indxpath.c#match_clause_to_indexcol](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2138-L2203)). A [planner support function](#planner-support-function) can derive index conditions from a condition that does not match directly ([pathnodes.h#IndexClause](../raw/postgres-17/src/include/nodes/pathnodes.h#L1722-L1766)).
+
+Related: [Qual](#qual), [Index scan](#index-scan), [Operator class](#operator-class), [Planner support function](#planner-support-function), [Path](#path), [ScalarArrayOpExpr](#scalararrayopexpr)
 
 ### Index-only scan
 
@@ -2072,6 +2137,16 @@ A nested loop join reads its outer (left) input one row at a time and scans its 
 
 Related: [Planner](#planner), [Executor](#executor), [Index scan](#index-scan), [Memoize](#memoize), [Cost](#cost), [effective_cache_size](#effective_cache_size), [Path](#path)
 
+### Nondeterministic collation
+
+**Aliases:** `deterministic = false`, `collisdeterministic`, case-insensitive collation, accent-insensitive collation. **Checked on:** PostgreSQL 17.
+
+A nondeterministic [collation](#collation) can treat two strings as equal even when their bytes differ, for example when it ignores case or accents, or compares different Unicode normal forms. A deterministic collation breaks every tie bytewise, so only identical byte sequences are equal ([charset.sgml#collation-nondeterministic](../raw/postgres-17/doc/src/sgml/charset.sgml#L1155-L1171)). `CREATE COLLATION ... (deterministic = false)` makes one; built-in and predefined collations are deterministic, and user-defined ones are by default ([charset.sgml#collation-nondeterministic-create](../raw/postgres-17/doc/src/sgml/charset.sgml#L1173-L1193)). The catalog records the choice in `pg_collation.collisdeterministic` ([pg_collation.h:40](../raw/postgres-17/src/include/catalog/pg_collation.h#L40)).
+
+It matters for B-tree [deduplication](#deduplication), because values that compare equal may still differ in bytes. `btvarstrequalimage()` reports a text-type key as equal-image only for the C collation, the database default or a deterministic collation, so an index on a nondeterministic text column is not [allequalimage](#allequalimage) and never deduplicates ([varlena.c#btvarstrequalimage](../raw/postgres-17/src/backend/utils/adt/varlena.c#L2600-L2613), [btree.sgml#deduplication-restrictions](../raw/postgres-17/doc/src/sgml/btree.sgml#L847-L854)). Some operations, such as pattern matching, are not supported under a nondeterministic collation ([charset.sgml#collation-nondeterministic-drawbacks](../raw/postgres-17/doc/src/sgml/charset.sgml#L1191-L1202)).
+
+Related: [Collation](#collation), [Deduplication](#deduplication), [allequalimage](#allequalimage), [Operator class](#operator-class)
+
 ### NOT VALID
 
 **Aliases:** `NOT VALID` constraint, `VALIDATE CONSTRAINT`, `pg_constraint.convalidated`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2318,6 +2393,16 @@ A `Path` is one candidate way to produce a relation's rows, such as a sequential
 
 Related: [RelOptInfo](#reloptinfo), [Cost](#cost), [Planner](#planner), [PlannedStmt](#plannedstmt)
 
+### Pathkey
+
+**Aliases:** `PathKey`, `pathkeys`, sort order of a path. **Checked on:** PostgreSQL 17.
+
+A pathkey describes one sort key of the rows a [path](#path) produces. A path's `pathkeys` field is a list of `PathKey` nodes: the first is the primary sort key, the next the secondary one, and an empty list means no known order ([pathnodes.h#PathKey](../raw/postgres-17/src/include/nodes/pathnodes.h#L1447-L1475), [pathnodes.h:1668](../raw/postgres-17/src/include/nodes/pathnodes.h#L1668)). Each `PathKey` names the value through an [equivalence class](#equivalence-class), plus a B-tree operator family, a direction and a nulls-first flag, so a path sorted by any member of the class counts as sorted by all of them ([optimizer/README#PathKeys](../raw/postgres-17/src/backend/optimizer/README#L904-L921)).
+
+This is how the planner decides whether a path already satisfies an `ORDER BY` or a merge join without an explicit sort. An index scan's pathkeys describe the index's order; a [sequential scan](#sequential-scan), a [bitmap scan](#bitmap-scan) and a scan of an index type that cannot return ordered results all have none ([optimizer/README#PathKeys-scans](../raw/postgres-17/src/backend/optimizer/README#L923-L939)).
+
+Related: [Path](#path), [Equivalence class](#equivalence-class), [Planner](#planner), [Index scan](#index-scan), [Operator class](#operator-class)
+
 ### Pending list
 
 **Aliases:** GIN fast update, `fastupdate`, `gin_pending_list_limit`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2563,6 +2648,16 @@ Related: [pgstattuple](#pgstattuple), [B-tree](#b-tree), [Metapage](#metapage), 
 - PostgreSQL 19: Holds. It still reports live and dead tuple counts and bytes plus free space, `pgstat_relation()` still sends tables to `pgstat_heap()`, handles B-tree, hash and GiST itself and rejects GIN, SP-GiST, BRIN and invalid indexes, and the extension still ships `pgstatindex`, `pgstatginindex`, `pgstathashindex` and `pgstattuple_approx` ([pgstattuple.control:1-2](../raw/postgres-19/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstattuple_type](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L57-L65), [pgstattuple.c#pgstat_relation](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L243-L293), [pgstatindex.c:503](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L503), [pgstatindex.c:608](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L608), [pgstatapprox.c:279](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L279), [pgstatapprox.c#statapprox_heap](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L106-L113)).
 
 Related: [pgstatindex](#pgstatindex), [Tuple](#tuple), [Bloat](#bloat), [Contrib](#contrib)
+
+### Pivot tuple
+
+**Aliases:** pivot, separator key, downlink, non-pivot tuple (contrast), `BTreeTupleIsPivot()`. **Checked on:** PostgreSQL 17.
+
+A pivot tuple is a [B-tree](#b-tree) tuple that points at no table row and exists only to steer searches. Every tuple on an internal page is a pivot tuple, and so is the [high key](#leaf-page) of a leaf page. A pivot tuple holds a separator key and a downlink to a child page, only a separator key, or only a downlink ([nbtree/README#pivot-tuples](../raw/postgres-17/src/backend/access/nbtree/README#L31-L40)). Because it only records where the key space divides, it can keep key values copied from rows that VACUUM removed long ago (same lines).
+
+Every B-tree with more than one level has pivot tuples, since searches descend through them. They need not carry every key column: [suffix truncation](#suffix-truncation) can drop trailing columns, which then count as "minus infinity" ([nbtree.h#pivot-tuples](../raw/postgres-17/src/include/access/nbtree.h#L389-L400)).
+
+Related: [B-tree](#b-tree), [Leaf page](#leaf-page), [Suffix truncation](#suffix-truncation), [Page split](#page-split), [Sibling link](#sibling-link)
 
 ### Plan cache mode
 
@@ -3289,6 +3384,16 @@ A snapshot is a record of which transactions count as finished for a query. It d
 
 Related: [MVCC](#mvcc), [xmin and xmax](#xmin-and-xmax), [xmin horizon](#xmin-horizon), [Transaction ID](#transaction-id)
 
+### SnapshotNonVacuumable
+
+**Aliases:** non-vacuumable snapshot, `SNAPSHOT_NON_VACUUMABLE`, `InitNonVacuumableSnapshot()`, `HeapTupleSatisfiesNonVacuumable()`. **Checked on:** PostgreSQL 17.
+
+A non-vacuumable [snapshot](#snapshot) is a visibility test rather than a point-in-time view. It accepts every row version that might still be visible to some transaction and rejects only versions that are surely dead to everyone, the ones [VACUUM](#vacuum) could remove ([snapshot.h#SNAPSHOT_NON_VACUUMABLE](../raw/postgres-17/src/include/utils/snapshot.h#L111-L118)). So recently deleted and not-yet-committed rows pass. The caller supplies the removal horizon to test against ([snapmgr.h#InitNonVacuumableSnapshot](../raw/postgres-17/src/include/utils/snapmgr.h#L43-L50)), and the heap's check reduces to "not dead under that horizon" ([heapam_visibility.c#HeapTupleSatisfiesNonVacuumable](../raw/postgres-17/src/backend/access/heap/heapam_visibility.c#L1416-L1448)).
+
+Two places in core use it. `get_actual_variable_endpoint()`, the planner's probe of an index's first or last value, reads with it: the query's own snapshot could force a costly visit to every recently dead or uncommitted row at that end, while `SnapshotAny` could return an extreme deleted long ago ([selfuncs.c#get_actual_variable_endpoint-snapshot](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6371-L6386), [selfuncs.c:6415](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6415)). `heap_index_delete_tuples()`, the heap side of both [simple](#simple-index-deletion) and [bottom-up](#bottom-up-index-deletion) index deletion, uses the same test to find index entries that point at dead row versions ([heapam.c#heap_index_delete_tuples](../raw/postgres-17/src/backend/access/heap/heapam.c#L8488-L8525)).
+
+Related: [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Dead tuple](#dead-tuple), [Simple index deletion](#simple-index-deletion), [Bottom-up index deletion](#bottom-up-index-deletion)
+
 ### SP-GiST
 
 **Aliases:** space-partitioned GiST. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3438,6 +3543,26 @@ A subscription is the downstream side of [logical replication](#logical-replicat
 - PostgreSQL 19: Holds. `pg_subscription` still stores the connection string, slot name, publications and `suborigin`, `origin` still defaults to `any`, and `CREATE SUBSCRIPTION` still runs `CreateSubscription()` ([logical-replication.sgml#logical-replication-subscription](../raw/postgres-19/doc/src/sgml/logical-replication.sgml#L207-L215), [pg_subscription.h#FormData_pg_subscription](../raw/postgres-19/src/include/catalog/pg_subscription.h#L45-L117), [create_subscription.sgml#sql-createsubscription-params-with-origin](../raw/postgres-19/doc/src/sgml/ref/create_subscription.sgml#L433-L443), [subscriptioncmds.c:647](../raw/postgres-19/src/backend/commands/subscriptioncmds.c#L647)). 19 adds two things: a subscription can connect through a foreign server (`subserver`) instead of a connection string, and `origin` has no effect for sequences ([pg_subscription.h:95-100](../raw/postgres-19/src/include/catalog/pg_subscription.h#L95-L100), [create_subscription.sgml:443](../raw/postgres-19/doc/src/sgml/ref/create_subscription.sgml#L443)).
 
 Related: [Publication](#publication), [Apply worker](#apply-worker), [Replication origin](#replication-origin), [Replication slot](#replication-slot)
+
+### Subtransaction
+
+**Aliases:** savepoint, `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, `BEGIN ... EXCEPTION` block, `BeginInternalSubTransaction()`, `pg_subtrans`. **Checked on:** PostgreSQL 17.
+
+A subtransaction is a transaction nested inside another, whose work can be rolled back without ending the outer transaction. SQL exposes it as a savepoint: `SAVEPOINT` sets a mark, and rolling back to it undoes every command run since, restoring the transaction's state to what it was at the mark ([ref/savepoint.sgml#description](../raw/postgres-17/doc/src/sgml/ref/savepoint.sgml#L36-L45)). The lowest layer of the transaction system implements subtransactions, and savepoints are built on it ([transam/README#layers](../raw/postgres-17/src/backend/access/transam/README#L6-L9)).
+
+In [PL/pgSQL](#plpgsql), a block with an `EXCEPTION` clause "effectively forms a subtransaction" ([plpgsql.sgml#exception-subtransaction](../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L308-L311)); the interpreter starts one with `BeginInternalSubTransaction()` and rolls it back when the block traps an error ([pl_exec.c:1777](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1777), [pl_exec.c:1842](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1842)). A subtransaction gets its own [transaction ID](#transaction-id) only when it first needs one, after its parent has one, and `pg_subtrans` records each subtransaction's parent ([transam/README#subtransaction-numbering](../raw/postgres-17/src/backend/access/transam/README#L193-L198), [transam/README#pg_subtrans](../raw/postgres-17/src/backend/access/transam/README#L378-L391)).
+
+Related: [Transaction ID](#transaction-id), [PL/pgSQL](#plpgsql), [Snapshot](#snapshot), [MVCC](#mvcc)
+
+### Suffix truncation
+
+**Aliases:** `_bt_truncate()`, truncated high key, truncated pivot tuple. **Checked on:** PostgreSQL 17.
+
+Suffix truncation is how a [B-tree](#b-tree) keeps its [pivot tuples](#pivot-tuple) short. When a leaf page splits, the left page's new high key keeps only the leading key columns needed to tell the last tuple on the left from the first on the right. The dropped trailing columns logically hold "negative infinity" and take no space ([nbtree/README#suffix-truncation](../raw/postgres-17/src/backend/access/nbtree/README#L823-L838)). That high key is reused as the downlink in the parent page, so internal pages hold shorter tuples, and the stated goal is better fan-out (same lines, [nbtree/README#suffix-truncation-goal](../raw/postgres-17/src/backend/access/nbtree/README#L840-L841)).
+
+`_bt_truncate()` builds the truncated tuple, and always drops `INCLUDE` columns ([nbtutils.c#_bt_truncate](../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L4627-L4656)). A page split and an index build both call it ([nbtinsert.c:1657](../raw/postgres-17/src/backend/access/nbtree/nbtinsert.c#L1657), [nbtsort.c:932](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L932)). When `_bt_findsplitloc()` chooses where to split a leaf page, it scores each candidate by how many columns the new high key must keep and takes the lowest score among the near-balanced candidates, so truncation also shapes where pages split ([nbtsplitloc.c#_bt_split_penalty](../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L1118-L1128), [nbtsplitloc.c#_bt_bestsplitloc](../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L770-L812)).
+
+Related: [Pivot tuple](#pivot-tuple), [B-tree](#b-tree), [Page split](#page-split), [Leaf page](#leaf-page), [Covering index](#covering-index)
 
 ### Summarizing index
 
@@ -3608,6 +3733,26 @@ Related: [xmin and xmax](#xmin-and-xmax), [Wraparound](#wraparound), [Freezing](
 These two settings end the whole session, not just a statement, when a transaction lasts too long. `idle_in_transaction_session_timeout` terminates a session that has sat idle inside an open transaction, waiting for the client's next query, for longer than the limit ([config.sgml#guc-idle-in-transaction-session-timeout](../raw/postgres-17/doc/src/sgml/config.sgml#L9571-L9595)). `transaction_timeout` terminates a session whose transaction has lasted longer than the limit, whether the transaction was opened with `BEGIN` or is the implicit one of a single statement. Prepared transactions are exempt ([config.sgml#guc-transaction-timeout](../raw/postgres-17/doc/src/sgml/config.sgml#L9498-L9532)). PostgreSQL 17's release notes list `transaction_timeout` as a new server variable ([release-17.sgml:15083-15092](../raw/postgres-17/doc/src/sgml/release-17.sgml#L15083-L15092)). `StartTransaction` arms the transaction timer ([xact.c:2174-2176](../raw/postgres-17/src/backend/access/transam/xact.c#L2174-L2176)). The main loop arms the idle-in-transaction timer each time the backend goes idle inside a transaction, but only when `transaction_timeout` is 0 or longer than the idle limit ([postgres.c:4616-4647](../raw/postgres-17/src/backend/tcop/postgres.c#L4616-L4647)). When either timer fires, `ProcessInterrupts` raises `FATAL` with "terminating connection due to idle-in-transaction timeout" or "terminating connection due to transaction timeout", unless the setting was reset to 0 in the meantime ([postgres.c:3435-3464](../raw/postgres-17/src/backend/tcop/postgres.c#L3435-L3464)). That differs from [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout), which cancel the statement with an `ERROR` and leave the session open ([postgres.c:3396-3409](../raw/postgres-17/src/backend/tcop/postgres.c#L3396-L3409)). Both settings default to 0 (off) and have context `user`, so `SET` or `SET LOCAL` changes them without a reload. An assign hook starts or stops the transaction timer when `transaction_timeout` changes inside a transaction ([guc_tables.c:2633-2653](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2633-L2653), [postgres.c#assign_transaction_timeout](../raw/postgres-17/src/backend/tcop/postgres.c#L3701-L3716)). The documentation adds that an open idle transaction keeps `VACUUM` from removing recently dead tuples ([config.sgml:9586-9592](../raw/postgres-17/doc/src/sgml/config.sgml#L9586-L9592)). An autovacuum worker forces both settings, with `statement_timeout` and `lock_timeout`, to 0 on itself "to avoid letting these settings prevent regular maintenance from being executed" ([autovacuum.c:1462-1470](../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1462-L1470)).
 
 Related: [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout), [GUC context](#guc-context), [Autovacuum](#autovacuum), [xmin horizon](#xmin-horizon), [Two-phase commit](#two-phase-commit)
+
+### TransactionXmin
+
+**Aliases:** `TransactionXmin`, `MyProc->xmin`, `RecentXmin` (contrast). **Checked on:** PostgreSQL 17.
+
+`TransactionXmin` is a backend-local transaction ID: "the oldest xmin of any snapshot in use in the current transaction", the same value the backend advertises as `MyProc->xmin` ([procarray.c#TransactionXmin](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2164-L2168), [snapmgr.c:98](../raw/postgres-17/src/backend/utils/time/snapmgr.c#L98)). `RecentXmin`, by contrast, is the xmin of the most recent snapshot (same lines). The first snapshot a transaction takes sets `TransactionXmin` ([procarray.c#TransactionXmin-first-snapshot](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2128-L2129)), and it advances, or is cleared, as the transaction's snapshots are released ([snapmgr.c#SnapshotResetXmin](../raw/postgres-17/src/backend/utils/time/snapmgr.c#L896-L931)).
+
+It is the horizon behind [indcheckxmin](#indcheckxmin): a transaction may use such an index only once the index's `pg_index` row is older than its `TransactionXmin` ([plancat.c#get_relation_info-indcheckxmin](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L269-L281)). A [transient plan](#transient-plan) records the value it was built under and is rebuilt when it changes ([plancache.c#CheckCachedPlan-transient](../raw/postgres-17/src/backend/utils/cache/plancache.c#L866-L873)).
+
+Related: [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [indcheckxmin](#indcheckxmin), [Transient plan](#transient-plan), [Transaction ID](#transaction-id)
+
+### Transient plan
+
+**Aliases:** `transientPlan`, `PlannedStmt.transientPlan`, `CachedPlan.saved_xmin`. **Checked on:** PostgreSQL 17.
+
+A transient plan is a plan that is valid only while the backend's [TransactionXmin](#transactionxmin) stays the same. The planner marks a plan this way when it had to leave out an index that some transactions cannot yet use: `get_relation_info()` skips an index whose [indcheckxmin](#indcheckxmin) horizon has not passed and sets `transientPlan` ([plancat.c#get_relation_info-indcheckxmin](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L269-L281)). The flag travels from the planner's global state into the finished [PlannedStmt](#plannedstmt), whose field comment reads "redo plan when TransactionXmin changes?" ([pathnodes.h#PlannerGlobal-transientPlan](../raw/postgres-17/src/include/nodes/pathnodes.h#L149-L150), [planner.c:545](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L545), [plannodes.h:62](../raw/postgres-17/src/include/nodes/plannodes.h#L62)).
+
+The plan cache honors it. When it builds a cached plan from a transient statement it records the current `TransactionXmin` as `saved_xmin`, and when it later reuses the plan it throws the plan away if `TransactionXmin` has changed, so the next execution is planned again and can see the index ([plancache.c#BuildCachedPlan-transient](../raw/postgres-17/src/backend/utils/cache/plancache.c#L1022-L1033), [plancache.c#CheckCachedPlan-transient](../raw/postgres-17/src/backend/utils/cache/plancache.c#L866-L873), [plancache.h#saved_xmin](../raw/postgres-17/src/include/utils/plancache.h#L156-L157)).
+
+Related: [indcheckxmin](#indcheckxmin), [TransactionXmin](#transactionxmin), [PlannedStmt](#plannedstmt), [Custom and generic plan](#custom-and-generic-plan), [Prepared statement](#prepared-statement)
 
 ### Truncation
 
@@ -3960,6 +4105,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 - Four entries added on 2026-09-24 for the v17 COMMENT-baseline non-B-tree inflation page were checked on PostgreSQL 17 only, as the asker chose: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). Their applicability to 12, 14, 18 and 19 has not been checked. The orchestrator read every cited range at the pin; no second reviewer has read them.
 - One entry added on 2026-09-24 for the v17 non-B-tree COMMENT-baseline maintenance heuristic page was checked on PostgreSQL 17 only, as the asker chose: [Isolation level](#isolation-level). Its applicability to 12, 14, 18 and 19 has not been checked. For the same page, [Back-patch](#back-patch) gained a PostgreSQL 17 check, whose four ranges cite the same text as its 19 note, at different lines. The orchestrator read every cited range at the pin; no second reviewer has read either.
 - Seven entries added on 2026-09-25 for the v17 planner-penalties page were checked on PostgreSQL 17 only, as the asker chose: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Their applicability to 12, 14, 18 and 19 has not been checked. Each was drafted by an agent that opened every cited range at the pin; the orchestrator re-read the claims it changed, and a final checker opened every citation in the seven entries and reported six defects, which were corrected.
+- Thirteen entries added later on 2026-09-25, while the v17 planner-penalties page was revised, were checked on PostgreSQL 17 only, as the asker chose: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). Their applicability to 12, 14, 18 and 19 has not been checked. One agent drafted them and opened every cited range at the pin; no second reviewer has read them. The same pass replaced the [Hash splitpoint](#hash-splitpoint) entry's bare alias "split point" with "hash split point", so that it no longer collides with a B-tree split point.
 
 ## Source References
 
@@ -4689,7 +4835,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (475 files):
+**PostgreSQL 17** (479 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4727,6 +4873,7 @@ One representative citation per cited source file, grouped by version:
 - [brin.sgml:84-95](../raw/postgres-17/doc/src/sgml/brin.sgml#L84-L95)
 - [btree-gin.sgml:9-22](../raw/postgres-17/doc/src/sgml/btree-gin.sgml#L9-L22)
 - [btree-gist.sgml:9-21](../raw/postgres-17/doc/src/sgml/btree-gist.sgml#L9-L21)
+- [btree.sgml#deduplication-restrictions](../raw/postgres-17/doc/src/sgml/btree.sgml#L847-L854)
 - [catalogs.sgml#catalog-pg-inherits](../raw/postgres-17/doc/src/sgml/catalogs.sgml#L4591-L4594)
 - [charset.sgml#collation-concepts](../raw/postgres-17/doc/src/sgml/charset.sgml#L649-L672)
 - [config.sgml:8685-8688](../raw/postgres-17/doc/src/sgml/config.sgml#L8685-L8688)
@@ -4769,6 +4916,7 @@ One representative citation per cited source file, grouped by version:
 - [pgupgrade.sgml:39-58](../raw/postgres-17/doc/src/sgml/ref/pgupgrade.sgml#L39-L58)
 - [prepare_transaction.sgml:41-46](../raw/postgres-17/doc/src/sgml/ref/prepare_transaction.sgml#L41-L46)
 - [ref/reindex.sgml:54-62](../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L54-L62)
+- [ref/savepoint.sgml#description](../raw/postgres-17/doc/src/sgml/ref/savepoint.sgml#L36-L45)
 - [ref/truncate.sgml:33](../raw/postgres-17/doc/src/sgml/ref/truncate.sgml#L33)
 - [ref/vacuum.sgml#INDEX_CLEANUP](../raw/postgres-17/doc/src/sgml/ref/vacuum.sgml#L187-L221)
 - [regress.sgml:483-492](../raw/postgres-17/doc/src/sgml/regress.sgml#L483-L492)
@@ -5000,6 +5148,7 @@ One representative citation per cited source file, grouped by version:
 - [ri_triggers.c:3-6](../raw/postgres-17/src/backend/utils/adt/ri_triggers.c#L3-L6)
 - [ruleutils.c#T_PartitionBoundSpec](../raw/postgres-17/src/backend/utils/adt/ruleutils.c#L10121-L10170)
 - [selfuncs.c:7108-7124](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7108-L7124)
+- [varlena.c#btvarstrequalimage](../raw/postgres-17/src/backend/utils/adt/varlena.c#L2600-L2613)
 - [catcache.c:3-4](../raw/postgres-17/src/backend/utils/cache/catcache.c#L3-L4)
 - [inval.c:4-35](../raw/postgres-17/src/backend/utils/cache/inval.c#L4-L35)
 - [lsyscache.c#get_func_support](../raw/postgres-17/src/backend/utils/cache/lsyscache.c#L1965-L1987)
@@ -5149,6 +5298,7 @@ One representative citation per cited source file, grouped by version:
 - [rel.h#HEAP_DEFAULT_FILLFACTOR](../raw/postgres-17/src/include/utils/rel.h#L348-L349)
 - [relcache.h:27](../raw/postgres-17/src/include/utils/relcache.h#L27)
 - [selfuncs.h:33-40](../raw/postgres-17/src/include/utils/selfuncs.h#L33-L40)
+- [snapmgr.h#InitNonVacuumableSnapshot](../raw/postgres-17/src/include/utils/snapmgr.h#L43-L50)
 - [snapshot.h#SNAPSHOT_MVCC](../raw/postgres-17/src/include/utils/snapshot.h#L37-L50)
 - [wait_event.h:18-27](../raw/postgres-17/src/include/utils/wait_event.h#L18-L27)
 - [varatt.h:142-155](../raw/postgres-17/src/include/varatt.h#L142-L155)

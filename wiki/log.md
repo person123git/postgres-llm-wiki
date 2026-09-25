@@ -14877,3 +14877,73 @@ commit on `origin/master`, so no rebase was needed.
 - Glossary review: this tooling change introduces no PostgreSQL terms or definition
   changes; the glossary was reviewed and left unchanged. No PostgreSQL measurements
   were run, no service was started, and no sandbox was created.
+
+## [2026-09-25] review v17 | planner penalties for bloated indexes: AGENTS.md adherence review, answer restructured, history rebased on v17 history, script hardened and re-run
+
+- Asked to review [Planner Penalties for Bloated Indexes in PostgreSQL 17
+  (unverified)](v17/questions/query-planning/bloated-indexes-query-planner.md) for adherence to
+  `AGENTS.md`, at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11; checkout at the
+  pin, no tracked file changed). The prompt as written read `follow agents.md, in postgresql 17,
+  review question: # Planner Penalties for Bloated Indexes in PostgreSQL 17 (unverified) , review
+  the document aderance to agents.md`. Corrected silently, per `MANDATORY Prompt Hygiene`, to:
+  "Follow AGENTS.md. In PostgreSQL 17, review the question "Planner Penalties for Bloated Indexes
+  in PostgreSQL 17 (unverified)" and its adherence to AGENTS.md." The corrections: `agents.md` to
+  `AGENTS.md` (twice), `postgresql` to `PostgreSQL`, the lowercase opening `follow`, the pasted
+  `#` heading marker and the space before the comma removed, `aderance` to `adherence`, the
+  repeated "review" merged, and the missing terminal period. The review was reported in chat
+  first, per `MANDATORY Review Requests`; the one scope question was answered **Fix all and
+  re-run**.
+
+**The review.** Five forks on the orchestrator's model (Opus 5.5) checked the page in slices
+(evidence for lines 59-373, 374-707 and 708-940, the GIN follow-up with Open Questions, and the
+measurement script, statically) while the orchestrator checked structure, style, glossary links,
+concept-page links and the closing sections mechanically. `wiki_lint` reported no error on the
+page, the Contents matched its 25 headings, all 2,245 citations were complete v17 links in
+bounds, and the review found no wrong engine behavior and no wrong number. It reported 14 medium
+and about 21 low findings, most against rules added after the page's last revision
+(`b465999`, `c242af7`):
+
+| Area | Finding | Fix |
+|---|---|---|
+| Technical Explanations | no logic map before the walkthrough; the opening led with struct fields and relied on terms defined later; an incomplete value table; branches and lifecycle states in dense paragraphs; formula terms undefined; worked examples not step by step; no final causal summary | the Answer now opens with a plain-language main idea and a measured-consequence table, then Mental Model (value table with live/stored and later use), Logic Map (flowchart with a keyed citation list), Step-By-Step Mechanism (six steps with input, decision and output), Branches And Exceptional Cases (three condition tables), Lifecycle Of The Planner Inputs (three event tables), Key Interactions and Formulas; the measurement subsections carry the worked examples step by step, and a Causal Summary follows them; the GIN follow-up gained a decision tree, condition and lifecycle tables, a worked example and its own causal summary |
+| Writing style | 21 paragraphs over 200 words (463 at most), 101 sentences over 40 words, table cells up to 320 words; the same mechanisms re-explained four to six times; process history on the page | longest prose unit now 102 words, widest table cell 54 words; re-explanations replaced by links to the core steps; `### Reviews after filing`, the 32-commit provenance table and the dated review paragraphs of Context Reviewed removed (this log keeps them) |
+| Cross-version evidence | the history method read `REL_12_0` text from `raw/postgres-12` and named three v12-only hashes; history claims lacked current-code citations | every cross-version claim now rests on the v17 checkout's own history: the v12 branch point `9e1c9f9594`, `git log -L` over `615cebc94b..HEAD`, commit diffs and ancestry against the `Stamp` commits; current-code citations on every claim and summary-table row; the 12.x-release attribution of the endpoint limit moved to Open Questions; added `3d351d916b2`'s `tableam.c` change, `29cf61ade3` and `587b6aa3f3` |
+| Citations and evidence | uncited table cells; an unrecorded docs-versus-source conflict (`btree.sgml`'s "always ... each and every index"); precision items (BRIN's `lastRevmapPage - 1`, the probe's last entry not killed, fillfactor per split kind, and others); `file:start-end` labels and topic labels | citations in every claim-bearing cell; the conflict under Open Questions; each precision item corrected against the pin; one symbol-based label per range page-wide |
+| Measurement script | `make check`'s `pg_regress` socket directory under `/tmp`; `tail -1`; `pgrep -f -- "-D $DATA"`; `grej` without `ON_ERROR_STOP`; `mkdir` before stage validation; an unasserted exit-trap teardown; no extraction command; an overstated header | `TMPDIR` and `PG_REGRESS_SOCK_DIR` point into the sandbox; `tail -n 1`; `pgrep -f -- "$DATA"`; `pgerr()` runs each statement under `ON_ERROR_STOP` and requires status 3 and its own error text; `check_root` and `setup_paths` run after stage validation; the exit trap checks for a leftover `postmaster.pid` or process; Usage gives the extraction commands and says to delete the extracted file |
+| Glossary and concept pages | jargon never linked; missing entries; the Hash splitpoint alias "split point" colliding with B-tree split points; the non-B-tree, non-GIN protocol page unlinked | terms linked once each at first use; 13 entries added, checked on 17 only; the alias fixed; the protocol page linked where the page prices non-B-tree indexes and in Navigation |
+
+**How the fixes were made.** The orchestrator wrote the new core of the Answer and the causal
+summary, edited the script and its Usage prose, and rewrote Context Reviewed, the Evidence Map
+(157 rows) and Open Questions (29 items, grouped by topic, without pass dates).
+Four forks rewrote the other Answer sections into separate files, which were spliced in by
+section, and a fifth added the glossary entries. Four verification forks then checked the
+assembled page region by region: they found no wrong engine behavior and no wrong number, and reported 2 medium and about 15 low items in the core, 6 low in the measurement sections, 7 low in the history section, and 4 medium and 3 low in the GIN follow-up and closing sections. The mediums were a glossary link the orchestrator's helper had put inside a code span, a GIN recipe step that counted the partial-match data-page charge twice, a `vacuumlazy.c` range the relabel had moved one line off, an incomplete account of which `cost_index()` heap estimates use the cache model, and the pin check's `git status`, which could refresh the checkout's index file. Every item was checked against the pin and fixed, including 20 glossary links moved to the term's first use and one more docs-versus-source item under Open Questions.
+
+**Script.** Edited in place, no second script: 1,369 lines, md5 `e6dae2e4df17eb0fbe013f11ebebfded`.
+Checked on the final text: a misspelt stage and a `WIKI_ROOT` that is not
+the repository were refused before anything was created; a run forced to fail mid-stage
+(`STATS_TARGET=bogus`, stage `fa`) stopped the server through the exit trap, left no
+`postmaster.pid`, process or socket, and exited 1.
+
+**Re-measurement.** On Darwin 27.0.0 arm64, Apple clang 21, `JOBS=8`, the edited script ran as a pair, bash 5.3.15 beside `/bin/bash` 3.2.57, three times from empty sandboxes: before the prose was assembled (21:55:27Z to 21:59:19Z), after assembly (22:32:02Z to 22:35:51Z), and, once the verification pass had added `--no-optional-locks` to the pin check, on the final text (22:48:21Z to 22:52:00Z, 3 min 39 s each). Every run exited 0 with `make check` All 225 and All 1 / 8 / 30. All six wrote the same `summary.txt` apart from timestamps and the bash version: 37 index rows, 11 GIN rows, 7 of 7 predictions, 29 fixture-table rows, 50 facts and 146 plans, the four rejection messages and both diagnostic outputs (340 / 246 / 72.35; `2030.46` and `1121.46`). All 131 two-decimal values on the page appear in it verbatim, and the other 24 are arithmetic on its values. `$SANDBOX/tmp` and `$SANDBOX/rs` stayed empty. The failure-path checks below were repeated on the final text.
+
+**Glossary.** Thirteen entries added, each checked on PostgreSQL 17 only, as the asker chose for
+this page: Equivalence class, HOT-blocking column, Hypothetical index, indcheckxmin, IndexClause,
+Nondeterministic collation, Pathkey, Pivot tuple, SnapshotNonVacuumable, Subtransaction, Suffix
+truncation, TransactionXmin and Transient plan, for 280 terms, with Contents lines, a Scope
+sentence, an Open Questions item recording their 17-only scope, and four new files in the
+PostgreSQL 17 Source References (475 to 479). The Hash splitpoint entry's bare alias "split
+point" became "hash split point", with a sentence separating it from a B-tree split point. The
+page links 120 glossary entries, once each.
+
+**Bookkeeping.** Both index blurbs gained a sentence for this revision; `wiki/versions.md` a dated
+coverage note. Lint: **940 errors / 2 warnings**, the repository baseline since the `wiki_lint` tightening earlier today: every error is in one of 30 other pages, none in a file this task touched, and the warnings are the known uncommitted changes in the PostgreSQL 12 and 14 checkouts.
+
+**No common concept page was touched.** The page now also links the non-B-tree, non-GIN protocol
+page; none of the three was edited.
+
+**Teardown.** Six full runs used two sandboxes in turn, `.wiki-runtime/tmp/bloatplan` (bash 5.3.15, port 55437) and `.wiki-runtime/tmp/bloatplan32` (bash 3.2.57, port 55438). Each run's `stop` stage asserted that `pg_ctl` found no server and that no `postmaster.pid`, process or socket was left, and the script's `clean` stage deleted both sandboxes before each new pair and at the end. The failure-path checks ran against the stopped `bloatplan` sandbox, and the forced failure's exit trap stopped the server it had started. The extracted script `.wiki-runtime/tmp/bloatplan.sh` and the working directory `.wiki-runtime/tmp/bpfix/` were deleted. Verified at the end: no `postgres` process, no socket for ports 55437 and 55438, `.wiki-runtime/tmp/` empty. `raw/postgres-17/` was read only; the orchestrator's own `git status` checks on it may have refreshed its index file, and no tracked file changed.
+
+**Rule conflicts.** During the report-only review, the glossary rule's same-task maintenance yielded to `MANDATORY Review Requests`, so the glossary gaps were reported first and fixed in this pass. The session's scratchpad default yielded to `MANDATORY Environment Isolation`: working files lived under `.wiki-runtime/tmp/` and are deleted.
+
+**Version control.** Nothing was committed or pushed.
