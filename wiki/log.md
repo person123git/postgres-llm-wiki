@@ -14725,3 +14725,27 @@ read only.
 **Version control.** Committed and pushed straight to `master` and `origin/master` once the asker
 said `commit and push`, on top of commit `7083250`. A fetch just before the commit showed no new
 commit on `origin/master`, so no rebase was needed.
+
+## [2026-09-25] scaffold | require structured technical explanations
+
+- Merged the requested tutorial style into [AGENTS.md](../AGENTS.md#mandatory-writing-style)
+  and added [MANDATORY Technical Explanations](../AGENTS.md#mandatory-technical-explanations).
+  Dependent steps, branches, interacting functions, and state changes now require a
+  structural representation before the detailed prose. The rule selects flowcharts,
+  numbered steps, state-transition tables, comparison tables, and worked calculations
+  according to the mechanism.
+- Added the eight-item preparation process, the ten-part explanation sequence, and both
+  final quality questions. The rule covers value origins and freshness, lifecycle events,
+  exceptional cases, subsystem interactions, formulas, numerical evidence, and a final
+  causal chain while preserving technical qualifications and precise citations.
+- Integrated the rule into deep inquiry and the answer and common concept workflows.
+  Explained how the sequence fits the existing page headings, concise glossary entries,
+  Contents, evidence sections, and measurement-script requirement.
+- Glossary review: reviewed its scope, source pins, and relevant value/state terminology,
+  including IndexOptInfo, RelOptInfo, reltuples and relpages, Statistics, Planner, and
+  Invalidation message. This instruction change needed no glossary definition changes.
+- Validation commands: `git diff --check` and
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`. Before the edit, lint reported
+  0 errors and 2 warnings for pre-existing uncommitted changes in the PostgreSQL 12 and
+  14 source checkouts.
+- No service or sandbox was started or created for this task.

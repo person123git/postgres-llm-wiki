@@ -62,6 +62,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - Inspect history when the user asks why, when intent matters, or when making a regression/change claim.
 - For cross-version claims, collect evidence for each relevant version.
 - Draft from a claim-to-source map. Put unresolved claims under `## Open Questions`.
+- Before drafting the explanation, map the values, information flow, branches, and lifecycle events required by `MANDATORY Technical Explanations`.
 - Minimum engine answer: normal path, edge/error path, key data structures, caller/callee boundary, build/generated-header implications visible from raw source, and tests or explicit test absence.
 - For planner, WAL, crash recovery, MVCC, storage, or corruption topics, missing caller/callee or data-structure context is a verification gap.
 
@@ -119,14 +120,135 @@ Migration note: existing pages that still use `[[raw/postgres-NN/...]]` wikilink
 ## MANDATORY Writing Style
 
 - Lead with the answer.
+- Write for a technically competent reader who does not yet understand this specific mechanism. Write as a tutorial, not as a compressed technical proof.
 - Use plain language and short sentences.
+- Use short paragraphs with one main causal idea each. Avoid sentences with several independent causal claims.
+- Define terminology before relying on it. Introduce implementation details only when they become relevant.
 - Link PostgreSQL jargon, acronyms, and advanced concepts on first substantive use to their entry in `wiki/glossary.md`; add or improve the entry when needed. Also link an existing matching-version common concept page for deeper explanation; see `MANDATORY Shared Glossary` and `MANDATORY Common Concept Documents`.
 - Use active voice and name concrete subjects.
-- Use lists, tables, and small code blocks for dense material.
+- Use lists, tables, diagrams, and small code blocks for dense material. For dependent steps, branches, interactions, or state changes, follow `MANDATORY Technical Explanations`.
 - Name conditions precisely. Avoid vague hedges.
+- Make causal relationships explicit: use language such as "because", "therefore", "so", "which means", "as a result", "this causes", and "this value is then used by" where it explains the connection.
+- Preserve all important technical details, meaningful edge cases, formulas, and source citations. Do not remove an important qualification to make an explanation shorter.
+- Repeat a fact only when the repetition helps connect two stages of the explanation. Prefer explicit relationships over elegant but compressed prose.
 - Skip filler and setup prose.
-- Cite every example.
+- Cite every example and attach each citation to the exact claim it supports, including claims in diagrams and tables.
 - Never trade citation precision for readability.
+
+## MANDATORY Technical Explanations
+
+Apply this rule when writing or rewriting technical material. Organize the explanation around the mechanism's causal structure, not the paragraph structure of the source material.
+
+If an explanation contains a multi-step causal chain, branching logic, multiple interacting functions, state transitions, or several conditions that determine different outcomes, you MUST externalize that logic before explaining it in detailed prose. The short main idea and the concepts needed to read the map come first; the logic map comes before the walkthrough. Do not make the reader reconstruct control flow or a dependency graph from paragraphs.
+
+Choose the representation that exposes the mechanism:
+
+| Logic to explain | Required representation |
+|---|---|
+| Conditional or execution logic | Flowchart or decision tree, using Mermaid or a readable text diagram |
+| Linear causal chain | Sequence of numbered steps |
+| Lifecycle events or state changes | State-transition table |
+| Cases that differ along the same dimensions | Comparison table |
+| Formulas and numerical values central to the result | Worked calculation |
+
+Use more than one representation when needed. Show inputs, conditions, transformations, outputs, and their dependencies; a diagram that merely repeats function names is insufficient. Never compress complicated branching or causal logic into a dense paragraph when it can be represented structurally.
+
+### Required process before drafting
+
+Alongside the claim-to-source map, identify:
+
+1. The main surprising behavior or result.
+2. The variables, stored values, estimates, or state that matter.
+3. The functions or components involved.
+4. The order in which information flows between them.
+5. Every important conditional branch.
+6. Which values come from current/live state and which come from stored or potentially stale state.
+7. The lifecycle events that alter those values.
+8. The final causal chain that produces the observed behavior.
+
+Then choose the structural representations and organize the explanation around that map. Preserve the evidence and qualifications while reorganizing material by causal role.
+
+### Required explanation structure
+
+Use the following sequence for a mechanism explanation. Include the conditional parts whenever the mechanism has the corresponding branches, lifecycle events, interactions, formulas, or numerical evidence; do not invent them to fill a section.
+
+Fit the sequence into the existing document shape:
+
+| Document | Placement |
+|---|---|
+| Question page or codebase navigation guide | Inside `## Answer`, with subsections as needed |
+| Common concept page | Main idea in `## Definition`; mental model, logic map, and walkthrough in `## How It Works`; relevant interactions in `## Interactions with Other Concepts` |
+| Shared glossary | Keep definitions concise and link deeper explanations; use a compact structural representation if an entry itself explains dependent steps or branches |
+
+Keep the mandated headings and their order. Keep `## Measurement Script`, evidence sections, and navigation in their prescribed positions, and update `## Contents` for any new or changed subsections. This rule does not authorize changes to common concept pages during another document's work.
+
+#### 1. Main idea
+
+Start with a short explanation in plain language: what happens, why it is surprising, and the core reason it happens. Do not begin with low-level implementation details.
+
+#### 2. Mental model
+
+Introduce only the concepts needed to follow the mechanism. For each important value, explain what it represents, where it comes from, whether it is live/current or stored, and which later calculation uses it. A value table can make these relationships explicit:
+
+| Value | Meaning | Source | Live/current or stored | Later use |
+|---|---|---|---|---|
+
+If similarly named values come from different sources, explicitly contrast their origins and explain why that distinction matters. Do not assume a stored value is stale merely because it is stored; state the condition that makes it stale.
+
+#### 3. Logic map
+
+Show the mechanism structurally before the detailed prose whenever any of the triggers above applies. Expose the decisions and what each branch supplies to the next stage. For a linear chain, numbered steps suffice; for branching logic, show the branches and their outcomes. Preserve important conditions and source citations in the representation or in a clearly keyed explanation immediately beside it.
+
+#### 4. Step-by-step explanation
+
+Walk through the mechanism in causal order. Each step should answer **Input → Decision → Calculation → Output → Consequence**, as applicable. Explain how that output becomes a later input. Prefer one main causal idea per paragraph and use explicit causal language so the reader knows why one step follows another.
+
+#### 5. Branches and exceptional cases
+
+Show the cases explicitly whenever conditions change behavior. Prefer this table shape:
+
+| Condition / state | Behavior | Consequence |
+|---|---|---|
+
+Include meaningful edge and error cases. Do not bury several special cases inside a long sentence.
+
+#### 6. Lifecycle or state changes
+
+If creation, rebuild, reset, restart, migration, analysis, vacuuming, invalidation, caching, refresh, or another event changes relevant state, give those events their own table:
+
+| Event | State before | State after | Effect on later calculation |
+|---|---|---|---|
+
+State which values change, which remain unchanged, and when later readers see the change.
+
+#### 7. Key interaction
+
+When the surprising behavior comes from subsystems using different values, explain the mismatch directly: "Component A uses X, while component B uses Y. Because X and Y are derived differently, ... Therefore ..." Name the actual components, values, and consequence.
+
+State non-obvious cancellation, scaling, clamping, rounding, or other interactions explicitly. Do not expect the reader to notice them from a formula alone.
+
+#### 8. Formula explanation
+
+Define every term before showing a formula. Then show the formula and immediately explain its practical meaning in plain language. Preserve its conditions and qualifications. If two terms grow together and cancel or partially cancel, demonstrate that relationship explicitly, including any limits on the cancellation.
+
+#### 9. Worked example
+
+If the source material contains numerical evidence, reproduce the relevant calculation step by step. State where each number came from, separate the inputs from the calculation and the result, and explain what the result demonstrates. Keep measured values distinct from estimates and derived values, and cite their sources.
+
+For numbers produced by running PostgreSQL, `MANDATORY Measurement Script` still applies. A worked example does not replace the published script, and a calculation does not establish the engine behavior behind it.
+
+#### 10. Final causal summary
+
+Finish the explanation with a concise causal chain: **initial state → input or event → transformation → interaction → observed result → relevant refresh or state change**. Use the actual mechanism and omit stages that do not apply. The reader should be able to understand the main mechanism from this summary alone, including the conditions that determine the result.
+
+### Critical quality test
+
+Before finalizing, ask:
+
+- Would a reader need to draw a diagram, state table, or dependency graph themselves to understand this explanation? If yes, the explanation is unfinished: create that representation in the document or answer.
+- Are multiple pieces of logic still compressed into a paragraph merely because they appeared together in the source? If yes, reorganize them by causal role.
+
+Check these requirements by hand. A clean `scripts/wiki_lint` result does not establish that an explanation exposes its causal structure.
 
 ## MANDATORY GUC Changes
 
@@ -583,9 +705,9 @@ Log heading format:
 2. Use `wiki/versions.md`, `wiki/index.md`, and the version landing page as navigation only.
 3. Build the deep-inquiry context envelope from the pinned checkout.
 4. List the jargon and concepts the answer leans on, review `wiki/glossary.md`, and read `wiki/vNN/common-concepts/` for that version. Maintain the relevant glossary entries and plan links to both vocabulary and existing deeper explanations; see `MANDATORY Shared Glossary` and `MANDATORY Common Concept Documents`.
-5. Draft a claim-to-source map.
+5. Draft a claim-to-source map and the causal map required by `MANDATORY Technical Explanations`.
 6. Move unverified claims to `## Open Questions`.
-7. Answer with matching-version raw citations, linking the concept pages instead of re-explaining their concepts. Do not edit a concept page as part of this work.
+7. Answer with matching-version raw citations, following `MANDATORY Technical Explanations` and linking the concept pages instead of re-explaining their concepts. Do not edit a concept page as part of this work.
 8. If the page reports a measured number, run the page's script and file it under `## Measurement Script`, then run the script's cleanup stage so no server or sandbox is left behind; see `MANDATORY Measurement Script`.
 9. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
 10. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
@@ -598,7 +720,7 @@ Run this workflow only when the user asks for the concept page itself. Never as 
 
 1. Confirm the target version and the exact concept boundary with the user.
 2. Read `wiki/vNN/common-concepts/` for that version to check the concept has no page and no overlapping page. Review the shared glossary's related entries so its concise definitions and the concept page's deeper explanation agree.
-3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map.
+3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map. Map the mechanism and structure its explanation according to `MANDATORY Technical Explanations`, within the required common concept headings.
 4. File or edit `wiki/vNN/common-concepts/<concept-slug>.md` with `type: common-concept`, the required headings, and matching-version raw citations only; see `MANDATORY Common Concept Documents`.
 5. Keep it source-only. Move anything unresolved to `## Open Questions`, and leave measurements to the question page that ran them.
 6. Re-read the pages that link the concept page and report, without editing them, any consumer the change now contradicts.
