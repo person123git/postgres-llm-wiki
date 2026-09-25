@@ -65,7 +65,16 @@ python3 -m venv .wiki-runtime/venv                # once per clone; requirements
 .wiki-runtime/venv/bin/python scripts/wiki_lint   # after every wiki-facing change
 ```
 
-`scripts/wiki_lint` checks links, front matter, pins, citation form, verification fields, and landing-page coverage. With every pinned checkout in place it reports `0 error(s), 0 warning(s)`.
+`scripts/wiki_lint` checks links, required front matter, registered versions and source pins,
+question/answer sections, common-concept sections, verification fields and dates, and
+landing-page coverage. Managed source citations must point to files with positive, ordered
+line ranges within the file. The parser accepts code-formatted link labels and angle-bracket
+destinations, ignores fenced examples, and rejects retired Obsidian source citations.
+
+Errors produce a failing exit status. Add `--warnings-as-errors` to fail on warnings too.
+Having all pinned checkouts present does not guarantee a clean run: page defects and dirty
+source checkouts are also reported. Lint does not establish that a citation supports a claim;
+the manual evidence and glossary checks in `AGENTS.md` still apply.
 
 ## Project Structure
 

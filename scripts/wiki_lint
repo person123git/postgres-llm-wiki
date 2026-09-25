@@ -133,14 +133,21 @@ def load_versions() -> dict[str, dict[str, str]]:
         die("wiki/versions.md does not exist")
 
     versions: dict[str, dict[str, str]] = {}
-    for line in versions_path.read_text(encoding="utf-8").splitlines():
+    table = _strip_fenced_code(section_text(versions_path.read_text(encoding="utf-8"), "Supported Versions"))
+    for line in table.splitlines():
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-        if len(cells) < 6 or not cells[0].isdigit():
+        if cells[0] == "Version" or all(re.fullmatch(r":?-+:?", cell) for cell in cells):
             continue
+        if len(cells) < 6 or not re.fullmatch(r"[0-9]+", cells[0]):
+            die("wiki/versions.md contains a malformed supported-version row")
         version, status, wiki_home, branch, commit = cells[:5]
+        if version in versions:
+            die(f"wiki/versions.md contains duplicate version {version}")
+        if not re.fullmatch(r"[0-9a-f]{40}", strip_ticks(commit)):
+            die(f"wiki/versions.md: v{version} pinned commit is not a full 40-character sha")
         versions[version] = {
             "version": version,
             "status": status,
@@ -149,6 +156,8 @@ def load_versions() -> dict[str, dict[str, str]]:
             "commit": strip_ticks(commit),
             "coverage": cells[5] if len(cells) > 5 else "",
         }
+    if not versions:
+        die("wiki/versions.md has no supported versions")
     return versions
 
 
@@ -204,18 +213,92 @@ def parse_front_matter(text: str) -> tuple[dict[str, object], str, bool]:
 
 
 LINK_RE = re.compile(r"(?<!!)\[\[([^\]\n]+)\]\]")
-MD_LINK_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)")
+MD_LINK_RE = re.compile(
+    r"(?<!!)\[([^\]\n]+)\]\([ \t]*(<[^<>\n]+>|[^\s()<>]+)"
+    r"(?:[ \t]+(?:\"[^\"\n]*\"|'[^'\n]*'))?[ \t]*\)"
+)
 RAW_SOURCE_REF_RE = re.compile(r"(?:(?:\.\./)+)?raw/postgres-\d+/[^\s<>\])]+")
-LINE_FRAGMENT_RE = re.compile(r"L\d+(?:-L\d+)?")
-_CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
-_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+LINE_FRAGMENT_RE = re.compile(r"L([0-9]+)(?:-L([0-9]+))?")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _mask(text: str) -> str:
+    """Hide syntax without joining lines or emptying a link label."""
+    return re.sub(r"[^\r\n]", " ", text)
+
+
+def _strip_fenced_code(text: str) -> str:
+    """Mask backtick/tilde fences, respecting their character and length."""
+    fence = ""
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        match = _FENCE_RE.match(line)
+        if fence:
+            lines.append(_mask(line))
+            if (match and match[1][0] == fence[0]
+                    and len(match[1]) >= len(fence) and not match[2].strip()):
+                fence = ""
+        elif match and not (match[1][0] == "`" and "`" in match[2]):
+            fence = match[1]
+            lines.append(_mask(line))
+        else:
+            lines.append(line)
+    return "".join(lines)
 
 
 def _strip_markdown_code(text: str) -> str:
-    """Remove fenced code blocks and inline code spans from Markdown text."""
-    text = _CODE_BLOCK_RE.sub("", text)
-    text = _CODE_SPAN_RE.sub("", text)
-    return text
+    """Mask code, preserving code-formatted labels as nonempty link labels."""
+    text = _strip_fenced_code(text)
+    ticks = list(re.finditer(r"`+", text))
+    # Match a delimiter only to the next run of exactly the same length.
+    following: dict[int, int] = {}
+    next_tick: dict[int, int] = {}
+    for index in range(len(ticks) - 1, -1, -1):
+        size = len(ticks[index][0])
+        if size in next_tick:
+            following[index] = next_tick[size]
+        next_tick[size] = index
+    chunks: list[str] = []
+    position = 0
+    index = 0
+    while index < len(ticks):
+        end_index = following.get(index)
+        if end_index is None:
+            index += 1
+            continue
+        start, end = ticks[index].start(), ticks[end_index].end()
+        chunks.extend((text[position:start], _mask(text[start:end])))
+        position = end
+        index = end_index + 1
+    chunks.append(text[position:])
+    return "".join(chunks)
+
+
+def markdown_url(match: re.Match[str]) -> str:
+    url = match.group(2).strip()
+    return url[1:-1] if url.startswith("<") and url.endswith(">") else url
+
+
+def is_raw_url(url: str) -> bool:
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", url) or url.startswith("//"):
+        return False
+    path = url.split("#", 1)[0].split("?", 1)[0]
+    return bool(re.search(r"(^|/)raw/postgres-[0-9]+/", path))
+
+
+def raw_target(url: str, page_path: Path | None = None) -> str:
+    path = url.split("#", 1)[0].split("?", 1)[0]
+    # Retain compatibility with the old repo-relative citation URLs.
+    if path.startswith("raw/"):
+        resolved = (REPO_ROOT / path).resolve()
+    elif page_path is not None:
+        resolved = (page_path.parent / path).resolve()
+    else:
+        return path
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path
 
 
 def extract_obsidian_links(text: str) -> list[str]:
@@ -247,42 +330,48 @@ def extract_markdown_raw_citations(text: str, page_path: Path | None = None) -> 
     text = _strip_markdown_code(text)
     targets: list[str] = []
     for match in MD_LINK_RE.finditer(text):
-        url = match.group(2).strip()
-        path = url.split("#", 1)[0].split("?", 1)[0].strip()
-        path = path.strip("/")
-        if not path:
-            continue
-
-        if path.startswith("raw/"):
-            targets.append(path)
-            continue
-
-        if re.search(r"(^|/)raw/postgres-\d+/", path) and page_path is not None:
-            resolved = (page_path.parent / path).resolve()
-            try:
-                targets.append(resolved.relative_to(REPO_ROOT).as_posix())
-            except ValueError:
-                targets.append(path)
+        url = markdown_url(match)
+        if is_raw_url(url):
+            targets.append(raw_target(url, page_path))
     return targets
 
 
-def markdown_raw_citation_format_issues(text: str) -> list[tuple[str, str]]:
+def markdown_raw_citation_format_issues(
+    text: str, page_path: Path | None = None,
+    line_counts: dict[Path, int] | None = None,
+) -> list[tuple[str, str]]:
     """Return format issues for Markdown links that target raw/postgres-NN/."""
     text = _strip_markdown_code(text)
     issues: list[tuple[str, str]] = []
+    if line_counts is None:
+        line_counts = {}
     for match in MD_LINK_RE.finditer(text):
-        url = match.group(2).strip()
-        path, sep, fragment = url.partition("#")
-        path = path.split("?", 1)[0].strip().strip("/")
-        if not re.search(r"(^|/)raw/postgres-\d+/", path):
+        url = markdown_url(match)
+        if not is_raw_url(url):
             continue
-
-        if not sep:
-            continue
-
-        fragment = fragment.split("?", 1)[0].strip()
-        if not LINE_FRAGMENT_RE.fullmatch(fragment):
+        fragment = url.partition("#")[2]
+        lines = LINE_FRAGMENT_RE.fullmatch(fragment)
+        if lines is None:
             issues.append((url, "line fragment must be #L<line> or #L<start>-L<end>"))
+            continue
+        start = int(lines[1])
+        end = int(lines[2] or lines[1])
+        if start < 1 or end < start:
+            issues.append((url, "line range must be positive and ordered"))
+            continue
+        if page_path is not None:
+            source = (REPO_ROOT / raw_target(url, page_path)).resolve()
+            if not source.is_relative_to(REPO_ROOT / "raw") or not source.is_file():
+                # The target check reports this separately.
+                continue
+            try:
+                if source not in line_counts:
+                    with source.open("rb") as handle:
+                        line_counts[source] = sum(1 for _ in handle)
+                if end > line_counts[source]:
+                    issues.append((url, f"line range exceeds file length ({line_counts[source]} lines)"))
+            except OSError as error:
+                issues.append((url, f"cannot read citation target: {error}"))
     return issues
 
 
@@ -292,8 +381,8 @@ def raw_source_references_outside_links(text: str) -> list[str]:
     linked_spans: list[tuple[int, int]] = []
 
     for match in MD_LINK_RE.finditer(text):
-        url = match.group(2)
-        if re.search(r"(^|/)raw/postgres-\d+/", url):
+        url = markdown_url(match)
+        if is_raw_url(url):
             linked_spans.append(match.span())
 
     for match in LINK_RE.finditer(text):
@@ -314,7 +403,7 @@ def extract_markdown_wiki_links(text: str, page_path: Path) -> list[str]:
     text = _strip_markdown_code(text)
     targets: list[str] = []
     for match in MD_LINK_RE.finditer(text):
-        url = match.group(2).strip()
+        url = markdown_url(match)
         if not url or url.startswith("#"):
             continue
         if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", url):
@@ -337,9 +426,10 @@ def extract_markdown_wiki_links(text: str, page_path: Path) -> list[str]:
 
 def section_text(text: str, heading: str) -> str:
     lines = text.splitlines()
+    visible_lines = _strip_fenced_code(text).splitlines()
     start = None
     heading_line = f"## {heading}"
-    for index, line in enumerate(lines):
+    for index, line in enumerate(visible_lines):
         if line.strip() == heading_line:
             start = index + 1
             break
@@ -347,10 +437,10 @@ def section_text(text: str, heading: str) -> str:
         return ""
 
     collected: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("## "):
+    for index in range(start, len(lines)):
+        if visible_lines[index].startswith("## "):
             break
-        collected.append(line)
+        collected.append(lines[index])
     return "\n".join(collected).strip()
 
 
@@ -361,7 +451,7 @@ CODEBASE_GUIDE_BASENAME = "codebase-navigation-guide"
 CODEBASE_GUIDE_TYPE = "codebase-navigation-guide"
 SOURCE_REQUIRED_TYPES = {"question", CODEBASE_GUIDE_TYPE, COMMON_CONCEPT_TYPE}
 QUESTION_STYLE_TYPES = {"question", CODEBASE_GUIDE_TYPE}
-QUESTION_SECTION_REQUIRED_TYPES = {CODEBASE_GUIDE_TYPE}
+QUESTION_SECTION_REQUIRED_TYPES = QUESTION_STYLE_TYPES
 FRONT_MATTER_ORDER_TYPES = QUESTION_STYLE_TYPES | {COMMON_CONCEPT_TYPE}
 TITLE_HINT_TYPES = QUESTION_STYLE_TYPES | {COMMON_CONCEPT_TYPE, "answer"}
 UNVERIFIED_HINT = "(unverified)"
@@ -406,18 +496,18 @@ def requires_front_matter(slug: str) -> bool:
     return version is not None
 
 
-def has_source_references(text: str) -> bool:
+def has_source_references(text: str, page_path: Path | None = None) -> bool:
     refs = section_text(text, "Source References")
-    return bool(re.search(r"(raw/postgres-\d+/|src/)", refs))
+    return bool(extract_markdown_raw_citations(refs, page_path))
 
 
 def has_section(text: str, heading: str) -> bool:
-    return any(line.strip() == f"## {heading}" for line in text.splitlines())
+    return any(line.strip() == f"## {heading}" for line in _strip_fenced_code(text).splitlines())
 
 
 def page_title(text: str) -> str | None:
     """Return the first top-level Markdown title, which always precedes body content."""
-    for line in text.splitlines():
+    for line in _strip_fenced_code(text).splitlines():
         if line.startswith("# "):
             return line[2:].strip()
     return None
@@ -495,17 +585,18 @@ def lint() -> tuple[list[Issue], list[Issue]]:
     slugs = {wiki_slug(path) for path in files}
     inbound = {slug: 0 for slug in slugs}
     page_text = {path: path.read_text(encoding="utf-8") for path in files}
-    front_matter: dict[Path, dict[str, object]] = {}
+    line_counts: dict[Path, int] = {}
 
     for path, text in page_text.items():
         slug = wiki_slug(path)
         fm, _, has_fm = parse_front_matter(text)
-        front_matter[path] = fm
 
         if requires_front_matter(slug) and not has_fm:
             errors.append(Issue("ERROR", rel(path), "missing required front matter"))
 
         parts = slug.split("/")
+        if re.fullmatch(r"v[0-9]+", parts[0]) and parts[0][1:] not in versions:
+            errors.append(Issue("ERROR", rel(path), f"version {parts[0]} is not registered in wiki/versions.md"))
         if (
             len(parts) == 2
             and re.fullmatch(r"v\d+", parts[0])
@@ -525,12 +616,11 @@ def lint() -> tuple[list[Issue], list[Issue]]:
             if expected and fm.get("pinned_commit") != expected:
                 errors.append(Issue("ERROR", rel(path), f"pinned_commit does not match wiki/versions.md for v{version}"))
 
-            cited_versions = sorted(set(re.findall(r"raw/postgres-(\d+)/", text)))
-            wrong = [cited for cited in cited_versions if cited != version]
-            if wrong:
-                errors.append(Issue("ERROR", rel(path), f"cites source checkout(s) for wrong version: {', '.join(wrong)}"))
-
         page_type = str(fm.get("type", ""))
+        if version_local_kind == "questions" and page_type != "question":
+            errors.append(Issue("ERROR", rel(path), "question page must have type: question"))
+        if page_type == "question" and version_local_kind != "questions":
+            errors.append(Issue("ERROR", rel(path), "question page must live under wiki/vNN/questions/"))
         if version_local_kind == CODEBASE_GUIDE_TYPE and page_type != CODEBASE_GUIDE_TYPE:
             errors.append(Issue("ERROR", rel(path), f"codebase navigation guide must have type: {CODEBASE_GUIDE_TYPE}"))
         if page_type == CODEBASE_GUIDE_TYPE and version_local_kind != CODEBASE_GUIDE_TYPE:
@@ -541,7 +631,14 @@ def lint() -> tuple[list[Issue], list[Issue]]:
         if page_type == COMMON_CONCEPT_TYPE and version_local_kind != COMMON_CONCEPT_DIR:
             errors.append(Issue("ERROR", rel(path), f"common concept page must live under wiki/vNN/{COMMON_CONCEPT_DIR}/"))
 
-        if page_type in SOURCE_REQUIRED_TYPES and not has_source_references(text):
+        # A missing or misspelled type must not disable the path's other checks.
+        page_type = {
+            "questions": "question",
+            COMMON_CONCEPT_DIR: COMMON_CONCEPT_TYPE,
+            CODEBASE_GUIDE_TYPE: CODEBASE_GUIDE_TYPE,
+        }.get(version_local_kind, page_type)
+
+        if page_type in SOURCE_REQUIRED_TYPES and not has_source_references(text, path):
             errors.append(Issue("ERROR", rel(path), "missing ## Source References entries"))
 
         if page_type == COMMON_CONCEPT_TYPE:
@@ -559,20 +656,25 @@ def lint() -> tuple[list[Issue], list[Issue]]:
 
         # Verification field checks
         if requires_front_matter(slug):
+            all_keys = ['type', 'version', 'pinned_commit', 'verified', 'verified_by_agent']
+            for key in all_keys:
+                if key not in fm:
+                    errors.append(Issue("ERROR", rel(path), f"missing required front matter field: {key}"))
             verified = fm.get("verified")
             if verified is not None and verified not in ("true", "false"):
                 errors.append(Issue("ERROR", rel(path), "verified must be 'true' or 'false'"))
 
             vba = fm.get("verified_by_agent")
             if vba is not None and vba != 'not yet':
-                if not re.match(r"^[a-zA-Z0-9_-]+ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", str(vba)):
+                if not re.fullmatch(r"[a-zA-Z0-9_-]+ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", str(vba)):
                     errors.append(Issue("ERROR", rel(path), "verified_by_agent invalid format: <model> YYYY-MM-DDTHH:MM:SSZ"))
-
-            if page_type in QUESTION_STYLE_TYPES and verified is None:
-                errors.append(Issue("ERROR", rel(path), "question-style pages must declare verified: (false until a human verifies the page)"))
+                else:
+                    try:
+                        datetime.strptime(str(vba).split(" ", 1)[1], "%Y-%m-%dT%H:%M:%SZ")
+                    except ValueError:
+                        errors.append(Issue("ERROR", rel(path), "verified_by_agent has an invalid UTC date or time"))
 
             if page_type in FRONT_MATTER_ORDER_TYPES:
-                all_keys = ['type', 'version', 'pinned_commit', 'verified', 'verified_by_agent']
                 present_expected = [k for k in all_keys if k in fm]
                 if list(fm.keys()) != present_expected:
                     warnings.append(Issue("WARN", rel(path), f"front matter keys not in order: {list(fm.keys())} (expected {all_keys})"))
@@ -586,11 +688,9 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                 elif verified != "true" and not title.endswith(UNVERIFIED_HINT):
                     errors.append(Issue("ERROR", rel(path), f"unverified page title must end with {UNVERIFIED_HINT}"))
 
-            if verified is None and vba is None:
-                warnings.append(Issue("WARN", rel(path), "Missing verification fields (verified or verified_by_agent)"))
-
         for target in extract_obsidian_links(text):
             if target.startswith("raw/"):
+                errors.append(Issue("ERROR", rel(path), f"raw source citations must use Markdown links: [[{target}]]"))
                 if not (REPO_ROOT / target).exists():
                     errors.append(Issue("ERROR", rel(path), f"broken wiki link [[{target}]]"))
                 continue
@@ -611,8 +711,9 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                 inbound[target] = inbound.get(target, 0) + 1
 
         for target in extract_markdown_raw_citations(text, path):
-            if not (REPO_ROOT / target).exists():
-                errors.append(Issue("ERROR", rel(path), f"broken Markdown citation ({target})"))
+            source = (REPO_ROOT / target).resolve()
+            if not source.is_relative_to(REPO_ROOT / "raw") or not source.is_file():
+                errors.append(Issue("ERROR", rel(path), f"broken Markdown citation ({target}): target must be a file inside raw/"))
                 continue
             if version:
                 cited_match = re.match(r"raw/postgres-(\d+)/", target)
@@ -623,7 +724,7 @@ def lint() -> tuple[list[Issue], list[Issue]]:
                     ))
 
         if page_type in SOURCE_REQUIRED_TYPES:
-            for target, reason in markdown_raw_citation_format_issues(text):
+            for target, reason in markdown_raw_citation_format_issues(text, path, line_counts):
                 errors.append(Issue(
                     "ERROR",
                     rel(path),

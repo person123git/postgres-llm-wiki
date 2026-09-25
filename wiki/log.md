@@ -14845,3 +14845,35 @@ commit on `origin/master`, so no rebase was needed.
   scripts/wiki_lint` reported 0 errors and 2 existing warnings for uncommitted
   changes in the PostgreSQL 12 and 14 source checkouts.
 - No PostgreSQL service or sandbox was started for this task.
+
+## [2026-09-25] scaffold | fix all eleven wiki_lint review findings
+
+- Original review prompt: `follow agents.md , review wiki_lint`. Corrected to
+  `Follow AGENTS.md and review wiki_lint` (capitalization and punctuation).
+  Follow-ups: `fix all`, then `fix all, don't add regression tests`; the operative
+  instruction is `Fix all; don't add regression tests.` (capitalization and punctuation).
+- Fixed the eleven reported tooling findings in `scripts/wiki_lint`: reject empty,
+  malformed, duplicate, or invalid-pin manifest rows and unregistered page versions;
+  require question types, question/answer sections, and all five metadata fields;
+  validate verification dates; require actual source-reference links; validate source
+  files and positive, ordered, in-bounds line ranges; reject raw Obsidian citations;
+  preserve code-formatted link labels; normalize angle-bracket destinations; derive
+  citation versions from parsed targets; and share fence handling between link,
+  title, and section checks. Source line counts are cached within each lint run.
+- Updated the README's lint description and exit-status guidance. No dependencies
+  or regression test files were added. The existing `verified:` fields were untouched.
+- Validation: 38 in-memory cases passed through the project venv, covering all eleven
+  findings, valid links and metadata, longer and unclosed fences, and cross-version
+  path normalization. `git diff --check` passed. The full CLI command
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint` reported 940 errors and 2
+  warnings, with exit status 1. Both warnings are the existing uncommitted changes
+  in the PostgreSQL 12 and 14 source checkouts. Full diagnostics are saved in
+  `.wiki-runtime/cache/wiki_lint/last-run.txt`. The final run follows this log update.
+- The stricter checks exposed 940 existing errors in 30 question pages: 924 source
+  links without line fragments and 16 missing non-empty `## Answer` sections. The
+  user declined the proposed page repairs. This explicit scope instruction takes
+  precedence over `MANDATORY Lint`'s instruction to fix every lint error; the page
+  errors remain visible, and no version-local page was changed.
+- Glossary review: this tooling change introduces no PostgreSQL terms or definition
+  changes; the glossary was reviewed and left unchanged. No PostgreSQL measurements
+  were run, no service was started, and no sandbox was created.
