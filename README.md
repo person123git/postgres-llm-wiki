@@ -89,7 +89,6 @@ All pages are source-backed with citations to the pinned PostgreSQL checkouts. R
 ## More Information
 
 - [The Idea](idea.md): The core concept behind LLM-maintained wikis
-- [Implementation Plan](postgresql-engine-wiki-plan.md): Detailed technical specifications and setup
 - [AGENTS.md](AGENTS.md): Instructions for contributing to the wiki
 
 For detailed coverage, start with [versions](wiki/versions.md) or the version-specific landing pages: [v19/index](wiki/v19/index.md), [v18/index](wiki/v18/index.md), [v17/index](wiki/v17/index.md), [v12/index](wiki/v12/index.md).

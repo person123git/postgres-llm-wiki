@@ -48,3 +48,4 @@ Name the neighboring concepts and where the boundary is. Link this version's oth
 
 - [vNN/index](../index.md)
 - [wiki index](../../index.md)
+- [Wiki Glossary (unverified)](../../glossary.md)

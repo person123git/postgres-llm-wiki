@@ -21,7 +21,7 @@ verified_by_agent: not yet
 
 ## Question
 
-Restate the user's prompt verbatim, after settling any prompt defects with the user.
+Restate the user's prompt verbatim, with any corrections made under `MANDATORY Prompt Hygiene`.
 
 ## Answer
 
@@ -45,3 +45,4 @@ Delete this section and its Contents entry unless the page reports a number prod
 
 - [vNN/index](../../index.md)
 - [wiki index](../../../index.md)
+- [Wiki Glossary (unverified)](../../../glossary.md)

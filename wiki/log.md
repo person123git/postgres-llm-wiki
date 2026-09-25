@@ -1,6 +1,6 @@
 # Wiki Log
 
-Append one entry after every scaffold change, version lifecycle event, ingest, trace, lint pass, or filed answer.
+Append one entry after every scaffold change, version lifecycle event, ingest, trace, filed answer, measurement run, or standalone lint run the user asked for. Record the lint result in the entry, and run lint after writing it.
 
 ## [2026-09-17] answer v17 | int to bigint: the rewrite priced on both 17.11 and 12.2
 
@@ -14749,3 +14749,99 @@ commit on `origin/master`, so no rebase was needed.
   0 errors and 2 warnings for pre-existing uncommitted changes in the PostgreSQL 12 and
   14 source checkouts.
 - No service or sandbox was started or created for this task.
+
+## [2026-09-25] scaffold | AGENTS.md review: GUC mapping, cross-version evidence, lint verification rule, and dead text
+
+- Reviewed `AGENTS.md` against `scripts/wiki_lint`, both templates, `.gitignore`, the v18
+  GUC source and the wiki's current state, reported 19 findings, then fixed them at the
+  user's direction. The request `review agents.md` is not restated on any page, so prompt
+  hygiene had nothing to correct.
+- **GUC contexts.** [MANDATORY GUC Changes](../AGENTS.md#mandatory-guc-changes) now maps
+  all seven `pg_settings.context` values in a table. `backend` and `superuser-backend`
+  moved from session scope to "new sessions only", because `SET` fails once a session has
+  started, and `internal` is "cannot be changed".
+- **Cross-version claims.** A version-local page now supports another version's value or
+  behavior through the target checkout's own git history and never cites another
+  checkout. This matches what the v18 GUC-defaults page already does. Previously the rule
+  asked for per-version evidence that lint forbade citing.
+- **Lint.** `scripts/wiki_lint` rejected any question page or guide whose `verified` was
+  not `false`, which would have failed the first human sign-off. It now errors only when
+  `verified:` is missing. Checked on a throwaway copy under `.wiki-runtime/tmp/lintcheck/`:
+  a `verified: true` page passes, a page with no `verified:` fails, and the old rule failed
+  both. The copy was deleted afterwards.
+- **New rules.** [Rule Precedence](../AGENTS.md#mandatory-rule-precedence),
+  [Review Requests](../AGENTS.md#mandatory-review-requests), and the commit workflow under
+  Version Control. Prompt hygiene now corrects typos silently, records the original wording
+  in the log, and asks only when a fix could change the meaning.
+- **Clarified.**
+  - Subagents must be given the orchestrator's model explicitly, not assumed to inherit it.
+  - Teardown uses `pgrep -f -- <datadir>` instead of `pgrep -a`, which on macOS adds the
+    caller's ancestors.
+  - `templates/` joined the read/write allowlist.
+  - Measurement scripts get a tool allowlist and a rule to use only POSIX options and regex
+    syntax, one per-leg exception, a short-sandbox-name note (macOS `sun_path`), and a
+    Runtime row that no longer assumes a kept build.
+  - Question pages always carry Context Reviewed, Evidence Map and Open Questions.
+  - Lint runs last, after the log entry.
+  - Mermaid needs a keyed citation list.
+  - The lint claim about verification fields is now limited to version-local pages.
+- **Removed dead text.** The `[[raw/...]]` citation migration note, the legacy answer-page
+  rules, the category-migration note and the template-deletion notes. No page of those
+  kinds remains. The `## Contents` and `## Measurement Script` migration notes stay,
+  because 17 of 74 question pages still lack `## Contents`.
+- **Templates.** Both now link the glossary in `## Navigation`, and the question template's
+  `## Question` hint follows the new prompt-hygiene rule.
+- **scripts/.** Removed `scripts/` from `.gitignore`, so new tooling is no longer silently
+  untracked. At the user's direction, deleted three untracked leftovers:
+  - `scripts/bootstrap_venv` and `scripts/recent_log`, byte-identical to the blobs removed
+    in `5d4042d`, so they can be restored from `5d4042d^`
+  - `scripts/.bloatplan_review_fix.py`, a one-off 2026-09-20 page-edit helper that was
+    never in git
+
+  I first recommended tracking `bootstrap_venv`. I withdrew that because it would reverse
+  the 2026-09-14 decision that made `python3 -m venv` the setup path, and the user kept
+  that decision.
+- **Glossary.** Removed the sentence in [GUC context](glossary.md#guc-context) that
+  described the old `AGENTS.md` wording, and removed the matching Open Question now that the
+  rule follows the source. No definition changed, and `verified_by_agent` stays `not yet`.
+- **Not changed.** Three filed measurement scripts still check teardown with `pgrep -a` or
+  `pgrep -af`:
+  - [very-large-shared-buffers](v17/questions/storage-and-vacuum/very-large-shared-buffers.md)
+  - [alter-column-int-to-bigint-io](v17/questions/storage-and-vacuum/alter-column-int-to-bigint-io.md)
+  - [btree-deduplication-after-pg-upgrade](v17/questions/indexing/btree-deduplication-after-pg-upgrade.md)
+
+  Fix them at their next re-run. `AGENTS.md` grew from 8,791 to 9,403 words, because the
+  new rules add more than the removed dead text.
+- Validation: `git diff --check` clean, then
+  `.wiki-runtime/venv/bin/python scripts/wiki_lint`: 0 errors, 2 warnings (the existing
+  uncommitted changes in the PostgreSQL 12 and 14 checkouts).
+- No PostgreSQL service was started. The only sandbox, `.wiki-runtime/tmp/lintcheck/`, was
+  deleted.
+
+## [2026-09-25] scaffold | retire repin helper and inline lint helpers
+
+- The original request named `reping_citations`; corrected that typo to the tracked
+  `scripts/repin_citations` before removing it. The follow-up asked to remove it and
+  `scripts/wiki_tooling.py`, and to move the helpers.
+- Moved the helper functions still used by `scripts/wiki_lint` into that script, including
+  project-venv enforcement, version/front-matter parsing, link extraction, and private
+  tool logging. Removed the now-unused shared helper module and citation-repin script.
+- Removed both retired scripts from the live `scripts/` tree in
+  `postgresql-engine-wiki-plan.md`. Historical mentions in the wiki and log remain as
+  records of past repins.
+- Lint before the change: 0 errors and 2 existing warnings for uncommitted changes in
+  the PostgreSQL 12 and 14 source checkouts. Final lint: 0 errors and the same 2 warnings.
+- No PostgreSQL service or sandbox was started for this task.
+
+## [2026-09-25] scaffold | remove completed implementation roadmap
+
+- Removed `postgresql-engine-wiki-plan.md` and all five files under
+  `implementation-steps/`. The phases were marked done; `AGENTS.md` remains the
+  authority for current wiki work.
+- Removed the obsolete implementation-plan link from `README.md`. Historical
+  mentions in this log remain as records of earlier work.
+- Glossary review: no PostgreSQL term or definition is affected.
+- Validation: `git diff --check` clean; `.wiki-runtime/venv/bin/python
+  scripts/wiki_lint` reported 0 errors and 2 existing warnings for uncommitted
+  changes in the PostgreSQL 12 and 14 source checkouts.
+- No PostgreSQL service or sandbox was started for this task.

@@ -5,7 +5,6 @@
 .obsidian/
 wiki/.obsidian
 .wiki-runtime/
-scripts/
 __pycache__/
 *.py[cod]
 

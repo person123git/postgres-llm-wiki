@@ -2,6 +2,17 @@
 
 This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned PostgreSQL checkout under `raw/postgres-NN/` is the evidence base.
 
+## MANDATORY Rule Precedence
+
+When two rules in this file conflict, or a rule conflicts with the request, follow the first that applies:
+
+1. The user's explicit instruction for the current task.
+2. `MANDATORY Environment Isolation` and `MANDATORY Version Control`.
+3. `MANDATORY Evidence` and `MANDATORY Citations`.
+4. Document shape, writing style, and bookkeeping rules.
+
+Name the conflict and the rule you followed in your response.
+
 ## MANDATORY Read First
 
 - Read `wiki/versions.md` before modifying or answering from the wiki.
@@ -15,7 +26,7 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 ## MANDATORY Environment Isolation
 
 - Stay inside this repo.
-- Read/write only `raw/`, `wiki/`, `.wiki-runtime/`, `scripts/`, `tests/`, `requirements.txt`, and top-level docs.
+- Read/write only `raw/`, `wiki/`, `.wiki-runtime/`, `scripts/`, `templates/`, `tests/`, `requirements.txt`, and top-level docs.
 - Treat `raw/postgres-NN/` checkouts as read-only evidence.
 - Run Python scripts from `.wiki-runtime/venv/`: activate it or call `.wiki-runtime/venv/bin/python scripts/<name>`.
 - If the venv is missing, create it with `python3 -m venv .wiki-runtime/venv`. That command is the only permitted use of host `python3`.
@@ -25,13 +36,13 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 - Use network only for venv setup from `requirements.txt` or user-requested source fetches.
 - Do not use `WIKI_ALLOW_SYSTEM_PYTHON=1` in normal work.
 - Keep generated artifacts, caches, and the venv under `.wiki-runtime/`.
-- Run every subagent on the orchestrator's model. A subagent inherits the model of the agent that launched it. This covers foreground and background subagents, read-only exploration runs, implementation runs, and any agent those subagents launch in turn.
-- If exact inheritance is unsupported, use the most capable available model of the same family, and disclose the substitution before the subagent starts: name the orchestrator's model, the substitute, and why exact inheritance failed.
+- Run every subagent on the orchestrator's model. Do not assume a subagent inherits it: an agent type's own definition or a configured default subagent model can override inheritance. Set the model explicitly when you launch the subagent, or use a launch mode that always inherits the launcher's model, such as a fork. This covers foreground and background subagents, read-only exploration runs, implementation runs, and any agent those subagents launch in turn.
+- If the orchestrator's exact model cannot be selected, use the most capable available model of the same family, and disclose the substitution before the subagent starts: name the orchestrator's model, the substitute, and why the exact model could not be used.
 - Disclose and proceed when the substitute is equal or more capable. Stop and get the user's approval when it is weaker than the orchestrator's model.
 - If no same-family model is available, do not substitute across families. Report it and ask, or keep the work in the orchestrator.
 - Stop every service you started for wiki processing or document generation before your final response, whether the work succeeded, failed, or was abandoned mid-run. This covers PostgreSQL postmasters, standbys and replicas, connection poolers, background `psql` sessions, watchers, and any other daemon.
-- Shut a cluster down cleanly with `pg_ctl -D <datadir> -m fast stop`, then confirm the teardown: no `postmaster.pid` in the data directory, no matching process in `pgrep -a postgres`, and the socket directory and port free.
-- Delete the sandbox you created under `.wiki-runtime/tmp/<name>/` once it is stopped, unless the user asked to keep it. If the user asked to keep it, leave it stopped, name the retained path on the page or in the log entry, and say how to restart it.
+- Shut a cluster down cleanly with `pg_ctl -D <datadir> -m fast stop`, then confirm the teardown: no `postmaster.pid` in the data directory, no process whose command line names the data directory in `pgrep -f -- <datadir>`, and the socket directory and port free. Do not use `pgrep -a`: on macOS `-a` adds the caller's ancestors to the match list instead of printing command lines.
+- Delete the sandbox you created under `.wiki-runtime/tmp/<name>/` once it is stopped, unless the user asked to keep it. Deleting it also deletes any build tree inside it, so a later run rebuilds. If the user asked to keep it, leave it stopped, name the retained path on the page or in the log entry, and say how to restart it.
 - Never stop, kill, or delete a cluster, service, or data directory you did not start. Report the process and its data directory to the user and ask first.
 
 ## MANDATORY Evidence
@@ -47,9 +58,18 @@ This repo is an LLM-maintained wiki for PostgreSQL internals. The pinned Postgre
 
 ## MANDATORY Prompt Hygiene
 
-- If a user question or any prompt that drives document generation contains typos or grammatical errors, stop before generating and ask the user whether to correct the prompt issues or keep them as written.
+- If a user question or any prompt that drives document generation contains typos or grammatical errors, correct them without asking. Wherever a rule calls for a verbatim restatement, restate the corrected prompt.
+- Record the original wording and each correction in the task's `wiki/log.md` entry. If the interaction has no log entry, list the corrections in your response.
+- Stop and ask before drafting only when a correction could change the prompt's meaning, or when the user asked to keep the prompt as written.
 - Apply this to filed `## Question` text, ingest prompts, and any prompt that will be restated verbatim in a wiki page.
-- Wait for the user's answer before drafting. Do not silently rewrite the prompt.
+
+## MANDATORY Review Requests
+
+- When the user asks you to review a page or file and states no scope, finish the review and report the findings before changing anything. Then ask one question that settles the scope: report only, fix in place, or fix and re-run the measurements.
+- "Just review", "report only", or "do not re-run" means report only: static checks, no edits, and no measurement runs.
+- "Fix issues" after a report means fix every reported finding, including the measurement script, and re-run the measurement whenever a fix can change its numbers.
+- A pasted review with its own fix order, or a request with its own numbered scope, is the scope. Do not ask about scope.
+- A bare "continue" after an interrupted run means finish the whole remaining task.
 
 ## MANDATORY Deep Inquiry
 
@@ -60,7 +80,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - Inspect adjacent callers, callees, structs, macros, includes, generated headers visible in raw source, reverse include users, tests, docs, catalogs, grammar, error paths, GUCs, and extension/contrib boundaries.
 - If evidence lookup fails or is untrustworthy, stop before drafting. Fix it, rerun it, or report the target version and error.
 - Inspect history when the user asks why, when intent matters, or when making a regression/change claim.
-- For cross-version claims, collect evidence for each relevant version.
+- For cross-version claims on a version-local page, support each other version's value or behavior through the target checkout's own git history. Name the commit by abbreviated hash, say what it changed, and cite the current code at the target pin. You may read another version's checkout to cross-check, but never cite it on that page. If the target history cannot establish a claim, for example because the checkout is a shallow clone, put the claim under `## Open Questions`.
 - Draft from a claim-to-source map. Put unresolved claims under `## Open Questions`.
 - Before drafting the explanation, map the values, information flow, branches, and lifecycle events required by `MANDATORY Technical Explanations`.
 - Minimum engine answer: normal path, edge/error path, key data structures, caller/callee boundary, build/generated-header implications visible from raw source, and tests or explicit test absence.
@@ -101,7 +121,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
   - Line numbers are stable because each version-local page pins an exact commit via `pinned_commit:`; the shared glossary records its per-version commits under `## Source Pins`. They jump correctly in VS Code and editors that understand Markdown line fragments.
 - Include full extensions for non-Markdown files (`.c`, `.h`, `.sgml`, `.sql`, `.out`).
 - Cite from the `raw/postgres-NN/` checkout matching the page `version:`. Never cite across versions on a version-local page. The shared glossary follows its explicit per-entry version scope and `## Source Pins` instead.
-- Use one citation style per page. Don't mix Markdown citations with the old `[[raw/...]]` wikilink form on the same page.
+- Do not use the retired `[[raw/...]]` wikilink citation form.
 - Page-to-page wiki navigation uses the same page-relative Markdown link syntax so it opens in plain VS Code Markdown preview. Do not use Obsidian wikilinks for wiki page navigation.
 - Do not state a claim as fact unless it is backed by a source file, symbol, test file, documentation page, commit, or saved design discussion.
 - Put uncertainty under `## Open Questions`.
@@ -114,8 +134,6 @@ Examples, as written from a question page such as `wiki/v18/questions/observabil
 [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208)
 [bufmgr.c:4397](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4397)
 ```
-
-Migration note: existing pages that still use `[[raw/postgres-NN/...]]` wikilink citations remain valid and need not be rewritten until they are next edited. New and substantially-revised pages must use the Markdown form.
 
 ## MANDATORY Writing Style
 
@@ -145,7 +163,7 @@ Choose the representation that exposes the mechanism:
 
 | Logic to explain | Required representation |
 |---|---|
-| Conditional or execution logic | Flowchart or decision tree, using Mermaid or a readable text diagram |
+| Conditional or execution logic | Flowchart or decision tree, as a readable text diagram, or as Mermaid with its citations in a keyed list beside it, because links inside a Mermaid diagram are not clickable and a plain Markdown preview may show it as source |
 | Linear causal chain | Sequence of numbered steps |
 | Lifecycle events or state changes | State-transition table |
 | Cases that differ along the same dimensions | Comparison table |
@@ -254,7 +272,15 @@ Check these requirements by hand. A clean `scripts/wiki_lint` result does not es
 
 - When suggesting any GUC change, state whether it needs restart, reload, or only session/transaction scope.
 - Determine the requirement from the same-version raw GUC definition or a validated `pg_settings` definition.
-- Map contexts explicitly: `postmaster` -> restart; `sighup` -> reload; `superuser`, `user`, `backend` -> session/transaction scope.
+- Map contexts explicitly:
+
+| `pg_settings.context` | Requirement |
+|---|---|
+| `postmaster` | restart |
+| `sighup` | reload |
+| `superuser`, `user` | session/transaction scope with `SET`; a `superuser` setting only for a role allowed to change it |
+| `backend`, `superuser-backend` | new sessions only: set it at connection start, for example through `PGOPTIONS`, or in the configuration file followed by a reload, which only sessions started afterwards pick up. `SET` fails once a session has started. |
+| `internal` | cannot be changed |
 
 ## MANDATORY Production SQL
 
@@ -274,8 +300,9 @@ Any page that reports a number produced by running PostgreSQL must publish the s
 
 - File the script under one top-level `## Measurement Script` section, placed after `## Answer` and before `## Context Reviewed`, and list it in `## Contents`.
 - Publish the script in full, in the page, inside a fenced block. Do not link to an uncommitted file, do not summarize it, and do not leave a reader to reassemble it from prose.
-- Use Bash and SQL only. No Python, no `awk`, no `perl`, no `jq`, no external harness. A reviewer needs a compiler, a shell, and this page. The `.wiki-runtime/venv/` Python is wiki tooling, not measurement tooling.
-- One script per page. When a measurement has more than one version leg, file one script per leg in its own `###` subsection under the same `## Measurement Script` section, named for the version it runs.
+- Use Bash and SQL. Besides `bash`, the script may call `git`, the build toolchain (`configure`, `make`, the C compiler), the PostgreSQL programs it builds, and standard POSIX utilities such as `sed`, `grep`, `sort`, `cut`, `tr`, `wc`, `head`, and `tail`. No Python, no `awk`, no `perl`, no `jq`, no external harness. The `.wiki-runtime/venv/` Python is wiki tooling, not measurement tooling.
+- Use only options and regular-expression syntax that POSIX specifies, so the script behaves the same with BSD (macOS) and GNU tools. For example, use `grep -E 'a|b'`, not `grep 'a\|b'`, and do not use `sed -i`.
+- File one script per page. The only exception is a measurement with more than one version leg: file one script per leg, each in its own `###` subsection under the same `## Measurement Script` section, named for the version it runs.
 
 Reuse and maintenance:
 
@@ -295,13 +322,14 @@ Usage information is mandatory. The section must state:
 | Environment | every variable the script reads, with its default |
 | Prerequisites | build toolchain, configure flags, extensions, locale and encoding requirements |
 | Output | where results land, and which file or table to read first |
-| Runtime | roughly how long a full run takes, and how long a re-run from a built tree takes |
+| Runtime | roughly how long a full run takes, and how long a re-run takes while the build is still present (before the cleanup stage deletes it) |
 | Cleanup | the stage or command that stops the server and deletes the sandbox |
 
 Isolation and safety, on top of `MANDATORY Environment Isolation`:
 
 - Treat `raw/postgres-NN/` as read only. Build out of tree and write every artifact under `.wiki-runtime/tmp/<name>/`.
 - Run an isolated cluster with its own data directory, its own socket directory, and a non-default port. Never measure against a cluster the user did not name.
+- Keep the sandbox name short. PostgreSQL refuses a Unix-socket path longer than the platform's `sun_path` buffer, which is about 103 usable bytes on macOS, and the repository path plus `.wiki-runtime/tmp/` already uses much of that.
 - Start with `set -uo pipefail`, and call `psql` with `-X -v ON_ERROR_STOP=1` so a stray `~/.psqlrc` cannot change the result and no error passes silently.
 - Follow `MANDATORY Production SQL` for the statements the script sends: the inline tag comment after the leading verb, and session-scoped `statement_timeout` and `lock_timeout`.
 - Name the context and apply scope of every GUC the script sets, per `MANDATORY GUC Changes`.
@@ -351,8 +379,6 @@ verified: false
 verified_by_agent: not yet
 ```
 
-- Legacy `type: answer` pages use the same field order with `type: answer`. Do not file new answer pages; see `MANDATORY Question Documents`.
-
 - The shared glossary uses `type: glossary`, `verified:`, and `verified_by_agent:` in that order. It has no single `version:` or `pinned_commit:`; its exact per-version pins belong in `## Source Pins`. See `MANDATORY Shared Glossary` for its full shape. The human-only verification rule and unverified title/link hints still apply.
 
 - Do not set the timestamp form if any claim is unverified. Fix it, move it under `## Open Questions`, or leave `verified_by_agent: not yet`.
@@ -370,7 +396,7 @@ verified_by_agent: not yet
 verified_by_agent: <model-name> YYYY-MM-DDTHH:MM:SSZ
 ```
 
-The timestamp form is `<model-name> <ISO-8601-UTC>`: a single space separator, then a UTC timestamp ending in `Z`, e.g. `claude-opus-4-8 2026-06-06T14:30:00Z`. The model name must match `[a-zA-Z0-9_-]+` (no spaces or dots). `scripts/wiki_lint` enforces exactly this shape. Use the exact current model name and the real verification time when filing an agent-verified page.
+The timestamp form is `<model-name> <ISO-8601-UTC>`: a single space separator, then a UTC timestamp ending in `Z`, e.g. `claude-opus-4-8 2026-06-06T14:30:00Z`. The model name must match `[a-zA-Z0-9_-]+` (no spaces or dots). `scripts/wiki_lint` enforces exactly this shape on version-local pages; it does not check the glossary's verification fields or title, so check those by hand. Use the exact current model name and the real verification time when filing an agent-verified page.
 
 ## MANDATORY Version Awareness
 
@@ -466,10 +492,10 @@ wiki/vNN/codebase-navigation-guide.md
 When a user asks a question, the deliverable is a single `type: question` page that holds both the question and its answer. Do not spin off a separate answer document.
 
 - File the page under `wiki/vNN/questions/<category>/`, using a category from `MANDATORY Question Categories`. Never file a question directly under `wiki/vNN/questions/`.
-- Restate the user prompt verbatim under `## Question`.
+- Restate the user prompt verbatim under `## Question`, with any corrections made under `MANDATORY Prompt Hygiene`.
 - Put the full answer, with matching-version raw citations, inline under `## Answer`.
 - Add `## Measurement Script` when the page reports a measured number; see `MANDATORY Measurement Script`.
-- Keep `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` on the same page when gaps exist.
+- Always include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` on the same page. When nothing is open, say so under `## Open Questions`.
 - Scaffold a new page from `templates/question.md`.
 
 Why one document per question, not a question page plus an answer page:
@@ -478,7 +504,7 @@ Why one document per question, not a question page plus an answer page:
 - One page per Q&A removes duplicate, drifting pages. A separate answer document forces two titles, two `(unverified)` hints, two `pinned_commit:` values, and two index entries to keep in sync.
 - It keeps verification honest. One page carries one `verified:` / `verified_by_agent:` state over one claim-to-source map, instead of a question page that silently goes stale against its answer page.
 
-Separate `type: answer` pages under `wiki/vNN/answers/` are legacy. Do not create new ones. Leave existing answer pages in place until they are next substantially revised, then fold them back into their question page. The `templates/answer.md` scaffold was deleted on 2026-09-11; a type you must not file has no scaffold.
+`type: answer` is retired, and no answer page remains. Do not file one.
 
 ## MANDATORY Question Categories
 
@@ -520,8 +546,6 @@ Index grouping:
 - `wiki/vNN/index.md` groups its `## Questions` list under one `### <Category label>` heading per non-empty category, in the table order above.
 - `wiki/index.md` uses the same grouping one level deeper, as `#### <Category label>` under each `### PostgreSQL NN` section.
 - Category labels are the title-cased directory name: Query Planning, Indexing, Storage and Vacuum, Replication and WAL, Observability, Server Administration.
-
-All question pages were migrated into categories on 2026-08-06. No uncategorized question page is grandfathered.
 
 ## MANDATORY Common Concept Documents
 
@@ -613,11 +637,11 @@ Bookkeeping and lint:
 - `scripts/wiki_lint` checks front matter presence and key order, `version:` and `pinned_commit:` against `wiki/versions.md`, citations from the matching checkout only, complete Markdown citation form, a non-empty `## Source References`, the required headings above, a non-empty `## Definition`, the `(unverified)` title hint, and that `type: common-concept` and `wiki/vNN/common-concepts/` always pair.
 - Lint cannot check that a consumer links an existing concept page, that a concept page stays source-only, or that another document's work left concept pages untouched. Check those by hand.
 
-Retirement note: `type: concept` under `wiki/vNN/concepts/` is retired and replaced by this type. No `type: concept` page was ever filed, so there is nothing to migrate. Do not file one. If an old-style concept page appears, refile it as `type: common-concept` under `wiki/vNN/common-concepts/`, fix the links into it, and log the move. The retired type's `templates/concept-shared.md` and `templates/concept-version.md` scaffolds were deleted on 2026-09-11 and replaced by `templates/common-concept.md`.
+`type: concept` under `wiki/vNN/concepts/` is retired and replaced by this type. Do not file one. If an old-style concept page appears, refile it as `type: common-concept` under `wiki/vNN/common-concepts/`, fix the links into it, and log the move.
 
 ## MANDATORY Table of Contents
 
-- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: common-concept`, `type: glossary`, and legacy `type: answer` pages, regardless of page length.
+- Every content page must open with a `## Contents` table of contents: `type: question`, `type: codebase-navigation-guide`, `type: common-concept`, and `type: glossary` pages, regardless of page length.
 - Navigation pages are exempt: `wiki/index.md`, `wiki/versions.md`, `wiki/log.md`, `wiki/overview.md`, and the `wiki/vNN/index.md` version landing pages.
 - Place the `## Contents` block between the page title (`# ...`) and the first content section. On a question-style page, including `type: codebase-navigation-guide`, that means immediately before `## Question`.
 - List every `##` and `###` section in document order as a nested Markdown bullet list: each `##` is a top-level bullet and its `###` subsections are indented two spaces beneath it. Do not list `####` or deeper headings.
@@ -656,8 +680,7 @@ Migration note: existing content pages without a `## Contents` block remain vali
 - Within each `wiki/vNN/`, file pages by `type:` into a per-type subdirectory:
   - `wiki/vNN/questions/<category>/` for `type: question` pages. A question page carries its own answer inline; see `MANDATORY Question Documents`. The category directory is mandatory; see `MANDATORY Question Categories`.
   - `wiki/vNN/common-concepts/` for `type: common-concept` pages. Concept pages are not categorized, and other documents only read them; see `MANDATORY Common Concept Documents`.
-  - `wiki/vNN/answers/` holds legacy `type: answer` pages only. Do not file new answer pages there.
-  - `wiki/vNN/concepts/` is retired with `type: concept`. Do not create it.
+- Do not create `wiki/vNN/answers/` or `wiki/vNN/concepts/`: `type: answer` and `type: concept` are retired.
 - The version landing page `wiki/vNN/index.md` and `wiki/vNN/codebase-navigation-guide.md` are the only Markdown pages allowed at the version root.
 - `wiki/vNN/questions/` itself holds only category directories, never Markdown pages.
 - Use page-relative Markdown links for wiki page navigation, e.g. `[v18/index](../../index.md)` and `[versions](../../../versions.md)` from a `wiki/v18/questions/<category>/` page. `scripts/wiki_lint` checks that local Markdown wiki links resolve and rejects Obsidian wikilinks for wiki page navigation.
@@ -675,9 +698,9 @@ After each meaningful wiki change:
 - Update `wiki/index.md` for created or substantially changed pages.
 - Update `wiki/versions.md` for supported-version lifecycle, repin, or meaningful coverage changes.
 - Update `wiki/vNN/index.md` for created or substantially changed version-local pages.
-- Append to `wiki/log.md` after scaffold changes, ingests, lint passes, filed answers, measurement runs, or version lifecycle events.
+- Append to `wiki/log.md` after scaffold changes, ingests, filed answers, measurement runs, version lifecycle events, or a standalone lint run the user asked for. Record the lint result in that entry.
 - Record teardown in the `wiki/log.md` entry for any step that ran a service: what was stopped, what was deleted, what was kept and where, or that nothing was running.
-- Run `scripts/wiki_lint` after every wiki-facing edit, including small edits to existing pages, indexes, version pages, log entries, citations, titles, or front matter.
+- Run `scripts/wiki_lint` last, after the log entry is written, so the final run covers every edit including the log; see `MANDATORY Lint`.
 
 Log heading format:
 
@@ -710,7 +733,7 @@ Log heading format:
 7. Answer with matching-version raw citations, following `MANDATORY Technical Explanations` and linking the concept pages instead of re-explaining their concepts. Do not edit a concept page as part of this work.
 8. If the page reports a measured number, run the page's script and file it under `## Measurement Script`, then run the script's cleanup stage so no server or sandbox is left behind; see `MANDATORY Measurement Script`.
 9. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
-10. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in filed pages when gaps exist.
+10. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in every filed page; see `MANDATORY Question Documents`.
 11. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
 12. Check glossary term links and the glossary link in `## Navigation`, then update indexes and log. Name any missing or wrong common concept page in your response instead of changing it; glossary maintenance remains part of this task.
 
@@ -728,7 +751,7 @@ Run this workflow only when the user asks for the concept page itself. Never as 
 
 ## MANDATORY Lint
 
-Lint is required after every wiki-facing change. Do not treat it as optional or only for new pages; run it before the final response whenever any wiki document changed.
+Lint is required after every wiki-facing change, including small edits to existing pages, indexes, version pages, log entries, citations, titles, or front matter. Do not treat it as optional or only for new pages. Run it after the task's log entry is written and before the final response. If it reports errors, fix them, update the lint result in the log entry, and run it again.
 
 Check broken links, orphan pages, missing source references, stale pins, wrong-version citations, invalid verification fields, unverified title hints, required common-concept sections, and version landing-page links.
 
@@ -743,10 +766,12 @@ Use the project venv:
 ## MANDATORY Version Control
 
 - Never commit or push without permission.
+- When the user asks for a commit, commit on `master` and push to `origin/master`. Another host pushes to the same branch, so fetch and rebase before pushing. Resolve `wiki/log.md` and `wiki/versions.md` conflicts by re-applying your own edits on top of the incoming text.
+- Finder `.DS_Store` files are tracked on purpose. Commit changes to them separately, as `chore: update workspace metadata`.
 
 ## MANDATORY Script Changes
 
-- Keep durable project tooling under `scripts/`.
+- Keep durable project tooling under `scripts/`, and track every durable script in git. One-off helpers, such as a script that edits a single page, belong under `.wiki-runtime/tmp/` and are deleted with it.
 - Keep runtime state under `.wiki-runtime/`.
 - Measurement scripts are page content, not `scripts/` tooling. File them in the page that reports their numbers; see `MANDATORY Measurement Script`.
 - When changing script contents, update adjacent workflow examples, lint examples, or tests that depend on the change.
