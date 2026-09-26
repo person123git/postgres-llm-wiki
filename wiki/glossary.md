@@ -16,6 +16,7 @@ verified_by_agent: not yet
   - [Alignment](#alignment)
   - [allequalimage](#allequalimage)
   - [amcheck](#amcheck)
+  - [Append and MergeAppend](#append-and-mergeappend)
   - [Apply worker](#apply-worker)
   - [Asynchronous commit](#asynchronous-commit)
   - [Asynchronous I/O](#asynchronous-io)
@@ -52,6 +53,7 @@ verified_by_agent: not yet
   - [Common table expression](#common-table-expression)
   - [CONCURRENTLY](#concurrently)
   - [Conflict detection](#conflict-detection)
+  - [Constant folding](#constant-folding)
   - [Constraint exclusion](#constraint-exclusion)
   - [Contrib](#contrib)
   - [Control file](#control-file)
@@ -63,6 +65,7 @@ verified_by_agent: not yet
   - [Cumulative statistics](#cumulative-statistics)
   - [Cumulative statistics kind](#cumulative-statistics-kind)
   - [Custom and generic plan](#custom-and-generic-plan)
+  - [Custom scan](#custom-scan)
   - [Data checksums](#data-checksums)
   - [Datum](#datum)
   - [Dead tuple](#dead-tuple)
@@ -70,6 +73,7 @@ verified_by_agent: not yet
   - [Declarative partitioning](#declarative-partitioning)
   - [Deduplication](#deduplication)
   - [Dirty buffer](#dirty-buffer)
+  - [disable_cost](#disable_cost)
   - [Dynamic shared memory](#dynamic-shared-memory)
   - [effective_cache_size](#effective_cache_size)
   - [effective_io_concurrency](#effective_io_concurrency)
@@ -99,9 +103,11 @@ verified_by_agent: not yet
   - [GiST](#gist)
   - [GiST build method](#gist-build-method)
   - [Grammar](#grammar)
+  - [Grouping sets](#grouping-sets)
   - [GUC](#guc)
   - [GUC context](#guc-context)
   - [Hash index](#hash-index)
+  - [Hash join](#hash-join)
   - [Hash splitpoint](#hash-splitpoint)
   - [Heap](#heap)
   - [Heavyweight lock](#heavyweight-lock)
@@ -112,6 +118,7 @@ verified_by_agent: not yet
   - [HOT-blocking column](#hot-blocking-column)
   - [Huge pages](#huge-pages)
   - [Hypothetical index](#hypothetical-index)
+  - [Incremental sort](#incremental-sort)
   - [indcheckxmin](#indcheckxmin)
   - [Index page recycling](#index-page-recycling)
   - [Index scan](#index-scan)
@@ -128,6 +135,9 @@ verified_by_agent: not yet
   - [Isolation level](#isolation-level)
   - [Isolation test](#isolation-test)
   - [JIT compilation](#jit-compilation)
+  - [Join order search](#join-order-search)
+  - [Join removal](#join-removal)
+  - [LATERAL](#lateral)
   - [Leaf page](#leaf-page)
   - [Leakproof function](#leakproof-function)
   - [Line pointer](#line-pointer)
@@ -140,33 +150,45 @@ verified_by_agent: not yet
   - [LWLock](#lwlock)
   - [Mackert-Lohman formula](#mackert-lohman-formula)
   - [maintenance_work_mem](#maintenance_work_mem)
+  - [Materialize node](#materialize-node)
   - [Memoize](#memoize)
   - [Memory context](#memory-context)
+  - [Merge join](#merge-join)
   - [Metapage](#metapage)
+  - [ModifyTable](#modifytable)
   - [Most common values and histogram](#most-common-values-and-histogram)
   - [MultiXact](#multixact)
   - [MVCC](#mvcc)
   - [Nested loop join](#nested-loop-join)
+  - [Node support functions](#node-support-functions)
   - [Nondeterministic collation](#nondeterministic-collation)
   - [NOT VALID](#not-valid)
+  - [Nullingrels](#nullingrels)
   - [OID](#oid)
+  - [One-shot plan](#one-shot-plan)
   - [Operator class](#operator-class)
   - [Origin filter](#origin-filter)
   - [OS page cache](#os-page-cache)
+  - [Outer join](#outer-join)
   - [Page](#page)
   - [Page split](#page-split)
   - [pageinspect](#pageinspect)
   - [Parallel query](#parallel-query)
   - [Parallel vacuum](#parallel-vacuum)
+  - [Param](#param)
+  - [Parameterized path](#parameterized-path)
   - [Parse tree](#parse-tree)
+  - [Partial aggregation](#partial-aggregation)
   - [Partial index](#partial-index)
   - [Partial path](#partial-path)
   - [Partition bound](#partition-bound)
   - [Partition pruning](#partition-pruning)
   - [Partitioned index](#partitioned-index)
+  - [Partitionwise aggregation](#partitionwise-aggregation)
   - [Partitionwise join](#partitionwise-join)
   - [Path](#path)
   - [Pathkey](#pathkey)
+  - [PathTarget](#pathtarget)
   - [Pending list](#pending-list)
   - [pg_attribute](#pg_attribute)
   - [pg_cast](#pg_cast)
@@ -186,10 +208,13 @@ verified_by_agent: not yet
   - [pgstatindex](#pgstatindex)
   - [pgstattuple](#pgstattuple)
   - [Pivot tuple](#pivot-tuple)
+  - [PlaceHolderVar](#placeholdervar)
   - [Plan cache mode](#plan-cache-mode)
+  - [Plan tree](#plan-tree)
   - [PlannedStmt](#plannedstmt)
   - [Planner](#planner)
   - [Planner support function](#planner-support-function)
+  - [PlannerInfo](#plannerinfo)
   - [PL/pgSQL](#plpgsql)
   - [Portal](#portal)
   - [Posting list](#posting-list)
@@ -200,6 +225,7 @@ verified_by_agent: not yet
   - [ProcArray](#procarray)
   - [ProcSignal barrier](#procsignal-barrier)
   - [Progress reporting](#progress-reporting)
+  - [ProjectSet](#projectset)
   - [Promotion](#promotion)
   - [Pruning](#pruning)
   - [Publication](#publication)
@@ -207,12 +233,14 @@ verified_by_agent: not yet
   - [Query jumbling](#query-jumbling)
   - [Range table](#range-table)
   - [Read stream](#read-stream)
+  - [Recursive CTE](#recursive-cte)
   - [Regression test](#regression-test)
   - [REINDEX](#reindex)
   - [Relation](#relation)
   - [Relation size functions](#relation-size-functions)
   - [Relcache](#relcache)
   - [Relfilenumber](#relfilenumber)
+  - [Relids](#relids)
   - [RelOptInfo](#reloptinfo)
   - [reltuples and relpages](#reltuples-and-relpages)
   - [Reorder buffer](#reorder-buffer)
@@ -224,13 +252,18 @@ verified_by_agent: not yet
   - [Ring buffer](#ring-buffer)
   - [Role membership](#role-membership)
   - [Row lock](#row-lock)
+  - [Row mark](#row-mark)
   - [Row-level security](#row-level-security)
+  - [Sample scan](#sample-scan)
   - [ScalarArrayOpExpr](#scalararrayopexpr)
   - [Security barrier](#security-barrier)
   - [SECURITY DEFINER](#security-definer)
   - [Security invoker view](#security-invoker-view)
   - [Selectivity](#selectivity)
+  - [Semi join and anti join](#semi-join-and-anti-join)
   - [Sequential scan](#sequential-scan)
+  - [Set operation](#set-operation)
+  - [set_plan_references](#set_plan_references)
   - [shared_buffers](#shared_buffers)
   - [shared_preload_libraries](#shared_preload_libraries)
   - [Shared-memory statistics](#shared-memory-statistics)
@@ -240,6 +273,7 @@ verified_by_agent: not yet
   - [SLRU](#slru)
   - [Snapshot](#snapshot)
   - [SnapshotNonVacuumable](#snapshotnonvacuumable)
+  - [SpecialJoinInfo](#specialjoininfo)
   - [SP-GiST](#sp-gist)
   - [SP-GiST placeholder](#sp-gist-placeholder)
   - [SPI](#spi)
@@ -250,6 +284,7 @@ verified_by_agent: not yet
   - [Storage parameter](#storage-parameter)
   - [SubLink](#sublink)
   - [SubPlan](#subplan)
+  - [Subquery pull-up](#subquery-pull-up)
   - [Subscription](#subscription)
   - [Subtransaction](#subtransaction)
   - [Suffix truncation](#suffix-truncation)
@@ -268,10 +303,13 @@ verified_by_agent: not yet
   - [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout)
   - [TransactionXmin](#transactionxmin)
   - [Transient plan](#transient-plan)
+  - [Transition table](#transition-table)
   - [Truncation](#truncation)
   - [Tuple](#tuple)
+  - [Tuple fraction](#tuple-fraction)
   - [Tuplesort](#tuplesort)
   - [Two-phase commit](#two-phase-commit)
+  - [Upper relation](#upper-relation)
   - [Utility command](#utility-command)
   - [VACUUM](#vacuum)
   - [Vacuum cost delay](#vacuum-cost-delay)
@@ -285,6 +323,7 @@ verified_by_agent: not yet
   - [WAL receiver](#wal-receiver)
   - [WAL sender](#wal-sender)
   - [WAL writer](#wal-writer)
+  - [Window function](#window-function)
   - [WithCheckOption](#withcheckoption)
   - [work_mem](#work_mem)
   - [Wraparound](#wraparound)
@@ -303,7 +342,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
 - The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Thirteen more, added later on 2026-09-25 while that page was revised, were also checked on 17 only: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Thirteen more, added later on 2026-09-25 while that page was revised, were also checked on 17 only: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). Thirty-nine more, added on 2026-09-26 for the PostgreSQL 17 query planner tutorial, were checked on 17 only: [Append and MergeAppend](#append-and-mergeappend), [Constant folding](#constant-folding), [Custom scan](#custom-scan), [disable_cost](#disable_cost), [Grouping sets](#grouping-sets), [Hash join](#hash-join), [Incremental sort](#incremental-sort), [Join order search](#join-order-search), [Join removal](#join-removal), [LATERAL](#lateral), [Materialize node](#materialize-node), [Merge join](#merge-join), [ModifyTable](#modifytable), [Node support functions](#node-support-functions), [Nullingrels](#nullingrels), [One-shot plan](#one-shot-plan), [Outer join](#outer-join), [Param](#param), [Parameterized path](#parameterized-path), [Partial aggregation](#partial-aggregation), [Partitionwise aggregation](#partitionwise-aggregation), [PathTarget](#pathtarget), [PlaceHolderVar](#placeholdervar), [Plan tree](#plan-tree), [PlannerInfo](#plannerinfo), [ProjectSet](#projectset), [Recursive CTE](#recursive-cte), [Relids](#relids), [Row mark](#row-mark), [Sample scan](#sample-scan), [Semi join and anti join](#semi-join-and-anti-join), [Set operation](#set-operation), [set_plan_references](#set_plan_references), [SpecialJoinInfo](#specialjoininfo), [Subquery pull-up](#subquery-pull-up), [Transition table](#transition-table), [Tuple fraction](#tuple-fraction), [Upper relation](#upper-relation), [Window function](#window-function). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -318,6 +357,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 | 19 | `raw/postgres-19/` | `REL_19_STABLE` | `dae3463fa969931458f1488f9b7af11e3741cd54` |
 
 ## Terms
+
 
 ### Access method
 
@@ -388,6 +428,16 @@ Related: [Deduplication](#deduplication), [Metapage](#metapage), [pg_upgrade](#p
 - PostgreSQL 19: Holds, with the same function set as 18, `gin_index_check()` included ([verify_gin.c:79](../raw/postgres-19/contrib/amcheck/verify_gin.c#L79), [verify_nbtree.c:252](../raw/postgres-19/contrib/amcheck/verify_nbtree.c#L252), [verify_heapam.c:252](../raw/postgres-19/contrib/amcheck/verify_heapam.c#L252)).
 
 Related: [Contrib](#contrib), [Extension](#extension), [B-tree](#b-tree), [GIN](#gin), [Heap](#heap)
+
+### Append and MergeAppend
+
+**Aliases:** `Append`, `MergeAppend`, `AppendPath`, `MergeAppendPath`, Parallel Append, async Append, ordered Append. **Checked on:** PostgreSQL 17.
+
+An Append plan node returns the rows of several child plans one after another. A MergeAppend node merges several child plans that are already sorted, so its output keeps their sort order ([plannodes.h#Append](../raw/postgres-17/src/include/nodes/plannodes.h#L260-L280), [plannodes.h#MergeAppend](../raw/postgres-17/src/include/nodes/plannodes.h#L282-L315)). The executor uses them to read the children of an [inheritance](#inheritance) or partitioned parent and to combine the branches of a `UNION ALL` ([nodeAppend.c:39-40](../raw/postgres-17/src/backend/executor/nodeAppend.c#L39-L40)). In the [planner](#planner), an `AppendPath` with no children marks a relation proven empty ([pathnodes.h#AppendPath](../raw/postgres-17/src/include/nodes/pathnodes.h#L1917-L1942)).
+
+Three variants matter when reading source. A plain Append can deliver ordered rows when range partitions are read in bound order, but `partitions_are_ordered()` refuses while a default partition is still live, and MergeAppend is used instead ([allpaths.c#generate_orderedappend_paths](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L1725-L1741), [partbounds.c#partitions_are_ordered](../raw/postgres-17/src/backend/partitioning/partbounds.c#L2852-L2887)). A Parallel Append spreads its children across workers; with `enable_parallel_append` on, the planner asks for at least floor(log2 of the child count) + 1 workers, capped at `max_parallel_workers_per_gather` ([allpaths.c#add_paths_to_append_rel-parallel](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L1521-L1543)). An async Append runs async-capable foreign scans concurrently. `create_append_plan()` considers it only with `enable_async_append` on, no required ordering, a path that is not parallel-safe, and more than one child ([createplan.c#create_append_plan-async](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1298-L1301), [createplan.c#mark_async_capable_plan-foreign](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1166-L1182)). Both node types carry `part_prune_info` for [partition pruning](#partition-pruning) while running ([plannodes.h:278-279](../raw/postgres-17/src/include/nodes/plannodes.h#L278-L279), [plannodes.h:313-314](../raw/postgres-17/src/include/nodes/plannodes.h#L313-L314)).
+
+Related: [Partition pruning](#partition-pruning), [Declarative partitioning](#declarative-partitioning), [Inheritance](#inheritance), [Parallel query](#parallel-query), [Foreign data wrapper](#foreign-data-wrapper), [Path](#path)
 
 ### Apply worker
 
@@ -859,6 +909,16 @@ In PostgreSQL 18, conflict detection is the subscriber-side code that classifies
 
 Related: [Logical replication](#logical-replication), [Apply worker](#apply-worker), [Replication origin](#replication-origin), [Subscription](#subscription), [Origin filter](#origin-filter)
 
+### Constant folding
+
+**Aliases:** `eval_const_expressions`, `estimate_expression_value`, expression simplification, const-simplification. **Checked on:** PostgreSQL 17.
+
+Constant folding is the [planner](#planner) computing parts of an expression that do not depend on any row, before the query runs, so `2 + 2` becomes `4`. `eval_const_expressions()` also simplifies boolean logic around unknown parts, turning `x OR true` into `true`. It evaluates only functions marked immutable, though it still folds their arguments ([clauses.c#eval_const_expressions](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L2223-L2259)). `preprocess_expression()` runs it on all of the query's expressions, function calls in `FROM` having had it earlier, because it also expands default arguments and named-argument calls, which the executor cannot handle ([planner.c#preprocess_expression-fold](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1183-L1202)).
+
+A folded or inlined function leaves no trace in the plan, so the planner records it in `glob->invalItems` to know when the plan must be rebuilt ([clauses.c:2241-2244](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L2241-L2244)). A parameter value becomes a constant only when it is marked `PARAM_FLAG_CONST` ([clauses.c#eval_const_expressions_mutator-param](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L2461-L2497)). The plan cache asks its callers to set that flag for a custom plan, and the extended-query protocol's Bind message and PL/pgSQL both do ([plancache.c:903-906](../raw/postgres-17/src/backend/utils/cache/plancache.c#L903-L906), [postgres.c:1969-1973](../raw/postgres-17/src/backend/tcop/postgres.c#L1969-L1973), [pl_exec.c:6413-6414](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L6413-L6414)). `estimate_expression_value()` is a looser variant used only for estimates: it also substitutes unmarked parameter values and folds stable functions ([clauses.c#estimate_expression_value](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L2387-L2416)).
+
+Related: [SQL function inlining](#sql-function-inlining), [Function volatility](#function-volatility), [Custom and generic plan](#custom-and-generic-plan), [Planner support function](#planner-support-function), [Planner](#planner)
+
 ### Constraint exclusion
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1007,6 +1067,16 @@ A statement with parameters, such as a [prepared statement](#prepared-statement)
 
 Related: [Plan cache mode](#plan-cache-mode), [Prepared statement](#prepared-statement), [Planner](#planner), [Invalidation message](#invalidation-message), [SPI](#spi)
 
+### Custom scan
+
+**Aliases:** `CustomPath`, `CustomScan`, `CustomScanState`, `CustomPathMethods`, `CustomScanMethods`, `CustomExecMethods`, custom scan provider. **Checked on:** PostgreSQL 17.
+
+A custom scan is a way of scanning a table, or of joining tables, that an extension implements instead of core code. The comment on `CustomPath` gives GPU acceleration and cache-based scans as examples ([pathnodes.h#CustomPath-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L1878-L1886)). The extension adds a `CustomPath` to a base relation from `set_rel_pathlist_hook`, or to a join relation from `set_join_pathlist_hook` ([pathnodes.h#CustomPath-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L1888-L1890)).
+
+The provider supplies three method tables. `CustomPathMethods.PlanCustomPath` turns the chosen path into a `CustomScan` plan node, which `create_customscan_plan()` calls after ordering the scan clauses ([extensible.h#CustomPathMethods](../raw/postgres-17/src/include/nodes/extensible.h#L92-L106), [createplan.c#create_customscan_plan](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L4294-L4310)). `CustomScanMethods` creates the executor state, and `CustomExecMethods` runs it ([extensible.h#CustomScanMethods](../raw/postgres-17/src/include/nodes/extensible.h#L112-L118), [extensible.h#CustomExecMethods](../raw/postgres-17/src/include/nodes/extensible.h#L124-L138)). Because plan trees are copied, a `CustomScan` must keep all its data in its own list fields ([plannodes.h#CustomScan-comment](../raw/postgres-17/src/include/nodes/plannodes.h#L731-L735)). Its `flags` declare backward-scan, mark-and-restore and projection support ([extensible.h:78-86](../raw/postgres-17/src/include/nodes/extensible.h#L78-L86)), and `RegisterCustomScanMethods()` registers the methods by name ([extensible.c#RegisterCustomScanMethods](../raw/postgres-17/src/backend/nodes/extensible.c#L84-L94)).
+
+Related: [Hook](#hook), [Path](#path), [Foreign data wrapper](#foreign-data-wrapper), [Executor](#executor), [Planner](#planner)
+
 ### Data checksums
 
 **Aliases:** page checksum, `pd_checksum`, `data_checksums`, `initdb --data-checksums`, `pg_checksums`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1104,6 +1174,16 @@ A dirty buffer is a shared buffer whose page was changed in memory but has not y
 - PostgreSQL 19: Differs: marking a hint-bit change dirty now needs at least the new `BUFFER_LOCK_SHARE_EXCLUSIVE` content-lock mode, which conflicts with itself; the plain share lock that was enough in 17 no longer suffices ([bufmgr.h:214-217](../raw/postgres-19/src/include/storage/bufmgr.h#L214-L217), [bufmgr.c#MarkBufferDirtyHint](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L5828-L5845), [bufmgr.c#MarkSharedBufferDirtyHint](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L5719-L5728)). `BM_DIRTY` is now a bit in a 64-bit state word ([buf_internals.h:100-108](../raw/postgres-19/src/include/storage/buf_internals.h#L100-L108)). `MarkBufferDirty()` still needs a pin and an exclusive content lock and defers the write, and the bgwriter still scans ahead of the clock hand ([bufmgr.c#MarkBufferDirty](../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L3160-L3170), [buffer/README#Normal Buffer Replacement Strategy](../raw/postgres-19/src/backend/storage/buffer/README#L200-L203), [buffer/README#Background Writer's Processing](../raw/postgres-19/src/backend/storage/buffer/README#L253-L258)).
 
 Related: [Background writer](#background-writer), [Buffer pin](#buffer-pin), [Checkpoint](#checkpoint), [Clock sweep](#clock-sweep), [WAL](#wal)
+
+### disable_cost
+
+**Aliases:** disabled path, `enable_*` penalty. **Checked on:** PostgreSQL 17.
+
+`disable_cost` is the fixed penalty of 1.0e10 cost units that the [planner](#planner) adds to a [path](#path) whose method a setting has turned off ([costsize.c:130](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L130)). In 17 many `enable_*` switches work this way: the path is still built, but its startup cost gains the penalty, so it wins only when nothing else is possible. `cost_seqscan()`, for example, adds it when `enable_seqscan` is off ([costsize.c:304-305](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L304-L305)). The documentation says the same in its own words: sequential scans cannot be suppressed entirely ([config.sgml#guc-enable-seqscan](../raw/postgres-17/doc/src/sgml/config.sgml#L5765-L5768)).
+
+The penalty applies to index scans, bitmap scans, TID scans, explicit sorts, hash aggregation, nested loops and Gather Merge ([costsize.c:606-607](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L606-L607), [costsize.c:1041-1042](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1041-L1042), [costsize.c:1402-1403](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1402-L1403), [costsize.c:2138-2139](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2138-L2139), [costsize.c:2726-2727](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2726-L2727), [costsize.c:3347-3348](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L3347-L3348), [costsize.c:493-494](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L493-L494)). Merge and hash joins get it too ([costsize.c:3794-3795](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L3794-L3795), [costsize.c:4224-4225](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L4224-L4225)). But with `enable_mergejoin` or `enable_hashjoin` off, such joins are built only for a full join, which may have no other method ([joinpath.c:204-217](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L204-L217), [joinpath.c:316-323](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L316-L323)). The planner also uses it where no setting is involved. A hash join gets it when its most common inner value would overflow the hash table's memory, and every path but a TID scan gets it for `WHERE CURRENT OF` ([costsize.c:4312-4322](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L4312-L4322), [costsize.c:4904-4908](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L4904-L4908)). Other switches instead stop paths from being built at all; `enable_memoize` is one ([joinpath.c:590-592](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L590-L592)).
+
+Related: [Cost](#cost), [Path](#path), [GUC](#guc), [Sequential scan](#sequential-scan), [Memoize](#memoize), [Planner](#planner)
 
 ### Dynamic shared memory
 
@@ -1505,6 +1585,16 @@ The grammar is the bison source `gram.y`. It turns the tokens produced by the fl
 
 Related: [Parse tree](#parse-tree), [Utility command](#utility-command), [BKI](#bki)
 
+### Grouping sets
+
+**Aliases:** `GROUPING SETS`, `ROLLUP`, `CUBE`, `GroupingSetsPath`, `RollupData`, `AGG_MIXED`, MixedAggregate. **Checked on:** PostgreSQL 17.
+
+Grouping sets let one query group the same rows in several ways at once and return all the results together, as if several `GROUP BY` queries were combined ([queries.sgml#queries-grouping-sets](../raw/postgres-17/doc/src/sgml/queries.sgml#L1230-L1236)). `ROLLUP` and `CUBE` are shorthands that expand into lists of sets. The parser expands them and refuses more than 4096 sets ([parse_agg.c:1150-1161](../raw/postgres-17/src/backend/parser/parse_agg.c#L1150-L1161)), and the [planner](#planner) expands them again in `preprocess_grouping_sets()` ([planner.c#preprocess_grouping_sets](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2077-L2085)).
+
+When reading source, the key idea is the rollup: a chain of sets in which each set contains the next, which one sorted pass can compute. `extract_rollup_sets()` splits the sets into the fewest such chains, to avoid extra sorts ([planner.c#extract_rollup_sets](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2960-L2980)). Each chain becomes a `RollupData`, which is either sorted or hashed, and a `GroupingSetsPath` carries the list ([pathnodes.h#RollupData](../raw/postgres-17/src/include/nodes/pathnodes.h#L2279-L2290), [pathnodes.h#GroupingSetsPath](../raw/postgres-17/src/include/nodes/pathnodes.h#L2292-L2304)). `consider_groupingsets_paths()` tries combinations of hashing and sorting ([planner.c#consider_groupingsets_paths](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4204-L4211)). A plan that uses both is strategy `AGG_MIXED`, which EXPLAIN prints as `MixedAggregate` ([nodes.h#AggStrategy](../raw/postgres-17/src/include/nodes/nodes.h#L351-L357), [explain.c:1557-1568](../raw/postgres-17/src/backend/commands/explain.c#L1557-L1568)).
+
+Related: [Planner](#planner), [Path](#path), [Upper relation](#upper-relation), [work_mem](#work_mem)
+
 ### GUC
 
 **Aliases:** Grand Unified Configuration, configuration parameter, setting, `pg_settings`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1546,6 +1636,16 @@ A hash index places each entry in a bucket chosen by hashing the key. It support
 - PostgreSQL 19: Holds. Buckets still split one at a time and chain overflow pages, entries still store only the sorted 32-bit hash code, `hashhandler()` still marks it single-strategy, single-column, non-unique and unordered, and block 0 is still the metapage ([hash/README:14-29](../raw/postgres-19/src/backend/access/hash/README#L14-L29), [hash/README:36-42](../raw/postgres-19/src/backend/access/hash/README#L36-L42), [hash.c#hashhandler](../raw/postgres-19/src/backend/access/hash/hash.c#L70-L84), [hash.h:198](../raw/postgres-19/src/include/access/hash.h#L198)).
 
 Related: [Access method](#access-method), [Metapage](#metapage)
+
+### Hash join
+
+**Aliases:** `HashJoin`, `HashPath`, `Hash` node, `nodeHashjoin.c`, `nodeHash.c`, hash batches, skew optimization, Parallel Hash, `enable_hashjoin`. **Checked on:** PostgreSQL 17.
+
+A hash join reads its inner input once, builds an in-memory hash table on the join key, and then probes that table with each row of the outer input. PostgreSQL's version is a hybrid hash join ([nodeHashjoin.c:15-16](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L15-L16)). It needs an equality condition whose operator is hashjoinable and that contains no volatile functions ([initsplan.c#check_hashjoinable](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L3402-L3430)). The [planner](#planner) builds hash join paths in `hash_inner_and_outer()` ([joinpath.c#hash_inner_and_outer](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L2082-L2092)), and EXPLAIN shows a `Hash Join` over a `Hash` node ([explain.c:1444-1445](../raw/postgres-17/src/backend/commands/explain.c#L1444-L1445), [explain.c:1619-1620](../raw/postgres-17/src/backend/commands/explain.c#L1619-L1620)).
+
+The table may use `work_mem` times `hash_mem_multiplier` ([nodeHash.c#get_hash_memory_limit](../raw/postgres-17/src/backend/executor/nodeHash.c#L3601-L3613)). A larger inner input is split into batches that are processed one at a time. The planner estimates the batch count and charges the extra sequential I/O ([costsize.c#initial_cost_hashjoin-batches](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L4129-L4155)); the executor measures the real size and doubles the batch count when the table grows too large ([nodeHashjoin.c:26-36](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L26-L36)). Inner rows whose hash value matches one of the outer side's most common values go into a small skew table, handled with the first batch, that never spills ([hashjoin.h:95-121](../raw/postgres-17/src/include/executor/hashjoin.h#L95-L121)). With Parallel Hash, workers build one shared table when both inputs have [partial paths](#partial-path) and `enable_parallel_hash` is on ([joinpath.c:2280-2292](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L2280-L2292)).
+
+Related: [Nested loop join](#nested-loop-join), [Merge join](#merge-join), [work_mem](#work_mem), [Parallel query](#parallel-query), [Most common values and histogram](#most-common-values-and-histogram), [disable_cost](#disable_cost)
 
 ### Hash splitpoint
 
@@ -1676,6 +1776,16 @@ A hypothetical index exists only in the [planner](#planner)'s list of a table's 
 Planner code that would read the index file checks the flag first. The planning-time endpoint probe skips hypothetical indexes ([selfuncs.c#get_actual_variable_range-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6207-L6212)). `gincostestimate()` uses zeroed metapage statistics instead of reading them, and `brincostestimate()` assumes the default pages per range ([selfuncs.c#gincostestimate-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7697-L7711), [selfuncs.c#brincostestimate-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8086-L8112)).
 
 Related: [IndexOptInfo](#indexoptinfo), [Hook](#hook), [Planner](#planner), [GIN](#gin), [BRIN](#brin)
+
+### Incremental sort
+
+**Aliases:** `IncrementalSort`, `IncrementalSortPath`, `nPresortedCols`, presorted keys, `enable_incremental_sort`. **Checked on:** PostgreSQL 17.
+
+An incremental sort sorts rows that are already ordered by the first few sort keys. It splits the input into groups with equal leading keys and sorts each group only by the remaining keys ([nodeIncrementalSort.c:14-19](../raw/postgres-17/src/backend/executor/nodeIncrementalSort.c#L14-L19)). Because it sorts one group at a time, it can start producing rows before it has read its whole input, which especially helps a query with `LIMIT` ([nodeIncrementalSort.c:51-56](../raw/postgres-17/src/backend/executor/nodeIncrementalSort.c#L51-L56)).
+
+In the [planner](#planner), an `IncrementalSortPath` is a sort path plus `nPresortedCols`, the number of leading keys the input already delivers ([pathnodes.h#IncrementalSortPath](../raw/postgres-17/src/include/nodes/pathnodes.h#L2206-L2216)). `create_ordered_paths()` uses a full sort when an input has no presorted keys and an incremental sort when it has some, unless `enable_incremental_sort` is off ([planner.c#create_ordered_paths-incremental](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L5345-L5377)). `cost_incremental_sort()` estimates how many groups the leading keys form and prices sorting one group ([costsize.c#cost_incremental_sort](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1973-L1984)). The executor has two modes: it sorts a minimum batch of rows on all keys, and a heuristic switches it to sorting one whole prefix group on the remaining keys when that looks beneficial ([nodeIncrementalSort.c:58-64](../raw/postgres-17/src/backend/executor/nodeIncrementalSort.c#L58-L64)).
+
+Related: [Pathkey](#pathkey), [Tuplesort](#tuplesort), [Index scan](#index-scan), [Tuple fraction](#tuple-fraction), [Planner](#planner)
 
 ### indcheckxmin
 
@@ -1883,6 +1993,36 @@ JIT compilation turns generic, interpreted work, such as evaluating a `WHERE` ex
 
 Related: [Executor](#executor), [PlannedStmt](#plannedstmt), [Cost](#cost), [GUC context](#guc-context)
 
+### Join order search
+
+**Aliases:** join search, `standard_join_search`, `join_search_one_level`, `make_rel_from_joinlist`, joinlist, dynamic programming, `join_collapse_limit`, `from_collapse_limit`, `join_search_hook`. **Checked on:** PostgreSQL 17.
+
+The join order search is the part of the [planner](#planner) that decides which tables to join first and which pairs to join. `deconstruct_jointree()` turns the query's join tree into a joinlist. Every item at one level is joined in an order the search chooses, within the limits that [outer joins](#outer-join) set. A nested sub-list is planned separately; it arises at a `FULL JOIN`, or where merging would exceed `join_collapse_limit` for explicit `JOIN`s or `from_collapse_limit` for `FROM` items and subqueries ([initsplan.c#deconstruct_jointree](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L728-L737), [initsplan.c#deconstruct_recurse-from](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L862-L894), [initsplan.c#deconstruct_recurse-join](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L1066-L1080)).
+
+`make_rel_from_joinlist()` plans each sub-list first, then hands the list's items to `join_search_hook` if set, to [GEQO](#geqo) when `geqo` is on and the list has at least `geqo_threshold` items, and otherwise to `standard_join_search()` ([allpaths.c#make_rel_from_joinlist](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L3325-L3346), [allpaths.c#make_rel_from_joinlist-search](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L3372-L3377)). That function uses dynamic programming: it builds every feasible two-item join, then three-item joins from those, and so on, keeping each size in `join_rel_level` ([allpaths.c#standard_join_search](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L3422-L3437)). `join_search_one_level()` prefers joins that have join clauses and makes Cartesian products only when an item has none ([joinrels.c#join_search_one_level](../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L60-L91)). After each size it records the cheapest paths of every join relation, which the next size builds on ([allpaths.c:3474-3475](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L3474-L3475)).
+
+Related: [GEQO](#geqo), [RelOptInfo](#reloptinfo), [SpecialJoinInfo](#specialjoininfo), [Path](#path), [Hook](#hook), [Planner](#planner)
+
+### Join removal
+
+**Aliases:** `remove_useless_joins`, `join_is_removable`, `reduce_unique_semijoins`, `rel_supports_distinctness`, left-join removal. **Checked on:** PostgreSQL 17.
+
+Join removal is the [planner](#planner) deleting a join that cannot change the query's result. It runs in `analyzejoins.c`, after qualifications have been distributed, because it needs information that the earlier rewrite steps do not have ([analyzejoins.c:4-12](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L4-L12)). `query_planner()` calls `remove_useless_joins()` and then `reduce_unique_semijoins()` ([analyzejoins.c#remove_useless_joins](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L71-L80), [planmain.c:225-231](../raw/postgres-17/src/backend/optimizer/plan/planmain.c#L225-L231)).
+
+In 17 only a left join can be removed. The join condition must match at most one inner row, and no column of the inner side may be needed above the join, so the join would just repeat its left input ([analyzejoins.c#join_is_removable](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L164-L176), [analyzejoins.c:190-191](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L190-L191), [analyzejoins.c:232-237](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L232-L237)). Proof of "at most one row" needs a unique, immediately enforced, non-partial index, or a subquery whose `DISTINCT`, grouping, aggregation or set operation can make it unique ([analyzejoins.c#rel_supports_distinctness](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L840-L874), [analyzejoins.c#query_supports_distinctness](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L997-L1010)). A related step turns a semi join whose inner side is provably unique into a plain inner join ([analyzejoins.c#reduce_unique_semijoins](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L750-L764)).
+
+Related: [Outer join](#outer-join), [Semi join and anti join](#semi-join-and-anti-join), [SpecialJoinInfo](#specialjoininfo), [Planner](#planner), [pg_index](#pg_index)
+
+### LATERAL
+
+**Aliases:** `LATERAL` subquery, lateral reference, `RangeTblEntry.lateral`, `lateral_relids`, `direct_lateral_relids`, `lateral_referencers`. **Checked on:** PostgreSQL 17.
+
+`LATERAL` lets a subquery in `FROM` refer to columns of the `FROM` items before it, so it is evaluated once for each row, or set of rows, of those items. For a function in `FROM` the keyword is optional, because function arguments may always refer to earlier items ([queries.sgml#queries-lateral](../raw/postgres-17/doc/src/sgml/queries.sgml#L850-L882)). The parser records the keyword in the [range table](#range-table) entry's `lateral` flag ([parsenodes.h:1245-1246](../raw/postgres-17/src/include/nodes/parsenodes.h#L1245-L1246)).
+
+The [planner](#planner) implements a lateral reference with [parameterized paths](#parameterized-path). Every path of the relation is parameterized by at least the relations its lateral references use, so it must sit on the inner side of a nested loop that supplies those values ([optimizer/README#LATERAL-subqueries](../raw/postgres-17/src/backend/optimizer/README#L1206-L1218)). `create_lateral_join_info()` fills in each relation's `lateral_relids`, its minimum parameterization, and `lateral_referencers` ([initsplan.c#create_lateral_join_info](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L496-L501), [pathnodes.h:903-907](../raw/postgres-17/src/include/nodes/pathnodes.h#L903-L907)). A lateral subquery can still be pulled up into its parent, unless that would put lateral references into join conditions they cannot legally reach ([optimizer/README#LATERAL-subqueries-pullup](../raw/postgres-17/src/backend/optimizer/README#L1220-L1231)).
+
+Related: [Parameterized path](#parameterized-path), [Nested loop join](#nested-loop-join), [Subquery pull-up](#subquery-pull-up), [PlaceHolderVar](#placeholdervar), [Range table](#range-table), [Relids](#relids)
+
 ### Leaf page
 
 **Aliases:** B-tree leaf level, level 0, `BTP_LEAF`, `P_ISLEAF`, high key. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2045,6 +2185,16 @@ Related: [effective_cache_size](#effective_cache_size), [Cost](#cost), [Correlat
 
 Related: [work_mem](#work_mem), [VACUUM](#vacuum), [TID](#tid), [GUC context](#guc-context)
 
+### Materialize node
+
+**Aliases:** `Material`, `MaterialPath`, `nodeMaterial.c`, `cost_material`, `enable_material`. **Checked on:** PostgreSQL 17.
+
+A Materialize node saves the rows of the plan below it the first time they are read, so that a later rescan, backward scan or mark-and-restore can read them again cheaply. The [planner](#planner) adds one when an input is expensive and must be scanned repeatedly, or when mark-and-restore is needed and the input cannot provide it ([pathnodes.h#MaterialPath](../raw/postgres-17/src/include/nodes/pathnodes.h#L1976-L1986)). The rows go into a tuplestore limited by [`work_mem`](#work_mem); `cost_material()` charges disk I/O when the data will not fit, and counts the savings only on rescans ([nodeMaterial.c:30-34](../raw/postgres-17/src/backend/executor/nodeMaterial.c#L30-L34), [nodeMaterial.c:64](../raw/postgres-17/src/backend/executor/nodeMaterial.c#L64), [costsize.c#cost_material](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2440-L2451)).
+
+Several places use it. A nested loop may materialize its cheapest inner path ([joinpath.c:1788-1799](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L1788-L1799)). A [merge join](#merge-join) materializes its inner input when that looks cheaper, and must do so when the input cannot mark and restore ([costsize.c#final_cost_mergejoin-materialize](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L3897-L3928)). A scrollable cursor gets one on top when its plan cannot run backward ([planner.c:424-432](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L424-L432)). A [SubPlan](#subplan) that does not depend on the outer row gets one so that repeated reads are cheap, and so does a sample scan whose method cannot repeat its sample ([subselect.c:522-534](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L522-L534), [allpaths.c:885-890](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L885-L890)). Turning `enable_material` off removes the optional uses only ([config.sgml#guc-enable-material](../raw/postgres-17/doc/src/sgml/config.sgml#L5575-L5579)). Unlike [Memoize](#memoize), which caches rows per parameter value, Materialize keeps one copy of one input.
+
+Related: [Nested loop join](#nested-loop-join), [Merge join](#merge-join), [Memoize](#memoize), [work_mem](#work_mem), [Planner](#planner)
+
 ### Memoize
 
 **Aliases:** Memoize node, `nodeMemoize.c`, `enable_memoize`, `get_memoize_path`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2073,6 +2223,16 @@ A memory context is a named pool of memory with a defined lifetime, and the serv
 
 Related: [ereport](#ereport), [work_mem](#work_mem), [Portal](#portal)
 
+### Merge join
+
+**Aliases:** `MergeJoin`, `MergePath`, `nodeMergejoin.c`, mergejoinable clause, `mergeopfamilies`, mark and restore, `enable_mergejoin`. **Checked on:** PostgreSQL 17.
+
+A merge join reads two inputs that are sorted on the join key and walks through them together, matching equal keys, much like merging two sorted lists ([nodeMergejoin.c:23-26](../raw/postgres-17/src/backend/executor/nodeMergejoin.c#L23-L26)). It compares keys with the B-tree comparison functions of the operator family the planner supplies ([nodeMergejoin.c:42-48](../raw/postgres-17/src/backend/executor/nodeMergejoin.c#L42-L48)). When the outer side repeats a key, the executor goes back to a marked inner row, so the inner input must support mark and restore ([nodeMergejoin.c:50-58](../raw/postgres-17/src/backend/executor/nodeMergejoin.c#L50-L58)).
+
+A condition qualifies only if its operator is mergejoinable and belongs to a B-tree operator family, and it contains no volatile function ([initsplan.c#check_mergejoinable](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L3364-L3399)). The [planner](#planner) builds merge join paths either by sorting both inputs, or by using an outer path that is already sorted and then sorting the inner one or taking an already-ordered inner path ([joinpath.c#sort_inner_and_outer](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L1254-L1257), [joinpath.c#generate_mergejoin_paths](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L1455-L1466)). A `MergePath` records the explicit sorts it needs, whether mark and restore can be skipped, and whether a [Materialize node](#materialize-node) goes over the inner side ([pathnodes.h#MergePath](../raw/postgres-17/src/include/nodes/pathnodes.h#L2112-L2141)). EXPLAIN prints it as `Merge Join` ([explain.c:1440-1441](../raw/postgres-17/src/backend/commands/explain.c#L1440-L1441)).
+
+Related: [Hash join](#hash-join), [Nested loop join](#nested-loop-join), [Pathkey](#pathkey), [Operator class](#operator-class), [Materialize node](#materialize-node), [Incremental sort](#incremental-sort)
+
 ### Metapage
 
 **Aliases:** meta page, metadata page. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2086,6 +2246,16 @@ A metapage is a special page, at block 0 of an index, that holds bookkeeping for
 - PostgreSQL 19: Holds. B-tree, hash, GIN, SP-GiST and BRIN still put the metapage at block 0 and GiST still puts its root there, and the B-tree and GIN metapage fields are unchanged ([nbtree.h:149](../raw/postgres-19/src/include/access/nbtree.h#L149), [hash.h:198](../raw/postgres-19/src/include/access/hash.h#L198), [ginblock.h:52](../raw/postgres-19/src/include/access/ginblock.h#L52), [spgist_private.h:47](../raw/postgres-19/src/include/access/spgist_private.h#L47), [brin_page.h:75](../raw/postgres-19/src/include/access/brin_page.h#L75), [gist_private.h:262](../raw/postgres-19/src/include/access/gist_private.h#L262), [nbtree.h#BTMetaPageData](../raw/postgres-19/src/include/access/nbtree.h#L104-L120), [ginblock.h#GinMetaPageData](../raw/postgres-19/src/include/access/ginblock.h#L55-L75)).
 
 Related: [Fast root](#fast-root), [allequalimage](#allequalimage), [Pending list](#pending-list), [B-tree](#b-tree)
+
+### ModifyTable
+
+**Aliases:** `ModifyTable` node, `ModifyTablePath`, `nodeModifyTable.c`, `resultRelations`, `nominalRelation`, result relation. **Checked on:** PostgreSQL 17.
+
+ModifyTable is the plan node that carries out `INSERT`, `UPDATE`, `DELETE` and `MERGE`. It takes rows from the plan below it. For `INSERT` they are the new rows, for `UPDATE` and `MERGE` the new column values plus the location of each target row, and for `DELETE` only the row location ([nodeModifyTable.c:22-25](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L22-L25)). For `MERGE`, that input is a join between the source and the target, an outer join when a `WHEN NOT MATCHED` clause is present ([nodeModifyTable.c:36-44](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L36-L44)). With `RETURNING` it returns one row per changed row; otherwise it loops until all the work is done ([nodeModifyTable.c:46-50](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L46-L50)).
+
+The [planner](#planner) adds a `ModifyTablePath` on top of the final relation in `grouping_planner()` for every statement that is not a `SELECT` ([planner.c:1823-1826](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1823-L1826), [planner.c:2008-2009](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2008-L2009)). One node can write to several tables: `resultRelations` lists the [range table](#range-table) indexes of the partitions or inheritance children it targets, while `nominalRelation` is the table EXPLAIN names ([plannodes.h#ModifyTable](../raw/postgres-17/src/include/nodes/plannodes.h#L213-L256)). The node also carries per-table `RETURNING` lists, [`WithCheckOption`](#withcheckoption) lists, row marks and, for `INSERT ... ON CONFLICT`, the arbiter indexes, which `infer_arbiter_indexes()` chooses while planning ([createplan.c:7095-7100](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L7095-L7100), [plancat.c#infer_arbiter_indexes](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L685-L694)).
+
+Related: [Row mark](#row-mark), [Plan tree](#plan-tree), [Range table](#range-table), [Declarative partitioning](#declarative-partitioning), [WithCheckOption](#withcheckoption), [Executor](#executor)
 
 ### Most common values and histogram
 
@@ -2137,6 +2307,16 @@ A nested loop join reads its outer (left) input one row at a time and scans its 
 
 Related: [Planner](#planner), [Executor](#executor), [Index scan](#index-scan), [Memoize](#memoize), [Cost](#cost), [effective_cache_size](#effective_cache_size), [Path](#path)
 
+### Node support functions
+
+**Aliases:** `gen_node_support.pl`, `nodetags.h`, `copyfuncs.funcs.c`, `equalfuncs.funcs.c`, `outfuncs.funcs.c`, `readfuncs.funcs.c`, `queryjumblefuncs.funcs.c`, `pg_node_attr`, `NodeTag`. **Checked on:** PostgreSQL 17.
+
+Node support functions are the routines that copy, compare, print and read back PostgreSQL's in-memory node trees: `copyObject()`, `equal()`, `nodeToString()`, `nodeRead()` and query jumbling. In 17 a build-time Perl script, `gen_node_support.pl`, generates them, together with `nodetags.h`, which supplies the `NodeTag` enum every node starts with ([gen_node_support.pl:3-9](../raw/postgres-17/src/backend/nodes/gen_node_support.pl#L3-L9), [nodes.h:28-31](../raw/postgres-17/src/include/nodes/nodes.h#L28-L31)). The script reads the struct definitions in a fixed list of headers, among them `primnodes.h`, `parsenodes.h`, `pathnodes.h` and `plannodes.h`, and writes a `*.funcs.c` and a `*.switch.c` file for each kind of support ([nodes/Makefile:41-63](../raw/postgres-17/src/backend/nodes/Makefile#L41-L63), [nodes/Makefile:77-97](../raw/postgres-17/src/backend/nodes/Makefile#L77-L97)).
+
+Annotations written as `pg_node_attr(...)` inside those structs steer the generator ([nodes.h:33-40](../raw/postgres-17/src/include/nodes/nodes.h#L33-L40)). The [planner](#planner)'s working structs `PlannerGlobal`, [PlannerInfo](#plannerinfo) and [RelOptInfo](#reloptinfo) are marked `no_copy_equal, no_read, no_query_jumble`, so they can be printed but never copied, compared or read back ([pathnodes.h:95-97](../raw/postgres-17/src/include/nodes/pathnodes.h#L95-L97), [pathnodes.h:195-197](../raw/postgres-17/src/include/nodes/pathnodes.h#L195-L197), [pathnodes.h:853-855](../raw/postgres-17/src/include/nodes/pathnodes.h#L853-L855)).
+
+Related: [Parse tree](#parse-tree), [PlannedStmt](#plannedstmt), [pg_node_tree](#pg_node_tree), [Query jumbling](#query-jumbling), [Planner](#planner)
+
 ### Nondeterministic collation
 
 **Aliases:** `deterministic = false`, `collisdeterministic`, case-insensitive collation, accent-insensitive collation. **Checked on:** PostgreSQL 17.
@@ -2161,6 +2341,16 @@ Related: [Collation](#collation), [Deduplication](#deduplication), [allequalimag
 
 Related: [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [Lock mode](#lock-mode), [Catalog](#catalog), [Declarative partitioning](#declarative-partitioning)
 
+### Nullingrels
+
+**Aliases:** `varnullingrels`, outer-join-aware Var, nulling relids. **Checked on:** PostgreSQL 17.
+
+Nullingrels are the sets of [outer joins](#outer-join) that can turn a column reference into NULL at the place where it appears in the query. Every `Var` carries such a set, `varnullingrels`, holding the [range table](#range-table) indexes of those outer joins ([primnodes.h:218-220](../raw/postgres-17/src/include/nodes/primnodes.h#L218-L220), [primnodes.h:274](../raw/postgres-17/src/include/nodes/primnodes.h#L274)). The same column therefore has two meanings: its value as the table scan sees it, with an empty set, and its value after a join that may have null-extended the row ([optimizer/README#nullingrels](../raw/postgres-17/src/backend/optimizer/README#L339-L352)).
+
+This matters when reading [planner](#planner) code because the marking decides where a condition may run. Take `t1 LEFT JOIN t2 ON (t1.x = t2.y) WHERE t1.x = 42`. The planner may derive `t2.y = 42` for the scan of `t2`, but it must not treat `t2.y` above the join as equal to `t1.x` ([optimizer/README#nullingrels-example](../raw/postgres-17/src/backend/optimizer/README#L325-L337)). Only Vars from the nullable side of a left or right join are marked, and both sides of a full join ([optimizer/README:355-359](../raw/postgres-17/src/backend/optimizer/README#L355-L359)). A [PlaceHolderVar](#placeholdervar) carries the same information in `phnullingrels` ([pathnodes.h:2761](../raw/postgres-17/src/include/nodes/pathnodes.h#L2761)).
+
+Related: [Outer join](#outer-join), [PlaceHolderVar](#placeholdervar), [Equivalence class](#equivalence-class), [Relids](#relids), [Qual](#qual)
+
 ### OID
 
 **Aliases:** object identifier, `Oid`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2174,6 +2364,16 @@ An OID (object identifier) is an unsigned 4-byte integer that PostgreSQL uses as
 - PostgreSQL 19: Holds. `Oid` is still an unsigned 4-byte integer, user OIDs still start at 16384, a wrapped counter still skips the reserved range, the pinning test is unchanged, `GetNewOidWithIndex()` still checks for collisions, and `pg_upgrade` still notes that OID and relfilenode can diverge ([postgres_ext.h:29-37](../raw/postgres-19/src/include/postgres_ext.h#L29-L37), [datatype.sgml:4807-4821](../raw/postgres-19/doc/src/sgml/datatype.sgml#L4807-L4821), [transam.h:170-197](../raw/postgres-19/src/include/access/transam.h#L170-L197), [catalog.c:370-378](../raw/postgres-19/src/backend/catalog/catalog.c#L370-L378), [catalog.c:448](../raw/postgres-19/src/backend/catalog/catalog.c#L448), [pg_upgrade.c:9-21](../raw/postgres-19/src/bin/pg_upgrade/pg_upgrade.c#L9-L21)).
 
 Related: [Catalog](#catalog), [pg_class](#pg_class), [Relfilenumber](#relfilenumber), [Transaction ID](#transaction-id)
+
+### One-shot plan
+
+**Aliases:** `CreateOneShotCachedPlan`, `is_oneshot`, `_SPI_prepare_oneshot_plan`, one-shot `CachedPlanSource`. **Checked on:** PostgreSQL 17.
+
+A one-shot plan is a plan-cache entry meant to be used exactly once. `CreateOneShotCachedPlan()` builds it in the caller's memory, copies nothing, and cannot be saved; it has no invalidation support, so it must be used up within the current transaction ([plancache.c#CreateOneShotCachedPlan](../raw/postgres-17/src/backend/utils/cache/plancache.c#L265-L287)). Because it is never reused, `choose_custom_plan()` always treats it as a custom plan, planned for the actual parameter values ([plancache.c#choose_custom_plan-oneshot](../raw/postgres-17/src/backend/utils/cache/plancache.c#L1058-L1060)).
+
+SPI uses one-shot entries for statements run from text: `SPI_execute()` and `SPI_execute_extended()` call `_SPI_prepare_oneshot_plan()`, which avoids data copying and invalidation overhead ([spi.c#_SPI_prepare_oneshot_plan](../raw/postgres-17/src/backend/executor/spi.c#L2310-L2327), [spi.c:614](../raw/postgres-17/src/backend/executor/spi.c#L614), [spi.c:660](../raw/postgres-17/src/backend/executor/spi.c#L660)). [PL/pgSQL](#plpgsql)'s `EXECUTE` of a dynamic string goes through `SPI_execute_extended()`, so every execution of it is parsed and planned afresh ([pl_exec.c:4474](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L4474)). A prepared statement, by contrast, keeps a saved entry that can hold a reusable generic plan.
+
+Related: [Custom and generic plan](#custom-and-generic-plan), [SPI](#spi), [PL/pgSQL](#plpgsql), [Prepared statement](#prepared-statement), [Invalidation message](#invalidation-message)
 
 ### Operator class
 
@@ -2216,6 +2416,16 @@ The OS page cache is the operating system's own memory cache of file data. It si
 - PostgreSQL 19: Holds ([config.sgml:1821-1831](../raw/postgres-19/doc/src/sgml/config.sgml#L1821-L1831), [fd.c:526](../raw/postgres-19/src/backend/storage/file/fd.c#L526), [xlog.c:8829-8836](../raw/postgres-19/src/backend/access/transam/xlog.c#L8829-L8836), [md.c:181-182](../raw/postgres-19/src/backend/storage/smgr/md.c#L181-L182), [guc_parameters.dat:674](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L674)).
 
 Related: [shared_buffers](#shared_buffers), [effective_cache_size](#effective_cache_size), [fsync](#fsync), [Buffer manager](#buffer-manager)
+
+### Outer join
+
+**Aliases:** `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN`, `JOIN_LEFT`, `JOIN_RIGHT`, `JOIN_FULL`, nullable side, null-extended row, `reduce_outer_joins`. **Checked on:** PostgreSQL 17.
+
+An outer join returns the matching row pairs plus the rows of one input that found no match, with NULLs in the other input's columns. A left join keeps unmatched left rows, a right join unmatched right rows, and a full join both ([nodes.h#JoinType](../raw/postgres-17/src/include/nodes/nodes.h#L287-L296)). The input whose columns can be filled with NULLs is the nullable side, and the NULL-filled row is a null-extended row.
+
+Outer joins limit what the [planner](#planner) may do, so it first tries to remove them. `reduce_outer_joins()` runs after expression preprocessing when the query has outer joins ([planner.c:1102-1108](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1102-L1108)). It turns an outer join into a plain join when a strict condition above it rejects every null-extended row, such as `WHERE b.y = 42` above `a LEFT JOIN b` ([prepjointree.c#reduce_outer_joins](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2900-L2913)). It turns `LEFT JOIN ... WHERE b.y IS NULL` into an anti join when the join clause is strict for `b.y`, and flips every right join into a left join ([prepjointree.c#reduce_outer_joins-anti](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2915-L2928)). The joins that remain may be reordered only as a few identities allow, and full joins are never reordered; each non-inner join gets a [SpecialJoinInfo](#specialjoininfo) that the join search checks ([optimizer/README#valid-outer-join-optimizations](../raw/postgres-17/src/backend/optimizer/README#L193-L243)).
+
+Related: [SpecialJoinInfo](#specialjoininfo), [Nullingrels](#nullingrels), [Semi join and anti join](#semi-join-and-anti-join), [Join removal](#join-removal), [PlaceHolderVar](#placeholdervar), [Join order search](#join-order-search)
 
 ### Page
 
@@ -2287,6 +2497,26 @@ Parallel vacuum lets VACUUM hand whole indexes to parallel worker processes duri
 
 Related: [VACUUM](#vacuum), [Autovacuum](#autovacuum), [Parallel query](#parallel-query), [maintenance_work_mem](#maintenance_work_mem)
 
+### Param
+
+**Aliases:** `Param` node, `ParamKind`, `PARAM_EXTERN`, `PARAM_EXEC`, `PARAM_SUBLINK`, `PARAM_MULTIEXPR`, `$1`, `paramExecTypes`, `paramassign.c`. **Checked on:** PostgreSQL 17.
+
+A Param is an expression node that stands for a value supplied from somewhere other than the row being processed. Its `paramkind` says where the value comes from ([primnodes.h#Param](../raw/postgres-17/src/include/nodes/primnodes.h#L338-L385)). A `PARAM_EXTERN` Param, written `$1`, `$2` and so on, takes its value from outside the plan, such as a prepared statement's argument. A `PARAM_EXEC` Param is an internal executor slot that carries a value into or out of a subquery, or from a nested loop into its inner scan ([primnodes.h:344-351](../raw/postgres-17/src/include/nodes/primnodes.h#L344-L351)). `PARAM_SUBLINK` and `PARAM_MULTIEXPR` stand for columns of a sub-select, and the [planner](#planner) converts both to `PARAM_EXEC` ([primnodes.h:353-363](../raw/postgres-17/src/include/nodes/primnodes.h#L353-L363)).
+
+`paramassign.c` hands out the `PARAM_EXEC` slots. `glob->paramExecTypes` records one data type per slot for the whole plan, because the executor has a single array of them ([paramassign.c:4-13](../raw/postgres-17/src/backend/optimizer/util/paramassign.c#L4-L13), [plannodes.h:93](../raw/postgres-17/src/include/nodes/plannodes.h#L93)). `plan_params` records the values a query level passes down to subqueries, and `curOuterParams` the values a nested loop passes to its inner side ([paramassign.c:15-26](../raw/postgres-17/src/backend/optimizer/util/paramassign.c#L15-L26)). Whether a `PARAM_EXTERN` value can be folded into the plan depends on how it was supplied; see [Constant folding](#constant-folding).
+
+Related: [Custom and generic plan](#custom-and-generic-plan), [SubPlan](#subplan), [Nested loop join](#nested-loop-join), [Parameterized path](#parameterized-path), [Prepared statement](#prepared-statement), [Constant folding](#constant-folding)
+
+### Parameterized path
+
+**Aliases:** `ParamPathInfo`, `param_info`, `ppi_req_outer`, `PATH_REQ_OUTER`, required outer relations, parameterization. **Checked on:** PostgreSQL 17.
+
+A parameterized path is a [path](#path) that uses a join clause to a relation it does not scan itself, so it needs a value from that other relation for every execution. The classic case is an index scan on `B` with the condition `B.Y = A.X`, which a nested loop runs once per row of `A`, passing the current `A.X` down ([optimizer/README#parameterized-paths](../raw/postgres-17/src/backend/optimizer/README#L1068-L1083), [optimizer/README:1124-1134](../raw/postgres-17/src/backend/optimizer/README#L1124-L1134)). Such a path can be joined to other relations first, but it can finally be used only as the inner side of a nested loop that supplies its parameters ([optimizer/README:1144-1149](../raw/postgres-17/src/backend/optimizer/README#L1144-L1149)).
+
+In source, `Path.param_info` points to a `ParamPathInfo`. That struct is shared by every path of the relation with the same required outer relations (`ppi_req_outer`), so all of them carry the same row estimate ([pathnodes.h#ParamPathInfo](../raw/postgres-17/src/include/nodes/pathnodes.h#L1556-L1586), [pathnodes.h:1653](../raw/postgres-17/src/include/nodes/pathnodes.h#L1653), [pathnodes.h#PATH_REQ_OUTER](../raw/postgres-17/src/include/nodes/pathnodes.h#L1671-L1673)). `add_path()` gives parameterized paths no credit for sort order, so fewer of them survive ([pathnode.c:381-385](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L381-L385)). A [LATERAL](#lateral) reference makes every path of its relation parameterized ([optimizer/README#LATERAL-subqueries](../raw/postgres-17/src/backend/optimizer/README#L1206-L1218)).
+
+Related: [Nested loop join](#nested-loop-join), [Index scan](#index-scan), [Memoize](#memoize), [LATERAL](#lateral), [Param](#param), [Relids](#relids)
+
 ### Parse tree
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2300,6 +2530,16 @@ A parse tree is the in-memory tree of nodes that represents one SQL statement. `
 - PostgreSQL 19: Holds. `raw_parser()` still returns `RawStmt` nodes in the default mode, parse analysis still turns each into a `Query` with the same four utility exceptions, and the executor still never sees the `Query` ([parser.c#raw_parser](../raw/postgres-19/src/backend/parser/parser.c#L33-L42), [parser.h:24-28](../raw/postgres-19/src/include/parser/parser.h#L24-L28), [parsenodes.h#RawStmt](../raw/postgres-19/src/include/nodes/parsenodes.h#L2066-L2090), [parsenodes.h#Query](../raw/postgres-19/src/include/nodes/parsenodes.h#L100-L110), [analyze.c:407-431](../raw/postgres-19/src/backend/parser/analyze.c#L407-L431)).
 
 Related: [Grammar](#grammar), [Planner](#planner), [Utility command](#utility-command), [PlannedStmt](#plannedstmt)
+
+### Partial aggregation
+
+**Aliases:** `AggSplit`, `AGGSPLIT_INITIAL_SERIAL`, `AGGSPLIT_FINAL_DESERIAL`, Partial Aggregate, Finalize Aggregate, combine function, `aggcombinefn`, `create_partial_grouping_paths()`. **Checked on:** PostgreSQL 17.
+
+Partial aggregation splits one aggregation into two steps. The first step builds each aggregate's running state over a subset of the rows and stops before the final function. The second step combines those states and computes the final values. Each Agg node carries the mode in `aggsplit`: `AGGSPLIT_INITIAL_SERIAL` skips the final function and serializes the state, and `AGGSPLIT_FINAL_DESERIAL` deserializes and combines ([nodes.h#AggSplit](../raw/postgres-17/src/include/nodes/nodes.h#L359-L381)). EXPLAIN prints the two nodes as "Partial" and "Finalize" ([explain.c#ExplainNode-aggsplit](../raw/postgres-17/src/backend/commands/explain.c#L1575-L1586)).
+
+The [planner](#planner) uses it for parallel aggregation, where workers run the first step below a Gather, and for partial [partitionwise aggregation](#partitionwise-aggregation) ([planner.c#create_ordinary_grouping_paths-partial](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4120-L4164), [planner.c#create_partial_grouping_paths](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L7300-L7314)). It needs aggregates or a GROUP BY and no grouping sets ([planner.c#can_partial_agg](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L7697-L7723)). Every aggregate must also be combinable. An aggregate with its own ORDER BY or DISTINCT blocks it, and so does one without a combine function in `pg_aggregate.aggcombinefn`, or one whose `internal` state has no serialization functions ([prepagg.c#preprocess_aggref-ordered](../raw/postgres-17/src/backend/optimizer/prep/prepagg.c#L241-L250), [prepagg.c#preprocess_aggref-partial](../raw/postgres-17/src/backend/optimizer/prep/prepagg.c#L288-L312), [pg_aggregate.h:49-56](../raw/postgres-17/src/include/catalog/pg_aggregate.h#L49-L56)).
+
+Related: [Partial path](#partial-path), [Parallel query](#parallel-query), [Partitionwise aggregation](#partitionwise-aggregation), [Upper relation](#upper-relation), [Plan tree](#plan-tree)
 
 ### Partial index
 
@@ -2365,6 +2605,16 @@ A partitioned index is the index you create on a partitioned table. It has relki
 
 Related: [pg_class](#pg_class), [pg_index](#pg_index), [Partition bound](#partition-bound), [REINDEX](#reindex), [CONCURRENTLY](#concurrently)
 
+### Partitionwise aggregation
+
+**Aliases:** `enable_partitionwise_aggregate`, `PartitionwiseAggregateType`, `PARTITIONWISE_AGGREGATE_FULL`, `PARTITIONWISE_AGGREGATE_PARTIAL`, `create_partitionwise_grouping_paths()`. **Checked on:** PostgreSQL 17.
+
+Partitionwise aggregation runs a grouping separately on each partition of a partitioned input and appends the results, instead of grouping the appended rows as a whole ([pathnodes.h#PartitionwiseAggregateType](../raw/postgres-17/src/include/nodes/pathnodes.h#L3260-L3276)). When the GROUP BY holds every partition key column, with the partitioning collation, all rows of a group come from one partition, so each partition's result is final ("full"). Otherwise each partition runs a [partial aggregation](#partial-aggregation) and a Finalize step above the Append combines the pieces ("partial"). The partial form pays off mainly when the first step removes many rows ([planner.c#create_partitionwise_grouping_paths](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L7957-L7975), [planner.c#create_ordinary_grouping_paths-patype](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4083-L4113)).
+
+The [planner](#planner) considers it only when `enable_partitionwise_aggregate` is on, which it is not by default, and the query has no grouping sets. The input relation must also be partitioned ([planner.c#create_grouping_paths-patype](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L3904-L3913), [guc_tables.c#enable_partitionwise_aggregate](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L934-L942)). It is separate from a [partitionwise join](#partitionwise-join), which has its own setting.
+
+Related: [Partitionwise join](#partitionwise-join), [Partial aggregation](#partial-aggregation), [Declarative partitioning](#declarative-partitioning), [Append and MergeAppend](#append-and-mergeappend), [GUC](#guc)
+
 ### Partitionwise join
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2402,6 +2652,16 @@ A pathkey describes one sort key of the rows a [path](#path) produces. A path's 
 This is how the planner decides whether a path already satisfies an `ORDER BY` or a merge join without an explicit sort. An index scan's pathkeys describe the index's order; a [sequential scan](#sequential-scan), a [bitmap scan](#bitmap-scan) and a scan of an index type that cannot return ordered results all have none ([optimizer/README#PathKeys-scans](../raw/postgres-17/src/backend/optimizer/README#L923-L939)).
 
 Related: [Path](#path), [Equivalence class](#equivalence-class), [Planner](#planner), [Index scan](#index-scan), [Operator class](#operator-class)
+
+### PathTarget
+
+**Aliases:** `reltarget`, `Path.pathtarget`, `set_pathtarget_cost_width()`, `create_projection_path()`. **Checked on:** PostgreSQL 17.
+
+A `PathTarget` describes the output columns a [path](#path) computes. It holds a list of expressions, their sort and group reference numbers, the cost of evaluating them, and the average width of the resulting rows ([pathnodes.h#PathTarget](../raw/postgres-17/src/include/nodes/pathnodes.h#L1506-L1549)). Every [RelOptInfo](#reloptinfo) has a default one, `reltarget`, which its paths usually share. A path that computes something different, such as an index scan that returns an index expression, points to its own in `Path.pathtarget` ([pathnodes.h#PathTarget-default](../raw/postgres-17/src/include/nodes/pathnodes.h#L1506-L1516), [pathnodes.h:884-887](../raw/postgres-17/src/include/nodes/pathnodes.h#L884-L887), [pathnodes.h:1640-1644](../raw/postgres-17/src/include/nodes/pathnodes.h#L1640-L1644)).
+
+It matters when reading planner code because a PathTarget, not a target list, is what the planner prices and passes along before any plan exists. `set_pathtarget_cost_width()` fills in its cost and width, and `create_projection_path()` wraps a path whose output must change ([costsize.c#set_pathtarget_cost_width](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L6260-L6273), [pathnode.c#create_projection_path](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L2676-L2688)). Its expressions carry no `TargetEntry` nodes; those appear only in the finished [plan tree](#plan-tree) ([pathnodes.h#PathTarget-exprs](../raw/postgres-17/src/include/nodes/pathnodes.h#L1518-L1519)).
+
+Related: [Path](#path), [RelOptInfo](#reloptinfo), [Upper relation](#upper-relation), [Cost](#cost), [Plan tree](#plan-tree)
 
 ### Pending list
 
@@ -2659,6 +2919,16 @@ Every B-tree with more than one level has pivot tuples, since searches descend t
 
 Related: [B-tree](#b-tree), [Leaf page](#leaf-page), [Suffix truncation](#suffix-truncation), [Page split](#page-split), [Sibling link](#sibling-link)
 
+### PlaceHolderVar
+
+**Aliases:** PHV, `PlaceHolderInfo`, `ph_eval_at`, `phnullingrels`, `make_placeholder_expr()`. **Checked on:** PostgreSQL 17.
+
+A `PlaceHolderVar` is a planner-only wrapper around an expression that must be computed below an [outer join](#outer-join). References above the join then read NULL, not the expression's value, when the join produces a null-extended row ([pathnodes.h#PlaceHolderVar-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L2749-L2756)). Neither the parser nor the executor knows this node type ([pathnodes.h#PlaceHolderVar-scope](../raw/postgres-17/src/include/nodes/pathnodes.h#L2763-L2765), [pathnodes.h#PlaceHolderVar](../raw/postgres-17/src/include/nodes/pathnodes.h#L2781-L2801)).
+
+It usually appears when [subquery pull-up](#subquery-pull-up) flattens a subquery that sits on the nullable side of an outer join. A pulled-up output is wrapped unless it is a plain column, or a strict expression over the subquery's own columns ([prepjointree.c#pullup_replace_vars_callback-need_phv](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2494-L2500), [prepjointree.c#pullup_replace_vars_callback-simple-var](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2591-L2610), [prepjointree.c#pullup_replace_vars_callback-strict](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2629-L2683)). Grouping sets and `UNION ALL` members force wrapping of every non-column output ([prepjointree.c#pull_up_simple_subquery-wrap](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1304-L1324)). A matching `PlaceHolderInfo` records `ph_eval_at`, the lowest join level that can compute the value, and that level can constrain join order ([pathnodes.h#PlaceHolderInfo](../raw/postgres-17/src/include/nodes/pathnodes.h#L3058-L3068)). At scan level, `set_plan_references()` replaces the wrapper by the expression it holds ([setrefs.c#fix_scan_expr_mutator-phv](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L2242-L2249)).
+
+Related: [Outer join](#outer-join), [Nullingrels](#nullingrels), [Subquery pull-up](#subquery-pull-up), [Relids](#relids), [set_plan_references](#set_plan_references)
+
 ### Plan cache mode
 
 **Aliases:** `plan_cache_mode`, `auto`, `force_custom_plan`, `force_generic_plan`, `PlanCacheMode`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2672,6 +2942,16 @@ Related: [B-tree](#b-tree), [Leaf page](#leaf-page), [Suffix truncation](#suffix
 - PostgreSQL 19: Holds ([plancache.c#choose_custom_plan](../raw/postgres-19/src/backend/utils/cache/plancache.c#L1184-L1230)). The setting is `PGC_USERSET`, so session scope ([guc_parameters.dat:2363](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2363)).
 
 Related: [Custom and generic plan](#custom-and-generic-plan), [Prepared statement](#prepared-statement), [Planner](#planner), [GUC context](#guc-context)
+
+### Plan tree
+
+**Aliases:** `Plan`, plan node, `lefttree`, `righttree`, `outerPlan()`, `innerPlan()`. **Checked on:** PostgreSQL 17.
+
+A plan tree is the executable form of a query: a tree of plan nodes, each a struct that starts with the common `Plan` fields. `Plan` itself is never created on its own. It holds the estimated startup and total [cost](#cost), the estimated rows and width, and parallel flags. It also holds the node's target list and quals, its left and right inputs, its InitPlans, and the parameter sets that decide when it must be rescanned ([plannodes.h#Plan](../raw/postgres-17/src/include/nodes/plannodes.h#L107-L172)). By convention the left input is the outer one and the right input the inner one ([plannodes.h#innerPlan](../raw/postgres-17/src/include/nodes/plannodes.h#L174-L182)).
+
+The [planner](#planner) builds it only at the end. `create_plan()` turns the chosen [path](#path) tree into plan nodes whose Vars still use the parser's numbering, and `set_plan_references()` fixes them afterwards ([createplan.c#create_plan](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L322-L338)). The costs and rows stored in plan nodes are the planner's estimates, which EXPLAIN prints. The executor builds a matching `PlanState` tree from it with `ExecInitNode()` ([execProcnode.c#ExecInitNode](../raw/postgres-17/src/backend/executor/execProcnode.c#L127-L142)). The whole tree travels inside a [PlannedStmt](#plannedstmt) ([plannodes.h:70](../raw/postgres-17/src/include/nodes/plannodes.h#L70)).
+
+Related: [PlannedStmt](#plannedstmt), [Path](#path), [set_plan_references](#set_plan_references), [Executor](#executor), [Executor state](#executor-state)
 
 ### PlannedStmt
 
@@ -2708,6 +2988,16 @@ Related: [Path](#path), [RelOptInfo](#reloptinfo), [Cost](#cost), [PlannedStmt](
 A planner support function is a helper, written in C, that is attached to another SQL function, its target function. It gives the [planner](#planner) knowledge about the target that the constant settings of `CREATE FUNCTION` cannot express ([xfunc.sgml#xfunc-optimization](../raw/postgres-17/doc/src/sgml/xfunc.sgml#L3792-L3809)). The target's [pg_proc](#pg_proc) row names the helper in `prosupport`, which `get_func_support()` reads ([pg_proc.h:55-56](../raw/postgres-17/src/include/catalog/pg_proc.h#L55-L56), [lsyscache.c#get_func_support](../raw/postgres-17/src/backend/utils/cache/lsyscache.c#L1965-L1987)). Only a superuser may attach one, through the `SUPPORT` clause of `CREATE FUNCTION` or `ALTER FUNCTION`, and the helper must take and return `internal` ([functioncmds.c:1441-1445](../raw/postgres-17/src/backend/commands/functioncmds.c#L1441-L1445), [functioncmds.c#interpret_func_support](../raw/postgres-17/src/backend/commands/functioncmds.c#L669-L706)). Every caller fills in one `SupportRequest*` node from `supportnodes.h` and calls the helper. A NULL pointer back means "no help", and the caller falls back to its default ([supportnodes.h:14-23](../raw/postgres-17/src/include/nodes/supportnodes.h#L14-L23)). `simplify_function()` sends `SupportRequestSimplify` during constant folding ([clauses.c:4119-4152](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L4119-L4152)). `function_selectivity()`, `add_function_cost()` and `get_function_rows()` send `SupportRequestSelectivity`, `SupportRequestCost` and `SupportRequestRows`. Without an answer they use a [selectivity](#selectivity) of 0.3333333, `procost` and `prorows` ([plancat.c#function_selectivity](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L2031-L2078), [plancat.c#add_function_cost](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L2093-L2137), [plancat.c#get_function_rows](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L2154-L2198)). `get_index_clause_from_support()` in `indxpath.c` sends `SupportRequestIndexCondition`. The planner tries it for a function clause with an argument that matches an index column, and for an operator clause whose operator is not in the index column's operator family ([indxpath.c#match_funcclause_to_indexcol](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2520-L2546), [indxpath.c:2449-2459](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2449-L2459)). The helper returns conditions the index can run directly. For example, `textlike_support`, the helper of `textlike`, can turn a LIKE with a constant prefix into index conditions such as `x >= prefix` when the index's operator family and collation allow it ([pg_proc.dat:1755-1760](../raw/postgres-17/src/include/catalog/pg_proc.dat#L1755-L1760), [like_support.c#like_regex_support](../raw/postgres-17/src/backend/utils/adt/like_support.c#L156-L234), [like_support.c#match_pattern_prefix](../raw/postgres-17/src/backend/utils/adt/like_support.c#L414-L470)). The request's `lossy` flag starts true, and the helper clears it only when its conditions exactly match the clause. While it is true, the original clause still runs on every row the index returns ([indxpath.c#get_index_clause_from_support](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2556-L2615), [supportnodes.h#SupportRequestIndexCondition](../raw/postgres-17/src/include/nodes/supportnodes.h#L203-L240), [xfunc.sgml:3864-3876](../raw/postgres-17/doc/src/sgml/xfunc.sgml#L3864-L3876)). Do not confuse it with the support functions an [operator class](#operator-class) registers in `pg_amproc`. The index [access method](#access-method) calls those itself, for example to compare B-tree keys ([xindex.sgml#xindex-support](../raw/postgres-17/doc/src/sgml/xindex.sgml#L376-L398)).
 
 Related: [Planner](#planner), [pg_proc](#pg_proc), [Selectivity](#selectivity), [Cost](#cost), [SQL function inlining](#sql-function-inlining), [Operator class](#operator-class), [Index scan](#index-scan)
+
+### PlannerInfo
+
+**Aliases:** `root`, `PlannerGlobal`, `glob`, `query_level`, `parent_root`. **Checked on:** PostgreSQL 17.
+
+`PlannerInfo` is the [planner](#planner)'s working state for one query level. Planner functions conventionally call it `root`. It links the `Query` being planned to everything the planner builds for it ([pathnodes.h#PlannerInfo-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L173-L183), [pathnodes.h#PlannerInfo-head](../raw/postgres-17/src/include/nodes/pathnodes.h#L195-L211)). `subquery_planner()` makes a new one for each query level, so a subquery gets its own, with `parent_root` pointing outward and `query_level` counting from 1 at the top ([planner.c:642](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L642)). Its fields include the per-table array `simple_rel_array`, the join relations, the [equivalence classes](#equivalence-class), the outer-join constraints in `join_info_list`, and the [upper relations](#upper-relation) ([pathnodes.h#simple_rel_array](../raw/postgres-17/src/include/nodes/pathnodes.h#L223-L231), [pathnodes.h#join_rel_list-to-join_info_list](../raw/postgres-17/src/include/nodes/pathnodes.h#L272-L340), [pathnodes.h#upper_rels](../raw/postgres-17/src/include/nodes/pathnodes.h#L412-L416)).
+
+State shared by every level of one planner call lives in a separate `PlannerGlobal`, reached as `root->glob`. It collects the subplans, the flattened [range table](#range-table), the dependency lists the plan cache later uses (`relationOids`, `invalItems`), the executor parameter types, and flags such as `transientPlan` and `parallelModeNeeded` ([pathnodes.h#PlannerGlobal-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L83-L89), [pathnodes.h#PlannerGlobal-fields](../raw/postgres-17/src/include/nodes/pathnodes.h#L104-L159)).
+
+Related: [Planner](#planner), [RelOptInfo](#reloptinfo), [Upper relation](#upper-relation), [PlannedStmt](#plannedstmt), [SpecialJoinInfo](#specialjoininfo), [Transient plan](#transient-plan)
 
 ### PL/pgSQL
 
@@ -2843,6 +3133,16 @@ Progress reporting is how a long-running command publishes how far it has got, t
 
 Related: [Cumulative statistics](#cumulative-statistics), [VACUUM](#vacuum), [REPACK](#repack), [CONCURRENTLY](#concurrently)
 
+### ProjectSet
+
+**Aliases:** `ProjectSetPath`, `create_set_projection_path()`, `adjust_paths_for_srfs()`, `split_pathtarget_at_srfs()`, `nodeProjectSet.c`. **Checked on:** PostgreSQL 17.
+
+`ProjectSet` is the plan node that evaluates set-returning functions written in a query's select list, such as `SELECT id, generate_series(1, 3) FROM t`, so one input row can produce several output rows ([plannodes.h#ProjectSet](../raw/postgres-17/src/include/nodes/plannodes.h#L202-L211)). The executor accepts such a function only at the top level of a ProjectSet's target list, never nested inside another expression ([nodeProjectSet.c:8-12](../raw/postgres-17/src/backend/executor/nodeProjectSet.c#L8-L12)).
+
+The [planner](#planner) meets that rule by splitting the output. `split_pathtarget_at_srfs()` breaks a [PathTarget](#pathtarget) into levels, one per depth of nested set-returning functions ([tlist.c#split_pathtarget_at_srfs](../raw/postgres-17/src/backend/optimizer/util/tlist.c#L823-L830)). `grouping_planner()` splits the final, sort-input and grouping targets this way ([planner.c#grouping_planner-srfs](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1631-L1650)), and `adjust_paths_for_srfs()` then inserts a `ProjectSetPath` for each level that computes one ([planner.c#adjust_paths_for_srfs](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6561-L6577), [pathnodes.h#ProjectSetPath](../raw/postgres-17/src/include/nodes/pathnodes.h#L2181-L2190)). A set-returning function in `FROM` is different: it is a relation of its own, read by a function scan ([allpaths.c#set_function_pathlist](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L2744-L2749)).
+
+Related: [PathTarget](#pathtarget), [Plan tree](#plan-tree), [Upper relation](#upper-relation), [Planner](#planner)
+
 ### Promotion
 
 **Aliases:** standby promotion, failover, `pg_promote()`, `pg_ctl promote`, promote signal file, `PromoteIsTriggered()`. **Checked on:** PostgreSQL 19.
@@ -2934,6 +3234,16 @@ A read stream is a helper that reads a [relation](#relation)'s blocks ahead of t
 - PostgreSQL 19: Differs: as in 18, VACUUM's heap scan and B-tree vacuum use streams, and the `postmaster`-context `io_max_combine_limit` caps `io_combine_limit` ([vacuumlazy.c:1314](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L1314), [nbtree.c:1324](../raw/postgres-19/src/backend/access/nbtree/nbtree.c#L1324), [guc_parameters.dat:1373](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1373)). New in 19, more callers use streams, including hash and GIN vacuum and `pgstatindex` ([hash.c:524](../raw/postgres-19/src/backend/access/hash/hash.c#L524), [ginvacuum.c:829](../raw/postgres-19/src/backend/access/gin/ginvacuum.c#L829), [pgstatindex.c:292](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L292)). `io_combine_limit` is `PGC_USERSET`, so session scope ([guc_parameters.dat:1363](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1363)).
 
 Related: [Buffer manager](#buffer-manager), [Asynchronous I/O](#asynchronous-io), [Ring buffer](#ring-buffer), [VACUUM](#vacuum), [Prefetch](#prefetch)
+
+### Recursive CTE
+
+**Aliases:** `WITH RECURSIVE`, `RecursiveUnion`, `RecursiveUnionPath`, `WorkTableScan`, worktable, `self_reference`, `recursive_worktable_factor`. **Checked on:** PostgreSQL 17.
+
+A recursive CTE is a `WITH RECURSIVE` query whose second branch refers to the CTE itself. It runs as a `RecursiveUnion` plan node. The non-recursive term runs once, and then the recursive term runs again and again over a worktable that holds the rows the previous round produced, until a round produces none ([nodeRecursiveunion.c#ExecRecursiveUnion-algorithm](../raw/postgres-17/src/backend/executor/nodeRecursiveunion.c#L62-L71), [plannodes.h#RecursiveUnion](../raw/postgres-17/src/include/nodes/plannodes.h#L317-L346)). The recursive term reads that worktable through a `WorkTableScan` ([plannodes.h#WorkTableScan](../raw/postgres-17/src/include/nodes/plannodes.h#L657-L665)). For `UNION` without `ALL`, the node also keeps a hash table of the rows already seen ([nodeRecursiveunion.c:6-7](../raw/postgres-17/src/backend/executor/nodeRecursiveunion.c#L6-L7)).
+
+The [planner](#planner) never inlines a recursive CTE into the outer query ([subselect.c#SS_process_ctes-inline-test](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L941-L949)), and `generate_recursion_path()` plans its two terms ([prepunion.c#generate_recursion_path](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L380-L386)). The planner cannot know how many rounds will run, so it sizes the worktable as `recursive_worktable_factor` times the non-recursive term's rows; the setting defaults to 10 ([costsize.c#set_cte_size_estimates-selfref](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L5990-L5997), [cost.h:33](../raw/postgres-17/src/include/optimizer/cost.h#L33), [guc_tables.c#recursive_worktable_factor](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3799-L3808)).
+
+Related: [Common table expression](#common-table-expression), [Set operation](#set-operation), [Param](#param), [GUC](#guc), [Planner](#planner)
 
 ### Regression test
 
@@ -3027,6 +3337,16 @@ A relfilenumber is the number in a [relation](#relation)'s data file name. It is
 - PostgreSQL 19: Holds. `RelFileNumber` is still stored in `pg_class.relfilenode`, a rewrite still swaps it while the OID stays, `RelFileLocator` still combines tablespace, database and relfilenumber, and 0 still marks a mapped catalog ([relpath.h#RelFileNumber](../raw/postgres-19/src/include/common/relpath.h#L22-L25), [pg_class.h#relfilenode](../raw/postgres-19/src/include/catalog/pg_class.h#L58-L59), [repack.c#swap_relation_files](../raw/postgres-19/src/backend/commands/repack.c#L1599-L1605), [relfilelocator.h#RelFileLocator](../raw/postgres-19/src/include/storage/relfilelocator.h#L20-L63)). New in 19, the swap code lives in `repack.c` ([repack.c:1626](../raw/postgres-19/src/backend/commands/repack.c#L1626)).
 
 Related: [Fork](#fork), [OID](#oid), [pg_class](#pg_class), [Table rewrite](#table-rewrite)
+
+### Relids
+
+**Aliases:** relid set, `Bitmapset`, `bms_*()` functions, `RelOptInfo.relids`, `all_query_rels`. **Checked on:** PostgreSQL 17.
+
+`Relids` is the [planner](#planner)'s type for a set of relations. It is a `Bitmapset` whose members are [range-table](#range-table) indexes, and the empty set is a NULL pointer ([pathnodes.h#Relids](../raw/postgres-17/src/include/nodes/pathnodes.h#L26-L30), [bitmapset.h:6-9](../raw/postgres-17/src/include/nodes/bitmapset.h#L6-L9)). The `relids` of a [RelOptInfo](#reloptinfo) say what it covers: one member for a base relation, several for a join. In 17 a join's set also holds the range-table indexes of the [outer joins](#outer-join) formed at or below it ([pathnodes.h#RelOptInfo-relids](../raw/postgres-17/src/include/nodes/pathnodes.h#L647-L650)). The final join must cover `all_query_rels` ([pathnodes.h#all_query_rels](../raw/postgres-17/src/include/nodes/pathnodes.h#L263-L269)).
+
+Planner code reasons about relations mostly with set operations on these values. The [join order search](#join-order-search) pairs two relations only when their sets do not overlap ([joinrels.c#join_search_one_level-overlap](../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L180-L186)). `find_join_rel()` looks up an existing join relation by its set, and switches from a list to a hash table once there are more than 32 join relations ([relnode.c#find_join_rel](../raw/postgres-17/src/backend/optimizer/util/relnode.c#L521-L534)).
+
+Related: [RelOptInfo](#reloptinfo), [Range table](#range-table), [Join order search](#join-order-search), [Nullingrels](#nullingrels), [SpecialJoinInfo](#specialjoininfo)
 
 ### RelOptInfo
 
@@ -3176,6 +3496,16 @@ A row lock blocks other writers and lockers of one row, not readers, and lasts u
 
 Related: [MultiXact](#multixact), [xmin and xmax](#xmin-and-xmax), [Heavyweight lock](#heavyweight-lock), [Tuple](#tuple)
 
+### Row mark
+
+**Aliases:** `PlanRowMark`, `RowMarkType`, `ROW_MARK_REFERENCE`, `ROW_MARK_COPY`, `LockRows`, `preprocess_rowmarks()`, EvalPlanQual. **Checked on:** PostgreSQL 17.
+
+A row mark is the [planner](#planner)'s record that rows read from one relation must be locked, or at least found again, while the statement runs. `preprocess_rowmarks()` creates a `PlanRowMark` for each non-target relation of a `SELECT ... FOR UPDATE/SHARE`, `UPDATE`, `DELETE` or `MERGE` ([planner.c#preprocess_rowmarks](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2291-L2295), [plannodes.h#PlanRowMark-comment](../raw/postgres-17/src/include/nodes/plannodes.h#L1339-L1346)). Its `markType` is one of four lock strengths or one of two non-locking kinds. `ROW_MARK_REFERENCE` fetches only the row's TID, and `ROW_MARK_COPY` copies the whole row when there is no TID to fetch, as for a VALUES or function scan ([plannodes.h#RowMarkType](../raw/postgres-17/src/include/nodes/plannodes.h#L1327-L1335)).
+
+The marks exist so that EvalPlanQual can recheck a row that a concurrent transaction changed, which requires finding every source row of a result row again ([plannodes.h#RowMarkType-epq](../raw/postgres-17/src/include/nodes/plannodes.h#L1314-L1323)). For that the planner adds hidden output columns named `ctid%u`, `tableoid%u` or `wholerow%u` ([plannodes.h#PlanRowMark-junk](../raw/postgres-17/src/include/nodes/plannodes.h#L1359-L1375)). With a locking clause, `grouping_planner()` puts a `LockRows` node on top, where the executor takes the [row locks](#row-lock); non-locking marks are left to the ModifyTable node ([planner.c#grouping_planner-lockrows](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1796-L1808), [plannodes.h#LockRows](../raw/postgres-17/src/include/nodes/plannodes.h#L1247-L1261)).
+
+Related: [Row lock](#row-lock), [ModifyTable](#modifytable), [TID](#tid), [Plan tree](#plan-tree), [Lock mode](#lock-mode)
+
 ### Row-level security
 
 **Aliases:** RLS, row security policy, `CREATE POLICY`, `pg_policy`, `relrowsecurity`, `relforcerowsecurity`, `BYPASSRLS`, `row_security`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3189,6 +3519,16 @@ Row-level security (RLS) lets a table restrict, per user, which rows normal quer
 - PostgreSQL 19: Holds. The `row_security` definition moved to the `guc_parameters.dat` data file, still `PGC_USERSET` (session scope) ([pg_policy.h:31](../raw/postgres-19/src/include/catalog/pg_policy.h#L31), [pg_class.h:113-116](../raw/postgres-19/src/include/catalog/pg_class.h#L113-L116), [guc_parameters.dat#row_security](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2579-L2584)).
 
 Related: [Rewriter](#rewriter), [Security barrier](#security-barrier), [Leakproof function](#leakproof-function), [SECURITY DEFINER](#security-definer), [pg_class](#pg_class), [GUC context](#guc-context)
+
+### Sample scan
+
+**Aliases:** `TABLESAMPLE`, `SampleScan`, `TsmRoutine`, tablesample method, `SYSTEM`, `BERNOULLI`, `tsm_system_rows`. **Checked on:** PostgreSQL 17.
+
+A sample scan reads a random sample of a table instead of the whole table, for a query that writes `FROM t TABLESAMPLE method (arguments)`. It is a `SampleScan` plan node carrying the query's `TableSampleClause` ([plannodes.h#SampleScan](../raw/postgres-17/src/include/nodes/plannodes.h#L401-L410)). The sampling method is pluggable. Its handler returns a `TsmRoutine` with one planning callback, `SampleScanGetSampleSize()`, plus the callbacks the executor uses to choose blocks and rows ([tsmapi.h#TsmRoutine](../raw/postgres-17/src/include/access/tsmapi.h#L56-L76)). The built-in `SYSTEM` method picks whole blocks and `BERNOULLI` picks single rows, each by hashing the block number or row TID with the seed ([system.c:6-13](../raw/postgres-17/src/backend/access/tablesample/system.c#L6-L13), [bernoulli.c:6-13](../raw/postgres-17/src/backend/access/tablesample/bernoulli.c#L6-L13)). Contrib adds others, such as `tsm_system_rows`, which returns a fixed number of rows ([tsm_system_rows.c:4-10](../raw/postgres-17/contrib/tsm_system_rows/tsm_system_rows.c#L4-L10)).
+
+For the [planner](#planner), a sampled table has exactly one path. `set_tablesample_rel_size()` replaces the table's page and row estimates with the method's own, and `set_tablesample_rel_pathlist()` adds a single sample-scan path ([allpaths.c#set_tablesample_rel_size](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L809-L846), [allpaths.c#set_tablesample_rel_pathlist](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L849-L867)). A method that cannot repeat its sample within one query gets a [Materialize node](#materialize-node) on top whenever the scan might run more than once ([allpaths.c#set_tablesample_rel_pathlist-materialize](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L869-L892)).
+
+Related: [Sequential scan](#sequential-scan), [Path](#path), [Materialize node](#materialize-node), [Access method](#access-method), [Contrib](#contrib)
 
 ### ScalarArrayOpExpr
 
@@ -3258,6 +3598,16 @@ Selectivity is the estimated fraction of rows that pass a condition, from 0 to 1
 
 Related: [Statistics](#statistics), [Cost](#cost), [Planner](#planner)
 
+### Semi join and anti join
+
+**Aliases:** semijoin, anti-semijoin, `JOIN_SEMI`, `JOIN_ANTI`, `JOIN_RIGHT_ANTI`, `JOIN_UNIQUE_INNER`, `JOIN_UNIQUE_OUTER`, `create_unique_path()`. **Checked on:** PostgreSQL 17.
+
+A semi join returns each left-hand row that has at least one match on the right, exactly once. An anti join returns each left-hand row that has no match, and `JOIN_RIGHT_ANTI` is the same with the inputs swapped. SQL has no JOIN syntax for either, so the [planner](#planner) creates them from idioms such as `EXISTS`, `IN (sub-SELECT)` and `NOT EXISTS` ([nodes.h#JoinType-semi](../raw/postgres-17/src/include/nodes/nodes.h#L298-L309)). `pull_up_sublinks()` does that conversion, but only at the top level of `WHERE` or `JOIN ... ON`, where a FALSE result and a NULL result need not be told apart ([prepjointree.c#pull_up_sublinks-comment](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L427-L444)). `reduce_outer_joins()` also turns `a LEFT JOIN b ON ... WHERE b.y IS NULL` into an anti join when the join clause is strict for `b.y` ([prepjointree.c#reduce_outer_joins-anti](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2915-L2922)).
+
+A semi join can run in more ways than its type suggests. When the right side is provably unique for the join clauses, `reduce_unique_semijoins()` makes it a plain inner join ([analyzejoins.c#reduce_unique_semijoins](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L750-L764)). Otherwise the planner may remove duplicates from one input with `create_unique_path()` and then do an inner join. The join-path code marks that choice `JOIN_UNIQUE_INNER` or `JOIN_UNIQUE_OUTER`, codes that never reach the executor ([pathnode.c#create_unique_path](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L1642-L1654), [nodes.h#JoinType-unique](../raw/postgres-17/src/include/nodes/nodes.h#L311-L316)).
+
+Related: [SubLink](#sublink), [Outer join](#outer-join), [SpecialJoinInfo](#specialjoininfo), [Join removal](#join-removal), [Join order search](#join-order-search), [Selectivity](#selectivity)
+
 ### Sequential scan
 
 **Aliases:** Seq Scan node, `SeqScan`, `nodeSeqscan.c`, full table scan. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3271,6 +3621,26 @@ A sequential scan reads every page of a table and tests each row against the que
 - PostgreSQL 19: Differs: as in 18, a disabled path is counted in `disabled_nodes`, but the flag now comes from the [relation](#relation)'s [pgs_mask](#pgs_mask) planner strategy mask rather than directly from `enable_seqscan` ([costsize.c:279](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L279), [costsize.c:332-336](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L332-L336)). The rest holds, including the read stream ([heapam.c:1299](../raw/postgres-19/src/backend/access/heap/heapam.c#L1299)).
 
 Related: [Index scan](#index-scan), [Bitmap scan](#bitmap-scan), [Cost](#cost), [Read stream](#read-stream), [Ring buffer](#ring-buffer)
+
+### Set operation
+
+**Aliases:** `UNION`, `INTERSECT`, `EXCEPT`, `SetOperationStmt`, `SetOp`, `HashSetOp`, `SetOpCmd`, `plan_set_operations()`, `prepunion.c`. **Checked on:** PostgreSQL 17.
+
+A set operation combines the results of two queries with `UNION`, `INTERSECT` or `EXCEPT`, each with or without `ALL`. The [planner](#planner) has two routes. A query made only of simple `UNION ALL` branches becomes an append relation, the same child list the planner builds for an inheritance tree; every other set operation goes through `plan_set_operations()` ([prepunion.c:7-13](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L7-L13), [prepjointree.c#flatten_simple_union_all](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2803-L2816), [pathnodes.h#AppendRelInfo-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L2931-L2938)).
+
+On the general route, `UNION ALL` becomes an Append of the branches. `UNION` adds duplicate removal, and in 17 the planner tries a hash aggregate, a sort followed by Unique, and a Unique over a MergeAppend of branches that are already sorted ([prepunion.c#generate_union_paths-hash](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L905-L920), [prepunion.c#generate_union_paths-sort](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L946-L958), [prepunion.c#generate_union_paths-mergeappend](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L978-L1000)). `INTERSECT` and `EXCEPT` run as a `SetOp` node over both branches' rows, which carry a flag column saying which branch each came from ([nodes.h#SetOpCmd](../raw/postgres-17/src/include/nodes/nodes.h#L389-L407), [plannodes.h#SetOp](../raw/postgres-17/src/include/nodes/plannodes.h#L1213-L1245)). `choose_hashed_setop()` decides between sorting and hashing, and EXPLAIN shows the hashed form as `HashSetOp` ([prepunion.c#generate_nonunion_paths-setop](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L1147-L1186), [explain.c:1604](../raw/postgres-17/src/backend/commands/explain.c#L1604)).
+
+Related: [Append and MergeAppend](#append-and-mergeappend), [Recursive CTE](#recursive-cte), [Upper relation](#upper-relation), [Subquery pull-up](#subquery-pull-up)
+
+### set_plan_references
+
+**Aliases:** setrefs.c, reference fixing, `OUTER_VAR`, `INNER_VAR`, `relationOids`, `invalItems`, `trivial_subqueryscan()`. **Checked on:** PostgreSQL 17.
+
+`set_plan_references()` is the [planner](#planner)'s last pass over a finished [plan tree](#plan-tree). It changes no plan choice. It rewrites representation details for the executor's convenience ([setrefs.c#set_plan_references-comment](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L220-L225)). It merges the range tables of all subqueries into one flat list, renumbers the Vars in scan nodes to match, and points the Vars in upper nodes at their inputs' outputs ([setrefs.c#set_plan_references-steps](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L227-L233)). It also keeps one branch of each AlternativeSubPlan, chosen by the estimated number of executions, and looks up the function behind each operator ([setrefs.c#set_plan_references-alternatives](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L241-L245)).
+
+Two of its results matter outside the executor. It records the relations, user-defined functions and domains the plan depends on, which the plan cache uses to invalidate cached plans ([setrefs.c#set_plan_references-dependencies](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L247-L252)). And it deletes SubqueryScan, Append and MergeAppend nodes that no longer do anything, which is why EXPLAIN can omit a subquery the query wrote ([setrefs.c#set_plan_references-trivial-nodes](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L256-L268)). `standard_planner()` runs it on the main plan and then on each subplan ([planner.c#standard_planner-setrefs](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L525-L533)).
+
+Related: [Plan tree](#plan-tree), [PlannedStmt](#plannedstmt), [Range table](#range-table), [Custom and generic plan](#custom-and-generic-plan), [Invalidation message](#invalidation-message), [SubPlan](#subplan)
 
 ### shared_buffers
 
@@ -3393,6 +3763,16 @@ A non-vacuumable [snapshot](#snapshot) is a visibility test rather than a point-
 Two places in core use it. `get_actual_variable_endpoint()`, the planner's probe of an index's first or last value, reads with it: the query's own snapshot could force a costly visit to every recently dead or uncommitted row at that end, while `SnapshotAny` could return an extreme deleted long ago ([selfuncs.c#get_actual_variable_endpoint-snapshot](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6371-L6386), [selfuncs.c:6415](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6415)). `heap_index_delete_tuples()`, the heap side of both [simple](#simple-index-deletion) and [bottom-up](#bottom-up-index-deletion) index deletion, uses the same test to find index entries that point at dead row versions ([heapam.c#heap_index_delete_tuples](../raw/postgres-17/src/backend/access/heap/heapam.c#L8488-L8525)).
 
 Related: [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Dead tuple](#dead-tuple), [Simple index deletion](#simple-index-deletion), [Bottom-up index deletion](#bottom-up-index-deletion)
+
+### SpecialJoinInfo
+
+**Aliases:** `join_info_list`, `min_lefthand`, `min_righthand`, `make_outerjoininfo()`, `join_is_legal()`. **Checked on:** PostgreSQL 17.
+
+A `SpecialJoinInfo` records the join-order constraints of one [outer join](#outer-join), [semi join or anti join](#semi-join-and-anti-join). The [planner](#planner) flattens those joins into its list of relations to join, so it keeps a separate record of what each one requires, in `PlannerInfo.join_info_list` ([pathnodes.h#SpecialJoinInfo-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L2803-L2814)). The key fields `min_lefthand` and `min_righthand` are the [Relids](#relids) that must already be joined on each side before this join can run ([pathnodes.h#SpecialJoinInfo-min-sides](../raw/postgres-17/src/include/nodes/pathnodes.h#L2819-L2822)). A RIGHT JOIN is stored as a LEFT JOIN with its inputs swapped ([pathnodes.h#SpecialJoinInfo-jointype](../raw/postgres-17/src/include/nodes/pathnodes.h#L2828-L2831)). The `commute_*` fields record which outer joins may be reordered around this one ([pathnodes.h#SpecialJoinInfo](../raw/postgres-17/src/include/nodes/pathnodes.h#L2892-L2913)).
+
+`make_outerjoininfo()` builds one for each such join while the join tree is taken apart ([initsplan.c#make_outerjoininfo](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L1340-L1362)). During the [join order search](#join-order-search), `join_is_legal()` checks each proposed pair of inputs against these records. It rejects a pair that would break one, and otherwise returns the record that sets the join's type, or none for a plain inner join ([joinrels.c#join_is_legal](../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L332-L352)).
+
+Related: [PlannerInfo](#plannerinfo), [Relids](#relids), [Outer join](#outer-join), [Semi join and anti join](#semi-join-and-anti-join), [Join order search](#join-order-search)
 
 ### SP-GiST
 
@@ -3529,6 +3909,16 @@ A `SubPlan` is the executable expression that replaces a sub-`SELECT` after the 
 - PostgreSQL 19: Differs in naming. `SubPlan` gains an `isInitPlan` flag, and a subplan's `plan_name` is now the name `choose_plan_name()` gives its subquery, such as `exists_1` ([primnodes.h#SubPlan](../raw/postgres-19/src/include/nodes/primnodes.h#L1095-L1097), [subselect.c:224-226](../raw/postgres-19/src/backend/optimizer/plan/subselect.c#L224-L226), [subselect.c:348](../raw/postgres-19/src/backend/optimizer/plan/subselect.c#L348), [planner.c#choose_plan_name](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L9240-L9246)). EXPLAIN adds the "InitPlan" or "SubPlan" prefix when it prints the name ([explain.c:5141-5151](../raw/postgres-19/src/backend/commands/explain.c#L5141-L5151)). The InitPlan rules are unchanged ([subselect.c:411](../raw/postgres-19/src/backend/optimizer/plan/subselect.c#L411), [subselect.c:526-531](../raw/postgres-19/src/backend/optimizer/plan/subselect.c#L526-L531), [nodeSubplan.c:1317](../raw/postgres-19/src/backend/executor/nodeSubplan.c#L1317)).
 
 Related: [Planner](#planner), [Executor](#executor), [PlannedStmt](#plannedstmt), [EXPLAIN](#explain)
+
+### Subquery pull-up
+
+**Aliases:** flattening, `pull_up_subqueries()`, `pull_up_simple_subquery()`, `is_simple_subquery()`, optimization fence, `OFFSET 0`. **Checked on:** PostgreSQL 17.
+
+Subquery pull-up is the [planner](#planner) merging a sub-SELECT in `FROM`, including a view the [rewriter](#rewriter) turned into one, into the parent query's join tree ([rewriteHandler.c#ApplyRetrieveRule-subquery](../raw/postgres-17/src/backend/rewrite/rewriteHandler.c#L1869-L1877)). Its tables then take part in the parent's join search like any other table. A subquery made only of simple `UNION ALL` branches becomes an append relation instead ([prepjointree.c#pull_up_subqueries](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L927-L936)). A subquery that is not pulled up is planned separately and read through a subquery scan ([allpaths.c#set_subquery_pathlist](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L2469-L2482)). The merged tables join the parent's search only while the combined list stays within `from_collapse_limit` ([initsplan.c#deconstruct_recurse-from_collapse_limit](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L862-L868)).
+
+`is_simple_subquery()` decides. A subquery stays separate when it has set operations other than simple `UNION ALL`, or aggregates, window functions or set-returning functions in its select list. GROUP BY, HAVING, ORDER BY, DISTINCT, LIMIT, OFFSET, FOR UPDATE or its own WITH also keep it separate ([prepjointree.c#is_simple_subquery-features](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1671-L1701)). It also stays separate when it is a security-barrier view, and when its select list calls a volatile function that pull-up might evaluate more than once ([prepjointree.c#is_simple_subquery-barrier](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1703-L1709), [prepjointree.c#is_simple_subquery-volatile](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1772-L1781)). That is why `OFFSET 0` works as an optimization fence. A pulled-up output that an [outer join](#outer-join) can set to NULL may be wrapped in a [PlaceHolderVar](#placeholdervar) ([prepjointree.c#pullup_replace_vars_callback-need_phv](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2494-L2500)).
+
+Related: [PlaceHolderVar](#placeholdervar), [SubLink](#sublink), [Join order search](#join-order-search), [Security barrier](#security-barrier), [Function volatility](#function-volatility), [Set operation](#set-operation)
 
 ### Subscription
 
@@ -3754,6 +4144,16 @@ The plan cache honors it. When it builds a cached plan from a transient statemen
 
 Related: [indcheckxmin](#indcheckxmin), [TransactionXmin](#transactionxmin), [PlannedStmt](#plannedstmt), [Custom and generic plan](#custom-and-generic-plan), [Prepared statement](#prepared-statement)
 
+### Transition table
+
+**Aliases:** `REFERENCING NEW TABLE`, `REFERENCING OLD TABLE`, named tuplestore, ephemeral named relation, ENR, `RTE_NAMEDTUPLESTORE`, `NamedTuplestoreScan`. **Checked on:** PostgreSQL 17.
+
+A transition table holds all the rows one statement changed, for an AFTER trigger declared with `REFERENCING NEW TABLE AS ...` or `OLD TABLE AS ...`. The trigger receives them as tuplestores in `TriggerData.tg_newtable` and `tg_oldtable` ([trigger.h:41-42](../raw/postgres-17/src/include/commands/trigger.h#L41-L42)). Queries inside the trigger function read them by name as ephemeral named relations: relations that exist only in the query's environment, not in the [catalogs](#catalog), and carry their own row-count estimate ([queryenvironment.h#EphemeralNamedRelationMetadataData](../raw/postgres-17/src/include/utils/queryenvironment.h#L25-L42)). `SPI_register_trigger_data()` makes both visible to the queries a procedural language runs, recording their current row counts ([spi.c#SPI_register_trigger_data](../raw/postgres-17/src/backend/executor/spi.c#L3357-L3404)).
+
+For the [planner](#planner), such a name is a [range-table](#range-table) entry of kind `RTE_NAMEDTUPLESTORE`, read by a `NamedTuplestoreScan` ([parsenodes.h:1032](../raw/postgres-17/src/include/nodes/parsenodes.h#L1032), [plannodes.h#NamedTuplestoreScan](../raw/postgres-17/src/include/nodes/plannodes.h#L647-L655)). It gets exactly one path. Its row estimate is the count the caller registered, or 1,000 when none is known ([allpaths.c#set_namedtuplestore_pathlist](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L2931-L2945), [costsize.c#set_namedtuplestore_size_estimates](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L6019-L6040)).
+
+Related: [SPI](#spi), [PL/pgSQL](#plpgsql), [Range table](#range-table), [Tuple](#tuple), [Planner](#planner)
+
 ### Truncation
 
 **Aliases:** relation truncation, vacuum truncation, `lazy_truncate_heap`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3782,6 +4182,16 @@ A tuple is an ordered set of attribute values. When a table or other [relation](
 
 Related: [Heap](#heap), [MVCC](#mvcc), [TID](#tid), [xmin and xmax](#xmin-and-xmax), [Alignment](#alignment)
 
+### Tuple fraction
+
+**Aliases:** `tuple_fraction`, `cursor_tuple_fraction`, `CURSOR_OPT_FAST_PLAN`, fast-start plan, `preprocess_limit()`, `get_cheapest_fractional_path()`. **Checked on:** PostgreSQL 17.
+
+The tuple fraction tells the [planner](#planner) how much of the result the caller is expected to read. With it, the planner can prefer a plan that returns its first rows cheaply over one that is cheapest in total. The value 0 means all rows, a value between 0 and 1 is a fraction of the rows, and a value of 1 or more is an absolute row count, such as a LIMIT ([planner.c#grouping_planner-comment](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1314-L1320)). `standard_planner()` starts from 0, or from `cursor_tuple_fraction`, which defaults to 0.1, for a cursor planned with `CURSOR_OPT_FAST_PLAN` ([planner.c#standard_planner-tuple-fraction](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L387-L413), [planmain.h:21](../raw/postgres-17/src/include/optimizer/planmain.h#L21), [guc_tables.c#cursor_tuple_fraction](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3787-L3796)). `preprocess_limit()` then adjusts it for a LIMIT or OFFSET the query writes ([planner.c#preprocess_limit](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2456-L2472)).
+
+The value decides the final choice. `get_cheapest_fractional_path()` returns the cheapest-total path when the fraction is 0, and otherwise the path that is cheapest for fetching that fraction ([planner.c#get_cheapest_fractional_path](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6524-L6559)). The cost of a partial fetch is interpolated between a path's startup [cost](#cost) and its total cost ([costsize.c#partial-fetch](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L40-L45)).
+
+Related: [Cost](#cost), [Path](#path), [Planner](#planner), [Portal](#portal), [GUC](#guc)
+
 ### Tuplesort
 
 **Aliases:** `tuplesort.c`, `tuplesortvariants.c`, external sort, external merge, `tuplesort_begin_index_btree`, logical tapes. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3809,6 +4219,16 @@ Two-phase commit splits a commit in two. `PREPARE TRANSACTION` makes the transac
 - PostgreSQL 19: Holds; `max_prepared_transactions` is `PGC_POSTMASTER` in `guc_parameters.dat` ([twophase.c:24-26](../raw/postgres-19/src/backend/access/transam/twophase.c#L24-L26), [guc_parameters.dat#max_prepared_transactions](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2100-L2106), [pg_subscription.h:68](../raw/postgres-19/src/include/catalog/pg_subscription.h#L68)).
 
 Related: [Transaction ID](#transaction-id), [xmin horizon](#xmin-horizon), [Subscription](#subscription), [Checkpoint](#checkpoint)
+
+### Upper relation
+
+**Aliases:** upper rel, `UpperRelationKind`, `UPPERREL_GROUP_AGG`, `UPPERREL_FINAL`, `fetch_upper_rel()`, `RELOPT_UPPER_REL`. **Checked on:** PostgreSQL 17.
+
+An upper relation is a [RelOptInfo](#reloptinfo) that stands for one processing step after all scans and joins, such as grouping, window functions, DISTINCT, ORDER BY or the final LIMIT ([pathnodes.h#UpperRelationKind](../raw/postgres-17/src/include/nodes/pathnodes.h#L65-L80), [pathnodes.h:825](../raw/postgres-17/src/include/nodes/pathnodes.h#L825)). The kinds are set operation, partial grouping, grouping, window, partial DISTINCT, DISTINCT, ordered and final. They give those steps the machinery the scan and join levels use: each upper relation collects alternative [paths](#path) with `add_path()`, and a later step builds on its cheapest ones ([relnode.c#fetch_upper_rel](../raw/postgres-17/src/backend/optimizer/util/relnode.c#L1456-L1470)).
+
+`grouping_planner()` fills them one after another, and the finished plan comes from the cheapest path of `UPPERREL_FINAL` ([planner.c#grouping_planner-upper](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1697-L1766), [planner.c#standard_planner-finish](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L415-L422)). They live in `PlannerInfo.upper_rels`, and `fetch_upper_rel()` finds one by kind and [Relids](#relids); most RelOptInfo fields stay unused for them ([pathnodes.h#upper_rels](../raw/postgres-17/src/include/nodes/pathnodes.h#L412-L416), [relnode.c#fetch_upper_rel](../raw/postgres-17/src/backend/optimizer/util/relnode.c#L1456-L1470)). A foreign-data wrapper can add paths to each one through `GetForeignUpperPaths`, and an extension through `create_upper_paths_hook` ([planner.c#grouping_planner-final-hooks](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2052-L2065)).
+
+Related: [RelOptInfo](#reloptinfo), [PlannerInfo](#plannerinfo), [Path](#path), [Partial aggregation](#partial-aggregation), [Window function](#window-function), [Hook](#hook), [Foreign data wrapper](#foreign-data-wrapper)
 
 ### Utility command
 
@@ -3992,6 +4412,16 @@ The WAL writer is a background process that writes and flushes [WAL](#wal) so th
 
 Related: [WAL](#wal), [Asynchronous commit](#asynchronous-commit), [Hint bits](#hint-bits), [Background writer](#background-writer), [Postmaster](#postmaster), [fsync](#fsync), [GUC context](#guc-context)
 
+### Window function
+
+**Aliases:** `WindowAgg`, `WindowFunc`, `WindowClause`, window specification, run condition, `create_window_paths()`, `nodeWindowAgg.c`. **Checked on:** PostgreSQL 17.
+
+A window function, such as `row_number() OVER (PARTITION BY a ORDER BY b)`, computes a value for each row from a set of related rows without collapsing them into groups. It runs in a `WindowAgg` plan node. One node handles one window specification and needs its input sorted by the PARTITION BY columns and then the ORDER BY columns. A query with several specifications gets a stack of WindowAgg nodes with sorts between them ([nodeWindowAgg.c:6-13](../raw/postgres-17/src/backend/executor/nodeWindowAgg.c#L6-L13), [plannodes.h#WindowAgg](../raw/postgres-17/src/include/nodes/plannodes.h#L1034-L1106)). The node keeps the rows of the current partition in a tuplestore ([nodeWindowAgg.c:15-18](../raw/postgres-17/src/backend/executor/nodeWindowAgg.c#L15-L18)).
+
+`create_window_paths()` builds this step as an [upper relation](#upper-relation). For each window it adds a full or [incremental sort](#incremental-sort) unless the input already has the needed order ([planner.c#create_window_paths](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4559-L4573), [planner.c#create_one_window_path-sort](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4689-L4732)). A run condition lets the node skip work that cannot change the result. For an outer filter such as `rn <= 2` on a `row_number()` column, the function's [planner support function](#planner-support-function) reports that its value only increases, and the filter becomes a `runCondition` on the WindowAgg ([allpaths.c#find_window_run_conditions](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L2190-L2201), [allpaths.c#find_window_run_conditions-support](../raw/postgres-17/src/backend/optimizer/path/allpaths.c#L2242-L2278), [plannodes.h#WindowAgg-runCondition](../raw/postgres-17/src/include/nodes/plannodes.h#L1078-L1082)).
+
+Related: [Upper relation](#upper-relation), [Incremental sort](#incremental-sort), [Pathkey](#pathkey), [Planner support function](#planner-support-function), [Tuplesort](#tuplesort)
+
 ### WithCheckOption
 
 **Aliases:** WCO, `WCOKind`, `WCO_VIEW_CHECK`, `WCO_RLS_INSERT_CHECK`, `WCO_RLS_UPDATE_CHECK`, `ExecWithCheckOptions`, `WITH CHECK OPTION`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4106,6 +4536,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 - One entry added on 2026-09-24 for the v17 non-B-tree COMMENT-baseline maintenance heuristic page was checked on PostgreSQL 17 only, as the asker chose: [Isolation level](#isolation-level). Its applicability to 12, 14, 18 and 19 has not been checked. For the same page, [Back-patch](#back-patch) gained a PostgreSQL 17 check, whose four ranges cite the same text as its 19 note, at different lines. The orchestrator read every cited range at the pin; no second reviewer has read either.
 - Seven entries added on 2026-09-25 for the v17 planner-penalties page were checked on PostgreSQL 17 only, as the asker chose: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Their applicability to 12, 14, 18 and 19 has not been checked. Each was drafted by an agent that opened every cited range at the pin; the orchestrator re-read the claims it changed, and a final checker opened every citation in the seven entries and reported six defects, which were corrected.
 - Thirteen entries added later on 2026-09-25, while the v17 planner-penalties page was revised, were checked on PostgreSQL 17 only, as the asker chose: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). Their applicability to 12, 14, 18 and 19 has not been checked. One agent drafted them and opened every cited range at the pin; no second reviewer has read them. The same pass replaced the [Hash splitpoint](#hash-splitpoint) entry's bare alias "split point" with "hash split point", so that it no longer collides with a B-tree split point.
+- Thirty-nine entries added on 2026-09-26 for the PostgreSQL 17 query planner tutorial were checked on PostgreSQL 17 only, following the practice for single-version pages: [Append and MergeAppend](#append-and-mergeappend), [Constant folding](#constant-folding), [Custom scan](#custom-scan), [disable_cost](#disable_cost), [Grouping sets](#grouping-sets), [Hash join](#hash-join), [Incremental sort](#incremental-sort), [Join order search](#join-order-search), [Join removal](#join-removal), [LATERAL](#lateral), [Materialize node](#materialize-node), [Merge join](#merge-join), [ModifyTable](#modifytable), [Node support functions](#node-support-functions), [Nullingrels](#nullingrels), [One-shot plan](#one-shot-plan), [Outer join](#outer-join), [Param](#param), [Parameterized path](#parameterized-path), [Partial aggregation](#partial-aggregation), [Partitionwise aggregation](#partitionwise-aggregation), [PathTarget](#pathtarget), [PlaceHolderVar](#placeholdervar), [Plan tree](#plan-tree), [PlannerInfo](#plannerinfo), [ProjectSet](#projectset), [Recursive CTE](#recursive-cte), [Relids](#relids), [Row mark](#row-mark), [Sample scan](#sample-scan), [Semi join and anti join](#semi-join-and-anti-join), [Set operation](#set-operation), [set_plan_references](#set_plan_references), [SpecialJoinInfo](#specialjoininfo), [Subquery pull-up](#subquery-pull-up), [Transition table](#transition-table), [Tuple fraction](#tuple-fraction), [Upper relation](#upper-relation), [Window function](#window-function). Their applicability to 12, 14, 18 and 19 has not been checked, and each was checked once, by the agent that wrote it, plus the orchestrator's mechanical checks.
 
 ## Source References
 
@@ -4835,7 +5266,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (479 files):
+**PostgreSQL 17** (510 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -4864,6 +5295,7 @@ One representative citation per cited source file, grouped by version:
 - [pgstattuple.c#pgstattuple_type](../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L55-L63)
 - [pgstattuple.control:1-2](../raw/postgres-17/contrib/pgstattuple/pgstattuple.control#L1-L2)
 - [postgres_fdw.c:553](../raw/postgres-17/contrib/postgres_fdw/postgres_fdw.c#L553)
+- [tsm_system_rows.c:4-10](../raw/postgres-17/contrib/tsm_system_rows/tsm_system_rows.c#L4-L10)
 - [acronyms.sgml:728-731](../raw/postgres-17/doc/src/sgml/acronyms.sgml#L728-L731)
 - [amcheck.sgml:10-30](../raw/postgres-17/doc/src/sgml/amcheck.sgml#L10-L30)
 - [arch-dev.sgml:401-406](../raw/postgres-17/doc/src/sgml/arch-dev.sgml#L401-L406)
@@ -4978,6 +5410,8 @@ One representative citation per cited source file, grouped by version:
 - [spgutils.c:64](../raw/postgres-17/src/backend/access/spgist/spgutils.c#L64)
 - [spgvacuum.c#vacuumRedirectAndPlaceholder](../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L569-L590)
 - [tableam.c:666-667](../raw/postgres-17/src/backend/access/table/tableam.c#L666-L667)
+- [bernoulli.c:6-13](../raw/postgres-17/src/backend/access/tablesample/bernoulli.c#L6-L13)
+- [system.c:6-13](../raw/postgres-17/src/backend/access/tablesample/system.c#L6-L13)
 - [transam/README:420-422](../raw/postgres-17/src/backend/access/transam/README#L420-L422)
 - [README.parallel#Overview](../raw/postgres-17/src/backend/access/transam/README.parallel#L1-L12)
 - [clog.c:91-96](../raw/postgres-17/src/backend/access/transam/clog.c#L91-L96)
@@ -5026,24 +5460,34 @@ One representative citation per cited source file, grouped by version:
 - [execMain.c:1-28](../raw/postgres-17/src/backend/executor/execMain.c#L1-L28)
 - [execPartition.c#ExecFindPartition](../raw/postgres-17/src/backend/executor/execPartition.c#L243-L262)
 - [execProcnode.c:43-61](../raw/postgres-17/src/backend/executor/execProcnode.c#L43-L61)
+- [nodeAppend.c:39-40](../raw/postgres-17/src/backend/executor/nodeAppend.c#L39-L40)
 - [nodeBitmapAnd.c#MultiExecBitmapAnd](../raw/postgres-17/src/backend/executor/nodeBitmapAnd.c#L109-L167)
 - [nodeBitmapHeapscan.c:1-17](../raw/postgres-17/src/backend/executor/nodeBitmapHeapscan.c#L1-L17)
 - [nodeBitmapIndexscan.c:94](../raw/postgres-17/src/backend/executor/nodeBitmapIndexscan.c#L94)
 - [nodeGather.c header](../raw/postgres-17/src/backend/executor/nodeGather.c#L9-L15)
 - [nodeGatherMerge.c:3-4](../raw/postgres-17/src/backend/executor/nodeGatherMerge.c#L3-L4)
 - [nodeHash.c#get_hash_memory_limit](../raw/postgres-17/src/backend/executor/nodeHash.c#L3602-L3613)
+- [nodeHashjoin.c:15-16](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L15-L16)
+- [nodeIncrementalSort.c:14-19](../raw/postgres-17/src/backend/executor/nodeIncrementalSort.c#L14-L19)
 - [nodeIndexonlyscan.c#IndexOnlyNext](../raw/postgres-17/src/backend/executor/nodeIndexonlyscan.c#L127-L169)
 - [nodeIndexscan.c#IndexNext](../raw/postgres-17/src/backend/executor/nodeIndexscan.c#L80-L130)
+- [nodeMaterial.c:30-34](../raw/postgres-17/src/backend/executor/nodeMaterial.c#L30-L34)
 - [nodeMemoize.c:13-19](../raw/postgres-17/src/backend/executor/nodeMemoize.c#L13-L19)
+- [nodeMergejoin.c:23-26](../raw/postgres-17/src/backend/executor/nodeMergejoin.c#L23-L26)
 - [nodeModifyTable.c:2160-2166](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2160-L2166)
 - [nodeNestloop.c:216-229](../raw/postgres-17/src/backend/executor/nodeNestloop.c#L216-L229)
+- [nodeProjectSet.c:8-12](../raw/postgres-17/src/backend/executor/nodeProjectSet.c#L8-L12)
+- [nodeRecursiveunion.c#ExecRecursiveUnion-algorithm](../raw/postgres-17/src/backend/executor/nodeRecursiveunion.c#L62-L71)
 - [nodeSeqscan.c:15-26](../raw/postgres-17/src/backend/executor/nodeSeqscan.c#L15-L26)
 - [nodeSort.c#ExecSort](../raw/postgres-17/src/backend/executor/nodeSort.c#L105-L122)
 - [nodeSubplan.c#ExecSetParamPlan](../raw/postgres-17/src/backend/executor/nodeSubplan.c#L1051-L1059)
+- [nodeWindowAgg.c:6-13](../raw/postgres-17/src/backend/executor/nodeWindowAgg.c#L6-L13)
 - [spi.c:94](../raw/postgres-17/src/backend/executor/spi.c#L94)
 - [foreign.c#GetFdwRoutine](../raw/postgres-17/src/backend/foreign/foreign.c#L321-L345)
 - [jit/README:1-22](../raw/postgres-17/src/backend/jit/README#L1-L22)
 - [dshash.c:3-9](../raw/postgres-17/src/backend/lib/dshash.c#L3-L9)
+- [nodes/Makefile:41-63](../raw/postgres-17/src/backend/nodes/Makefile#L41-L63)
+- [extensible.c#RegisterCustomScanMethods](../raw/postgres-17/src/backend/nodes/extensible.c#L84-L94)
 - [gen_node_support.pl:4-9](../raw/postgres-17/src/backend/nodes/gen_node_support.pl#L4-L9)
 - [outfuncs.c#nodeToString](../raw/postgres-17/src/backend/nodes/outfuncs.c#L786-L794)
 - [queryjumblefuncs.c:6-22](../raw/postgres-17/src/backend/nodes/queryjumblefuncs.c#L6-L22)
@@ -5059,23 +5503,33 @@ One representative citation per cited source file, grouped by version:
 - [indxpath.c:2706-2708](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2706-L2708)
 - [joinpath.c#get_memoize_path](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L577-L581)
 - [joinrels.c#try_partitionwise_join](../raw/postgres-17/src/backend/optimizer/path/joinrels.c#L1458-L1477)
+- [analyzejoins.c:4-12](../raw/postgres-17/src/backend/optimizer/plan/analyzejoins.c#L4-L12)
 - [createplan.c#order_qual_clauses](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L5283-L5293)
+- [initsplan.c#check_hashjoinable](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L3402-L3430)
+- [planmain.c:225-231](../raw/postgres-17/src/backend/optimizer/plan/planmain.c#L225-L231)
 - [planner.c#planner](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L274-L285)
+- [setrefs.c#fix_scan_expr_mutator-phv](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L2242-L2249)
 - [subselect.c#SS_process_ctes](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L934-L951)
+- [prepagg.c#preprocess_aggref-ordered](../raw/postgres-17/src/backend/optimizer/prep/prepagg.c#L241-L250)
 - [prepjointree.c:1703-1709](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1703-L1709)
+- [prepunion.c#generate_recursion_path](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L380-L386)
 - [clauses.c#evaluate_function](../raw/postgres-17/src/backend/optimizer/util/clauses.c#L4495-L4507)
 - [inherit.c#expand_inherited_rtentry](../raw/postgres-17/src/backend/optimizer/util/inherit.c#L60-L88)
+- [paramassign.c:4-13](../raw/postgres-17/src/backend/optimizer/util/paramassign.c#L4-L13)
 - [pathnode.c#add_path](../raw/postgres-17/src/backend/optimizer/util/pathnode.c#L361-L420)
 - [plancat.c:340](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L340)
 - [relnode.c#build_joinrel_partition_info](../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2016-L2045)
 - [restrictinfo.c#make_restrictinfo_internal](../raw/postgres-17/src/backend/optimizer/util/restrictinfo.c#L138-L146)
+- [tlist.c#split_pathtarget_at_srfs](../raw/postgres-17/src/backend/optimizer/util/tlist.c#L823-L830)
 - [parser/README:1-14](../raw/postgres-17/src/backend/parser/README#L1-L14)
 - [analyze.c#parse_analyze_fixedparams](../raw/postgres-17/src/backend/parser/analyze.c#L120-L127)
 - [gram.y:2326-2327](../raw/postgres-17/src/backend/parser/gram.y#L2326-L2327)
 - [parser/meson.build:30-41](../raw/postgres-17/src/backend/parser/meson.build#L30-L41)
+- [parse_agg.c:1150-1161](../raw/postgres-17/src/backend/parser/parse_agg.c#L1150-L1161)
 - [parse_expr.c#transformAExprIn](../raw/postgres-17/src/backend/parser/parse_expr.c#L1127-L1241)
 - [parse_oper.c#make_scalar_array_op](../raw/postgres-17/src/backend/parser/parse_oper.c#L787-L915)
 - [parser.c#raw_parser](../raw/postgres-17/src/backend/parser/parser.c#L34-L42)
+- [partbounds.c#partitions_are_ordered](../raw/postgres-17/src/backend/partitioning/partbounds.c#L2852-L2887)
 - [partprune.c header](../raw/postgres-17/src/backend/partitioning/partprune.c#L3-L25)
 - [sysv_shmem.c#GetHugePageSize](../raw/postgres-17/src/backend/port/sysv_shmem.c#L490-L541)
 - [win32_shmem.c:236-256](../raw/postgres-17/src/backend/port/win32_shmem.c#L236-L256)
@@ -5196,6 +5650,7 @@ One representative citation per cited source file, grouped by version:
 - [stratnum.h:37-43](../raw/postgres-17/src/include/access/stratnum.h#L37-L43)
 - [tableam.h#TU_UpdateIndexes](../raw/postgres-17/src/include/access/tableam.h#L113-L127)
 - [transam.h#FrozenTransactionId](../raw/postgres-17/src/include/access/transam.h#L20-L35)
+- [tsmapi.h#TsmRoutine](../raw/postgres-17/src/include/access/tsmapi.h#L56-L76)
 - [visibilitymapdefs.h#VISIBILITYMAP_ALL_VISIBLE](../raw/postgres-17/src/include/access/visibilitymapdefs.h#L20-L21)
 - [xact.h#SyncCommitLevel](../raw/postgres-17/src/include/access/xact.h#L68-L79)
 - [xlog.h#XLogHintBitIsNeeded](../raw/postgres-17/src/include/access/xlog.h#L110-L118)
@@ -5204,6 +5659,7 @@ One representative citation per cited source file, grouped by version:
 - [c.h#TYPEALIGN](../raw/postgres-17/src/include/c.h#L808-L828)
 - [genbki.h:23](../raw/postgres-17/src/include/catalog/genbki.h#L23)
 - [index.h:21](../raw/postgres-17/src/include/catalog/index.h#L21)
+- [pg_aggregate.h:49-56](../raw/postgres-17/src/include/catalog/pg_aggregate.h#L49-L56)
 - [pg_am.dat:14-35](../raw/postgres-17/src/include/catalog/pg_am.dat#L14-L35)
 - [pg_am.h#FormData_pg_am](../raw/postgres-17/src/include/catalog/pg_am.h#L29-L41)
 - [pg_amop.h#FormData_pg_amop](../raw/postgres-17/src/include/catalog/pg_amop.h#L54-L81)
@@ -5238,14 +5694,18 @@ One representative citation per cited source file, grouped by version:
 - [pg_type.h#typalign](../raw/postgres-17/src/include/catalog/pg_type.h#L150-L176)
 - [event_trigger.h#AT_REWRITE](../raw/postgres-17/src/include/commands/event_trigger.h#L36-L43)
 - [progress.h:1-25](../raw/postgres-17/src/include/commands/progress.h#L1-L25)
+- [trigger.h:41-42](../raw/postgres-17/src/include/commands/trigger.h#L41-L42)
 - [relpath.h#ForkNumber](../raw/postgres-17/src/include/common/relpath.h#L47-L62)
 - [executor.h#ExecQual](../raw/postgres-17/src/include/executor/executor.h#L407-L417)
+- [hashjoin.h:95-121](../raw/postgres-17/src/include/executor/hashjoin.h#L95-L121)
 - [instrument.h#BufferUsage](../raw/postgres-17/src/include/executor/instrument.h#L24-L42)
 - [tuptable.h:125-127](../raw/postgres-17/src/include/executor/tuptable.h#L125-L127)
 - [fmgr.h:95](../raw/postgres-17/src/include/fmgr.h#L95)
 - [fdwapi.h#FdwRoutine](../raw/postgres-17/src/include/foreign/fdwapi.h#L204-L281)
 - [miscadmin.h:79-84](../raw/postgres-17/src/include/miscadmin.h#L79-L84)
+- [bitmapset.h:6-9](../raw/postgres-17/src/include/nodes/bitmapset.h#L6-L9)
 - [execnodes.h#PlanState](../raw/postgres-17/src/include/nodes/execnodes.h#L1113-L1130)
+- [extensible.h#CustomPathMethods](../raw/postgres-17/src/include/nodes/extensible.h#L92-L106)
 - [lockoptions.h#LockTupleMode](../raw/postgres-17/src/include/nodes/lockoptions.h#L46-L59)
 - [nodes.h:251](../raw/postgres-17/src/include/nodes/nodes.h#L251)
 - [parsenodes.h#CTEMaterialize](../raw/postgres-17/src/include/nodes/parsenodes.h#L1636-L1641)
@@ -5257,6 +5717,7 @@ One representative citation per cited source file, grouped by version:
 - [tidbitmap.h#TBMIterateResult](../raw/postgres-17/src/include/nodes/tidbitmap.h#L39-L47)
 - [cost.h:34](../raw/postgres-17/src/include/optimizer/cost.h#L34)
 - [geqo_gene.h:35](../raw/postgres-17/src/include/optimizer/geqo_gene.h#L35)
+- [planmain.h:21](../raw/postgres-17/src/include/optimizer/planmain.h#L21)
 - [kwlist.h:374-375](../raw/postgres-17/src/include/parser/kwlist.h#L374-L375)
 - [parser.h:24-28](../raw/postgres-17/src/include/parser/parser.h#L24-L28)
 - [parsetree.h#rt_fetch](../raw/postgres-17/src/include/parser/parsetree.h#L26-L32)
@@ -5295,6 +5756,7 @@ One representative citation per cited source file, grouped by version:
 - [pgstat_internal.h#PgStat_KindInfo](../raw/postgres-17/src/include/utils/pgstat_internal.h#L201-L219)
 - [plancache.h#CachedPlanSource](../raw/postgres-17/src/include/utils/plancache.h#L121-L133)
 - [portal.h:3-9](../raw/postgres-17/src/include/utils/portal.h#L3-L9)
+- [queryenvironment.h#EphemeralNamedRelationMetadataData](../raw/postgres-17/src/include/utils/queryenvironment.h#L25-L42)
 - [rel.h#HEAP_DEFAULT_FILLFACTOR](../raw/postgres-17/src/include/utils/rel.h#L348-L349)
 - [relcache.h:27](../raw/postgres-17/src/include/utils/relcache.h#L27)
 - [selfuncs.h:33-40](../raw/postgres-17/src/include/utils/selfuncs.h#L33-L40)
