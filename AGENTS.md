@@ -83,6 +83,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - For cross-version claims on a version-local page, support each other version's value or behavior through the target checkout's own git history. Name the commit by abbreviated hash, say what it changed, and cite the current code at the target pin. You may read another version's checkout to cross-check, but never cite it on that page. If the target history cannot establish a claim, for example because the checkout is a shallow clone, put the claim under `## Open Questions`.
 - Draft from a claim-to-source map. Put unresolved claims under `## Open Questions`.
 - Before drafting the explanation, map the values, information flow, branches, and lifecycle events required by `MANDATORY Technical Explanations`.
+- For every claim that functionality behaves differently from its default, establish the default, the cause, and the mechanism required by `MANDATORY Non-Default Behavior`.
 - Minimum engine answer: normal path, edge/error path, key data structures, caller/callee boundary, build/generated-header implications visible from raw source, and tests or explicit test absence.
 - For planner, WAL, crash recovery, MVCC, storage, or corruption topics, missing caller/callee or data-structure context is a verification gap.
 
@@ -228,7 +229,7 @@ Show the cases explicitly whenever conditions change behavior. Prefer this table
 | Condition / state | Behavior | Consequence |
 |---|---|---|
 
-Include meaningful edge and error cases. Do not bury several special cases inside a long sentence.
+Include meaningful edge and error cases. Do not bury several special cases inside a long sentence. When a case departs from default behavior, explain why it does; see `MANDATORY Non-Default Behavior`.
 
 #### 6. Lifecycle or state changes
 
@@ -267,6 +268,34 @@ Before finalizing, ask:
 - Are multiple pieces of logic still compressed into a paragraph merely because they appeared together in the source? If yes, reorganize them by causal role.
 
 Check these requirements by hand. A clean `scripts/wiki_lint` result does not establish that an explanation exposes its causal structure.
+
+## MANDATORY Non-Default Behavior
+
+Whenever a statement says that PostgreSQL functionality behaves differently from its default behavior, explain why it behaves differently. Do not leave the reader to guess what changed the behavior.
+
+Default behavior is what the pinned server does when nothing overrides it: every GUC, storage parameter, and command option at its default, a build with default options, no extension or hook loaded, and the code path the functionality takes in the common case.
+
+- Apply this rule wherever the statement appears: answer prose, tables, diagrams, worked examples, measurement results, glossary entries, common concept pages, and answers given in chat without filing a page.
+- Put the explanation beside the statement, or link the section of the same page that holds it.
+- Give the explanation these three parts:
+
+| Part | What to state |
+|---|---|
+| Default | What the functionality does by default. |
+| Cause | What makes this case different, named precisely: a non-default GUC, storage parameter, command option, or build option; catalog, data, or stored state; an extension or hook; or a condition that sends the code down a special-case branch. |
+| Mechanism | How the cause produces the different behavior: the code that reads the setting or tests the condition, and the path it takes instead of the default one. |
+
+- Cite each part from the matching `raw/postgres-NN/` checkout. Establish the default from the pinned source, such as the GUC's boot value, the storage parameter's default, or the branch the code takes when the option is absent. Never take a default from model memory; see `MANDATORY Evidence`.
+- A GUC can have two defaults: its compiled-in boot value, and a different value that `initdb` writes into a new cluster's configuration file, as it does for `shared_buffers`. When the two differ, say which one the statement compares against.
+- When the cause is a setting, give the value in effect, the default value, and where the value was set, such as the measurement script, the configuration file, or a `SET` in the session. If you also suggest changing it, `MANDATORY GUC Changes` applies.
+- When a measurement runs with a non-default setting, build option, or fixture state, name each result that depends on it, say why the script needs it, and say what the default does instead. Report the default's result as measured only if the script ran a default leg; otherwise cite the source for it.
+- A behavior that differs from an earlier version's default is a cross-version claim. Support it with the target checkout's own history, as `MANDATORY Deep Inquiry` requires.
+- If the pinned checkout does not establish the cause or the mechanism, do not guess. File the observed behavior, the default it departs from, and the missing reason under `## Open Questions`.
+- Do not call a behavior non-default, unusual, or an exception without stating the default it departs from.
+- This rule does not authorize changes to common concept pages during another document's work.
+- `scripts/wiki_lint` does not check this rule. Check every such statement by hand before filing.
+
+Migration note: existing pages that state non-default behavior without this explanation remain valid and need not be changed until they are next substantially revised or reviewed, at which point add the explanation.
 
 ## MANDATORY GUC Changes
 
@@ -333,6 +362,7 @@ Isolation and safety, on top of `MANDATORY Environment Isolation`:
 - Start with `set -uo pipefail`, and call `psql` with `-X -v ON_ERROR_STOP=1` so a stray `~/.psqlrc` cannot change the result and no error passes silently.
 - Follow `MANDATORY Production SQL` for the statements the script sends: the inline tag comment after the leading verb, and session-scoped `statement_timeout` and `lock_timeout`.
 - Name the context and apply scope of every GUC the script sets, per `MANDATORY GUC Changes`.
+- Explain what each non-default setting, build option, or fixture state changes and why the script needs it, per `MANDATORY Non-Default Behavior`.
 - Mark fixture statements as disposable. They create and drop objects and are not meant for a database anyone cares about.
 - Give the script a cleanup stage that stops the server and deletes the sandbox, and run that stage before your final response. Publishing the stage is not enough; see the teardown bullets in `MANDATORY Environment Isolation`.
 - A script published inside a fenced block must not contain a literal Markdown fence. Assemble one at run time when the script has to read fenced blocks out of the page, e.g. `fence=$(printf '\140\140\140')`.
@@ -728,7 +758,7 @@ Log heading format:
 2. Use `wiki/versions.md`, `wiki/index.md`, and the version landing page as navigation only.
 3. Build the deep-inquiry context envelope from the pinned checkout.
 4. List the jargon and concepts the answer leans on, review `wiki/glossary.md`, and read `wiki/vNN/common-concepts/` for that version. Maintain the relevant glossary entries and plan links to both vocabulary and existing deeper explanations; see `MANDATORY Shared Glossary` and `MANDATORY Common Concept Documents`.
-5. Draft a claim-to-source map and the causal map required by `MANDATORY Technical Explanations`.
+5. Draft a claim-to-source map and the causal map required by `MANDATORY Technical Explanations`. Mark each claim of non-default behavior with its default, cause, and mechanism; see `MANDATORY Non-Default Behavior`.
 6. Move unverified claims to `## Open Questions`.
 7. Answer with matching-version raw citations, following `MANDATORY Technical Explanations` and linking the concept pages instead of re-explaining their concepts. Do not edit a concept page as part of this work.
 8. If the page reports a measured number, run the page's script and file it under `## Measurement Script`, then run the script's cleanup stage so no server or sandbox is left behind; see `MANDATORY Measurement Script`.
@@ -743,7 +773,7 @@ Run this workflow only when the user asks for the concept page itself. Never as 
 
 1. Confirm the target version and the exact concept boundary with the user.
 2. Read `wiki/vNN/common-concepts/` for that version to check the concept has no page and no overlapping page. Review the shared glossary's related entries so its concise definitions and the concept page's deeper explanation agree.
-3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map. Map the mechanism and structure its explanation according to `MANDATORY Technical Explanations`, within the required common concept headings.
+3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map. Map the mechanism and structure its explanation according to `MANDATORY Technical Explanations`, within the required common concept headings. Explain each statement of non-default behavior as `MANDATORY Non-Default Behavior` requires.
 4. File or edit `wiki/vNN/common-concepts/<concept-slug>.md` with `type: common-concept`, the required headings, and matching-version raw citations only; see `MANDATORY Common Concept Documents`.
 5. Keep it source-only. Move anything unresolved to `## Open Questions`, and leave measurements to the question page that ran them.
 6. Re-read the pages that link the concept page and report, without editing them, any consumer the change now contradicts.

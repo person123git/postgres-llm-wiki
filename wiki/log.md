@@ -14980,3 +14980,52 @@ page; none of the three was edited.
 - **Teardown.** Fast-stopped the task's sole server (PID 8505), data directory `.wiki-runtime/tmp/stat12/data`, socket `.wiki-runtime/tmp/stat12/s`, port 55462. The clean stage confirmed absence of postmaster.pid, no `pgrep -f -- <datadir>` match, no socket/lock file, and no TCP listener; it then deleted the entire stat12 sandbox, including build/install/data/output. A sandboxed stop signal was denied, so the approved cleanup ran outside the execution sandbox. The runtime script and its stat12-work directory were also deleted. No server, build, sandbox, or helper from this task is retained.
 - **Rule precedence.** MANDATORY Environment Isolation's required `pgrep`/`lsof` teardown checks took precedence over MANDATORY Measurement Script's narrower tool allowlist. The explicit page-fix scope took precedence over MANDATORY Lint's general direction to fix every error: 940 pre-existing errors in other pages were left outside this task.
 - **Version control follow-up.** The user authorized publication on `master` and `origin/master`. Before committing, `git fetch origin` succeeded and `HEAD` matched `origin/master` at `a26185a`; the five task files are the complete change set. Fetch/rebase will be checked again immediately before pushing. The explicit commit/push request authorizes these Git remote operations under Rule Precedence, ahead of Environment Isolation's general network restriction. No measurement server or sandbox was restarted.
+
+## [2026-09-30] scaffold | require an explanation for every statement of non-default behavior
+
+- **Prompt hygiene.** Original request: "add mandatory rule on agents.md, for any statements
+  on any funtionality of postgresql that is diferent from the its default behavior should
+  have an explainantion on why the functionality is acting diferently from it's default."
+  Corrected to: "Add a mandatory rule to AGENTS.md: any statement about PostgreSQL
+  functionality that differs from its default behavior should have an explanation of why the
+  functionality is acting differently from its default." Corrections: capitalization of
+  Add, AGENTS.md and PostgreSQL; "on agents.md" to "to AGENTS.md"; "statements on any
+  funtionality" to "statement about ... functionality"; "diferent"/"diferently" to
+  "different"/"differently"; "the its" to "its"; "explainantion on" to "explanation of";
+  "it's" to "its". No correction changed the meaning.
+- **New rule.** Added [MANDATORY Non-Default Behavior](../AGENTS.md#mandatory-non-default-behavior)
+  between Technical Explanations and GUC Changes. Any statement that PostgreSQL
+  functionality behaves differently from its default must explain why, in three cited
+  parts: the default, the cause of the difference, and the mechanism that turns the cause
+  into the different behavior. The rule defines default behavior, covers every place such a
+  statement can appear (prose, tables, diagrams, measurement results, glossary, concept
+  pages, chat answers), and sends an unestablished cause to `## Open Questions`.
+- **My additions beyond the request,** each chosen to fit the existing rules: the default
+  must come from the pinned checkout and never from model memory; a GUC's boot value and
+  the value `initdb` writes into a new cluster's configuration file can differ, so the
+  statement says which one it compares against; a measurement names the results that
+  depend on a non-default setting and reports the default's result as measured only when a
+  default leg ran; a difference from an earlier version's default follows the cross-version
+  rule; and a migration note leaves existing pages valid until their next substantial
+  revision or review.
+- **Cross-references.** One line each in Deep Inquiry, Technical Explanations part 5,
+  the Measurement Script isolation list, Answer And File step 5, and the common concept
+  workflow step 3. Rule Precedence is unchanged: the rule is an explanation rule in its
+  fourth tier, and its evidence requirements already sit in the third.
+- **Evidence for the rule's own wording.** `boot_val` is the compiled-in default field in
+  `guc_tables.h` in all five pinned checkouts, and `initdb.c` writes `shared_buffers` into
+  the new configuration file in all five.
+- **Glossary review.** Reviewed GUC, GUC context, Storage parameter, Hook, Extension and
+  shared_buffers, which already uses "boot value". This instruction change needed no
+  glossary change.
+- **Not changed.** No wiki page, template, or script. `scripts/wiki_lint` does not check
+  the new rule, and the rule says so.
+- **Validation.** `git diff --check` clean. `.wiki-runtime/venv/bin/python scripts/wiki_lint`
+  before the edit: 940 errors / 2 warnings, the repository baseline since 2026-09-25. After
+  the edit and this entry: 940 errors / 2 warnings, unchanged; no error is in a file this
+  task touched.
+- No service or sandbox was started for this task.
+- **Version control follow-up.** The user asked for a commit and push. `git fetch origin`
+  succeeded and `HEAD` matched `origin/master` at `ba57f08`, so no rebase was needed;
+  `AGENTS.md` and `wiki/log.md` are the complete change set. Lint re-run after this line:
+  940 errors / 2 warnings, unchanged.
