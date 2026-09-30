@@ -83,7 +83,7 @@ Deep inquiry is the default unless the user explicitly asks for a quick answer.
 - For cross-version claims on a version-local page, support each other version's value or behavior through the target checkout's own git history. Name the commit by abbreviated hash, say what it changed, and cite the current code at the target pin. You may read another version's checkout to cross-check, but never cite it on that page. If the target history cannot establish a claim, for example because the checkout is a shallow clone, put the claim under `## Open Questions`.
 - Draft from a claim-to-source map. Put unresolved claims under `## Open Questions`.
 - Before drafting the explanation, map the values, information flow, branches, and lifecycle events required by `MANDATORY Technical Explanations`.
-- For every claim that functionality behaves differently from its default, establish the default, the cause, and the mechanism required by `MANDATORY Non-Default Behavior`.
+- For every statement of non-default behavior, including one that never names the default, establish the default, the cause, and the mechanism required by `MANDATORY Non-Default Behavior`.
 - Minimum engine answer: normal path, edge/error path, key data structures, caller/callee boundary, build/generated-header implications visible from raw source, and tests or explicit test absence.
 - For planner, WAL, crash recovery, MVCC, storage, or corruption topics, missing caller/callee or data-structure context is a verification gap.
 
@@ -271,7 +271,9 @@ Check these requirements by hand. A clean `scripts/wiki_lint` result does not es
 
 ## MANDATORY Non-Default Behavior
 
-Whenever a statement says that PostgreSQL functionality behaves differently from its default behavior, explain why it behaves differently. Do not leave the reader to guess what changed the behavior.
+Whenever a statement describes PostgreSQL functionality behaving differently from its default behavior, explain why it behaves differently. Do not leave the reader to guess what changed the behavior.
+
+The rule follows what a statement describes, not how it is worded. It also covers a statement that reports a non-default behavior or result as a plain fact, without naming the default or calling the case an exception. For example, a statement of the form "A does B" is covered when A would not do B by default. Whatever makes A do B in this case, such as a changed setting or option, a fixture, stored state, or a special-case branch, is the cause the explanation must name.
 
 Default behavior is what the pinned server does when nothing overrides it: every GUC, storage parameter, and command option at its default, a build with default options, no extension or hook loaded, and the code path the functionality takes in the common case.
 
@@ -293,7 +295,7 @@ Default behavior is what the pinned server does when nothing overrides it: every
 - If the pinned checkout does not establish the cause or the mechanism, do not guess. File the observed behavior, the default it departs from, and the missing reason under `## Open Questions`.
 - Do not call a behavior non-default, unusual, or an exception without stating the default it departs from.
 - This rule does not authorize changes to common concept pages during another document's work.
-- `scripts/wiki_lint` does not check this rule. Check every such statement by hand before filing.
+- `scripts/wiki_lint` does not check this rule. Check every such statement by hand before filing. To find the statements that never name the default, trace each setting, option, or fixture state that a page's script changes to every claim that depends on it.
 
 Migration note: existing pages that state non-default behavior without this explanation remain valid and need not be changed until they are next substantially revised or reviewed, at which point add the explanation.
 
