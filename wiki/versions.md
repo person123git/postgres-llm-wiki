@@ -16,6 +16,10 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-09-30: **focused source corrections v17**, [How the PostgreSQL 17 Query Planner Works: A Comprehensive Tutorial (unverified)](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), at unchanged pin `786db8dcf16` (17.11).
+  - Corrected indirect InitPlan correlation and dependency-driven recalculation, preserved sublink and CTE eligibility gates in the summary, documented deferrable-arbiter rejection, and distinguished SQL-function cache ownership from statement lifetime. Updated the corresponding maps, tables, coverage and evidence rows, and the shared SubPlan glossary entry with per-version evidence.
+  - The published measurement script and numerical excerpts are unchanged. The user requested no measurement reruns; the new exceptional paths are identified as source-only. Verification remains `not yet`.
+
 - 2026-09-26: **review and fix v12**, [How pgstatindex Calculates B-Tree Index Statistics in PostgreSQL 12 (unverified)](v12/questions/indexing/how-pgstatindex-calculates-information.md), unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2).
   - Corrected schema-name permission checks and the special-pointer assertion boundary; added value, decision, and lifecycle maps, glossary links, and worked calculations.
   - Published one staged Bash/SQL measurement script. Both extension installcheck suites passed, all six page censuses matched the worker's counts and formulas, and schema/function/OID permission probes passed. Retained dead-item storage left density unchanged; VACUUM produced deleted pages without shrinking the captured main-fork byte size. The isolated server was stopped and its build/cluster sandbox deleted.
