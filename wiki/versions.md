@@ -16,6 +16,10 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-01: **focused review fixes v17**, [How the PostgreSQL 17 Query Planner Works: A Comprehensive Tutorial (unverified)](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), at unchanged pin `786db8dcf168` (17.11).
+  - Fixed all seven tutorial findings and the linked Path glossary issue. Aligned the maps, comparison tables, coverage matrix and evidence map; qualified LATERAL physical execution and JIT guards in the shared glossary with matching-version evidence.
+  - The script changed only in repeatability comments; SQL, fixture inputs and numerical excerpts are unchanged. No measurements were re-run; the script-freshness warning and `verified_by_agent: not yet` remain.
+
 - 2026-09-30: **third review and fix v17**, [How the PostgreSQL 17 Query Planner Works: A Comprehensive Tutorial (unverified)](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), at unchanged pin `786db8dcf16` (17.11).
   - Fixed every finding of the report-only review: ten statements the pinned source contradicted, about 120 overstated or under-qualified claims, and the gaps under the new Non-Default Behavior rule, with 308 edits across chapters 1-16, the evidence map and open questions, a 305-row coverage matrix (two rows and nine settings added), a rebuilt Source References list (309 files) and glossary links at first use for 89 terms.
   - The measurement script changed only in comments and one unused variable (md5 `a9ea83e979476a34208c166c098dc91e`); the filed numbers come from the unchanged run (md5 `18f872e6c888d4861d3402b3fabc8c79`), recorded under Last run and Open Questions. No measurement was re-run, as the user asked. The shared glossary gained `pg_statistic` and Speculative insertion (checked on 17 only), for 321 terms. Verification remains `not yet`.
