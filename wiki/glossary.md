@@ -41,6 +41,7 @@ verified_by_agent: not yet
   - [Buffer manager](#buffer-manager)
   - [Buffer pin](#buffer-pin)
   - [Buildfarm](#buildfarm)
+  - [Bulk writer](#bulk-writer)
   - [Catalog](#catalog)
   - [Catalog version](#catalog-version)
   - [Checkpoint](#checkpoint)
@@ -50,6 +51,7 @@ verified_by_agent: not yet
   - [Collation](#collation)
   - [Command tag](#command-tag)
   - [COMMENT ON](#comment-on)
+  - [commit_delay](#commit_delay)
   - [Common table expression](#common-table-expression)
   - [CONCURRENTLY](#concurrently)
   - [Conflict detection](#conflict-detection)
@@ -173,6 +175,7 @@ verified_by_agent: not yet
   - [Page](#page)
   - [Page split](#page-split)
   - [pageinspect](#pageinspect)
+  - [Parallel index build](#parallel-index-build)
   - [Parallel query](#parallel-query)
   - [Parallel vacuum](#parallel-vacuum)
   - [Param](#param)
@@ -223,6 +226,7 @@ verified_by_agent: not yet
   - [Postmaster](#postmaster)
   - [Prefetch](#prefetch)
   - [Prepared statement](#prepared-statement)
+  - [PROC_IN_SAFE_IC](#proc_in_safe_ic)
   - [ProcArray](#procarray)
   - [ProcSignal barrier](#procsignal-barrier)
   - [Progress reporting](#progress-reporting)
@@ -263,6 +267,7 @@ verified_by_agent: not yet
   - [Selectivity](#selectivity)
   - [Semi join and anti join](#semi-join-and-anti-join)
   - [Sequential scan](#sequential-scan)
+  - [Session-level lock](#session-level-lock)
   - [Set operation](#set-operation)
   - [set_plan_references](#set_plan_references)
   - [shared_buffers](#shared_buffers)
@@ -291,12 +296,14 @@ verified_by_agent: not yet
   - [Subtransaction](#subtransaction)
   - [Suffix truncation](#suffix-truncation)
   - [Summarizing index](#summarizing-index)
+  - [Synchronized scan](#synchronized-scan)
   - [Synchronous replication](#synchronous-replication)
   - [Syscache](#syscache)
   - [Table rewrite](#table-rewrite)
   - [Table synchronization](#table-synchronization)
   - [Tablespace](#tablespace)
   - [TAP test](#tap-test)
+  - [Temporary file](#temporary-file)
   - [TID](#tid)
   - [Timeline](#timeline)
   - [TOAST](#toast)
@@ -318,6 +325,7 @@ verified_by_agent: not yet
   - [Vacuum failsafe](#vacuum-failsafe)
   - [VACUUM FULL](#vacuum-full)
   - [varlena](#varlena)
+  - [Virtual transaction ID](#virtual-transaction-id)
   - [Visibility map](#visibility-map)
   - [Wait event](#wait-event)
   - [WAL](#wal)
@@ -344,7 +352,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - Each entry states the versions it was checked on in its **Checked on:** line. A definition applies only to those versions. The shared page does not imply that a term means the same thing in every version.
 - The main paragraph of an entry cites PostgreSQL 17 unless it opens by naming another version. That happens when the concept does not exist in 17, or when the entry was checked only on another version.
 - The **Version notes:** list gives each other checked version its own evidence. Each note opens with **Holds**, **Differs** or **Not present**. "Holds" means every claim of the main paragraph is true for that version, apart from any exception the note names. A change that first appears in PostgreSQL 18 is described in the 18 note, and the 19 note says "as in 18". Every note cites only its own version's checkout.
-- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Thirteen more, added later on 2026-09-25 while that page was revised, were also checked on 17 only: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). Thirty-nine more, added on 2026-09-26 for the PostgreSQL 17 query planner tutorial, were checked on 17 only: [Append and MergeAppend](#append-and-mergeappend), [Constant folding](#constant-folding), [Custom scan](#custom-scan), [disable_cost](#disable_cost), [Grouping sets](#grouping-sets), [Hash join](#hash-join), [Incremental sort](#incremental-sort), [Join order search](#join-order-search), [Join removal](#join-removal), [LATERAL](#lateral), [Materialize node](#materialize-node), [Merge join](#merge-join), [ModifyTable](#modifytable), [Node support functions](#node-support-functions), [Nullingrels](#nullingrels), [One-shot plan](#one-shot-plan), [Outer join](#outer-join), [Param](#param), [Parameterized path](#parameterized-path), [Partial aggregation](#partial-aggregation), [Partitionwise aggregation](#partitionwise-aggregation), [PathTarget](#pathtarget), [PlaceHolderVar](#placeholdervar), [Plan tree](#plan-tree), [PlannerInfo](#plannerinfo), [ProjectSet](#projectset), [Recursive CTE](#recursive-cte), [Relids](#relids), [Row mark](#row-mark), [Sample scan](#sample-scan), [Semi join and anti join](#semi-join-and-anti-join), [Set operation](#set-operation), [set_plan_references](#set_plan_references), [SpecialJoinInfo](#specialjoininfo), [Subquery pull-up](#subquery-pull-up), [Transition table](#transition-table), [Tuple fraction](#tuple-fraction), [Upper relation](#upper-relation), [Window function](#window-function). Two more, added on 2026-09-30 during the third review of that tutorial, were checked on 17 only: [pg_statistic](#pg_statistic) and [Speculative insertion](#speculative-insertion). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
+- As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Thirteen more, added later on 2026-09-25 while that page was revised, were also checked on 17 only: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). Thirty-nine more, added on 2026-09-26 for the PostgreSQL 17 query planner tutorial, were checked on 17 only: [Append and MergeAppend](#append-and-mergeappend), [Constant folding](#constant-folding), [Custom scan](#custom-scan), [disable_cost](#disable_cost), [Grouping sets](#grouping-sets), [Hash join](#hash-join), [Incremental sort](#incremental-sort), [Join order search](#join-order-search), [Join removal](#join-removal), [LATERAL](#lateral), [Materialize node](#materialize-node), [Merge join](#merge-join), [ModifyTable](#modifytable), [Node support functions](#node-support-functions), [Nullingrels](#nullingrels), [One-shot plan](#one-shot-plan), [Outer join](#outer-join), [Param](#param), [Parameterized path](#parameterized-path), [Partial aggregation](#partial-aggregation), [Partitionwise aggregation](#partitionwise-aggregation), [PathTarget](#pathtarget), [PlaceHolderVar](#placeholdervar), [Plan tree](#plan-tree), [PlannerInfo](#plannerinfo), [ProjectSet](#projectset), [Recursive CTE](#recursive-cte), [Relids](#relids), [Row mark](#row-mark), [Sample scan](#sample-scan), [Semi join and anti join](#semi-join-and-anti-join), [Set operation](#set-operation), [set_plan_references](#set_plan_references), [SpecialJoinInfo](#specialjoininfo), [Subquery pull-up](#subquery-pull-up), [Transition table](#transition-table), [Tuple fraction](#tuple-fraction), [Upper relation](#upper-relation), [Window function](#window-function). Two more, added on 2026-09-30 during the third review of that tutorial, were checked on 17 only: [pg_statistic](#pg_statistic) and [Speculative insertion](#speculative-insertion). Eight more, added on 2026-10-07 for the PostgreSQL 17 `CREATE INDEX CONCURRENTLY` page, were checked on 17 only: [Bulk writer](#bulk-writer), [commit_delay](#commit_delay), [Parallel index build](#parallel-index-build), [PROC_IN_SAFE_IC](#proc_in_safe_ic), [Session-level lock](#session-level-lock), [Synchronized scan](#synchronized-scan), [Temporary file](#temporary-file) and [Virtual transaction ID](#virtual-transaction-id). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
@@ -755,6 +763,16 @@ In PostgreSQL 19's source tree, the buildfarm is the set of community test machi
 
 Related: [Regression test](#regression-test), [TAP test](#tap-test), [PG_TEST_EXTRA](#pg_test_extra), [Back-patch](#back-patch)
 
+### Bulk writer
+
+**Aliases:** `bulk_write.c`, `smgr_bulk_start_rel`, `smgr_bulk_write`, `smgr_bulk_finish`, bulk loading facility. **Checked on:** PostgreSQL 17.
+
+The bulk writer is the [storage manager](#storage-manager) facility that fills a new relation [fork](#fork) by writing finished pages straight to the file, without passing them through the [buffer manager](#buffer-manager). It assumes that no other backend accesses the relation meanwhile. Skipping the buffer locks is the gain. The cost is that the pages must be read back into shared buffers when they are first used ([bulk_write.c:3-25](../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L3-L25)). A caller starts with `smgr_bulk_start_rel()`, gets an empty page buffer from `smgr_bulk_get_buf()`, hands each finished page to `smgr_bulk_write()`, and ends with `smgr_bulk_finish()` ([bulk_write.h:33-39](../raw/postgres-17/src/include/storage/bulk_write.h#L33-L39)). In PostgreSQL 17 two index builds use it for the main fork: the [B-tree](#b-tree) build and the sorted [GiST build](#gist-build-method) ([nbtsort.c:1149](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1149), [gistbuild.c:409](../raw/postgres-17/src/backend/access/gist/gistbuild.c#L409)). It also writes the empty init forks of B-tree and [SP-GiST](#sp-gist) indexes, the new heap that `CLUSTER` and [VACUUM FULL](#vacuum-full) produce, and block-by-block copies of a relation fork ([nbtree.c#btbuildempty](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L155-L173), [spginsert.c#spgbuildempty](../raw/postgres-17/src/backend/access/spgist/spginsert.c#L150-L177), [rewriteheap.c:263](../raw/postgres-17/src/backend/access/heap/rewriteheap.c#L263), [heapam_handler.c:724-726](../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L724-L726), [tableam.h:1664-1666](../raw/postgres-17/src/include/access/tableam.h#L1664-L1666), [storage.c#RelationCopyStorage](../raw/postgres-17/src/backend/catalog/storage.c#L463-L503)).
+
+Pages are queued and written in batches of up to 32 ([bulk_write.c:48](../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L48), [xlogrecord.h:241](../raw/postgres-17/src/include/access/xlogrecord.h#L241)). When the relation needs [WAL](#wal), each batch is first logged by `log_newpages()` as one record that carries a forced [full-page image](#full-page-image) of every page in the batch ([bulk_write.c#smgr_bulk_flush](../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L239-L313), [xloginsert.c#log_newpages](../raw/postgres-17/src/backend/access/transam/xloginsert.c#L1169-L1224)). Because the writes bypass shared buffers, no [checkpoint](#checkpoint) learns about them through the usual path, so `smgr_bulk_finish()` arranges the [fsync](#fsync) itself. For a WAL-logged relation it compares the redo pointer saved at the start with the current one. If they differ, a checkpoint began during the build and missed the pages written before it, so the fork is synced at once. Otherwise a sync request is registered for the next checkpoint ([bulk_write.c#smgr_bulk_finish](../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L124-L223)).
+
+Related: [Storage manager](#storage-manager), [Buffer manager](#buffer-manager), [Full-page image](#full-page-image), [WAL](#wal), [Checkpoint](#checkpoint), [fsync](#fsync), [B-tree](#b-tree), [GiST build method](#gist-build-method), [Table rewrite](#table-rewrite)
+
 ### Catalog
 
 **Aliases:** system catalog, `pg_catalog`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -869,6 +887,14 @@ Related: [Event trigger](#event-trigger), [Utility command](#utility-command)
 
 Related: [OID](#oid), [REINDEX](#reindex), [CONCURRENTLY](#concurrently), [Catalog](#catalog)
 
+### commit_delay
+
+**Aliases:** `commit_siblings`, group commit, `CommitDelay`, `CommitSiblings`. **Checked on:** PostgreSQL 17.
+
+`commit_delay` makes a backend sleep, for the given number of microseconds, just before it flushes [WAL](#wal) to disk. During the sleep other transactions can reach their own commit, and one flush then covers all of them. Sharing one flush among several commits is called group commit. The setting can raise commit throughput on a busy server, and it adds up to that delay to each affected flush ([config.sgml#guc-commit-delay](../raw/postgres-17/doc/src/sgml/config.sgml#L3544-L3580)). The sleep is in `XLogFlush()`, after the backend has taken `WALWriteLock` and found that its record is still not flushed. It runs only when `commit_delay` is above zero, [fsync](#fsync) is on, and at least `commit_siblings` other backends are inside a transaction that has a [transaction ID](#transaction-id) and is not waiting for a lock ([xlog.c:2845-2895](../raw/postgres-17/src/backend/access/transam/xlog.c#L2845-L2895), [procarray.c#MinimumActiveBackends](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L3535-L3592)). `XLogFlush()` is the general "flush WAL up to this position" routine, so the sleep can hit any synchronous WAL flush, not only the flush of a commit record ([xlog.c#XLogFlush](../raw/postgres-17/src/backend/access/transam/xlog.c#L2771-L2778), [config.sgml:3569-3578](../raw/postgres-17/doc/src/sgml/config.sgml#L3569-L3578)). `commit_delay` defaults to 0, which disables the sleep, and accepts up to 100000 microseconds. Its context is `superuser`: a role allowed to change it can `SET` it for a session or a transaction, with no reload or restart. `commit_siblings` defaults to 5 and has context `user`, so any session can `SET` it the same way ([guc_tables.c#commit_delay](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2980-L2990), [guc_tables.c#commit_siblings](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2992-L3001), [config.sgml#guc-commit-siblings](../raw/postgres-17/doc/src/sgml/config.sgml#L3582-L3597)).
+
+Related: [WAL](#wal), [Asynchronous commit](#asynchronous-commit), [fsync](#fsync), [GUC context](#guc-context), [LWLock](#lwlock), [Transaction ID](#transaction-id)
+
 ### Common table expression
 
 **Aliases:** CTE, `WITH` query, `MATERIALIZED`, `NOT MATERIALIZED`, `CommonTableExpr`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -895,7 +921,7 @@ For index commands, `CONCURRENTLY` builds, rebuilds or drops an index without bl
 - PostgreSQL 18: Holds. The docs, the two grammar uses, the `ShareUpdateExclusiveLock` choice in `DefineIndex()`, `index_set_state_flags()`, and `ReindexRelationConcurrently()` are unchanged ([ref/create_index.sgml#sql-createindex-concurrently](../raw/postgres-18/doc/src/sgml/ref/create_index.sgml#L618-L649), [ref/drop_index.sgml:46-50](../raw/postgres-18/doc/src/sgml/ref/drop_index.sgml#L46-L50), [gram.y:2339-2340](../raw/postgres-18/src/backend/parser/gram.y#L2339-L2340), [gram.y:4926](../raw/postgres-18/src/backend/parser/gram.y#L4926), [indexcmds.c:681](../raw/postgres-18/src/backend/commands/indexcmds.c#L681), [index.c#index_set_state_flags](../raw/postgres-18/src/backend/catalog/index.c#L3523-L3557), [indexcmds.c#ReindexRelationConcurrently](../raw/postgres-18/src/backend/commands/indexcmds.c#L3561-L3584)).
 - PostgreSQL 19: Holds. The docs still describe two table scans and waits, `DETACH PARTITION` and `REFRESH MATERIALIZED VIEW` still accept the keyword, `DefineIndex()` still picks `ShareUpdateExclusiveLock` over `ShareLock`, `index_set_state_flags()` still steps the `pg_index` flags, and `ReindexRelationConcurrently()` still adds a transient index first ([ref/create_index.sgml#sql-createindex-concurrently](../raw/postgres-19/doc/src/sgml/ref/create_index.sgml#L618-L646), [ref/drop_index.sgml:46-50](../raw/postgres-19/doc/src/sgml/ref/drop_index.sgml#L46-L50), [gram.y:2410-2411](../raw/postgres-19/src/backend/parser/gram.y#L2410-L2411), [gram.y:5006](../raw/postgres-19/src/backend/parser/gram.y#L5006), [indexcmds.c:685](../raw/postgres-19/src/backend/commands/indexcmds.c#L685), [index.c#index_set_state_flags](../raw/postgres-19/src/backend/catalog/index.c#L3615-L3625), [indexcmds.c#ReindexRelationConcurrently](../raw/postgres-19/src/backend/commands/indexcmds.c#L3590-L3612), [ref/reindex.sgml#sql-reindex-concurrently](../raw/postgres-19/doc/src/sgml/ref/reindex.sgml#L385-L396)). A failed build still leaves an invalid index ([ref/create_index.sgml#sql-createindex-concurrently](../raw/postgres-19/doc/src/sgml/ref/create_index.sgml#L650-L673)). 19 also offers `REPACK (CONCURRENTLY)`, a table rewrite rather than an index command ([mvcc.sgml:1101-1103](../raw/postgres-19/doc/src/sgml/mvcc.sgml#L1101-L1103)).
 
-Related: [Invalid index](#invalid-index), [REINDEX](#reindex), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [Snapshot](#snapshot), [pg_index](#pg_index)
+Related: [Invalid index](#invalid-index), [REINDEX](#reindex), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [Snapshot](#snapshot), [pg_index](#pg_index), [PROC_IN_SAFE_IC](#proc_in_safe_ic), [Session-level lock](#session-level-lock), [Virtual transaction ID](#virtual-transaction-id)
 
 ### Conflict detection
 
@@ -1687,7 +1713,7 @@ A heavyweight lock, also called a regular lock, is a lock taken through the lock
 - PostgreSQL 18: Holds. `LockRelationOid()` still calls `LockAcquireExtended()`, which gains one argument in 18, `logLockFailure` ([lmgr/README:20-35](../raw/postgres-18/src/backend/storage/lmgr/README#L20-L35), [lock.c#LockConflicts](../raw/postgres-18/src/backend/storage/lmgr/lock.c#L65-L105), [lmgr.c#LockRelationOid](../raw/postgres-18/src/backend/storage/lmgr/lmgr.c#L101-L116), [lock.c#LockAcquireExtended](../raw/postgres-18/src/backend/storage/lmgr/lock.c#L835-L841), [lmgr.c#LockRelationIdForSession](../raw/postgres-18/src/backend/storage/lmgr/lmgr.c#L378-L384)).
 - PostgreSQL 19: Holds. It still has eight table-driven modes, deadlock detection, release at transaction end by default and session-level locks, and `LockRelationOid()` still calls `LockAcquireExtended()`, which takes the `logLockFailure` argument as in 18 ([lmgr/README:20-35](../raw/postgres-19/src/backend/storage/lmgr/README#L20-L35), [lockdefs.h:34-48](../raw/postgres-19/src/include/storage/lockdefs.h#L34-L48), [lock.c#LockConflicts](../raw/postgres-19/src/backend/storage/lmgr/lock.c#L68-L108), [lmgr.c#LockRelationOid](../raw/postgres-19/src/backend/storage/lmgr/lmgr.c#L107-L116), [lock.c#LockAcquireExtended](../raw/postgres-19/src/backend/storage/lmgr/lock.c#L865-L871), [lmgr.c#LockRelationIdForSession](../raw/postgres-19/src/backend/storage/lmgr/lmgr.c#L378-L384)). `LOCKTAG` moved from `lock.h` to a new header, `locktag.h` ([locktag.h#LOCKTAG](../raw/postgres-19/src/include/storage/locktag.h#L64-L72)).
 
-Related: [AccessExclusiveLock](#accessexclusivelock), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [LWLock](#lwlock)
+Related: [AccessExclusiveLock](#accessexclusivelock), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [LWLock](#lwlock), [Session-level lock](#session-level-lock), [Virtual transaction ID](#virtual-transaction-id)
 
 ### Hint bits
 
@@ -2185,7 +2211,7 @@ Related: [effective_cache_size](#effective_cache_size), [Cost](#cost), [Correlat
 - PostgreSQL 18: Holds. Still `user` context (session scope), default 65536 kB and minimum 64 kB, used by B-tree builds and to size the `TidStore` of dead TIDs, with `autovacuum_work_mem` (`sighup`) taking over in workers when not -1 ([guc_tables.c#maintenance_work_mem](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2594-L2602), [nbtsort.c:372-377](../raw/postgres-18/src/backend/access/nbtree/nbtsort.c#L372-L377), [vacuumlazy.c#dead_items_alloc](../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3497-L3502), [vacuumlazy.c:3551-3555](../raw/postgres-18/src/backend/access/heap/vacuumlazy.c#L3551-L3555), [guc_tables.c:3650](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3650)).
 - PostgreSQL 19: Holds. It is still `PGC_USERSET` (session scope) with default 65536 kB, B-tree builds still size their sort with it, and VACUUM still sizes its `TidStore` of dead TIDs with it unless an autovacuum worker has `autovacuum_work_mem` set ([guc_parameters.dat#maintenance_work_mem](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1951-L1959), [nbtsort.c:375-380](../raw/postgres-19/src/backend/access/nbtree/nbtsort.c#L375-L380), [vacuumlazy.c:3-14](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L3-L14), [vacuumlazy.c#dead_items_alloc](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L3443-L3445), [vacuumlazy.c:3494-3498](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L3494-L3498)). `autovacuum_work_mem` is still `PGC_SIGHUP` (reload) ([guc_parameters.dat#autovacuum_work_mem](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L291-L300)).
 
-Related: [work_mem](#work_mem), [VACUUM](#vacuum), [TID](#tid), [GUC context](#guc-context)
+Related: [work_mem](#work_mem), [VACUUM](#vacuum), [TID](#tid), [GUC context](#guc-context), [Parallel index build](#parallel-index-build)
 
 ### Materialize node
 
@@ -2470,6 +2496,18 @@ Related: [Fillfactor](#fillfactor), [Simple index deletion](#simple-index-deleti
 - PostgreSQL 19: Holds. `get_raw_page` still requires a superuser and copies one block of a fork, and the per-format decoders are still separate ([pageinspect.control](../raw/postgres-19/contrib/pageinspect/pageinspect.control#L1-L2), [rawpage.c#get_raw_page_internal](../raw/postgres-19/contrib/pageinspect/rawpage.c#L145-L156), [pageinspect--1.5.sql:178](../raw/postgres-19/contrib/pageinspect/pageinspect--1.5.sql#L178)). As in 18, the extension's default version is 1.13 ([pageinspect.control:3](../raw/postgres-19/contrib/pageinspect/pageinspect.control#L3)).
 
 Related: [Page](#page), [Fork](#fork), [Contrib](#contrib), [Extension](#extension), [pgstattuple](#pgstattuple)
+
+### Parallel index build
+
+**Aliases:** parallel `CREATE INDEX`, `max_parallel_maintenance_workers`, parallel maintenance worker, `plan_create_index_workers`, `amcanbuildparallel`. **Checked on:** PostgreSQL 17.
+
+A parallel index build is an index build whose table scan and sort are shared between the session's own backend, called the leader, and [background workers](#background-worker). In PostgreSQL 17 only [B-tree](#b-tree) and [BRIN](#brin) support it: they are the access methods whose handler sets `amcanbuildparallel` ([amapi.h:251-252](../raw/postgres-17/src/include/access/amapi.h#L251-L252), [nbtree.c:120](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L120), [brin.c:266](../raw/postgres-17/src/backend/access/brin/brin.c#L266), [ref/create_index.sgml#parallel-index-build](../raw/postgres-17/doc/src/sgml/ref/create_index.sgml#L806-L845)). `CREATE INDEX`, `CREATE INDEX CONCURRENTLY` and `REINDEX` all call `index_build()` with `parallel = true`, and for such an access method it asks `plan_create_index_workers()` how many workers to request ([index.c:1284](../raw/postgres-17/src/backend/catalog/index.c#L1284), [index.c:1539](../raw/postgres-17/src/backend/catalog/index.c#L1539), [index.c:3789](../raw/postgres-17/src/backend/catalog/index.c#L3789), [index.c:2995-3005](../raw/postgres-17/src/backend/catalog/index.c#L2995-L3005)).
+
+That function applies its tests in a fixed order. It returns 0 at once in a standalone backend or when `max_parallel_maintenance_workers` is 0 ([planner.c:6908-6913](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6908-L6913)). It returns 0 when the table is temporary, or when an index expression or predicate is not parallel safe ([planner.c:6958-6971](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6958-L6971)). Next, a `parallel_workers` [storage parameter](#storage-parameter) on the table decides the number, capped by `max_parallel_maintenance_workers` and with no further test ([planner.c:6973-6985](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6973-L6985)). Without that parameter a table-size model picks a number, which is then lowered until every participant, counting the leader, would get at least 32 MB of [maintenance_work_mem](#maintenance_work_mem) ([planner.c:6987-7012](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L6987-L7012)).
+
+The result is a request, not a guarantee. If no [dynamic shared memory](#dynamic-shared-memory) segment is available, or no worker starts, the build falls back to a serial one; if only some workers start, it runs with those ([nbtsort.c:1489-1497](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1489-L1497), [nbtsort.c:1582-1587](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1582-L1587), [brin.c:2435-2443](../raw/postgres-17/src/backend/access/brin/brin.c#L2435-L2443), [brin.c:2513-2518](../raw/postgres-17/src/backend/access/brin/brin.c#L2513-L2518), [config.sgml#guc-max-parallel-maintenance-workers](../raw/postgres-17/doc/src/sgml/config.sgml#L2864-L2900)). The leader also scans and sorts as one participant, unless the server was compiled with `DISABLE_LEADER_PARTICIPATION` ([nbtsort.c:1410-1415](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1410-L1415), [nbtsort.c:1592-1594](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1592-L1594)). `max_parallel_maintenance_workers` defaults to 2 and has context `user`, so a session or transaction can `SET` it with no reload or restart. The same setting also caps [parallel vacuum](#parallel-vacuum) ([guc_tables.c#max_parallel_maintenance_workers](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3409-L3417), [config.sgml#guc-max-parallel-maintenance-workers](../raw/postgres-17/doc/src/sgml/config.sgml#L2864-L2900)).
+
+Related: [B-tree](#b-tree), [BRIN](#brin), [Background worker](#background-worker), [maintenance_work_mem](#maintenance_work_mem), [Tuplesort](#tuplesort), [Dynamic shared memory](#dynamic-shared-memory), [Parallel vacuum](#parallel-vacuum), [Parallel query](#parallel-query), [GUC context](#guc-context)
 
 ### Parallel query
 
@@ -3117,6 +3155,18 @@ A prepared statement is a statement that is parsed and analyzed once, saved (usu
 
 Related: [Custom and generic plan](#custom-and-generic-plan), [Plan cache mode](#plan-cache-mode), [Portal](#portal), [Planner](#planner)
 
+### PROC_IN_SAFE_IC
+
+**Aliases:** safe concurrent index build, `statusFlags`, `set_indexsafe_procflags`, `PROC_XMIN_FLAGS`. **Checked on:** PostgreSQL 17.
+
+`PROC_IN_SAFE_IC` is a per-backend status flag. It says that the backend is running `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` on an index that has no expression column and no predicate ([proc.h:54-62](../raw/postgres-17/src/include/storage/proc.h#L54-L62)). Such a build cannot run code that reads another table. Other concurrent index builds therefore do not need to wait for its [snapshot](#snapshot), which saves pointless waits and avoids some [deadlocks](#deadlock) ([indexcmds.c#set_indexsafe_procflags](../raw/postgres-17/src/backend/commands/indexcmds.c#L4473-L4505)). The flag is one bit of `PGPROC.statusFlags`, mirrored in the `ProcGlobal->statusFlags` array that [ProcArray](#procarray) scans read ([indexcmds.c:4501-4504](../raw/postgres-17/src/backend/commands/indexcmds.c#L4501-L4504)).
+
+`DefineIndex()` computes whether the index qualifies. It then calls `set_indexsafe_procflags()` right after it starts each later transaction of the build ([indexcmds.c:1144-1146](../raw/postgres-17/src/backend/commands/indexcmds.c#L1144-L1146), [indexcmds.c:1621-1623](../raw/postgres-17/src/backend/commands/indexcmds.c#L1621-L1623), [indexcmds.c:1693-1695](../raw/postgres-17/src/backend/commands/indexcmds.c#L1693-L1695), [indexcmds.c:1753-1755](../raw/postgres-17/src/backend/commands/indexcmds.c#L1753-L1755)). It must set the flag again each time because the flag is cleared at transaction end, and it must do so before the transaction has an xid or an xmin ([proc.h:70-72](../raw/postgres-17/src/include/storage/proc.h#L70-L72), [procarray.c:711-721](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L711-L721), [indexcmds.c:4488-4499](../raw/postgres-17/src/backend/commands/indexcmds.c#L4488-L4499)). `REINDEX CONCURRENTLY` applies the same test to each index it rebuilds ([indexcmds.c:3808-3810](../raw/postgres-17/src/backend/commands/indexcmds.c#L3808-L3810), [indexcmds.c:3990-3992](../raw/postgres-17/src/backend/commands/indexcmds.c#L3990-L3992)).
+
+The reader is `WaitForOlderSnapshots()`. It passes the flag in the exclusion mask of `GetCurrentVirtualXIDs()`, which skips every backend whose status flags intersect the mask ([indexcmds.c:412-442](../raw/postgres-17/src/backend/commands/indexcmds.c#L412-L442), [procarray.c:3342-3348](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L3342-L3348)). So the flag describes the backend that is skipped, not the backend that waits. In 17 the flag does not change what `VACUUM` may remove: `ComputeXidHorizons()` skips only backends flagged `PROC_IN_VACUUM` or `PROC_IN_LOGICAL_DECODING` ([procarray.c:1826-1832](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1826-L1832)). A parallel worker copies the flag from its leader when it installs the leader's snapshot, because the flag is one of the `PROC_XMIN_FLAGS` ([proc.h:74-78](../raw/postgres-17/src/include/storage/proc.h#L74-L78), [procarray.c#ProcArrayInstallRestoredXmin](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2606-L2659), [parallel.c:1485-1490](../raw/postgres-17/src/backend/access/transam/parallel.c#L1485-L1490), [nbtsort.c:1761-1766](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1761-L1766)).
+
+Related: [CONCURRENTLY](#concurrently), [ProcArray](#procarray), [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Expression index](#expression-index), [Partial index](#partial-index), [REINDEX](#reindex), [Virtual transaction ID](#virtual-transaction-id), [Parallel index build](#parallel-index-build)
+
 ### ProcArray
 
 **Aliases:** process array, `procarray.c`, `ProcArrayStruct`, `ProcArrayLock`, `PGPROC`, `ProcGlobal`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3640,7 +3690,17 @@ A sequential scan reads every page of a table and tests each row against the que
 - PostgreSQL 18: Differs: `enable_seqscan = off` now marks the path as disabled by setting `disabled_nodes`, instead of adding `disable_cost` ([costsize.c:357](../raw/postgres-18/src/backend/optimizer/path/costsize.c#L357)). The executor adds specialized variants such as `ExecSeqScanWithQual()` ([nodeSeqscan.c:130](../raw/postgres-18/src/backend/executor/nodeSeqscan.c#L130)). The rest holds, including the read stream and the synchronized-scan start ([heapam.c:1221](../raw/postgres-18/src/backend/access/heap/heapam.c#L1221), [heapam.c:433-436](../raw/postgres-18/src/backend/access/heap/heapam.c#L433-L436)).
 - PostgreSQL 19: Differs: as in 18, a disabled path is counted in `disabled_nodes`, but the flag now comes from the [relation](#relation)'s [pgs_mask](#pgs_mask) planner strategy mask rather than directly from `enable_seqscan` ([costsize.c:279](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L279), [costsize.c:332-336](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L332-L336)). The rest holds, including the read stream ([heapam.c:1299](../raw/postgres-19/src/backend/access/heap/heapam.c#L1299)).
 
-Related: [Index scan](#index-scan), [Bitmap scan](#bitmap-scan), [Cost](#cost), [Read stream](#read-stream), [Ring buffer](#ring-buffer)
+Related: [Index scan](#index-scan), [Bitmap scan](#bitmap-scan), [Cost](#cost), [Read stream](#read-stream), [Ring buffer](#ring-buffer), [Synchronized scan](#synchronized-scan)
+
+### Session-level lock
+
+**Aliases:** session lock, `LockRelationIdForSession`, `UnlockRelationIdForSession`, `sessionLock`. **Checked on:** PostgreSQL 17.
+
+A session-level lock is a [heavyweight lock](#heavyweight-lock) that belongs to the session instead of the current transaction, so a commit does not release it. `LockAcquire()` has a `sessionLock` argument for this, and `LockRelationIdForSession()` is the wrapper for a table or index ([lock.c#LockAcquire](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L730-L763), [lmgr.c#LockRelationIdForSession](../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L374-L394)). Commands that run as several transactions use one to keep a relation from being dropped between their transactions. `CREATE INDEX CONCURRENTLY` takes a session-level [ShareUpdateExclusiveLock](#shareupdateexclusivelock) on the table before its first commit; `REINDEX CONCURRENTLY`, `DROP INDEX CONCURRENTLY` and `VACUUM` take session-level locks for the same reason ([indexcmds.c:1606-1615](../raw/postgres-17/src/backend/commands/indexcmds.c#L1606-L1615), [indexcmds.c:3944-3950](../raw/postgres-17/src/backend/commands/indexcmds.c#L3944-L3950), [index.c:2259-2265](../raw/postgres-17/src/backend/catalog/index.c#L2259-L2265), [vacuum.c:2142-2153](../raw/postgres-17/src/backend/commands/vacuum.c#L2142-L2153)). Taking it cannot block, because the same backend already holds the same lock at transaction level ([indexcmds.c:1606-1609](../raw/postgres-17/src/backend/commands/indexcmds.c#L1606-L1609)).
+
+A session-level lock on a relation ends in one of three ways: the matching unlock call, an error, or backend exit ([lmgr.c:377-380](../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L377-L380)). At a transaction abort `ProcReleaseLocks()` releases the standard locks including the session-level ones, while at commit it keeps them ([proc.c#ProcReleaseLocks](../raw/postgres-17/src/backend/storage/lmgr/proc.c#L794-L821), [lock.c#LockReleaseAll](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L2160-L2169)). Session-level advisory locks behave differently: they stay through an abort too ([proc.c:801-802](../raw/postgres-17/src/backend/storage/lmgr/proc.c#L801-L802), [mvcc.sgml:1540-1563](../raw/postgres-17/doc/src/sgml/mvcc.sgml#L1540-L1563)). The holder of a session-level relation lock still takes an ordinary transaction-level lock in each transaction that uses the relation, so that its [relcache](#relcache) entry is current ([lmgr.c:382-384](../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L382-L384)).
+
+Related: [Heavyweight lock](#heavyweight-lock), [Lock mode](#lock-mode), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [CONCURRENTLY](#concurrently), [VACUUM](#vacuum), [Relcache](#relcache)
 
 ### Set operation
 
@@ -3896,7 +3956,7 @@ The storage manager is the layer below the [buffer manager](#buffer-manager) tha
 - PostgreSQL 18: Differs: the table adds `smgr_maxcombine` and `smgr_startreadv`, which starts a read as an [asynchronous I/O](#asynchronous-io) handle ([smgr.c#f_smgr](../raw/postgres-18/src/backend/storage/smgr/smgr.c#L105-L113), [md.c:44-50](../raw/postgres-18/src/backend/storage/smgr/md.c#L44-L50)). The build options are as in 17 ([meson_options.txt:15-19](../raw/postgres-18/meson_options.txt#L15-L19)).
 - PostgreSQL 19: Differs: as in 18, the table has `smgr_maxcombine` and `smgr_startreadv` ([smgr.c#f_smgr](../raw/postgres-19/src/backend/storage/smgr/smgr.c#L105-L113), [md.c:46-52](../raw/postgres-19/src/backend/storage/smgr/md.c#L46-L52)).
 
-Related: [Buffer manager](#buffer-manager), [Fork](#fork), [Relfilenumber](#relfilenumber), [Block](#block), [Asynchronous I/O](#asynchronous-io)
+Related: [Buffer manager](#buffer-manager), [Fork](#fork), [Relfilenumber](#relfilenumber), [Block](#block), [Asynchronous I/O](#asynchronous-io), [Bulk writer](#bulk-writer)
 
 ### Storage parameter
 
@@ -3992,6 +4052,16 @@ A summarizing index stores summaries of the data in whole table blocks instead o
 
 Related: [BRIN](#brin), [BRIN summarization](#brin-summarization), [HOT](#hot), [Access method](#access-method), [Relcache](#relcache), [Partial index](#partial-index)
 
+### Synchronized scan
+
+**Aliases:** syncscan, `synchronize_seqscans`, `ss_get_location`, `ss_report_location`, `SO_ALLOW_SYNC`. **Checked on:** PostgreSQL 17.
+
+A synchronized scan is a [sequential scan](#sequential-scan) that starts at the block where another scan of the same table is reading, instead of at block 0, and wraps around the end to cover the rest. Several backends scanning one big table then read each page from disk about once between them ([syncscan.c:6-32](../raw/postgres-17/src/backend/access/common/syncscan.c#L6-L32), [config.sgml#guc-synchronize-seqscans](../raw/postgres-17/doc/src/sgml/config.sgml#L10868-L10889)). `initscan()` allows it only when three things hold: the table does not use local buffers and is larger than a quarter of [shared_buffers](#shared_buffers) (`NBuffers / 4`), the caller set `SO_ALLOW_SYNC`, and `synchronize_seqscans` is on. It then takes the start block from `ss_get_location()` ([heapam.c:433-496](../raw/postgres-17/src/backend/access/heap/heapam.c#L433-L496), [syncscan.c#ss_get_location](../raw/postgres-17/src/backend/access/common/syncscan.c#L243-L279)). A running scan reports its position every `SYNC_SCAN_REPORT_INTERVAL` pages so that later scans can join it ([syncscan.c:83](../raw/postgres-17/src/backend/access/common/syncscan.c#L83), [syncscan.c#ss_report_location](../raw/postgres-17/src/backend/access/common/syncscan.c#L281-L323)).
+
+Because the start block varies, rows come back in a different physical order from one run to the next. A caller that needs tuples in physical order therefore passes `allow_sync = false`. Examples are the [GIN](#gin) build, the serial [BRIN](#brin) build, and the validation scan of `CREATE INDEX CONCURRENTLY` ([gininsert.c:378-384](../raw/postgres-17/src/backend/access/gin/gininsert.c#L378-L384), [brin.c:1217-1224](../raw/postgres-17/src/backend/access/brin/brin.c#L1217-L1224), [heapam_handler.c:1793-1804](../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1793-L1804)). `synchronize_seqscans` defaults to on and has context `user`, so a session or transaction can `SET` it with no reload or restart ([guc_tables.c#synchronize_seqscans](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1766-L1774)).
+
+Related: [Sequential scan](#sequential-scan), [shared_buffers](#shared_buffers), [Ring buffer](#ring-buffer), [GUC context](#guc-context), [GIN](#gin), [BRIN](#brin), [CONCURRENTLY](#concurrently)
+
 ### Synchronous replication
 
 **Aliases:** sync rep, `synchronous_commit`, `synchronous_standby_names`, `syncrep.c`, `SyncRepWaitForLSN`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4075,6 +4145,16 @@ A TAP test is a Perl script, by default one of the `t/*.pl` files in a test dire
 - PostgreSQL 19: Holds. TAP tests are still `t/*.pl` scripts run by `prove`, the configure and Meson switches are unchanged, and scripts still drive servers through `PostgreSQL::Test::Cluster` ([regress.sgml#regress-tap](../raw/postgres-19/doc/src/sgml/regress.sgml#L916-L948), [meson_options.txt:43-44](../raw/postgres-19/meson_options.txt#L43-L44), [meson.build:1810-1826](../raw/postgres-19/meson.build#L1810-L1826), [Cluster.pm:8-12](../raw/postgres-19/src/test/perl/PostgreSQL/Test/Cluster.pm#L8-L12)).
 
 Related: [Regression test](#regression-test), [Isolation test](#isolation-test), [Injection point](#injection-point)
+
+### Temporary file
+
+**Aliases:** temp file, `temp_tablespaces`, `temp_file_limit`, `log_temp_files`, `BufFile`, `pgsql_tmp`. **Checked on:** PostgreSQL 17.
+
+A temporary file is a scratch file that a backend writes when working data does not fit in memory. It is not a temporary table. Most users go through the `BufFile` layer: the logical tapes of a [tuplesort](#tuplesort) that spills to disk, the batch files of a [hash join](#hash-join), tuplestores, and the node buffers of a buffered [GiST build](#gist-build-method) ([buffile.c:12-42](../raw/postgres-17/src/backend/storage/file/buffile.c#L12-L42), [logtape.c:3-7](../raw/postgres-17/src/backend/utils/sort/logtape.c#L3-L7), [logtape.c:585-595](../raw/postgres-17/src/backend/utils/sort/logtape.c#L585-L595), [nodeHashjoin.c:1334-1342](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L1334-L1342), [tuplestore.c:811-821](../raw/postgres-17/src/backend/utils/sort/tuplestore.c#L811-L821), [gistbuildbuffers.c:53-57](../raw/postgres-17/src/backend/access/gist/gistbuildbuffers.c#L53-L57)). `OpenTemporaryFile()` creates the file in a `pgsql_tmp` directory and marks it for deletion when it is closed. Unless the caller asked for a file that outlives the transaction, that happens at the end of the transaction at the latest ([fd.c#OpenTemporaryFile](../raw/postgres-17/src/backend/storage/file/fd.c#L1709-L1773), [fd.c#TempTablespacePath](../raw/postgres-17/src/backend/storage/file/fd.c#L1775-L1797), [file_utils.h:62-63](../raw/postgres-17/src/include/common/file_utils.h#L62-L63)).
+
+Three settings govern these files. `temp_tablespaces` lists the [tablespaces](#tablespace) to use. Its default is an empty string, which puts temporary files in the database's default tablespace ([fd.c:1737-1763](../raw/postgres-17/src/backend/storage/file/fd.c#L1737-L1763), [config.sgml#guc-temp-tablespaces](../raw/postgres-17/doc/src/sgml/config.sgml#L9203-L9250)). It has context `user`, so a session or transaction can `SET` it with no reload or restart ([guc_tables.c#temp_tablespaces](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4148-L4157)). `temp_file_limit` caps the total size of all temporary files that one process holds at any instant. A write that would pass the cap fails with "temporary file size exceeds temp_file_limit". The default, -1, means no limit ([fd.c:2211-2237](../raw/postgres-17/src/backend/storage/file/fd.c#L2211-L2237), [fd.c:233-239](../raw/postgres-17/src/backend/storage/file/fd.c#L233-L239), [guc_tables.c#temp_file_limit](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2504-L2513), [config.sgml#guc-temp-file-limit](../raw/postgres-17/doc/src/sgml/config.sgml#L2284-L2309)). `log_temp_files` logs a file's path and size when the file is deleted. The default, -1, logs nothing; 0 logs every file; a positive value logs files of at least that many kilobytes ([fd.c#ReportTemporaryFileUsage](../raw/postgres-17/src/backend/storage/file/fd.c#L1524-L1539), [guc_tables.c#log_temp_files](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3554-L3563), [config.sgml#guc-log-temp-files](../raw/postgres-17/doc/src/sgml/config.sgml#L7957-L7979)). `temp_file_limit` and `log_temp_files` have context `superuser`: a role allowed to change them can `SET` them for a session or transaction, with no reload or restart. Each deleted file is also added to the database's `temp_files` and `temp_bytes` counters while `track_counts` is on ([pgstat_database.c#pgstat_report_tempfile](../raw/postgres-17/src/backend/utils/activity/pgstat_database.c#L171-L185), [guc_tables.c#track_counts](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1411-L1419)).
+
+Related: [Tuplesort](#tuplesort), [work_mem](#work_mem), [maintenance_work_mem](#maintenance_work_mem), [Tablespace](#tablespace), [Hash join](#hash-join), [GiST build method](#gist-build-method), [GUC context](#guc-context), [Cumulative statistics](#cumulative-statistics)
 
 ### TID
 
@@ -4234,7 +4314,7 @@ Tuplesort is PostgreSQL's general sorting module ([tuplesort.c:6-12](../raw/post
 - PostgreSQL 18: Holds: the merge is a balanced k-way merge, with the variants in `tuplesortvariants.c` ([tuplesort.c:15-16](../raw/postgres-18/src/backend/utils/sort/tuplesort.c#L15-L16), [tuplesortvariants.c:359](../raw/postgres-18/src/backend/utils/sort/tuplesortvariants.c#L359)).
 - PostgreSQL 19: Differs: an in-memory sort, including the sort of each run, uses a radix sort instead of quicksort when the leading key compares as an integer and there are at least 40 tuples. `EXPLAIN` still reports the method as `quicksort` ([tuplesort.c:26-29](../raw/postgres-19/src/backend/utils/sort/tuplesort.c#L26-L29), [tuplesort.c#tuplesort_sort_memtuples](../raw/postgres-19/src/backend/utils/sort/tuplesort.c#L3006-L3021), [tuplesort.c:524](../raw/postgres-19/src/backend/utils/sort/tuplesort.c#L524), [tuplesort.c#tuplesort_method_name](../raw/postgres-19/src/backend/utils/sort/tuplesort.c#L2440-L2456)). The balanced k-way merge and `tuplesortvariants.c` are as in 17 ([tuplesort.c:15-16](../raw/postgres-19/src/backend/utils/sort/tuplesort.c#L15-L16), [tuplesortvariants.c:360](../raw/postgres-19/src/backend/utils/sort/tuplesortvariants.c#L360)).
 
-Related: [work_mem](#work_mem), [maintenance_work_mem](#maintenance_work_mem), [B-tree](#b-tree), [EXPLAIN](#explain)
+Related: [work_mem](#work_mem), [maintenance_work_mem](#maintenance_work_mem), [B-tree](#b-tree), [EXPLAIN](#explain), [Temporary file](#temporary-file), [Parallel index build](#parallel-index-build)
 
 ### Two-phase commit
 
@@ -4343,6 +4423,18 @@ A varlena is PostgreSQL's layout for variable-length values such as `text` and `
 - PostgreSQL 19: Differs in spelling. `varlena` is a typedef, not only `struct varlena`, and `VARSIZE_ANY_EXHDR` and similar helpers are inline functions in `varatt.h` ([c.h#varlena](../raw/postgres-19/src/include/c.h#L769-L796), [varatt.h:157-170](../raw/postgres-19/src/include/varatt.h#L157-L170), [varatt.h:472](../raw/postgres-19/src/include/varatt.h#L472)).
 
 Related: [TOAST](#toast), [Tuple](#tuple), [Datum](#datum)
+
+### Virtual transaction ID
+
+**Aliases:** VXID, `VirtualTransactionId`, `vxid`, `virtualxid`, `VirtualXactLock`, `localTransactionId`. **Checked on:** PostgreSQL 17.
+
+A virtual transaction ID (VXID) identifies a running top-level transaction without using up a permanent [transaction ID](#transaction-id). It is the pair of the backend's proc number and a counter local to that backend, written like `4/12532` ([xact.sgml:25-35](../raw/postgres-17/doc/src/sgml/xact.sgml#L25-L35), [lock.h:43-63](../raw/postgres-17/src/include/storage/lock.h#L43-L63)). Every transaction gets one when it starts. An XID is assigned only when the transaction first writes, so a read-only transaction has a VXID and no XID ([xact.c:2117-2135](../raw/postgres-17/src/backend/access/transam/xact.c#L2117-L2135), [xact.sgml:37-48](../raw/postgres-17/doc/src/sgml/xact.sgml#L37-L48), [xact.sgml:86-94](../raw/postgres-17/doc/src/sgml/xact.sgml#L86-L94)). VXIDs are unique only over the short term and are never stored on disk ([lock.h:43-49](../raw/postgres-17/src/include/storage/lock.h#L43-L49)).
+
+Each transaction holds an exclusive [heavyweight lock](#heavyweight-lock) on its own VXID for as long as it runs ([system-views.sgml:1566-1576](../raw/postgres-17/doc/src/sgml/system-views.sgml#L1566-L1576), [lock.c#VirtualXactLockTableInsert](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L4419-L4451)). That lock is how one backend waits for another transaction to end when it cannot rely on an XID: `VirtualXactLock(vxid, true)` requests a share lock on the VXID, and the request is granted only once the holder's transaction is over ([lock.c#VirtualXactLock](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L4550-L4663)). Two functions return lists of VXIDs for this purpose. `GetLockConflicts()` returns the transactions that hold a lock conflicting with a given lock mode on an object. `GetCurrentVirtualXIDs()` returns the VXIDs of other backends, filtered by arguments such as an xmin limit, the database and a mask of status flags ([lock.c#GetLockConflicts](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L2884-L2904), [procarray.c#GetCurrentVirtualXIDs](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L3296-L3378)). `CREATE INDEX CONCURRENTLY` uses the first to wait out writers and the second to wait out old [snapshots](#snapshot) ([lmgr.c#WaitForLockersMultiple](../raw/postgres-17/src/backend/storage/lmgr/lmgr.c#L889-L973), [indexcmds.c#WaitForOlderSnapshots](../raw/postgres-17/src/backend/commands/indexcmds.c#L396-L497)).
+
+A transaction can outlive its VXID by being prepared for [two-phase commit](#two-phase-commit). `VirtualXactLock()` therefore also waits on the XID that the transaction acquired, including the XID of a prepared transaction that was known by that VXID before `PREPARE TRANSACTION` ([lock.c:4586-4599](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L4586-L4599), [lock.c#XactLockForVirtualXact](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L4497-L4548), [lock.c:4645-4662](../raw/postgres-17/src/backend/storage/lmgr/lock.c#L4645-L4662)).
+
+Related: [Transaction ID](#transaction-id), [Heavyweight lock](#heavyweight-lock), [ProcArray](#procarray), [Snapshot](#snapshot), [CONCURRENTLY](#concurrently), [Two-phase commit](#two-phase-commit), [PROC_IN_SAFE_IC](#proc_in_safe_ic), [Session-level lock](#session-level-lock)
 
 ### Visibility map
 
@@ -5296,7 +5388,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (510 files):
+**PostgreSQL 17** (522 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -5389,6 +5481,7 @@ One representative citation per cited source file, grouped by version:
 - [storage.sgml:313-315](../raw/postgres-17/doc/src/sgml/storage.sgml#L313-L315)
 - [system-views.sgml#view-pg-settings](../raw/postgres-17/doc/src/sgml/system-views.sgml#L3334-L3374)
 - [wal.sgml:495-509](../raw/postgres-17/doc/src/sgml/wal.sgml#L495-L509)
+- [xact.sgml:25-35](../raw/postgres-17/doc/src/sgml/xact.sgml#L25-L35)
 - [xfunc.sgml:3408-3414](../raw/postgres-17/doc/src/sgml/xfunc.sgml#L3408-L3414)
 - [xindex.sgml#xindex](../raw/postgres-17/doc/src/sgml/xindex.sgml#L3-L32)
 - [meson.build#bison_kw](../raw/postgres-17/meson.build#L353-L356)
@@ -5397,6 +5490,7 @@ One representative citation per cited source file, grouped by version:
 - [brin.c:289](../raw/postgres-17/src/backend/access/brin/brin.c#L289)
 - [relation.c:42-43](../raw/postgres-17/src/backend/access/common/relation.c#L42-L43)
 - [reloptions.c#fillfactor](../raw/postgres-17/src/backend/access/common/reloptions.c#L174-L194)
+- [syncscan.c:6-32](../raw/postgres-17/src/backend/access/common/syncscan.c#L6-L32)
 - [gin/README:8-26](../raw/postgres-17/src/backend/access/gin/README#L8-L26)
 - [ginfast.c](../raw/postgres-17/src/backend/access/gin/ginfast.c#L1-L7)
 - [ginget.c:1961-1962](../raw/postgres-17/src/backend/access/gin/ginget.c#L1961-L1962)
@@ -5407,6 +5501,7 @@ One representative citation per cited source file, grouped by version:
 - [gist/README:1-25](../raw/postgres-17/src/backend/access/gist/README#L1-L25)
 - [gist.c:79](../raw/postgres-17/src/backend/access/gist/gist.c#L79)
 - [gistbuild.c:888-891](../raw/postgres-17/src/backend/access/gist/gistbuild.c#L888-L891)
+- [gistbuildbuffers.c:53-57](../raw/postgres-17/src/backend/access/gist/gistbuildbuffers.c#L53-L57)
 - [gistget.c#gistcanreturn](../raw/postgres-17/src/backend/access/gist/gistget.c#L785-L801)
 - [gistutil.c#gistPageRecyclable](../raw/postgres-17/src/backend/access/gist/gistutil.c#L885-L908)
 - [gistvacuum.c#gistdeletepage](../raw/postgres-17/src/backend/access/gist/gistvacuum.c#L640-L656)
@@ -5436,6 +5531,7 @@ One representative citation per cited source file, grouped by version:
 - [nbtsplitloc.c#_bt_findsplitloc](../raw/postgres-17/src/backend/access/nbtree/nbtsplitloc.c#L86-L102)
 - [nbtutils.c#_bt_allequalimage](../raw/postgres-17/src/backend/access/nbtree/nbtutils.c#L5129-L5140)
 - [spgist/README:1-12](../raw/postgres-17/src/backend/access/spgist/README#L1-L12)
+- [spginsert.c#spgbuildempty](../raw/postgres-17/src/backend/access/spgist/spginsert.c#L150-L177)
 - [spgscan.c#spgcanreturn](../raw/postgres-17/src/backend/access/spgist/spgscan.c#L1082-L1095)
 - [spgutils.c:64](../raw/postgres-17/src/backend/access/spgist/spgutils.c#L64)
 - [spgvacuum.c#vacuumRedirectAndPlaceholder](../raw/postgres-17/src/backend/access/spgist/spgvacuum.c#L569-L590)
@@ -5592,6 +5688,7 @@ One representative citation per cited source file, grouped by version:
 - [buffer/README:12-26](../raw/postgres-17/src/backend/storage/buffer/README#L12-L26)
 - [bufmgr.c:15-29](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L15-L29)
 - [freelist.c#ClockSweepTick](../raw/postgres-17/src/backend/storage/buffer/freelist.c#L103-L125)
+- [buffile.c:12-42](../raw/postgres-17/src/backend/storage/file/buffile.c#L12-L42)
 - [fd.c#pg_fsync](../raw/postgres-17/src/backend/storage/file/fd.c#L385-L389)
 - [freespace.c:16-20](../raw/postgres-17/src/backend/storage/freespace/freespace.c#L16-L20)
 - [indexfsm.c#RecordFreeIndexPage](../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L48-L55)
@@ -5607,6 +5704,7 @@ One representative citation per cited source file, grouped by version:
 - [lwlock.c:1170](../raw/postgres-17/src/backend/storage/lmgr/lwlock.c#L1170)
 - [proc.c:1295-1307](../raw/postgres-17/src/backend/storage/lmgr/proc.c#L1295-L1307)
 - [bufpage.c:315](../raw/postgres-17/src/backend/storage/page/bufpage.c#L315)
+- [bulk_write.c:3-25](../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L3-L25)
 - [md.c#register_dirty_segment](../raw/postgres-17/src/backend/storage/smgr/md.c#L1359-L1369)
 - [smgr.c:1-12](../raw/postgres-17/src/backend/storage/smgr/smgr.c#L1-L12)
 - [sync.c:573-603](../raw/postgres-17/src/backend/storage/sync/sync.c#L573-L603)
@@ -5620,6 +5718,7 @@ One representative citation per cited source file, grouped by version:
 - [backend_progress.c#pgstat_progress_update_param](../raw/postgres-17/src/backend/utils/activity/backend_progress.c#L42-L62)
 - [backend_status.c#BackendStatusShmemSize](../raw/postgres-17/src/backend/utils/activity/backend_status.c#L95-L97)
 - [pgstat.c#pgstat_before_server_shutdown](../raw/postgres-17/src/backend/utils/activity/pgstat.c#L455-L488)
+- [pgstat_database.c#pgstat_report_tempfile](../raw/postgres-17/src/backend/utils/activity/pgstat_database.c#L171-L185)
 - [pgstat_io.c header](../raw/postgres-17/src/backend/utils/activity/pgstat_io.c#L1-L8)
 - [pgstat_relation.c:568-580](../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L568-L580)
 - [pgstat_shmem.c#StatsShmemInit](../raw/postgres-17/src/backend/utils/activity/pgstat_shmem.c#L169-L184)
@@ -5652,8 +5751,10 @@ One representative citation per cited source file, grouped by version:
 - [rls.c#check_enable_rls](../raw/postgres-17/src/backend/utils/misc/rls.c#L75-L88)
 - [mmgr/README:9-49](../raw/postgres-17/src/backend/utils/mmgr/README#L9-L49)
 - [dsa.c:3-16](../raw/postgres-17/src/backend/utils/mmgr/dsa.c#L3-L16)
+- [logtape.c:3-7](../raw/postgres-17/src/backend/utils/sort/logtape.c#L3-L7)
 - [tuplesort.c:6-12](../raw/postgres-17/src/backend/utils/sort/tuplesort.c#L6-L12)
 - [tuplesortvariants.c:352](../raw/postgres-17/src/backend/utils/sort/tuplesortvariants.c#L352)
+- [tuplestore.c:811-821](../raw/postgres-17/src/backend/utils/sort/tuplestore.c#L811-L821)
 - [snapmgr.c#GetTransactionSnapshot](../raw/postgres-17/src/backend/utils/time/snapmgr.c#L246-L282)
 - [initdb.c:167](../raw/postgres-17/src/bin/initdb/initdb.c#L167)
 - [pg_basebackup.c:2001-2009](../raw/postgres-17/src/bin/pg_basebackup/pg_basebackup.c#L2001-L2009)
@@ -5686,6 +5787,7 @@ One representative citation per cited source file, grouped by version:
 - [xlog.h#XLogHintBitIsNeeded](../raw/postgres-17/src/include/access/xlog.h#L110-L118)
 - [xlog_internal.h#XLogFileName](../raw/postgres-17/src/include/access/xlog_internal.h#L164-L170)
 - [xlogdefs.h#XLogRecPtr](../raw/postgres-17/src/include/access/xlogdefs.h#L17-L21)
+- [xlogrecord.h:241](../raw/postgres-17/src/include/access/xlogrecord.h#L241)
 - [c.h#TYPEALIGN](../raw/postgres-17/src/include/c.h#L808-L828)
 - [genbki.h:23](../raw/postgres-17/src/include/catalog/genbki.h#L23)
 - [index.h:21](../raw/postgres-17/src/include/catalog/index.h#L21)
@@ -5725,6 +5827,7 @@ One representative citation per cited source file, grouped by version:
 - [event_trigger.h#AT_REWRITE](../raw/postgres-17/src/include/commands/event_trigger.h#L36-L43)
 - [progress.h:1-25](../raw/postgres-17/src/include/commands/progress.h#L1-L25)
 - [trigger.h:41-42](../raw/postgres-17/src/include/commands/trigger.h#L41-L42)
+- [file_utils.h:62-63](../raw/postgres-17/src/include/common/file_utils.h#L62-L63)
 - [relpath.h#ForkNumber](../raw/postgres-17/src/include/common/relpath.h#L47-L62)
 - [executor.h#ExecQual](../raw/postgres-17/src/include/executor/executor.h#L407-L417)
 - [hashjoin.h:95-121](../raw/postgres-17/src/include/executor/hashjoin.h#L95-L121)
@@ -5764,6 +5867,7 @@ One representative citation per cited source file, grouped by version:
 - [buf_internals.h#BufferDesc](../raw/postgres-17/src/include/storage/buf_internals.h#L245-L256)
 - [bufmgr.h:156-163](../raw/postgres-17/src/include/storage/bufmgr.h#L156-L163)
 - [bufpage.h#Page](../raw/postgres-17/src/include/storage/bufpage.h#L22-L28)
+- [bulk_write.h:33-39](../raw/postgres-17/src/include/storage/bulk_write.h#L33-L39)
 - [itemid.h#ItemIdData](../raw/postgres-17/src/include/storage/itemid.h#L17-L30)
 - [itemptr.h#ItemPointerData](../raw/postgres-17/src/include/storage/itemptr.h#L20-L40)
 - [lock.h#LOCKTAG](../raw/postgres-17/src/include/storage/lock.h#L164-L172)

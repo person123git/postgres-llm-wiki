@@ -16,6 +16,10 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-07: **review and fix v17**, [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17 (unverified)](v17/questions/indexing/create-index-concurrently.md), at unchanged pin `786db8dcf168` (17.11).
+  - Fixed all 36 findings of the same day's review. Seven statements contradicted the pin: which backend `PROC_IN_SAFE_IC` exempts, the commit of transaction 3 (normally no transaction ID, so no flush and no standby wait), `deadlock_timeout` and the autovacuum cancel, the worker count the `pageinspect` BRIN test allows, the commit behind the `MyProc->xmin` assertion, the meaning of `indislive`, and the reading of the `multiple-cic` test. The Answer is now organized as a mental model, a logic map, state and lock tables, worked calculations and causal summaries, and the "what changed from PostgreSQL 12" table has fifteen rows, each tied to a commit in the v17 checkout's history.
+  - The page reports no measured numbers and no server was started. The shared glossary gained eight entries checked on PostgreSQL 17 only (Bulk writer, commit_delay, Parallel index build, PROC_IN_SAFE_IC, Session-level lock, Synchronized scan, Temporary file, Virtual transaction ID), for 329 terms. Verification remains `not yet`.
+
 - 2026-10-01: **focused review fixes v17**, [How the PostgreSQL 17 Query Planner Works: A Comprehensive Tutorial (unverified)](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), at unchanged pin `786db8dcf168` (17.11).
   - Fixed all seven tutorial findings and the linked Path glossary issue. Aligned the maps, comparison tables, coverage matrix and evidence map; qualified LATERAL physical execution and JIT guards in the shared glossary with matching-version evidence.
   - The script changed only in repeatability comments; SQL, fixture inputs and numerical excerpts are unchanged. No measurements were re-run; the script-freshness warning and `verified_by_agent: not yet` remain.
