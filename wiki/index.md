@@ -5,7 +5,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 ## Entry Points
 
 - [versions](versions.md) - PostgreSQL version index and source pin manifest.
-- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 329 terms).
+- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 332 terms).
 - [overview](overview.md) - Cross-version architecture overview.
 - [log](log.md) - Chronological activity log.
 
@@ -101,6 +101,10 @@ This is the global catalog for the PostgreSQL engine wiki.
 #### Replication and WAL
 
 - [How Bi-Directional Logical Replication Works in PostgreSQL 17, and All Related Commits by Minor Version (unverified)](v17/questions/replication-and-wal/bidirectional-logical-replication.md) - Explains how two v17 nodes replicate to each other without loops: subscriptions created with `origin = none` make the publisher's `pgoutput` origin filter skip WAL changes that carry a replication origin ID, which is exactly the tag every apply worker stamps on the transactions it replays; covers the subscription `origin` parameter and `pg_subscription.suborigin`, WAL origin tagging (`XLOG_INCLUDE_ORIGIN` -> `XLogRecordAssemble`), decode-time filtering (`pgoutput_origin_filter`, `DecodeTXNNeedSkip`), the initial-sync `copy_data`/`origin = none` WARNING, setup pattern, and limitations (manual conflicts, no DDL/sequence replication); plus the complete related commit history grouped by minor version: 16-cycle feature commits, the 17.0 filter-state fix, the 17.5 partition-aware WARNING fix, and the 17.10 CVE-2026-6638 SQL-injection fix, with foundations, incidental, and adjacent commits listed separately.
+
+#### Observability
+
+- [Reading EXPLAIN (ANALYZE, BUFFERS, SETTINGS) to Find Missing, Unusable and Bloated Indexes in PostgreSQL 17 (unverified)](v17/questions/observability/explain-analyze-buffers-settings-tutorial.md) - A measured tutorial on reading the three options together at the 17.11 pin: where every number comes from (planner estimates against executor measurements), per-loop averages against totals, what increments each `Buffers` counter (hits per pin, `read` as a shared-buffer miss the OS page cache may serve, ring buffers, bulk-written new indexes, planning buffers from histogram-endpoint probes), and how `Settings:` lists only `GUC_EXPLAIN` settings that differ from their boot values. A decision procedure separates a missing index, an index the predicate cannot match (casts, a `numeric` literal), an invalid index, an index usable but not chosen, and index bloat, each with captured plans. The bloat scenarios follow the Mandatory B-Tree Bloat Tests phases with clean maintenance proofs (including a new missed-cleanup-lock check) and a `REINDEX INDEX` oracle: sparse leaves and deleted pages both priced at 2,466 index pages for a 90 % range, so the planner chose a 7,353-buffer Seq Scan over an Index Only Scan that read 249 buffers once rebuilt, with worked cost arithmetic matching `EXPLAIN` to the cent; a fillfactor-50 control shows the false-positive trap (1.8 times the buffers per entry, 0 % reclaimable). One staged Bash and SQL script, run end to end in 74 seconds.
 
 #### Server Administration
 
