@@ -1,7 +1,7 @@
 ---
 type: question
 version: 19
-pinned_commit: dae3463fa969931458f1488f9b7af11e3741cd54
+pinned_commit: 1ecc48b9bcc377df867de3957d3abfbe5c14c2f9
 verified: false
 verified_by_agent: not yet
 ---
@@ -41,6 +41,8 @@ The asker chose two scope answers before drafting:
 
 - **No fetch.** `raw/postgres-19` is a shallow clone, and the asker chose to file without deepening it. The 2018 and 2019 commits below are listed as this clone's older release tags reach them. Their ancestry to the pin, and the master commits the clone cannot see, are recorded under [Open Questions](#open-questions).
 - **Glossary.** Ten new glossary terms were added, each checked on PostgreSQL 19 only.
+
+Repin note (2026-10-09): the page is now pinned to `1ecc48b9bcc`. On the host that made this repin, `raw/postgres-19` is a full clone, not a shallow one; see the last [Context Reviewed](#context-reviewed) item and the first [Open Questions](#open-questions) item.
 
 ## Answer
 
@@ -215,7 +217,7 @@ Nine follow-ups came after the 19beta3 stamp, so no beta carried them with the f
 | `dff11f846c4` | 2026-07-09 | Fujii Masao | doc: Fix data checksum progress reporting documentation | Added `pg_stat_progress_data_checksums` to the [progress reporting](../../../glossary.md#progress-reporting) summary and documented its counters as `bigint`. | no | beta2 |
 | `9d1d91a1433` | 2026-07-10 | Fujii Masao | Fix data checksum progress counter initialization | Counters start at -1 (shown as NULL) instead of 0. `blocks_done` resets for each fork. | no | beta2 |
 | `c479ea58e77` | 2026-07-10 | Fujii Masao | Fix data checksum processing for temp relations and dropped databases | Waits only for temporary relations that have storage. Shared catalogs count as processed only after a worker succeeds. Before this, a dropped database could let enabling finish without processing them. | no | beta2 |
-| `e3a27cad462` | 2026-07-16 | Gustafsson | doc: Fix link text for data checksums | Repaired link text that `67846550dc6` broke, in `storage.sgml`, `config.sgml` and `amcheck.sgml`; back-patched through 18. The revert names it, but all four added lines survive ([storage.sgml:800](../../../../raw/postgres-19/doc/src/sgml/storage.sgml#L800), [config.sgml:13266](../../../../raw/postgres-19/doc/src/sgml/config.sgml#L13266), [amcheck.sgml:424](../../../../raw/postgres-19/doc/src/sgml/amcheck.sgml#L424)). | yes | beta3 |
+| `e3a27cad462` | 2026-07-16 | Gustafsson | doc: Fix link text for data checksums | Repaired link text that `67846550dc6` broke, in `storage.sgml`, `config.sgml` and `amcheck.sgml`; back-patched through 18. The revert names it, but all four added lines survive ([storage.sgml:800](../../../../raw/postgres-19/doc/src/sgml/storage.sgml#L800), [config.sgml:13267](../../../../raw/postgres-19/doc/src/sgml/config.sgml#L13267), [amcheck.sgml:424](../../../../raw/postgres-19/doc/src/sgml/amcheck.sgml#L424)). | yes | beta3 |
 | `3aa54433b0c` | 2026-07-17 | Fujii Masao | Restrict pg_stat_io entries for data checksum processes | Taught `pgstat_tracks_io_object()` and `pgstat_tracks_io_op()` which I/O the launcher and workers can do, so [pg_stat_io](../../../glossary.md#pg_stat_io) drops rows that can never fill. | no | beta3 |
 | `2b6e7c0a7db` | 2026-07-21 | Peter Eisentraut | pg_upgrade: Message wording fix | Reworded a [pg_upgrade](../../../glossary.md#pg_upgrade) refusal to "data checksums are being enabled in the old cluster". The check fires for either in-progress state, since it tests `data_checksum_version > PG_DATA_CHECKSUM_VERSION` (`c05d5ce1236^:src/bin/pg_upgrade/controldata.c:740-746`). | no | beta3 |
 | `9eb77f9fc80` | 2026-07-28 | Gustafsson; Zsolt Parragi | Recheck checksum state before file_copy during CREATE DATABASE | Rechecks the state in `CreateDatabaseUsingFileCopy()` after an XID exists. Adds the injection point `createdb-before-catalog-insert`, which survives the revert. | no | beta3 |
@@ -375,6 +377,7 @@ These commits matched a search but are not part of the feature.
 - Glossary entries reviewed: Data checksums, Page, WAL, Full-page image, Checkpoint, Background worker, Hot standby, Crash recovery, Fork, Relcache, Injection point, TAP test, Isolation test, Progress reporting, pg_stat_io, pg_upgrade, LWLock, OID, Critical section, Vacuum cost delay and Hint bits. Ten entries were added (see the log).
 - Common concepts: PostgreSQL 19 has no `common-concepts/` pages, so none is linked.
 - No server was started and nothing was measured.
+- 2026-10-09 repin, range `dae3463fa96..1ecc48b9bcc` (99 commits, `REL_19_BETA4-116-g1ecc48b9bcc`): no commit message in the range matches `checksum`: on the full clone, `git log -i --grep=checksum` returns 238 commits at both `dae3463fa96` and the new pin (the filing-time count of 68 was taken on the shallow clone). Three commits touch a file this page cites, and none changes a claim: `d26295f12ee` edits the `log_line_prefix` text in `config.sgml`, `3f5bfbce4c4` changes the `EnableLogicalDecoding()` call in `xlog_redo()`, and `720d03d59bc` adds the release notes' acknowledgments list. All 107 citations are byte-identical at their shifted ranges; `checksum.h`, `bufpage.c`, `pg_control.h`, and `pg_checksums` are unchanged across the range. The repinning host's checkout is not shallow (`git rev-list --count HEAD` is 65,275), so the shallow-clone facts above describe the filing environment; the commit list was not rebuilt against the full history (see [Open Questions](#open-questions)).
 
 ## Evidence Map
 
@@ -396,7 +399,7 @@ These commits matched a search but are not part of the feature.
 | `PG_CONTROL_VERSION` 1901 to 1902 to 1903 to 1905 | `git log -G'define PG_CONTROL_VERSION'`; [pg_control.h:25](../../../../raw/postgres-19/src/include/catalog/pg_control.h#L25) |
 | `XLOG_PAGE_MAGIC` 0xD121 to 0xD122 | `4a9a6c5a69c` diff; [xlog_internal.h:35](../../../../raw/postgres-19/src/include/access/xlog_internal.h#L35) |
 | Checksum-failure counts NULL again when off | `f19c0eccae9` `pgstatfuncs.c` hunk; [pgstatfuncs.c#pg_stat_get_db_checksum_failures](../../../../raw/postgres-19/src/backend/utils/adt/pgstatfuncs.c#L1178-L1194); `6b0760a10a3` |
-| The `e3a27cad462` fixes survive despite being named | [storage.sgml:800](../../../../raw/postgres-19/doc/src/sgml/storage.sgml#L800), [config.sgml:13266](../../../../raw/postgres-19/doc/src/sgml/config.sgml#L13266), [amcheck.sgml:424](../../../../raw/postgres-19/doc/src/sgml/amcheck.sgml#L424) |
+| The `e3a27cad462` fixes survive despite being named | [storage.sgml:800](../../../../raw/postgres-19/doc/src/sgml/storage.sgml#L800), [config.sgml:13267](../../../../raw/postgres-19/doc/src/sgml/config.sgml#L13267), [amcheck.sgml:424](../../../../raw/postgres-19/doc/src/sgml/amcheck.sgml#L424) |
 | Leftover injection point | [dbcommands.c:1507](../../../../raw/postgres-19/src/backend/commands/dbcommands.c#L1507); `9eb77f9fc80`; the `grep -rn` absence check |
 | Offline path at the pin | [pg_checksums.c:1-5](../../../../raw/postgres-19/src/bin/pg_checksums/pg_checksums.c#L1-L5), [pg_checksums.c:584-598](../../../../raw/postgres-19/src/bin/pg_checksums/pg_checksums.c#L584-L598), [initdb.c:167](../../../../raw/postgres-19/src/bin/initdb/initdb.c#L167) |
 
@@ -407,6 +410,8 @@ These commits matched a search but are not part of the feature.
   - Master commits between the `REL_18_STABLE` branch point and 2025-08-07 were never searched, so a feature-related commit there would be missing from this page.
 
   The asker chose not to fetch. `git -C raw/postgres-19 fetch --unshallow origin REL_19_STABLE`, followed by the searches in [Context Reviewed](#context-reviewed), would close both gaps.
+
+  At the 2026-10-09 repin to `1ecc48b9bcc`, the checkout on the repinning host is a full clone: `git rev-parse --is-shallow-repository` prints `false`, and `466c5435fd4` resolves. On it, `git merge-base --is-ancestor` confirms that all ten commits named in [2018 to 2019: The First Attempt](#2018-to-2019-the-first-attempt) are ancestors of the pin, which closes the first gap. The second gap stays open: the seven searches were not re-run over the newly visible master history, so a feature-related commit there could still be missing.
 - **`78e950cb8`.** The message of `25b922ec582` says this commit "added checksum state handling to all XLOG_CHECKPOINT records". The hash does not resolve in this clone. A blame of the lines `25b922ec582` changed attributes the checkpoint handling to `f19c0eccae9`, so the hash may be one that never reached the public tree. This clone cannot settle it.
 - **`51f55b13a4d`.** The message of `1d28812160d` names this hash for the `DROP DATABASE ... WITH (FORCE)` test, but it is not in this clone. On `REL_19_STABLE` that test arrived with `e469e4784ea`. The local `origin/master` ref stops at 2026-07-27, so a master counterpart from after that date cannot be checked here.
 - **`PG_CONTROL_VERSION` 1904.** The revert moved the version from 1903 to 1905. No commit in this clone's history sets 1904, and the revert message does not explain the skip.
@@ -455,7 +460,7 @@ These commits matched a search but are not part of the feature.
 - [wal.sgml#checksums-offline-enable-disable](../../../../raw/postgres-19/doc/src/sgml/wal.sgml#L271-L282)
 - [monitoring.sgml:3900-3918](../../../../raw/postgres-19/doc/src/sgml/monitoring.sgml#L3900-L3918)
 - [storage.sgml:800](../../../../raw/postgres-19/doc/src/sgml/storage.sgml#L800)
-- [config.sgml:13266](../../../../raw/postgres-19/doc/src/sgml/config.sgml#L13266)
+- [config.sgml:13267](../../../../raw/postgres-19/doc/src/sgml/config.sgml#L13267)
 - [amcheck.sgml:424](../../../../raw/postgres-19/doc/src/sgml/amcheck.sgml#L424)
 - [release-19.sgml:2804-2814](../../../../raw/postgres-19/doc/src/sgml/release-19.sgml#L2804-L2814)
 - [de.po:35408](../../../../raw/postgres-19/src/backend/po/de.po#L35408)
