@@ -45,8 +45,8 @@ enabled, installed, or configured to produce the data.
 Run the health check in layers, and read every result in light of how
 PostgreSQL 12 produced it. First confirm that the server collects the data and
 that your role can see it. Then read live state (sessions, locks, replication),
-cumulative counters, and catalog freeze horizons. Finally, read the server log
-for the same interval.
+cumulative counters, and [catalog](../../../glossary.md#catalog) freeze
+horizons. Finally, read the server log for the same interval.
 
 The order matters because an empty view, a zero counter, or a missing log line
 has several possible meanings. It can mean "healthy", "never collected", "hidden
@@ -78,11 +78,12 @@ The "Freshness and lifetime" column says when a reading can be stale or lost.
 
 | Evidence | What it represents | Live or stored | Freshness and lifetime | Used in |
 |---|---|---|---|---|
-| [`pg_stat_activity`](../../../glossary.md#pg_stat_activity), `pg_locks`, `pg_blocking_pids()`, `pg_stat_progress_vacuum`, `pg_prepared_xacts` | What server processes, locks, and [prepared transactions](../../../glossary.md#two-phase-commit) are doing now | Live shared memory | The activity data is captured on first use in a transaction and reused until the transaction ends. [monitoring.sgml#activity-snapshot](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L242-L251) | Sections 1, 2, 4 |
+| [`pg_stat_activity`](../../../glossary.md#pg_stat_activity) and `pg_stat_progress_vacuum` ([progress reporting](../../../glossary.md#progress-reporting)) | What server processes are doing now | Live shared memory, copied once per transaction | Captured on first use in a transaction and reused until the transaction ends or `pg_stat_clear_snapshot()` runs. [monitoring.sgml#activity-snapshot](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L242-L251) [pgstat.c#pgstat_read_current_status](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3367-L3368) [pgstat.c#AtEOXact_PgStat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L2170-L2171) [pgstat.c#pgstat_clear_snapshot](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5796-L5806) | Sections 1, 4 |
+| `pg_locks`, `pg_blocking_pids()`, `pg_prepared_xacts` | Locks and [prepared transactions](../../../glossary.md#two-phase-commit) now | Live shared memory, read again by every call | Never frozen by the transaction, so a query that joins them to `pg_stat_activity` inside a longer transaction mixes a frozen copy with live data. [lockfuncs.c#pg_lock_status](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L139-L146) [lockfuncs.c#pg_blocking_pids](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L426-L428) [twophase.c#pg_prepared_xact](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L754-L760) | Section 2 |
 | `pg_stat_replication`, `pg_stat_wal_receiver`, `pg_stat_subscription`, `pg_replication_slots` | Current replication processes and slot horizons | Live | Lag columns show recent measurements and revert to NULL after an idle catch-up. [monitoring.sgml#replication-lag](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L1985-L2003) | Section 7 |
 | `pg_stat_database`, `pg_stat_*_tables`, `pg_stat_bgwriter`, `pg_stat_archiver`, `pg_stat_database_conflicts` | Cumulative counters | Stored by the statistics collector | Lag behind activity, are snapshotted per transaction, and are reset by the events in [When counters reset](#when-counters-reset). [monitoring.sgml#statistics-lag-and-snapshots](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L229-L260) | Sections 3, 4, 6, 7 |
 | [`pg_stat_statements`](../../../glossary.md#pg_stat_statements) | Cumulative totals per user, database, and query identifier | Extension shared memory | Read entry by entry, each under its own spinlock, so one read is not an atomic snapshot. [pg_stat_statements.c#view-iteration](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1500-L1615) | Section 8 |
-| `pg_class.relfrozenxid`, `relminmxid`, `pg_database.datfrozenxid`, `datminmxid` | [Freeze](../../../glossary.md#freezing) horizons | Stored catalog state | Move only when VACUUM advances them. [maintenance.sgml#xid-age-queries](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L557-L585) | Section 5 |
+| `pg_class.relfrozenxid`, `relminmxid`, `pg_database.datfrozenxid`, `datminmxid` | [Freeze](../../../glossary.md#freezing) horizons | Stored catalog state | Move only when [VACUUM](../../../glossary.md#vacuum) advances them. [maintenance.sgml#xid-age-queries](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L557-L585) | Section 5 |
 | `pg_settings` | Effective settings in the current session, plus `pending_restart` | Live | A row can be hidden from the reader; see [Who can see what](#who-can-see-what). [guc.c#pg_settings-access](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L8998-L9008) | [Observability prerequisites](#observability-prerequisites) |
 | Server log | Events that happened and passed the severity and threshold filters | Stored log stream | Contains only what the logging settings allowed while the event happened. [config.sgml#server-log-levels](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5877-L5927) | [Database log checklist](#database-log-checklist) |
 
@@ -106,7 +107,7 @@ error. A health query run as the wrong role can therefore look healthy. The
 | Details in `pg_stat_replication` and `pg_stat_wal_receiver` | Shown | Shown | `pid` only | [walsender.c#detail-gate](../../../../raw/postgres-12/src/backend/replication/walsender.c#L3313-L3321) [walreceiver.c#detail-gate](../../../../raw/postgres-12/src/backend/replication/walreceiver.c#L1397-L1405) |
 | `pg_ls_waldir()` and `pg_ls_archive_statusdir()` | Allowed | Allowed | `permission denied for function` | [system_views.sql#monitor-file-functions](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1320-L1347) |
 | [`pgstattuple`](../../../glossary.md#pgstattuple) and [`pgstatindex`](../../../glossary.md#pgstatindex) | Allowed | Allowed, through `pg_stat_scan_tables` | Not granted | [pgstattuple--1.4--1.5.sql#scan-role-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L6-L119) |
-| `pg_subscription.oid` | Allowed | `permission denied for table pg_subscription` | `permission denied for table pg_subscription` | [system_views.sql#pg_subscription-column-grants](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1059-L1062) [pg_subscription.h#oid](../../../../raw/postgres-12/src/include/catalog/pg_subscription.h#L41) [execMain.c#column-privileges](../../../../raw/postgres-12/src/backend/executor/execMain.c#L676-L692) |
+| `pg_subscription.oid` | Allowed | `permission denied for table pg_subscription` | `permission denied for table pg_subscription` | [system_views.sql#pg_subscription-column-grants](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1059-L1062) [pg_subscription.h:41](../../../../raw/postgres-12/src/include/catalog/pg_subscription.h#L41) [execMain.c#column-privileges](../../../../raw/postgres-12/src/backend/executor/execMain.c#L676-L692) |
 
 Three consequences follow, and the first two catch ordinary roles quietly.
 
@@ -115,9 +116,15 @@ Three consequences follow, and the first two catch ordinary roles quietly.
    another role's `VACUUM` as a row with only `pid` and `datname`.
    [pgstatfuncs.c#pg_stat_get_progress_info-access](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L516-L532)
 2. `backend_type` is one of the redacted fields. Without `pg_read_all_stats`,
-   the connection-capacity query in section 1 counts only the reader's own
-   client backends, and the long-transaction query drops other users' rows
-   because their `xact_start` is NULL.
+   the connection-capacity query in section 1 counts only the client backends
+   of roles whose privileges the reader has, and the long-transaction query
+   drops the other rows because their `xact_start` is NULL. Only client
+   backends, [WAL senders](../../../glossary.md#wal-sender), and background
+   workers record a user. Every other
+   process, such as an autovacuum worker or the checkpointer, records none, so
+   an ordinary reader never has its privileges and its row is redacted too.
+   [pgstat.c#pgstat_bestart-userid](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L2961-L2967)
+   [pgstatfuncs.c#activity-access](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L653-L656)
    [pgstatfuncs.c#activity-redaction](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L885-L911)
 3. PostgreSQL 12 grants PUBLIC only six columns of `pg_subscription`, and `oid`
    is not one of them. The executor checks `SELECT` privilege on every column a
@@ -132,7 +139,8 @@ a superuser `VACUUM`, the superuser saw `relid`, phase `scanning heap`, and
 both saw only `pid` and `datname`. Of the three probed settings, the ordinary
 role saw only `archive_command`. In `pg_stat_activity` the ordinary role saw
 all 8 rows but 7 with a NULL `backend_type`, so it counted 1 client backend
-where the superuser counted 2. In `pg_stat_statements` every other-user row
+where the superuser counted 2: of the 7 hidden rows, only 1 was a client
+backend. In `pg_stat_statements` every other-user row
 had a NULL `queryid` and redacted text for the ordinary role, and none did for
 `pg_monitor`. The subscription query filed earlier on this page, which joined
 on `pg_subscription.oid`, failed for `pg_monitor` with `permission denied for
@@ -147,14 +155,14 @@ idle, clean database.
 
 | Event | State before | State after | Effect on later readings | Source |
 |---|---|---|---|---|
-| `pg_stat_reset()` in a database | Accumulated database, table, and function counters | That database's counters and table entries are empty; `stats_reset` is now | Deltas across the reset are invalid; compare `stats_reset` first | [pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6097-L6122) [pgstat.c#reset_dbentry_counters](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4714-L4741) |
+| `pg_stat_reset()` in a database | Accumulated database, table, and function counters | That database's counters are zero and its table and function entries are deleted; `stats_reset` is now | Deltas across the reset are invalid; compare `stats_reset` first. Autovacuum skips every table that has no entry, except for wraparound, until new activity recreates the entry, and then counts only dead rows created after the reset | [pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6097-L6122) [pgstat.c#reset_dbentry_counters](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4708-L4745) [autovacuum.c#no-stats-entry](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3082-L3090) |
 | `pg_stat_reset_shared('bgwriter')` or `('archiver')` | Cluster-wide counters | That view is zero; its `stats_reset` is now | Same as above, for `pg_stat_bgwriter` or `pg_stat_archiver` | [pgstat.c#pgstat_recv_resetsharedcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6134-L6144) |
-| `pg_stat_reset_single_table_counters()` | One table's counters | That table is zero; the database's `stats_reset` is now | The database timestamp moves although other tables kept their history | [pgstat.c#single-counter-reset](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6166-L6172) |
+| `pg_stat_reset_single_table_counters()` | One table's counters | That table's entry is deleted, so it reads zero; the database's `stats_reset` is now | The database timestamp moves although other tables kept their history, and autovacuum skips that table the same way until activity recreates its entry | [pgstat.c#single-counter-reset](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6159-L6177) [autovacuum.c#no-stats-entry](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3082-L3090) |
 | Clean shutdown, then a start that needs no recovery | Counters in the collector | The collector wrote them at exit and reads them at start | Counters continue | [pgstat.c#collector-exit-write](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4674-L4680) [pgstat.c#collector-start-read](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4455-L4461) |
 | Backend crash with the default `restart_after_crash = on`, or `pg_ctl -m immediate` | Counters in the collector | Startup performs recovery and deletes every statistics file; new `stats_reset` values appear when entries are recreated | Every table looks freshly reset. Autovacuum skips a table with no statistics entry except for wraparound, and later counts only post-restart dead rows | [xlog.c#recovery-decision](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6733-L6746) [xlog.c#pgstat_reset_all-call](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6843-L6846) [pgstat.c#pgstat_reset_all](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L680-L690) [pgstat.c#new-reset-timestamps](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5163-L5167) [autovacuum.c#no-stats-entry](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3082-L3090) |
 | Any standby start, including after a clean standby shutdown | The standby's own counters, such as `pg_stat_database_conflicts` | A standby always performs archive recovery at start, so the same wipe happens | Standby conflict history restarts at every start | [xlog.c#recovery-decision](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6733-L6746) |
 | `pg_stat_statements_reset()` or entry eviction | Per-statement totals | Reset entries are gone; eviction discards the least-executed entries when more than `pg_stat_statements.max` statements are seen | A first-only or negative delta means the interval is broken | [pgstatstatements.sgml#reset](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L333-L357) [pgstatstatements.sgml#entry-eviction](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L399-L410) |
-| Clean shutdown or `pg_ctl -m immediate`, with the default `pg_stat_statements.save = on` | Per-statement totals | The postmaster exits with code 0, the module dumps its entries, and the next start reloads them | Statement totals survive although the collector's counters were wiped | [postmaster.c#immediate-shutdown-not-fatal](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3618-L3619) [postmaster.c#normal-exit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3874-L3896) [pg_stat_statements.c#pgss_shmem_shutdown](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L692-L702) [pg_stat_statements.c#load-dump](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L546-L560) |
+| Clean shutdown or `pg_ctl -m immediate`, with the default `pg_stat_statements.save = on` | Per-statement totals | The [postmaster](../../../glossary.md#postmaster) exits with code 0, the module dumps its entries, and the next start reloads them | Statement totals survive although the collector's counters were wiped | [postmaster.c#immediate-shutdown-not-fatal](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3618-L3619) [postmaster.c#normal-exit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3874-L3896) [pg_stat_statements.c#pgss_shmem_shutdown](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L692-L702) [pg_stat_statements.c#load-dump](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L546-L560) |
 | Backend crash with reinitialization | Per-statement totals | The postmaster runs `shmem_exit(1)`, the module skips its dump, and the dump read at the last start was already deleted | Statement totals are lost | [postmaster.c#crash-reinitialize](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3915-L3928) [pg_stat_statements.c#pgss_shmem_shutdown](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L692-L702) [pg_stat_statements.c#remove-dump](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L626-L639) |
 
 Two of these rows depart from what a reader might expect, so their cause is
@@ -191,7 +199,7 @@ ones being true.
    those settings only during `shared_preload_libraries` loading, and an
    unloaded custom setting is a hidden placeholder.
    [pg_stat_statements.c#_PG_init](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L351-L360)
-   [guc.c#placeholder-flags](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4976)
+   [guc.c:4976](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4976)
 2. Choose the monitoring role with [Who can see what](#who-can-see-what). Use a
    superuser for a complete capture on this pin. A `pg_monitor` member can run
    every fenced query on this page, but its progress rows and its view of
@@ -202,7 +210,8 @@ ones being true.
 4. Compare each cumulative result with a previous capture from the same epoch.
    `pg_stat_database`, `pg_stat_bgwriter`, and `pg_stat_archiver` expose reset
    timestamps; the per-table views do not. Check the log for crash recovery or
-   a standby restart in the interval, because either one wipes the counters;
+   a standby restart in the interval, because either one wipes the counters,
+   and check `stats_reset` for a manual reset, which also blinds autovacuum;
    see [When counters reset](#when-counters-reset).
    [monitoring.sgml#DynamicStatisticsViews](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L294-L360)
    [monitoring.sgml#CollectedStatisticsViews](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L386-L425)
@@ -262,12 +271,12 @@ listed in [Defaults that decide what you see](#defaults-that-decide-what-you-see
 | Correlatable log lines | Keep a process ID or session ID in `log_line_prefix`. The default already has the PID, so change it only if it was overridden or you need user, database, or client fields. [config.sgml#log_min_duration_statement](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5956-L5968) [guc.c#log_line_prefix](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3592-L3600) | `PGC_SIGHUP`: reload. |
 | Server-log severity and diagnostic detail | Ensure `log_min_messages` admits the severities you search. In this server-log ranking `LOG` sits above `ERROR`, so the default `warning` already keeps LOG lines. `log_min_error_statement` controls whether an error's SQL text is logged, and `log_error_verbosity` controls detail. [config.sgml#server-log-levels](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5877-L5927) | All three are `PGC_SUSET`: a superuser can `SET` them per session; a cluster default is a configuration-file or `ALTER SYSTEM` change followed by a reload. [guc.c#log-level-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4286-L4316) |
 | Current sessions, transaction age, query text, and waits | Keep `track_activities` enabled. `pg_stat_activity` exposes state, transaction and query start times, waits, query text, and `backend_xmin`. Raise `track_activity_query_size` if 1024 bytes cuts off useful query text. [system_views.sql#pg_stat_activity](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L732-L756) [config.sgml#track_activity_query_size](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6820-L6834) | `track_activities` is `PGC_SUSET`. [`track_activity_query_size`](../../../glossary.md#track_activity_query_size) is `PGC_POSTMASTER`: restart. [guc.c#track_activities](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1381-L1391) [guc.c#track_activity_query_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3164-L3173) |
-| Database and table counters | Keep `track_counts` enabled. It feeds the collected statistics and is required for normal [autovacuum](../../../glossary.md#autovacuum). [config.sgml#track_counts](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6838-L6850) [config.sgml#autovacuum](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6985-L7005) | `PGC_SUSET`. Set it in the configuration file so every session and autovacuum collect. [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1392-L1400) |
+| Database and table counters | Keep `track_counts` enabled. It feeds the collected statistics and is required for normal [autovacuum](../../../glossary.md#autovacuum). A process with it off sends no table counters, no vacuum or analyze reports, and no deadlock, temporary-file, checksum-failure, or recovery-conflict counts, so those columns read 0, not NULL. `pg_stat_bgwriter` and `pg_stat_archiver` are sent without that check and need only the statistics collector. [config.sgml#track_counts](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6838-L6850) [config.sgml#autovacuum](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6985-L7005) [pgstat.c#pgstat_initstats](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1767-L1771) [pgstat.c#pgstat_report_vacuum](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1415-L1416) [pgstat.c#pgstat_report_analyze](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1444-L1445) [pgstat.c#pgstat_report_recovery_conflict](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1495-L1496) [pgstat.c#pgstat_report_deadlock](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1515-L1516) [pgstat.c#pgstat_report_checksum_failures_in_db](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1536-L1537) [pgstat.c#pgstat_report_tempfile](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1570-L1571) [pgstat.c#archiver-and-bgwriter-sends](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4371-L4415) | `PGC_SUSET`. Set it in the configuration file so every session and autovacuum collect. [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1392-L1400) |
 | Database, `EXPLAIN (BUFFERS)`, and `pg_stat_statements` I/O time | Enable `track_io_timing` when the platform's timing overhead is acceptable. It supplies `blk_read_time` and `blk_write_time`. [config.sgml#track_io_timing](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6854-L6871) | `PGC_SUSET`. [guc.c#track_io_timing](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1401-L1409) |
-| Slow statements, lock waits, temp files, checkpoints, autovacuum, connection lifecycle, and replication commands in the log | Configure the matching logging setting. `deadlock_timeout` decides when `log_lock_waits` writes its line and when the deadlock check runs. [config.sgml#log_min_duration_statement](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5931-L5953) [config.sgml#logging-operational-events](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6165-L6222) [config.sgml#lock-and-temp-logging](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6477-L6574) [config.sgml#log_autovacuum_min_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7010-L7033) | `log_checkpoints` and `log_autovacuum_min_duration` are `PGC_SIGHUP`: reload. `log_connections` and `log_disconnections` are `PGC_SU_BACKEND`: a reload updates the postmaster, which passes the value only to sessions started afterwards. The other settings and `deadlock_timeout` are `PGC_SUSET`. [guc.c#logging-booleans](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1252) [guc.c#log_lock_waits](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1489-L1497) [guc.c#deadlock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2062-L2072) [guc.c#logging-thresholds](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2703-L2725) [guc.c#log_temp_files](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3153-L3162) [guc.c#PGC_SU_BACKEND-reload](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6811-L6858) |
+| Slow statements, lock waits, temp files, checkpoints, autovacuum, connection lifecycle, and replication commands in the log | Configure the matching logging setting. Statement durations come from `log_min_duration_statement`, `log_duration`, or `log_transaction_sample_rate`, and `log_statement` logs statement text when a statement starts. `deadlock_timeout` decides when `log_lock_waits` writes its line and when the deadlock check runs. [config.sgml#log_min_duration_statement](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5931-L5953) [config.sgml#log_transaction_sample_rate](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5973-L5998) [config.sgml#log_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6227-L6256) [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2210-L2247) [config.sgml#logging-operational-events](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6165-L6222) [config.sgml#lock-and-temp-logging](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6477-L6574) [config.sgml#log_autovacuum_min_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7010-L7033) | `log_checkpoints` and `log_autovacuum_min_duration` are `PGC_SIGHUP`: reload. `log_connections` and `log_disconnections` are `PGC_SU_BACKEND`: a reload updates the postmaster, which passes the value only to sessions started afterwards. The other settings, including `log_duration`, `log_statement`, and `log_transaction_sample_rate`, and `deadlock_timeout` are `PGC_SUSET`. [guc.c#logging-booleans](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1252) [guc.c#log_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1287-L1295) [guc.c#log_transaction_sample_rate](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3433-L3442) [guc.c#log_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4318-L4326) [guc.c#log_lock_waits](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1489-L1497) [guc.c#deadlock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2062-L2072) [guc.c#logging-thresholds](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2703-L2725) [guc.c#log_temp_files](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3153-L3162) [guc.c#PGC_SU_BACKEND-reload](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6811-L6858) |
 | Per-statement workload totals | Install the PostgreSQL 12 `pg_stat_statements` [contrib](../../../glossary.md#contrib) module, add it to [`shared_preload_libraries`](../../../glossary.md#shared_preload_libraries), restart, and run `CREATE /* wiki_enable_pgss */ EXTENSION pg_stat_statements;` in each database that needs the view. Confirm that `pg_stat_statements.track` is not `none`. [pgstatstatements.sgml#loading](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L10-L30) | `shared_preload_libraries` and `pg_stat_statements.max` need a restart. `pg_stat_statements.track` and `track_utility` are `PGC_SUSET`; `pg_stat_statements.save` is `PGC_SIGHUP`. [guc.c#shared_preload_libraries](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3767-L3776) [pg_stat_statements.c#module-GUCs](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L365-L410) |
-| Exact or approximate heap [bloat](../../../glossary.md#bloat) and B-tree structure | Install the PostgreSQL 12 `pgstattuple` module and run `CREATE /* wiki_enable_pgstattuple */ EXTENSION pgstattuple;` in the target database. Its default version 1.5 is built by the 1.4 script plus the 1.4-to-1.5 update, which revokes public execution and grants the functions to `pg_stat_scan_tables`. [pgstattuple.sgml#module-and-privileges](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L10-L23) [pgstattuple.control](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.control#L1-L5) [pgstattuple--1.4--1.5.sql#scan-role-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L6-L119) | Extension creation is per database. [pgstattuple--1.4.sql#functions](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L3-L20) |
-| Checksum failures | [Data checksums](../../../glossary.md#data-checksums) must be enabled; `data_checksums` reports it. PostgreSQL verifies a checksum when it reads a page, so a zero counter says nothing about pages nobody read. Keep `ignore_checksum_failure` and `zero_damaged_pages` off; [Defaults that decide what you see](#defaults-that-decide-what-you-see) explains what each one changes. [bufmgr.c#checksum-read-path](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897-L925) [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L145-L161) [monitoring.sgml#checksum_failures](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2599-L2611) | `data_checksums` is `PGC_INTERNAL`. Enabling checksums needs `initdb --data-checksums` or, after a clean shutdown, offline `pg_checksums --enable`. Offline `pg_checksums` also verifies every file. [guc.c#data_checksums](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1826-L1835) [initdb.sgml#data-checksums](../../../../raw/postgres-12/doc/src/sgml/ref/initdb.sgml#L212-L225) [pg_checksums.sgml#operation](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L38-L51) [pg_checksums.sgml#notes](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L204-L225) |
+| Exact or approximate [heap](../../../glossary.md#heap) [bloat](../../../glossary.md#bloat) and B-tree structure | Install the PostgreSQL 12 `pgstattuple` module and run `CREATE /* wiki_enable_pgstattuple */ EXTENSION pgstattuple;` in the target database. Its default version 1.5 is built by the 1.4 script plus the 1.4-to-1.5 update, which revokes public execution and grants the functions to `pg_stat_scan_tables`. [pgstattuple.sgml#module-and-privileges](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L10-L23) [pgstattuple.control](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.control#L1-L5) [pgstattuple--1.4--1.5.sql#scan-role-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L6-L119) | Extension creation is per database. [pgstattuple--1.4.sql#functions](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4.sql#L3-L20) |
+| Checksum failures | [Data checksums](../../../glossary.md#data-checksums) must be enabled; `data_checksums` reports it. `track_counts` must also be on in the process that reads the page, or the failure is never counted. PostgreSQL verifies a checksum when it reads a page, so a zero counter says nothing about pages nobody read. Keep `ignore_checksum_failure` and `zero_damaged_pages` off; [Defaults that decide what you see](#defaults-that-decide-what-you-see) explains what each one changes. [bufmgr.c#checksum-read-path](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897-L925) [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L145-L161) [monitoring.sgml#checksum_failures](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2599-L2611) | `data_checksums` is `PGC_INTERNAL`. Enabling checksums needs `initdb --data-checksums` or, after a clean shutdown, offline `pg_checksums --enable`. Offline `pg_checksums` also verifies every file. [guc.c#data_checksums](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1826-L1835) [initdb.sgml#data-checksums](../../../../raw/postgres-12/doc/src/sgml/ref/initdb.sgml#L212-L225) [pg_checksums.sgml#operation](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L38-L51) [pg_checksums.sgml#notes](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L204-L225) |
 | [WAL archiving](../../../glossary.md#wal-archiving), physical and logical replication, and [slots](../../../glossary.md#replication-slot) | Define the expected topology first. Physical streaming needs a [`wal_level`](../../../glossary.md#wal-level) of `replica` or higher (the default), sender capacity, an authorized replication connection, and standby settings. Logical replication needs `wal_level = logical` on the publisher plus slot, sender, logical-worker, and background-worker capacity. An empty view is expected only when that component is absent by design. `pg_stat_replication` lists directly connected consumers only. [config.sgml#wal_level](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2453-L2462) [high-availability.sgml#physical-replication-setup](../../../../raw/postgres-12/doc/src/sgml/high-availability.sgml#L666-L715) [logical-replication.sgml#logical-replication-config](../../../../raw/postgres-12/doc/src/sgml/logical-replication.sgml#L545-L573) [monitoring.sgml#direct-replication-connections](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L1978-L1983) | `wal_level`, `archive_mode`, `max_wal_senders`, `max_replication_slots`, `primary_conninfo`, `primary_slot_name`, `hot_standby`, `max_worker_processes`, and `max_logical_replication_workers` need a restart. `archive_command`, `archive_timeout`, `wal_keep_segments`, standby feedback and delays, receiver status interval and timeout, `synchronous_standby_names`, and `max_sync_workers_per_subscription` reload. `wal_sender_timeout` and `synchronous_commit` are `PGC_USERSET`. [guc.c#archive_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1964-L1974) [guc.c#standby-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1752-L1770) [guc.c#standby-and-receiver-timeouts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2074-L2127) [guc.c#wal_keep_segments](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2532-L2540) [guc.c#sender-capacity-and-timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2635-L2665) [guc.c#logical-worker-capacity](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2788-L2822) [guc.c#archive_command](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3454-L3462) [guc.c#standby-connection-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3560-L3579) [guc.c#synchronous_standby_names](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4086-L4095) [guc.c#synchronous_commit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4353-L4361) [guc.c#archive_mode](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4363-L4371) [guc.c#wal_level](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4409-L4417) |
 
 A cluster-wide value for a `PGC_SUSET` or `PGC_USERSET` setting is a
@@ -303,8 +312,10 @@ WHERE name IN (
     'autovacuum',
     'autovacuum_freeze_max_age',
     'autovacuum_multixact_freeze_max_age',
+    'checkpoint_completion_target',
     'checkpoint_warning',
     'data_checksums',
+    'data_sync_retry',
     'deadlock_timeout',
     'hot_standby',
     'hot_standby_feedback',
@@ -315,6 +326,7 @@ WHERE name IN (
     'log_connections',
     'log_destination',
     'log_disconnections',
+    'log_duration',
     'log_error_verbosity',
     'log_line_prefix',
     'log_lock_waits',
@@ -322,7 +334,9 @@ WHERE name IN (
     'log_min_error_statement',
     'log_min_messages',
     'log_replication_commands',
+    'log_statement',
     'log_temp_files',
+    'log_transaction_sample_rate',
     'logging_collector',
     'max_connections',
     'max_locks_per_transaction',
@@ -351,6 +365,7 @@ WHERE name IN (
     'track_activity_query_size',
     'track_counts',
     'track_io_timing',
+    'vacuum_freeze_min_age',
     'wal_level',
     'wal_keep_segments',
     'wal_receiver_status_interval',
@@ -382,26 +397,40 @@ Most event logging is off in a default PostgreSQL 12 server, and several safety
 settings change behavior only when they leave their default. The table gives
 each default, what the default does, and what a non-default value changes. The
 script's `default` stage read every value in the "PostgreSQL 12 default"
-column from a fresh cluster's `pg_settings`.
+column from a fresh cluster's `pg_settings`. The "Apply scope" column gives
+each setting's context. `PGC_POSTMASTER` needs a restart and `PGC_SIGHUP` a
+reload. `PGC_SUSET` and `PGC_USERSET` take a session `SET`, by a superuser
+for `PGC_SUSET`, or a configuration change and a reload for the cluster
+value. `PGC_SU_BACKEND` reaches only sessions started after the change.
+[guc.c#GucContext_Names](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L594-L603)
+[guc.c#PGC_SU_BACKEND-reload](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6811-L6858)
+[guc.c#PGC_SUSET-accepts-sighup](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6859-L6870)
 
 | Setting | PostgreSQL 12 default | What the default does | What a non-default value changes | Apply scope | Source |
 |---|---|---|---|---|---|
-| `log_min_duration_statement` | `-1` | Logs no statement durations | `0` logs every completed statement; `N` logs statements that ran at least `N` ms | `PGC_SUSET` | [guc.c#log_min_duration_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2703-L2713) [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2210-L2247) |
+| `log_min_duration_statement` | `-1` | With `log_duration` and `log_transaction_sample_rate` also at their defaults, logs no statement durations | `0` logs every completed statement; `N` logs statements that ran at least `N` ms | `PGC_SUSET` | [guc.c#log_min_duration_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2703-L2713) [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2210-L2247) |
+| `log_duration` | `off` | Logs no duration-only lines | `on` logs `duration: N ms` for every completed statement; the statement text is added only when the statement also crossed `log_min_duration_statement` and was not already logged | `PGC_SUSET` | [guc.c#log_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1287-L1295) [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2210-L2247) [config.sgml#log_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6227-L6256) |
+| `log_statement` | `none` | Logs no statement text when statements start | `ddl`, `mod`, or `all` log matching statements as `statement: ...` when they start, so a later duration line for such a statement omits the text | `PGC_SUSET` | [guc.c#log_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4318-L4326) [postgres.c#exec_simple_query-log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047) [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2235-L2242) |
+| `log_transaction_sample_rate` | `0` | Samples no transactions | A fraction `f` samples each new transaction with probability `f`, and every statement of a sampled transaction is logged with its duration, whatever it took | `PGC_SUSET` | [guc.c#log_transaction_sample_rate](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3433-L3442) [xact.c#xact_is_sampled](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1909-L1912) [config.sgml#log_transaction_sample_rate](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5973-L5998) |
 | `log_autovacuum_min_duration` | `-1` | Logs no autovacuum completions or skips; autovacuum ERRORs are still logged | `0` logs every autovacuum action and every skip caused by a lock or a dropped table; a table's storage parameter can override it | `PGC_SIGHUP` | [guc.c#log_autovacuum_min_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2715-L2725) [vacuumlazy.c#autovacuum-log-gate](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L372-L380) [config.sgml#log_autovacuum_min_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7010-L7033) |
 | `log_temp_files` | `-1` | Logs no temporary files; `temp_files` and `temp_bytes` still count them | `0` logs every [temporary file](../../../glossary.md#temporary-file) when it is deleted; `N` logs files of at least `N` kB | `PGC_SUSET` | [guc.c#log_temp_files](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3153-L3162) [fd.c#ReportTemporaryFileUsage](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1272-L1287) |
-| `log_checkpoints` | `off` | Logs no checkpoint or restartpoint start and end lines | Logs both, with the cause flags and write and sync times | `PGC_SIGHUP` | [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225) [xlog.c:8710](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8710) [xlog.c:9166](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9166) [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8408-L8413) |
+| `log_checkpoints` | `off` | Logs no checkpoint or [restartpoint](../../../glossary.md#checkpointer) start and end lines | Logs both, with the cause flags and write and sync times | `PGC_SIGHUP` | [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225) [xlog.c:8710](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8710) [xlog.c:9166](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9166) [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8408-L8413) |
 | `log_lock_waits` | `off` | Logs no lock-wait lines; a `deadlock detected` ERROR is still logged | Logs a waiter after `deadlock_timeout`, with holder and queue PIDs | `PGC_SUSET` | [guc.c#log_lock_waits](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1489-L1497) [proc.c#lock-wait-log](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1377-L1381) |
 | `log_connections`, `log_disconnections` | `off` | Logs no connection lifecycle | Logs attempts and authorization, or session end with duration | `PGC_SU_BACKEND` | [guc.c#logging-booleans](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1226-L1243) |
 | `log_line_prefix` | `'%m [%p] '` | Prints a millisecond timestamp and the process ID | Can add user, database, client, and session fields | `PGC_SIGHUP` | [guc.c#log_line_prefix](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3592-L3600) |
 | `log_min_messages` | `warning` | Keeps WARNING and higher, which in this ranking includes LOG | A lower level adds NOTICE, INFO, and DEBUG noise; a higher level drops warnings | `PGC_SUSET` | [guc.c#log_min_messages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4296-L4305) [config.sgml#log_min_messages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5885-L5896) |
-| `track_io_timing` | `off` | I/O time columns stay 0 | Times every data-file read and write | `PGC_SUSET` | [guc.c#track_io_timing](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1401-L1409) [bufmgr.c#io-timing](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L894-L905) |
+| `track_io_timing` | `off` | I/O time columns stay 0 | Times each read that goes through the buffer manager and each write of a shared buffer; other paths, such as writes of temporary-table buffers, stay untimed | `PGC_SUSET` | [guc.c#track_io_timing](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1401-L1409) [bufmgr.c#io-timing](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L894-L905) [bufmgr.c#FlushBuffer-timing](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2752-L2770) [localbuf.c#local-buffer-write](../../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L206-L228) |
 | `max_prepared_transactions` | `0` | `PREPARE TRANSACTION` fails with `prepared transactions are disabled`, so `pg_prepared_xacts` stays empty | Allows prepared transactions, which keep their locks until committed or rolled back and, while they last, hold back VACUUM | `PGC_POSTMASTER` | [guc.c#max_prepared_transactions](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2344-L2352) [twophase.c#feature-disabled](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L385-L390) [prepare_transaction.sgml#caution](../../../../raw/postgres-12/doc/src/sgml/ref/prepare_transaction.sgml#L125-L136) |
 | `ignore_checksum_failure` | `off` | A checksum mismatch gives a WARNING and a counter increment, then an `invalid page in block` ERROR; the page is not loaded | A page whose header looks sane is loaded anyway after the WARNING, so the query reads possibly corrupt data; the documentation warns this can cause crashes or hide corruption | `PGC_SUSET` | [guc.c#ignore_checksum_failure](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1148) [bufpage.c#checksum-failure-handling](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L144-L161) [config.sgml#ignore_checksum_failure](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L9727-L9740) |
 | `zero_damaged_pages` | `off` | An invalid page gives an ERROR | The page is zeroed in memory with a WARNING, so its rows vanish from the query. The zeroed page is not forced to disk, so the documentation recommends recreating the table or index before turning the setting off again | `PGC_SUSET` | [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1149-L1162) [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) [config.sgml#zero_damaged_pages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L9752-L9767) |
-| `checkpoint_warning` | `30s` | Logs the frequency message when WAL-caused checkpoints start less than 30 s apart | `0` disables the message | `PGC_SIGHUP` | [guc.c#checkpoint_warning](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2577-L2589) [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462) |
+| `checkpoint_completion_target` | `0.5` | A [WAL](../../../glossary.md#wal)-caused checkpoint is requested once WAL written since the last checkpoint's redo point reaches `max_wal_size` ÷ 1.5, in whole segments; see section 6 | A higher value divides by more, so WAL-caused checkpoints come sooner; `0` waits for the full `max_wal_size` | `PGC_SIGHUP` | [guc.c#checkpoint_completion_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3413-L3421) [xlog.c#CalculateCheckpointSegments](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2255-L2281) |
+| `checkpoint_warning` | `30s` | Logs the frequency message when a WAL-caused checkpoint starts less than 30 s after the previous checkpoint started, whatever caused that one | `0` disables the message | `PGC_SIGHUP` | [guc.c#checkpoint_warning](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2577-L2589) [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462) |
+| `data_sync_retry` | `off` | A failed [fsync](../../../glossary.md#fsync) of a data file is a PANIC, so the process that hit it, usually the [checkpointer](../../../glossary.md#checkpointer), crashes, and the server reinitializes and runs crash recovery | `on` reports an ERROR and lets a later checkpoint retry; the documentation warns that some systems forget the failed data, so a retry can falsely succeed | `PGC_POSTMASTER` | [guc.c#data_sync_retry](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1947-L1953) [fd.c#data_sync_elevel](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L3470-L3491) [sync.c#ProcessSyncRequests-fsync-failure](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L392-L396) [config.sgml#data_sync_retry](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L9018-L9047) |
 | `max_standby_streaming_delay` | `30s` | Replay waits up to 30 s past WAL receipt before cancelling conflicting standby queries | `-1` waits forever; smaller values cancel sooner | `PGC_SIGHUP` | [guc.c#standby-conflict-delays](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2085-L2094) [standby.c#GetStandbyLimitTime](../../../../raw/postgres-12/src/backend/storage/ipc/standby.c#L154-L169) |
 | `hot_standby_feedback` | `off` | The primary can remove rows a standby query still needs, which causes snapshot conflicts | The standby reports its xmin, which avoids those cancellations but can bloat the primary | `PGC_SIGHUP` | [guc.c#hot_standby_feedback](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1762-L1770) [config.sgml#hot_standby_feedback](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4139-L4161) |
 | `restart_after_crash` | `on` | After a backend crash the postmaster terminates every child, reinitializes, and runs crash recovery | The postmaster exits instead, leaving the server down | `PGC_SIGHUP` | [guc.c#restart_after_crash](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1277-L1285) [postmaster.c#no-restart-exit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3907-L3909) |
+| `autovacuum_freeze_max_age` | `200000000` | Forces an anti-wraparound autovacuum on a table whose `relfrozenxid` is older; together with `vacuum_freeze_min_age` it also decides when VACUUM warns `oldest xmin is far in the past` (section 1) | A lower value forces those vacuums sooner; a table's storage parameter can only lower it | `PGC_POSTMASTER` | [guc.c#autovacuum_freeze_max_age](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2966-L2975) [autovacuum.c#effective-freeze-ages](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3018-L3034) [vacuum.c#oldest-xmin-warning](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L920-L949) |
+| `vacuum_freeze_min_age` | `50000000` | VACUUM freezes row versions older than this many transactions behind its removal cutoff, using at most half of `autovacuum_freeze_max_age` | A smaller value freezes sooner; it also moves the `oldest xmin is far in the past` threshold | `PGC_USERSET` | [guc.c#vacuum_freeze_min_age](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2410-L2419) [vacuum.c#oldest-xmin-warning](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L920-L949) |
 
 The data checksum switch is not a setting at all: `initdb` leaves checksums off
 unless `--data-checksums` is given, and `data_checksums` only reports the
@@ -478,19 +507,31 @@ Checklist:
 
 - [ ] Compare only `client backend` rows with `max_connections`, and keep the
   `superuser_reserved_connections` margin. Autovacuum workers, background
-  workers, and WAL senders draw from separate PGPROC pools, which PostgreSQL
-  sizes separately in `MaxBackends`, so do not count them as client
-  connections. A nonzero `hidden_backend_type` means the reader lacks
-  `pg_read_all_stats` and the count is too low.
+  workers, and [WAL senders](../../../glossary.md#wal-sender) draw from
+  separate PGPROC pools, which PostgreSQL sizes separately in `MaxBackends`, so
+  do not count them as client connections. A nonzero `hidden_backend_type`
+  means the reader lacks `pg_read_all_stats`, so the client count may be too
+  low. It is not the number of missing clients, because the hidden rows also
+  include background processes; see [Who can see what](#who-can-see-what).
   [guc.c#max_connections-reserved](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2129-L2148)
   [postinit.c#InitializeMaxBackends](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L527-L539)
   [proc.c#InitProcess-free-lists](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L319-L327)
   [pgstatfuncs.c#activity-redaction](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L885-L911)
 - [ ] Investigate old active or `idle in transaction` sessions, especially rows
   with an old `backend_xmin`, the session's [xmin horizon](../../../glossary.md#xmin-horizon)
-  contribution. VACUUM warns when the oldest xmin is far in the past and points
-  to open transactions, old prepared transactions, and stale replication slots.
-  [vacuum.c#oldest-xmin-warning](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L933-L949)
+  contribution. Do not wait for VACUUM's WARNING `oldest xmin is far in the
+  past`, which points to open transactions, old prepared transactions, and
+  stale replication slots: it fires only once the horizon is very old. VACUUM
+  first subtracts its freeze age from the horizon and then compares the result
+  with the next XID minus `autovacuum_freeze_max_age`. The freeze age is
+  `vacuum_freeze_min_age`, capped at half of `autovacuum_freeze_max_age`. At
+  the defaults the warning therefore needs a horizon more than
+  200,000,000 − min(50,000,000, 100,000,000) = 150,000,000 transactions old.
+  A horizon that is already blocking cleanup shows up much earlier as
+  `dead but not yet removable` rows in the autovacuum summary (section 4).
+  [vacuum.c#oldest-xmin-warning](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L920-L949)
+  [guc.c#vacuum_freeze_min_age](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2410-L2419)
+  [guc.c#autovacuum_freeze_max_age](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2966-L2975)
 - [ ] Investigate sustained `Lock`, `BufferPin`, or `IO` waits, and correlate
   them with the lock and log checks below.
   [monitoring.sgml#wait_event_type](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L687-L760)
@@ -556,12 +597,21 @@ prepared transaction is the blocker. A prepared transaction never waits, but
 it keeps the locks it acquired. Its `pg_locks.pid` is NULL, and its
 [virtual transaction ID](../../../glossary.md#virtual-transaction-id) is shown
 as `-1/<transaction>`. Keep cluster-wide database and relation identifiers as
-OIDs rather than casting them in the current database.
+[OIDs](../../../glossary.md#oid) rather than casting them in the current
+database.
 [func.sgml#pg_blocking_pids](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L17584-L17604)
 [catalogs.sgml#pg_locks-pid](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L9219-L9227)
 [lockfuncs.c#pid-null-for-prepared](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L311-L312)
 [catalogs.sgml#prepared-transaction-locks](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L9300-L9331)
 [catalogs.sgml#pg_prepared_xacts](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L9627-L9710)
+
+Run the blocker query on its own, in autocommit mode. Inside an explicit
+transaction, `pg_stat_activity` keeps the copy taken by its first read, while
+`pg_blocking_pids()` reads the lock manager again on every call. A later run
+in the same transaction can then pair live blocker PIDs with stale session
+rows; see [What each source of evidence represents](#what-each-source-of-evidence-represents).
+[pgstat.c#pgstat_read_current_status](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3367-L3368)
+[lockfuncs.c#pg_blocking_pids](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L426-L428)
 
 Prepared transactions exist only on a server whose `max_prepared_transactions`
 is above its default of 0; at the default, `PREPARE TRANSACTION` fails and the
@@ -570,7 +620,8 @@ two prepared-transaction queries return nothing. See
 [twophase.c#feature-disabled](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L385-L390)
 
 Measured on this pin, with `max_prepared_transactions = 10`: a prepared
-transaction holding `AccessExclusiveLock` on a table made a waiting `SELECT`
+transaction holding [`AccessExclusiveLock`](../../../glossary.md#accessexclusivelock)
+on a table made a waiting `SELECT`
 report `blocking_pid = 0` and `blocking_type = prepared transaction`. The
 prepared-lock query returned the retained `relation` lock and the
 transaction's own `transactionid` `ExclusiveLock`, both with a NULL `pid` and
@@ -642,29 +693,59 @@ Checklist:
   checksum failures, and I/O time. Temporary-file counters include every temp
   file regardless of `log_temp_files`, because one call site both counts and
   logs each file. I/O time needs `track_io_timing`. Checksum counters are NULL
-  when checksums are disabled. A zero checksum delta covers only the pages
-  read during the interval; see `Open Questions` for a base-backup accounting
-  defect in this pin. Measured on this pin: one query run with
-  `work_mem = 64kB` (default `4MB`, set by session `SET` so that it would
-  spill) created 2 temporary files. `temp_files` rose by 2 and `temp_bytes` by
-  5,634,432, the exact sum of the two sizes logged under `log_temp_files = 0`
-  (default `-1`).
+  when checksums are disabled. With checksums on, they, like the deadlock and
+  temporary-file counters, miss every event in a session whose `track_counts`
+  is off, so they can read 0 although failures happened; see
+  [Observability prerequisites](#observability-prerequisites). A zero
+  checksum delta covers only the pages read during the interval; see
+  `Open Questions` for a base-backup accounting defect in this pin. Measured
+  on this pin: one query run with [`work_mem`](../../../glossary.md#work_mem)
+  = 64kB (default `4MB`, set by session `SET` so that it would spill) created
+  2 temporary files. `temp_files` rose by 2 and `temp_bytes` by 5,634,432, the
+  exact sum of the two sizes logged under `log_temp_files = 0` (default `-1`).
   [monitoring.sgml#pg_stat_database-counters](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2524-L2628)
   [fd.c#ReportTemporaryFileUsage](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1272-L1287)
   [pgstatfuncs.c#checksum-null](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1536-L1537)
   [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L145-L161)
 - [ ] On a [hot standby](../../../glossary.md#hot-standby), capture
   recovery-conflict deltas by reason. The view counts cancellations that WAL
-  replay needed after tablespace drops, conflicting locks, obsolete snapshots,
+  replay needed after [tablespace](../../../glossary.md#tablespace) drops,
+  conflicting locks, obsolete [snapshots](../../../glossary.md#snapshot),
   buffer pins, or recovery deadlocks. Those are exactly the five
   `PROCSIG_RECOVERY_CONFLICT_*` reasons that the collector counts; a sixth, a
   dropped database, is deliberately not counted. These are not application
   `lock_timeout` events or the primary's `deadlocks`. The view holds data only
-  on standbys, and every standby start resets it.
+  on standbys, and every standby start resets it. The table below shows which
+  sessions see an ERROR and which a FATAL.
   [monitoring.sgml#pg_stat_database_conflicts](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2640-L2702)
   [procsignal.h#ProcSignalReason](../../../../raw/postgres-12/src/include/storage/procsignal.h#L37-L43)
   [pgstat.c#pgstat_recv_recoveryconflict](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6330-L6362)
   [standby.c#ResolveRecoveryConflictWithLock](../../../../raw/postgres-12/src/backend/storage/ipc/standby.c#L388-L423)
+
+Replay resolves a conflict by signaling each conflicting session. What the
+session then sees depends on its state when it handles the signal, so the
+ERROR and FATAL forms in the log do not map one to one to "running" and
+"idle". Every row cites the same two functions:
+[postgres.c#RecoveryConflictInterrupt](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2841-L2915)
+decides between cancel, terminate, and ignore, and
+[postgres.c#ProcessInterrupts](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2990-L3112)
+raises the message. The SQLSTATEs come from
+[errcodes.txt:323](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L323)
+and [errcodes.txt:429](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L429).
+
+| Session state when it handles the signal | Outcome | Message | Counted in `pg_stat_database_conflicts` |
+|---|---|---|---|
+| Not in a transaction (lock, tablespace, or snapshot conflict) | Ignored | none | no |
+| In a top-level transaction that has already failed | Ignored | none | no |
+| Running a statement at top level | Statement cancelled; the session stays | ERROR `canceling statement due to conflict with recovery`, SQLSTATE 40001 | yes |
+| Idle in a top-level transaction, waiting for client input | Session ended, because the idle client would otherwise keep holding up replay, so the backend terminates the connection to dislodge it | FATAL `terminating connection due to conflict with recovery`, SQLSTATE 40001, with HINT `In a moment you should be able to reconnect to the database and repeat your command.` | yes |
+| Inside a subtransaction, such as a `SAVEPOINT` or a PL/pgSQL exception block, running or idle | Session ended, because an ERROR would abort only the subtransaction, while the outer transaction can still hold the conflicting snapshot or lock | The same FATAL, without the HINT | yes |
+| Connected to a database that replay is dropping | Session ended | FATAL `terminating connection due to conflict with recovery`, SQLSTATE 57P04 | no |
+| A buffer-pin or recovery-deadlock signal to a session that is not holding up replay | Ignored | none | no |
+
+Measured on this pin, in the `conflict` stage of the
+[measurement script](#measurement-script): the idle top-level session got the
+FATAL with the HINT, and the running session got the ERROR.
 
 **4. Vacuum, analyze, dead rows, and progress**
 
@@ -761,12 +842,13 @@ row counts are discovery signals, not proof that maintenance is overdue.
 
 `pg_stat_user_tables` exposes estimated live and [dead rows](../../../glossary.md#dead-tuple),
 changes since analyze, and maintenance timestamps and counts. It omits
-partitioned parents, and it filters out `pg_catalog` and the `pg_toast`
-schemas, which is why the catalog and [TOAST](../../../glossary.md#toast)
-queries read `pg_stat_sys_tables`. PostgreSQL 12 autovacuum examines ordinary
-tables, materialized views, and their TOAST tables, but it does not select
-partitioned parents. `ANALYZE` on a partitioned parent recurses through the
-partitions and updates parent statistics, so deployments that plan queries on
+partitioned parents, and it filters out the `pg_catalog`,
+`information_schema`, and `pg_toast` schemas, which is why the catalog and
+[TOAST](../../../glossary.md#toast) queries read `pg_stat_sys_tables`.
+PostgreSQL 12 autovacuum examines ordinary tables, materialized views, and
+their TOAST tables, but it does not select partitioned parents. `ANALYZE` on
+a partitioned parent recurses through the partitions and updates parent
+statistics, so deployments that plan queries on
 [partitioned](../../../glossary.md#declarative-partitioning) parents need an
 explicit parent `ANALYZE` policy.
 [system_views.sql#table-statistics-views](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L552-L616)
@@ -776,7 +858,8 @@ explicit parent `ANALYZE` policy.
 [ref/analyze.sgml#partitioned-tables](../../../../raw/postgres-12/doc/src/sgml/ref/analyze.sgml#L112-L121)
 
 `pg_stat_progress_vacuum` has one row per running `VACUUM` or autovacuum
-worker. `VACUUM FULL` reports through `pg_stat_progress_cluster` instead. The
+worker. [`VACUUM FULL`](../../../glossary.md#vacuum-full) reports through
+`pg_stat_progress_cluster` instead. The
 view includes workers in every database, so filtering to `current_database()`
 makes the `regclass` cast resolve in the right database.
 [monitoring.sgml#pg-stat-progress-vacuum-view](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L3738-L3849)
@@ -814,9 +897,14 @@ Checklist:
 - [ ] Look for repeated `canceling autovacuum task`. A session that waits on
   a lock held by a non-wraparound autovacuum worker cancels that worker after
   `deadlock_timeout`, so frequent conflicting DDL or `LOCK TABLE` can keep a
-  table from ever finishing a vacuum. Anti-wraparound workers are exempt.
+  table from ever finishing a vacuum. Anti-wraparound workers are exempt. The
+  worker raises the same ERROR for any query cancel, so a manual
+  `pg_cancel_backend()` of the worker also produces it. The CONTEXT line says
+  `automatic vacuum of table ...`, or `automatic analyze of table ...` when
+  the task was an analyze only; search for both.
   [proc.c#autovacuum-cancel](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375)
   [postgres.c#canceling-autovacuum-task](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3096-L3101)
+  [autovacuum.c#autovacuum-error-context](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2480-L2493)
 - [ ] Review partitioned parents separately and schedule recursive `ANALYZE`
   where queries depend on parent statistics. Review TOAST and catalog
   maintenance with the two `pg_stat_sys_tables` queries.
@@ -913,29 +1001,100 @@ Checklist:
 
 - [ ] Compare two samples that share `stats_reset`. `checkpoints_req` counts
   every requested [checkpoint](../../../glossary.md#checkpoint), whatever
-  requested it, so it does not say why. With `log_checkpoints` on, each
-  `checkpoint starting:` line lists its cause flags, and ` wal` marks a
-  checkpoint requested because WAL volume reached `max_wal_size`.
+  requested it, so it does not say why. The checkpointer counts a request
+  before the checkpoint runs, so the count also includes a request that
+  `CreateCheckPoint()` then skips because no WAL needing a checkpoint was
+  written. With `log_checkpoints` on, each `checkpoint starting:` line lists
+  its cause flags.
   [monitoring.sgml#pg_stat_bgwriter](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2399-L2484)
+  [checkpointer.c#requested-checkpoint-count](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L385-L394)
+  [xlog.c#idle-checkpoint-skip](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8628-L8645)
   [xlog.c#LogCheckpointStart](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8356-L8372)
+- [ ] Read ` wal` as "WAL since the last checkpoint reached the trigger
+  distance", not as "WAL reached `max_wal_size`". When a process finishes
+  writing a WAL segment, it requests a checkpoint if that segment is at least
+  `CheckPointSegments` − 1 segments past the segment holding the last
+  checkpoint's redo point. `CheckPointSegments` is `max_wal_size` in segments
+  divided by 1 + `checkpoint_completion_target`, rounded down, and at least 1.
+  The request comes early so that the spread-out checkpoint can finish before
+  WAL reaches `max_wal_size`, which the documentation describes as starting a
+  checkpoint when `max_wal_size` "is about to be exceeded".
+  [xlog.c#CalculateCheckpointSegments](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2255-L2281)
+  [xlog.c#XLogCheckpointNeeded](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2352-L2361)
   [xlog.c#WAL-caused-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2553-L2557)
+  [wal.sgml#checkpoint-triggers](../../../../raw/postgres-12/doc/src/sgml/wal.sgml#L472-L477)
+
+  | Step | Defaults | The script's `dh12.conf` |
+  |---|---|---|
+  | `max_wal_size` in 16 MB segments | 1 GB = 64 | 32 MB = 2 |
+  | Divided by 1 + `checkpoint_completion_target` (0.5) | 42.67 | 1.33 |
+  | `CheckPointSegments`, rounded down, at least 1 | 42 | 1 |
+  | A finished segment requests a checkpoint when it is at least this many segments past the redo segment | 41, so after 41 to 42 segments (656 to 672 MB) of WAL | 0, so every finished segment |
+
+  The inputs are the boot values `DEFAULT_MAX_WAL_SEGS` = 64 and a 16 MB
+  segment, and `checkpoint_completion_target` = 0.5; the script's `default`
+  stage read `max_wal_size = 1024MB` and `checkpoint_completion_target = 0.5`
+  from a fresh cluster.
+  [xlog_internal.h#DEFAULT_MAX_WAL_SEGS](../../../../raw/postgres-12/src/include/access/xlog_internal.h#L92-L93)
+  [pg_config_manual.h:20](../../../../raw/postgres-12/src/include/pg_config_manual.h#L20)
+  [guc.c#checkpoint_completion_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3413-L3421)
 - [ ] Investigate repeated `checkpoints are occurring too frequently` lines.
   The [checkpointer](../../../glossary.md#checkpointer) writes this at LOG
-  severity, not WARNING, with the hint to increase `max_wal_size`. It does so
-  only for a WAL-caused checkpoint that starts within `checkpoint_warning` of
-  the previous one, and never for a standby restartpoint. Without
+  severity, not WARNING, with the hint to increase `max_wal_size`. Without
   `log_checkpoints`, it is the only log evidence of the cause.
-  `checkpoint_warning` and `max_wal_size` are reload settings. Measured on
-  this pin, with `max_wal_size = 32MB` (the `initdb` file value is `1GB`) and
-  `log_checkpoints = on` (default `off`), both in the script's `dh12.conf`:
-  within the stage's capture window, a
-  150,000-row insert produced three `checkpoint starting: wal` lines, each
-  preceded by a LOG frequency line (`0 seconds apart` twice, `1 second apart`
-  once) and its hint. The standby logged two `restartpoint starting: wal`
-  lines and no frequency line.
-  [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462)
-  [xlog.c#restartpoint-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L11564-L11572)
+  `checkpoint_warning` and `max_wal_size` are reload settings. The
+  checkpointer logs the message only when all three conditions below hold,
+  and it tests them before the checkpoint runs:
+
+  | Condition | When it is false |
+  |---|---|
+  | The server is not in recovery, so this is a checkpoint, not a restartpoint | No message: a standby's restartpoints never log it |
+  | A WAL-caused request is among the merged request flags | No message, however close together the checkpoints are |
+  | The previous checkpoint, whatever its cause, started less than `checkpoint_warning` seconds earlier | No message |
+
+  Because the test comes first, a frequency line can appear with no
+  `checkpoint starting:` line after it. `CreateCheckPoint()` checks for new
+  WAL only afterwards, skips a checkpoint when none was written, and reports
+  that skip only at DEBUG1.
+  [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L425-L462)
+  [xlog.c#idle-checkpoint-skip](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8628-L8645)
+  [xlog.c:8710](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8710)
   [guc.c#checkpoint-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2589)
+
+  Measured on this pin, with `max_wal_size = 32MB` (the `initdb` file value
+  is `1GB`) and `log_checkpoints = on` (default `off`), both in the script's
+  `dh12.conf`: within the stage's capture window, a 150,000-row insert right
+  after a manual `CHECKPOINT` produced three `checkpoint starting: wal` lines
+  and four LOG frequency lines, all `0 seconds apart` and each with its hint.
+  The fourth frequency line had no start line after it, which matches the
+  idle skip above. A warm re-run of the same stage logged three of each,
+  because the counts depend on timing. The standby logged two
+  `restartpoint starting: wal` lines and no frequency line.
+- [ ] Expect restartpoints on a standby to follow the same trigger, computed
+  from the standby's own `max_wal_size`. The startup process requests a
+  restartpoint when replay moves to a new WAL segment past the trigger
+  distance. A restartpoint can only use a checkpoint record that replay has
+  already reached. If none is newer than the last restartpoint,
+  `CreateRestartPoint()` skips the request with a DEBUG2 line, and the
+  checkpointer retries 15 s later with the time flag. That is why a standby
+  can log `restartpoint starting: time` long before `checkpoint_timeout`.
+  [xlog.c#restartpoint-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L11557-L11572)
+  [xlog.c#RecoveryRestartPoint](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9013-L9051)
+  [xlog.c#restartpoint-skip](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9117-L9123)
+  [checkpointer.c#restartpoint-retry](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L502-L520)
+  [checkpointer.c#time-driven-flag](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L396-L410)
+
+  Measured on this pin in the `restartpoint` stage of the
+  [measurement script](#measurement-script). The standby ran with
+  `log_min_messages = debug2` (default `warning`) so that the skip line
+  appears. The primary's `max_wal_size` was raised to `1GB` for the stage so
+  that its segment switch requested no checkpoint of its own. With the
+  standby on the inherited 32 MB, a segment switch on the primary made the
+  standby log `skipping restartpoint, already performed at ...`. A primary
+  `CHECKPOINT` then gave replay a newer checkpoint record, and the standby
+  logged `restartpoint starting: time` 15,009 ms after the skip. With the
+  standby's `max_wal_size` raised to `1GB`, the same steps produced no skip
+  and no restartpoint within 30 s.
 - [ ] A `maxwritten_clean` delta means the
   [background writer](../../../glossary.md#background-writer) stopped a pass
   after reaching `bgwriter_lru_maxpages`. `buffers_backend` counts buffers
@@ -1127,10 +1286,16 @@ Checklist:
   [slot.c#ComputeRequiredXmin-and-LSN](../../../../raw/postgres-12/src/backend/replication/slot.c#L695-L776)
   [catalogs.sgml#pg_replication_slots-columns](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L9914-L9968)
   [high-availability.sgml#replication-slot-retention](../../../../raw/postgres-12/doc/src/sgml/high-availability.sgml#L914-L930)
-- [ ] Without a slot, nothing keeps WAL for a lagging standby. Segment removal
-  keeps only what `wal_keep_segments` (default 0) and slots require, so a
-  standby that falls one segment behind a busy primary can be cut off with
-  `requested WAL segment ... has already been removed`.
+- [ ] Know what keeps WAL for a lagging standby. At the end of each
+  checkpoint, the primary removes or recycles the segments older than that
+  checkpoint's redo point. `KeepLogSeg()` first moves that boundary back by
+  `wal_keep_segments` (default 0) and to the oldest `restart_lsn` of any slot.
+  Without a slot or `wal_keep_segments`, a standby that falls behind the
+  latest checkpoint's redo point, and cannot fetch the missing segment from a
+  WAL archive, is cut off with `requested WAL segment ... has already been
+  removed`. With a small `max_wal_size`, checkpoints come often, so that point
+  moves forward quickly.
+  [xlog.c#checkpoint-removal-boundary](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8898-L8905)
   [xlog.c#KeepLogSeg](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9307-L9349)
   [guc.c#wal_keep_segments](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2532-L2540)
 - [ ] On a physical standby, an empty `pg_stat_wal_receiver` means no
@@ -1155,12 +1320,20 @@ Checklist:
   `pg_subscription.oid`.
   [system_views.sql#pg_stat_subscription](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L803-L816)
   [system_views.sql#pg_subscription-column-grants](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1059-L1062)
-  [indexing.h#pg_subscription_subname_index](../../../../raw/postgres-12/src/include/catalog/indexing.h#L363)
+  [indexing.h:363](../../../../raw/postgres-12/src/include/catalog/indexing.h#L363)
   [monitoring.sgml#pg_stat_subscription](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2134-L2205)
   [catalogs.sgml#pg_subscription](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L6699-L6797)
-- [ ] Investigate an old `backend_xmin` on a sender. It is the horizon that a
-  standby reports through `hot_standby_feedback`, and it delays vacuum on the
-  primary.
+- [ ] Investigate an old `backend_xmin` on a sender and an old `xmin` on a
+  physical slot. A standby reports its horizon through
+  `hot_standby_feedback`, and either one delays vacuum on the primary. Where
+  the horizon appears depends on the slot. Without a slot, the
+  [WAL sender](../../../glossary.md#wal-sender) keeps it as its own xmin,
+  shown as `pg_stat_replication.backend_xmin`. With a slot, the WAL sender
+  stores it in the slot and clears its own xmin, so `backend_xmin` is NULL and
+  the horizon appears as `pg_replication_slots.xmin`. The documentation
+  describes only the first case; see `Open Questions`.
+  [walsender.c#ProcessStandbyHSFeedbackMessage](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2056-L2065)
+  [walsender.c#PhysicalReplicationSlotNewXmin](../../../../raw/postgres-12/src/backend/replication/walsender.c#L1873-L1893)
   [monitoring.sgml#pg_stat_replication-backend_xmin](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L1835-L1840)
   [config.sgml#hot_standby_feedback](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4139-L4161)
 - [ ] With synchronous replication, correlate commit latency and lock
@@ -1216,10 +1389,18 @@ Checklist:
   [pgstatstatements.sgml#entry-eviction](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L399-L410)
   [pgstatstatements.sgml#reset](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L333-L357)
   [config.sgml#track_io_timing](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6867-L6871)
-- [ ] Do not expect comment tags to separate entries. Statements that differ
-  only in constants share one entry, and the stored text is that of the first
-  statement seen; comments are not part of the identity.
+- [ ] Know which statements a comment tag separates. `SELECT`, `INSERT`,
+  `UPDATE`, and `DELETE` statements that differ only in constants or comments
+  share one entry: constants show as `$1`, `$2`, and so on, and the rest of
+  the stored text is that of the first statement seen. Every other statement
+  is a utility statement, tracked by default because
+  `pg_stat_statements.track_utility` defaults to `on`. A utility statement is
+  identified by a hash of its own text, so each differently tagged, or
+  differently valued, `SET`, `VACUUM`, or `CHECKPOINT` gets its own entry.
   [pgstatstatements.sgml#query-merging](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L236-L255)
+  [pg_stat_statements.c#track_utility](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L390-L396)
+  [pg_stat_statements.c#utility-store](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1054-L1061)
+  [pg_stat_statements.c#utility-text-hash](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1148-L1162)
 - [ ] Verify `pg_stat_statements.track`, `pg_stat_statements.track_utility`,
   `pg_stat_statements.max`, and `pg_stat_statements.save` before interpreting
   sparse results. Eviction, reset, or a backend crash can break a comparison
@@ -1252,24 +1433,24 @@ and the severity shown is the one the source uses.
 |---|---|---|---|
 | `sorry, too many clients already`, `remaining connection slots are reserved...`, or `number of requested standby connections exceeds max_wal_senders` | New clients are refused. Ordinary users are refused before the reserved superuser slots; WAL senders have their own pool. [proc.c#InitProcess](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L347-L363) [postinit.c#reserved-connections](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L818-L828) | Compare only `client backend` rows with `max_connections`; inspect pool limits, abandoned sessions, and bursts. The capacity settings need a restart. [guc.c#max_connections-reserved](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2129-L2148) | The FATAL messages are built in. Enable `log_connections` and `log_disconnections` before new sessions start for attempt and duration context. [config.sgml#log_connections-disconnections](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6182-L6222) |
 | `no pg_hba.conf entry`, an authentication failure, or `could not accept SSL connection` | The client cannot establish the session. Repetition can mean a deployment error, a stale credential, an incompatible TLS setup, or unwanted access attempts. [auth.c#auth_failed](../../../../raw/postgres-12/src/backend/libpq/auth.c#L255-L323) [auth.c#no-pg_hba.conf-entry](../../../../raw/postgres-12/src/backend/libpq/auth.c#L494-L528) [be-secure-openssl.c#SSL-errors](../../../../raw/postgres-12/src/backend/libpq/be-secure-openssl.c#L440-L459) | Correlate client address, database, user, and TLS state with the expected inventory; review HBA order and credential or certificate rotation. | Authentication errors are built in. `log_connections` adds attempt context. [config.sgml#log_connections](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6182-L6203) |
-| `duration: ... ms  statement: ...` from the simple protocol, or `duration: ... ms  parse ...`, `bind ...`, or `execute ...` from the extended protocol | Latency, resource use, and lock holding rise while slow statements run. Clients that use the extended protocol have Parse, Bind, and Execute timed separately, so a search for `statement:` alone misses their statements. [config.sgml#log_min_duration_statement](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5931-L5953) [postgres.c#exec_simple_query-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1281-L1298) [postgres.c#parse-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1547-L1560) [postgres.c#bind-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1914-L1930) [postgres.c#execute-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2135-L2152) | Correlate with `pg_stat_statements`, lock waits, I/O timing, and temp-file lines. Measured on this pin, with `log_min_duration_statement = 250` ms in the script's `dh12.conf`: a 0.5 s sleep logged `statement:` from `psql`, `execute <unnamed>:` from `pgbench -M extended`, and `execute P0_2:` from `pgbench -M prepared`, whose statement names come from `P<script>_<command>`. [pgbench.c#prepared-statement-name](../../../../raw/postgres-12/src/bin/pgbench/pgbench.c#L2599) | Set `log_min_duration_statement` (default `-1`): `0` logs every completed statement. [guc.c#log_min_duration_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2703-L2713) |
+| `duration: ... ms  statement: ...` from the simple protocol, `duration: ... ms  parse ...`, `bind ...`, or `execute ...` from the extended protocol, or a bare `duration: ... ms` | Latency, resource use, and lock holding rise while slow statements run. Clients that use the extended protocol have Parse, Bind, and Execute timed separately, so a search for `statement:` alone misses their statements. [config.sgml#log_min_duration_statement](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5931-L5953) [postgres.c#exec_simple_query-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1281-L1298) [postgres.c#parse-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1547-L1560) [postgres.c#bind-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1914-L1930) [postgres.c#execute-duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2135-L2152) | Correlate with `pg_stat_statements`, lock waits, I/O timing, and temp-file lines. A bare duration line comes from `log_duration = on`, or from a statement whose text `log_statement` already logged when it started, so match it to that earlier line by PID. A transaction sampled by `log_transaction_sample_rate` logs every statement with its text however fast it ran, so a line with text is not always a slow statement. [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2210-L2247) [postgres.c#exec_simple_query-log_statement](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1039-L1047) Measured on this pin, with `log_min_duration_statement = 250` ms in the script's `dh12.conf`: a 0.5 s sleep logged `statement:` from `psql`, `execute <unnamed>:` from `pgbench -M extended`, and `execute P0_2:` from `pgbench -M prepared`, whose statement names come from `P<script>_<command>`. [pgbench.c:2599](../../../../raw/postgres-12/src/bin/pgbench/pgbench.c#L2599) | Set `log_min_duration_statement` (default `-1`): `0` logs every completed statement. `log_duration`, `log_statement`, and `log_transaction_sample_rate` (defaults `off`, `none`, and `0`) produce the other forms. All four are `PGC_SUSET`. [guc.c#log_min_duration_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2703-L2713) [guc.c#log_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1287-L1295) [guc.c#log_statement](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4318-L4326) [guc.c#log_transaction_sample_rate](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3433-L3442) |
 | `temporary file: path ..., size ...` or `temporary file size exceeds temp_file_limit` | Temp I/O consumes storage, and a process that exceeds `temp_file_limit` fails its statement. [fd.c#ReportTemporaryFileUsage](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1272-L1287) [fd.c#temp_file_limit](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1942-L1956) | Sorts, hashes, and materialized intermediate results create temporary files. Correlate the PID with the statement and compare `temp_bytes` and `temp_blks_written`. [config.sgml#log_temp_files](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6555-L6574) | Set `log_temp_files` (default `-1`) to `0` to log every file. Both settings are `PGC_SUSET`. [guc.c#log_temp_files](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3153-L3162) [guc.c#temp_file_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2270-L2279) |
 | `process ... still waiting for ...`, `acquired ... after ...`, `detected deadlock while waiting`, `avoided deadlock ... by rearranging queue order`, or `deadlock detected` | A statement waited for a lock; a hard deadlock aborts one transaction. The optional wait LOG lines and the built-in deadlock ERROR are separate signals. A holder PID of 0 in `Process holding the lock` is a prepared transaction. [proc.c#lock-wait-log](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1377-L1497) [deadlock.c#DeadLockReport](../../../../raw/postgres-12/src/backend/storage/lmgr/deadlock.c#L1139-L1146) | Use `pg_blocking_pids()` and the holder and waiter PIDs. Check inconsistent lock order and prepared transactions that keep locks. [mvcc.sgml#Deadlocks](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1358-L1423) | Enable `log_lock_waits` (default `off`); it logs waits longer than `deadlock_timeout`. Both are `PGC_SUSET`. [config.sgml#log_lock_waits](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6477-L6490) [guc.c#deadlock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2062-L2072) |
 | `canceling statement due to lock timeout`, `canceling statement due to statement timeout`, or `terminating connection due to idle-in-transaction timeout` | PostgreSQL cancels the statement or ends the idle transaction's session. Intentional guardrails produce these, so escalate repeated, unexpected, or service-affecting events. [postgres.c#ProcessInterrupts-timeouts](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3058-L3136) | Compare the configured limit with expected work and inspect blockers or transaction handling. | [`statement_timeout`, `lock_timeout`](../../../glossary.md#statement_timeout-and-lock_timeout), and [`idle_in_transaction_session_timeout`](../../../glossary.md#transaction_timeout-and-idle_in_transaction_session_timeout) are `PGC_USERSET` and default to 0, which disables them. [guc.c#client-timeouts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2408) |
-| ERROR `canceling statement due to conflict with recovery` or FATAL `terminating connection due to conflict with recovery` | Replay on a standby cancels a running query, or ends a session that sits idle in a transaction, so replay can continue. The idle case is FATAL because no statement is running to cancel. [postgres.c#RecoveryConflictInterrupt](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2866-L2915) [postgres.c#idle-session-conflict](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3030-L3041) [postgres.c#running-query-conflict](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3103-L3112) | Use `pg_stat_database_conflicts` to separate tablespace, lock, snapshot, buffer-pin, and recovery-deadlock causes; long standby queries and cleanup on the primary conflict. Measured on this pin: one running and one idle `REPEATABLE READ` session were cancelled 30 s after a `VACUUM` on the primary, with one ERROR, one FATAL, and `confl_snapshot` moving from 0 to 2. [monitoring.sgml#pg_stat_database_conflicts](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2640-L2702) | Built in on a standby. Replay waits `max_standby_streaming_delay` (default 30 s) after WAL receipt before cancelling; both delays reload. [standby.c#GetStandbyLimitTime](../../../../raw/postgres-12/src/backend/storage/ipc/standby.c#L154-L169) [guc.c#standby-conflict-delays](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2074-L2094) |
-| Successful `automatic vacuum of table ...`, `automatic aggressive vacuum of table ...`, or `automatic aggressive vacuum to prevent wraparound of table ...` | The vacuum finished, but it may have removed little. The summary reports duration and system usage, index scans, pages (including pages skipped because of pins), rows removed, rows `dead but not yet removable` with the `oldest xmin`, buffer hits, misses, and dirties, and read and write rates. It has no WAL-usage field in PostgreSQL 12. [vacuumlazy.c#autovacuum-message-prefixes](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L401-L413) [vacuumlazy.c#autovacuum-summary](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L380-L441) | Growing unremovable rows point to an old horizon: long transactions, prepared transactions, replication slots, or standby feedback. Compare with prior runs and current table size. | Set `log_autovacuum_min_duration` (default `-1`) to a nonnegative value and reload; `0` logs every action. [config.sgml#log_autovacuum_min_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7010-L7033) [guc.c#log_autovacuum_min_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2715-L2725) |
+| ERROR `canceling statement due to conflict with recovery` or FATAL `terminating connection due to conflict with recovery` | Replay on a standby cancels a top-level statement with the ERROR. It ends the session with the FATAL when the session is idle in a transaction, when it is inside a subtransaction, or when replay drops its database; only the idle case adds the reconnect HINT. The [recovery-conflict table](#sql-health-checklist) in section 3 lists every case. [postgres.c#RecoveryConflictInterrupt](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2866-L2915) [postgres.c#subtransaction-and-database-conflicts](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2990-L3007) [postgres.c#idle-session-conflict](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3030-L3041) [postgres.c#running-query-conflict](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3103-L3112) | Use `pg_stat_database_conflicts` to separate tablespace, lock, snapshot, buffer-pin, and recovery-deadlock causes; a session ended because replay dropped its database is not counted there. Long standby queries and cleanup on the primary conflict. Measured on this pin, by the `conflict` stage of the [measurement script](#measurement-script): on a test table with `autovacuum_enabled = false` (default `true`), a standby with a slot and the default `hot_standby_feedback = off`, one running and one idle `REPEATABLE READ` session were cancelled 30 s after a `VACUUM` on the primary. That gave one ERROR, one FATAL with the HINT, and `confl_snapshot` moving from 0 to 2. [monitoring.sgml#pg_stat_database_conflicts](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2640-L2702) [pgstat.c#pgstat_recv_recoveryconflict](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6330-L6362) | Built in on a standby. Replay waits `max_standby_streaming_delay` (default 30 s) after WAL receipt before cancelling; both delays reload. [standby.c#GetStandbyLimitTime](../../../../raw/postgres-12/src/backend/storage/ipc/standby.c#L154-L169) [guc.c#standby-conflict-delays](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2074-L2094) |
+| Successful `automatic vacuum of table ...`, `automatic aggressive vacuum of table ...`, or `automatic aggressive vacuum to prevent wraparound of table ...` | The vacuum finished, but it may have removed little. The `aggressive` forms mark an [aggressive VACUUM](../../../glossary.md#aggressive-vacuum), which had to advance the table's freeze horizon. The summary reports duration and system usage, index scans, pages (including pages skipped because of pins), rows removed, rows `dead but not yet removable` with the `oldest xmin`, buffer hits, misses, and dirties, and read and write rates. It has no WAL-usage field in PostgreSQL 12. [vacuumlazy.c#autovacuum-message-prefixes](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L401-L413) [vacuumlazy.c#autovacuum-summary](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L380-L441) | Growing unremovable rows point to an old horizon: long transactions, prepared transactions, replication slots, or standby feedback. Compare with prior runs and current table size. | Set `log_autovacuum_min_duration` (default `-1`) to a nonnegative value and reload; `0` logs every action. [config.sgml#log_autovacuum_min_duration](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7010-L7033) [guc.c#log_autovacuum_min_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2715-L2725) |
 | Successful `automatic analyze of table ...` | Analyze finished. In this pin its message carries system usage only, without vacuum's page, row, or buffer fields. [analyze.c#autoanalyze-summary](../../../../raw/postgres-12/src/backend/commands/analyze.c#L667-L679) | Compare frequency with the table's change rate and the freshness of planner statistics. | The same `log_autovacuum_min_duration` threshold. |
-| ERROR `canceling autovacuum task` followed by CONTEXT `automatic vacuum of table ...` | A conflicting lock request cancelled a non-wraparound autovacuum worker after `deadlock_timeout`. Repeated cancellations can stop a table from ever finishing a vacuum. [proc.c#autovacuum-cancel](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375) [postgres.c#canceling-autovacuum-task](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3096-L3101) [autovacuum.c#autovacuum-error-context](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2480-L2493) | Find the DDL, `LOCK TABLE`, or other strong lock that conflicts with `SHARE UPDATE EXCLUSIVE`. The waiter's own note is DEBUG1, so only the worker's ERROR appears by default. Measured on this pin: a `LOCK TABLE ... IN SHARE MODE` against a running autovacuum logged this ERROR and CONTEXT, and the waiter acquired its lock after about 1000 ms, the default `deadlock_timeout`. The worker was kept busy by the test table's storage parameters `autovacuum_vacuum_cost_delay = 20` and `autovacuum_vacuum_cost_limit = 1` (defaults `-1`, meaning 2 ms and 200); see the [measurement script](#measurement-script). [proc.c#autovacuum-cancel-debug](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1344-L1347) | Built in; no setting is needed. `log_lock_waits` adds the waiter's line. |
-| `skipping vacuum ... lock not available`, `skipping analyze ... lock not available`, `oldest xmin is far in the past`, or `oldest multixact is far in the past` | Maintenance stays incomplete, and an old horizon delays cleanup or freezing. [vacuum.c#automatic-vacuum-and-analyze-skips](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L558-L649) [vacuum.c#old-horizon-warnings](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L933-L988) | Check relation options, blockers, old sessions, prepared transactions, slots, and row-lock-heavy activity. | Autovacuum's skip lines need a nonnegative `log_autovacuum_min_duration`; the WARNING lines are built in. [vacuum.c#skip-log-level](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L609-L614) |
-| `database ... must be vacuumed within ... transactions` or `database is not accepting commands to avoid wraparound data loss` | An emergency. Ignored warnings lead to refusal of new commands, while uncontrolled wraparound would make old rows look like they are in the future. `GetNewTransactionId()` raises the WARNING at the warn limit and the ERROR at the stop limit, both naming the oldest database. [varsup.c#GetNewTransactionId-wraparound-limits](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L158) [maintenance.sgml#wraparound-impact](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L391-L405) [maintenance.sgml#wraparound-warning-shutdown](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L608-L635) | Autovacuum has not advanced the oldest XIDs. Check blocked or failed anti-wraparound vacuums, old transactions, prepared transactions, stale slots, and old temporary tables. A manual fix must run as a superuser, because a non-superuser VACUUM skips catalogs. | Built in. Make sure the log keeps WARNING and ERROR. |
+| ERROR `canceling autovacuum task` followed by CONTEXT `automatic vacuum of table ...`, or `automatic analyze of table ...` for an analyze-only task | A conflicting lock request cancelled a non-wraparound autovacuum worker after `deadlock_timeout`, or someone cancelled the worker by hand, because the worker raises this ERROR for any query cancel. Repeated cancellations can stop a table from ever finishing a vacuum. [proc.c#autovacuum-cancel](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375) [postgres.c#canceling-autovacuum-task](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3096-L3101) [autovacuum.c#autovacuum-error-context](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2480-L2493) | Find the DDL, `LOCK TABLE`, or other strong lock that conflicts with `SHARE UPDATE EXCLUSIVE`. The waiter's own note is DEBUG1, so only the worker's ERROR appears by default. Measured on this pin: a `LOCK TABLE ... IN SHARE MODE` against a running autovacuum logged this ERROR and CONTEXT, and the waiter acquired its lock after about 1000 ms, the default `deadlock_timeout`. The worker was kept busy by the test table's storage parameters `autovacuum_vacuum_cost_delay = 20` and `autovacuum_vacuum_cost_limit = 1` (defaults `-1`, meaning 2 ms and 200); see the [measurement script](#measurement-script). [proc.c#autovacuum-cancel-debug](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1344-L1347) | Built in; no setting is needed. `log_lock_waits` adds the waiter's line. |
+| `skipping vacuum ... lock not available`, `skipping analyze ... lock not available`, `oldest xmin is far in the past`, or `oldest multixact is far in the past` | Maintenance stays incomplete, and an old horizon delays cleanup or freezing. The two WARNINGs fire only for very old horizons: at the defaults the XID one needs a horizon more than 150,000,000 transactions old (section 1). [vacuum.c#automatic-vacuum-and-analyze-skips](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L558-L649) [vacuum.c#old-horizon-warnings](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L920-L988) | Check relation options, blockers, old sessions, prepared transactions, slots, and row-lock-heavy activity. Do not read the absence of the WARNINGs as a healthy horizon. | Autovacuum's skip lines need a nonnegative `log_autovacuum_min_duration`; the WARNING lines are built in. [vacuum.c#skip-log-level](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L609-L614) |
+| `database ... must be vacuumed within ... transactions` or `database is not accepting commands to avoid wraparound data loss` | An emergency. Ignored warnings lead to refusal of new commands, while uncontrolled wraparound would make old rows look like they are in the future. `GetNewTransactionId()` raises the WARNING at the warn limit and the ERROR at the stop limit, both naming the oldest database. [varsup.c#GetNewTransactionId-wraparound-limits](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L158) [maintenance.sgml#wraparound-impact](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L391-L405) [maintenance.sgml#wraparound-warning-shutdown](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L608-L635) | Autovacuum has not advanced the oldest XIDs. Check blocked or failed anti-wraparound vacuums, old transactions, prepared transactions, stale slots, and old temporary tables. Before the stop limit, run a database-wide `VACUUM` in the named database as a superuser. A database owner's `VACUUM` skips the shared catalogs with `only superuser can vacuum it`, other roles skip every table they do not own, and `datfrozenxid` is the minimum over all of that database's tables, shared catalogs included. Once the stop limit is reached, the check refuses new XIDs only under the postmaster. The ERROR's HINT therefore says to stop the postmaster and vacuum that database in single-user mode, and to resolve old prepared transactions and stale replication slots. [vacuum.c#vacuum_is_relation_owner](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L501-L516) [vacuum.c#vac_update_datfrozenxid](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1320-L1344) [varsup.c#stop-limit-hint](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L130) [maintenance.sgml#superuser-vacuum](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L619-L622) [maintenance.sgml#single-user-recovery](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L633-L640) | Built in. Make sure the log keeps WARNING and ERROR. |
 | `must be vacuumed before ... more MultiXactId(s) ...`, `must be vacuumed before ... more multixact member(s) ...`, `database is not accepting commands that generate new MultiXactIds ...`, or `multixact "members" limit exceeded` | PostgreSQL can force maintenance, refuse commands, or fail row-locking work before the configured MultiXact age is reached. [multixact.c#MultiXact-emergency-limits](../../../../raw/postgres-12/src/backend/access/transam/multixact.c#L920-L1140) [multixact.c#member-space-warning](../../../../raw/postgres-12/src/backend/access/transam/multixact.c#L1129-L1140) | Inspect `datminmxid`, relation MultiXact ages, long-lived row lockers, prepared transactions, and the effective member-space threshold. [multixact.c#MultiXactMemberFreezeThreshold](../../../../raw/postgres-12/src/backend/access/transam/multixact.c#L2785-L2845) | Built in. `autovacuum_multixact_freeze_max_age` needs a restart, but member-space pressure lowers the effective threshold on its own. [guc.c#autovacuum_multixact_freeze_max_age](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2976-L2985) |
-| `checkpoint starting: ...`, `checkpoint complete: ...`, `restartpoint starting: ...`, or LOG `checkpoints are occurring too frequently` | Frequent requested checkpoints raise write pressure, and long write or sync phases can line up with latency spikes. The start line names the cause; the frequency line is LOG severity, appears only for WAL-caused checkpoints within `checkpoint_warning`, and never for restartpoints. [xlog.c#LogCheckpointStart](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8356-L8372) [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8374-L8454) [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462) | Compare `checkpoints_req`, the cause flags, WAL generation, and `max_wal_size`. | Enable `log_checkpoints` (default `off`) and reload for start and end lines; the frequency line does not need it. `checkpoint_warning` and `max_wal_size` reload. [config.sgml#log_checkpoints](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6165-L6178) [guc.c#checkpoint-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2589) |
+| `checkpoint starting: ...`, `checkpoint complete: ...`, `restartpoint starting: ...`, or LOG `checkpoints are occurring too frequently` | Frequent requested checkpoints raise write pressure, and long write or sync phases can line up with latency spikes. The start line names the cause, and ` wal` means WAL since the last checkpoint reached `max_wal_size` divided by 1 + `checkpoint_completion_target` (section 6). The frequency line is LOG severity, appears only for a WAL-caused checkpoint that starts within `checkpoint_warning` of the previous checkpoint of any cause, and never for restartpoints. A standby can log `restartpoint starting: time` 15 s after skipping a restartpoint it could not perform. [xlog.c#LogCheckpointStart](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8356-L8372) [xlog.c#LogCheckpointEnd](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8374-L8454) [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462) | Compare `checkpoints_req`, the cause flags, WAL generation, and `max_wal_size`. | Enable `log_checkpoints` (default `off`) and reload for start and end lines; the frequency line does not need it. `checkpoint_warning` and `max_wal_size` reload. [config.sgml#log_checkpoints](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6165-L6178) [guc.c#checkpoint-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2589) |
 | `archive_mode enabled, yet archive_command is not set`, `archive command failed with exit code ...`, `archive command was terminated by signal ...`, or `archiving write-ahead log file ... failed too many times` | Required WAL is not archived; WAL accumulates in `pg_wal`, and the archive chain or recovery-point objective can break. [pgarch.c#archive-failures](../../../../raw/postgres-12/src/backend/postmaster/pgarch.c#L466-L545) [pgarch.c#archive-command-exits](../../../../raw/postgres-12/src/backend/postmaster/pgarch.c#L623-L680) | Check the command's exit status, destination capacity and permissions, and WAL generation against archive throughput. Verify the destination independently, because a zero exit status is not proof of an archived object. | `archive_mode` needs a restart; `archive_command` and `archive_timeout` reload. The command must return zero only after success. [config.sgml#archive-mode-command](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L3072-L3133) |
 | `terminating walsender process due to replication timeout`, `terminating walreceiver due to timeout`, a lost WAL stream, or `requested WAL segment ... has already been removed` | Replication disconnects or cannot continue from the requested point. If the WAL is in neither `pg_wal` nor the archive, the replica or subscriber needs a new starting point or a rebuild. [walsender.c#WalSndCheckTimeOut](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2125-L2149) [walreceiver.c#receiver-errors](../../../../raw/postgres-12/src/backend/replication/walreceiver.c#L420-L529) [xlog.c#requested-WAL-removed](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L3855-L3865) | Check network continuity, sender and receiver timeouts, slot retention, `wal_keep_segments`, archive availability, and whether the expected worker is running. | `wal_receiver_timeout` reloads; `wal_sender_timeout` is `PGC_USERSET`. The messages are built in. [guc.c#wal_receiver_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2118-L2127) [guc.c#wal_sender_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2656-L2665) |
-| `server process (PID ...) was terminated by signal ...`, `terminating any other active server processes`, `all server processes terminated; reinitializing`, `database system was not properly shut down; automatic recovery in progress`, or a WAL write or fsync PANIC | A WAL I/O PANIC stops the server. A backend crash makes the postmaster terminate every other server process, reinitialize shared memory, and run [crash recovery](../../../glossary.md#crash-recovery), which also deletes all collected statistics. [xlog.c#WAL-write-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2494-L2510) [xlog.c#WAL-fsync-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10093-L10126) [postmaster.c#LogChildExit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3678-L3686) [postmaster.c#backend-crash-reinitialization](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3378-L3407) [postmaster.c#reinitialize-after-crash](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3911-L3928) [xlog.c#not-properly-shut-down](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6764-L6766) | Treat this as an availability and durability incident. Keep the whole message chain; check storage, the filesystem, the kernel and out-of-memory killer, extension crashes, and recovery completion. After recovery, schedule `VACUUM` and `ANALYZE` on busy tables, because autovacuum no longer sees their pre-crash dead rows. Measured on this pin: a `SIGKILL` of one backend produced this whole chain, ending with `database system is ready to accept connections`. | Built in, with the default `restart_after_crash = on`. Make sure the log keeps LOG and PANIC lines; collect host and kernel evidence separately. [guc.c#restart_after_crash](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1277-L1285) |
+| `<process> (PID ...) was terminated by signal ...` or `<process> (PID ...) exited with exit code ...`, `terminating any other active server processes`, `all server processes terminated; reinitializing`, `database system was not properly shut down; automatic recovery in progress`, `aborting startup due to startup process failure`, or a PANIC such as a WAL write or fsync failure or a data-file `could not fsync file` | `<process>` is `server process` for a client backend, with `DETAIL: Failed process was running: ...` naming its statement, or a process type such as `checkpointer process`, `startup process`, or `background worker "..."`. A PANIC aborts the process that hit it, which the postmaster then handles as a crash. A crash makes the postmaster terminate every other server process, reinitialize shared memory, and run [crash recovery](../../../glossary.md#crash-recovery), which also deletes all collected statistics. A failed startup process is not restarted, so the server stays down. [xlog.c#WAL-write-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2494-L2510) [xlog.c#WAL-fsync-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10093-L10126) [sync.c#ProcessSyncRequests-fsync-failure](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L392-L396) [fd.c#data_sync_elevel](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L3470-L3491) [postmaster.c#LogChildExit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3651-L3697) [postmaster.c#startup-failure](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L2929-L2935) [postmaster.c#startup-crashed-exit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3907-L3909) [postmaster.c#backend-crash-reinitialization](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3378-L3407) [postmaster.c#reinitialize-after-crash](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3911-L3928) [xlog.c#not-properly-shut-down](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6764-L6766) | Treat this as an availability and durability incident. Keep the whole message chain; check storage, the filesystem, the kernel and out-of-memory killer, extension crashes, and recovery completion. After recovery, schedule `VACUUM` and `ANALYZE` on busy tables, because autovacuum no longer sees their pre-crash dead rows. Measured on this pin: a `SIGKILL` of one backend produced this whole chain, ending with `database system is ready to accept connections`. | Built in, with the default `restart_after_crash = on`. Make sure the log keeps LOG and PANIC lines; collect host and kernel evidence separately. [guc.c#restart_after_crash](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1277-L1285) |
 | `could not extend file ... Check free disk space` or a short-write variant | The statement that needed the relation to grow fails. Continued lack of space can also block WAL, temp, or other writes. [md.c#mdextend](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L398-L418) | Check free space, inodes, quotas, storage errors, and whether retained WAL, temp files, or relation growth used the volume. | Built in. PostgreSQL does not expose filesystem free space in the views used here, so add operating-system monitoring. |
 | `out of shared memory` with `You might need to increase max_locks_per_transaction` | The lock request fails, so the statement or transaction cannot continue. [lock.c#LockAcquireExtended](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L918-L930) | Check transactions that touch many relations or partitions, concurrent lock demand, and prepared transactions. The lock table is sized as `max_locks_per_transaction * (MaxBackends + max_prepared_transactions)` plus a 10% margin, which is not a hard per-transaction cap. [lock.c#NLOCKENTS](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L53-L57) [lock.c#lock-hash-margin](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L3437-L3460) [config.sgml#max_locks_per_transaction](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L8615-L8642) | `max_locks_per_transaction` and `max_prepared_transactions` need a restart; standbys need at least the primary's values. [guc.c#max_prepared_transactions](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2344-L2352) [guc.c#max_locks_per_transaction](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2463-L2473) [config.sgml#standby-lock-capacity](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L8639-L8642) |
-| WARNING `page verification failed, calculated checksum ... but expected ...`, ERROR `invalid page in block ... of relation ...`, WARNING `...; zeroing out page`, a base-backup checksum failure, or a nonzero checksum counter | PostgreSQL found a page it read to be damaged. The checksum WARNING needs data checksums, but the `invalid page` ERROR also fires without them when the page header is impossible. A `zeroing out page` WARNING means rows were dropped from that read. A zero counter does not verify unread pages. [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L161) [bufmgr.c#invalid-page-handling](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) [basebackup.c#backup-checksum-failures](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1543-L1622) | Preserve evidence, identify the relation and block, investigate storage and I/O, and validate independent backups or replicas before any repair. Measured on this pin: an impossible header on a checksum-free cluster raised `invalid page in block 0 of relation base/...`, and `checksum_failures` stayed NULL. | Checksums must be enabled for the counters. Keep `ignore_checksum_failure` and `zero_damaged_pages` at `off`; see [Defaults that decide what you see](#defaults-that-decide-what-you-see). [guc.c#damaged-page-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1162) |
+| WARNING `page verification failed, calculated checksum ... but expected ...`, ERROR `invalid page in block ... of relation ...`, WARNING `...; zeroing out page`, a base-backup checksum failure, or a nonzero checksum counter | PostgreSQL found a page it read to be damaged. The checksum WARNING needs data checksums, but the `invalid page` ERROR also fires without them when the page header is impossible. A `zeroing out page` WARNING means rows were dropped from that read. A zero counter does not verify unread pages. [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L161) [bufmgr.c#invalid-page-handling](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) [basebackup.c#backup-checksum-failures](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1543-L1622) | Preserve evidence, identify the relation and block, investigate storage and I/O, and validate independent backups or replicas before any repair. Measured on this pin: an impossible header on a checksum-free cluster raised `invalid page in block 0 of relation base/...`, and `checksum_failures` stayed NULL. | Checksums must be enabled, and `track_counts` on, for the counters. Keep `ignore_checksum_failure` and `zero_damaged_pages` at `off`; see [Defaults that decide what you see](#defaults-that-decide-what-you-see). [guc.c#damaged-page-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1162) |
 | `using stale statistics instead of current ones because stats collector is not responding` | Collected counters can be stale or missing, so conclusions based on them are unreliable. [pgstat.c#collector-not-responding](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L5741-L5765) | Check the collector process, the log chain, the local socket and filesystem, and whether a crash or restart is in progress. Re-capture after the collector resumes. | A built-in LOG line, kept by the default `log_min_messages`. |
 | Connection or disconnection churn, or unexpected replication commands | Short sessions add connection overhead; replication commands should match the expected replication clients. `log_disconnections` includes session duration. [config.sgml#log-connections-disconnections](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6182-L6222) [config.sgml#log_replication_commands](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6539-L6551) | Check pool behavior, authentication retries, restart loops, and the replication inventory. Duplicate connection lines can be normal during password prompting. | Reload file changes to `log_connections` and `log_disconnections`; only sessions started afterwards pick them up. `log_replication_commands` is `PGC_SUSET`. [guc.c#PGC_SU_BACKEND-reload](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6811-L6858) |
 
@@ -1280,7 +1461,7 @@ fields cited in each row.
 
 | Priority | Finding | Repercussion | Root-cause direction |
 |---|---|---|---|
-| Immediate | XID or MultiXact stop warning, WAL write or fsync PANIC, checksum or `invalid page` error, a `zeroing out page` WARNING, disk-extension failure, uncontrolled `pg_wal` growth, or required WAL already removed | Commands, writes, or replication fail; WAL I/O can stop the server; damaged pages mean possible data loss. [varsup.c#GetNewTransactionId-wraparound-limits](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L158) [multixact.c#MultiXact-emergency-limits](../../../../raw/postgres-12/src/backend/access/transam/multixact.c#L920-L1140) [xlog.c#WAL-fsync-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10093-L10126) [bufmgr.c#invalid-page-handling](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) | Preserve evidence and administrative access, reduce nonessential load, find old transactions, prepared transactions, and slots, verify storage, and confirm that the needed WAL, archive, and backups still exist. |
+| Immediate | XID or MultiXact wraparound WARNING or stop-limit ERROR, a WAL write or fsync PANIC, a data-file fsync PANIC, checksum or `invalid page` error, a `zeroing out page` WARNING, disk-extension failure, uncontrolled `pg_wal` growth, or required WAL already removed | Commands, writes, or replication fail; a PANIC crash-restarts the server; damaged pages mean possible data loss. [varsup.c#GetNewTransactionId-wraparound-limits](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L158) [multixact.c#MultiXact-emergency-limits](../../../../raw/postgres-12/src/backend/access/transam/multixact.c#L920-L1140) [xlog.c#WAL-fsync-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10093-L10126) [sync.c#ProcessSyncRequests-fsync-failure](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L392-L396) [bufmgr.c#invalid-page-handling](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) | Preserve evidence and administrative access, reduce nonessential load, find old transactions, prepared transactions, and slots, verify storage, and confirm that the needed WAL, archive, and backups still exist. |
 | High | Connection exhaustion, sustained lock waits, deadlocks, repeated unexpected timeouts, stopped replication workers, synchronous-replication delay, or a crash-recovery chain in the log | Clients are refused, work waits or aborts, replication falls behind, synchronous commits hold locks longer, and after a crash every collected counter restarts. [proc.c#InitProcess](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L347-L363) [deadlock.c#DeadLockReport](../../../../raw/postgres-12/src/backend/storage/lmgr/deadlock.c#L1139-L1146) [high-availability.sgml#synchronous-replication-impact](../../../../raw/postgres-12/doc/src/sgml/high-availability.sgml#L1238-L1244) [xlog.c#pgstat_reset_all-call](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6843-L6846) | Identify the client backends, blockers, configured timeout, expected topology, and replication stage. A single intentional timeout is a guardrail event, not automatically an incident. After a crash, re-baseline counters and vacuum busy tables. |
 | Sustained degradation | Growing dead rows, growing `dead but not yet removable` counts, repeated `canceling autovacuum task`, stale analyze times, repeated temp files, slow statements, frequent requested checkpoints, or backend writes and fsyncs | Table and index space and query cost grow, plans use stale statistics, temp and checkpoint I/O compete with the workload, and latency rises. [monitoring.sgml#pg_stat_all_tables](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2773-L2831) [monitoring.sgml#pg_stat_bgwriter](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2412-L2475) [vacuumlazy.c#autovacuum-summary](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L380-L441) | Check autovacuum thresholds, horizons, and lock conflicts, the top `pg_stat_statements` deltas, spilling sorts and hashes, and WAL and checkpoint sizing. [autovacuum.c#threshold-decision](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3060-L3080) [config.sgml#log_temp_files](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6562-L6573) [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462) |
 | Observability gap | Redacted activity or query fields, a hidden `backend_type`, truncated query text, disabled I/O timing, a missing extension or topology view, a collector warning, wiped counters, or `pending_restart = true` | The database may be unhealthy while the evidence is missing. Empty event logs and zero I/O time are not gaps by themselves when nothing qualifying happened. [config.sgml#track_activity_query_size](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6820-L6834) [config.sgml#track_io_timing](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L6854-L6871) [catalogs.sgml#pg_settings_pending_restart](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L10494-L10498) | Verify access, effective settings, topology, extension loading, and the counter epoch first. Apply the needed restart, reload, or session setting, then start a new measurement interval before drawing conclusions. |
@@ -1304,7 +1485,8 @@ the default and damaged-page legs in
 [Defaults that decide what you see](#defaults-that-decide-what-you-see), the
 prepared-transaction blocker, lock-wait and deadlock logging, temp-file
 accounting, the three duration-line forms, checkpoint and restartpoint lines,
-the autovacuum summaries and cancellation, the two recovery-conflict outcomes,
+the autovacuum summaries and cancellation, the two recovery-conflict outcomes
+and the idle session's HINT, the standby's skipped and retried restartpoint,
 the counter wipes in [When counters reset](#when-counters-reset), and one run
 of every fenced SQL block on this page. A measurement shows what this build
 did; the cited source explains why.
@@ -1313,11 +1495,11 @@ did; the cited source explains why.
 |---|---|
 | Purpose | Backs the measured statements above and checks that every SQL block on the page runs on PostgreSQL 12.2 as a superuser and as a `pg_monitor` member on the primary, and as a superuser on a standby. |
 | Invocation | Save the fenced script as `.wiki-runtime/tmp/dh12-work/measure.sh`, then run `bash .wiki-runtime/tmp/dh12-work/measure.sh` from the repository root. Pass stage names to run a subset, for example `bash .wiki-runtime/tmp/dh12-work/measure.sh logs report`. |
-| Stages | Default order: `build default cluster standby access prepared deadlock logs autovac conflict crash checksum sqlcheck report clean`. Each stage is described in the next table. |
+| Stages | Default order: `build default cluster standby access prepared deadlock logs autovac conflict restartpoint crash checksum sqlcheck report clean`. Each stage is described in the next table. |
 | Environment | `DH12_JOBS`, a positive integer, default `8`, sets build parallelism. Everything else is fixed: the pin, the sandbox `.wiki-runtime/tmp/dh12/`, its socket directory `s/`, ports 55471 (primary), 55472 (standby), and 55473 (checksum cluster), and the bootstrap superuser `wiki_dh12`. The script exports `LC_ALL=C`, `TMPDIR` inside the sandbox, and `PGCONNECT_TIMEOUT=10`, and unsets the libpq service, host, port, user, database, password, and option variables. |
-| Prerequisites | Bash, Git, the C toolchain a Git checkout of PostgreSQL 12 needs (a C compiler, make, bison, flex, Perl), and POSIX utilities including `dd` and `cksum`. `pgrep` and `lsof` serve the teardown checks that MANDATORY Environment Isolation requires. The build uses `--without-readline --without-zlib`, which only change `psql` line editing and compression; no measured result depends on them. No network and no system PostgreSQL are used. Every object, role, prepared transaction, snapshot, crash, and corrupted page is a disposable fixture inside the sandbox. |
-| Output | `.wiki-runtime/tmp/dh12/out/`. Read `results.txt` first; `report` prints it with the platform facts. Per-leg files sit beside it, for example `access-progress.txt`, `prepared-queries.txt`, `conflict-log.txt`, and the server logs `primary.log`, `standby.log`, and `ck.log`. |
-| Runtime | On the recorded machine a cold build took about 60 s with `DH12_JOBS=16`, and the measurement stages about 60 s, 30 s of it the standby conflict delay. A re-run while the build exists skips compilation. |
+| Prerequisites | Bash, Git, the C toolchain a Git checkout of PostgreSQL 12 needs (a C compiler, make, bison, flex, Perl), and POSIX utilities including `dd` and `cksum`. `pgrep` and `lsof` serve the teardown checks that MANDATORY Environment Isolation requires, so the script stops before any stage runs if either is missing. The build uses `--without-readline --without-zlib`, which only change `psql` line editing and compression; no measured result depends on them. No network and no system PostgreSQL are used. Every object, role, prepared transaction, snapshot, crash, and corrupted page is a disposable fixture inside the sandbox. |
+| Output | `.wiki-runtime/tmp/dh12/out/`. Read `results.txt` first; `report` prints it with the platform facts. Per-leg files sit beside it, for example `access-progress.txt`, `prepared-queries.txt`, `conflict-log.txt`, `rp-inherited.txt`, `rp-control.txt`, and the server logs `primary.log`, `standby.log`, and `ck.log`. |
+| Runtime | On the recorded machine, with `DH12_JOBS=16`, a run from an empty sandbox took about 3 minutes: 68 s to build and 111 s for the measurement stages, of which about 30 s is the standby conflict delay and 46 s the restartpoint probe. A re-run while the build was still present took 113 s, 3 s of it in `build`. |
 | Cleanup | `clean` stops all three clusters, checks that no `postmaster.pid`, process, socket, or listening port remains, and deletes the sandbox. `stop` does the same without deleting. |
 
 | Stage | What it does |
@@ -1325,13 +1507,14 @@ did; the cited source explains why.
 | `build` | Checks the pin and a clean source tree, configures and builds out of tree, installs the server, `pg_stat_statements`, and `pgstattuple`, then checks that the source tree is still clean. Reuses an existing build. |
 | `default` | Creates a fresh primary with default settings, reads the defaults from `pg_settings`, shows that `PREPARE TRANSACTION` fails, writes an impossible header into one page of a disposable table, and reads it back. Ends with the primary stopped. |
 | `cluster` | Writes the non-default settings into `dh12.conf`, includes it from `postgresql.conf`, and starts the primary. |
-| `standby` | Builds a streaming standby with `pg_basebackup -R -C -S dh12_standby` and waits for streaming. |
+| `standby` | Builds a streaming standby with `pg_basebackup -R -C -S dh12_standby`, waits for streaming, and records the settings the standby took from the copied `dh12.conf`. |
 | `access` | Creates the roles `dh_monitor` (a `pg_monitor` member) and `dh_plain`, runs a slowed superuser `VACUUM`, and probes progress, settings, activity, and `pg_stat_statements` visibility as each role; runs the earlier subscription query and `pg_ls_waldir()` as each role. |
 | `prepared` | Prepares a transaction holding `ACCESS EXCLUSIVE`, blocks a reader behind it, and runs the page's blocker and prepared-lock queries. |
 | `deadlock` | Runs a two-session, two-row deadlock and checks the counter and log. |
 | `logs` | Runs a spilling query, three slow statements over three protocols, and a WAL burst; checks temp-file, duration, checkpoint, and restartpoint lines. |
 | `autovac` | Holds a snapshot during an autovacuum, releases it, and then cancels a slowed autovacuum with a conflicting lock. |
-| `conflict` | Creates one running and one idle `REPEATABLE READ` session on the standby, vacuums their rows away on the primary, waits for both cancellations, then restarts the standby cleanly. |
+| `conflict` | Creates one running and one idle `REPEATABLE READ` session on the standby, vacuums their rows away on the primary, waits for both cancellations, checks that the idle session's FATAL carried the reconnect HINT, then restarts the standby cleanly. |
+| `restartpoint` | Raises the primary's `max_wal_size` to `1GB` with `ALTER SYSTEM` and a reload. Restarts the standby twice with `log_min_messages = debug2`: first on the inherited 32 MB, then with `max_wal_size = 1GB` on its command line. In each leg it switches WAL segments and runs `CHECKPOINT` on the primary, then reads the standby log. It checks that the first leg logs a skipped restartpoint and then a `time` restartpoint 13 to 18 s later, and that the second leg logs neither within 30 s. Then it resets the primary's setting and restarts the standby normally. |
 | `crash` | Kills one primary backend with `SIGKILL`, then stops the primary with `pg_ctl -m immediate`, reading counters and markers before and after each. |
 | `checksum` | Creates a separate cluster with `initdb -k`, changes one free-space byte in two tables, and reads them with default, `ignore_checksum_failure`, and `zero_damaged_pages` settings. Ends with that cluster stopped. |
 | `sqlcheck` | Extracts every fenced SQL block from this page, substitutes the two `schema.*_name` placeholders with a fixture, and runs each block as listed in Purpose. |
@@ -1339,7 +1522,10 @@ did; the cited source explains why.
 | `stop`, `clean` | Stop the clusters with the teardown checks; `clean` also deletes the sandbox. |
 
 Every setting and fixture state that departs from the default is listed below,
-with its scope and the results that depend on it.
+with its scope and the results that depend on it. The `dh12.conf` settings
+apply to the standby too: `pg_basebackup` copies the primary's data
+directory, including `dh12.conf` and the `include_if_exists` line in
+`postgresql.conf`, and the `standby` stage records the copied values.
 
 | Setting or state | Default | Value here | Where set | Context and apply scope | Why the script needs it | Results that depend on it |
 |---|---|---|---|---|---|---|
@@ -1351,7 +1537,10 @@ with its scope and the results that depend on it.
 | `log_checkpoints` | `off` | `on` | `dh12.conf` | `PGC_SIGHUP`, reload [guc.c#log_checkpoints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1217-L1225) | Logs checkpoint and restartpoint start lines with their cause | Start lines; the frequency line does not depend on it |
 | `log_autovacuum_min_duration` | `-1` | `0` | `dh12.conf` | `PGC_SIGHUP`, reload [guc.c#log_autovacuum_min_duration](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2715-L2725) | Logs every autovacuum summary | The held and released summaries; the cancellation ERROR does not depend on it |
 | `autovacuum_naptime` | `60` s | `1` s | `dh12.conf` | `PGC_SIGHUP`, reload [guc.c#autovacuum_naptime](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2937-L2946) | Makes autovacuum visit within seconds | Timing of the `autovac` stage only |
-| `max_wal_size`, `min_wal_size` | `1GB` (written by `initdb`), `80MB` | `32MB`, `32MB` | `dh12.conf` | `PGC_SIGHUP`, reload [guc.c#min_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2542-L2552) [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564) | Makes a 150,000-row insert trigger WAL-caused checkpoints | Checkpoint, frequency, and restartpoint lines |
+| `max_wal_size`, `min_wal_size` | `1GB` (written by `initdb`), `80MB` | `32MB`, `32MB` | `dh12.conf` | `PGC_SIGHUP`, reload [guc.c#min_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2542-L2552) [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564) | At 32 MB the trigger distance is one segment, so every finished segment requests a checkpoint on the primary and a restartpoint on the standby; see section 6 [xlog.c#CalculateCheckpointSegments](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2255-L2281) | Checkpoint, frequency, and restartpoint lines, and the inherited leg of the `restartpoint` stage |
+| `max_wal_size` on the primary during the `restartpoint` stage | `1GB` | `1GB`, overriding `dh12.conf` | `ALTER SYSTEM`, then `ALTER SYSTEM RESET` at the end of the stage | `PGC_SIGHUP`, reload. Settings in `postgresql.auto.conf` override those in `postgresql.conf`, and the stage waits until a new session reads `1GB` [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564) [config.sgml#postgresql-auto-conf](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L186-L196) | Keeps the primary's own segment switch from requesting a checkpoint, so the only new checkpoint record is the explicit `CHECKPOINT` | Both legs of the `restartpoint` stage |
+| `log_min_messages` on the standby | `warning` | `debug2` | `pg_ctl -o` at the two probe starts | `PGC_SUSET`; the command-line value applies from the restart [guc.c#log_min_messages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4296-L4305) | Logs the DEBUG2 `skipping restartpoint` line | Both legs of the `restartpoint` stage |
+| `max_wal_size` on the standby, control leg | `1GB` | `1GB`, overriding the copied `32MB` | `pg_ctl -o` at the control leg's start | `PGC_SIGHUP`; the command-line value applies from the restart [guc.c#max_wal_size](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2554-L2564) | Gives the standby a 42-segment trigger distance, so a segment switch requests no restartpoint | The control leg of the `restartpoint` stage |
 | Physical slot `dh12_standby` | No slot | Created by `pg_basebackup -C -S` | `standby` stage | Fixture state [pg_basebackup.sgml#write-recovery-conf](../../../../raw/postgres-12/doc/src/sgml/ref/pg_basebackup.sgml#L212-L225) [xlog.c#KeepLogSeg](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9307-L9349) | With 32 MB of WAL and no slot, the primary can remove a segment the standby has not received | Every standby result; the slot holds no xmin because the standby sends no feedback |
 | `work_mem` | `4MB` | `64kB` | Session `SET` | `PGC_USERSET`, session [guc.c#work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2230-L2241) | Forces the function scan and the sort to spill | The temp-file counts and bytes |
 | `vacuum_cost_delay`, `vacuum_cost_limit` | `0`, `200` | `20` ms, `1` | Session `SET` | `PGC_USERSET`, session [guc.c#vacuum_cost_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2311-L2319) [guc.c#vacuum_cost_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3372-L3381) | Keeps the manual `VACUUM` running for seconds so its progress row can be probed | The progress visibility rows |
@@ -1360,30 +1549,34 @@ with its scope and the results that depend on it.
 | Data checksums | Off | On for the `ck` cluster only | `initdb -k` | Cluster creation [initdb.sgml#data-checksums](../../../../raw/postgres-12/doc/src/sgml/ref/initdb.sgml#L212-L225) | Checksum verification needs it | Every `checksum` stage result |
 | Table storage parameters | `autovacuum_vacuum_threshold` and `scale_factor` `-1` (use 50 rows and 0.2), cost delay `-1` (use 2 ms), cost limit `-1` (use 200), `autovacuum_enabled = true` | Threshold `0` and scale `0` on `dh_av` and `dh_avc`; cost delay `20` and limit `1` on `dh_avc`; `autovacuum_enabled = false` on `dh_rc` and `dh_crash` | `CREATE TABLE ... WITH` | Per table [reloptions.c#autovacuum-options](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L107-L243) [reloptions.c#real-options](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L358-L377) [guc.c#autovacuum_vacuum_threshold](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2947-L2955) [guc.c#autovacuum_vacuum_scale_factor](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3394-L3402) [guc.c#autovacuum_vacuum_cost_delay](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3383-L3392) | Makes autovacuum visit the two test tables at once, keeps one worker busy long enough to cancel, and keeps autovacuum away from the conflict and crash tables | The `autovac`, `conflict`, and `crash` results |
 | `port`, `unix_socket_directories`, `listen_addresses` | `5432`, `/tmp`, `localhost` | Sandbox ports, the sandbox socket directory, `''` | `pg_ctl -o` | `PGC_POSTMASTER`, restart [guc.c#port](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2177-L2185) [guc.c#socket-and-listen](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3936-L3960) | Isolation | None |
-| Fixture states | None | A prepared transaction, held snapshots on the primary and the standby, one impossible page header, two changed free-space bytes, one `SIGKILL`, and one immediate shutdown | The stages | Disposable | Each creates the condition its claim describes | The matching stage results |
+| Fixture states | None | A prepared transaction, held snapshots on the primary and the standby, one impossible page header, two changed free-space bytes, a WAL segment switch and a `CHECKPOINT` in each probe leg, one `SIGKILL`, and one immediate shutdown | The stages | Disposable | Each creates the condition its claim describes | The matching stage results |
 
-**Last run:** 2026-10-08, report written at 19:52:57Z, PostgreSQL 12.2 at
+**Last run:** 2026-10-14, report written at 18:06:00Z, PostgreSQL 12.2 at
 `45b88269a353ad93744772791feb6d01bc7e1e42`, built by this script with
 `--without-readline --without-zlib`; Linux x86_64 (a WSL2 kernel), gcc 13.3.0,
 64-bit, `block_size=8192`, `max_data_alignment=8`, locale `C`, UTF-8; data
 checksums off on the primary and standby and on for the `ck` cluster. The run
 started from an empty sandbox and ran every stage from `build` to `report`;
-each stage passed its built-in checks, and `clean` ran afterwards. The
-published script is byte-identical to the text that ran. These observations
-supplement the cited source; they do not replace it.
+each stage passed its built-in checks. A second run of the same stages while
+the build was still present also passed every check; its results matched
+except for the timing-dependent counts noted below. `clean` ran afterwards.
+The published script is byte-identical to the text that ran. These
+observations supplement the cited source; they do not replace it.
 
 | Stage | Measured result |
 |---|---|
-| `default` | Defaults as listed in the defaults table; `PREPARE TRANSACTION` failed with `prepared transactions are disabled`; the impossible header raised `invalid page in block 0 of relation base/...`; `checksum_failures` was NULL |
+| `default` | Defaults as listed in the defaults table, including `checkpoint_completion_target = 0.5`, `data_sync_retry = off`, `log_duration = off`, `log_statement = none`, `log_transaction_sample_rate = 0`, `autovacuum_freeze_max_age = 200000000`, and `vacuum_freeze_min_age = 50000000`; `PREPARE TRANSACTION` failed with `prepared transactions are disabled`; the impossible header raised `invalid page in block 0 of relation base/...`; `checksum_failures` was NULL |
+| `standby` | Streaming, `async`; slot `dh12_standby` physical, active, `xmin` NULL; in recovery; the standby's `dh12.conf` settings matched the primary's, including `max_wal_size = 32MB` |
 | `access` | Superuser: `relid` visible, phase `scanning heap`, `heap_blks_total = 173`; `pg_monitor` and ordinary role: `pid` and `datname` only. Settings: ordinary role saw `archive_command` only. Activity: the ordinary role saw 8 rows, 7 with NULL `backend_type`, and counted 1 client backend against 2. `pg_stat_statements`: all other-user rows redacted for the ordinary role, none for `pg_monitor`. Earlier subscription query: superuser ok, `pg_monitor` `permission denied for table pg_subscription`. `pg_ls_waldir()`: allowed for `pg_monitor`, denied for the ordinary role |
 | `prepared` | `pg_blocking_pids()` returned `{0}`; the prepared transaction held `relation` `AccessExclusiveLock` and `transactionid` `ExclusiveLock`, both with NULL `pid` and `-1/<transaction>`; the wait line said `Process holding the lock: 0.` |
 | `deadlock` | One victim; `deadlocks` 0 to 1; `detected deadlock while waiting for ShareLock on transaction` and `deadlock detected` logged |
-| `logs` | 2 temp files, 5,634,432 bytes in both the counters and the log; `statement:`, `execute <unnamed>:`, and `execute P0_2:` duration lines; one `checkpoint starting: immediate force wait`, three `checkpoint starting: wal`, and three LOG `checkpoints are occurring too frequently` lines (two `0 seconds apart`, one `1 second apart`) with hints; standby: two `restartpoint starting: wal`, one `restartpoint starting: time`, and no frequency line |
+| `logs` | 2 temp files, 5,634,432 bytes in both the counters and the log; `statement:`, `execute <unnamed>:`, and `execute P0_2:` duration lines; one `checkpoint starting: immediate force wait`, three `checkpoint starting: wal`, and four LOG `checkpoints are occurring too frequently (0 seconds apart)` lines with hints, the last with no start line after it; standby: two `restartpoint starting: wal` and no frequency line. The warm re-run logged three frequency lines |
 | `autovac` | Held: `0 removed, 2000 remain, 1000 are dead but not yet removable`; released: `1000 removed, 1000 remain, 0 are dead but not yet removable`; cancellation: `canceling autovacuum task` with CONTEXT `automatic vacuum of table "postgres.public.dh_avc"`, waiter acquired after about 1000 ms, no `sending cancel` line |
-| `conflict` | One FATAL `terminating connection due to conflict with recovery` and one ERROR `canceling statement due to conflict with recovery`, both with DETAIL `User query might have needed to see row versions that must be removed.`, 30 s after the `VACUUM`; `confl_snapshot` 0 to 2; after a clean standby restart, 0 with a new `stats_reset` |
+| `conflict` | One FATAL `terminating connection due to conflict with recovery` with HINT `In a moment you should be able to reconnect to the database and repeat your command.`, and one ERROR `canceling statement due to conflict with recovery`, both with DETAIL `User query might have needed to see row versions that must be removed.`, 30 s after the `VACUUM`; `confl_snapshot` 0 to 2; after a clean standby restart, 0 with a new `stats_reset` |
+| `restartpoint` | Inherited leg, standby `max_wal_size = 32MB`: one `DEBUG:  skipping restartpoint, already performed at X/X`, then `restartpoint starting: time` 15,009 ms later (15,017 ms in the warm re-run). Control leg, standby `max_wal_size = 1GB`: no skip line and no restartpoint line within 30 s |
 | `crash` | `SIGKILL`: the full reinitialization chain; `n_dead_tup` 500 to 0, both `stats_reset` values new, the marker statement gone from `pg_stat_statements`. Immediate shutdown: `n_dead_tup` 250 to 0, both `stats_reset` values new, the second marker still present |
 | `checksum` | Default: checksum WARNING plus `invalid page` ERROR; `ignore_checksum_failure`: WARNING and 100 rows; `zero_damaged_pages`: WARNING, `zeroing out page` WARNING, and 0 rows; `checksum_failures = 3` |
-| `sqlcheck` | All 11 fenced SQL blocks ran without error as listed in Purpose |
+| `sqlcheck` | All 11 fenced SQL blocks ran without error as listed in Purpose; their concatenated text had `cksum` `3372585192 13604` |
 
 ```bash
 #!/usr/bin/env bash
@@ -1420,6 +1613,11 @@ GUARD="SET /* wiki_dh12_guard */ statement_timeout = '120s';
 SET /* wiki_dh12_guard */ lock_timeout = '10s';"
 
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+# The teardown checks required by MANDATORY Environment Isolation need both
+# tools; without them a process or port check would pass silently.
+for tool in pgrep lsof; do
+  command -v "$tool" > /dev/null 2>&1 || die "$tool is required for the teardown checks"
+done
 owned() { test -f "$RUN/owner" && test "$(cat "$RUN/owner")" = "$OWNER"; }
 claim() {
   if test -e "$RUN"; then owned || die "Existing unowned sandbox: $RUN"; fi
@@ -1458,9 +1656,10 @@ flat() { tr '\n' ';' < "$1"; }
 running() { test -f "$1/postmaster.pid" && "$INSTALL/bin/pg_ctl" -D "$1" status > /dev/null 2>&1; }
 port_busy() { lsof -nP -iTCP:"$1" -sTCP:LISTEN > /dev/null 2>&1 || test -e "$SOCK/.s.PGSQL.$1"; }
 start_cluster() {
+  # $1 data directory, $2 port, $3 log file, $4 optional extra server options
   if port_busy "$2"; then die "Port or socket $2 is already in use"; fi
   "$INSTALL/bin/pg_ctl" -D "$1" -l "$3" -w -t 120 start \
-    -o "-p $2 -k $SOCK -c listen_addresses=''" > /dev/null || die "Start failed: $1"
+    -o "-p $2 -k $SOCK -c listen_addresses='' ${4:-}" > /dev/null || die "Start failed: $1"
 }
 stop_one() {
   owned || return 1
@@ -1525,15 +1724,17 @@ default_leg() {
   q "$PPORT" "$SU" -A -F '|' > "$OUT/default-settings.txt" <<'SQL' || die "Settings capture failed"
 SELECT /* wiki_dh12_defaults */ name, setting, coalesce(unit, ''), boot_val, source, context
 FROM pg_settings
-WHERE name IN ('checkpoint_warning', 'data_checksums', 'deadlock_timeout',
+WHERE name IN ('autovacuum_freeze_max_age', 'checkpoint_completion_target',
+  'checkpoint_warning', 'data_checksums', 'data_sync_retry', 'deadlock_timeout',
   'hot_standby', 'hot_standby_feedback', 'ignore_checksum_failure', 'lock_timeout',
   'log_autovacuum_min_duration', 'log_checkpoints', 'log_connections',
-  'log_destination', 'log_disconnections', 'log_line_prefix', 'log_lock_waits',
-  'log_min_duration_statement', 'log_min_messages', 'log_temp_files',
+  'log_destination', 'log_disconnections', 'log_duration', 'log_line_prefix',
+  'log_lock_waits', 'log_min_duration_statement', 'log_min_messages',
+  'log_statement', 'log_temp_files', 'log_transaction_sample_rate',
   'logging_collector', 'max_prepared_transactions', 'max_standby_streaming_delay',
   'max_wal_size', 'restart_after_crash', 'shared_preload_libraries',
   'statement_timeout', 'track_activity_query_size', 'track_io_timing',
-  'zero_damaged_pages')
+  'vacuum_freeze_min_age', 'zero_damaged_pages')
 ORDER BY name;
 SQL
   record "default.settings: $(flat "$OUT/default-settings.txt")"
@@ -1623,6 +1824,8 @@ standby() {
   record "standby.replication: $(val "$PPORT" "$SU" "SELECT /* wiki_dh12_replication */ state || ' ' || sync_state FROM pg_stat_replication;")"
   record "standby.slot: $(val "$PPORT" "$SU" "SELECT /* wiki_dh12_slot */ slot_name || ' ' || slot_type || ' active=' || active || ' xmin=' || coalesce(xmin::text, 'NULL') FROM pg_replication_slots;")"
   record "standby.in_recovery: $(val "$SPORT" "$SU" "SELECT /* wiki_dh12_recovery */ pg_is_in_recovery();")"
+  # pg_basebackup copied dh12.conf, so the standby runs with the same settings.
+  record "standby.nondefault: $(val "$SPORT" "$SU" "SELECT /* wiki_dh12_standby_nondefault */ string_agg(name || '=' || setting || coalesce(unit, ''), ';' ORDER BY name) FROM pg_settings WHERE sourcefile LIKE '%/dh12.conf';")"
 }
 
 roles() {
@@ -2109,6 +2312,8 @@ SQL
   since "$OUT/standby.log" "$ms" \
     | grep -E 'conflict with recovery|User query might have needed|In a moment you should be able to reconnect' \
     > "$OUT/conflict-log.txt"
+  grep -q 'HINT:  In a moment you should be able to reconnect' "$OUT/conflict-log.txt" \
+    || die "The idle session's FATAL carried no reconnect HINT"
   record "conflict.confl_snapshot: before=$c0 after=$c1 seconds_from_vacuum_to_both_messages=$elapsed"
   record "conflict.log: $(sed 's/^[^]]*] //' "$OUT/conflict-log.txt" | tr '\n' ';')"
   r0=$(val "$SPORT" "$SU" "SELECT /* wiki_dh12_reset_before */ stats_reset FROM pg_stat_database WHERE datname = current_database();") \
@@ -2121,6 +2326,91 @@ SQL
   r1=$(val "$SPORT" "$SU" "SELECT /* wiki_dh12_reset_after */ stats_reset FROM pg_stat_database WHERE datname = current_database();") \
     || die "Reset read failed"
   record "conflict.after_clean_standby_restart: confl_snapshot=$c2 stats_reset_before=$r0 stats_reset_after=$r1"
+  wait_for 60 "streaming replication" streaming
+}
+
+primary_wal_size() {
+  test "$(val "$PPORT" "$SU" "SELECT /* wiki_dh12_rp_size */ current_setting('max_wal_size');")" = "$1"
+}
+ms_of() {
+  # Time of day of one log line, in milliseconds, from the '%m' prefix field.
+  local t h mi s
+  t=$(printf '%s\n' "$1" | cut -d' ' -f2)
+  h=${t%%:*}; t=${t#*:}; mi=${t%%:*}; s=${t#*:}
+  printf '%s\n' "$(( 10#$h * 3600000 + 10#$mi * 60000 + 10#${s%.*} * 1000 + 10#${s#*.} ))"
+}
+strip_rp() { sed 's/^[^]]*] //; s/at [0-9A-F]*\/[0-9A-F]*/at X\/X/'; }
+restartpoint() {
+  need; reset_results restartpoint
+  running "$PDATA" || die "Primary is not running"
+  running "$SDATA" || die "Standby is not running"
+  # Disposable probe state: the primary's max_wal_size goes back to the 1GB
+  # default for this stage, so a segment switch requests no checkpoint there
+  # and the only new checkpoint record is the explicit CHECKPOINT below.
+  q "$PPORT" "$SU" > /dev/null <<'SQL' || die "Primary probe settings failed"
+ALTER /* wiki_dh12_rp_probe */ SYSTEM SET max_wal_size = '1GB';
+SELECT /* wiki_dh12_rp_probe */ pg_reload_conf();
+DROP /* wiki_dh12_disposable */ TABLE IF EXISTS dh_rp;
+CREATE /* wiki_dh12_disposable */ TABLE dh_rp (id integer);
+SQL
+  wait_for 15 "the primary's probe max_wal_size" primary_wal_size 1GB
+  for leg in inherited control; do
+    stop_one "$SDATA" "$SPORT" || die "Standby teardown failed"
+    if test "$leg" = inherited; then
+      start_cluster "$SDATA" "$SPORT" "$OUT/standby.log" "-c log_min_messages=debug2"
+    else
+      start_cluster "$SDATA" "$SPORT" "$OUT/standby.log" "-c log_min_messages=debug2 -c max_wal_size=1GB"
+    fi
+    wait_for 60 "the restarted standby" standby_ready
+    wait_for 60 "streaming replication" streaming
+    record "restartpoint.$leg.standby_max_wal_size: $(val "$SPORT" "$SU" "SELECT /* wiki_dh12_rp_setting */ current_setting('max_wal_size');")"
+    ms=$(mark "$OUT/standby.log")
+    q "$PPORT" "$SU" > /dev/null <<'SQL' || die "Segment switch failed"
+INSERT /* wiki_dh12_disposable */ INTO dh_rp SELECT generate_series(1, 100);
+SELECT /* wiki_dh12_rp_switch */ pg_switch_wal();
+SQL
+    if test "$leg" = inherited; then
+      wait_for 30 "the skipped restartpoint" has_since "$OUT/standby.log" "$ms" \
+        'DEBUG:  skipping restartpoint, already performed at'
+    else
+      sleep 5
+    fi
+    printf '%s\n' "CHECKPOINT /* wiki_dh12_rp_checkpoint */;" | q "$PPORT" "$SU" \
+      || die "Primary CHECKPOINT failed"
+    if test "$leg" = inherited; then
+      wait_for 45 "the time-driven restartpoint" has_since "$OUT/standby.log" "$ms" \
+        'LOG:  restartpoint starting: time'
+    else
+      sleep 25
+    fi
+    since "$OUT/standby.log" "$ms" > "$OUT/rp-$leg.txt"
+    nskip=$(grep -c 'DEBUG:  skipping restartpoint, already performed at' "$OUT/rp-$leg.txt")
+    nrp=$(grep -c 'LOG:  restartpoint starting:' "$OUT/rp-$leg.txt")
+    if test "$leg" = inherited; then
+      rpl=$(grep -n 'LOG:  restartpoint starting: time' "$OUT/rp-$leg.txt" | head -n 1 | cut -d: -f1)
+      skl=$(head -n "$rpl" "$OUT/rp-$leg.txt" \
+        | grep -n 'DEBUG:  skipping restartpoint, already performed at' | tail -n 1 | cut -d: -f1)
+      test -n "$skl" || die "No skipped restartpoint before the time-driven one"
+      skip=$(sed -n "${skl}p" "$OUT/rp-$leg.txt"); rp=$(sed -n "${rpl}p" "$OUT/rp-$leg.txt")
+      gap=$(( $(ms_of "$rp") - $(ms_of "$skip") ))
+      if test "$gap" -lt 0; then gap=$((gap + 86400000)); fi
+      test "$gap" -ge 13000 && test "$gap" -le 18000 || die "Retry gap $gap ms is not about 15 s"
+      record "restartpoint.inherited: skipped_lines=$nskip restartpoint_lines=$nrp last_skip_to_time_restartpoint_ms=$gap skip=$(printf '%s\n' "$skip" | strip_rp) restartpoint=$(printf '%s\n' "$rp" | strip_rp)"
+    else
+      test "$nskip" -eq 0 && test "$nrp" -eq 0 \
+        || die "The control leg logged $nskip skips and $nrp restartpoints"
+      record "restartpoint.control: skipped_lines=$nskip restartpoint_lines=$nrp window_s=30"
+    fi
+  done
+  q "$PPORT" "$SU" > /dev/null <<'SQL' || die "Primary probe reset failed"
+ALTER /* wiki_dh12_rp_probe */ SYSTEM RESET max_wal_size;
+SELECT /* wiki_dh12_rp_probe */ pg_reload_conf();
+DROP /* wiki_dh12_disposable */ TABLE dh_rp;
+SQL
+  wait_for 15 "the primary's max_wal_size from dh12.conf" primary_wal_size 32MB
+  stop_one "$SDATA" "$SPORT" || die "Standby teardown failed"
+  start_cluster "$SDATA" "$SPORT" "$OUT/standby.log"
+  wait_for 60 "the restarted standby" standby_ready
   wait_for 60 "streaming replication" streaming
 }
 
@@ -2312,15 +2602,16 @@ clean() {
 }
 
 if test "$#" -eq 0; then
-  set -- build default cluster standby access prepared deadlock logs autovac conflict crash \
-    checksum sqlcheck report clean
+  set -- build default cluster standby access prepared deadlock logs autovac conflict \
+    restartpoint crash checksum sqlcheck report clean
 fi
 for stage in "$@"; do
   stage_t0=$SECONDS
   case "$stage" in
     build) build ;; default) default_leg ;; cluster) cluster ;; standby) standby ;;
     access) access ;; prepared) prepared ;; deadlock) deadlock ;; logs) logs ;;
-    autovac) autovac ;; conflict) conflict ;; crash) crash ;; checksum) checksum ;;
+    autovac) autovac ;; conflict) conflict ;; restartpoint) restartpoint ;;
+    crash) crash ;; checksum) checksum ;;
     sqlcheck) sqlcheck ;; report) report ;;
     stop) need; stop_all || die "Stop failed" ;; clean) clean ;;
     *) die "Unknown stage: $stage" ;;
@@ -2351,6 +2642,21 @@ done
   crashes and reinitialization, immediate shutdown, WAL I/O failures, disk
   extension, lock-table exhaustion, the statistics collector, and page
   verification with both damaged-page settings.
+- The decision paths behind those messages: the recovery-conflict choice
+  between cancel, terminate, and ignore, including subtransactions and dropped
+  databases; `check_log_duration()` with `log_duration`, `log_statement`, and
+  transaction sampling; `LogChildExit()` and startup-process failure; and
+  `data_sync_elevel()` for data-file fsync failures.
+- WAL-caused checkpoint and restartpoint requests: `CalculateCheckpointSegments()`,
+  `XLogCheckpointNeeded()`, the segment-switch requests in `XLogWrite()` and
+  `XLogPageRead()`, the idle skip in `CreateCheckPoint()`, the restartpoint
+  skip in `CreateRestartPoint()`, the checkpointer's 15 s retry, WAL removal
+  at checkpoint end, and `KeepLogSeg()`.
+- The `track_counts` gate in each statistics sender, entry deletion by the
+  reset functions, autovacuum's no-entry skip, which processes record a user
+  in `pg_stat_activity`, the live reads behind `pg_locks`,
+  `pg_blocking_pids()`, and `pg_prepared_xacts`, standby feedback with and
+  without a slot, and `pg_stat_statements` hashing of utility statements.
 - Autovacuum table, TOAST, temporary-table, and orphan selection, threshold
   decisions, lock-conflict cancellation, the completion summary, XID and
   MultiXact anti-wraparound behavior, effective member-space limits, and the
@@ -2386,15 +2692,16 @@ upstream test for this compound checklist as a whole.
 
 | Claim area | Primary evidence |
 |---|---|
-| Monitoring access and setting visibility | [user-manag.sgml#default-roles](../../../../raw/postgres-12/doc/src/sgml/user-manag.sgml#L519-L538), [pgstatfuncs.c#activity-and-progress-access](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L490-L655), [pgstatfuncs.c#activity-redaction](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L885-L911), [guc.c#pg_settings-access](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L8998-L9008), [system_views.sql#pg_subscription-column-grants](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1059-L1062), [execMain.c#column-privileges](../../../../raw/postgres-12/src/backend/executor/execMain.c#L676-L692) |
-| Counter epochs, resets, and recovery wipes | [pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6097-L6122), [pgstat.c#collector-exit-write](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4674-L4680), [xlog.c#recovery-decision](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6733-L6746), [xlog.c#pgstat_reset_all-call](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6843-L6846), [postmaster.c#immediate-shutdown-not-fatal](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3618-L3619), [pg_stat_statements.c#pgss_shmem_shutdown](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L692-L702) |
-| Logging destinations, filters, defaults, and apply scopes | [config.sgml#log_destination](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5439-L5486), [config.sgml#server-log-levels](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5877-L5927), [guc.c#GucContext_Names](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L594-L603), [guc.c#source-priority](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6925-L6941) |
-| Connections, prepared locks, deadlocks, timeouts, and recovery conflicts | [postinit.c#InitializeMaxBackends](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L527-L539), [func.sgml#pg_blocking_pids](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L17584-L17604), [twophase.c#feature-disabled](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L385-L390), [proc.c#lock-wait-log](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1377-L1497), [postgres.c#RecoveryConflictInterrupt](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2866-L2915), [postgres.c#ProcessInterrupts](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2990-L3136) |
+| Monitoring access and setting visibility | [user-manag.sgml#default-roles](../../../../raw/postgres-12/doc/src/sgml/user-manag.sgml#L519-L538), [pgstatfuncs.c#activity-and-progress-access](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L490-L655), [pgstatfuncs.c#activity-redaction](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L885-L911), [pgstat.c#pgstat_bestart-userid](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L2961-L2967), [guc.c#pg_settings-access](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L8998-L9008), [system_views.sql#pg_subscription-column-grants](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L1059-L1062), [execMain.c#column-privileges](../../../../raw/postgres-12/src/backend/executor/execMain.c#L676-L692) |
+| Freshness of live views | [pgstat.c#pgstat_read_current_status](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L3367-L3368), [pgstat.c#AtEOXact_PgStat](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L2170-L2171), [lockfuncs.c#pg_lock_status](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L139-L146), [lockfuncs.c#pg_blocking_pids](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L426-L428), [twophase.c#pg_prepared_xact](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L754-L760) |
+| Counter epochs, resets, recovery wipes, and collection gates | [pgstat.c#pgstat_recv_resetcounter](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6097-L6122), [pgstat.c#reset_dbentry_counters](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4708-L4745), [pgstat.c#single-counter-reset](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L6159-L6177), [autovacuum.c#no-stats-entry](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3082-L3090), [pgstat.c#pgstat_report_checksum_failures_in_db](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1536-L1537), [pgstat.c#archiver-and-bgwriter-sends](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4371-L4415), [pgstat.c#collector-exit-write](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L4674-L4680), [xlog.c#recovery-decision](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6733-L6746), [xlog.c#pgstat_reset_all-call](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6843-L6846), [postmaster.c#immediate-shutdown-not-fatal](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3618-L3619), [pg_stat_statements.c#pgss_shmem_shutdown](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L692-L702) |
+| Logging destinations, filters, defaults, and apply scopes | [config.sgml#log_destination](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5439-L5486), [config.sgml#server-log-levels](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5877-L5927), [postgres.c#check_log_duration](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2210-L2247), [xact.c#xact_is_sampled](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1909-L1912), [guc.c#GucContext_Names](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L594-L603), [guc.c#source-priority](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L6925-L6941) |
+| Connections, prepared locks, deadlocks, timeouts, and recovery conflicts | [postinit.c#InitializeMaxBackends](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L527-L539), [func.sgml#pg_blocking_pids](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L17584-L17604), [twophase.c#feature-disabled](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L385-L390), [proc.c#lock-wait-log](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1377-L1497), [postgres.c#RecoveryConflictInterrupt](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2841-L2915), [postgres.c#ProcessInterrupts](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2990-L3136), [errcodes.txt:429](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L429) |
 | Vacuum, analyze, TOAST, catalogs, partitions, and wraparound | [autovacuum.c#do_autovacuum-table-and-TOAST-passes](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2035-L2191), [autovacuum.c#relation_needs_vacanalyze](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L2920-L3096), [proc.c#autovacuum-cancel](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1375), [vacuumlazy.c#autovacuum-summary](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L380-L441), [analyze.c#analyze_rel](../../../../raw/postgres-12/src/backend/commands/analyze.c#L231-L268), [varsup.c#GetNewTransactionId-wraparound-limits](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L158), [multixact.c#MultiXactMemberFreezeThreshold](../../../../raw/postgres-12/src/backend/access/transam/multixact.c#L2785-L2845) |
-| Checkpoints, restartpoints, and background writes | [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2260-L2300), [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1086-L1159), [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462), [xlog.c#LogCheckpointStart](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8356-L8372), [xlog.c#restartpoint-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L11564-L11572) |
-| WAL archiving, replication, subscriptions, and slots | [pgarch.c#archive-command-result](../../../../raw/postgres-12/src/backend/postmaster/pgarch.c#L466-L680), [system_views.sql#replication-views](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L758-L816), [slot.c#ComputeRequiredXmin-and-LSN](../../../../raw/postgres-12/src/backend/replication/slot.c#L695-L776), [xlog.c#KeepLogSeg](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9307-L9349), [monitoring.sgml#replication-lag](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L1978-L2020) |
-| Query and relation extensions | [pg_stat_statements.c#module-GUCs](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L365-L410), [pgstatstatements.sgml#query-merging](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L236-L255), [pgstattuple.sgml#pgstattuple_approx](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L484-L538), [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L315) |
-| Crashes, checksums, and storage errors | [postmaster.c#reinitialize-after-crash](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3911-L3928), [xlog.c#WAL-fsync-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10093-L10126), [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L161), [bufmgr.c#invalid-page-handling](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925), [md.c#mdextend](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L398-L418) |
+| Checkpoints, restartpoints, and background writes | [xlog.c#CalculateCheckpointSegments](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2255-L2281), [xlog.c#XLogCheckpointNeeded](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2352-L2361), [xlog.c#WAL-caused-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2553-L2557), [xlog.c#idle-checkpoint-skip](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8628-L8645), [xlog.c#restartpoint-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L11557-L11572), [xlog.c#restartpoint-skip](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9117-L9123), [checkpointer.c#checkpoint-warning](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L425-L462), [checkpointer.c#restartpoint-retry](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L502-L520), [xlog.c#LogCheckpointStart](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8356-L8372), [bufmgr.c#BgBufferSync](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2260-L2300), [checkpointer.c#ForwardSyncRequest](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L1086-L1159) |
+| WAL archiving, replication, subscriptions, and slots | [pgarch.c#archive-command-result](../../../../raw/postgres-12/src/backend/postmaster/pgarch.c#L466-L680), [system_views.sql#replication-views](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L758-L816), [slot.c#ComputeRequiredXmin-and-LSN](../../../../raw/postgres-12/src/backend/replication/slot.c#L695-L776), [xlog.c#checkpoint-removal-boundary](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L8898-L8905), [xlog.c#KeepLogSeg](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9307-L9349), [walsender.c#ProcessStandbyHSFeedbackMessage](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2056-L2065), [monitoring.sgml#replication-lag](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L1978-L2020) |
+| Query and relation extensions | [pg_stat_statements.c#module-GUCs](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L365-L410), [pg_stat_statements.c#utility-text-hash](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1148-L1162), [pgstatstatements.sgml#query-merging](../../../../raw/postgres-12/doc/src/sgml/pgstatstatements.sgml#L236-L255), [pgstattuple.sgml#pgstattuple_approx](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L484-L538), [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L315) |
+| Crashes, checksums, and storage errors | [postmaster.c#LogChildExit](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3651-L3697), [postmaster.c#reinitialize-after-crash](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3911-L3928), [xlog.c#WAL-fsync-failures](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L10093-L10126), [fd.c#data_sync_elevel](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L3470-L3491), [sync.c#ProcessSyncRequests-fsync-failure](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L392-L396), [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L161), [bufmgr.c#invalid-page-handling](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925), [md.c#mdextend](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L398-L418) |
 | Tests and build/generated boundary | [stats.sql#wait_for_stats](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L27-L78), [prepared_xacts.sql#view-and-lock-tests](../../../../raw/postgres-12/src/test/regress/sql/prepared_xacts.sql#L110-L153), [catalog/Makefile#catalog-generation](../../../../raw/postgres-12/src/backend/catalog/Makefile#L51-L109), [initdb.c#setup_sysviews](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1651-L1671) |
 
 ## Open Questions
@@ -2448,14 +2755,27 @@ upstream test for this compound checklist as a whole.
   reads that row.
   [monitoring.sgml#pg_stat_database](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2510-L2517)
   [system_views.sql#pg_stat_database](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L856-L863)
-- The standby logged `restartpoint starting: time` 15 s after each start,
-  well before `checkpoint_timeout`. That spacing matches the checkpointer's
-  rule of retrying a restartpoint it could not perform 15 s later with the time
-  flag, but the request behind the first attempt was not traced. The page
-  relies only on the absence of the frequency line on the standby, which the
-  source guarantees.
+- The `pg_stat_replication.backend_xmin` documentation describes the column
+  as the standby's `xmin` horizon reported by `hot_standby_feedback`, with no
+  exception for slots. In this pin, a WAL sender that uses a physical slot
+  stores the reported horizon in the slot and clears its own xmin, so
+  `backend_xmin` is NULL there. The page follows the implementation. This path
+  was not measured, because the script's standby sends no feedback.
+  [monitoring.sgml#pg_stat_replication-backend_xmin](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L1835-L1840)
+  [walsender.c#ProcessStandbyHSFeedbackMessage](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2056-L2065)
+  [walsender.c#PhysicalReplicationSlotNewXmin](../../../../raw/postgres-12/src/backend/replication/walsender.c#L1873-L1893)
+- The WAL documentation says a restartpoint "is triggered when a checkpoint
+  record is reached" once `checkpoint_timeout` has passed or WAL is about to
+  exceed `max_wal_size`. In this pin, replaying a checkpoint record only
+  records it. The request comes from the checkpointer's timer or from a
+  segment switch in replay, and a request with no newer checkpoint record is
+  skipped and retried 15 s later. The page follows the implementation, and
+  the `restartpoint` stage measured the skip and the retry.
+  [wal.sgml#restartpoints](../../../../raw/postgres-12/doc/src/sgml/wal.sgml#L591-L609)
+  [xlog.c#RecoveryRestartPoint](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9013-L9051)
+  [xlog.c#restartpoint-request](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L11557-L11572)
+  [xlog.c#restartpoint-skip](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L9117-L9123)
   [checkpointer.c#restartpoint-retry](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L502-L520)
-  [checkpointer.c#time-driven-flag](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L396-L410)
 
 ## Source References
 
@@ -2471,6 +2791,7 @@ upstream test for this compound checklist as a whole.
 - [checkpointer.c](../../../../raw/postgres-12/src/backend/postmaster/checkpointer.c#L447-L462)
 - [config.sgml](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L5439-L7033)
 - [deadlock.c](../../../../raw/postgres-12/src/backend/storage/lmgr/deadlock.c#L1083-L1147)
+- [errcodes.txt](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L323-L429)
 - [execMain.c](../../../../raw/postgres-12/src/backend/executor/execMain.c#L571-L692)
 - [fd.c](../../../../raw/postgres-12/src/backend/storage/file/fd.c#L1272-L1287)
 - [func.sgml](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L17584-L17604)
@@ -2479,6 +2800,7 @@ upstream test for this compound checklist as a whole.
 - [indexing.h](../../../../raw/postgres-12/src/include/catalog/indexing.h#L360-L363)
 - [initdb.c](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1651-L1671)
 - [initdb.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/initdb.sgml#L212-L225)
+- [localbuf.c](../../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L206-L228)
 - [lock.c](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L53-L57)
 - [lockfuncs.c](../../../../raw/postgres-12/src/backend/utils/adt/lockfuncs.c#L311-L312)
 - [logical-replication.sgml](../../../../raw/postgres-12/doc/src/sgml/logical-replication.sgml#L545-L573)
@@ -2489,11 +2811,13 @@ upstream test for this compound checklist as a whole.
 - [mvcc.sgml](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1358-L1423)
 - [pg_basebackup.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/pg_basebackup.sgml#L212-L225)
 - [pg_checksums.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L38-L51)
+- [pg_config_manual.h](../../../../raw/postgres-12/src/include/pg_config_manual.h#L20)
 - [pg_ctl-ref.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/pg_ctl-ref.sgml#L192-L197)
 - [pg_proc.dat](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L2265-L2272)
 - [pg_stat_statements.c](../../../../raw/postgres-12/contrib/pg_stat_statements/pg_stat_statements.c#L1500-L1615)
 - [pg_subscription.h](../../../../raw/postgres-12/src/include/catalog/pg_subscription.h#L39-L41)
 - [pgarch.c](../../../../raw/postgres-12/src/backend/postmaster/pgarch.c#L430-L680)
+- [pgbench.c](../../../../raw/postgres-12/src/bin/pgbench/pgbench.c#L2599)
 - [pgstat.c](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L680-L690)
 - [pgstatfuncs.c](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L490-L655)
 - [pgstatindex.c](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L315)
@@ -2505,6 +2829,7 @@ upstream test for this compound checklist as a whole.
 - [postgres.c](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2990-L3136)
 - [postinit.c](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L527-L539)
 - [postmaster.c](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L3378-L3407)
+- [prepare_transaction.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/prepare_transaction.sgml#L125-L136)
 - [prepared_xacts.sql](../../../../raw/postgres-12/src/test/regress/sql/prepared_xacts.sql#L110-L153)
 - [proc.c](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1308-L1497)
 - [procsignal.h](../../../../raw/postgres-12/src/include/storage/procsignal.h#L37-L43)
@@ -2515,15 +2840,19 @@ upstream test for this compound checklist as a whole.
 - [slot.c](../../../../raw/postgres-12/src/backend/replication/slot.c#L695-L776)
 - [standby.c](../../../../raw/postgres-12/src/backend/storage/ipc/standby.c#L154-L169)
 - [stats.sql](../../../../raw/postgres-12/src/test/regress/sql/stats.sql#L27-L78)
+- [sync.c](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L392-L396)
 - [system_views.sql](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L732-L887)
 - [twophase.c](../../../../raw/postgres-12/src/backend/access/transam/twophase.c#L385-L390)
 - [user-manag.sgml](../../../../raw/postgres-12/doc/src/sgml/user-manag.sgml#L519-L538)
 - [vacuum.c](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L880-L996)
 - [vacuumlazy.c](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L372-L441)
 - [varsup.c](../../../../raw/postgres-12/src/backend/access/transam/varsup.c#L118-L158)
+- [wal.sgml](../../../../raw/postgres-12/doc/src/sgml/wal.sgml#L472-L609)
 - [walreceiver.c](../../../../raw/postgres-12/src/backend/replication/walreceiver.c#L1397-L1405)
-- [walsender.c](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2924-L2957)
-- [xlog.c](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6733-L6846)
+- [walsender.c](../../../../raw/postgres-12/src/backend/replication/walsender.c#L1873-L2065)
+- [xact.c](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1909-L1912)
+- [xlog.c](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2255-L2557)
+- [xlog_internal.h](../../../../raw/postgres-12/src/include/access/xlog_internal.h#L92-L93)
 - [xlogarchive.c](../../../../raw/postgres-12/src/backend/access/transam/xlogarchive.c#L500-L539)
 - [xlogfuncs.c](../../../../raw/postgres-12/src/backend/access/transam/xlogfuncs.c#L340-L361)
 - [001_stream_rep.pl](../../../../raw/postgres-12/src/test/recovery/t/001_stream_rep.pl#L1-L20)
