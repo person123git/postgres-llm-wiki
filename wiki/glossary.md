@@ -152,6 +152,7 @@ verified_by_agent: not yet
   - [Line pointer](#line-pointer)
   - [Lock mode](#lock-mode)
   - [Lock queue](#lock-queue)
+  - [Log severity](#log-severity)
   - [Logical decoding](#logical-decoding)
   - [Logical replication](#logical-replication)
   - [Lossy bitmap](#lossy-bitmap)
@@ -295,6 +296,7 @@ verified_by_agent: not yet
   - [SP-GiST placeholder](#sp-gist-placeholder)
   - [SPI](#spi)
   - [SQL function inlining](#sql-function-inlining)
+  - [SQLSTATE](#sqlstate)
   - [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout)
   - [Statistics](#statistics)
   - [Storage manager](#storage-manager)
@@ -368,6 +370,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
 
+- On 2026-10-15, the PostgreSQL 12 corruption-log reference added [Log severity](#log-severity) and [SQLSTATE](#sqlstate), checked on 12 only, and narrow PostgreSQL 12 notes for [All-zero page](#all-zero-page) and [Control file](#control-file). The latter notes do not extend the PostgreSQL 17 bulk-extension sizing and catalog-counter discussion or PostgreSQL 19 control-file layout to 12. The glossary has 343 terms.
+
 ## Source Pins
 
 | Version | Checkout | Branch | Pinned commit |
@@ -432,11 +436,14 @@ Related: [Freezing](#freezing), [Missed dead tuple](#missed-dead-tuple), [Vacuum
 
 ### All-zero page
 
-**Aliases:** new page, uninitialized page, `PageIsNew`, never-initialized page. **Checked on:** PostgreSQL 17.
+**Aliases:** new page, uninitialized page, `PageIsNew`, never-initialized page. **Checked on:** PostgreSQL 12, 17.
 
 An all-zero page is a [page](#page) that a relation's file gained by extension but that nothing has initialized yet, so all of it, header included, is still zero bytes. `PageIsNew()` recognizes one by its `pd_upper` field reading 0, which an initialized page never has ([bufpage.h#PageIsNew](../raw/postgres-17/src/include/storage/bufpage.h#L226-L235)). In PostgreSQL 17 a [heap](#heap) gets such pages mostly from bulk extension. An insert that carries a bulk-insert state, as `CREATE TABLE AS` does, extends the file by several pages at a time, up to 64, and keeps the spare pages for the inserts that follow, so the pages still unused when the load ends stay all-zero ([hio.c#RelationAddBlocks](../raw/postgres-17/src/backend/access/heap/hio.c#L237-L308), [createas.c:561](../raw/postgres-17/src/backend/commands/createas.c#L561)). A backend that crashes after extending a file by one page can also leave one ([vacuumlazy.c#lazy_scan_new_or_empty](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1290-L1297)).
 
 [VACUUM](#vacuum) treats an all-zero page as free space. It records the page in the [free space map](#free-space-map) and deliberately leaves it out of the [visibility map](#visibility-map), so every later VACUUM visits it again ([vacuumlazy.c#lazy_scan_new_or_empty](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1290-L1321)). Both VACUUM and `ANALYZE` set `pg_class.relallvisible` from the visibility map's count ([vacuumlazy.c:559-573](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L559-L573), [analyze.c:625-640](../raw/postgres-17/src/backend/commands/analyze.c#L625-L640)). So after a VACUUM that left nothing else unfinished, `relallvisible` is still short of `relpages` by exactly the table's all-zero pages. [Truncation](#truncation) can give such pages at the end of the table back to the operating system. The [pageinspect](#pageinspect) function `page_header()` shows an all-zero page as `upper = 0` ([rawpage.c#page_header](../raw/postgres-17/contrib/pageinspect/rawpage.c#L246-L327)).
+
+**Version notes:**
+- PostgreSQL 12: Differs in verifier name and scope checked here: `PageIsNew()` tests only whether `pd_upper` is zero, while `PageIsVerified()` separately scans the entire page before accepting its all-zero case. The verifier permits all-zero pages because a crash after relation extension can leave one. Heap VACUUM ensures space is recorded in the free space map and leaves the page out of the visibility map ([bufpage.h#PageIsNew](../raw/postgres-12/src/include/storage/bufpage.h#L225-L229), [bufpage.c#PageIsVerified](../raw/postgres-12/src/backend/storage/page/bufpage.c#L64-L142), [vacuumlazy.c#new-page-handling](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L885-L927)). The bulk-extension sizing and catalog-counter calculation above are checked on PostgreSQL 17 only.
 
 Related: [Page](#page), [Heap](#heap), [Free space map](#free-space-map), [Visibility map](#visibility-map), [VACUUM](#vacuum), [Truncation](#truncation)
 
@@ -1023,9 +1030,12 @@ Related: [Extension](#extension), [pageinspect](#pageinspect), [pgstattuple](#pg
 
 ### Control file
 
-**Aliases:** `pg_control`, `global/pg_control`, `XLOG_CONTROL_FILE`, `ControlFileData`, `PG_CONTROL_VERSION`, `pg_controldata`. **Checked on:** PostgreSQL 19.
+**Aliases:** `pg_control`, `global/pg_control`, `XLOG_CONTROL_FILE`, `ControlFileData`, `PG_CONTROL_VERSION`, `pg_controldata`. **Checked on:** PostgreSQL 12, 19.
 
 In PostgreSQL 19, the control file is the small binary file `global/pg_control`, relative to the data directory, that records cluster-wide state such as format versions and the last checkpoint ([xlog_internal.h:146-149](../raw/postgres-19/src/include/access/xlog_internal.h#L146-L149)). Its layout is `ControlFileData`: the system identifier, the `pg_control_version` and `catalog_version_no` format stamps, the cluster state, the latest [checkpoint](#checkpoint) location with a copy of that checkpoint record, `minRecoveryPoint` and the backup fields, the WAL-related settings, build parameters such as block size and alignment, and a CRC that must come last ([pg_control.h#ControlFileData](../raw/postgres-19/src/include/catalog/pg_control.h#L105-L136), [pg_control.h:169-209](../raw/postgres-19/src/include/catalog/pg_control.h#L169-L209), [pg_control.h:246-248](../raw/postgres-19/src/include/catalog/pg_control.h#L246-L248)). The used part must stay within 512 bytes so that each update is an atomic write, and the file on disk is padded to 8192 bytes ([pg_control.h:250-265](../raw/postgres-19/src/include/catalog/pg_control.h#L250-L265)). `PG_CONTROL_VERSION` is 1905 at the pin, and `ReadControlFile()` stops startup when the stored format version, the CRC or the [catalog version](#catalog-version) does not match the binary ([pg_control.h:24-25](../raw/postgres-19/src/include/catalog/pg_control.h#L24-L25), [xlog.c#ReadControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4446-L4498)). `BootStrapXLOG()` creates the file with `WriteControlFile()`, and `UpdateControlFile()` rewrites and flushes it through the shared `update_controlfile()` routine ([xlog.c:5287-5288](../raw/postgres-19/src/backend/access/transam/xlog.c#L5287-L5288), [xlog.c#UpdateControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4636-L4644), [controldata_utils.c#update_controlfile](../raw/postgres-19/src/common/controldata_utils.c#L180-L200)). Two fields hold the [data checksums](#data-checksums) state: `data_checksum_version` is the current state, and `data_checksum_version_init` keeps the state from cluster initialization, which `pg_control_init()` returns as `data_page_checksum_version` ([pg_control.h:224-231](../raw/postgres-19/src/include/catalog/pg_control.h#L224-L231), [pg_controldata.c#pg_control_init](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L206-L258)). The `pg_controldata` program prints the file, and the SQL functions `pg_control_system()`, `pg_control_checkpoint()`, `pg_control_recovery()` and `pg_control_init()` return most of the same fields ([pg_controldata.sgml#r1-app-pgcontroldata-1](../raw/postgres-19/doc/src/sgml/ref/pg_controldata.sgml#L36-L44), [func-info.sgml#functions-info-controldata](../raw/postgres-19/doc/src/sgml/func/func-info.sgml#L3302-L3313), [pg_controldata.c:32](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L32), [pg_controldata.c:70](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L70), [pg_controldata.c:166](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L166)). An extension's `.control` file is a different thing; see [Extension](#extension).
+
+**Version notes:**
+- PostgreSQL 12: Differs in layout; this note verifies the cluster-state and validation meanings needed by the corruption-log reference. `global/pg_control` contains `ControlFileData`, including its format versions, cluster state, checkpoint location/copy, `data_checksum_version`, and a final checksum field. The data-page checksum gate tests `data_checksum_version > 0`, while startup validates the control file's own checksum independently ([xlog_internal.h:144](../raw/postgres-12/src/include/access/xlog_internal.h#L144), [pg_control.h#ControlFileData](../raw/postgres-12/src/include/catalog/pg_control.h#L100-L131), [pg_control.h#checksum-fields](../raw/postgres-12/src/include/catalog/pg_control.h#L221-L233), [xlog.c#DataChecksumsEnabled](../raw/postgres-12/src/backend/access/transam/xlog.c#L4818-L4826), [xlog.c#control-file-checksum](../raw/postgres-12/src/backend/access/transam/xlog.c#L4638-L4647)). The PostgreSQL 19 layout constants and additional initialization-state field above are scoped to 19.
 
 Related: [Catalog version](#catalog-version), [Checkpoint](#checkpoint), [Crash recovery](#crash-recovery), [Data checksums](#data-checksums), [XLOG_PAGE_MAGIC](#xlog_page_magic), [Extension](#extension)
 
@@ -2208,6 +2218,14 @@ The lock queue is the ordered list of processes waiting for a [heavyweight lock]
 - PostgreSQL 19: Holds ([lock.h:148](../raw/postgres-19/src/include/storage/lock.h#L148), [lmgr/README:364-381](../raw/postgres-19/src/backend/storage/lmgr/README#L364-L381), [system-views.sgml:1970](../raw/postgres-19/doc/src/sgml/system-views.sgml#L1970)).
 
 Related: [Heavyweight lock](#heavyweight-lock), [Lock mode](#lock-mode), [Deadlock](#deadlock), [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeout)
+
+### Log severity
+
+**Aliases:** message level, error level, `elevel`, `WARNING`, `ERROR`, `LOG`, `FATAL`, `PANIC`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, log severity is the level attached to an error report. `ERROR` aborts the transaction, `FATAL` aborts the process, and `PANIC` takes the other backends down too; `LOG` carries server operational messages and `WARNING` reports an unexpected condition. These meanings come from `elog.h` ([elog.h#levels](../raw/postgres-12/src/include/utils/elog.h#L20-L53)). Server-log filtering defaults to `WARNING` and retains `WARNING`, `ERROR`, `LOG`, `FATAL`, and `PANIC`; `LOG` has special ordering in `is_log_level_output()`, so a threshold of `LOG` suppresses ordinary warnings and errors. That differs from the numeric order of the C constants ([guc.c#log_min_messages](../raw/postgres-12/src/backend/utils/misc/guc.c#L4296-L4305), [elog.c#is_log_level_output](../raw/postgres-12/src/backend/utils/error/elog.c#L3430-L3456)). An error inside a [critical section](#critical-section) becomes `PANIC`; startup and other contexts without an error handler can promote `ERROR` to `FATAL` ([elog.c#severity-promotion](../raw/postgres-12/src/backend/utils/error/elog.c#L238-L268)).
+
+Related: [SQLSTATE](#sqlstate), [Critical section](#critical-section), [GUC context](#guc-context)
 
 ### Logical decoding
 
@@ -4056,6 +4074,14 @@ SQL function inlining is the [planner](#planner) replacing a call to a simple SQ
 
 Related: [Planner](#planner), [Function volatility](#function-volatility), [SECURITY DEFINER](#security-definer), [Partition pruning](#partition-pruning)
 
+### SQLSTATE
+
+**Aliases:** SQL state, error code, `sqlerrcode`, `MAKE_SQLSTATE`, `XX000`, `XX001`, `XX002`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, SQLSTATE is a five-character code attached to an error report. `MAKE_SQLSTATE()` encodes its five characters; `errcodes.txt` defines `XX000` as `internal_error`, `XX001` as `data_corrupted`, and `XX002` as `index_corrupted` ([elog.h#MAKE_SQLSTATE](../raw/postgres-12/src/include/utils/elog.h#L58-L71), [errcodes.txt#internal-errors](../raw/postgres-12/src/backend/utils/errcodes.txt#L489-L494)). A report of `ERROR` or stronger defaults to `XX000` unless the reporting site assigns another code. A bare `WARNING` defaults to `01000`, and lower levels default to `00000`; therefore neither a generic internal-error code nor the absence of a dedicated corruption code establishes whether data is intact ([elog.c#default-sqlstate](../raw/postgres-12/src/backend/utils/error/elog.c#L382-L388), [errcodes.txt#report-defaults](../raw/postgres-12/src/backend/utils/errcodes.txt#L77-L84)). Default text-log verbosity does not print SQLSTATE beside the severity. Setting `log_error_verbosity = verbose` changes the formatter's branch so it adds that code; the default is `default`, and this setting is `PGC_SUSET`, so an allowed role can change it at session/transaction scope ([guc.c#log_error_verbosity](../raw/postgres-12/src/backend/utils/misc/guc.c#L4286-L4294), [elog.c#text-sqlstate](../raw/postgres-12/src/backend/utils/error/elog.c#L2860-L2867)).
+
+Related: [Log severity](#log-severity), [GUC context](#guc-context)
+
 ### statement_timeout and lock_timeout
 
 **Aliases:** `statement_timeout`, `lock_timeout`, `StatementTimeout`, `LockTimeout`, session timeouts. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4844,7 +4870,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (377 files):
+**PostgreSQL 12** (378 files):
 
 - [configure.in#blocksize](../raw/postgres-12/configure.in#L250-L277)
 - [contrib/Makefile:31-37](../raw/postgres-12/contrib/Makefile#L31-L37)
@@ -5223,6 +5249,8 @@ One representative citation per cited source file, grouped by version:
 - [parallel_schedule:13-16](../raw/postgres-12/src/test/regress/parallel_schedule#L13-L16)
 - [pg_regress.c:3](../raw/postgres-12/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-12/src/tools/msvc/config_default.pl#L19)
+
+- [errcodes.txt#internal-errors](../raw/postgres-12/src/backend/utils/errcodes.txt#L489-L494)
 
 **PostgreSQL 14** (355 files):
 

@@ -12,7 +12,7 @@
 Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 
 - [PostgreSQL 12 Codebase Navigation Guide (unverified)](codebase-navigation-guide.md) - Reviewed root-level map of the pinned v12 tree: build ownership; backend and standalone entry; simple and extended Parse/Bind/Execute/Sync flow; raw parse, analysis, RIR rewrite, planning, portal strategies, and full executor lifecycle; utility/event-trigger routing and error recovery; plan-cache, portal, planner, executor, relcache, GUC, and AM structures; custom AM registration and packaged/core extension boundaries; generated catalog/parser/fmgr/LWLock artifacts; and regression, isolation, TAP, module, and doc surfaces.
-- [Wiki Glossary (unverified)](../glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 341 terms).
+- [Wiki Glossary (unverified)](../glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 343 terms).
 
 ## Questions
 
@@ -53,6 +53,7 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 
 ### Observability
 
+- [Corruption Indicators in PostgreSQL 12 Logs With Data Checksums Disabled (unverified)](questions/observability/corruption-log-messages-with-checksums-disabled.md) - Source-based message catalog for checksum-disabled clusters: page/index/TOAST, freezing and catalog checks, transaction files, storage failures, WAL and control-file validation, explicit amcheck diagnostics, logging defaults, and contextual cases such as the local end of WAL. Includes a detection decision tree and state lifecycle; no runtime measurements.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](questions/observability/explain-analyze-buffers-output.md)
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 12 (unverified)](questions/observability/pg-stat-statements.md)
 

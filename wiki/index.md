@@ -5,7 +5,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 ## Entry Points
 
 - [versions](versions.md) - PostgreSQL version index and source pin manifest.
-- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 341 terms).
+- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 343 terms).
 - [overview](overview.md) - Cross-version architecture overview.
 - [log](log.md) - Chronological activity log.
 
@@ -176,6 +176,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 
 #### Observability
 
+- [Corruption Indicators in PostgreSQL 12 Logs With Data Checksums Disabled (unverified)](v12/questions/observability/corruption-log-messages-with-checksums-disabled.md) - Source-based message catalog for checksum-disabled clusters: page/index/TOAST, freezing and catalog checks, transaction files, storage failures, WAL and control-file validation, explicit amcheck diagnostics, logging defaults, and contextual cases such as the local end of WAL. Includes a detection decision tree and state lifecycle; no runtime measurements.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](v12/questions/observability/explain-analyze-buffers-output.md) - Detailed field-by-field explanation of `EXPLAIN (ANALYZE, BUFFERS)` shared, local, temp, and I/O timing output in PostgreSQL 12.
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 12 (unverified)](v12/questions/observability/pg-stat-statements.md) - Explains the v12 extension's in-extension query jumbling, hooks, shared-hash and external query-text storage, readout, permissions, persistence, and its four GUCs (`max`, `track`, `track_utility`, `save`) plus `shared_preload_libraries` and `track_io_timing`.
 
