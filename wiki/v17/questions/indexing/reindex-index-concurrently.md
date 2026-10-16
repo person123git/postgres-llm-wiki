@@ -55,12 +55,12 @@ it." for grammar and capitalization at the user's request; meaning preserved.)
 
 ## Answer
 
-`REINDEX INDEX CONCURRENTLY` (RIC) rebuilds an index without ever blocking
+[`REINDEX INDEX CONCURRENTLY`](../../../glossary.md#reindex) (RIC) rebuilds an index without ever blocking
 `INSERT`/`UPDATE`/`DELETE`, and without leaving the index unavailable to queries
 in between. It builds a **brand-new copy** of the index next to the original,
 catches that copy up to concurrent writes, atomically **swaps** the copy in for
 the original, and only then marks the original dead and drops it. The build and
-catch-up reuse the exact `CREATE INDEX CONCURRENTLY` (CIC) machinery; the
+catch-up reuse the exact [`CREATE INDEX CONCURRENTLY`](../../../glossary.md#concurrently) (CIC) machinery; the
 swap-and-drop tail is what makes a reindex.
 
 All of it runs in `ReindexRelationConcurrently()`, which lays out **six phases**
@@ -83,7 +83,7 @@ schema changes
 The algorithm is the same six-phase shape PostgreSQL 12 used, but several things
 changed since v12 — most visibly, RIC now works on **partitioned** indexes and
 tables, can move indexes to a new **tablespace**, advertises `PROC_IN_SAFE_IC`
-so other concurrent builds can ignore it, makes its `pg_index` flag writes
+so other concurrent builds can ignore it, makes its [`pg_index`](../../../glossary.md#pg_index) flag writes
 **transactional**, and fixes a progress-view phase bug. See
 [What changed from PostgreSQL 12](#what-changed-from-postgresql-12).
 
@@ -100,7 +100,7 @@ differences:
 | Phases / waits | build, validate, mark valid (3 waits) | create copy, build, validate, swap, set-dead, drop (**5 waits**) |
 | Extra waits | none beyond the snapshot wait | two `AccessExclusiveLock` waits that **wait out readers** of the old index before set-dead and drop ([indexcmds.c:4198-4234](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4198-L4234)) |
 | Names | the index keeps its name | new copy takes the original's name; the old index is renamed `<name>_ccold` ([index.c#swap-names](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1610), [indexcmds.c#ccold](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4142-L4147)) |
-| On failure | leaves the **target** index invalid | leaves an invalid `_ccnew` (before swap) or `_ccold` (after swap); a healthy original is preserved until the swap |
+| On failure | leaves the **target** index invalid | no new copy survives an abort before phase 1 commits; later failures can leave an [invalid](../../../glossary.md#invalid-index) `_ccnew` (before the swap commits) or `_ccold` (after it commits); see the [failure table](#failure-scenarios-and-the-outcome-on-the-table) for the commit boundaries and evidence |
 
 The "wait out readers" difference is the operationally important one. CIC's two
 lock-based waits use `ShareLock` conflict checks and do not wait for
@@ -440,8 +440,8 @@ faster. They bound or expose the initial relation lock and RIC's five waits:
 | `deadlock_timeout`; `log_lock_waits` | The first controls when a blocked lock acquisition runs deadlock detection; lowering it does not end a non-deadlocked wait. The second logs waits that survive that interval. They are detection and observability controls, not throughput controls ([proc.c#deadlock-and-lock-timeouts](../../../../raw/postgres-17/src/backend/storage/lmgr/proc.c#L1273-L1325), [proc.c#long-wait-logging](../../../../raw/postgres-17/src/backend/storage/lmgr/proc.c#L1491-L1525)). | 1 second and off; both are `PGC_SUSET`, so an authorized role can use session scope with no reload or restart ([guc_tables.c#deadlock_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2146-L2157), [guc_tables.c#log_lock_waits](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1512-L1521)). |
 | Blocker-side `idle_in_transaction_session_timeout` | It does not fire in the actively running RIC backend. In another session it can terminate an idle-in-transaction reader or writer that blocks RIC; that is blocker policy, not a scan-speed setting ([postgres.c#idle-in-transaction-timer](../../../../raw/postgres-17/src/backend/tcop/postgres.c#L4616-L4646)). | 0 (disabled); session in the blocker; no reload or restart ([guc_tables.c#idle_in_transaction_session_timeout](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2632-L2642)). |
 
-A timeout or cancellation after phase 1 can leave the committed transient index
-behind. Before the atomic swap it is the invalid `_ccnew`; after the swap the
+A timeout or cancellation after phase 1 commits can leave the committed transient index
+behind. Before the swap commits it is the invalid `_ccnew`; after that commit the
 rebuilt index has the original name and an invalid `_ccold` can remain. Timeouts
 are therefore completion policy, not free acceleration
 ([indexcmds.c#phase-boundaries](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3952-L4262),
@@ -591,19 +591,24 @@ Phase 4 then copies `indimmediate` from old to new and resets the old index to
 
 ### Failure scenarios and the outcome on the table
 
-Like CIC, RIC commits many times, so the outcome depends on **which phase failed**.
-The single most important property: a RIC failure on a **healthy** index never
-leaves you without a working index, because the swap (phase 4) is the only step
-that touches the original, and it runs only after the new copy is fully built and
-validated.
+RIC commits its work in stages. **The phase-1 commit decides whether the new
+copy survives an abort; the phase-4 commit decides which index has the original
+name.** The build starts after the creation transaction commits, and the swap
+commits in a later transaction
+([indexcmds.c#creation-and-build-transactions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3952-L4012),
+[indexcmds.c#swap-transaction](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4110-L4182)).
 
 | Failure point | Leftover on the table | Recovery |
 |---|---|---|
-| Phase 1 (gather / create copies / initial lock) | **none** — phase 1's transaction rolls back, so no `_ccnew` persists; original untouched | retry |
-| Phase 2 (Wait 1 or build) | one or more **invalid `_ccnew`** copies (the failing one **not ready**, any earlier-built ones **ready**); original state unchanged | `DROP INDEX <name>_ccnew`, then retry |
-| Phase 3 (Wait 2 / validate / Wait 3) | **invalid, ready `_ccnew`** copy; original state unchanged | `DROP INDEX <name>_ccnew`, then retry |
-| Phase 4 (swap), before its commit | swap transaction rolls back: `_ccnew` still invalid, original state unchanged and normally named | `DROP INDEX <name>_ccnew`, then retry |
-| Phase 5 or 6 (after swap committed) | the **new** index is already valid and carries the original name; the **old** `_ccold` index lingers (invalid, possibly dead) | `DROP INDEX <name>_ccold` |
+| Phase 1 (gather / create copies / initial lock), **before its commit** | **none from this attempt** — the creation transaction rolls back, so no new `_ccnew` persists; original untouched ([indexcmds.c#copy-creation](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3834-L3852), [indexcmds.c#creation-commit](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3944-L3954), [storage.c#RelationCreateStorage](../../../../raw/postgres-17/src/backend/catalog/storage.c#L108-L118)) | retry |
+| Phase 2 (Wait 1 or build) | one or more **invalid `_ccnew`** copies; copies whose build has not committed are **not ready**, earlier committed builds are **ready**; original state unchanged ([indexcmds.c#build-transactions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3962-L4012), [index.c#build-set-ready](../../../../raw/postgres-17/src/backend/catalog/index.c#L1538-L1556)) | `DROP INDEX <name>_ccnew`, then retry |
+| Phase 3 (Wait 2 / validate / Wait 3) | **invalid, ready `_ccnew`** copy; original state unchanged ([indexcmds.c#validation-transactions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4008-L4106), [index.c#build-set-ready](../../../../raw/postgres-17/src/backend/catalog/index.c#L1547-L1556)) | `DROP INDEX <name>_ccnew`, then retry |
+| Phase 4 (swap), before its commit | swap transaction rolls back: `_ccnew` still invalid, original state unchanged and normally named ([indexcmds.c#swap-transaction](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4110-L4182), [index.c#swap-names-and-validity](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1665)) | `DROP INDEX <name>_ccnew`, then retry |
+| Phase 5 or 6, after the swap commits and before the drop commits | the **new** index is already valid and carries the original name; the **old** `_ccold` index lingers (invalid, possibly dead) ([index.c#swap-names-and-validity](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1665), [indexcmds.c#retire-and-drop-old-index](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4190-L4262)) | `DROP INDEX <name>_ccold` |
+
+The documented recovery is to drop an invalid `_ccnew` and retry, or to drop an
+invalid `_ccold` because the rebuild has already succeeded
+([reindex.sgml#failure-recovery](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L466-L478)).
 
 **A failure never leaves `index_name` itself invalid for a healthy index.** The
 swap in phase 4 is the only step that touches the original index's name or its
@@ -616,12 +621,25 @@ The source comment states the intent — mark new valid and old invalid "at the
 same time to make sure we only get constraint violations from the indexes with
 the correct names"
 ([indexcmds.c:4114-4118](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4114-L4118)).
-So a pre-swap abort discards the `_ccnew` copy and leaves the original valid (even
-if bloated); a post-swap failure can only happen once the rebuilt `index_name` is
-already valid. The invalid leftover is always a **differently named** index
-(`_ccnew` or `_ccold`), never the bare `index_name`. The one exception is when
-`index_name` was **already invalid before** RIC ran (the repair case) — then a new
-pre-swap failure leaves it invalid only because it started that way.
+
+The `_ccnew` copy disappears on abort only if its phase-1 creation transaction
+has not committed. Once that transaction commits, a later abort rolls back the
+current transaction's work without undoing the earlier creation. A failure in
+phase 2 or 3, or in phase 4 before its commit, therefore leaves an invalid
+`_ccnew` alongside the unchanged original
+([indexcmds.c#creation-and-build-transactions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3952-L4012),
+[indexcmds.c#swap-transaction](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4110-L4182),
+[index.c#previously-committed-copy](../../../../raw/postgres-17/src/backend/catalog/index.c#L1526-L1534)).
+
+For a healthy original, an abort before the swap commits leaves `index_name`
+valid, even if it is bloated. After the swap commits, that name belongs to the
+valid rebuilt index; any invalid leftover has a different name, `_ccnew` or
+`_ccold`
+([index.c#swap-names-and-validity](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1665),
+[indexcmds.c#swap-commit](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4180-L4182)).
+If `index_name` was already invalid, an abort before the swap commits preserves
+that invalid state; see the [repair case](#can-a-failure-leave-an-invalid-index-with-the-original-index-name)
+and its regression evidence below.
 
 Invalid leftovers are ignored for query planning: `get_relation_info` closes and
 skips an index whose `indisvalid` is false
@@ -670,14 +688,18 @@ So every committed outcome keeps a valid `index_name`:
 
 | When the failure happens | What `index_name` is | Invalid leftover |
 |---|---|---|
-| Phases 1-3, or phase 4 **before** it commits | the **original** index — name and `indisvalid` untouched, still valid even if bloated | a separate `index_name_ccnew` build copy, invalid |
-| Phases 5-6, **after** the swap commits | the **rebuilt** index — already marked valid under `index_name` | the renamed `index_name_ccold` old index, invalid |
+| Phase 1, **before** its creation transaction commits | the **original** index — still valid under its original name | none from this attempt; creation rolls back ([indexcmds.c#creation-commit](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3944-L3954), [storage.c#RelationCreateStorage](../../../../raw/postgres-17/src/backend/catalog/storage.c#L108-L118)) |
+| After phase 1 commits, but **before** phase 4 commits | the **original** index — name and `indisvalid` untouched, still valid even if bloated | a separate `index_name_ccnew` build copy, invalid; its creation already committed ([indexcmds.c#creation-and-build-transactions](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3952-L4012), [indexcmds.c#swap-transaction](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4110-L4182)) |
+| Phases 5-6, **after** the swap commits and before the drop commits | the **rebuilt** index — already marked valid under `index_name` | the renamed `index_name_ccold` old index, invalid ([index.c#swap-names-and-validity](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1665), [indexcmds.c#retire-and-drop-old-index](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4190-L4262)) |
 
-A pre-swap abort discards the `_ccnew` copy's catalog work with its transaction
-and never renamed or invalidated the original; a post-swap failure can only
-happen once the rebuilt index is already valid under `index_name`. The invalid
-leftover is therefore always a **differently named** index (`_ccnew` or
-`_ccold`), never the bare `index_name`.
+An abort before the swap commits preserves the original index's name and
+validity. It does **not** remove a `_ccnew` whose creation committed in phase 1.
+Even an abort during the swap rolls back the renames and validity changes, not
+that earlier creation. This is why preserving a healthy `index_name` and
+leaving an invalid `_ccnew` are compatible outcomes
+([indexcmds.c#creation-commit](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3952-L3954),
+[indexcmds.c#swap-transaction](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4120-L4182),
+[index.c#swap-names-and-validity](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1665)).
 
 This directly answers the bloat worry: you do **not** go from "one bloated but
 valid `index_name`" to "no usable index." Before the swap the planner still has
@@ -899,6 +921,8 @@ through `ExecReindex` with `ReindexStmt` / `ReindexParams` structs and a
 - `index_concurrently_create_copy`, `index_concurrently_build`,
   `index_concurrently_swap`, `index_concurrently_set_dead`, `index_drop`, and
   `index_set_state_flags` in `src/backend/catalog/index.c`.
+- The creation and swap commit boundaries in `ReindexRelationConcurrently`,
+  and transactional storage creation in `src/backend/catalog/storage.c`.
 - `doDeletion` in `src/backend/catalog/dependency.c`; `WaitForLockersMultiple` in
   `src/backend/storage/lmgr/lmgr.c`; the `LockConflicts` table in
   `src/backend/storage/lmgr/lock.c`.
@@ -963,6 +987,7 @@ through `ExecReindex` with `ReindexStmt` / `ReindexParams` structs and a
 | RIC advertises `PROC_IN_SAFE_IC` in phases 2/3 (if safe) and 4 (unconditional) | [indexcmds.c:3990-3992](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3990-L3992), [indexcmds.c:4052-4054](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4052-L4054), [indexcmds.c:4127](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4127) |
 | `index_set_state_flags` is transactional (`CatalogTupleUpdate`); `INDEX_DROP_SET_DEAD` asserts not valid | [index.c:3478-3550](../../../../raw/postgres-17/src/backend/catalog/index.c#L3478-L3550) |
 | Invalid indexes skipped by planner but can still affect writes while live/ready | [plancat.c:260-266](../../../../raw/postgres-17/src/backend/optimizer/util/plancat.c#L260-L266), [relcache.c:4802-4871](../../../../raw/postgres-17/src/backend/utils/cache/relcache.c#L4802-L4871), [execIndexing.c:356-359](../../../../raw/postgres-17/src/backend/executor/execIndexing.c#L356-L359) |
+| An abort before phase 1 commits leaves no new copy; after that commit and before the swap commits, an abort leaves the already-created `_ccnew` invalid | [indexcmds.c:3952-4012](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L3952-L4012), [indexcmds.c:4110-4182](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4110-L4182), [index.c:1526-1534](../../../../raw/postgres-17/src/backend/catalog/index.c#L1526-L1534), [storage.c:108-118](../../../../raw/postgres-17/src/backend/catalog/storage.c#L108-L118), [create_index.out:2722-2736](../../../../raw/postgres-17/src/test/regress/expected/create_index.out#L2722-L2736) |
 | A RIC failure never leaves a healthy `index_name` invalid: phase 4 renames the rebuilt copy to `index_name` and flips validity in one transaction; the invalid leftover is always `_ccnew`/`_ccold`. `index_name` is invalid only if it was already invalid (repair case) | [index.c:1608-1665](../../../../raw/postgres-17/src/backend/catalog/index.c#L1608-L1665), [indexcmds.c:4114-4181](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4114-L4181), [create_index.out:2716-2760](../../../../raw/postgres-17/src/test/regress/expected/create_index.out#L2716-L2760) |
 | Progress: command `REINDEX CONCURRENTLY`; phase 6 correctly sets `WAIT_5` (fixed vs v12) | [indexcmds.c:4232-4233](../../../../raw/postgres-17/src/backend/commands/indexcmds.c#L4232-L4233), [progress.h:92-114](../../../../raw/postgres-17/src/include/commands/progress.h#L92-L114), [system_views.sql:1264-1277](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1264-L1277) |
 | v14 added partitioned REINDEX (`a6642b3ae06`), TABLESPACE (`c5b286047cd`), transactional flags (`83158f74d3a`), PROC_IN_SAFE_IC for RIC (`f9900df5`), progress fix (`e66bcfb4c66`) | checkout git history; [reindex.sgml:319-334](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L319-L334) |
@@ -1018,6 +1043,7 @@ through `ExecReindex` with `ReindexStmt` / `ReindexParams` structs and a
 - [index.c#index_concurrently_set_dead](../../../../raw/postgres-17/src/backend/catalog/index.c#L1837-L1871)
 - [index.c#index_drop](../../../../raw/postgres-17/src/backend/catalog/index.c#L2131-L2213)
 - [index.c#index_set_state_flags](../../../../raw/postgres-17/src/backend/catalog/index.c#L3478-L3550)
+- [storage.c#RelationCreateStorage](../../../../raw/postgres-17/src/backend/catalog/storage.c#L108-L171)
 - [index.c#index_build](../../../../raw/postgres-17/src/backend/catalog/index.c#L2959-L3069)
 - [index.c#validate_index](../../../../raw/postgres-17/src/backend/catalog/index.c#L3262-L3452)
 - [heapam_handler.c#heapam_index_build_range_scan](../../../../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L1171-L1744)
@@ -1061,6 +1087,7 @@ through `ExecReindex` with `ReindexStmt` / `ReindexParams` structs and a
 - [system_views.sql#pg_stat_progress_create_index](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1264-L1277)
 - [ref/reindex.sgml#CONCURRENTLY](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L319-L478)
 - [create_index.sql#ric-block](../../../../raw/postgres-17/src/test/regress/sql/create_index.sql#L882-L1165)
+- [create_index.out#failed-rebuild-and-repair](../../../../raw/postgres-17/src/test/regress/expected/create_index.out#L2716-L2760)
 - [reindex-concurrently.spec](../../../../raw/postgres-17/src/test/isolation/specs/reindex-concurrently.spec#L1-L40)
 - [reindex_concurrently_deferred.spec](../../../../raw/postgres-17/src/test/modules/injection_points/specs/reindex_concurrently_deferred.spec#L1-L50)
 - [reindex_concurrently_deferred.out](../../../../raw/postgres-17/src/test/modules/injection_points/expected/reindex_concurrently_deferred.out#L1-L41)
@@ -1068,6 +1095,7 @@ through `ExecReindex` with `ReindexStmt` / `ReindexParams` structs and a
 
 ## Navigation
 
+- [Wiki Glossary (unverified)](../../../glossary.md)
 - [How CREATE INDEX CONCURRENTLY Is Implemented in PostgreSQL 17](create-index-concurrently.md)
 - [How REINDEX INDEX CONCURRENTLY Is Implemented in PostgreSQL 12](../../../v12/questions/indexing/reindex-index-concurrently.md)
 - [v17 index](../../index.md)
