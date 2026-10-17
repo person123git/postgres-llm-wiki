@@ -16,6 +16,9 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-17: **review and fix v17**, [How the PostgreSQL 17 Query Planner Works: A Comprehensive Tutorial (unverified)](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), source-only.
+  - Confirmed and fixed eight pasted contradictions: the path-retention and disabled-method summaries, "only a new plan uses changed settings", which `ON` conditions can reduce an outer join, the DISTINCT hashing exception, the Gather Merge row estimate, "the planner never sees SQL text", and the run's startup overrides. Seven more copies of the same errors were corrected, and chapter 3 gained a table of which joins pass conditions down.
+  - The script is byte-identical and only two text logic maps changed among the fenced blocks, so no measurement was re-run. The shared glossary needed no change.
 - 2026-10-15: filed [Corruption Indicators in PostgreSQL 12 Logs With Data Checksums Disabled (unverified)](v12/questions/observability/corruption-log-messages-with-checksums-disabled.md) at unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`.
   - Source-only catalog of failed structural checks, contextual I/O/recovery symptoms, and explicit `amcheck` messages, with defaults, SQLSTATEs, a detection decision tree, and a state lifecycle. Distinguishes data-page checksums from WAL/control-file checksums and explains local end-of-WAL and other ambiguous signals.
   - The shared glossary gained Log severity and SQLSTATE, checked on 12 only, and PostgreSQL 12 qualifications for All-zero page and Control file; 343 terms. No common-concept page changed and no server was run.
