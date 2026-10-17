@@ -16,6 +16,8 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-17: **fix and re-run v17**, [the comprehensive planner tutorial](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), unchanged 17.11 pin `786db8dcf16`. Corrected the pasted review's 30 numbered findings (including the preserved historical test-capture discrepancy) and 16 additional wording/record issues, synchronized four glossary entries and the page's own navigation, and re-ran all 183 experiment labels and the core/contrib suites. Both postgres_fdw summaries now survive capture: 2 regression tests and 1 isolation test. The 152 complete plan lines in Answer text fences match the rerun. No common concept changed; two additional conflicts on other question pages were reported without edits.
+
 - 2026-10-17: **review and fix v17**, [How the PostgreSQL 17 Query Planner Works: A Comprehensive Tutorial (unverified)](v17/questions/query-planning/query-planner-comprehensive-tutorial.md), at unchanged pin `786db8dcf168bd9df8f55047337525ac19118b1c` (17.11), source-only.
   - Confirmed and fixed eight pasted contradictions: the path-retention and disabled-method summaries, "only a new plan uses changed settings", which `ON` conditions can reduce an outer join, the DISTINCT hashing exception, the Gather Merge row estimate, "the planner never sees SQL text", and the run's startup overrides. Seven more copies of the same errors were corrected, and chapter 3 gained a table of which joins pass conditions down.
   - The script is byte-identical and only two text logic maps changed among the fenced blocks, so no measurement was re-run. The shared glossary needed no change.
