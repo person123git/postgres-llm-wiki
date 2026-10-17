@@ -70,6 +70,76 @@ Name the conflict and the rule you followed in your response.
 - "Fix issues" after a report means fix every reported finding, including the measurement script, and re-run the measurement whenever a fix can change its numbers.
 - A pasted review with its own fix order, or a request with its own numbered scope, is the scope. Do not ask about scope.
 - A bare "continue" after an interrupted run means finish the whole remaining task.
+- Every review includes the contradiction check in `MANDATORY Contradiction Checks`, report-only reviews included.
+
+## MANDATORY Contradiction Checks
+
+Check every review, every modification, and every new document for contradictions before you report or file the work. A contradiction is two statements that cannot both be true for the same PostgreSQL version under the same conditions and state, or a statement that the pinned source shows to be false. The check applies in every workflow, whether or not the workflow's steps name it.
+
+| Work | What to check |
+|---|---|
+| New document, or a substantial revision such as a rewrite | Every statement on the page against every other statement on it, and against the comparison set below. |
+| Review | The same full-page check. When the user limits the review to named statements or sections, check those statements, every copy of them, and the statements that depend on them. A report-only review still runs the check, because it is a static check; see `MANDATORY Review Requests`. |
+| Modification of an existing document, including glossary, navigation, and repin edits | Every added or changed statement against the rest of the document and the comparison set, plus every other place that states, summarizes, or depends on a changed claim. |
+| Change to `AGENTS.md`, `README.md`, or a template | The new or changed text against every other rule, the templates, `README.md`, and what `scripts/wiki_lint` actually checks. When the change leaves another rule, a template, or `README.md` in conflict with it, update that text in the same change or ask the user. |
+
+Comparison set:
+
+- The rest of the page: title, lead, body, tables, diagrams, logic maps, worked examples, the measurement script and its comments, the last-run record, `## Context Reviewed`, `## Evidence Map`, and `## Open Questions`.
+- The pinned `raw/postgres-NN/` checkout for the page's version, including the sources each statement cites.
+- The glossary entries the page links: the shared definition and the note for the page's version.
+- The matching-version common concept pages the page links.
+- The page's own entries in `wiki/index.md` and `wiki/vNN/index.md`, and its version's row in `wiki/versions.md`.
+- Other pages of the same version that state the same claim. Find them by searching that version's tree for the claim's symbols, GUCs, catalog columns, and numbers.
+
+Typical contradictions:
+
+- Opposite claims about the same behavior, or different values for the same quantity, such as a default, a count, a threshold, or a commit.
+- A table row, diagram branch, or worked example that disagrees with the prose it illustrates.
+- A lead, summary, title, or index entry that drops a condition the detailed text establishes, and so claims more than the text supports.
+- A statement that asserts what `## Open Questions` lists as unresolved, or an open question that the page answers elsewhere.
+- A measured number, script comment, or last-run record that disagrees with the prose that interprets it.
+
+Resolve each contradiction by its case, then edit or report it according to the location table below:
+
+| Case | Resolution |
+|---|---|
+| A wiki statement disagrees with the pinned implementation source | Source wins. Correct the statement and cite the source beside it. |
+| Same-checkout docs or tests disagree with the implementation source | Source wins. File the discrepancy under `## Open Questions`; see `MANDATORY Evidence`. |
+| A measured result disagrees with the source reading | Keep both, and file the disagreement under `## Open Questions`; see `MANDATORY Measurement Script`. |
+| Two wiki statements disagree, and the pinned source settles which is right | Correct the wrong statement and every copy of it, citing the source. |
+| Two wiki statements disagree, and the pinned source does not settle it | State neither as fact. File both statements and the missing evidence under `## Open Questions`. |
+| Both statements hold, under different versions, conditions, settings, or states | Name the separating condition on each statement. When it is a non-default setting or state, explain it as `MANDATORY Non-Default Behavior` requires. |
+
+Agreement between wiki pages is not evidence. A claim repeated on several pages is still settled only by the pinned source; see `MANDATORY Evidence`.
+
+Fix only within the scope the user authorized, and report every contradiction outside it. In a review, `MANDATORY Review Requests` settles that scope before any edit. Within the scope, act on where the contradicting statement lives:
+
+| Location | Action |
+|---|---|
+| The document under work | Fix it in the same task. |
+| `wiki/glossary.md` | Fix it in the same task, with matching-version evidence; see `MANDATORY Shared Glossary`. |
+| The page's own entries in `wiki/index.md` and `wiki/vNN/index.md`, or its version's row in `wiki/versions.md` | Fix them with the task's bookkeeping; see `MANDATORY Bookkeeping`. |
+| A common concept page, during another document's work | Do not edit it. Record the conflict under the current page's `## Open Questions` and tell the user; see `MANDATORY Common Concept Documents`. |
+| Any other page or navigation entry, or a conflict in `AGENTS.md`, `README.md`, or a template that the task did not create | Do not edit it unless the user asks for that change; a request to fix the reviewed page does not cover it. Report it in your response and, if the task has one, in its log entry. |
+
+Method:
+
+- Work from a claim inventory: the claim-to-source map from `MANDATORY Deep Inquiry` when drafting, or a list of the page's claims when reviewing.
+- Search the page and the comparison set for each claim's symbols, GUCs, catalog columns, and numbers, then read every hit. A search finds candidates; only reading decides whether two statements contradict.
+- When you correct a statement, find every copy of it in the same change: correct each copy you may edit, and report the rest. A fix that silently leaves a copy behind creates a new contradiction.
+- When subagents or separate passes each cover part of a page, the orchestrator runs the check on the assembled page. A section-local check cannot see a conflict between sections.
+- The verbatim `## Question` is the user's prompt, not a claim. If its premise conflicts with the pinned source, say so in the Answer; do not edit the Question to remove the conflict.
+- Dated records describe the state on their date: `wiki/log.md` entries and the dated notes under `## Coverage Notes` in `wiki/versions.md`. A later change does not make them contradictions, so do not rewrite them.
+- A page that keeps an unresolved contradiction outside `## Open Questions` cannot carry the `verified_by_agent:` timestamp form; see `MANDATORY Verification Fields`.
+
+Recording:
+
+- Record the outcome in the task's `wiki/log.md` entry: what was compared, and how many contradictions were found, fixed, reported without a change, or withdrawn; or that none was found. For an interaction with no log entry, such as a report-only review, give the outcome in your response.
+- In a review report, give each contradiction as a pair: both locations, what each says, and which one the pinned source supports, with its citation, or that the source settles neither. List contradictions whose wrong statement lies in another document separately from the reviewed page's findings.
+- `scripts/wiki_lint` does not detect contradictions. Check by hand before filing; a clean lint result does not show that a page is consistent.
+
+Migration note: existing pages need no contradiction sweep of their own until they are next reviewed or modified.
 
 ## MANDATORY Deep Inquiry
 
@@ -727,6 +797,7 @@ Migration note: existing content pages without a `## Contents` block remain vali
 After each meaningful wiki change:
 
 - Maintain the shared glossary and record the review outcome; see `MANDATORY Shared Glossary`. Review is required even when the interaction produces no document change.
+- Record the outcome of the contradiction check; see `MANDATORY Contradiction Checks`.
 - Update `wiki/index.md` for created or substantially changed pages.
 - Update `wiki/versions.md` for supported-version lifecycle, repin, or meaningful coverage changes.
 - Update `wiki/vNN/index.md` for created or substantially changed version-local pages.
@@ -752,7 +823,8 @@ Log heading format:
 5. Create `wiki/vNN/codebase-navigation-guide.md`.
 6. Review the shared glossary for the new version, adding source-backed terms or version qualifications as needed; link it from the new landing page and guide.
 7. Update `wiki/index.md`.
-8. Append to `wiki/log.md` and run `scripts/wiki_lint`.
+8. Check the new pages for contradictions; see `MANDATORY Contradiction Checks`.
+9. Append to `wiki/log.md` and run `scripts/wiki_lint`.
 
 ### MANDATORY Answer And File
 
@@ -767,7 +839,8 @@ Log heading format:
 9. File the answer inline in the question page under `wiki/vNN/questions/<category>/` (`type: question`). Choose the category with `MANDATORY Question Categories`. Do not create a separate answer page; see `MANDATORY Question Documents`.
 10. Include `## Context Reviewed`, `## Evidence Map`, and `## Open Questions` in every filed page; see `MANDATORY Question Documents`.
 11. Add the `## Contents` table of contents; see `MANDATORY Table of Contents`.
-12. Check glossary term links and the glossary link in `## Navigation`, then update indexes and log. Name any missing or wrong common concept page in your response instead of changing it; glossary maintenance remains part of this task.
+12. Check the page for contradictions, and fix or report each one; see `MANDATORY Contradiction Checks`.
+13. Check glossary term links and the glossary link in `## Navigation`, then update indexes and log. Name any missing or wrong common concept page in your response instead of changing it; glossary maintenance remains part of this task.
 
 ### MANDATORY File Or Change A Common Concept Document
 
@@ -778,7 +851,7 @@ Run this workflow only when the user asks for the concept page itself. Never as 
 3. Build the deep-inquiry context envelope from the pinned checkout and draft a claim-to-source map. Map the mechanism and structure its explanation according to `MANDATORY Technical Explanations`, within the required common concept headings. Explain each statement of non-default behavior as `MANDATORY Non-Default Behavior` requires.
 4. File or edit `wiki/vNN/common-concepts/<concept-slug>.md` with `type: common-concept`, the required headings, and matching-version raw citations only; see `MANDATORY Common Concept Documents`.
 5. Keep it source-only. Move anything unresolved to `## Open Questions`, and leave measurements to the question page that ran them.
-6. Re-read the pages that link the concept page and report, without editing them, any consumer the change now contradicts.
+6. Check the page for contradictions; see `MANDATORY Contradiction Checks`. Re-read the pages that link the concept page and report, without editing them, any consumer the change now contradicts.
 7. Maintain the relevant glossary entries and add the concept page's term and glossary navigation links. Link the concept page from `wiki/vNN/index.md` under `## Common Concepts` and from `wiki/index.md`, then append to `wiki/log.md` and run `scripts/wiki_lint`.
 
 ## MANDATORY Lint
@@ -787,7 +860,7 @@ Lint is required after every wiki-facing change, including small edits to existi
 
 Check broken links, orphan pages, missing source references, stale pins, wrong-version citations, invalid verification fields, unverified title hints, required common-concept sections, and version landing-page links.
 
-Also perform the manual glossary checks in `MANDATORY Shared Glossary`; the current linter does not enforce those requirements.
+Also perform the manual glossary checks in `MANDATORY Shared Glossary`; the current linter does not enforce those requirements. It does not detect contradictions either, so run the check in `MANDATORY Contradiction Checks` by hand.
 
 Use the project venv:
 
