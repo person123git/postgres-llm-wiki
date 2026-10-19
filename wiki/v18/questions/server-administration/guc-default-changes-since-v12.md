@@ -8,13 +8,32 @@ verified_by_agent: not yet
 
 # GUC Default-Value Changes Since PostgreSQL 12 (unverified)
 
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Answer Up Front](#answer-up-front)
+  - [Changed In PostgreSQL 13](#changed-in-postgresql-13)
+  - [Changed In PostgreSQL 14](#changed-in-postgresql-14)
+  - [Changed In PostgreSQL 15](#changed-in-postgresql-15)
+  - [Changed In PostgreSQL 18](#changed-in-postgresql-18)
+  - [Not Default-Value Changes](#not-default-value-changes)
+- [Context Reviewed](#context-reviewed)
+- [Test Coverage](#test-coverage)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Navigation](#navigation)
+
 ## Question
 
 In PostgreSQL 18, summarize all GUC default-value changes since PostgreSQL 12.
 
-## Answer Up Front
+## Answer
 
-Eight server settings that already existed in PostgreSQL 12 have a different
+### Answer Up Front
+
+Eight server [settings](../../../glossary.md#guc) that already existed in PostgreSQL 12 have a different
 semantic built-in default in PostgreSQL 18. One more setting,
 `log_connections`, changed from a boolean default display of `off` to a string
 default display of `''`, but both defaults disable connection logging. Each row
@@ -23,20 +42,37 @@ that introduced the change, and how a change to the setting takes effect.
 
 | Setting | Old default (v12) | New default (v18) | First in | Apply scope |
 |---|---|---|---|---|
-| `ssl_min_protocol_version` | `TLSv1` | `TLSv1.2` | 13 | Reload (`PGC_SIGHUP`) |
+| `ssl_min_protocol_version` | `TLSv1` | `TLSv1.2` | 13 | Reload ([`PGC_SIGHUP`](../../../glossary.md#guc-context)) |
 | `password_encryption` | `md5` | `scram-sha-256` | 14 | Session (`PGC_USERSET`) |
 | `vacuum_cost_page_miss` | `10` | `2` | 14 | Session (`PGC_USERSET`) |
 | `checkpoint_completion_target` | `0.5` | `0.9` | 14 | Reload (`PGC_SIGHUP`) |
-| `shared_buffers` built-in default | `8MB` (1024 blocks) | `128MB` (16384 blocks) | 15 | Restart (`PGC_POSTMASTER`) |
+| [`shared_buffers`](../../../glossary.md#shared_buffers) built-in default | `8MB` (1024 [blocks](../../../glossary.md#block)) | `128MB` (16384 blocks) | 15 | Restart (`PGC_POSTMASTER`) |
 | `log_checkpoints` | `off` | `on` | 15 | Reload (`PGC_SIGHUP`) |
 | `log_autovacuum_min_duration` | `-1` (off) | `10min` | 15 | Reload (`PGC_SIGHUP`) |
-| `effective_io_concurrency` | `1` on prefetch builds, `0` otherwise | `16` | 18 | Session (`PGC_USERSET`) |
+| [`effective_io_concurrency`](../../../glossary.md#effective_io_concurrency) | `1` on [prefetch](../../../glossary.md#prefetch) builds, `0` otherwise | `16` | 18 | Session (`PGC_USERSET`) |
 | `log_connections` default spelling/type | `off` | `''` (disabled) | 18 | New session (`PGC_SU_BACKEND`) |
 
-The PostgreSQL 18 value and apply scope come from the v18 GUC table
-([guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c))
-and the v18 configuration docs
-([config.sgml](../../../../raw/postgres-18/doc/src/sgml/config.sgml)). The old
+The PostgreSQL 18 value and apply scope come from each setting's entry in the
+v18 GUC table
+([guc_tables.c#ssl_min_protocol_version](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L5397-L5406),
+[guc_tables.c#password_encryption](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L5374-L5381),
+[guc_tables.c#vacuum_cost_page_miss](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2653-L2660),
+[guc_tables.c#checkpoint_completion_target](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L4123-L4130),
+[guc_tables.c#shared_buffers](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2378-L2386),
+[guc_tables.c#log_checkpoints](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1239-L1247),
+[guc_tables.c#log_autovacuum_min_duration](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3181-L3190),
+[guc_tables.c#effective_io_concurrency](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3249-L3260),
+[guc_tables.c#log_connections](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L4998-L5006))
+and from its entry in the v18 configuration docs
+([config.sgml#ssl_min_protocol_version](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L1592-L1594),
+[config.sgml#password_encryption](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L1114-L1121),
+[config.sgml#vacuum_cost_page_miss](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L9402-L9415),
+[config.sgml#checkpoint_completion_target](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L3712-L3724),
+[config.sgml#shared_buffers](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L1731-L1739),
+[config.sgml#log_checkpoints](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L7584-L7597),
+[config.sgml#log_autovacuum_min_duration](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L7564-L7580),
+[config.sgml#effective_io_concurrency](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L2688-L2704),
+[config.sgml#log_connections](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L7601-L7612)). The old
 values and introducing major versions come from the same `raw/postgres-18/`
 checkout's Git history and were cross-checked against the pinned PostgreSQL 12
 GUC table. Per this wiki's version rule, this v18 page cites only
@@ -58,9 +94,9 @@ page's pin `baa7b142aace6821ce085906f314a75bcc4d95c8`, and that commit
 The new parameter is covered under
 [Not Default-Value Changes](#not-default-value-changes).
 
-## Changed In PostgreSQL 13
+### Changed In PostgreSQL 13
 
-### `ssl_min_protocol_version`: `TLSv1` -> `TLSv1.2`
+#### `ssl_min_protocol_version`: `TLSv1` -> `TLSv1.2`
 
 PostgreSQL 18 boots with `PG_TLS1_2_VERSION` for the minimum SSL/TLS protocol
 version
@@ -73,9 +109,9 @@ The change was made by commit `b1abfec8` (2019-12-04, "Update minimum SSL
 version"), whose in-tree version string was `13devel`. The setting is
 `PGC_SIGHUP`, so a configuration-file change takes effect on reload.
 
-## Changed In PostgreSQL 14
+### Changed In PostgreSQL 14
 
-### `password_encryption`: `md5` -> `scram-sha-256`
+#### `password_encryption`: `md5` -> `scram-sha-256`
 
 New passwords set by role DDL now default to SCRAM-SHA-256 storage. The v18
 boot value is `PASSWORD_TYPE_SCRAM_SHA_256`
@@ -89,9 +125,9 @@ scram-sha-256") introduced the change in `14devel`. This is `PGC_USERSET`, so
 it can be changed for a session or transaction; changing the cluster default in
 the configuration file takes effect on reload for future sessions.
 
-### `vacuum_cost_page_miss`: `10` -> `2`
+#### `vacuum_cost_page_miss`: `10` -> `2`
 
-Cost-based vacuum delay now charges a lower cost for a page miss. PostgreSQL 18
+[Cost-based vacuum delay](../../../glossary.md#vacuum-cost-delay) now charges a lower cost for a page miss. PostgreSQL 18
 uses the boot value `2`
 ([guc_tables.c#vacuum_cost_page_miss](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2653-L2660)),
 and the docs describe `2` as the default
@@ -102,9 +138,9 @@ Commit `e19594c5` (2021-01-27, "Reduce the default value of
 vacuum_cost_page_miss") introduced the change in `14devel`. This is
 `PGC_USERSET`.
 
-### `checkpoint_completion_target`: `0.5` -> `0.9`
+#### `checkpoint_completion_target`: `0.5` -> `0.9`
 
-Checkpoints now spread writes over 90% of the checkpoint interval by default.
+[Checkpoints](../../../glossary.md#checkpoint) now spread writes over 90% of the checkpoint interval by default.
 The v18 boot value is `0.9`
 ([guc_tables.c#checkpoint_completion_target](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L4123-L4130)),
 and the docs explain the same default
@@ -115,12 +151,12 @@ Commit `bbcc4eb2` (2021-03-24, "Change checkpoint_completion_target default to
 0.9") introduced the change in `14devel`. This is `PGC_SIGHUP`, so reload is
 enough.
 
-## Changed In PostgreSQL 15
+### Changed In PostgreSQL 15
 
-### `shared_buffers` built-in default: `8MB` -> `128MB`
+#### `shared_buffers` built-in default: `8MB` -> `128MB`
 
 The compiled boot value rose from 1024 blocks to 16384 blocks, which is 128MB
-with the default 8kB `BLCKSZ`. PostgreSQL 18 stores `16384` in the GUC table
+with the default 8kB [`BLCKSZ`](../../../glossary.md#blcksz). PostgreSQL 18 stores `16384` in the GUC table
 ([guc_tables.c#shared_buffers](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2378-L2386)),
 and the docs describe the default as typically 128MB
 ([config.sgml#shared_buffers](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L1731-L1739)).
@@ -133,9 +169,9 @@ pg_settings") noted that `initdb` had already selected a practical default of
 128MB in ordinary clusters. `shared_buffers` is `PGC_POSTMASTER`, so changing it
 requires restart.
 
-### `log_checkpoints`: `off` -> `on`
+#### `log_checkpoints`: `off` -> `on`
 
-Checkpoint and restartpoint logging is enabled by default. The v18 GUC table
+Checkpoint and [restartpoint](../../../glossary.md#checkpointer) logging is enabled by default. The v18 GUC table
 sets `log_checkpoints` to `true`
 ([guc_tables.c#log_checkpoints](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1239-L1247)),
 and the docs state that the default is on
@@ -143,9 +179,9 @@ and the docs state that the default is on
 The sample file agrees
 ([postgresql.conf.sample#log_checkpoints](../../../../raw/postgres-18/src/backend/utils/misc/postgresql.conf.sample#L592-L601)).
 
-### `log_autovacuum_min_duration`: `-1` -> `10min`
+#### `log_autovacuum_min_duration`: `-1` -> `10min`
 
-Autovacuum and autoanalyze actions running at least 10 minutes are now logged by
+[Autovacuum](../../../glossary.md#autovacuum) and autoanalyze actions running at least 10 minutes are now logged by
 default. PostgreSQL 18 stores `600000` milliseconds as the boot value
 ([guc_tables.c#log_autovacuum_min_duration](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3181-L3190)),
 and the docs state the human-readable default as `10min`
@@ -158,9 +194,9 @@ log_checkpoints=on, log_autovacuum_min_duration=10m"), whose in-tree version
 was `15devel`. Both are `PGC_SIGHUP`, so reload applies configuration-file
 changes.
 
-## Changed In PostgreSQL 18
+### Changed In PostgreSQL 18
 
-### `effective_io_concurrency`: `1` -> `16`
+#### `effective_io_concurrency`: `1` -> `16`
 
 PostgreSQL 18 now defaults the number of concurrent storage I/O operations to
 `16`. The GUC table reads the value from `DEFAULT_EFFECTIVE_IO_CONCURRENCY`
@@ -176,7 +212,7 @@ say the new value better reflects modern hardware
 This is `PGC_USERSET`, so a session or transaction can override it; changing
 the cluster default takes effect for later settings loads.
 
-### `log_connections`: `off` -> `''` with disabled behavior preserved
+#### `log_connections`: `off` -> `''` with disabled behavior preserved
 
 `log_connections` changed from a boolean to a string/list setting in
 PostgreSQL 18. The v18 GUC table gives it an empty-string boot value
@@ -195,21 +231,21 @@ The release notes identify commit `9219093c` as the modularization that made
 ([release-18.sgml#log_connections](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml#L9644-L9661)).
 
 This is `PGC_SU_BACKEND`. A configuration reload changes the value inherited by
-subsequently-started backends, but existing backends ignore reload changes for
+subsequently-started [backends](../../../glossary.md#backend), but existing backends ignore reload changes for
 `PGC_BACKEND` and `PGC_SU_BACKEND` settings
 ([guc.c#PGC_SU_BACKEND](../../../../raw/postgres-18/src/backend/utils/misc/guc.c#L3523-L3584)).
 At connection start, only superusers and users with the needed `SET` privilege
 can set it; after connection start, it cannot be changed
 ([config.sgml#log_connections-scope](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L7697-L7700)).
 
-## Not Default-Value Changes
+### Not Default-Value Changes
 
 These differences can look like default changes when comparing files, but they
 are out of scope for this page:
 
 - **Settings added after v12**: examples include `summarize_wal`,
   `vacuum_buffer_usage_limit`, `maintenance_io_concurrency`,
-  `compute_query_id`, `default_toast_compression`, and `io_method`. They have
+  [`compute_query_id`](../../../glossary.md#query-jumbling), `default_toast_compression`, and [`io_method`](../../../glossary.md#asynchronous-io). They have
   v18 defaults, but they were not settings present in both v12 and v18
   ([guc_tables.c#summarize_wal](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1885-L1892),
   [guc_tables.c#vacuum_buffer_usage_limit](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2389-L2398),
@@ -245,7 +281,7 @@ are out of scope for this page:
   `'pgoutput, test_decoding'`. It is out of scope here because the parameter
   does not exist in v12, but it is worth naming as a behavior-changing new
   default shipped in a minor release: a server whose administrator narrows the
-  list refuses logical decoding requests for any other plugin. Apply scope:
+  list refuses [logical decoding](../../../glossary.md#logical-decoding) requests for any other plugin. Apply scope:
   `PGC_SUSET` means a `postgresql.conf` change takes effect on reload (no
   restart), a superuser can change it for a session with `SET`, and
   `GUC_SUPERUSER_ONLY` restricts who may read or set it; a superuser can also
@@ -253,11 +289,11 @@ are out of scope for this page:
   ([guc_tables.c#output_plugin_libraries](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L4986-L4996),
   [postgresql.conf.sample:821](../../../../raw/postgres-18/src/backend/utils/misc/postgresql.conf.sample#L821),
   [config.sgml#output_plugin_libraries](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L4615-L4670)).
-- **Allowed-range changes**: `maintenance_work_mem` and `autovacuum_work_mem`
+- **Allowed-range changes**: [`maintenance_work_mem`](../../../glossary.md#maintenance_work_mem) and `autovacuum_work_mem`
   keep defaults of `64MB` and `-1` while allowing smaller explicit values;
   explicit `autovacuum_work_mem` values below `64kB` are clamped to `64kB`.
   `max_files_per_process` still defaults to `1000`, and
-  `track_activity_query_size` still defaults to `1024`
+  [`track_activity_query_size`](../../../glossary.md#track_activity_query_size) still defaults to `1024`
   ([guc_tables.c#maintenance_work_mem](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2593-L2601),
   [guc_tables.c#autovacuum_work_mem](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L3649-L3657),
   [autovacuum.c#check_autovacuum_work_mem](../../../../raw/postgres-18/src/backend/postmaster/autovacuum.c#L3420-L3443),
@@ -332,27 +368,27 @@ and explicit `effective_io_concurrency` settings in planner/tablespace tests
 
 ## Source References
 
-- [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c) -
+- [guc_tables.c](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1-L5457) -
   GUC boot values and `PGC_*` apply-scope flags.
-- [config.sgml](../../../../raw/postgres-18/doc/src/sgml/config.sgml) -
+- [config.sgml](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L1-L13127) -
   configuration documentation for current defaults, setting effects, and
   `log_connections` compatibility.
-- [postgresql.conf.sample](../../../../raw/postgres-18/src/backend/utils/misc/postgresql.conf.sample) -
+- [postgresql.conf.sample](../../../../raw/postgres-18/src/backend/utils/misc/postgresql.conf.sample#L1-L889) -
   shipped sample configuration defaults.
-- [release-18.sgml](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml) -
+- [release-18.sgml](../../../../raw/postgres-18/doc/src/sgml/release-18.sgml#L1-L13518) -
   v18 release-note entries for `effective_io_concurrency`,
   `maintenance_io_concurrency`, and `log_connections`.
-- [backend_startup.c](../../../../raw/postgres-18/src/backend/tcop/backend_startup.c),
-  [backend_startup.h](../../../../raw/postgres-18/src/include/tcop/backend_startup.h),
-  and [guc.c](../../../../raw/postgres-18/src/backend/utils/misc/guc.c) -
+- [backend_startup.c](../../../../raw/postgres-18/src/backend/tcop/backend_startup.c#L1-L1139),
+  [backend_startup.h](../../../../raw/postgres-18/src/include/tcop/backend_startup.h#L1-L122),
+  and [guc.c](../../../../raw/postgres-18/src/backend/utils/misc/guc.c#L1-L6994) -
   `log_connections` option parsing and `PGC_SU_BACKEND` application rules.
-- [password.sql](../../../../raw/postgres-18/src/test/regress/sql/password.sql),
-  [001_ssltests.pl](../../../../raw/postgres-18/src/test/ssl/t/001_ssltests.pl),
-  [001_password.pl](../../../../raw/postgres-18/src/test/authentication/t/001_password.pl),
-  [select_parallel.sql](../../../../raw/postgres-18/src/test/regress/sql/select_parallel.sql),
-  [tablespace.sql](../../../../raw/postgres-18/src/test/regress/sql/tablespace.sql),
-  [vacuum.sql](../../../../raw/postgres-18/src/test/regress/sql/vacuum.sql), and
-  [pg_regress.c](../../../../raw/postgres-18/src/test/regress/pg_regress.c) -
+- [password.sql](../../../../raw/postgres-18/src/test/regress/sql/password.sql#L1-L120),
+  [001_ssltests.pl](../../../../raw/postgres-18/src/test/ssl/t/001_ssltests.pl#L1-L941),
+  [001_password.pl](../../../../raw/postgres-18/src/test/authentication/t/001_password.pl#L1-L764),
+  [select_parallel.sql](../../../../raw/postgres-18/src/test/regress/sql/select_parallel.sql#L1-L590),
+  [tablespace.sql](../../../../raw/postgres-18/src/test/regress/sql/tablespace.sql#L1-L439),
+  [vacuum.sql](../../../../raw/postgres-18/src/test/regress/sql/vacuum.sql#L1-L497), and
+  [pg_regress.c](../../../../raw/postgres-18/src/test/regress/pg_regress.c#L1-L2670) -
   individual GUC behavior tests and harness settings.
 
 ## Open Questions
@@ -365,7 +401,9 @@ and explicit `effective_io_concurrency` settings in planner/tablespace tests
   cross-check. A reviewer wanting independent confirmation of PostgreSQL 12
   values can read `src/backend/utils/misc/guc.c` in that pinned checkout.
 
-## Related Pages
+## Navigation
 
+- [wiki index](../../../index.md)
+- [Wiki Glossary (unverified)](../../../glossary.md)
 - [v18/index](../../index.md)
 - [versions](../../../versions.md)

@@ -46,14 +46,14 @@ Yes on both counts, but every substantive change landed early and nothing has mo
 |---|---|---|
 | Bound syntax (`FOR VALUES ...` / `DEFAULT`) | Yes — three changes | PostgreSQL 12 |
 | `pg_class.relpartbound` column definition | No | never (introduced with the feature) |
-| Content of the stored `pg_node_tree` | Yes — two changes | PostgreSQL 17 |
+| Content of the stored [`pg_node_tree`](../../../glossary.md#pg_node_tree) | Yes — two changes | PostgreSQL 17 |
 | Deparsed text from `pg_get_expr` | No | never |
 | Exposure surfaces (functions, psql, pg_dump) | Yes — additions only | PostgreSQL 14 |
 
 Concretely:
 
-- **Syntax.** `MINVALUE`/`MAXVALUE` replaced `UNBOUNDED` before 10.0 shipped ([`d363d42bb9a`](#syntax-changes-since-declarative-partitioning-was-introduced)); PostgreSQL 11 added `DEFAULT` and the hash form `WITH (MODULUS m, REMAINDER r)`; PostgreSQL 12 replaced the literal-only bound element with a general expression. After that PostgreSQL 12 commit the grammar production has been touched exactly twice: one whole-tree indentation run in 15.0, and one PostgreSQL 18 commit that added error cursors to two hash-bound errors.
-- **`relpartbound` the column.** Unchanged. It is still the last variable-length `pg_class` attribute, still `pg_node_tree`, still defaulting to null [pg_class.h#relpartbound](../../../../raw/postgres-18/src/include/catalog/pg_class.h#L134-L144).
+- **Syntax.** `MINVALUE`/`MAXVALUE` replaced `UNBOUNDED` before 10.0 shipped ([`d363d42bb9a`](#syntax-changes-since-declarative-partitioning-was-introduced)); PostgreSQL 11 added `DEFAULT` and the hash form `WITH (MODULUS m, REMAINDER r)`; PostgreSQL 12 replaced the literal-only bound element with a general expression. After that PostgreSQL 12 commit the [grammar](../../../glossary.md#grammar) production has been touched exactly twice: one whole-tree indentation run in 15.0, and one PostgreSQL 18 commit that added error cursors to two hash-bound errors.
+- **[`relpartbound`](../../../glossary.md#partition-bound) the column.** Unchanged. It is still the last variable-length [`pg_class`](../../../glossary.md#pg_class) attribute, still `pg_node_tree`, still defaulting to null [pg_class.h#relpartbound](../../../../raw/postgres-18/src/include/catalog/pg_class.h#L134-L144).
 - **`relpartbound` the value.** Two changes. PostgreSQL 11 added `is_default`, `modulus`, and `remainder` to the serialized node; PostgreSQL 17 made `nodeToString()` write `-1` for every parse-location field, so bound node trees stored on 17 and later no longer carry the original cursor offsets.
 - **Exposure.** No typed accessor was ever added. The bound is still only readable as (a) the opaque `pg_node_tree`, (b) the deparsed `FOR VALUES ...` string from `pg_get_expr(relpartbound, oid)`, or (c) a derived boolean via `pg_get_partition_constraintdef(oid)`. PostgreSQL 14 added the `DETACH PENDING` annotation that psql prints next to the bound, and that is the newest change to any exposure surface.
 
@@ -74,7 +74,7 @@ Three details of the v18 grammar are easy to get wrong:
 
 - **`MODULUS` and `REMAINDER` are not keywords.** The hash form parses as a `DefElem` list of `NonReservedWord Iconst` pairs, and the action loop then matches the downcased names `"modulus"` and `"remainder"` [gram.y#hash_partbound](../../../../raw/postgres-18/src/backend/parser/gram.y#L3240-L3256) [gram.y#hash_partbound-loop](../../../../raw/postgres-18/src/backend/parser/gram.y#L3155-L3195). Neither name appears in `kwlist.h`. Consequences: the two options may be given in either order, each may appear only once, and any third name raises `unrecognized hash partition bound specification`.
 - **`MINVALUE` and `MAXVALUE` are not part of the bound grammar either.** They are ordinary unreserved keywords [kwlist.h:276](../../../../raw/postgres-18/src/include/parser/kwlist.h#L276) [kwlist.h:281](../../../../raw/postgres-18/src/include/parser/kwlist.h#L281), so they arrive inside `expr_list` as a one-field `ColumnRef`, and `transformPartitionRangeBounds()` recognizes them by string comparison against `"minvalue"` and `"maxvalue"` [parse_utilcmd.c#transformPartitionRangeBounds](../../../../raw/postgres-18/src/backend/parser/parse_utilcmd.c#L4450-L4560). The recognition is therefore case-insensitive through the lexer's downcasing, and a *quoted* lowercase `"minvalue"` is also accepted as the sentinel, while `"MINVALUE"` is not (see [Previous-pin measurements](#previous-pin-measurements)).
-- **A bound element is a general expression, not a literal.** `transformPartitionBoundValue()` runs `transformExpr()` with `EXPR_KIND_PARTITION_BOUND`, coerces the result to the key column's type and typmod, then evaluates it to a `Const` carrying the key's collation [parse_utilcmd.c#transformPartitionBoundValue](../../../../raw/postgres-18/src/backend/parser/parse_utilcmd.c#L4607-L4676). The documentation states the same contract: the expression "is evaluated once at table creation time, so it can even contain volatile expressions such as `CURRENT_TIMESTAMP`" [create_table.sgml#partition_bound_expr](../../../../raw/postgres-18/doc/src/sgml/ref/create_table.sgml#L480-L488).
+- **A bound element is a general expression, not a literal.** `transformPartitionBoundValue()` runs `transformExpr()` with `EXPR_KIND_PARTITION_BOUND`, coerces the result to the key column's type and typmod, then evaluates it to a `Const` carrying the key's [collation](../../../glossary.md#collation) [parse_utilcmd.c#transformPartitionBoundValue](../../../../raw/postgres-18/src/backend/parser/parse_utilcmd.c#L4607-L4676). The documentation states the same contract: the expression "is evaluated once at table creation time, so it can even contain volatile expressions such as `CURRENT_TIMESTAMP`" [create_table.sgml#partition_bound_expr](../../../../raw/postgres-18/doc/src/sgml/ref/create_table.sgml#L480-L488).
 
 The same production is reused by `CREATE TABLE ... PARTITION OF` [gram.y#CREATE-TABLE-PARTITION-OF](../../../../raw/postgres-18/src/backend/parser/gram.y#L3694-L3714), `CREATE FOREIGN TABLE ... PARTITION OF` [gram.y#CREATE-FOREIGN-TABLE-PARTITION-OF](../../../../raw/postgres-18/src/backend/parser/gram.y#L5712-L5733), and `ALTER TABLE ... ATTACH PARTITION` [gram.y#partition_cmd](../../../../raw/postgres-18/src/backend/parser/gram.y#L2324-L2338). The documented synopses match [create_table.sgml#partition_bound_spec](../../../../raw/postgres-18/doc/src/sgml/ref/create_table.sgml#L93-L98) [alter_table.sgml#ATTACH-PARTITION](../../../../raw/postgres-18/doc/src/sgml/ref/alter_table.sgml#L1033-L1044).
 
@@ -131,9 +131,9 @@ The column is declared inside the `CATALOG_VARLEN` block of `pg_class`, as the t
 	pg_node_tree relpartbound BKI_DEFAULT(_null_);
 ```
 
-The catalog documentation describes it as, "If table is a partition (see `relispartition`), internal representation of the partition bound" [catalogs.sgml#relpartbound](../../../../raw/postgres-18/doc/src/sgml/catalogs.sgml#L2307-L2315).
+The [catalog](../../../glossary.md#catalog) documentation describes it as, "If table is a partition (see `relispartition`), internal representation of the partition bound" [catalogs.sgml#relpartbound](../../../../raw/postgres-18/doc/src/sgml/catalogs.sgml#L2307-L2315).
 
-The write path is a two-step affair. `heap_create_with_catalog()` always inserts the `pg_class` row with `relpartbound` null [heap.c#relpartbound-null](../../../../raw/postgres-18/src/backend/catalog/heap.c#L980-L983), and `StorePartitionBound()` then updates that row, serializing the parse-analyzed node and setting `relispartition` in the same tuple [heap.c#StorePartitionBound](../../../../raw/postgres-18/src/backend/catalog/heap.c#L4091-L4144):
+The write path is a two-step affair. `heap_create_with_catalog()` always inserts the `pg_class` [row](../../../glossary.md#tuple) with `relpartbound` null [heap.c#relpartbound-null](../../../../raw/postgres-18/src/backend/catalog/heap.c#L980-L983), and `StorePartitionBound()` then updates that row, serializing the parse-analyzed node and setting `relispartition` in the same tuple [heap.c#StorePartitionBound](../../../../raw/postgres-18/src/backend/catalog/heap.c#L4091-L4144):
 
 ```c
 	new_val[Anum_pg_class_relpartbound - 1] = CStringGetTextDatum(nodeToString(bound));
@@ -146,9 +146,9 @@ What `nodeToString()` writes is the generic node-tree text format, one `:field v
 - **The node label is upper-cased.** The generator emits `WRITE_NODE_TYPE("PARTITIONBOUNDSPEC")` because the output format "starts with upper case node type name" [gen_node_support.pl#out-funcs](../../../../raw/postgres-18/src/backend/nodes/gen_node_support.pl#L917-L946).
 - **All fields are written, including the ones the strategy does not use.** There is no omit-if-default rule on the write side, so a list bound still carries `:modulus 0 :remainder 0` and empty `:lowerdatums <>`.
 - **Every location field reads `-1`.** `WRITE_LOCATION_FIELD` consults the file-static `write_location_fields` flag, which `nodeToString()` leaves false; only `nodeToStringWithLocations()` sets it [outfuncs.c#WRITE_LOCATION_FIELD](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c#L98-L100) [outfuncs.c#nodeToString](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c#L774-L814). `StorePartitionBound()` calls the plain form.
-- **The bound datum itself is stored as raw bytes, not as text.** `_outConst()` ends by calling `outDatum()`, which prints the datum's length and then each byte as a decimal integer [outfuncs.c#outDatum](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c#L343-L376). That representation is host-endian and type-length dependent, which is why nothing outside the backend should parse it.
+- **The bound [datum](../../../glossary.md#datum) itself is stored as raw bytes, not as text.** `_outConst()` ends by calling `outDatum()`, which prints the datum's length and then each byte as a decimal integer [outfuncs.c#outDatum](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c#L343-L376). That representation is host-endian and type-length dependent, which is why nothing outside the [backend](../../../glossary.md#backend) should parse it.
 
-`relpartbound` is `pg_node_tree`, whose `attstorage` is `extended`, so the value can be compressed inline — but `pg_class` deliberately has no TOAST table, a fact asserted by a regression test [misc_sanity.out#no-toast-catalogs](../../../../raw/postgres-18/src/test/regress/expected/misc_sanity.out#L50-L70). A bound too large to compress into the tuple therefore fails at DDL time rather than being pushed out of line; see [Previous-pin measurements](#previous-pin-measurements).
+`relpartbound` is `pg_node_tree`, whose `attstorage` is `extended`, so the value can be compressed inline — but `pg_class` deliberately has no [TOAST](../../../glossary.md#toast) table, a fact asserted by a [regression test](../../../glossary.md#regression-test) [misc_sanity.out#no-toast-catalogs](../../../../raw/postgres-18/src/test/regress/expected/misc_sanity.out#L50-L70). A bound too large to compress into the tuple therefore fails at DDL time rather than being pushed out of line; see [Previous-pin measurements](#previous-pin-measurements).
 
 ### Changes to the stored representation since declarative partitioning was introduced
 
@@ -164,7 +164,7 @@ Two candidate changes turn out to be no-ops for this column, and both are worth 
 - **PostgreSQL 16 made node support functions generated** (`964d01ae90c` introduced `src/backend/nodes/gen_node_support.pl`). The generated `_outPartitionBoundSpec()` reproduces the hand-written one field for field: `char` → `WRITE_CHAR_FIELD`, `bool` → `WRITE_BOOL_FIELD`, `int` → `WRITE_INT_FIELD`, `List *` → `WRITE_NODE_FIELD`, `ParseLoc` → `WRITE_LOCATION_FIELD`, with the same upper-cased label [gen_node_support.pl#field-types](../../../../raw/postgres-18/src/backend/nodes/gen_node_support.pl#L1014-L1067). The stored text is unaffected.
 - **The primitives did not move.** `outDatum()` is byte-identical between the `REL_10_0` tree and the pin, `_outConst()` likewise, and the `WRITE_CHAR_FIELD`, `WRITE_BOOL_FIELD`, `WRITE_INT_FIELD` and `WRITE_NODE_FIELD` macros produce identical output [outfuncs.c#WRITE-macros](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c#L93-L106).
 
-Practical reading: a `relpartbound` value written by PostgreSQL 11 through 16 and one written by 17 or 18 differ only in the `:location` numbers. A value written by 10 additionally lacks three fields. `pg_upgrade` does not carry the text across anyway — `pg_dump` re-emits DDL and the new server re-serializes — so the divergence matters for external tools that read the column, not for upgrades.
+Practical reading: a `relpartbound` value written by PostgreSQL 11 through 16 and one written by 17 or 18 differ only in the `:location` numbers. A value written by 10 additionally lacks three fields. [`pg_upgrade`](../../../glossary.md#pg_upgrade) does not carry the text across anyway — `pg_dump` re-emits DDL and the new server re-serializes — so the divergence matters for external tools that read the column, not for upgrades.
 
 ### The relpartbound lifecycle
 
@@ -175,7 +175,7 @@ Practical reading: a `relpartbound` value written by PostgreSQL 11 through 16 an
 
 `DETACH PARTITION CONCURRENTLY` splits step 2 across two transactions: the first marks `pg_inherits.inhdetachpending`, commits, and only the second nulls `relpartbound` [tablecmds.c#ATExecDetachPartition](../../../../raw/postgres-18/src/backend/commands/tablecmds.c#L20971-L20980). During the gap the bound is still readable, which the isolation suite asserts directly with `SELECT relpartbound IS NULL FROM pg_class` before and after the blocking session commits [detach-partition-concurrently-1.spec](../../../../raw/postgres-18/src/test/isolation/specs/detach-partition-concurrently-1.spec#L35-L46).
 
-Partitioned *indexes* never get a bound. An index attached with `ALTER INDEX ... ATTACH PARTITION` has null `relpartbound` on both parent and child, which the regression suite checks by selecting the column [indexing.sql#relpartbound](../../../../raw/postgres-18/src/test/regress/sql/indexing.sql#L70-L75) [indexing.out#relpartbound](../../../../raw/postgres-18/src/test/regress/expected/indexing.out#L128-L137).
+Partitioned *indexes* never get a bound. An index attached with [`ALTER INDEX ... ATTACH PARTITION`](../../../glossary.md#partitioned-index) has null `relpartbound` on both parent and child, which the regression suite checks by selecting the column [indexing.sql#relpartbound](../../../../raw/postgres-18/src/test/regress/sql/indexing.sql#L70-L75) [indexing.out#relpartbound](../../../../raw/postgres-18/src/test/regress/expected/indexing.out#L128-L137).
 
 ### How PostgreSQL 18 exposes the bound
 
@@ -183,7 +183,7 @@ There are exactly three SQL-visible forms, plus two client tools that consume th
 
 **1. The raw `pg_node_tree`.** Readable by any role with `SELECT` on `pg_class`, which is world-readable. Opaque by design and documented only as "internal representation" [catalogs.sgml#relpartbound](../../../../raw/postgres-18/doc/src/sgml/catalogs.sgml#L2307-L2315).
 
-**2. `pg_get_expr(relpartbound, oid)`** — the canonical deparse. `pg_get_expr_worker()` runs `stringToNode()`, rejects query trees and out-of-scope `Var`s, opens the relation under `AccessShareLock` when a nonzero relid is given, and deparses [ruleutils.c#pg_get_expr_worker](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L2711-L2788). A `PartitionBoundSpec` reaches `get_rule_expr()`'s `T_PartitionBoundSpec` arm, which produces the same text the grammar accepts [ruleutils.c#T_PartitionBoundSpec](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L10431-L10488):
+**2. `pg_get_expr(relpartbound, oid)`** — the canonical deparse. `pg_get_expr_worker()` runs `stringToNode()`, rejects query trees and out-of-scope `Var`s, opens the [relation](../../../glossary.md#relation) under [`AccessShareLock`](../../../glossary.md#lock-mode) when a nonzero relid is given, and deparses [ruleutils.c#pg_get_expr_worker](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L2711-L2788). A `PartitionBoundSpec` reaches `get_rule_expr()`'s `T_PartitionBoundSpec` arm, which produces the same text the grammar accepts [ruleutils.c#T_PartitionBoundSpec](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L10431-L10488):
 
 | Stored spec | Deparsed text |
 |---|---|
@@ -194,7 +194,7 @@ There are exactly three SQL-visible forms, plus two client tools that consume th
 
 Two deparse rules govern the elements. `get_range_partbound_string()` emits the bare, upper-case keywords `MINVALUE` and `MAXVALUE` for the two sentinel kinds [ruleutils.c#get_range_partbound_string](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L13704-L13742). Every real value goes through `get_const_expr(val, context, -1)`, and `showtype = -1` means "never show `::typename` decoration" [ruleutils.c#get_const_expr](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L11453-L11468). That is what makes the output paste-able into `ATTACH PARTITION`, and also what makes it lossy: the text does not record which type the literal belongs to.
 
-**3. `pg_get_partition_constraintdef(oid)`** — a derived boolean. It calls `get_partition_qual_relid()` and deparses the resulting expression [ruleutils.c#pg_get_partition_constraintdef](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L2092-L2121), documented as "Reconstructs the definition of a partition constraint" [func.sgml#pg_get_partition_constraintdef](../../../../raw/postgres-18/doc/src/sgml/func.sgml#L26393-L26406). This is a different shape of information: it includes the inherited quals of every ancestor and the `IS NOT NULL` guards, so it is not a bound list.
+**3. `pg_get_partition_constraintdef(oid)`** — a derived boolean. It calls `get_partition_qual_relid()` and deparses the resulting expression [ruleutils.c#pg_get_partition_constraintdef](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L2092-L2121), documented as "Reconstructs the definition of a partition constraint" [func.sgml#pg_get_partition_constraintdef](../../../../raw/postgres-18/doc/src/sgml/func.sgml#L26393-L26406). This is a different shape of information: it includes the inherited [quals](../../../glossary.md#qual) of every ancestor and the `IS NOT NULL` guards, so it is not a bound list.
 
 **Clients.** psql's `\d` on a partition runs `pg_get_expr(c.relpartbound, c.oid)` and prints `Partition of: <parent> <bound>`, appending ` DETACH PENDING` when `pg_inherits.inhdetachpending` is set, and adds `Partition constraint:` from `pg_get_partition_constraintdef()` under `\d+` [describe.c#Partition-of](../../../../raw/postgres-18/src/bin/psql/describe.c#L2197-L2248). `\d+` on the parent lists each child with its bound and deliberately sorts the default partition last by testing the deparsed text against the literal `'DEFAULT'` [describe.c#child-tables](../../../../raw/postgres-18/src/bin/psql/describe.c#L3476-L3504). `pg_dump` uses the same deparse to build `ALTER TABLE ONLY ... ATTACH PARTITION ... <bound>;` [pg_dump.c#dumpTableAttach](../../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L17926-L17971).
 
@@ -211,7 +211,7 @@ Additions only; nothing was removed and no output format changed.
 | `3bae43ca4dc` | 11.0 | Sorts the default partition to the bottom of that list. |
 | `24f62e93f31`, `4e784f35145` | 13.0 | Reworked `\d` output for partitioned tables and partitioned indexes. |
 | `71f4c8c6f74` | 14.0 | `DETACH PARTITION ... CONCURRENTLY`; psql gained the ` DETACH PENDING` suffix on the bound line. |
-| `4438eb4a495`, `e3fcbbd623b`, `be85727a3df` | 15.0 | `pg_dump` refactors: the bound query moved into a prepared statement. Same SQL, same output. |
+| `4438eb4a495`, `e3fcbbd623b`, `be85727a3df` | 15.0 | `pg_dump` refactors: the bound query moved into a [prepared statement](../../../glossary.md#prepared-statement). Same SQL, same output. |
 
 The `pg_get_expr` deparse path itself has no functional commit in that window; the only change to `get_range_partbound_string()` since 10.0 is a comment fix (`0896ae561b6`, first in 13.0).
 
@@ -219,15 +219,15 @@ The `pg_get_expr` deparse path itself has no functional commit in that window; t
 
 The read direction is where the stored text is turned back into engine structures, and it has three distinct entry points — worth knowing because each has a different failure mode.
 
-- **`RelationBuildPartitionDesc()`** reads every child's `relpartbound` to build the parent's partition descriptor. It tries the syscache first, then falls back to a direct `pg_class` scan, precisely because a concurrent `ATTACH` may not be visible yet and a concurrent `DETACH CONCURRENTLY` may have already nulled the column. If the bound is still missing it retries once, then errors with `missing relpartbound for relation %u`, and it type-checks the deserialized node with `invalid relpartbound for relation %u` [partdesc.c#RelationBuildPartitionDesc](../../../../raw/postgres-18/src/backend/partitioning/partdesc.c#L179-L282).
-- **`generate_partition_qual()`** reads a single partition's bound to build its check constraint, caching the result in the relcache entry [partcache.c#generate_partition_qual](../../../../raw/postgres-18/src/backend/utils/cache/partcache.c#L364-L381).
+- **`RelationBuildPartitionDesc()`** reads every child's `relpartbound` to build the parent's partition descriptor. It tries the [syscache](../../../glossary.md#syscache) first, then falls back to a direct `pg_class` scan, precisely because a concurrent `ATTACH` may not be visible yet and a concurrent `DETACH CONCURRENTLY` may have already nulled the column. If the bound is still missing it retries once, then errors with `missing relpartbound for relation %u`, and it type-checks the deserialized node with `invalid relpartbound for relation %u` [partdesc.c#RelationBuildPartitionDesc](../../../../raw/postgres-18/src/backend/partitioning/partdesc.c#L179-L282).
+- **`generate_partition_qual()`** reads a single partition's bound to build its check constraint, caching the result in the [relcache](../../../glossary.md#relcache) entry [partcache.c#generate_partition_qual](../../../../raw/postgres-18/src/backend/utils/cache/partcache.c#L364-L381).
 - **`get_qual_for_range()`** reads the *siblings'* bounds when constructing a default partition's constraint, using `SysCacheGetAttrNotNull()` since a listed partition must have one [partbounds.c#default-partition-qual](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c#L4315-L4326).
 
 The pinned checkout contains one v18-era change on this path: `c899c6839f5`, "Fix creation of partition descriptor during concurrent detach+drop", which added the missing null-tuple check in the direct-scan fallback. It changed neither syntax nor stored format.
 
 Two adjacent 18.4/18.6 changes touch the partition machinery without touching the bound grammar or `relpartbound`:
 
-- `0c06ebf126a`, "Prevent satisfies_hash_partition from crashing with VARIADIC NULL.", makes `satisfies_hash_partition(..., VARIADIC NULL::sometype[])` return false instead of crashing, on both the cached-`FmgrInfo` and the deconstruct-array paths [partbounds.c#variadic-null-cached](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c#L4871-L4876) [partbounds.c#variadic-null-array](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c#L4951-L4958). That function evaluates the *derived* hash-partition constraint at runtime; it neither parses nor stores a bound.
+- `0c06ebf126a`, "Prevent satisfies_hash_partition from crashing with VARIADIC NULL.", makes `satisfies_hash_partition(..., VARIADIC NULL::sometype[])` return false instead of crashing, on both the cached-[`FmgrInfo`](../../../glossary.md#fmgr) and the deconstruct-array paths [partbounds.c#variadic-null-cached](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c#L4871-L4876) [partbounds.c#variadic-null-array](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c#L4951-L4958). That function evaluates the *derived* hash-partition constraint at runtime; it neither parses nor stores a bound.
 - `2780538433f` makes `StorePartitionKey()` check `USAGE` on the types reached by partition-*key* expressions before recording their dependencies [heap.c#StorePartitionKey-type-USAGE](../../../../raw/postgres-18/src/backend/catalog/heap.c#L4030-L4043). That is a key-side privilege check on `CREATE TABLE ... PARTITION BY`, not a bound-side change.
 
 ### Error paths
@@ -249,9 +249,9 @@ Two adjacent 18.4/18.6 changes touch the partition machinery without touching th
 
 Nothing about the bound is hand-maintained in a generated artifact, which is why the PostgreSQL 16 generator switch was invisible here:
 
-- `Anum_pg_class_relpartbound` and `Natts_pg_class` come from the generated `pg_class_d.h`, produced by `genbki.pl` from `pg_class.h`. Every read site uses the symbol, never a literal ordinal.
+- `Anum_pg_class_relpartbound` and `Natts_pg_class` come from the generated `pg_class_d.h`, produced by [`genbki.pl`](../../../glossary.md#bki) from `pg_class.h`. Every read site uses the symbol, never a literal ordinal.
 - `T_PartitionBoundSpec`, `_outPartitionBoundSpec()`, `_readPartitionBoundSpec()`, `_copyPartitionBoundSpec()` and `_equalPartitionBoundSpec()` are all generated from the `parsenodes.h` struct by `gen_node_support.pl` [gen_node_support.pl#out-funcs](../../../../raw/postgres-18/src/backend/nodes/gen_node_support.pl#L917-L946). The struct carries no `pg_node_attr()` marking, so it gets the default full read/write/copy/equal treatment. Adding a field to `PartitionBoundSpec` would silently change the on-disk `relpartbound` text.
-- `pg_get_partition_constraintdef` is registered in `pg_proc.dat` at OID 3408 and reaches SQL through the generated `fmgrtab.c`.
+- `pg_get_partition_constraintdef` is registered in `pg_proc.dat` at [OID](../../../glossary.md#oid) 3408 and reaches SQL through the generated `fmgrtab.c`.
 
 ### Previous-pin measurements
 
@@ -391,33 +391,34 @@ Explicit gaps found in the pinned tree:
 
 ## Source References
 
-- [gram.y](../../../../raw/postgres-18/src/backend/parser/gram.y) - bound grammar production, hash option list, and all bound use sites.
-- [parse_utilcmd.c](../../../../raw/postgres-18/src/backend/parser/parse_utilcmd.c) - bound transform, sentinel recognition, sentinel ordering, and element evaluation.
-- [parsenodes.h](../../../../raw/postgres-18/src/include/nodes/parsenodes.h) - `PartitionBoundSpec`, `PartitionRangeDatum`, `PartitionRangeDatumKind`, `PartitionCmd`.
-- [pg_class.h](../../../../raw/postgres-18/src/include/catalog/pg_class.h) - the `relpartbound` column definition.
-- [heap.c](../../../../raw/postgres-18/src/backend/catalog/heap.c) - `StorePartitionBound` and the null-at-creation site.
-- [tablecmds.c](../../../../raw/postgres-18/src/backend/commands/tablecmds.c) - attach/detach callers and the clearing code.
-- [outfuncs.c](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c) - node serialization primitives, `outDatum`, and the location-field policy.
-- [gen_node_support.pl](../../../../raw/postgres-18/src/backend/nodes/gen_node_support.pl) - generation of the bound node's out/read/copy/equal functions.
-- [ruleutils.c](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c) - bound deparse, `pg_get_expr`, `pg_get_partition_constraintdef`.
-- [partdesc.c](../../../../raw/postgres-18/src/backend/partitioning/partdesc.c) - partition-descriptor read path and retry logic.
-- [partcache.c](../../../../raw/postgres-18/src/backend/utils/cache/partcache.c) - per-partition qual generation from the stored bound.
-- [partbounds.c](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c) - default-partition constraint construction from sibling bounds.
-- [partbounds.h](../../../../raw/postgres-18/src/include/partitioning/partbounds.h) - the internal `PartitionBoundInfoData` form.
-- [kwlist.h](../../../../raw/postgres-18/src/include/parser/kwlist.h) - keyword categories for `minvalue`/`maxvalue`.
-- [describe.c](../../../../raw/postgres-18/src/bin/psql/describe.c) - psql `\d`/`\d+` bound output.
-- [pg_dump.c](../../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c) - `ATTACH PARTITION` emission.
-- [catalogs.sgml](../../../../raw/postgres-18/doc/src/sgml/catalogs.sgml) - `pg_class.relpartbound` description.
-- [create_table.sgml](../../../../raw/postgres-18/doc/src/sgml/ref/create_table.sgml) - bound synopsis and semantics.
-- [alter_table.sgml](../../../../raw/postgres-18/doc/src/sgml/ref/alter_table.sgml) - `ATTACH PARTITION` synopsis.
-- [func.sgml](../../../../raw/postgres-18/doc/src/sgml/func.sgml) - `pg_get_expr` and `pg_get_partition_constraintdef` documentation.
-- [create_table.sql](../../../../raw/postgres-18/src/test/regress/sql/create_table.sql) and [create_table.out](../../../../raw/postgres-18/src/test/regress/expected/create_table.out) - bound syntax and deparse coverage.
-- [indexing.sql](../../../../raw/postgres-18/src/test/regress/sql/indexing.sql) and [indexing.out](../../../../raw/postgres-18/src/test/regress/expected/indexing.out) - null `relpartbound` for partitioned indexes.
-- [detach-partition-concurrently-1.spec](../../../../raw/postgres-18/src/test/isolation/specs/detach-partition-concurrently-1.spec) - `relpartbound` visibility during concurrent detach.
-- [misc_sanity.out](../../../../raw/postgres-18/src/test/regress/expected/misc_sanity.out) - catalogs without TOAST tables.
+- [gram.y](../../../../raw/postgres-18/src/backend/parser/gram.y#L1-L19728) - bound grammar production, hash option list, and all bound use sites.
+- [parse_utilcmd.c](../../../../raw/postgres-18/src/backend/parser/parse_utilcmd.c#L1-L4676) - bound transform, sentinel recognition, sentinel ordering, and element evaluation.
+- [parsenodes.h](../../../../raw/postgres-18/src/include/nodes/parsenodes.h#L1-L4335) - `PartitionBoundSpec`, `PartitionRangeDatum`, `PartitionRangeDatumKind`, `PartitionCmd`.
+- [pg_class.h](../../../../raw/postgres-18/src/include/catalog/pg_class.h#L1-L238) - the `relpartbound` column definition.
+- [heap.c](../../../../raw/postgres-18/src/backend/catalog/heap.c#L1-L4169) - `StorePartitionBound` and the null-at-creation site.
+- [tablecmds.c](../../../../raw/postgres-18/src/backend/commands/tablecmds.c#L1-L22193) - attach/detach callers and the clearing code.
+- [outfuncs.c](../../../../raw/postgres-18/src/backend/nodes/outfuncs.c#L1-L830) - node serialization primitives, `outDatum`, and the location-field policy.
+- [gen_node_support.pl](../../../../raw/postgres-18/src/backend/nodes/gen_node_support.pl#L1-L1399) - generation of the bound node's out/read/copy/equal functions.
+- [ruleutils.c](../../../../raw/postgres-18/src/backend/utils/adt/ruleutils.c#L1-L13742) - bound deparse, `pg_get_expr`, `pg_get_partition_constraintdef`.
+- [partdesc.c](../../../../raw/postgres-18/src/backend/partitioning/partdesc.c#L1-L508) - partition-descriptor read path and retry logic.
+- [partcache.c](../../../../raw/postgres-18/src/backend/utils/cache/partcache.c#L1-L432) - per-partition qual generation from the stored bound.
+- [partbounds.c](../../../../raw/postgres-18/src/backend/partitioning/partbounds.c#L1-L4991) - default-partition constraint construction from sibling bounds.
+- [partbounds.h](../../../../raw/postgres-18/src/include/partitioning/partbounds.h#L1-L146) - the internal `PartitionBoundInfoData` form.
+- [kwlist.h](../../../../raw/postgres-18/src/include/parser/kwlist.h#L1-L521) - keyword categories for `minvalue`/`maxvalue`.
+- [describe.c](../../../../raw/postgres-18/src/bin/psql/describe.c#L1-L7322) - psql `\d`/`\d+` bound output.
+- [pg_dump.c](../../../../raw/postgres-18/src/bin/pg_dump/pg_dump.c#L1-L20417) - `ATTACH PARTITION` emission.
+- [catalogs.sgml](../../../../raw/postgres-18/doc/src/sgml/catalogs.sgml#L1-L9776) - `pg_class.relpartbound` description.
+- [create_table.sgml](../../../../raw/postgres-18/doc/src/sgml/ref/create_table.sgml#L1-L2624) - bound synopsis and semantics.
+- [alter_table.sgml](../../../../raw/postgres-18/doc/src/sgml/ref/alter_table.sgml#L1-L1880) - `ATTACH PARTITION` synopsis.
+- [func.sgml](../../../../raw/postgres-18/doc/src/sgml/func.sgml#L1-L32046) - `pg_get_expr` and `pg_get_partition_constraintdef` documentation.
+- [create_table.sql](../../../../raw/postgres-18/src/test/regress/sql/create_table.sql#L1-L753) and [create_table.out](../../../../raw/postgres-18/src/test/regress/expected/create_table.out#L1-L1151) - bound syntax and deparse coverage.
+- [indexing.sql](../../../../raw/postgres-18/src/test/regress/sql/indexing.sql#L1-L1009) and [indexing.out](../../../../raw/postgres-18/src/test/regress/expected/indexing.out#L1-L1791) - null `relpartbound` for partitioned indexes.
+- [detach-partition-concurrently-1.spec](../../../../raw/postgres-18/src/test/isolation/specs/detach-partition-concurrently-1.spec#L1-L69) - `relpartbound` visibility during concurrent detach.
+- [misc_sanity.out](../../../../raw/postgres-18/src/test/regress/expected/misc_sanity.out#L1-L98) - catalogs without TOAST tables.
 
 ## Navigation
 
+- [Wiki Glossary (unverified)](../../../glossary.md)
 - [v18/index](../../index.md)
 - [versions](../../../versions.md)
 - [wiki index](../../../index.md)

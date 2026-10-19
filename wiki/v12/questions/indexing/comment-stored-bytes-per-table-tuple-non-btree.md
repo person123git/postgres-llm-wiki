@@ -48,20 +48,20 @@ Record a stable post-build baseline for every index except btree in its PostgreS
 
 ### Verdict
 
-The scheme works, but only for two of the five non-B-tree access methods, and only under a stated precondition. Measured on an isolated PostgreSQL 12.2 server built from this pin, over 132 measured cells (22 workloads x 6 index shapes) with `REINDEX` as ground truth:
+The scheme works, but only for two of the five non-B-tree [access methods](../../../glossary.md#access-method), and only under a stated precondition. Measured on an isolated PostgreSQL 12.2 server built from this pin, over 132 measured cells (22 workloads x 6 index shapes) with [`REINDEX`](../../../glossary.md#reindex) as ground truth:
 
-- **GiST is the one access method where a stored baseline plus a fixed percentage calibrates cleanly.** A threshold anywhere in **20-30%** separated every "worth rebuilding" cell from every "not worth it" cell (14 true positives, 0 false positives, 0 false negatives), and a *fresh, zero-bloat* GiST index's ratio moved only ±3.84% across a 64x row-count range, so growth alone does not trip it.
-- **hash and SP-GiST are usable only if the row count is roughly stable.** Their best thresholds (hash 9-11%, SP-GiST 29-32%) score 100% on a fixed-size table, but a freshly built, zero-bloat hash index reads anywhere from -20.31% to +49.42% purely from the bucket-allocation staircase, and a fresh SP-GiST index up to +33.08%. Both windows are narrower than their own no-bloat noise.
-- **GIN needs a much higher threshold (50-75%) and still misclassifies**, because insert growth genuinely lowers GIN packing density and because the pending list moves the numerator for reasons a rebuild is the wrong answer to.
-- **BRIN must never be rebuilt on this signal.** `REINDEX` reclaimed exactly 0.00% in all 22 BRIN cells, while the ratio moved between -87.50% and +9900.00%. Every firing is a false positive.
+- **[GiST](../../../glossary.md#gist) is the one access method where a stored baseline plus a fixed percentage calibrates cleanly.** A threshold anywhere in **20-30%** separated every "worth rebuilding" cell from every "not worth it" cell (14 true positives, 0 false positives, 0 false negatives), and a *fresh, zero-bloat* GiST index's ratio moved only ±3.84% across a 64x row-count range, so growth alone does not trip it.
+- **hash and [SP-GiST](../../../glossary.md#sp-gist) are usable only if the row count is roughly stable.** Their best thresholds (hash 9-11%, SP-GiST 29-32%) score 100% on a fixed-size table, but a freshly built, zero-bloat [hash index](../../../glossary.md#hash-index) reads anywhere from -20.31% to +49.42% purely from the bucket-allocation staircase, and a fresh SP-GiST index up to +33.08%. Both windows are narrower than their own no-bloat noise.
+- **[GIN](../../../glossary.md#gin) needs a much higher threshold (50-75%) and still misclassifies**, because insert growth genuinely lowers GIN packing density and because the [pending list](../../../glossary.md#pending-list) moves the numerator for reasons a rebuild is the wrong answer to.
+- **[BRIN](../../../glossary.md#brin) must never be rebuilt on this signal.** `REINDEX` reclaimed exactly 0.00% in all 22 BRIN cells, while the ratio moved between -87.50% and +9900.00%. Every firing is a false positive.
 
-The reason the proxy works at all is a v12 property: plain `VACUUM` never returns index main-fork blocks to the operating system for any of these access methods, so the numerator only ever rises until a rebuild. `RelationTruncate` has exactly seven call sites in this tree, and the only index-side one is inside `TRUNCATE`'s immediate rebuild path [heap.c#RelationTruncateIndexes](../../../../raw/postgres-12/src/backend/catalog/heap.c#L3163-L3207); SP-GiST's index truncation is present but disabled under `#ifdef NOT_USED` with the comment "Note that btree doesn't do this either" [spgvacuum.c#spgvacuumscan](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L863-L886). Every access method instead recycles freed pages through the FSM fork [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L48-L55), which `pg_relation_size`'s default `'main'` fork does not count [pg_proc.dat#pg_relation_size](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6887).
+The reason the proxy works at all is a v12 property: plain [`VACUUM`](../../../glossary.md#vacuum) never returns index main-fork [blocks](../../../glossary.md#block) to the operating system for any of these access methods, so the numerator only ever rises until a rebuild. `RelationTruncate` has exactly seven call sites in this tree, and the only index-side one is inside `TRUNCATE`'s immediate rebuild path [heap.c#RelationTruncateIndexes](../../../../raw/postgres-12/src/backend/catalog/heap.c#L3163-L3207); SP-GiST's index [truncation](../../../glossary.md#truncation) is present but disabled under `#ifdef NOT_USED` with the comment "Note that btree doesn't do this either" [spgvacuum.c#spgvacuumscan](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L863-L886). Every access method instead recycles freed [pages](../../../glossary.md#page) through the [FSM](../../../glossary.md#free-space-map) [fork](../../../glossary.md#fork) [indexfsm.c#RecordFreeIndexPage](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L48-L55), which [`pg_relation_size`](../../../glossary.md#relation-size-functions)'s default `'main'` fork does not count [pg_proc.dat#pg_relation_size](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6887).
 
-The reason it fails is the denominator. `pg_class.reltuples` is a `float4` estimate of live rows, and in this version there is no `-1` sentinel: the comment is exactly "# of tuples (not always up-to-date)" [pg_class.h:62-63](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L62-L63). It is refreshed by block-sampled `ANALYZE` [analyze.c#acquire_sample_rows](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1111-L1122), by old-density extrapolation in `VACUUM` [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1058-L1113), and — critically for a "post-build baseline" — by every index build, which rewrites the *heap's* `relpages` and `reltuples` as a side effect [index.c#index_build](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986).
+The reason it fails is the denominator. [`pg_class.reltuples`](../../../glossary.md#reltuples-and-relpages) is a `float4` estimate of live rows, and in this version there is no `-1` sentinel: the comment is exactly "# of tuples (not always up-to-date)" [pg_class.h:62-63](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L62-L63). It is refreshed by block-sampled `ANALYZE` [analyze.c#acquire_sample_rows](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1111-L1122), by old-density extrapolation in `VACUUM` [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1058-L1113), and — critically for a "post-build baseline" — by every index build, which rewrites the *[heap](../../../glossary.md#heap)'s* `relpages` and `reltuples` as a side effect [index.c#index_build](../../../../raw/postgres-12/src/backend/catalog/index.c#L2977-L2986).
 
 ### Calibrated thresholds per access method
 
-"Worth rebuilding" below means a `REINDEX` that reclaims at least 20% of the index's current bytes. `Window` is the measured gap between the highest reading among not-worth-it cells and the lowest reading among worth-it cells; any threshold inside the window scores perfectly on this data set. `Growth noise` is the spread of a *freshly built* index's ratio across 25,000 to 1,600,000 rows, which is the amount of drift a stored baseline accumulates with no bloat at all.
+"Worth rebuilding" below means a `REINDEX` that reclaims at least 20% of the index's current bytes. `Window` is the measured gap between the highest reading among not-worth-it cells and the lowest reading among worth-it cells; any threshold inside the window scores perfectly on this data set. `Growth noise` is the spread of a *freshly built* index's ratio across 25,000 to 1,600,000 rows, which is the amount of drift a stored baseline accumulates with no [bloat](../../../glossary.md#bloat) at all.
 
 | Index type | Recommended threshold | Perfect window | TP / FP / FN / TN | Growth noise (fresh build) | Verdict |
 |---|---|---|---|---|---|
@@ -82,13 +82,13 @@ Rank correlation between the reading and the reclaimable fraction is high for ev
 
 The ratio mixes two independent quantities, and one of them is far noisier than the thing being measured.
 
-**Numerator — monotone, but quantized per access method.** `pg_relation_size(index)` sums the segment files of one fork [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L273-L308), and the one-argument form hardcodes `'main'` [pg_proc.dat#pg_relation_size](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6887). Freed pages leave the main fork's high-water mark untouched:
+**Numerator — monotone, but quantized per access method.** `pg_relation_size(index)` sums the [segment files](../../../glossary.md#storage-manager) of one fork [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L273-L308), and the one-argument form hardcodes `'main'` [pg_proc.dat#pg_relation_size](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L6883-L6887). Freed pages leave the main fork's high-water mark untouched:
 
 - hash frees an overflow page by clearing a bitmap bit, never by truncating [hashovfl.c#_hash_freeovflpage](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L593-L641), and its README states it outright: "There is currently no provision to shrink a hash index, other than by rebuilding it with REINDEX" [hash/README:31-34](../../../../raw/postgres-12/src/backend/access/hash/README#L31-L34). `hashvacuumcleanup` only reports `RelationGetNumberOfBlocks` [hash.c#hashvacuumcleanup](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L641-L656).
-- GiST does delete empty leaf pages in this version and records recyclable ones in the FSM [gistvacuum.c#gistvacuumpage](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L306-L317), gated on the page's deletion XID preceding `RecentGlobalXmin` [gistutil.c#gistPageRecyclable](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L883-L906), and reuses them through `gistNewBuffer` [gistutil.c#gistNewBuffer](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L813-L822) — inside the same file.
-- GIN puts recyclable pages in the FSM and refreshes the metapage statistics [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L755-L784).
+- GiST does delete empty [leaf pages](../../../glossary.md#leaf-page) in this version and records recyclable ones in the FSM [gistvacuum.c#gistvacuumpage](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L306-L317), gated on the page's deletion [XID](../../../glossary.md#transaction-id) preceding `RecentGlobalXmin` [gistutil.c#gistPageRecyclable](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L883-L906), and reuses them through `gistNewBuffer` [gistutil.c#gistNewBuffer](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L813-L822) — inside the same file.
+- GIN puts recyclable pages in the FSM and refreshes the [metapage](../../../glossary.md#metapage) statistics [ginvacuum.c#ginvacuumcleanup](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L755-L784).
 - SP-GiST converts expired redirect tuples to placeholders and only removes placeholders at the end of a page [spgvacuum.c#vacuumRedirectAndPlaceholder](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L519-L530).
-- BRIN's `ambulkdelete` is a no-op by design [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784), and `brinvacuumcleanup` only refreshes the FSM and adds summaries [brin.c#brin_vacuum_scan](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1490-L1500).
+- BRIN's [`ambulkdelete`](../../../glossary.md#index-vacuuming) is a no-op by design [brin.c#brinbulkdelete](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L766-L784), and `brinvacuumcleanup` only refreshes the FSM and adds summaries [brin.c#brin_vacuum_scan](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1490-L1500).
 
 **Denominator — an estimate with three distinct failure states.** Stale (nothing ran `ANALYZE`), extrapolated (a partial `VACUUM` reused the previous density for unscanned pages, [vacuum.c#vac_estimate_reltuples](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1096-L1112)), or zero. Zero is ambiguous in v12 and means both "unknown tuple density" and "genuinely empty", as `heap_vacuum_rel` says in so many words [vacuumlazy.c#heap_vacuum_rel](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L320-L330).
 
@@ -96,16 +96,16 @@ Because the numerator cannot fall and the denominator can, a pure delete workloa
 
 ### Recording the baseline with COMMENT ON INDEX
 
-`COMMENT ON INDEX` accepts a string literal or `NULL` and nothing else — the grammar production is `Sconst | NULL_P` [gram.y#comment_text](../../../../raw/postgres-12/src/backend/parser/gram.y#L6589-L6592). Confirmed on the pin: `COMMENT ON INDEX i IS (SELECT '1.0')` and `COMMENT ON INDEX i IS 12.5` both fail with `syntax error`. A computed baseline therefore has to go through dynamic SQL. Other mechanics verified on the pin:
+`COMMENT ON INDEX` accepts a string literal or `NULL` and nothing else — the [grammar](../../../glossary.md#grammar) production is `Sconst | NULL_P` [gram.y#comment_text](../../../../raw/postgres-12/src/backend/parser/gram.y#L6589-L6592). Confirmed on the pin: `COMMENT ON INDEX i IS (SELECT '1.0')` and `COMMENT ON INDEX i IS 12.5` both fail with `syntax error`. A computed baseline therefore has to go through dynamic SQL. Other mechanics verified on the pin:
 
 | Behavior | Evidence |
 |---|---|
-| Takes `ShareUpdateExclusiveLock` on the index, held to commit (measured: one `relation` lock on the index, none on the table) | [comment.c#CommentObject](../../../../raw/postgres-12/src/backend/commands/comment.c#L66-L73) |
+| Takes [`ShareUpdateExclusiveLock`](../../../glossary.md#shareupdateexclusivelock) on the index, held to commit (measured: one `relation` lock on the index, none on the table) | [comment.c#CommentObject](../../../../raw/postgres-12/src/backend/commands/comment.c#L66-L73) |
 | Requires ownership of the index (measured: `ERROR: must be owner of index t_cm_gin`) | [objectaddress.c#check_object_ownership](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L2275-L2289) |
-| One row per index in `pg_description`, `classoid = pg_class`, `objsubid = 0` (measured) | [comment.c#CreateComments](../../../../raw/postgres-12/src/backend/commands/comment.c#L142-L225) |
+| One row per index in [`pg_description`](../../../glossary.md#comment-on), `classoid = pg_class`, `objsubid = 0` (measured) | [comment.c#CreateComments](../../../../raw/postgres-12/src/backend/commands/comment.c#L142-L225) |
 | `IS NULL` and `IS ''` both delete the row (measured: 0 rows after each) | [comment.c:154-156](../../../../raw/postgres-12/src/backend/commands/comment.c#L154-L156) |
 | Canonical read is `obj_description(idx, 'pg_class')` | [pg_proc.dat#obj_description](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L2311-L2314) |
-| Plain `REINDEX INDEX` keeps it: the OID does not change (measured: 18061 before and after) | [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3436-L3544) |
+| Plain `REINDEX INDEX` keeps it: the [OID](../../../glossary.md#oid) does not change (measured: 18061 before and after) | [index.c#reindex_index](../../../../raw/postgres-12/src/backend/catalog/index.c#L3436-L3544) |
 | `REINDEX INDEX CONCURRENTLY` keeps it by moving the row: OID changed 18061 -> 18063, still exactly one `pg_description` row (measured) | [index.c#index_concurrently_swap](../../../../raw/postgres-12/src/backend/catalog/index.c#L1612-L1656) |
 | `DROP INDEX` deletes it | [dependency.c#deleteOneObject](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1313-L1320) |
 | Any user can read it, so put no secrets in it | [ref/comment.sgml#Notes](../../../../raw/postgres-12/doc/src/sgml/ref/comment.sgml#L274-L286) |
@@ -189,7 +189,7 @@ WHERE am.amname <> 'btree'
 ORDER BY 7 DESC NULLS LAST;
 ```
 
-`indpred` is the partial-index guard; the measured reason for it is below. `pg_relation_size` needs no privileges in this version (there is no ACL check for it in `dbsize.c`, unlike `pg_database_size`), and comments are world readable, so the check runs as any login role; only stamping needs index ownership.
+[`indpred`](../../../glossary.md#partial-index) is the partial-index guard; the measured reason for it is below. `pg_relation_size` needs no privileges in this version (there is no ACL check for it in `dbsize.c`, unlike `pg_database_size`), and comments are world readable, so the check runs as any login role; only stamping needs index ownership.
 
 ### Index-specific factors
 
@@ -214,11 +214,11 @@ GIN size also is not per row: one heap row yields one entry per array element [g
 
 A fourth nuance: for hash, part of what `REINDEX` "reclaims" is re-bucketing, not dead space. After deleting 10% of rows and vacuuming, the index stayed at 6,905,856 bytes and 768 buckets; the rebuild produced 5,341,184 bytes and **640** buckets because `hashbuild` re-read the now-smaller `reltuples`. That is 22.66% reclaimed with no dead space involved.
 
-**GiST — the well-behaved case, with one asterisk.** Build-time fillfactor sets page density [gistbuild.c#gistbuild](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L150-L153), but runtime inserts pass `freespace = 0` [gist.c#gistinsert](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L176) and splits ignore fillfactor entirely — `gistfitpage` still carries a `/* TODO: Consider fillfactor */` [gistutil.c#gistfitpage](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L78-L89). That is exactly why insert-only growth did **not** inflate GiST's ratio in my runs (-6.83% to -7.37% at 2x to 8x) while churn did (+13.97% to +354.99%). The asterisk: GiST builds are not byte-deterministic. Re-running two identical cells reproduced 10 of 12 numbers exactly and differed only for GiST (84.62% vs 84.22%, 45.86% vs 45.72% reclaimed).
+**GiST — the well-behaved case, with one asterisk.** Build-time [fillfactor](../../../glossary.md#fillfactor) sets page density [gistbuild.c#gistbuild](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L150-L153), but runtime inserts pass `freespace = 0` [gist.c#gistinsert](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L176) and splits ignore fillfactor entirely — `gistfitpage` still carries a `/* TODO: Consider fillfactor */` [gistutil.c#gistfitpage](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L78-L89). That is exactly why insert-only growth did **not** inflate GiST's ratio in my runs (-6.83% to -7.37% at 2x to 8x) while churn did (+13.97% to +354.99%). The asterisk: GiST builds are not byte-deterministic. Re-running two identical cells reproduced 10 of 12 numbers exactly and differed only for GiST (84.62% vs 84.22%, 45.86% vs 45.72% reclaimed).
 
-**SP-GiST — placeholders and an XID gate.** A deleted or moved leaf tuple leaves a redirect or placeholder occupying `SGDTSIZE` so later offsets do not shift, and a redirect becomes a placeholder only once its XID precedes `RecentGlobalXmin` [spgvacuum.c#vacuumRedirectAndPlaceholder](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L519-L530); only trailing placeholders are removed. Measured: after rewriting the indexed column on all 200,000 rows and before any `VACUUM`, the index read +160.86% with 67.97% of page bytes in use. Because the gate depends on the oldest snapshot in the cluster, the same maintenance window can score differently depending on unrelated long-running transactions.
+**SP-GiST — placeholders and an XID gate.** A deleted or moved leaf tuple leaves a redirect or placeholder occupying `SGDTSIZE` so later offsets do not shift, and a redirect becomes a placeholder only once its XID precedes `RecentGlobalXmin` [spgvacuum.c#vacuumRedirectAndPlaceholder](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L519-L530); only trailing placeholders are removed. Measured: after rewriting the indexed column on all 200,000 rows and before any `VACUUM`, the index read +160.86% with 67.97% of page bytes in use. Because the gate depends on the oldest [snapshot](../../../glossary.md#snapshot) in the cluster, the same maintenance window can score differently depending on unrelated long-running transactions.
 
-**BRIN — the numerator has almost nothing to do with rows.** Total size is driven by heap block count divided by `pages_per_range` [brin.sgml#brin-intro](../../../../raw/postgres-12/doc/src/sgml/brin.sgml#L52-L60), with the revmap growing one page per `REVMAP_PAGE_MAXITEMS` ranges [brin_page.h#REVMAP_PAGE_MAXITEMS](../../../../raw/postgres-12/src/include/access/brin_page.h#L88-L94). Measured on one 200,000-row table: `pages_per_range = 128` gave 3 pages and 0.12288 bytes/row, `8` gave 4 pages and 0.16384, `1` gave 19 pages and 0.77824 — a 6.3x baseline spread from a reloption. Under churn the index stayed at exactly 24,576 bytes (reading +0.00%) while the same query went from 130 to 487 blocks, and the rebuild brought it only to 386 blocks with 0.00% bytes reclaimed. BRIN degrades in summary *precision*, which this metric cannot see, and the fix for that is `brin_desummarize_range` plus a summarization pass, not `REINDEX`.
+**BRIN — the numerator has almost nothing to do with rows.** Total size is driven by heap block count divided by `pages_per_range` [brin.sgml#brin-intro](../../../../raw/postgres-12/doc/src/sgml/brin.sgml#L52-L60), with the revmap growing one page per `REVMAP_PAGE_MAXITEMS` ranges [brin_page.h#REVMAP_PAGE_MAXITEMS](../../../../raw/postgres-12/src/include/access/brin_page.h#L88-L94). Measured on one 200,000-row table: `pages_per_range = 128` gave 3 pages and 0.12288 bytes/row, `8` gave 4 pages and 0.16384, `1` gave 19 pages and 0.77824 — a 6.3x baseline spread from a [reloption](../../../glossary.md#storage-parameter). Under churn the index stayed at exactly 24,576 bytes (reading +0.00%) while the same query went from 130 to 487 blocks, and the rebuild brought it only to 386 blocks with 0.00% bytes reclaimed. BRIN degrades in summary *precision*, which this metric cannot see, and the fix for that is `brin_desummarize_range` plus a summarization pass, not `REINDEX`.
 
 ### Space reclaimed is not query performance
 
@@ -254,7 +254,7 @@ Rebuild cost on the 200,000-row fixture, for weighing "unnecessary rebuilds": Gi
 - **A rebuild does not re-stamp the baseline.** Nothing in `reindex_index` or `index_concurrently_swap` rewrites a comment's contents, so after a rebuild the stored number still describes the pre-rebuild index. Re-stamping is a separate step the operator must perform.
 - **A fresh rebuild does not return to the baseline.** The GIN case above rebuilt to +28.06% versus its own stored baseline, because a fresh build at 400,000 rows simply has a different bytes-per-tuple than a fresh build at 200,000.
 - **`INCLUDING ALL` clones a wrong baseline** onto an empty index, as measured above. The `relid=` guard in the check catches it.
-- **`pg_relation_size` on a partitioned index returns 0** in this version (no relkind check in `dbsize.c`), and a partitioned parent's `reltuples` is never written, since the non-inherited `ANALYZE` pass is skipped for `RELKIND_PARTITIONED_TABLE`. Apply the scheme per partition.
+- **`pg_relation_size` on a [partitioned index](../../../glossary.md#partitioned-index) returns 0** in this version (no relkind check in `dbsize.c`), and a partitioned parent's `reltuples` is never written, since the non-inherited `ANALYZE` pass is skipped for [`RELKIND_PARTITIONED_TABLE`](../../../glossary.md#declarative-partitioning). Apply the scheme per partition.
 
 ### Operational recipe
 
@@ -272,13 +272,13 @@ Determined from the same-version GUC and reloption definitions:
 
 | Setting | Kind | Default | Scope needed to change it |
 |---|---|---|---|
-| `gin_pending_list_limit` | GUC, `PGC_USERSET`, kB [guc.c#gin_pending_list_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3175-L3184) | 4096 kB | session/transaction (`SET`); also settable per index |
-| `fastupdate` | GIN reloption [reloptions.c:127](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L127) | `true` | `ALTER INDEX`, takes `AccessExclusiveLock`; does not flush the existing list |
+| `gin_pending_list_limit` | GUC, [`PGC_USERSET`](../../../glossary.md#guc-context), kB [guc.c#gin_pending_list_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3175-L3184) | 4096 kB | session/transaction (`SET`); also settable per index |
+| `fastupdate` | GIN reloption [reloptions.c:127](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L127) | `true` | `ALTER INDEX`, takes [`AccessExclusiveLock`](../../../glossary.md#accessexclusivelock); does not flush the existing list |
 | `gin_pending_list_limit` | GIN reloption [reloptions.c:324](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L324) | -1 (use the GUC) | `ALTER INDEX`, `AccessExclusiveLock` |
 | `pages_per_range` | BRIN reloption [reloptions.c:316](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L316) | 128 [brin.h:39](../../../../raw/postgres-12/src/include/access/brin.h#L39) | `ALTER INDEX`, `AccessExclusiveLock`; only a rebuild re-lays the index out |
 | `autosummarize` | BRIN reloption [reloptions.c:100](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L100) | `false` | `ALTER INDEX`, `AccessExclusiveLock` |
 | `fillfactor` | hash 75, GiST 90, SP-GiST 80 [hash.h:279](../../../../raw/postgres-12/src/include/access/hash.h#L279), [gist_private.h:465](../../../../raw/postgres-12/src/include/access/gist_private.h#L465), [spgist.h:25](../../../../raw/postgres-12/src/include/access/spgist.h#L25) | — | `ALTER INDEX`, `ShareUpdateExclusiveLock`; hash writes it into the metapage at build time only |
-| `statement_timeout`, `lock_timeout` | GUC, `PGC_USERSET` | 0 | session/transaction |
+| [`statement_timeout`](../../../glossary.md#statement_timeout-and-lock_timeout), `lock_timeout` | GUC, `PGC_USERSET` | 0 | session/transaction |
 
 No `postmaster`-context (restart) or `sighup`-context (reload) setting is required by anything on this page.
 
@@ -286,9 +286,9 @@ No `postmaster`-context (restart) or `sighup`-context (reload) setting is requir
 
 ### Environment and protocol
 
-- Server built from this checkout only: `configure --prefix=.wiki-runtime/pg12/install --without-readline --without-zlib --enable-debug`; `postgres (PostgreSQL) 12.2`. contrib `pageinspect`, `pgstattuple` and `pg_freespacemap` installed from the same tree.
-- Isolated throwaway cluster on port 55442 with a private socket directory under `.wiki-runtime/tmp/bpt/`. `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `work_mem = 64MB`, `max_wal_size = 4GB`, `fsync = off`, `synchronous_commit = off`, **`autovacuum = off`**, `track_io_timing = on`, 8192-byte blocks.
-- Autovacuum was disabled so that each cell's `VACUUM`/`ANALYZE` boundary is exactly where the script puts it. In production, autovacuum is what keeps the denominator fresh; the "stale `reltuples`" probe measures what happens when it does not.
+- Server built from this checkout only: `configure --prefix=.wiki-runtime/pg12/install --without-readline --without-zlib --enable-debug`; `postgres (PostgreSQL) 12.2`. [contrib](../../../glossary.md#contrib) [`pageinspect`](../../../glossary.md#pageinspect), [`pgstattuple`](../../../glossary.md#pgstattuple) and [`pg_freespacemap`](../../../glossary.md#pg_freespacemap) installed from the same tree.
+- Isolated throwaway cluster on port 55442 with a private socket directory under `.wiki-runtime/tmp/bpt/`. `shared_buffers = 512MB`, `maintenance_work_mem = 256MB`, `work_mem = 64MB`, `max_wal_size = 4GB`, `fsync = off`, [`synchronous_commit = off`](../../../glossary.md#asynchronous-commit), **`autovacuum = off`**, `track_io_timing = on`, 8192-byte blocks.
+- [Autovacuum](../../../glossary.md#autovacuum) was disabled so that each cell's `VACUUM`/`ANALYZE` boundary is exactly where the script puts it. In production, autovacuum is what keeps the denominator fresh; the "stale `reltuples`" probe measures what happens when it does not.
 - Per-cell protocol: build the table, load rows, `VACUUM (ANALYZE)`, create the six indexes, stamp each baseline via `COMMENT ON INDEX`, run the workload, reach the maintenance point (`VACUUM (ANALYZE)` unless the cell name says otherwise), read the ratio and the access-method internals, measure the query, `REINDEX INDEX`, measure size and query again, record one row per index.
 - Ground truth for space is `pg_relation_size` before and after `REINDEX INDEX` on the same index. Ground truth for query work is the root-node shared blocks (hit + read) from `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` with `enable_seqscan = off`, median execution time over 7 runs, warm cache.
 - Page density for every access method came from `page_header(get_raw_page(...))` over all pages, treating `pd_lower = 0` as an unwritten page, because `pgstattuple()` opens only btree, hash and GiST indexes in this version [pgstattuple.c#pgstattuple_internal](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L262-L286) and refuses hash indexes containing a splitpoint hole.
@@ -299,7 +299,7 @@ One table per cell, every column a pure function of `id` so a rerun reproduces t
 
 Six indexes per table, covering all five core non-btree access methods plus the GIN pending-list variable: `hash (n)`, `gist (p)`, `gin (tags) WITH (fastupdate = off)`, `gin (tags2) WITH (fastupdate = on)`, `spgist (s)`, `brin (b)`. The two GIN indexes are on separate columns so each query can only choose one of them. Fresh sizes at 200,000 rows: hash 843 pages, GiST 1,713, GIN 392, SP-GiST 1,551, BRIN 3.
 
-Representative queries, one per index: `n = 7919` (hash, index scan), `p <@ box '((0.40,0.40),(0.45,0.45))'` (GiST), `tags @> ARRAY[42]` and `tags2 @> ARRAY[42]` (GIN), `s >= 'ab' AND s < 'ac'` (SP-GiST), `b BETWEEN 100000 AND 100500` (BRIN).
+Representative queries, one per index: `n = 7919` (hash, [index scan](../../../glossary.md#index-scan)), `p <@ box '((0.40,0.40),(0.45,0.45))'` (GiST), `tags @> ARRAY[42]` and `tags2 @> ARRAY[42]` (GIN), `s >= 'ab' AND s < 'ac'` (SP-GiST), `b BETWEEN 100000 AND 100500` (BRIN).
 
 ### Workloads
 
@@ -312,7 +312,7 @@ Representative queries, one per index: `n = 7919` (hash, index scan), `p <@ box 
 | `del90_novac` | delete 90%, then `ANALYZE` without `VACUUM` |
 | `churn25` / `churn50` / `churn100` | `UPDATE ... SET n = n + 1` on 25 / 50 / 100% of rows (non-HOT: an indexed column changes, so all six indexes get new entries) |
 | `churn200` / `churn400` | 2 / 4 full passes of the same update |
-| `hot` | `fillfactor = 70` table, two full passes updating only `pad`; measured 241,920 of 400,000 updates were HOT (60.5%), so this is a partial-HOT workload, not a pure one |
+| `hot` | `fillfactor = 70` table, two full passes updating only `pad`; measured 241,920 of 400,000 updates were [HOT](../../../glossary.md#hot) (60.5%), so this is a partial-HOT workload, not a pure one |
 | `grow2x` / `grow4x` / `grow8x` | insert to 2x / 4x / 8x the baseline row count, no updates or deletes |
 | `turnover` | delete half the rows, `VACUUM`, re-insert the same number |
 | `mixed` | three rounds of +40,000 inserts, 20% indexed-column updates, 10% deletes, with a `VACUUM` between rounds |
@@ -478,55 +478,56 @@ The test server was stopped and its data directory removed after the run; the SQ
 
 ## Source References
 
-- [comment.c](../../../../raw/postgres-12/src/backend/commands/comment.c)
-- [gram.y](../../../../raw/postgres-12/src/backend/parser/gram.y)
-- [objectaddress.c](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c)
-- [dependency.c](../../../../raw/postgres-12/src/backend/catalog/dependency.c)
-- [index.c](../../../../raw/postgres-12/src/backend/catalog/index.c)
-- [heap.c](../../../../raw/postgres-12/src/backend/catalog/heap.c)
-- [parse_utilcmd.c](../../../../raw/postgres-12/src/backend/parser/parse_utilcmd.c)
-- [pg_proc.dat](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat)
-- [pg_class.h](../../../../raw/postgres-12/src/include/catalog/pg_class.h)
-- [dbsize.c](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c)
-- [vacuum.c](../../../../raw/postgres-12/src/backend/commands/vacuum.c)
-- [vacuumlazy.c](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c)
-- [analyze.c](../../../../raw/postgres-12/src/backend/commands/analyze.c)
-- [heapam_handler.c](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c)
-- [plancat.c](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c)
-- [indexfsm.c](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c)
-- [reloptions.c](../../../../raw/postgres-12/src/backend/access/common/reloptions.c)
-- [guc.c](../../../../raw/postgres-12/src/backend/utils/misc/guc.c)
-- [hash.c](../../../../raw/postgres-12/src/backend/access/hash/hash.c)
-- [hashpage.c](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c)
-- [hashovfl.c](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c)
-- [hash.h](../../../../raw/postgres-12/src/include/access/hash.h)
-- [hash/README](../../../../raw/postgres-12/src/backend/access/hash/README)
-- [gist.c](../../../../raw/postgres-12/src/backend/access/gist/gist.c)
-- [gistbuild.c](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c)
-- [gistvacuum.c](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c)
-- [gistutil.c](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c)
-- [gist_private.h](../../../../raw/postgres-12/src/include/access/gist_private.h)
-- [ginfast.c](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c)
-- [ginvacuum.c](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c)
-- [ginutil.c](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c)
-- [ginarrayproc.c](../../../../raw/postgres-12/src/backend/access/gin/ginarrayproc.c)
-- [ginblock.h](../../../../raw/postgres-12/src/include/access/ginblock.h)
-- [gin_private.h](../../../../raw/postgres-12/src/include/access/gin_private.h)
-- [spgvacuum.c](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c)
-- [spgutils.c](../../../../raw/postgres-12/src/backend/access/spgist/spgutils.c)
-- [spgist.h](../../../../raw/postgres-12/src/include/access/spgist.h)
-- [brin.c](../../../../raw/postgres-12/src/backend/access/brin/brin.c)
-- [brin_page.h](../../../../raw/postgres-12/src/include/access/brin_page.h)
-- [brin.h](../../../../raw/postgres-12/src/include/access/brin.h)
-- [pgstattuple.c](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c)
-- [create_index.sql](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql)
-- [maintenance.sgml](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml)
-- [ref/comment.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/comment.sgml)
-- [ref/reindex.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml)
-- [brin.sgml](../../../../raw/postgres-12/doc/src/sgml/brin.sgml)
+- [comment.c](../../../../raw/postgres-12/src/backend/commands/comment.c#L1-L458)
+- [gram.y](../../../../raw/postgres-12/src/backend/parser/gram.y#L1-L16358)
+- [objectaddress.c](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1-L5378)
+- [dependency.c](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1-L2878)
+- [index.c](../../../../raw/postgres-12/src/backend/catalog/index.c#L1-L3956)
+- [heap.c](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1-L3794)
+- [parse_utilcmd.c](../../../../raw/postgres-12/src/backend/parser/parse_utilcmd.c#L1-L4088)
+- [pg_proc.dat](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L1-L10679)
+- [pg_class.h](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L1-L197)
+- [dbsize.c](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L1-L1022)
+- [vacuum.c](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1-L1983)
+- [vacuumlazy.c](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1-L2356)
+- [analyze.c](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1-L2850)
+- [heapam_handler.c](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1-L2669)
+- [plancat.c](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L1-L2319)
+- [indexfsm.c](../../../../raw/postgres-12/src/backend/storage/freespace/indexfsm.c#L1-L74)
+- [reloptions.c](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L1-L1625)
+- [guc.c](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1-L11723)
+- [hash.c](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L1-L915)
+- [hashpage.c](../../../../raw/postgres-12/src/backend/access/hash/hashpage.c#L1-L1616)
+- [hashovfl.c](../../../../raw/postgres-12/src/backend/access/hash/hashovfl.c#L1-L1083)
+- [hash.h](../../../../raw/postgres-12/src/include/access/hash.h#L1-L463)
+- [hash/README](../../../../raw/postgres-12/src/backend/access/hash/README#L1-L651)
+- [gist.c](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L1-L1714)
+- [gistbuild.c](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L1-L1205)
+- [gistvacuum.c](../../../../raw/postgres-12/src/backend/access/gist/gistvacuum.c#L1-L684)
+- [gistutil.c](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L1-L1048)
+- [gist_private.h](../../../../raw/postgres-12/src/include/access/gist_private.h#L1-L554)
+- [ginfast.c](../../../../raw/postgres-12/src/backend/access/gin/ginfast.c#L1-L1074)
+- [ginvacuum.c](../../../../raw/postgres-12/src/backend/access/gin/ginvacuum.c#L1-L795)
+- [ginutil.c](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L1-L716)
+- [ginarrayproc.c](../../../../raw/postgres-12/src/backend/access/gin/ginarrayproc.c#L1-L305)
+- [ginblock.h](../../../../raw/postgres-12/src/include/access/ginblock.h#L1-L349)
+- [gin_private.h](../../../../raw/postgres-12/src/include/access/gin_private.h#L1-L476)
+- [spgvacuum.c](../../../../raw/postgres-12/src/backend/access/spgist/spgvacuum.c#L1-L970)
+- [spgutils.c](../../../../raw/postgres-12/src/backend/access/spgist/spgutils.c#L1-L1036)
+- [spgist.h](../../../../raw/postgres-12/src/include/access/spgist.h#L1-L228)
+- [brin.c](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L1-L1500)
+- [brin_page.h](../../../../raw/postgres-12/src/include/access/brin_page.h#L1-L96)
+- [brin.h](../../../../raw/postgres-12/src/include/access/brin.h#L1-L52)
+- [pgstattuple.c](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L1-L590)
+- [create_index.sql](../../../../raw/postgres-12/src/test/regress/sql/create_index.sql#L1-L1096)
+- [maintenance.sgml](../../../../raw/postgres-12/doc/src/sgml/maintenance.sgml#L1-L1030)
+- [ref/comment.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/comment.sgml#L1-L359)
+- [ref/reindex.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/reindex.sgml#L1-L475)
+- [brin.sgml](../../../../raw/postgres-12/doc/src/sgml/brin.sgml#L1-L823)
 
 ## Navigation
 
+- [Wiki Glossary (unverified)](../../../glossary.md)
 - [v12 index](../../index.md)
 - [wiki index](../../../index.md)
 - [versions](../../../versions.md)

@@ -8,13 +8,31 @@ verified_by_agent: not yet
 
 # GUC Default-Value Changes Since PostgreSQL 12 (unverified)
 
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Answer Up Front](#answer-up-front)
+  - [Changed in PostgreSQL 13](#changed-in-postgresql-13)
+  - [Changed in PostgreSQL 14](#changed-in-postgresql-14)
+  - [Changed in PostgreSQL 15](#changed-in-postgresql-15)
+  - [Not Default-Value Changes](#not-default-value-changes)
+- [Context Reviewed](#context-reviewed)
+- [Test Coverage](#test-coverage)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Navigation](#navigation)
+
 ## Question
 
 In PostgreSQL 17, summarize all GUC default-value changes since version 12.
 
-## Answer Up Front
+## Answer
 
-Seven server settings that already existed in PostgreSQL 12 ship a different
+### Answer Up Front
+
+Seven server [settings](../../../glossary.md#guc) that already existed in PostgreSQL 12 ship a different
 built-in default value in PostgreSQL 17. Each row below gives the old default
 (the value compiled into PostgreSQL 12), the PostgreSQL 17 default, the major
 version that introduced the change, and how a change to the setting takes effect
@@ -23,19 +41,32 @@ session/transaction, per the context flag in `guc_tables.c`).
 
 | Setting | Old default (v12) | New default (v17) | First in | Apply scope |
 |---|---|---|---|---|
-| `ssl_min_protocol_version` | `TLSv1` | `TLSv1.2` | 13 | Reload (`PGC_SIGHUP`) |
+| `ssl_min_protocol_version` | `TLSv1` | `TLSv1.2` | 13 | Reload ([`PGC_SIGHUP`](../../../glossary.md#guc-context)) |
 | `password_encryption` | `md5` | `scram-sha-256` | 14 | Session (`PGC_USERSET`) |
 | `vacuum_cost_page_miss` | `10` | `2` | 14 | Session (`PGC_USERSET`) |
 | `checkpoint_completion_target` | `0.5` | `0.9` | 14 | Reload (`PGC_SIGHUP`) |
-| `shared_buffers` (built-in default) | `8MB` (1024 blocks) | `128MB` (16384 blocks) | 15 | Restart (`PGC_POSTMASTER`) |
+| [`shared_buffers`](../../../glossary.md#shared_buffers) (built-in default) | `8MB` (1024 [blocks](../../../glossary.md#block)) | `128MB` (16384 blocks) | 15 | Restart (`PGC_POSTMASTER`) |
 | `log_checkpoints` | `off` | `on` | 15 | Reload (`PGC_SIGHUP`) |
 | `log_autovacuum_min_duration` | `-1` (off) | `10min` | 15 | Reload (`PGC_SIGHUP`) |
 
-The current value and apply scope of each setting come from the PostgreSQL 17
-GUC table
-([guc_tables.c](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c))
-and the configuration docs
-([config.sgml](../../../../raw/postgres-17/doc/src/sgml/config.sgml)). The old
+The current value and apply scope of each setting come from its entry in the
+PostgreSQL 17 GUC table
+([guc_tables.c#ssl_min_protocol_version](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L5125-L5131),
+[guc_tables.c#password_encryption](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L5102-L5107),
+[guc_tables.c#vacuum_cost_page_miss](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2526-L2531),
+[guc_tables.c#checkpoint_completion_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3917-L3923),
+[guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2268),
+[guc_tables.c#log_checkpoints](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1201-L1206),
+[guc_tables.c#log_autovacuum_min_duration](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3042-L3049))
+and from the default each setting's entry in the configuration docs states, in
+the same order
+([config.sgml:1516](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L1516),
+[config.sgml:1120](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L1120),
+[config.sgml:2488](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L2488),
+[config.sgml:3634](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L3634),
+[config.sgml:1659](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L1659),
+[config.sgml:7441](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L7441),
+[config.sgml:7420](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L7420)). The old
 value and the introducing major version come from the same `raw/postgres-17/`
 checkout's own commit history; the introducing version is read from the in-tree
 `AC_INIT` development-version string at each commit (see
@@ -47,8 +78,8 @@ only changed their `postgresql.conf.sample` comment, and `wal_compression`
 changed type (boolean to enum) while keeping the `off` default. See
 [Not Default-Value Changes](#not-default-value-changes). Settings that were
 *added* after v12 are out of scope here, even though they have PostgreSQL 17
-defaults; examples include `default_toast_compression`, `compute_query_id`, and
-`maintenance_io_concurrency`
+defaults; examples include `default_toast_compression`, [`compute_query_id`](../../../glossary.md#query-jumbling), and
+[`maintenance_io_concurrency`](../../../glossary.md#effective_io_concurrency)
 ([guc_tables.c#maintenance_io_concurrency](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3124-L3134),
 [guc_tables.c#compute_query_id](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4787-L4795),
 [guc_tables.c#default_toast_compression](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4809-L4818)).
@@ -71,9 +102,9 @@ Apply scope: `PGC_SUSET` means a `postgresql.conf` change takes effect on
 granted that privilege. It is a new setting, not a changed default, so it does
 not belong in the table above.
 
-## Changed in PostgreSQL 13
+### Changed in PostgreSQL 13
 
-### `ssl_min_protocol_version`: `TLSv1` -> `TLSv1.2`
+#### `ssl_min_protocol_version`: `TLSv1` -> `TLSv1.2`
 
 The minimum SSL/TLS protocol the server will negotiate was raised from TLS 1.0
 to TLS 1.2. The PostgreSQL 17 boot value is `PG_TLS1_2_VERSION`
@@ -86,9 +117,9 @@ The change was made by commit `b1abfec8` (2019-12-04, "Update minimum SSL
 version"), which carried the in-tree version string `13devel`. It is a
 `PGC_SIGHUP` setting, so a change takes effect on configuration reload.
 
-## Changed in PostgreSQL 14
+### Changed in PostgreSQL 14
 
-### `password_encryption`: `md5` -> `scram-sha-256`
+#### `password_encryption`: `md5` -> `scram-sha-256`
 
 New passwords set with `CREATE ROLE` / `ALTER ROLE ... PASSWORD` are now hashed
 with SCRAM-SHA-256 instead of MD5. The boot value is
@@ -103,9 +134,9 @@ password_encryption to scram-sha-256"), in-tree version `14devel`. As a
 `PGC_USERSET` setting it can be changed for a single session by any role; a
 change to the cluster default in `postgresql.conf` takes effect on reload.
 
-### `vacuum_cost_page_miss`: `10` -> `2`
+#### `vacuum_cost_page_miss`: `10` -> `2`
 
-The cost charged during cost-based vacuum delay for reading a page not already
+The cost charged during [cost-based vacuum delay](../../../glossary.md#vacuum-cost-delay) for reading a page not already
 in shared buffers dropped from 10 to 2, reflecting that buffer misses are
 cheaper relative to dirtying a page than the old ratio assumed. The boot value
 is `2`
@@ -118,9 +149,9 @@ Changed by commit `e19594c5` (2021-01-27, "Reduce the default value of
 vacuum_cost_page_miss"), in-tree version `14devel`. It is `PGC_USERSET`
 (session/transaction; reload for the global default).
 
-### `checkpoint_completion_target`: `0.5` -> `0.9`
+#### `checkpoint_completion_target`: `0.5` -> `0.9`
 
-The fraction of the checkpoint interval over which dirty buffers are spread was
+The fraction of the [checkpoint](../../../glossary.md#checkpoint) interval over which [dirty buffers](../../../glossary.md#dirty-buffer) are spread was
 raised from 0.5 to 0.9, smoothing checkpoint write bursts. The boot value is
 `0.9`
 ([guc_tables.c#checkpoint_completion_target](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3917-L3923)),
@@ -131,13 +162,13 @@ matching the sample
 Changed by commit `bbcc4eb2` (2021-03-24, "Change checkpoint_completion_target
 default to 0.9"), in-tree version `14devel`. It is `PGC_SIGHUP` (reload).
 
-## Changed in PostgreSQL 15
+### Changed in PostgreSQL 15
 
-### `shared_buffers` built-in default: `8MB` -> `128MB`
+#### `shared_buffers` built-in default: `8MB` -> `128MB`
 
 The value compiled into the GUC table (the `pg_settings.boot_val`, used when no
 value is written by `initdb`) rose from 1024 blocks (8MB) to 16384 blocks
-(128MB) at the standard 8kB `BLCKSZ`. The PostgreSQL 17 boot value is `16384`
+(128MB) at the standard 8kB [`BLCKSZ`](../../../glossary.md#blcksz). The PostgreSQL 17 boot value is `16384`
 ([guc_tables.c#shared_buffers](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2262-L2268)),
 the docs say "The default is typically 128 megabytes"
 ([config.sgml#shared_buffers](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L1659)),
@@ -153,7 +184,7 @@ realistic default has effectively been 128MB since PostgreSQL 10 because
 into the generated `postgresql.conf`. `shared_buffers` is `PGC_POSTMASTER`, so a
 change requires a server restart.
 
-### `log_checkpoints`: `off` -> `on`
+#### `log_checkpoints`: `off` -> `on`
 
 Checkpoint activity is now logged by default. The boot value is `true`
 ([guc_tables.c#log_checkpoints](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1201-L1206)),
@@ -162,9 +193,9 @@ the docs state "The default is on"
 and the sample shows `on`
 ([postgresql.conf.sample:583](../../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample#L583)).
 
-### `log_autovacuum_min_duration`: `-1` -> `10min`
+#### `log_autovacuum_min_duration`: `-1` -> `10min`
 
-Autovacuum and autoanalyze actions taking at least 10 minutes are now logged by
+[Autovacuum](../../../glossary.md#autovacuum) and autoanalyze actions taking at least 10 minutes are now logged by
 default, where `-1` previously disabled this logging entirely. The boot value is
 `600000` milliseconds
 ([guc_tables.c#log_autovacuum_min_duration](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3042-L3049)),
@@ -178,7 +209,7 @@ commit `64da07c4` (2021-12-13, "Default to log_checkpoints=on,
 log_autovacuum_min_duration=10m"), in-tree version `15devel`. Both are
 `PGC_SIGHUP` (reload).
 
-## Not Default-Value Changes
+### Not Default-Value Changes
 
 These differ from PostgreSQL 12 in the sample file or in type, but the GUC's
 built-in default value did not change:
@@ -196,7 +227,7 @@ built-in default value did not change:
   ([guc_tables.c#PG_KRB_SRVTAB](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L95-L97))
   and is normally supplied by the build as `FILE:${sysconfdir}/krb5.keytab` in
   both v12 and v17. Commit `860fe27e` (2020-12-30, "Fix up usage of
-  krb_server_keyfile GUC parameter", back-patched to v12) only corrected
+  krb_server_keyfile GUC parameter", [back-patched](../../../glossary.md#back-patch) to v12) only corrected
   authentication behavior, the docs, and the sample comment
   ([postgresql.conf.sample:101](../../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample#L101)).
 - **`wal_compression`**: changed from a boolean to an enum (to add `pglz`/`lz4`/
@@ -207,7 +238,7 @@ built-in default value did not change:
   `on` is a historical spelling of `pglz` and repeats that the default is `off`
   ([config.sgml:3388](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L3388),
   [postgresql.conf.sample:243-244](../../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample#L243-L244)).
-- **Allowed-range tweaks, not default changes**: `maintenance_work_mem` and
+- **Allowed-range tweaks, not default changes**: [`maintenance_work_mem`](../../../glossary.md#maintenance_work_mem) and
   `autovacuum_work_mem` kept their defaults while allowing smaller explicit
   values (`64MB` for `maintenance_work_mem`, `-1` for `autovacuum_work_mem`;
   explicit autovacuum values below `64kB` are clamped to `64kB`)
@@ -216,7 +247,7 @@ built-in default value did not change:
   [autovacuum.c#check_autovacuum_work_mem](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L3367-L3385)).
   `max_files_per_process` still defaults to `1000` while its minimum is `64`
   ([guc_tables.c#max_files_per_process](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2566-L2572)),
-  and `track_activity_query_size` still defaults to `1024` while its maximum is
+  and [`track_activity_query_size`](../../../glossary.md#track_activity_query_size) still defaults to `1024` while its maximum is
   `1048576`
   ([guc_tables.c#track_activity_query_size](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3566-L3573)).
 
@@ -287,10 +318,10 @@ and the regression harness's explicit logging settings for test clusters
 
 ## Source References
 
-- [guc_tables.c](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c) - GUC table: boot values and `PGC_*` apply-scope flags for all settings on this page.
-- [postgresql.conf.sample](../../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample) - shipped sample showing the documented defaults.
-- [config.sgml](../../../../raw/postgres-17/doc/src/sgml/config.sgml) - configuration documentation stating each default.
-- [password.sql](../../../../raw/postgres-17/src/test/regress/sql/password.sql), [001_ssltests.pl](../../../../raw/postgres-17/src/test/ssl/t/001_ssltests.pl), [vacuum.sql](../../../../raw/postgres-17/src/test/regress/sql/vacuum.sql), and [pg_regress.c](../../../../raw/postgres-17/src/test/regress/pg_regress.c) - individual GUC behavior tests and harness settings.
+- [guc_tables.c](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1-L5174) - GUC table: boot values and `PGC_*` apply-scope flags for all settings on this page.
+- [postgresql.conf.sample](../../../../raw/postgres-17/src/backend/utils/misc/postgresql.conf.sample#L1-L848) - shipped sample showing the documented defaults.
+- [config.sgml](../../../../raw/postgres-17/doc/src/sgml/config.sgml#L1-L12365) - configuration documentation stating each default.
+- [password.sql](../../../../raw/postgres-17/src/test/regress/sql/password.sql#L1-L116), [001_ssltests.pl](../../../../raw/postgres-17/src/test/ssl/t/001_ssltests.pl#L1-L902), [vacuum.sql](../../../../raw/postgres-17/src/test/regress/sql/vacuum.sql#L1-L421), and [pg_regress.c](../../../../raw/postgres-17/src/test/regress/pg_regress.c#L1-L2665) - individual GUC behavior tests and harness settings.
 
 ## Open Questions
 
@@ -304,7 +335,9 @@ and the regression harness's explicit logging settings for test clusters
   independent confirmation of a v12 value can read the GUC table at
   `src/backend/utils/misc/guc.c` in the separate PostgreSQL 12 checkout.
 
-## Related Pages
+## Navigation
 
+- [wiki index](../../../index.md)
+- [Wiki Glossary (unverified)](../../../glossary.md)
 - [v17/index](../../index.md)
 - [versions](../../../versions.md)

@@ -4077,32 +4077,32 @@ Every number in the tables above is a measurement from the 17.11 run described u
 
 ## Source References
 
-- [ginvacuum.c](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c) - `ginvacuumcleanup`, its `analyze_only` branch, `GinPageIsRecyclable`, `ginDeletePage`, the `num_index_tuples` assignment.
-- [gininsert.c](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c) - `ginbuild`, `ginBuildCallback` and its memory-driven flush, `ginHeapTupleBulkInsert`, `buildFreshLeafTuple`, `addItemPointersToLeafTuple`.
-- [ginfast.c](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c) - `GIN_PAGE_FREESIZE`, the foreground cleanup threshold, `ginInsertCleanup` and its `ginEntryInsert` loop, `shiftList`, `gin_clean_pending_list` and its return value, the pending-page FSM recycling.
-- [ginbtree.c](../../../../raw/postgres-17/src/backend/access/gin/ginbtree.c) - the split that takes a new page, which is why settling an index can grow it.
-- [ginutil.c](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c) - `ginhandler`, `ginoptions`, `GinNewBuffer`, `ginUpdateStats`.
-- [gin_private.h](../../../../raw/postgres-17/src/include/access/gin_private.h), [ginblock.h](../../../../raw/postgres-17/src/include/access/ginblock.h), [reloptions.c](../../../../raw/postgres-17/src/backend/access/common/reloptions.c) - `GinOptions`, the metapage struct and flag bits, `fastupdate` and `gin_pending_list_limit` defaults and lock levels.
-- [README](../../../../raw/postgres-17/src/backend/access/gin/README) - page deletion, and why the entry tree keeps its tuples.
-- [index.c](../../../../raw/postgres-17/src/backend/catalog/index.c) - `index_build`, `index_update_stats`, `reindex_index`, `index_concurrently_swap`.
-- [analyze.c](../../../../raw/postgres-17/src/backend/commands/analyze.c) - `do_analyze_rel`, `tupleFract`, the ANALYZE-only cleanup gate, the per-index `vac_update_relstats` call, the sample size `targrows` and `std_typanalyze`'s `300 * attstattarget`, and `acquire_sample_rows`' block sample and its extrapolation of the table's row count.
-- [sampling.c](../../../../raw/postgres-17/src/backend/utils/misc/sampling.c) - `BlockSampler_Init`, which picks `ANALYZE`'s random blocks, or all of a small table's.
-- [vacuum.c](../../../../raw/postgres-17/src/backend/commands/vacuum.c) - `vac_cleanup_one_index`, `vacuum_get_cutoffs`, the vacuum-then-analyze order, the skip-for-want-of-a-lock messages.
-- [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c) - `update_relstats_all_indexes`, the `estimated_count` guard, `recently_dead_tuples` and the `lazy_vacuum` gate, the `VERBOSE` tuples and index lines.
-- [procarray.c](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c), [twophase.c](../../../../raw/postgres-17/src/backend/access/transam/twophase.c) - what pins the removal horizon: every backend's xid and xmin, the vacuuming and decoding exemption, a replication slot's `xmin`, and a prepared transaction's dummy `PGPROC`.
-- [autovacuum.c](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c) - `relation_needs_vacanalyze`'s thresholds, the reloption-or-GUC selection, the `av_enabled` short circuit, and the worker's forcing of the four settable timeouts to zero.
-- [pgstat_relation.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c) - `pgstat_report_analyze`, `pgstat_report_vacuum`, `pgstat_relation_flush_cb`.
-- [pgstat.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c) - `pgstat_report_stat`, `PGSTAT_MIN_INTERVAL`, `PGSTAT_MAX_INTERVAL`.
-- [comment.c](../../../../raw/postgres-17/src/backend/commands/comment.c) - `CommentObject`, `check_object_ownership`.
-- [dbsize.c](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c) - `calculate_relation_size`, `pg_relation_size`.
-- [indexfsm.c](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c), [freespace.c](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c) - what an index FSM stores, and what a free page reads back.
-- [system_functions.sql](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql) - `obj_description`, `pg_relation_size`.
-- [system_views.sql](../../../../raw/postgres-17/src/backend/catalog/system_views.sql) - `pg_stat_all_tables`, `pg_stat_activity`'s `xact_start`/`backend_xid`/`backend_xmin`, `pg_replication_slots`' `xmin`/`catalog_xmin`, and the three progress views a census flags.
-- [guc_tables.c](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c) - `maintenance_work_mem`, `gin_pending_list_limit`, `statement_timeout`, `lock_timeout`, `transaction_timeout`, `idle_in_transaction_session_timeout`, `default_statistics_target`, the autovacuum thresholds.
-- [pg_class.h](../../../../raw/postgres-17/src/include/catalog/pg_class.h), [pg_index.h](../../../../raw/postgres-17/src/include/catalog/pg_index.h), [pg_description.h](../../../../raw/postgres-17/src/include/catalog/pg_description.h), [pg_proc.dat](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat).
-- [gin.sgml](../../../../raw/postgres-17/doc/src/sgml/gin.sgml) - fast update technique, tips and tricks.
-- [maintenance.sgml](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml) - `routine-reindex`.
-- [ref/reindex.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml), [ref/comment.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml).
+- [ginvacuum.c](../../../../raw/postgres-17/src/backend/access/gin/ginvacuum.c#L1-L829) - `ginvacuumcleanup`, its `analyze_only` branch, `GinPageIsRecyclable`, `ginDeletePage`, the `num_index_tuples` assignment.
+- [gininsert.c](../../../../raw/postgres-17/src/backend/access/gin/gininsert.c#L1-L536) - `ginbuild`, `ginBuildCallback` and its memory-driven flush, `ginHeapTupleBulkInsert`, `buildFreshLeafTuple`, `addItemPointersToLeafTuple`.
+- [ginfast.c](../../../../raw/postgres-17/src/backend/access/gin/ginfast.c#L1-L1091) - `GIN_PAGE_FREESIZE`, the foreground cleanup threshold, `ginInsertCleanup` and its `ginEntryInsert` loop, `shiftList`, `gin_clean_pending_list` and its return value, the pending-page FSM recycling.
+- [ginbtree.c](../../../../raw/postgres-17/src/backend/access/gin/ginbtree.c#L1-L835) - the split that takes a new page, which is why settling an index can grow it.
+- [ginutil.c](../../../../raw/postgres-17/src/backend/access/gin/ginutil.c#L1-L701) - `ginhandler`, `ginoptions`, `GinNewBuffer`, `ginUpdateStats`.
+- [gin_private.h](../../../../raw/postgres-17/src/include/access/gin_private.h#L1-L498), [ginblock.h](../../../../raw/postgres-17/src/include/access/ginblock.h#L1-L346), [reloptions.c](../../../../raw/postgres-17/src/backend/access/common/reloptions.c#L1-L2146) - `GinOptions`, the metapage struct and flag bits, `fastupdate` and `gin_pending_list_limit` defaults and lock levels.
+- [README](../../../../raw/postgres-17/src/backend/access/gin/README#L1-L562) - page deletion, and why the entry tree keeps its tuples.
+- [index.c](../../../../raw/postgres-17/src/backend/catalog/index.c#L1-L4265) - `index_build`, `index_update_stats`, `reindex_index`, `index_concurrently_swap`.
+- [analyze.c](../../../../raw/postgres-17/src/backend/commands/analyze.c#L1-L3044) - `do_analyze_rel`, `tupleFract`, the ANALYZE-only cleanup gate, the per-index `vac_update_relstats` call, the sample size `targrows` and `std_typanalyze`'s `300 * attstattarget`, and `acquire_sample_rows`' block sample and its extrapolation of the table's row count.
+- [sampling.c](../../../../raw/postgres-17/src/backend/utils/misc/sampling.c#L1-L304) - `BlockSampler_Init`, which picks `ANALYZE`'s random blocks, or all of a small table's.
+- [vacuum.c](../../../../raw/postgres-17/src/backend/commands/vacuum.c#L1-L2596) - `vac_cleanup_one_index`, `vacuum_get_cutoffs`, the vacuum-then-analyze order, the skip-for-want-of-a-lock messages.
+- [vacuumlazy.c](../../../../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1-L3197) - `update_relstats_all_indexes`, the `estimated_count` guard, `recently_dead_tuples` and the `lazy_vacuum` gate, the `VERBOSE` tuples and index lines.
+- [procarray.c](../../../../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1-L5266), [twophase.c](../../../../raw/postgres-17/src/backend/access/transam/twophase.c#L1-L2675) - what pins the removal horizon: every backend's xid and xmin, the vacuuming and decoding exemption, a replication slot's `xmin`, and a prepared transaction's dummy `PGPROC`.
+- [autovacuum.c](../../../../raw/postgres-17/src/backend/postmaster/autovacuum.c#L1-L3387) - `relation_needs_vacanalyze`'s thresholds, the reloption-or-GUC selection, the `av_enabled` short circuit, and the worker's forcing of the four settable timeouts to zero.
+- [pgstat_relation.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat_relation.c#L1-L986) - `pgstat_report_analyze`, `pgstat_report_vacuum`, `pgstat_relation_flush_cb`.
+- [pgstat.c](../../../../raw/postgres-17/src/backend/utils/activity/pgstat.c#L1-L1747) - `pgstat_report_stat`, `PGSTAT_MIN_INTERVAL`, `PGSTAT_MAX_INTERVAL`.
+- [comment.c](../../../../raw/postgres-17/src/backend/commands/comment.c#L1-L459) - `CommentObject`, `check_object_ownership`.
+- [dbsize.c](../../../../raw/postgres-17/src/backend/utils/adt/dbsize.c#L1-L1028) - `calculate_relation_size`, `pg_relation_size`.
+- [indexfsm.c](../../../../raw/postgres-17/src/backend/storage/freespace/indexfsm.c#L1-L74), [freespace.c](../../../../raw/postgres-17/src/backend/storage/freespace/freespace.c#L1-L950) - what an index FSM stores, and what a free page reads back.
+- [system_functions.sql](../../../../raw/postgres-17/src/backend/catalog/system_functions.sql#L1-L788) - `obj_description`, `pg_relation_size`.
+- [system_views.sql](../../../../raw/postgres-17/src/backend/catalog/system_views.sql#L1-L1377) - `pg_stat_all_tables`, `pg_stat_activity`'s `xact_start`/`backend_xid`/`backend_xmin`, `pg_replication_slots`' `xmin`/`catalog_xmin`, and the three progress views a census flags.
+- [guc_tables.c](../../../../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1-L5174) - `maintenance_work_mem`, `gin_pending_list_limit`, `statement_timeout`, `lock_timeout`, `transaction_timeout`, `idle_in_transaction_session_timeout`, `default_statistics_target`, the autovacuum thresholds.
+- [pg_class.h](../../../../raw/postgres-17/src/include/catalog/pg_class.h#L1-L235), [pg_index.h](../../../../raw/postgres-17/src/include/catalog/pg_index.h#L1-L92), [pg_description.h](../../../../raw/postgres-17/src/include/catalog/pg_description.h#L1-L73), [pg_proc.dat](../../../../raw/postgres-17/src/include/catalog/pg_proc.dat#L1-L12188).
+- [gin.sgml](../../../../raw/postgres-17/doc/src/sgml/gin.sgml#L1-L714) - fast update technique, tips and tricks.
+- [maintenance.sgml](../../../../raw/postgres-17/doc/src/sgml/maintenance.sgml#L1-L1214) - `routine-reindex`.
+- [ref/reindex.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L1-L576), [ref/comment.sgml](../../../../raw/postgres-17/doc/src/sgml/ref/comment.sgml#L1-L379).
 
 ## Navigation
 

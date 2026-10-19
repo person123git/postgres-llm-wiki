@@ -26,6 +26,7 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-18/`. Th
 ### Storage and Vacuum
 
 - [Extension Hooks for VACUUM and Autovacuum in PostgreSQL 18 (unverified)](questions/storage-and-vacuum/extension-hooks-vacuum-autovacuum.md) - Enumerates every extension point on the VACUUM/ANALYZE and autovacuum code paths in v18: in-process hook variables, table/index AM and FDW callbacks, and adjacent extension surfaces, with the manual-vs-autovacuum coverage of each.
+  - Citation fix, 2026-10-19: file-level citations became line ranges, and the re-read corrected six statements against the pin: who calls `shmem_startup_hook`, the two callers of `process_shmem_requests`, the flag shared-memory requests need, `GetNamedDSMSegment()` as a second route, indirect `object_access_hook` calls from `VACUUM FULL` and the orphaned temporary-table drop, and `RegisterBackgroundWorker`'s process rules.
 - [Usage of NUM_BUFFER_PARTITIONS in PostgreSQL 18 (unverified)](questions/storage-and-vacuum/num-buffer-partitions.md) - How PostgreSQL 18 uses the fixed `NUM_BUFFER_PARTITIONS` count for shared buffer mapping hash partitions, `BufferMapping` LWLocks, read/allocation, extension, and invalidation paths, plus the macro's source commit history (16->128).
 
 ### Replication and WAL

@@ -16,11 +16,11 @@ Explain how bi-directional logical replication works in PostgreSQL 17, and add a
 
 ## Answer
 
-PostgreSQL 17 supports bi-directional logical replication by combining ordinary
-publish/subscribe logical replication with the subscription parameter
-`origin = none`. Each of two nodes publishes a table and subscribes to the same
-table on the other node with `origin = none`. Every transaction an apply worker
-replays is tagged in WAL with a *replication origin*; a subscription created
+PostgreSQL 17 supports bi-directional [logical replication](../../../glossary.md#logical-replication) by combining ordinary
+publish/subscribe logical replication with the [subscription](../../../glossary.md#subscription) parameter
+[`origin = none`](../../../glossary.md#origin-filter). Each of two nodes publishes a table and subscribes to the same
+table on the other node with `origin = none`. Every transaction an [apply worker](../../../glossary.md#apply-worker)
+replays is tagged in [WAL](../../../glossary.md#wal) with a *[replication origin](../../../glossary.md#replication-origin)*; a subscription created
 with `origin = none` asks the publisher to send only changes that carry **no**
 origin. Locally entered data therefore replicates exactly one hop, and replayed
 data is filtered out on the way back — that is what prevents infinite loops
@@ -76,7 +76,7 @@ filter by specific origin names
 ### How applied changes get an origin tag
 
 Each subscription owns a replication origin named `pg_<subscription-oid>`
-(tablesync workers use `pg_<subscription-oid>_<relation-oid>`)
+([tablesync](../../../glossary.md#table-synchronization) workers use `pg_<subscription-oid>_<relation-oid>`)
 ([worker.c#ReplicationOriginNameForLogicalRep](../../../../raw/postgres-17/src/backend/replication/logical/worker.c#L429-L443)).
 The apply worker creates the origin if needed and configures the whole session
 with it: `replorigin_session_setup(originid, 0)` plus
@@ -108,7 +108,7 @@ From then on, WAL records produced by that session carry the origin ID:
   valid
   ([xloginsert.c#XLogRecordAssemble](../../../../raw/postgres-17/src/backend/access/transam/xloginsert.c#L840-L847),
   [xlog.h#XLOG_INCLUDE_ORIGIN](../../../../raw/postgres-17/src/include/access/xlog.h#L154)).
-- At commit, the origin's replay progress (remote LSN, commit timestamp) is
+- At commit, the origin's replay progress (remote [LSN](../../../glossary.md#lsn), commit timestamp) is
   advanced crash-safely together with the commit record
   ([xact.c#RecordTransactionCommit](../../../../raw/postgres-17/src/backend/access/transam/xact.c#L1404-L1458)).
 
@@ -121,7 +121,7 @@ what `origin = none` selects for.
 1. The subscriber's apply worker copies `pg_subscription.suborigin` into the
    streaming options
    ([worker.c#set_stream_options](../../../../raw/postgres-17/src/backend/replication/logical/worker.c#L4408-L4409))
-   and the walreceiver adds `origin '<value>'` to `START_REPLICATION ...
+   and the [walreceiver](../../../glossary.md#wal-receiver) adds `origin '<value>'` to `START_REPLICATION ...
    (proto_version ..., origin 'none', publication_names ...)`, but only when
    the publisher is version 16 or newer
    ([libpqwalreceiver.c#libpqrcv_startstreaming](../../../../raw/postgres-17/src/backend/replication/libpqwalreceiver/libpqwalreceiver.c#L664-L669)).
@@ -134,11 +134,11 @@ what `origin = none` selects for.
 3. The filter returns `true` (= skip) exactly when `publish_no_origin` is set
    and the record's origin ID is not `InvalidRepOriginId`
    ([pgoutput.c#pgoutput_origin_filter](../../../../raw/postgres-17/src/backend/replication/pgoutput/pgoutput.c#L1722-L1736)).
-4. Logical decoding consults the callback through `FilterByOrigin`
+4. [Logical decoding](../../../glossary.md#logical-decoding) consults the callback through `FilterByOrigin`
    ([decode.c#FilterByOrigin](../../../../raw/postgres-17/src/backend/replication/logical/decode.c#L578-L585),
    [logical.c#filter_by_origin_cb_wrapper](../../../../raw/postgres-17/src/backend/replication/logical/logical.c#L1289-L1312))
    at two levels:
-   - **Per change**, before the change is even queued into the reorder buffer:
+   - **Per change**, before the change is even queued into the [reorder buffer](../../../glossary.md#reorder-buffer):
      [decode.c#DecodeInsert](../../../../raw/postgres-17/src/backend/replication/logical/decode.c#L924),
      [decode.c#DecodeUpdate](../../../../raw/postgres-17/src/backend/replication/logical/decode.c#L974),
      [decode.c#DecodeDelete](../../../../raw/postgres-17/src/backend/replication/logical/decode.c#L1040),
@@ -165,10 +165,10 @@ considerably more efficient than doing it in the output plugin"
 With node A and node B each publishing `t` and subscribing to the other with
 `origin = none`:
 
-1. `INSERT` on A runs in a normal backend. No session origin, so its WAL has
+1. `INSERT` on A runs in a normal [backend](../../../glossary.md#backend). No session origin, so its WAL has
    no origin chunk
    ([xloginsert.c#XLogRecordAssemble](../../../../raw/postgres-17/src/backend/access/transam/xloginsert.c#L840-L847)).
-2. A's walsender for B's subscription decodes the insert; the filter sees
+2. A's [walsender](../../../glossary.md#wal-sender) for B's subscription decodes the insert; the filter sees
    `InvalidRepOriginId` and publishes it
    ([pgoutput.c#pgoutput_origin_filter](../../../../raw/postgres-17/src/backend/replication/pgoutput/pgoutput.c#L1722-L1736)).
 3. B's apply worker replays it with `replorigin_session_origin =
@@ -178,7 +178,7 @@ With node A and node B each publishing `t` and subscribing to the other with
    origin ID, and skips it — the row never travels back to A
    ([decode.c#DecodeInsert](../../../../raw/postgres-17/src/backend/replication/logical/decode.c#L924)).
 
-The TAP test asserts exactly this: after inserts on both nodes, each node holds
+The [TAP test](../../../glossary.md#tap-test) asserts exactly this: after inserts on both nodes, each node holds
 both rows and "bidirectional logical replication setup does not cause infinite
 recursive insertion"
 ([030_origin.pl:71-99](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L71-L99)).
@@ -208,9 +208,9 @@ include foreign-origin rows
 `CREATE SUBSCRIPTION` and `ALTER SUBSCRIPTION ... REFRESH PUBLICATION` with
 `copy_data = true` and `origin = none` therefore run
 `check_publications_origin`: it queries the publisher's
-`pg_subscription_rel` for the subscribed tables (including partition ancestors
+`pg_subscription_rel` for the subscribed tables (including [partition](../../../glossary.md#declarative-partitioning) ancestors
 and children) and raises a WARNING — "might copy data that had a different
-origin" — naming the publications involved
+origin" — naming the [publications](../../../glossary.md#publication) involved
 ([subscriptioncmds.c#check_publications_origin](../../../../raw/postgres-17/src/backend/commands/subscriptioncmds.c#L2044-L2161),
 call sites
 [subscriptioncmds.c:789](../../../../raw/postgres-17/src/backend/commands/subscriptioncmds.c#L789)
@@ -305,11 +305,17 @@ CREATE SUBSCRIPTION tap_sub_A_B
 
 ### Test coverage
 
-- [030_origin.pl](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl) —
-  the dedicated TAP test: bidirectional A↔B setup (L24-L69), no infinite
-  recursion (L71-L99), three-node origin isolation (L100-L144), the
-  `copy_data`/`origin = none` WARNING incl. `ALTER ... REFRESH` (L145-L223),
-  and the partitioned-table WARNING cases (L224 onward). Since 17.10 it uses a
+- [030_origin.pl](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L1-L333) —
+  the dedicated TAP test: bidirectional A↔B setup
+  ([030_origin.pl:24-69](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L24-L69)),
+  no infinite recursion
+  ([030_origin.pl:71-99](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L71-L99)),
+  three-node origin isolation
+  ([030_origin.pl:100-144](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L100-L144)),
+  the `copy_data`/`origin = none` WARNING incl. `ALTER ... REFRESH`
+  ([030_origin.pl:145-223](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L145-L223)),
+  and the partitioned-table WARNING cases
+  ([030_origin.pl:224-333](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L224-L333)). Since 17.10 it uses a
   quoted table name (`tab'le`) to exercise the SQL-injection fix (see commit
   `f0f59b658e` below).
 - [subscription.sql:69-75](../../../../raw/postgres-17/src/test/regress/sql/subscription.sql#L69-L75) —
@@ -350,7 +356,7 @@ is bracketed by the checkout's own `Stamp HEAD as NNdevel` commits
 
 | Commit | Date | Subject |
 |---|---|---|
-| `54ccfd6586` | 2023-09-27 | "Fix the misuse of origin filter across multiple pg_logical_slot_get_changes() calls." — moved `publish_no_origin` from a global into `PGOutputData` so retries cannot reuse a stale filter setting; back-patched through 16 |
+| `54ccfd6586` | 2023-09-27 | "Fix the misuse of origin filter across multiple pg_logical_slot_get_changes() calls." — moved `publish_no_origin` from a global into `PGOutputData` so retries cannot reuse a stale filter setting; [back-patched](../../../glossary.md#back-patch) through 16 |
 
 ### 17.1 - 17.4
 
@@ -373,7 +379,7 @@ the adjacent list below.)
 
 | Commit | Date | Subject |
 |---|---|---|
-| `f0f59b658e` | 2026-05-11 | "Fix SQL injection in logical replication origin checks." — CVE-2026-6638: `check_publications_origin` interpolated schema/relation names unquoted during `ALTER SUBSCRIPTION ... REFRESH PUBLICATION`; now quoted with `quote_literal_cstr` ([subscriptioncmds.c:2093-2106](../../../../raw/postgres-17/src/backend/commands/subscriptioncmds.c#L2093-L2106)); back-patched through 16 |
+| `f0f59b658e` | 2026-05-11 | "Fix SQL injection in logical replication origin checks." — CVE-2026-6638: `check_publications_origin` interpolated schema/[relation](../../../glossary.md#relation) names unquoted during `ALTER SUBSCRIPTION ... REFRESH PUBLICATION`; now quoted with `quote_literal_cstr` ([subscriptioncmds.c:2093-2106](../../../../raw/postgres-17/src/backend/commands/subscriptioncmds.c#L2093-L2106)); back-patched through 16 |
 
 ### 17.11
 
@@ -500,7 +506,7 @@ SUBSCRIPTION`), `0ed8f1afb1` (2025-12-24, 17.8, second origin-advance fix).
   [logical-replication.sgml](../../../../raw/postgres-17/doc/src/sgml/logical-replication.sgml#L1602-L1682),
   [catalogs.sgml](../../../../raw/postgres-17/doc/src/sgml/catalogs.sgml#L8075).
 - Tests:
-  [030_origin.pl](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl),
+  [030_origin.pl](../../../../raw/postgres-17/src/test/subscription/t/030_origin.pl#L1-L333),
   [subscription.sql](../../../../raw/postgres-17/src/test/regress/sql/subscription.sql#L69-L75),
   [replorigin.sql](../../../../raw/postgres-17/contrib/test_decoding/sql/replorigin.sql#L34-L37).
 - Source history: `git log` sweeps over `030_origin.pl`, `-S
@@ -555,3 +561,9 @@ SUBSCRIPTION`), `0ed8f1afb1` (2025-12-24, 17.8, second origin-advance fix).
   the git sweeps listed in Context Reviewed; a commit that touched the feature
   without matching those file paths, symbols, or the word "origin" in its
   subject would have been missed.
+
+## Navigation
+
+- [v17/index](../../index.md)
+- [wiki index](../../../index.md)
+- [Wiki Glossary (unverified)](../../../glossary.md)

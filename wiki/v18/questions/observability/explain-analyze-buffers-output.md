@@ -8,13 +8,33 @@ verified_by_agent: not yet
 
 # EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 18 (unverified)
 
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Short Answer](#short-answer)
+  - [Safe Production Shape](#safe-production-shape)
+  - [What Each Field Means](#what-each-field-means)
+  - [How The Counters Are Collected](#how-the-counters-are-collected)
+  - [Where It Appears In The Plan](#where-it-appears-in-the-plan)
+  - [I/O Timing And `track_io_timing`](#io-timing-and-track_io_timing)
+  - [Reading Common Patterns](#reading-common-patterns)
+  - [Tests And Examples](#tests-and-examples)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Source References](#source-references)
+- [Open Questions](#open-questions)
+- [Navigation](#navigation)
+
 ## Question
 
 In PostgreSQL 18, when a query uses `EXPLAIN (ANALYZE, BUFFERS)`, describe in detail all buffer information in the output.
 
-## Short Answer
+## Answer
 
-In PostgreSQL 18, `EXPLAIN (ANALYZE, BUFFERS)` executes the target statement and records buffer activity in `BufferUsage` counters attached to executor instrumentation [explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L682) [instrument.h#BufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L24-L42). If `BUFFERS` is not written explicitly, PostgreSQL 18 turns it on by default when `ANALYZE` is true; `BUFFERS OFF` disables it [explain_state.c#ParseExplainOptionList](../../../../raw/postgres-18/src/backend/commands/explain_state.c#L77-L207).
+### Short Answer
+
+In PostgreSQL 18, `EXPLAIN (ANALYZE, BUFFERS)` executes the target statement and records buffer activity in `BufferUsage` counters attached to [executor](../../../glossary.md#executor) instrumentation [explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L682) [instrument.h#BufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L24-L42). If `BUFFERS` is not written explicitly, PostgreSQL 18 turns it on by default when `ANALYZE` is true; `BUFFERS OFF` disables it [explain_state.c#ParseExplainOptionList](../../../../raw/postgres-18/src/backend/commands/explain_state.c#L77-L207).
 
 A typical text fragment looks like this:
 
@@ -23,26 +43,26 @@ Buffers: shared hit=15 read=4 dirtied=1 written=1, local hit=2 read=1 dirtied=1 
 I/O Timings: shared read=3.217 write=0.812, local read=0.044 write=0.021, temp read=1.302 write=0.773
 ```
 
-`shared` means ordinary table and index blocks in shared buffers, `local` means temporary table and index blocks in backend-local buffers, and `temp` means short-lived executor work files used by sorts, hashes, `Materialize`, and similar nodes [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208). Text format prints only positive buffer and I/O-timing values; JSON, XML, and YAML print every buffer counter property, and print I/O-time properties when `track_io_timing` is enabled [explain.c#show_buffer_usage](../../../../raw/postgres-18/src/backend/commands/explain.c#L4086-L4249).
+`shared` means ordinary table and index [blocks](../../../glossary.md#block) in shared buffers, `local` means temporary table and index blocks in backend-local buffers, and `temp` means short-lived executor work files used by sorts, hashes, `Materialize`, and similar nodes [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208). Text format prints only positive buffer and I/O-timing values; JSON, XML, and YAML print every buffer counter property, and print I/O-time properties when `track_io_timing` is enabled [explain.c#show_buffer_usage](../../../../raw/postgres-18/src/backend/commands/explain.c#L4086-L4249).
 
-## Safe Production Shape
+### Safe Production Shape
 
-`EXPLAIN ANALYZE` runs the statement, so a write statement really writes unless the session wraps it in a transaction that later rolls back [explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L682). Before running a production-bound investigation, use session or transaction scoped limits; PostgreSQL 18 defines both `statement_timeout` and `lock_timeout` as `PGC_USERSET`, so they require no restart or reload and can be set in the current session or transaction [guc_tables.c#statement_timeout](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2740-L2748) [guc_tables.c#lock_timeout](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2751-L2758).
+`EXPLAIN ANALYZE` runs the statement, so a write statement really writes unless the session wraps it in a transaction that later rolls back [explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L682). Before running a production-bound investigation, use session or transaction scoped limits; PostgreSQL 18 defines both [`statement_timeout`](../../../glossary.md#statement_timeout-and-lock_timeout) and `lock_timeout` as [`PGC_USERSET`](../../../glossary.md#guc-context), so they require no restart or reload and can be set in the current session or transaction [guc_tables.c#statement_timeout](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2740-L2748) [guc_tables.c#lock_timeout](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L2751-L2758).
 
 ```sql
 SET /* wiki_limit_explain_statement */ statement_timeout = '30s';
 SET /* wiki_limit_explain_lock_wait */ lock_timeout = '5s';
 ```
 
-## What Each Field Means
+### What Each Field Means
 
-The counts are block-event counters, not tuple counters and not distinct-page counters. `BufferUsage` stores block counts, and PostgreSQL reports the configured disk block size through `block_size`, whose default is 8192 bytes [instrument.h#BufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L24-L42) [config.sgml#block_size](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11808-L11824).
+The counts are block-event counters, not [tuple](../../../glossary.md#tuple) counters and not distinct-page counters. `BufferUsage` stores block counts, and PostgreSQL reports the configured disk [block size](../../../glossary.md#blcksz) through `block_size`, whose default is 8192 bytes [instrument.h#BufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L24-L42) [config.sgml#block_size](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L11808-L11824).
 
 | Output field | Meaning in PostgreSQL 18 |
 |---|---|
-| `shared hit=N` | PostgreSQL needed a block from an ordinary table or index and found it already available in shared buffers, avoiding a read into a new buffer [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208). The shared hit counter is incremented when `PinBufferForBlock`, `ReadRecentBuffer`, or the concurrent-read path in `AsyncReadBuffers` finds the shared buffer already valid for this backend [bufmgr.c#PinBufferForBlock](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1101-L1176) [bufmgr.c#ReadRecentBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L682-L751) [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). |
-| `shared read=N` | PostgreSQL issued relation-block read I/O for ordinary table or index blocks that were not already available to this backend [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). `AsyncReadBuffers` adds the number of blocks in the I/O batch to `shared_blks_read` for persistent or unlogged relation reads [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). |
-| `shared dirtied=N` | The statement made previously clean shared buffers dirty. Normal page changes increment the counter in `MarkBufferDirty`, and hint-bit style changes can increment it in `MarkBufferDirtyHint` when the buffer was not already dirty [bufmgr.c#MarkBufferDirty](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2970-L3016) [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L5453-L5583). |
+| `shared hit=N` | PostgreSQL needed a block from an ordinary table or index and found it already available in shared buffers, avoiding a read into a new buffer [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208). The shared hit counter is incremented when `PinBufferForBlock`, `ReadRecentBuffer`, or the concurrent-read path in `AsyncReadBuffers` finds the shared buffer already valid for this [backend](../../../glossary.md#backend) [bufmgr.c#PinBufferForBlock](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1101-L1176) [bufmgr.c#ReadRecentBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L682-L751) [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). |
+| `shared read=N` | PostgreSQL issued relation-block read I/O for ordinary table or index blocks that were not already available to this backend [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). `AsyncReadBuffers` adds the number of blocks in the I/O batch to `shared_blks_read` for persistent or unlogged [relation](../../../glossary.md#relation) reads [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). |
+| `shared dirtied=N` | The statement made previously clean shared buffers dirty. Normal [page](../../../glossary.md#page) changes increment the counter in `MarkBufferDirty`, and hint-bit style changes can increment it in `MarkBufferDirtyHint` when the buffer was not already dirty [bufmgr.c#MarkBufferDirty](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2970-L3016) [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L5453-L5583). |
 | `shared written=N` | This backend wrote ordinary relation data while the statement was running. PostgreSQL 18 increments the shared written counter when shared relation extension writes zeroed new blocks and when `FlushBuffer` writes a dirty shared buffer [bufmgr.c#ExtendBufferedRelShared](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2628-L2898) [bufmgr.c#FlushBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4307-L4436). |
 | `local hit=N` | PostgreSQL needed a block from a temporary table or index and found it already available in the backend's local buffer pool [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208). The local hit counter is incremented through the local-buffer paths in `PinBufferForBlock`, `ReadRecentBuffer`, and `AsyncReadBuffers` [bufmgr.c#PinBufferForBlock](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1101-L1176) [bufmgr.c#ReadRecentBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L682-L751) [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). |
 | `local read=N` | PostgreSQL read temporary table or index blocks into local buffers. The read path adds the I/O batch length to `local_blks_read` for temporary-relation reads [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987). |
@@ -52,17 +72,17 @@ The counts are block-event counters, not tuple counters and not distinct-page co
 | `temp written=N` | The executor wrote to a temporary work file through `BufFile`, not to a temporary table's local buffer pool [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208). `BufFileDumpBuffer` increments `temp_blks_written` after successful `FileWrite` calls [buffile.c#BufFileDumpBuffer](../../../../raw/postgres-18/src/backend/storage/file/buffile.c#L494-L580). |
 | `I/O Timings: shared ... local ... temp ...` | These are elapsed times for shared relation I/O, local temporary-relation I/O, and temporary work-file I/O, printed in milliseconds when timing values are present in text output [explain.c#show_buffer_usage](../../../../raw/postgres-18/src/backend/commands/explain.c#L4086-L4249). Shared and local read/write times are accumulated by `pgstat_count_io_op_time`; temp work-file read/write times are accumulated in `BufFileLoadBuffer` and `BufFileDumpBuffer` [pgstat_io.c#pgstat_count_io_op_time](../../../../raw/postgres-18/src/backend/utils/activity/pgstat_io.c#L122-L160) [buffile.c#BufFileLoadBuffer](../../../../raw/postgres-18/src/backend/storage/file/buffile.c#L434-L484) [buffile.c#BufFileDumpBuffer](../../../../raw/postgres-18/src/backend/storage/file/buffile.c#L494-L580). |
 
-## How The Counters Are Collected
+### How The Counters Are Collected
 
-`pgBufferUsage` is the backend-wide accumulator for these counters, and plan nodes collect deltas from it rather than owning independent counters while they run [instrument.h#pgBufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L102) [instrument.c#InstrStartNode](../../../../raw/postgres-18/src/backend/executor/instrument.c#L68-L80) [instrument.c#InstrStopNode](../../../../raw/postgres-18/src/backend/executor/instrument.c#L84-L128). `ExplainOnePlan` passes `INSTRUMENT_BUFFERS` into `CreateQueryDesc` when `BUFFERS` is active, `ExecutorStart` copies that option into `EState`, and `ExecInitNode` allocates `Instrumentation` for each plan node [explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L682) [execMain.c#ExecutorStart](../../../../raw/postgres-18/src/backend/executor/execMain.c#L122-L264) [execProcnode.c#ExecInitNode](../../../../raw/postgres-18/src/backend/executor/execProcnode.c#L142-L420).
+`pgBufferUsage` is the backend-wide accumulator for these counters, and plan nodes collect deltas from it rather than owning independent counters while they run [instrument.h#pgBufferUsage](../../../../raw/postgres-18/src/include/executor/instrument.h#L102) [instrument.c#InstrStartNode](../../../../raw/postgres-18/src/backend/executor/instrument.c#L68-L80) [instrument.c#InstrStopNode](../../../../raw/postgres-18/src/backend/executor/instrument.c#L84-L128). `ExplainOnePlan` passes `INSTRUMENT_BUFFERS` into `CreateQueryDesc` when `BUFFERS` is active, `ExecutorStart` copies that option into [`EState`](../../../glossary.md#executor-state), and `ExecInitNode` allocates `Instrumentation` for each plan node [explain.c#ExplainOnePlan](../../../../raw/postgres-18/src/backend/commands/explain.c#L494-L682) [execMain.c#ExecutorStart](../../../../raw/postgres-18/src/backend/executor/execMain.c#L122-L264) [execProcnode.c#ExecInitNode](../../../../raw/postgres-18/src/backend/executor/execProcnode.c#L142-L420).
 
 `ExecProcNodeInstr` calls `InstrStartNode` before the real node function and `InstrStopNode` after it returns a tuple or end-of-scan marker, so the node stores the difference between the global `pgBufferUsage` value at node entry and node exit [execProcnode.c#ExecProcNodeInstr](../../../../raw/postgres-18/src/backend/executor/execProcnode.c#L479-L490) [instrument.c#BufferUsageAccumDiff](../../../../raw/postgres-18/src/backend/executor/instrument.c#L248-L274).
 
-Upper plan nodes include buffer work done by their children, because the parent node remains active while it calls child nodes; the PostgreSQL 18 `EXPLAIN` reference states that upper-level block counts include child-node counts [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208) [execProcnode.c#ExecProcNodeInstr](../../../../raw/postgres-18/src/backend/executor/execProcnode.c#L479-L490). Do not sum all `Buffers:` lines in a text plan to compute a query total, because parent and child lines can describe the same work [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208).
+Upper plan nodes include buffer work done by their children, because the parent node remains active while it calls child nodes; the PostgreSQL 18 [`EXPLAIN`](../../../glossary.md#explain) reference states that upper-level block counts include child-node counts [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208) [execProcnode.c#ExecProcNodeInstr](../../../../raw/postgres-18/src/backend/executor/execProcnode.c#L479-L490). Do not sum all `Buffers:` lines in a text plan to compute a query total, because parent and child lines can describe the same work [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208).
 
 The counters count buffer events, not distinct block identities. The source increments hit, read, dirty, and write counters at the moment each corresponding path is taken, so repeated requests for the same block can increase the same counter more than once [bufmgr.c#PinBufferForBlock](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1101-L1176) [bufmgr.c#AsyncReadBuffers](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1773-L1987) [bufmgr.c#MarkBufferDirty](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2970-L3016) [bufmgr.c#FlushBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4307-L4436).
 
-## Where It Appears In The Plan
+### Where It Appears In The Plan
 
 Plan-node buffer lines are printed from `ExplainNode` when `es->buffers` is true and the plan node has instrumentation [explain.c#ExplainNode](../../../../raw/postgres-18/src/backend/commands/explain.c#L2284-L2314). In text format, `show_buffer_usage` suppresses a `Buffers:` line if all shared, local, and temp block counters are zero, and suppresses an `I/O Timings:` line if all shared, local, and temp timing fields are zero [explain.c#show_buffer_usage](../../../../raw/postgres-18/src/backend/commands/explain.c#L4086-L4249).
 
@@ -70,13 +90,13 @@ Planning buffer use is measured separately around `pg_plan_query` and printed un
 
 Serialization buffer use is printed only when the `SERIALIZE` option is active. The serialize destination receiver snapshots `pgBufferUsage` for each output tuple when `BUFFERS` is active, stores the deltas in `SerializeMetrics`, and `ExplainPrintSerialize` prints those counters in the `Serialization` section [explain_dr.c#serializeAnalyzeReceive](../../../../raw/postgres-18/src/backend/commands/explain_dr.c#L104-L202) [explain_dr.h#SerializeMetrics](../../../../raw/postgres-18/src/include/commands/explain_dr.h#L21-L27) [explain.c#ExplainPrintSerialize](../../../../raw/postgres-18/src/backend/commands/explain.c#L999-L1048).
 
-In parallel query, PostgreSQL 18 allocates a `BufferUsage` slot for each worker in dynamic shared memory, each worker stores its execution delta with `InstrEndParallelQuery`, and the leader adds worker values back into its own `pgBufferUsage` with `InstrAccumParallelQuery` after workers finish [execParallel.c#ExecInitParallelPlan](../../../../raw/postgres-18/src/backend/executor/execParallel.c#L599-L780) [execParallel.c#ParallelQueryMain](../../../../raw/postgres-18/src/backend/executor/execParallel.c#L1429-L1531) [execParallel.c#ExecParallelFinish](../../../../raw/postgres-18/src/backend/executor/execParallel.c#L1156-L1200) [instrument.c#InstrAccumParallelQuery](../../../../raw/postgres-18/src/backend/executor/instrument.c#L218-L222). `EXPLAIN (ANALYZE, VERBOSE, BUFFERS)` can print per-worker buffer details because `ExplainNode` walks `worker_instrument` and calls `show_buffer_usage` for each worker with loops greater than zero [explain.c#ExplainNode](../../../../raw/postgres-18/src/backend/commands/explain.c#L2284-L2314).
+In [parallel query](../../../glossary.md#parallel-query), PostgreSQL 18 allocates a `BufferUsage` slot for each worker in [dynamic shared memory](../../../glossary.md#dynamic-shared-memory), each worker stores its execution delta with `InstrEndParallelQuery`, and the leader adds worker values back into its own `pgBufferUsage` with `InstrAccumParallelQuery` after workers finish [execParallel.c#ExecInitParallelPlan](../../../../raw/postgres-18/src/backend/executor/execParallel.c#L599-L780) [execParallel.c#ParallelQueryMain](../../../../raw/postgres-18/src/backend/executor/execParallel.c#L1429-L1531) [execParallel.c#ExecParallelFinish](../../../../raw/postgres-18/src/backend/executor/execParallel.c#L1156-L1200) [instrument.c#InstrAccumParallelQuery](../../../../raw/postgres-18/src/backend/executor/instrument.c#L218-L222). `EXPLAIN (ANALYZE, VERBOSE, BUFFERS)` can print per-worker buffer details because `ExplainNode` walks `worker_instrument` and calls `show_buffer_usage` for each worker with loops greater than zero [explain.c#ExplainNode](../../../../raw/postgres-18/src/backend/commands/explain.c#L2284-L2314).
 
 Trigger functions can be instrumented with the same executor instrumentation options, but the trigger summary prints trigger name, time, and calls, not buffer counters [execMain.c#InitResultRelInfo](../../../../raw/postgres-18/src/backend/executor/execMain.c#L1247-L1326) [trigger.c#ExecCallTriggerFunc](../../../../raw/postgres-18/src/backend/commands/trigger.c#L2315-L2404) [explain.c#report_triggers](../../../../raw/postgres-18/src/backend/commands/explain.c#L1092-L1159).
 
-## I/O Timing And `track_io_timing`
+### I/O Timing And `track_io_timing`
 
-`track_io_timing` controls whether PostgreSQL measures database I/O wait time for these buffer timing fields; PostgreSQL 18 defines it as `PGC_SUSET`, off by default, backed by the `track_io_timing` variable [guc_tables.c#track_io_timing](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1513-L1519). Under the wiki GUC context mapping, this is a superuser or granted-privilege session/transaction-scope setting, so enabling it does not require restart or reload [guc_tables.c#track_io_timing](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1513-L1519) [config.sgml#track_io_timing](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L8745-L8772).
+`track_io_timing` controls whether PostgreSQL measures database I/O wait time for these buffer timing fields; PostgreSQL 18 defines it as `PGC_SUSET`, off by default, backed by the `track_io_timing` variable [guc_tables.c#track_io_timing](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1513-L1519). Under the wiki [GUC](../../../glossary.md#guc) context mapping, this is a superuser or granted-privilege session/transaction-scope setting, so enabling it does not require restart or reload [guc_tables.c#track_io_timing](../../../../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L1513-L1519) [config.sgml#track_io_timing](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L8745-L8772).
 
 The PostgreSQL 18 documentation says `track_io_timing` repeatedly queries the operating-system clock and may add significant overhead on some platforms [config.sgml#track_io_timing](../../../../raw/postgres-18/doc/src/sgml/config.sgml#L8745-L8772). A superuser, or a user granted permission to set it, can enable it for the current session:
 
@@ -84,7 +104,7 @@ The PostgreSQL 18 documentation says `track_io_timing` repeatedly queries the op
 SET /* wiki_enable_track_io_timing */ track_io_timing = on;
 ```
 
-## Reading Common Patterns
+### Reading Common Patterns
 
 High `shared hit` means the plan repeatedly found ordinary table or index blocks already in PostgreSQL shared buffers, so it avoided relation-block read I/O for those requests [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208) [bufmgr.c#PinBufferForBlock](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L1101-L1176).
 
@@ -92,13 +112,13 @@ High `shared read` means the plan caused relation-block read I/O for ordinary ta
 
 High `temp read` or `temp written` points to executor work files handled through `BufFile`, not to blocks of temporary tables or temporary indexes [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208) [buffile.c#BufFileLoadBuffer](../../../../raw/postgres-18/src/backend/storage/file/buffile.c#L434-L484) [buffile.c#BufFileDumpBuffer](../../../../raw/postgres-18/src/backend/storage/file/buffile.c#L494-L580).
 
-High `dirtied` means the statement turned clean buffers dirty. High `written` means the backend wrote relation data during the statement, either by relation extension or by flushing dirty buffers on the source paths above [bufmgr.c#MarkBufferDirty](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2970-L3016) [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L5453-L5583) [bufmgr.c#ExtendBufferedRelShared](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2628-L2898) [bufmgr.c#FlushBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4307-L4436) [localbuf.c#ExtendBufferedRelLocal](../../../../raw/postgres-18/src/backend/storage/buffer/localbuf.c#L353-L490) [localbuf.c#FlushLocalBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/localbuf.c#L182-L220).
+High `dirtied` means the statement turned clean buffers dirty. High `written` means the backend wrote relation data during the statement, either by relation extension or by flushing [dirty buffers](../../../glossary.md#dirty-buffer) on the source paths above [bufmgr.c#MarkBufferDirty](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2970-L3016) [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L5453-L5583) [bufmgr.c#ExtendBufferedRelShared](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2628-L2898) [bufmgr.c#FlushBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L4307-L4436) [localbuf.c#ExtendBufferedRelLocal](../../../../raw/postgres-18/src/backend/storage/buffer/localbuf.c#L353-L490) [localbuf.c#FlushLocalBuffer](../../../../raw/postgres-18/src/backend/storage/buffer/localbuf.c#L182-L220).
 
-## Tests And Examples
+### Tests And Examples
 
 The same-checkout PostgreSQL 18 reference documentation defines the `BUFFERS` fields, states that upper-level nodes include child-node block counts, and shows a worked `EXPLAIN ANALYZE` example with `Buffers: shared hit=4` lines [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208) [ref/explain.sgml#EXPLAIN-EXECUTE-example](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L488-L512).
 
-The PostgreSQL 18 regression tests cover `EXPLAIN (ANALYZE, BUFFERS, FORMAT xml)`, `EXPLAIN (ANALYZE, BUFFERS, FORMAT json)`, `EXPLAIN (ANALYZE, SERIALIZE, BUFFERS, FORMAT yaml)`, `track_io_timing` I/O time fields in JSON, and `EXPLAIN (BUFFERS, FORMAT json)` without `ANALYZE` [explain.sql#EXPLAIN-BUFFERS-tests](../../../../raw/postgres-18/src/test/regress/sql/explain.sql#L58-L82) [explain.out#EXPLAIN-BUFFERS-output](../../../../raw/postgres-18/src/test/regress/expected/explain.out#L145-L338). The same test file deliberately filters text-mode `Buffers:` lines because the counts vary with system state [explain.sql#explain_filter](../../../../raw/postgres-18/src/test/regress/sql/explain.sql#L13-L34).
+The PostgreSQL 18 [regression tests](../../../glossary.md#regression-test) cover `EXPLAIN (ANALYZE, BUFFERS, FORMAT xml)`, `EXPLAIN (ANALYZE, BUFFERS, FORMAT json)`, `EXPLAIN (ANALYZE, SERIALIZE, BUFFERS, FORMAT yaml)`, `track_io_timing` I/O time fields in JSON, and `EXPLAIN (BUFFERS, FORMAT json)` without `ANALYZE` [explain.sql#EXPLAIN-BUFFERS-tests](../../../../raw/postgres-18/src/test/regress/sql/explain.sql#L58-L82) [explain.out#EXPLAIN-BUFFERS-output](../../../../raw/postgres-18/src/test/regress/expected/explain.out#L145-L338). The same test file deliberately filters text-mode `Buffers:` lines because the counts vary with system state [explain.sql#explain_filter](../../../../raw/postgres-18/src/test/regress/sql/explain.sql#L13-L34).
 
 ## Context Reviewed
 
@@ -176,7 +196,9 @@ The PostgreSQL 18 regression tests cover `EXPLAIN (ANALYZE, BUFFERS, FORMAT xml)
 
 - The PostgreSQL 18 documentation describes `written` as previously dirty blocks evicted from cache, while the implementation also increments `shared_blks_written` and `local_blks_written` during relation extension. This page follows the implementation source for the detailed field definition [ref/explain.sgml#BUFFERS](../../../../raw/postgres-18/doc/src/sgml/ref/explain.sgml#L181-L208) [bufmgr.c#ExtendBufferedRelShared](../../../../raw/postgres-18/src/backend/storage/buffer/bufmgr.c#L2628-L2898) [localbuf.c#ExtendBufferedRelLocal](../../../../raw/postgres-18/src/backend/storage/buffer/localbuf.c#L353-L490).
 
-## Related Pages
+## Navigation
 
+- [wiki index](../../../index.md)
+- [Wiki Glossary (unverified)](../../../glossary.md)
 - [v18/index](../../index.md)
 - [versions](../../../versions.md)

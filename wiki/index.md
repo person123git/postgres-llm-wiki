@@ -39,6 +39,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 #### Storage and Vacuum
 
 - [Extension Hooks for VACUUM and Autovacuum in PostgreSQL 18 (unverified)](v18/questions/storage-and-vacuum/extension-hooks-vacuum-autovacuum.md) - Catalogs every extension point on the VACUUM/ANALYZE and autovacuum paths: in-process hook variables, table and index AM and FDW callbacks, and adjacent surfaces (background workers, custom cumulative statistics), with manual-vs-autovacuum coverage.
+  - Citation fix, 2026-10-19: file-level citations became line ranges, and the re-read corrected six statements against the pin: who calls `shmem_startup_hook`, the two callers of `process_shmem_requests`, the flag shared-memory requests need, `GetNamedDSMSegment()` as a second route, indirect `object_access_hook` calls from `VACUUM FULL` and the orphaned temporary-table drop, and `RegisterBackgroundWorker`'s process rules.
 - [Usage of NUM_BUFFER_PARTITIONS in PostgreSQL 18 (unverified)](v18/questions/storage-and-vacuum/num-buffer-partitions.md) - Explains the shared buffer mapping hash partition count, `BufferMapping` LWLocks, normal lookup/allocation and invalidation paths, relation extension, wait events, test-coverage gap, and the full source commit history (16->128) in PostgreSQL 18.
 
 #### Replication and WAL

@@ -11,36 +11,23 @@ verified_by_agent: not yet
 ## Contents
 
 - [Question](#question)
-- [Short Answer](#short-answer)
-- [Syntax and Modes](#syntax-and-modes)
-- [Source Layout](#source-layout)
-- [Blocking REPACK (the simple rewrite)](#blocking-repack-the-simple-rewrite)
-  - [Multi-table discovery and recheck](#multi-table-discovery-and-recheck)
-- [REPACK CONCURRENTLY (online rewrite via logical decoding)](#repack-concurrently-online-rewrite-via-logical-decoding)
-  - [Step by step](#step-by-step)
-  - [How concurrent changes are captured and replayed](#how-concurrent-changes-are-captured-and-replayed)
-  - [Error handling and worker teardown](#error-handling-and-worker-teardown)
-  - [WAL retention and `effective_wal_level`](#wal-retention-and-effective_wal_level)
-- [Restrictions on CONCURRENTLY](#restrictions-on-concurrently)
-- [GUC: `max_repack_replication_slots`](#guc-max_repack_replication_slots)
-- [I/O Impact and Throttling](#io-impact-and-throttling)
-  - [Where the writes and reads come from](#where-the-writes-and-reads-come-from)
-  - [Settings that change the load](#settings-that-change-the-load)
-  - [Recipes for a gentler REPACK](#recipes-for-a-gentler-repack)
-  - [How to watch it](#how-to-watch-it)
-- [Progress reporting](#progress-reporting)
-- [Tests](#tests)
-- [Feature-Scope Commits](#feature-scope-commits)
-  - [Foundational](#foundational)
-  - [CONCURRENTLY infrastructure](#concurrently-infrastructure)
-  - [Correctness fixes](#correctness-fixes)
-  - [Error messages, docs, style](#error-messages-docs-style)
-  - [Tests](#tests-1)
+- [Answer](#answer)
+  - [Short Answer](#short-answer)
+  - [Syntax and Modes](#syntax-and-modes)
+  - [Source Layout](#source-layout)
+  - [Blocking REPACK (the simple rewrite)](#blocking-repack-the-simple-rewrite)
+  - [REPACK CONCURRENTLY (online rewrite via logical decoding)](#repack-concurrently-online-rewrite-via-logical-decoding)
+  - [Restrictions on CONCURRENTLY](#restrictions-on-concurrently)
+  - [GUC: `max_repack_replication_slots`](#guc-max_repack_replication_slots)
+  - [I/O Impact and Throttling](#io-impact-and-throttling)
+  - [Progress reporting](#progress-reporting)
+  - [Tests](#tests)
+  - [Feature-Scope Commits](#feature-scope-commits)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Source References](#source-references)
 - [Open Questions](#open-questions)
-- [Related Pages](#related-pages)
+- [Navigation](#navigation)
 
 ## Question
 
@@ -55,7 +42,9 @@ In PostgreSQL 19, for the question page "How the REPACK Command Works in Postgre
 
 > Answered in [I/O Impact and Throttling](#io-impact-and-throttling), source-and-history scope at the asker's choice: no v19 server was built, so that section carries no measurements.
 
-## Short Answer
+## Answer
+
+### Short Answer
 
 `REPACK` is a new top-level SQL command in PostgreSQL 19 that rewrites a table into a fresh relfilenode to reclaim dead-tuple space, optionally clustering rows by an index. It **absorbs the functionality of `VACUUM FULL` and `CLUSTER`** into one command: physical-order rewrite (like `VACUUM FULL`) and index-order rewrite (like `CLUSTER`) are just two modes of `REPACK`, and the two legacy commands are kept but de-emphasized [repack.c#overview](../../../../raw/postgres-19/src/backend/commands/repack.c#L1-L22) [ac58465e commit message](#feature-scope-commits). The command is documented as "rewrite a table to reclaim disk space" [ref/repack.sgml#refpurpose](../../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L17-L20).
 
@@ -68,7 +57,7 @@ On the follow-up question: **`REPACK` cannot be throttled.** It has no cost-base
 
 This page tracks **87 feature-scope commits (2026-03-10 to 2026-10-07)**: commits whose subject/body explicitly references REPACK, adjacent prerequisite/support commits used by that history, and tree-wide fixes that changed REPACK-specific code or text. Álvaro Herrera committed most of them, and the commit-message `Author:` trailers credit most of the code to Antonin Houska and to Herrera himself, building on Houska's `pg_squeeze` extension. The tables under [Feature-Scope Commits](#feature-scope-commits) name each commit's **committer**, adding "patch by …" where the commit message names a different author.
 
-## Syntax and Modes
+### Syntax and Modes
 
 The grammar produces a single `RepackStmt` node for `REPACK` and `CLUSTER`, distinguished by a `RepackCommand` tag [parsenodes.h#RepackStmt](../../../../raw/postgres-19/src/include/nodes/parsenodes.h#L3986-L4001) [gram.y#RepackStmt](../../../../raw/postgres-19/src/backend/parser/gram.y#L12080-L12173). `VACUUM (FULL)` still parses as `VacuumStmt`; when the `FULL` option is present, `vacuum.c` routes execution into the same rewrite engine with `REPACK_COMMAND_VACUUMFULL` [gram.y#VacuumStmt](../../../../raw/postgres-19/src/backend/parser/gram.y#L12193-L12225) [vacuum.c#VACUUMFULL-repack](../../../../raw/postgres-19/src/backend/commands/vacuum.c#L2302-L2305):
 
@@ -96,7 +85,7 @@ Key forms:
 
 The generic privilege reference now lists `REPACK` among the commands authorized by `MAINTAIN`, and the predefined `pg_maintain` role grants that right on all relations [ddl.sgml#MAINTAIN](../../../../raw/postgres-19/doc/src/sgml/ddl.sgml#L2540-L2552) [user-manag.sgml#pg_maintain](../../../../raw/postgres-19/doc/src/sgml/user-manag.sgml#L655-L670). At runtime, membership in `pg_maintain` adds `ACL_MAINTAIN` when the relation ACL is checked [aclchk.c#pg_class_aclmask_ext](../../../../raw/postgres-19/src/backend/catalog/aclchk.c#L3385-L3394).
 
-## Source Layout
+### Source Layout
 
 ```text
 src/backend/commands/repack.c            ExecRepack, cluster_rel, the rewrite engine
@@ -114,7 +103,7 @@ The output plugin is built as `pgrepack` and linked into the backend (`backend_t
 
 Every other output plugin must be named in the new `output_plugin_libraries` GUC or the same function errors with `library "%s" may not be used as an output plugin` [logical.c#StartupDecodingContext-plugin-check](../../../../raw/postgres-19/src/backend/replication/logical/logical.c#L179-L259). That GUC is `PGC_SUSET` with boot value `"pgoutput, test_decoding"`, so a superuser `SET` applies to the session/transaction with no restart or reload, while a `postgresql.conf` change needs a configuration reload [guc_parameters.dat#output_plugin_libraries](../../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2311-L2318). Despite the file/dir name `pgrepack`, the user-facing command is `REPACK`; the third-party extension is unrelated.
 
-## Blocking REPACK (the simple rewrite)
+### Blocking REPACK (the simple rewrite)
 
 `ExecRepack()` parses the option list (`VERBOSE`/`ANALYZE`/`CONCURRENTLY`), sets the `CLUOPT_*` bitmask in `ClusterParams`, picks the lock level, and either processes one relation or builds a work list for the multi-table forms [repack.c#ExecRepack](../../../../raw/postgres-19/src/backend/commands/repack.c#L259-L467) [repack.h#CLUOPT](../../../../raw/postgres-19/src/include/commands/repack.h#L24-L36). Since `d7db169fa13`, `ANALYZE` is accepted only for `REPACK` itself: `ExecRepack()` raises `ANALYZE option not supported for %s` for `CLUSTER (ANALYZE)`, exactly as it already did for `CONCURRENTLY`. `VACUUM (FULL, ANALYZE)` is unaffected because it does not pass through `ExecRepack()` [repack.c#ANALYZE-option](../../../../raw/postgres-19/src/backend/commands/repack.c#L276-L285) [vacuum.c#VACUUMFULL-repack](../../../../raw/postgres-19/src/backend/commands/vacuum.c#L2302-L2305). Since `24dd8c369e5`, `REPACK (ANALYZE)` without `CONCURRENTLY` also calls `PreventInTransactionBlock()`, because the single-relation path commits and restarts the transaction; the reference page adds that the option cannot run inside a transaction block, function, procedure, or `DO` block [repack.c#ANALYZE-PreventInTransactionBlock](../../../../raw/postgres-19/src/backend/commands/repack.c#L312-L336) [ref/repack.sgml#ANALYZE](../../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L130-L139). Multiple tables are each processed in their own transaction (like `VACUUM`) to avoid holding many strong locks at once, which is why the multi-table and `CONCURRENTLY` forms cannot run inside a transaction block [repack.c#per-table-txn](../../../../raw/postgres-19/src/backend/commands/repack.c#L236-L258).
 
@@ -131,7 +120,7 @@ Before progress reporting starts, `cluster_rel()` also refuses a table that carr
 
 Predicate (SSI) locks on tuples/pages are promoted to a relation lock before the rewrite, because tuples move [repack.c#TransferPredicateLocks](../../../../raw/postgres-19/src/backend/commands/repack.c#L672-L683).
 
-### Multi-table discovery and recheck
+#### Multi-table discovery and recheck
 
 The no-table forms and partition fan-out first collect lightweight `RelToCluster { tableOid, indexOid }` records. They do **not** retain a lock on each target while building that list, so each OID pair is only a candidate and may become stale before its turn [repack.c#RelToCluster](../../../../raw/postgres-19/src/backend/commands/repack.c#L86-L96) [repack.c#get_tables_to_repack](../../../../raw/postgres-19/src/backend/commands/repack.c#L2260-L2363) [repack.c#get_tables_to_repack_partitioned](../../../../raw/postgres-19/src/backend/commands/repack.c#L2365-L2491).
 
@@ -143,7 +132,7 @@ Commit `133eba078f7` made these rules consistent. The earlier whole-database lis
 
 Commit `69fe2514fdd` then moved partitioned-table and partitioned-index resolution into `get_tables_to_repack_partitioned()`. The caller passes the already-open, `AccessExclusiveLock`-protected parent; the helper resolves `USING INDEX`, collects leaf candidates without locking them, closes and unlocks the parent, and returns the list [repack.c#get_tables_to_repack_partitioned](../../../../raw/postgres-19/src/backend/commands/repack.c#L2365-L2491). For a concurrently disappearing leaf index, it now calls `IndexGetRelation(..., true)` and silently skips an invalid result instead of raising a cache-lookup error [repack.c#partition-index-disappearance](../../../../raw/postgres-19/src/backend/commands/repack.c#L2443-L2458). This remains discovery-time hardening; each surviving table still undergoes the locked per-table recheck above.
 
-## REPACK CONCURRENTLY (online rewrite via logical decoding)
+### REPACK CONCURRENTLY (online rewrite via logical decoding)
 
 The concurrent path keeps the table online by combining a low-strength lock with logical decoding. The cast of characters:
 
@@ -155,7 +144,7 @@ The concurrent path keeps the table online by combining a low-strength lock with
 | **Temporary replication slot** | `pg_repack_<pid>`, `RS_TEMPORARY` so it is dropped on error/exit; pins the WAL/snapshot start point [repack_worker.c#slot](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L245-L251). |
 | **DSM + spill fileset** | `DecodingWorkerShared` in DSM coordinates the two processes; a `SharedFileSet` holds the exported snapshot and change files [repack_internal.h#DecodingWorkerShared](../../../../raw/postgres-19/src/include/commands/repack_internal.h#L61-L120). |
 
-### Step by step
+#### Step by step
 
 1. **Precondition checks.** `check_concurrent_repack_requirements()` enforces `wal_level >= replica` ([WAL level](../../../glossary.md#wal-level)); rejects a table whose table [access method](../../../glossary.md#access-method) routine is not heap's, system catalogs, tables marked `user_catalog_table`, TOAST tables, non-permanent (temp/unlogged) tables, materialized views, and `REPLICA IDENTITY NOTHING`/`FULL`; and obtains the **identity index** from `RelationGetReplicaIndex()`. Without a usable identity index, concurrent mode is refused [repack.c#check_concurrent_repack_requirements](../../../../raw/postgres-19/src/backend/commands/repack.c#L972-L1090). `RelationGetReplicaIndex()` returns the non-deferrable primary key under `REPLICA IDENTITY DEFAULT` and the `indisreplident` index under `REPLICA IDENTITY USING INDEX`; if that index was dropped, it returns nothing even when a usable primary key exists, and REPACK now refuses instead of falling back to the key, because logical decoding would not log usable tuple identity for it (`434bde9ce6b`) [repack.c#identity-index](../../../../raw/postgres-19/src/backend/commands/repack.c#L1063-L1087) [relcache.c#RelationGetReplicaIndex](../../../../raw/postgres-19/src/backend/utils/cache/relcache.c#L5068-L5094).
 2. **Start the worker before any XID is assigned.** The leader becomes a lock-group leader, then `start_repack_decoding_worker()` sets up the [DSM](../../../glossary.md#dynamic-shared-memory), registers the [`bgworker`](../../../glossary.md#background-worker), and blocks until the worker reports `initialized` [repack.c#start_repack_decoding_worker](../../../../raw/postgres-19/src/backend/commands/repack.c#L1135-L1167) [repack.c#start_repack_decoding_worker-impl](../../../../raw/postgres-19/src/backend/commands/repack.c#L3810-L3907). Since `47b5b23a780` that wait has two stages. `wait_for_repack_decoding_worker()` first waits until the worker has started and attached to the error queue, and raises `REPACK decoding worker failed to start` if it stopped without attaching; only then does the leader sleep on the condition variable, so a worker that never starts no longer hangs the leader [repack.c#wait-call](../../../../raw/postgres-19/src/backend/commands/repack.c#L3873-L3884) [repack.c#wait_for_repack_decoding_worker](../../../../raw/postgres-19/src/backend/commands/repack.c#L3909-L3975). The worker connects as the table owner with both `BGWORKER_BYPASS_ALLOWCONN` and `BGWORKER_BYPASS_ROLELOGINCHECK`, so the owner needs neither `LOGIN` nor `CONNECT` (`CONNECT` since `9bf3a414560`), and it adopts the leader's `lock_timeout` and `transaction_timeout` values through `DecodingWorkerShared` (`746a507a391`), so a session-level `SET` reaches it and a role- or database-level setting for the owner does not override it [repack_worker.c#connect-and-timeouts](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L104-L118) [repack.c#timeouts](../../../../raw/postgres-19/src/backend/commands/repack.c#L3843-L3845) [repack_internal.h#DecodingWorkerShared](../../../../raw/postgres-19/src/include/commands/repack_internal.h#L61-L120). The worker creates the temporary slot, enables logical decoding, restricts decoding to the target relation (and its TOAST relation), builds an initial historic snapshot, and exports it to a file [repack_worker.c#setup](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L222-L322).
@@ -165,7 +154,7 @@ The concurrent path keeps the table online by combining a low-strength lock with
 6. **Lock upgrade + catch-up #2.** The leader takes `AccessExclusiveLock` on the table, all its indexes, and its TOAST relation, transfers predicate locks, flushes WAL, and applies the remaining changes with `done = true` so the worker exits [repack.c#lock-upgrade](../../../../raw/postgres-19/src/backend/commands/repack.c#L3473-L3527).
 7. **Swap.** `swap_relation_files()` swaps each index's storage, then `finish_heap_swap()` swaps the heap (and TOAST), dropping the transient relation. The old OID, grants, and dependencies are preserved [repack.c#swap](../../../../raw/postgres-19/src/backend/commands/repack.c#L3540-L3591).
 
-### How concurrent changes are captured and replayed
+#### How concurrent changes are captured and replayed
 
 The `pgrepack` plugin's `change_cb` only ever sees the target relation (other relations are filtered out during decoding by `change_useless_for_repack()`), and writes a compact record per change: a one-byte kind (`i`/`u`/`U`/`d`), the heap tuple bytes, and any out-of-line external attributes spilled separately to stay under `MaxAllocSize` [pgrepack.c#repack_store_change](../../../../raw/postgres-19/src/backend/replication/pgrepack/pgrepack.c#L191-L306) [repack_worker.c#change_useless_for_repack](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L530-L567) [repack_internal.h#ConcurrentChangeKind](../../../../raw/postgres-19/src/include/commands/repack_internal.h#L24-L32).
 
@@ -178,11 +167,11 @@ Two fixes made that suppression complete for output plugins that ask for heap-re
 
 The identity-index scan key is precomputed in `initialize_change_context()`, which resolves the equality strategy from the index's operator family (so it works for non-btree identity indexes too — see commit `36f52a59`) [repack.c#initialize_change_context](../../../../raw/postgres-19/src/backend/commands/repack.c#L3217-L3364). When replay reconstructs a spilled tuple, `restore_tuple()` checks that every separately stored varlena attribute is consumed and errors if the spill file contains too few or too many separately stored attributes; commit `e2a8cabc` added the leftover-attribute check [repack.c#restore_tuple](../../../../raw/postgres-19/src/backend/commands/repack.c#L2947-L3022). `restore_tuple()` also sets every dropped column of each spilled tuple to NULL, so neither a replayed `UPDATE` nor a replayed `INSERT` carries dropped-column values into the new heap, which might have no TOAST table to hold them. `10c67bcb2da` first did this for the new tuple of an update. `d65fa2e7263` moved it into `restore_tuple()`, because a concurrent `INSERT` can carry such values too, for example when a trigger returns a copy of an existing row, and keeping them could fail with "row is too big" when the new heap has no TOAST table [repack.c#null-dropped-columns](../../../../raw/postgres-19/src/backend/commands/repack.c#L2969-L2977).
 
-### Error handling and worker teardown
+#### Error handling and worker teardown
 
 The leader runs `rebuild_relation()` inside `PG_ENSURE_ERROR_CLEANUP(stop_repack_decoding_worker_cb)` so the worker and its slot are cleaned up even on `FATAL` exit (e.g. `pg_terminate_backend()`), and `stop_repack_decoding_worker()` terminates the worker, detaches the error queue if it is still attached, cancels CV sleeps, waits for the worker to exit, and only then detaches the DSM, because a worker still starting up may be attaching to the shared file set [repack.c#ensure-cleanup](../../../../raw/postgres-19/src/backend/commands/repack.c#L694-L702) [repack.c#stop_repack_decoding_worker](../../../../raw/postgres-19/src/backend/commands/repack.c#L3984-L4044). Worker errors are forwarded to the leader through a shared-memory message queue and re-thrown with a "REPACK decoding worker" context line, using the `PROCSIG_REPACK_MESSAGE` interrupt and `ProcessRepackMessages()` [repack.c#ProcessRepackMessages](../../../../raw/postgres-19/src/backend/commands/repack.c#L4139-L4285). Since `47b5b23a780`, a worker that finishes sends a `PqRepackMsg_Terminate` (`'X'`) message, on which the leader detaches the queue and stops reading; a queue that reports detached without that message now raises `lost connection to REPACK decoding worker`. On exit, `RepackWorkerShutdown()` detaches the DSM *before* signalling the leader, so the leader cannot read a queue that still looks attached and then sleep forever [repack_worker.c#Terminate](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L172-L175) [repack.c#ProcessRepackMessage-Terminate](../../../../raw/postgres-19/src/backend/commands/repack.c#L4271-L4279) [repack_worker.c#RepackWorkerShutdown](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L184-L207) [protocol.h#PqRepackMsg_Terminate](../../../../raw/postgres-19/src/include/libpq/protocol.h#L72-L74).
 
-### WAL retention and `effective_wal_level`
+#### WAL retention and `effective_wal_level`
 
 Normally a replication slot pins `restart_lsn` so WAL can't be recycled. `REPACK` does not need crash-safe replay (a crash just restarts the whole operation), so the worker advances the slot's restart/confirmed LSN as it crosses each WAL-segment boundary, letting old WAL be recycled while `REPACK` runs (commit `45b02984`) [repack_worker.c#WAL-recycling](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L405-L434). Because the temporary slot is logical, the worker calls `EnsureLogicalDecodingEnabled()` at setup and `ReplicationSlotDropAcquired(true)` at teardown so `effective_wal_level` does not stay stuck at `logical` afterward (commit `2af1dc89`) [repack_worker.c#enable-decoding](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L239-L252) [repack_worker.c#cleanup](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L324-L335).
 
@@ -192,7 +181,7 @@ At `wal_level = replica`, the worker can also be one of two backends concurrentl
 
 Commit `6a80179f6b0` then closed the opposite race, a *deactivation* that interleaves with slot creation. `EnsureLogicalDecodingEnabled()`'s recovery branch no longer asserts that decoding is still enabled; it re-checks after the slot exists — so a concurrent deactivation can see the slot's `in_use` flag — and raises `logical decoding on standby requires "effective_wal_level" >= "logical" on the primary` with detail `Logical decoding was concurrently disabled during the logical replication slot creation.` [logicalctl.c#EnsureLogicalDecodingEnabled](../../../../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L344-L393). Slot synchronization takes a separate path. `6a80179f6b0` made `update_and_persist_local_synced_slot()` skip persisting a synced slot when decoding had been disabled meanwhile. That check missed a deactivation followed by a re-activation, so the adjacent fix `3f5bfbce4c4` replaced it with a check right after `synchronize_one_slot()` creates the local slot. Once replay has reached the remote slot's `restart_lsn`, the new slot is dropped unless `StandbyLogicalDecodingEnabledSince()` shows that decoding stayed enabled from that LSN on; the log says `could not synchronize replication slot "%s"` with the detail `Logical decoding was disabled after the remote slot's restart LSN %X/%08X.`, and the next cycle retries with fresh remote information [slotsync.c#post-create-check](../../../../raw/postgres-19/src/backend/replication/logical/slotsync.c#L861-L916). To answer that question, `EnableLogicalDecoding()` now takes the end LSN of the status-change record being replayed and remembers it as `last_replayed_enable_lsn` [logicalctl.c#last_replayed_enable_lsn](../../../../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L408-L418) [logicalctl.c#StandbyLogicalDecodingEnabledSince](../../../../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L241-L264). Scope matters here: that branch runs only while `RecoveryInProgress()`, i.e. for slot creation on a standby, and a REPACK worker rewrites a table and so runs only on a writable server — the error is therefore not on the worker's path, even though the worker calls the same `EnsureLogicalDecodingEnabled()` [repack_worker.c#enable-decoding](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L239-L252). The commit also adds a recovery-race block to the same TAP test, driven by the new `replication-slot-create-begin` injection point [051_effective_wal_level.pl#deactivation-races](../../../../raw/postgres-19/src/test/recovery/t/051_effective_wal_level.pl#L545-L785) [slot.c:423](../../../../raw/postgres-19/src/backend/replication/slot.c#L423). `3f5bfbce4c4` added a case to that block in which the remote slot is dropped and re-created before synchronization resumes, and `d53e54f5e53` stabilized its cleanup with one more `pg_sync_replication_slots()` call [051_effective_wal_level.pl#re-creation-case](../../../../raw/postgres-19/src/test/recovery/t/051_effective_wal_level.pl#L630-L713) [051_effective_wal_level.pl#extra-sync](../../../../raw/postgres-19/src/test/recovery/t/051_effective_wal_level.pl#L700-L703).
 
-## Restrictions on CONCURRENTLY
+### Restrictions on CONCURRENTLY
 
 `REPACK (CONCURRENTLY)` is rejected for any of: a relation that is not a table, such as a materialized view; an `UNLOGGED` or temporary table; a partitioned table; a table without a primary key or index-based replica identity (including deferrable PKs, and a table whose `REPLICA IDENTITY USING INDEX` index was dropped); a system catalog or TOAST table; a table whose access method is not `heap`; a table declared with `user_catalog_table`; execution inside a transaction block; or when `max_repack_replication_slots` leaves no slot free [ref/repack.sgml#cannot-use](../../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L382-L445) [repack.c#check_concurrent_repack_requirements](../../../../raw/postgres-19/src/backend/commands/repack.c#L972-L1090). The reference page does not list the dropped-identity-index case.
 
@@ -208,13 +197,13 @@ Five of these checks are new since the 2026-09-01 pin, all backpatched to 19:
 
 `94cc8c443a3` then moved every CONCURRENTLY rejection reason into an `errdetail` of the form `This operation …`, keeping only the `ALTER TABLE ... REPLICA IDENTITY USING INDEX` hint for deferrable primary keys [repack.c#check_concurrent_repack_requirements](../../../../raw/postgres-19/src/backend/commands/repack.c#L972-L1090). It is documented as **not MVCC-safe**: once the repacking transaction commits, the table appears empty to concurrent transactions that use a snapshot taken before repacking started [ref/repack.sgml#warning](../../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L320-L328). After the `01a80f06` revert (see commits), only **one** `REPACK (CONCURRENTLY)` may run at a time across the whole instance.
 
-## GUC: `max_repack_replication_slots`
+### GUC: `max_repack_replication_slots`
 
 Concurrent `REPACK` consumes a logical replication slot for its lifetime. Rather than forcing users to inflate `max_replication_slots`, v19 adds a dedicated pool sized by `max_repack_replication_slots` (default `5`, min `0`) [guc_parameters.dat#max_repack_replication_slots](../../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2108-L2114) [slot.c#decl](../../../../raw/postgres-19/src/backend/replication/slot.c#L163-L164). `ReplicationSlotCreate(..., repack = true, ...)` allocates from the extra `[max_replication_slots, max_replication_slots + max_repack_replication_slots)` band of the slot array, so REPACK slots never compete with ordinary replication slots [slot.c#ReplicationSlotCreate](../../../../raw/postgres-19/src/backend/replication/slot.c#L372-L465).
 
 **Scope:** `max_repack_replication_slots` is `PGC_POSTMASTER` — it **requires a server restart** [guc_parameters.dat#context](../../../../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2108-L2108). The decoding worker also needs a free `max_worker_processes` slot, or `REPACK (CONCURRENTLY)` errors out [repack.c#worker-slots](../../../../raw/postgres-19/src/backend/commands/repack.c#L3868-L3872).
 
-## I/O Impact and Throttling
+### I/O Impact and Throttling
 
 **PostgreSQL 19 gives `REPACK` no throttle.** No command option, no reloption, and no GUC makes it pause or rate-limit itself. `ExecRepack()` accepts exactly three options — `VERBOSE`, `ANALYZE`, `CONCURRENTLY` — and none of them concerns I/O [repack.c#ExecRepack-options](../../../../raw/postgres-19/src/backend/commands/repack.c#L271-L306).
 
@@ -222,7 +211,7 @@ Unlike lazy (non-`FULL`) `VACUUM`, the rewrite path has **no cost-based delay**.
 
 Nothing schedules a rewrite for you either: the only callers of `cluster_rel()` are `ExecRepack()` [repack.c#cluster_rel-call](../../../../raw/postgres-19/src/backend/commands/repack.c#L2605-L2613) and `VACUUM (FULL)` [vacuum.c#VACUUMFULL-repack](../../../../raw/postgres-19/src/backend/commands/vacuum.c#L2302-L2305), and autovacuum never sets `VACOPT_FULL` [autovacuum.c#at_params.options](../../../../raw/postgres-19/src/backend/postmaster/autovacuum.c#L2938-L2948). What you *can* control is how much data the command moves, how much of it passes through shared buffers, how much WAL it writes, and when and in how many pieces it runs.
 
-### Where the writes and reads come from
+#### Where the writes and reads come from
 
 | Work | Blocking `REPACK` | `REPACK (CONCURRENTLY)` |
 |---|---|---|
@@ -240,7 +229,7 @@ Two consequences worth naming:
 - **Index rebuilds bypass shared buffers too.** A btree build writes its pages with the same `bulk_write.c` interface as the heap rewrite [nbtsort.c#bulkstate](../../../../raw/postgres-19/src/backend/access/nbtree/nbtsort.c#L1153) [nbtsort.c#_bt_blwritepage](../../../../raw/postgres-19/src/backend/access/nbtree/nbtsort.c#L618-L644).
 - **The index-scan copy path is the least considerate one.** `heapam_index_fetch_tuple()` reads each heap page with a plain `ReadBuffer()` — no access strategy, no read stream, no I/O combining — and prunes it on first pin [heapam_indexscan.c#heapam_index_fetch_tuple](../../../../raw/postgres-19/src/backend/access/heap/heapam_indexscan.c#L231-L263). The sequential path gets both a ring buffer and a read stream (below).
 
-### Settings that change the load
+#### Settings that change the load
 
 The sequential scan of the old heap is the one part with built-in restraint. `initscan()` gives it a `BAS_BULKREAD` ring **and** enables synchronized scanning, but only when the relation is larger than `NBuffers / 4` [heapam.c#initscan](../../../../raw/postgres-19/src/backend/access/heap/heapam.c#L360-L411); `table_beginscan()` supplies the `SO_ALLOW_STRAT`/`SO_ALLOW_SYNC` flags that permit both [tableam.h#table_beginscan](../../../../raw/postgres-19/src/include/access/tableam.h#L942-L951). In v19 that ring is not a fixed 256 kB: it grows by `io_combine_limit * effective_io_concurrency` blocks, capped by the backend pin limit and by `NBuffers / 8` [freelist.c#GetAccessStrategy](../../../../raw/postgres-19/src/backend/storage/buffer/freelist.c#L425-L500) [freelist.c#GetAccessStrategyWithSize](../../../../raw/postgres-19/src/backend/storage/buffer/freelist.c#L511-L541). The scan reads through a `READ_STREAM_SEQUENTIAL` stream [heapam.c#read_stream_begin_relation](../../../../raw/postgres-19/src/backend/access/heap/heapam.c#L1277-L1307), whose look-ahead comes from `effective_io_concurrency` — not `maintenance_io_concurrency`, because the stream does not pass `READ_STREAM_MAINTENANCE` [read_stream.c#max_ios](../../../../raw/postgres-19/src/backend/storage/aio/read_stream.c#L795-L834).
 
@@ -262,7 +251,7 @@ The sequential scan of the old heap is the one part with built-in restraint. `in
 
 Settings that look relevant and are not: `vacuum_cost_delay` / `vacuum_cost_limit` and their autovacuum twins (no delay point on this path, above); `maintenance_io_concurrency` (the cluster scan's stream is not a maintenance stream [read_stream.c#max_ios](../../../../raw/postgres-19/src/backend/storage/aio/read_stream.c#L795-L834)); and `enable_sort`, which the reference page still recommends for avoiding the sort file [ref/repack.sgml#Notes-on-Resources](../../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L279-L315) but which no longer changes the decision — see [Open Questions](#open-questions).
 
-### Recipes for a gentler REPACK
+#### Recipes for a gentler REPACK
 
 - **Do one table, or one partition, at a time.** The bare `REPACK;` form sweeps every table the caller has `MAINTAIN` on, one transaction each [repack.c#per-table-txn](../../../../raw/postgres-19/src/backend/commands/repack.c#L236-L258); naming a single relation lets you space the bursts out yourself, which is the only real pacing mechanism available.
 - **Prefer physical order.** `REPACK t` with no `USING INDEX` resolves to no index at all [repack.c#determine_clustered_index](../../../../raw/postgres-19/src/backend/commands/repack.c#L2651-L2691), so it always takes the plain sequential path [repack.c#use_sort-choice](../../../../raw/postgres-19/src/backend/commands/repack.c#L1532-L1545) — the only path with a ring buffer and read-ahead.
@@ -271,13 +260,13 @@ Settings that look relevant and are not: `vacuum_cost_delay` / `vacuum_cost_limi
 - **Move temp files off the data device** with `temp_tablespaces`, which covers both the sort file and the `CONCURRENTLY` change spool.
 - **Do not reach for `CONCURRENTLY` to reduce I/O.** It protects availability, and it lets old WAL recycle while it runs [repack_worker.c#WAL-recycling](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L405-L434), but it adds decoding, spilling and replay on top of the same rewrite, and it gives up both the buffer-bypassing write path and the TOAST swap-by-content shortcut.
 
-### How to watch it
+#### How to watch it
 
 `pg_stat_progress_repack` reports the phase and the block and tuple counters (see [Progress reporting](#progress-reporting)), and `REPACK (VERBOSE)` prints the chosen method plus removable/nonremovable row counts and a `pg_rusage` line [repack.c#verbose-report](../../../../raw/postgres-19/src/backend/commands/repack.c#L1591-L1603).
 
 `pg_stat_io` has a blind spot here. `IOOP_WRITE` and `IOOP_EXTEND` are only ever counted inside the buffer manager [bufmgr.c#IOOP_EXTEND](../../../../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L3040-L3046) [bufmgr.c#IOOP_WRITE](../../../../raw/postgres-19/src/backend/storage/buffer/bufmgr.c#L4607-L4626) [localbuf.c#IOOP_WRITE](../../../../raw/postgres-19/src/backend/storage/buffer/localbuf.c#L212-L217), so the blocking rewrite's heap and index writes — which go straight to `smgrextend()` — never appear there. Reads of the old heap do, under context `bulkread` or `normal`, and the `CONCURRENTLY` copy's writes appear under `bulkwrite`.
 
-## Progress reporting
+### Progress reporting
 
 Each backend running `REPACK` reports through `pg_stat_progress_repack`, exposing the command, phase, clustering-index OID, heap tuples scanned/inserted/updated/deleted, block counts, and index-rebuild count [system_views.sql#pg_stat_progress_repack](../../../../raw/postgres-19/src/backend/catalog/system_views.sql#L1349-L1378) [progress.h#PROGRESS_REPACK](../../../../raw/postgres-19/src/include/commands/progress.h#L77-L106). The phases include the concurrent-only `catch-up` and `swapping relation files` steps [progress.h#phases](../../../../raw/postgres-19/src/include/commands/progress.h#L97-L106). The old `pg_stat_progress_cluster` view is preserved as a compatibility wrapper over the same data [system_views.sql#pg_stat_progress_cluster](../../../../raw/postgres-19/src/backend/catalog/system_views.sql#L1380-L1399). See also [progress reporting](../../../glossary.md#progress-reporting).
 
@@ -291,15 +280,15 @@ While catching up, the leader waits on the `REPACK_WORKER_EXPORT` wait event [wa
 
 Commit `dc8628e55d4` made the surrounding documentation say the same thing the view does. `pg_stat_progress_repack` is now documented as holding a row for each backend running `REPACK`, `CLUSTER`, **or** `VACUUM FULL` — its `relid` is "the table being processed" and its `command` is one of the three — and the `VACUUM` progress section points at both the new view and the compatibility one [monitoring.sgml#pg_stat_progress_repack](../../../../raw/postgres-19/doc/src/sgml/monitoring.sgml#L7073-L7080) [monitoring.sgml#vacuum-full-progress](../../../../raw/postgres-19/doc/src/sgml/monitoring.sgml#L7346-L7353). The same commit records `REPACK` in the `ACCESS EXCLUSIVE` lock-mode list, noting that `CONCURRENTLY` takes that lock only while swapping the table and index files, and makes the `ctid` note cover any table-rewriting operation rather than `VACUUM FULL` alone [mvcc.sgml#ACCESS-EXCLUSIVE](../../../../raw/postgres-19/doc/src/sgml/mvcc.sgml#L1095-L1109) [ddl.sgml#ctid](../../../../raw/postgres-19/doc/src/sgml/ddl.sgml#L1564-L1574).
 
-## Tests
+### Tests
 
 Because `REPACK (CONCURRENTLY)` needs `wal_level >= replica`, its functional tests live in `contrib/test_decoding` rather than the core regression suite (commit `4b2aa4b3`). The SQL test covers partition ownership checks, `attmissingval` preservation, a table with `CREATE INDEX CONCURRENTLY` leftovers, the full matrix of rejection cases (partitioned, catalog, `user_catalog_table`, TOAST, temp, unlogged, materialized view, `REPLICA IDENTITY NOTHING`, no PK/RI, deferrable PK, dropped replica-identity index with a usable PK), and a check that the `pgrepack` plugin cannot be driven directly through the SQL logical-decoding interface (added by commit `cd7b204b`) [test_decoding/sql/repack.sql](../../../../raw/postgres-19/contrib/test_decoding/sql/repack.sql#L1-L111). That direct-use case still runs `pg_create_logical_replication_slot('s_repack', 'pgrepack')` and still expects the same `ERROR`/`DETAIL` pair, but its expected output lost the `CONTEXT:  slot "s_repack", output plugin "pgrepack", in the startup callback` line, because `5d47df21e89` moved the rejection out of the plugin's startup callback [test_decoding/sql/repack.sql#direct-use](../../../../raw/postgres-19/contrib/test_decoding/sql/repack.sql#L106-L111) [test_decoding/expected/repack.out#direct-use](../../../../raw/postgres-19/contrib/test_decoding/expected/repack.out#L142-L151). The same commit added `output_plugin_libraries` coverage to `test_decoding`'s `permissions` test: with the GUC set to `pgoutput`, both a `REPLICATION` role and the default role get `ERROR: library "test_decoding" may not be used as an output plugin` [permissions.sql#output_plugin_libraries](../../../../raw/postgres-19/contrib/test_decoding/sql/permissions.sql#L18-L24) [permissions.out#output_plugin_libraries](../../../../raw/postgres-19/contrib/test_decoding/expected/permissions.out#L32-L42). Timing-sensitive concurrency (a transaction modifying the table during the rewrite) is driven by [injection points](../../../glossary.md#injection-point) in [isolation specs](../../../glossary.md#isolation-test) `repack`, `repack_toast`, `repack_temporal`, and `repack_temporal_multirange`, hooked at `repack-concurrently-before-lock` [repack.c#injection-point](../../../../raw/postgres-19/src/backend/commands/repack.c#L3451-L3455). Two specs are new since the 2026-09-01 pin. `repack_decode` (`741f9d741e6`, extended by `7ed016a1de3`) decodes with `include-rewrites` while REPACK replays a TOASTed update [repack_decode.spec](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_decode.spec#L1-L87). `repack_commit_race` (`4a4bf490dc5`) exercises the initial-snapshot commit race, which `057_snapshot_commit_race.pl` also covers through a `CREATE_REPLICATION_SLOT ... USE_SNAPSHOT` [TAP test](../../../glossary.md#tap-test) [repack_commit_race.spec](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_commit_race.spec#L1-L95) [057_snapshot_commit_race.pl](../../../../raw/postgres-19/src/test/recovery/t/057_snapshot_commit_race.pl#L1-L148). The core regression test `cluster.sql` checks that `REPACK (ANALYZE)` fails inside a transaction block and a `DO` block (`24dd8c369e5`) [cluster.sql#REPACK-ANALYZE-xact](../../../../raw/postgres-19/src/test/regress/sql/cluster.sql#L392-L399). After the 2026-09-24 pin, four isolation specs changed. `repack_missingval` is new with `a4052efe2aa` and replays a change to a row written before a non-rewriting `ADD COLUMN` [repack_missingval.spec](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_missingval.spec#L1-L74). `repack_toast` gained a session that tries to `REPACK` the TOAST table while the decoding worker is still waiting for an open transaction, which the early TOAST lock from `76a268273c8` must block [repack_toast.spec#s3](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_toast.spec#L186-L204) [repack_toast.spec#toast-permutation](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_toast.spec#L214-L225). `repack_dropped` is new with `10c67bcb2da`, was extended to inserts by `d65fa2e7263`, and was added to the make build by `3cf7d89d6b6` [repack_dropped.spec](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_dropped.spec#L1-L86) [injection_points/Makefile:28](../../../../raw/postgres-19/src/test/modules/injection_points/Makefile#L28). `950a2a19276` makes `repack_decode` pass `skip-empty-xacts`, so a concurrent autovacuum transaction that changes only catalogs no longer adds an empty transaction to the decoded count [repack_decode.spec#skip-empty-xacts](../../../../raw/postgres-19/src/test/modules/injection_points/specs/repack_decode.spec#L43-L52).
 
-## Feature-Scope Commits
+### Feature-Scope Commits
 
 These are the 87 REPACK feature-scope commits in the pinned `REL_19_STABLE` checkout (`1ecc48b9bcc`, `REL_19_BETA4-116-g1ecc48b9bcc`, stamped `19beta4`), grouped by topic. Scope includes commits whose subject/body explicitly references REPACK, prerequisite/support commits cited by that history, and tree-wide fixes that changed REPACK-specific code or documentation. Broad commits that only touch shared infrastructure files are excluded unless their REPACK-specific effect is listed here.
 
-### Foundational
+#### Foundational
 
 | Commit | Date | Committer | What it does |
 |---|---|---|---|
@@ -308,7 +297,7 @@ These are the 87 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 | `c0b53ec0` | 2026-04-06 | Á. Herrera | **Rename `cluster.c` to `repack.c`** (and the header), since the code now centers on `REPACK`. |
 | `28d534e2` | 2026-04-06 | Á. Herrera | **Add the `CONCURRENTLY` option.** Initial copy under `ShareUpdateExclusiveLock` + MVCC snapshot, a temporary slot, a decoding worker that stashes changes, and replay before the final swap. Based on Houska's `pg_squeeze` [repack.c#overview](../../../../raw/postgres-19/src/backend/commands/repack.c#L7-L21). |
 
-### CONCURRENTLY infrastructure
+#### CONCURRENTLY infrastructure
 
 | Commit | Date | Committer | What it does |
 |---|---|---|---|
@@ -322,7 +311,7 @@ These are the 87 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 | `45b02984` | 2026-05-30 | Á. Herrera | **Allow old WAL recycling during REPACK CONCURRENTLY** by moving the slot forward each WAL segment [repack_worker.c#WAL-recycling](../../../../raw/postgres-19/src/backend/commands/repack_worker.c#L405-L434). |
 | `6a80179f6b0` | 2026-07-30 | M. Sawada | **Re-check the logical-decoding status after the slot exists** so a concurrent deactivation cannot leave an undecodable slot: the recovery path in `EnsureLogicalDecodingEnabled()` raises an error instead of asserting [logicalctl.c#EnsureLogicalDecodingEnabled](../../../../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L344-L393), slot synchronization skipped persisting such a slot (a check that the adjacent `3f5bfbce4c4` later replaced with one made right after the local slot is created [slotsync.c#post-create-check](../../../../raw/postgres-19/src/backend/replication/logical/slotsync.c#L861-L916)), and `ReplicationSlotCreate()` gains a `replication-slot-create-begin` injection point [slot.c:423](../../../../raw/postgres-19/src/backend/replication/slot.c#L423). |
 
-### Correctness fixes
+#### Correctness fixes
 
 | Commit | Date | Committer | What it does |
 |---|---|---|---|
@@ -376,7 +365,7 @@ These are the 87 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 | `10c67bcb2da` | 2026-10-03 | Á. Herrera | **Null out dropped columns in replayed updates**, in the new `prepare_concurrent_update()` that replaces `adjust_toast_pointers()`; adds the `repack_dropped` spec [repack.c#prepare_concurrent_update](../../../../raw/postgres-19/src/backend/commands/repack.c#L3024-L3060). |
 | `d65fa2e7263` | 2026-10-07 | Á. Herrera; patch by S. Zhong | **Null out dropped columns in every replayed tuple**, inserts included, by moving the clearing into `restore_tuple()` (backpatch-through 19) [repack.c#null-dropped-columns](../../../../raw/postgres-19/src/backend/commands/repack.c#L2969-L2977). |
 
-### Error messages, docs, style
+#### Error messages, docs, style
 
 | Commit | Date | Committer | What it does |
 |---|---|---|---|
@@ -398,7 +387,7 @@ These are the 87 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 | `8a2beb5f15f` | 2026-09-23 | M. Sawada; patch by S. Imseih | Document that `initializing` includes enabling and initializing logical decoding for `CONCURRENTLY`, and that `catch-up` includes the wait for the swap lock [monitoring.sgml#phase-initializing](../../../../raw/postgres-19/doc/src/sgml/monitoring.sgml#L7255-L7273) [monitoring.sgml#phase-catch-up](../../../../raw/postgres-19/doc/src/sgml/monitoring.sgml#L7298-L7308). |
 | `53c8cfc2537` | 2026-10-07 | Á. Herrera; patch by R. Marek, Herrera and S. Zhong | **Revamp the reference page.** Description and Parameters keep only short entries; their notes move under Notes, which gains a "Notes on Concurrent Operation" subsection that documents the memory cost of concurrently updated or deleted rows and the limit of about 104 million of them (backpatch-through 19) [ref/repack.sgml#notes-on-concurrently](../../../../raw/postgres-19/doc/src/sgml/ref/repack.sgml#L317-L446). |
 
-### Tests
+#### Tests
 
 | Commit | Date | Committer | What it does |
 |---|---|---|---|
@@ -513,8 +502,9 @@ These are the 87 REPACK feature-scope commits in the pinned `REL_19_STABLE` chec
 - **No measurements.** The [I/O Impact and Throttling](#io-impact-and-throttling) section is source-and-history only at the asker's chosen scope. The relative cost of the paths it names — hint-bit dirtying of the old heap, TOAST rewrite volume, the buffer-bypassing write path, `CONCURRENTLY`'s decode/spill/replay overhead — is not quantified here.
 - This page is drafted from a close source read but is **not yet agent-verified claim-by-claim**; `verified_by_agent` remains `not yet`.
 
-## Related Pages
+## Navigation
 
+- [wiki index](../../../index.md)
 - [v19/index](../../index.md) — PostgreSQL 19 landing page.
 - [How pg_plan_advice Works in PostgreSQL 19, and All Its Commits (unverified)](../query-planning/pg-plan-advice.md) — the other deep v19 feature walkthrough.
 - [versions](../../../versions.md) — source pin manifest.
