@@ -16,6 +16,7 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-20: **filed v12**, [A Manually Zeroed Relation File in PostgreSQL 12: Do SELECT, VACUUM, and pg_dump Error? (unverified)](v12/questions/storage-and-vacuum/zeroed-relation-file.md), at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). Measured on a server built from the pin with `RELSEG_SIZE` patched to 128 blocks in the out-of-tree `pg_config.h` (a disclosed non-default compile-time knob; `--with-segsize` accepts only whole gigabytes, and `SHOW segment_size` recorded `1MB`).
 - 2026-10-19: **lint fix across v12, v14, v17, v18 and v19**, 27 question pages at unchanged pins. `scripts/wiki_lint` went from 782 errors to 0.
   - 675 Source References and Context Reviewed citations gained whole-file ranges, 91 inline citations gained precise ranges read at the pin, and 16 pages in older layouts now hold their answer under `## Answer`, with Contents.
   - The re-read corrected six statements on [Extension Hooks for VACUUM and Autovacuum in PostgreSQL 18 (unverified)](v18/questions/storage-and-vacuum/extension-hooks-vacuum-autovacuum.md) (shared-memory startup, `RegisterBackgroundWorker`, indirect `object_access_hook` calls) and one Source References label on the v17 `shared_buffers` page.
