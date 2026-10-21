@@ -16,6 +16,7 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-21: **filed v12**, [Can amcheck Detect Zeroed Relation Segments in PostgreSQL 12? (unverified)](v12/questions/indexing/amcheck-zeroed-relation-segments.md), at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Source-only follow-up to the zeroed-file question, covering heap-comparison direction, last-segment truncation, all-zero overwrites, index traversal, cache limits and unmeasured cases.
 - 2026-10-20: **filed v12**, [A Manually Zeroed Relation File in PostgreSQL 12: Do SELECT, VACUUM, and pg_dump Error? (unverified)](v12/questions/storage-and-vacuum/zeroed-relation-file.md), at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42` (12.2). Measured on a server built from the pin with `RELSEG_SIZE` patched to 128 blocks in the out-of-tree `pg_config.h` (a disclosed non-default compile-time knob; `--with-segsize` accepts only whole gigabytes, and `SHOW segment_size` recorded `1MB`).
 - 2026-10-19: **lint fix across v12, v14, v17, v18 and v19**, 27 question pages at unchanged pins. `scripts/wiki_lint` went from 782 errors to 0.
   - 675 Source References and Context Reviewed citations gained whole-file ranges, 91 inline citations gained precise ranges read at the pin, and 16 pages in older layouts now hold their answer under `## Answer`, with Contents.
