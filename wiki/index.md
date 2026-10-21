@@ -5,7 +5,7 @@ This is the global catalog for the PostgreSQL engine wiki.
 ## Entry Points
 
 - [versions](versions.md) - PostgreSQL version index and source pin manifest.
-- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 346 terms).
+- [Wiki Glossary (unverified)](glossary.md) - The one glossary shared by every version. PostgreSQL jargon, acronyms and source-code terms, each entry citing the pinned checkout it was checked on (PostgreSQL 12, 14, 17, 18 and 19; 348 terms).
 - [overview](overview.md) - Cross-version architecture overview.
 - [log](log.md) - Chronological activity log.
 
@@ -166,6 +166,8 @@ This is the global catalog for the PostgreSQL engine wiki.
 - [Indexes Only on the Parent Versus Only on the Child Tables of a Declaratively Partitioned Table in PostgreSQL 12 (unverified)](v12/questions/indexing/partitioned-index-parent-vs-child.md) - Source-only comparison of cascading parent indexes and independent leaf indexes at the v12 pin. Covers storage-less parents, hierarchy pre-locking, concurrent leaf rollout, parent constraints and targeted `ON CONFLICT`, the untargeted `DO NOTHING` exception, the exact `CompareIndexInfo` matching limits, constraint-owned drops, DETACH child/default-partition locks, INSERT versus UPDATE/planning index opens, and table attachment's invalid-leaf caveat. Includes catalog/planner/executor structures, generated-header and extension boundaries, regression evidence, and explicit measurement gaps. Agent verification remains `not yet`.
 
 #### Storage and Vacuum
+
+- [Failure Scenarios That Can Leave Schema Relation Files Empty in PostgreSQL 12 (unverified)](v12/questions/storage-and-vacuum/schema-empty-relation-files-failure-scenarios.md) - Source-only distinction between unlogged recovery resets, an earlier committed clear followed by a failed reload, and zero-byte remnants of dropped or aborted storage. Separates empty tables from literally zero-length current heap/index files; includes a decision map, transaction/file lifecycle, restore boundaries and a read-only catalog inventory. The actual incident remains undiagnosed.
 
 - [DROP SCHEMA After Relation Files Were Emptied in PostgreSQL 12 (unverified)](v12/questions/storage-and-vacuum/drop-schema-zeroed-relation-files.md) - Source-derived deletion walkthrough, reviewed and fixed on 2026-10-21: default RESTRICT still sees catalog dependencies after user files are emptied, but refuses only after the dependency walk has locked every dependent, so it can wait first; explicit CASCADE can remove ordinary objects without scanning their data when catalogs remain usable, and its deletion routines can lock tables outside the schema, such as foreign-key referenced tables. Covers emptied catalogs (usually read errors rather than silent omissions), locks and triggers, rollback, zero-length versus missing segments, and commit/checkpoint file cleanup.
 

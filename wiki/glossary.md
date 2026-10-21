@@ -328,11 +328,13 @@ verified_by_agent: not yet
   - [TransactionXmin](#transactionxmin)
   - [Transient plan](#transient-plan)
   - [Transition table](#transition-table)
+  - [TRUNCATE](#truncate)
   - [Truncation](#truncation)
   - [Tuple](#tuple)
   - [Tuple fraction](#tuple-fraction)
   - [Tuplesort](#tuplesort)
   - [Two-phase commit](#two-phase-commit)
+  - [Unlogged relation](#unlogged-relation)
   - [Upper relation](#upper-relation)
   - [Utility command](#utility-command)
   - [VACUUM](#vacuum)
@@ -377,6 +379,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-21, the PostgreSQL 12 relation-tail check page added [Relation mapper](#relation-mapper), checked on 12 only, and PostgreSQL 12 notes on page and segment geometry for [All-zero page](#all-zero-page), [Free space map](#free-space-map), [Visibility map](#visibility-map) and [Storage manager](#storage-manager). The glossary has 344 terms.
 
 - On 2026-10-21, the DROP SCHEMA question added [Dependency](#dependency) and [Schema](#schema), checked on PostgreSQL 12 only, and qualified the PostgreSQL 12 Storage manager note for already-open segment state.
+
+- On 2026-10-21, the empty-schema failure-scenarios question added [TRUNCATE](#truncate) and [Unlogged relation](#unlogged-relation), checked on PostgreSQL 12 only, and a PostgreSQL 12 qualification for [Subtransaction](#subtransaction). The WAL entry now distinguishes the normal-data predicate and shared-buffer recipe from the PostgreSQL 12 unlogged initialization-fork records. There are 348 terms.
 
 ## Source Pins
 
@@ -4227,13 +4231,16 @@ Related: [Publication](#publication), [Apply worker](#apply-worker), [Replicatio
 
 ### Subtransaction
 
-**Aliases:** savepoint, `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, `BEGIN ... EXCEPTION` block, `BeginInternalSubTransaction()`, `pg_subtrans`. **Checked on:** PostgreSQL 17.
+**Aliases:** savepoint, `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, `BEGIN ... EXCEPTION` block, `BeginInternalSubTransaction()`, `pg_subtrans`. **Checked on:** PostgreSQL 12, 17.
 
 A subtransaction is a transaction nested inside another, whose work can be rolled back without ending the outer transaction. SQL exposes it as a savepoint: `SAVEPOINT` sets a mark, and rolling back to it undoes every command run since, restoring the transaction's state to what it was at the mark ([ref/savepoint.sgml#description](../raw/postgres-17/doc/src/sgml/ref/savepoint.sgml#L36-L45)). The lowest layer of the transaction system implements subtransactions, and savepoints are built on it ([transam/README#layers](../raw/postgres-17/src/backend/access/transam/README#L6-L9)).
 
 In [PL/pgSQL](#plpgsql), a block with an `EXCEPTION` clause "effectively forms a subtransaction" ([plpgsql.sgml#exception-subtransaction](../raw/postgres-17/doc/src/sgml/plpgsql.sgml#L308-L311)); the interpreter starts one with `BeginInternalSubTransaction()` and rolls it back when the block traps an error ([pl_exec.c:1777](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1777), [pl_exec.c:1842](../raw/postgres-17/src/pl/plpgsql/src/pl_exec.c#L1842)). A subtransaction gets its own [transaction ID](#transaction-id) only when it first needs one, after its parent has one, and `pg_subtrans` records each subtransaction's parent ([transam/README#subtransaction-numbering](../raw/postgres-17/src/backend/access/transam/README#L193-L198), [transam/README#pg_subtrans](../raw/postgres-17/src/backend/access/transam/README#L378-L391)).
 
-Related: [Transaction ID](#transaction-id), [PL/pgSQL](#plpgsql), [Snapshot](#snapshot), [MVCC](#mvcc)
+**Version notes:**
+- PostgreSQL 12: Holds: SQL savepoints create nested transaction state, and rollback marks the inner states for abort and the target for restart ([xact.c#DefineSavepoint](../raw/postgres-12/src/backend/access/transam/xact.c#L4037-L4067), [xact.c#RollbackToSavepoint](../raw/postgres-12/src/backend/access/transam/xact.c#L4316-L4345)). PL/pgSQL exception handling uses the internal begin/rollback calls ([pl_exec.c#begin-subtransaction](../raw/postgres-12/src/pl/plpgsql/src/pl_exec.c#L1699-L1701), [pl_exec.c#abort-inner-transaction](../raw/postgres-12/src/pl/plpgsql/src/pl_exec.c#L1755-L1766)). XIDs are assigned only when needed, parent first, and `pg_subtrans` records their parentage ([transam/README#numbering](../raw/postgres-12/src/backend/access/transam/README#L193-L201), [transam/README#parentage](../raw/postgres-12/src/backend/access/transam/README#L370-L374)). `GetCurrentSubTransactionId()` identifies the current nested state; this matters to TRUNCATE's in-place branch, which requires creation or relfilenode replacement in that same subtransaction, not merely somewhere in the outer transaction ([xact.c#current-subtransaction](../raw/postgres-12/src/backend/access/transam/xact.c#L708-L712), [tablecmds.c#in-place-gate](../raw/postgres-12/src/backend/commands/tablecmds.c#L1786-L1797)).
+
+Related: [Transaction ID](#transaction-id), [PL/pgSQL](#plpgsql), [Snapshot](#snapshot), [MVCC](#mvcc), [TRUNCATE](#truncate)
 
 ### Suffix truncation
 
@@ -4474,6 +4481,19 @@ For the [planner](#planner), such a name is a [range-table](#range-table) entry 
 
 Related: [SPI](#spi), [PL/pgSQL](#plpgsql), [Range table](#range-table), [Tuple](#tuple), [Planner](#planner)
 
+### TRUNCATE
+
+**Aliases:** SQL `TRUNCATE`, `ExecuteTruncateGuts`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, `TRUNCATE` removes all rows from the selected tables without a row-by-row scan and rebuilds their indexes. It is different from [VACUUM tail truncation](#truncation), which removes only an empty suffix. The default dependency option is `RESTRICT`; explicit `CASCADE` adds foreign-key referencing tables, not all members of a schema. Sequences are left unchanged by default (`CONTINUE IDENTITY`). [tablecmds.c#truncate-operation](../raw/postgres-12/src/backend/commands/tablecmds.c#L1504-L1514) [tablecmds.c#rebuild](../raw/postgres-12/src/backend/commands/tablecmds.c#L1812-L1840) [tablecmds.c#cascade](../raw/postgres-12/src/backend/commands/tablecmds.c#L1648-L1698) [gram.y#dependency-default](../raw/postgres-12/src/backend/parser/gram.y#L2564-L2568) [gram.y#identity-default](../raw/postgres-12/src/backend/parser/gram.y#L6359-L6362)
+
+| Storage state | Mechanism and rollback meaning |
+|---|---|
+| Ordinary pre-existing table | Assign new empty storage; keep the old storage until commit. Abort discards the new storage instead. [tablecmds.c#new-storage](../raw/postgres-12/src/backend/commands/tablecmds.c#L1812-L1840) [storage.c#transaction-lifetime](../raw/postgres-12/src/backend/catalog/storage.c#L36-L49) |
+| Table created or given a new relfilenode in the current subtransaction | Truncate in place, because rollback would discard that current storage anyway. [tablecmds.c#in-place-branch](../raw/postgres-12/src/backend/commands/tablecmds.c#L1786-L1797) |
+
+Related: [Relfilenumber](#relfilenumber), [Subtransaction](#subtransaction), [Truncation](#truncation), [WAL](#wal)
+
 ### Truncation
 
 **Aliases:** relation truncation, vacuum truncation, `lazy_truncate_heap`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4539,6 +4559,21 @@ Two-phase commit splits a commit in two. `PREPARE TRANSACTION` makes the transac
 - PostgreSQL 19: Holds; `max_prepared_transactions` is `PGC_POSTMASTER` in `guc_parameters.dat` ([twophase.c:24-26](../raw/postgres-19/src/backend/access/transam/twophase.c#L24-L26), [guc_parameters.dat#max_prepared_transactions](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2100-L2106), [pg_subscription.h:68](../raw/postgres-19/src/include/catalog/pg_subscription.h#L68)).
 
 Related: [Transaction ID](#transaction-id), [xmin horizon](#xmin-horizon), [Subscription](#subscription), [Checkpoint](#checkpoint)
+
+### Unlogged relation
+
+**Aliases:** unlogged table, `UNLOGGED`, `RELPERSISTENCE_UNLOGGED`, init fork. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, an unlogged relation keeps its ordinary data outside the normal relation-data [WAL](#wal) path. Ordinary table creation defaults to permanent storage (`p`); explicit `UNLOGGED` selects `u`, for which `RelationNeedsWAL()` is false. Its initialization [fork](#fork) is an exception: heap init-file creation and the B-tree init metapage are WAL-logged. [gram.y#persistence-default](../raw/postgres-12/src/backend/parser/gram.y#L3282-L3283) [pg_class.h#persistence](../raw/postgres-12/src/include/catalog/pg_class.h#L165-L167) [rel.h#RelationNeedsWAL](../raw/postgres-12/src/include/utils/rel.h#L515-L520) [heapam_handler.c#init-creation](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624) [nbtree.c#init-metapage-WAL](../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183)
+
+| Startup state | Effect |
+|---|---|
+| Recovery required | Cleanup removes non-init files of relations identified by init files; after replay, initialization copies init to main. This resets unlogged contents, including committed contents, rather than reconstructing their former rows. [xlog.c#cleanup](../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884) [xlog.c#init](../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331) [reinit.c#cleanup-and-copy](../raw/postgres-12/src/backend/storage/file/reinit.c#L180-L308) |
+| Ordinary clean restart without requested recovery or required redo | Does not enter that recovery/reset branch. [xlog.c#recovery-gate](../raw/postgres-12/src/backend/access/transam/xlog.c#L6728-L6749) |
+
+The selector is physical init-file identity, not a schema. An empty heap init fork and an initialized B-tree init fork also differ: the latter contains a metapage, so “reset to empty” does not mean every file is zero bytes. [reinit.c#selection](../raw/postgres-12/src/backend/storage/file/reinit.c#L180-L258) [heapam_handler.c#heap-init](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624) [nbtree.c#btbuildempty](../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183)
+
+Related: [Crash recovery](#crash-recovery), [Fork](#fork), [Metapage](#metapage), [Schema](#schema), [WAL](#wal)
 
 ### Upper relation
 
@@ -4691,10 +4726,10 @@ Related: [Cumulative statistics](#cumulative-statistics), [LWLock](#lwlock), [He
 
 **Aliases:** write-ahead log, XLOG, xlog. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-The write-ahead log (WAL) is the sequential journal of changes to the cluster. It is written before the changed data pages, so replaying it after a crash restores a consistent state ([glossary.sgml#glossary-wal](../raw/postgres-17/doc/src/sgml/glossary.sgml#L2269-L2279), [transam/README:402-415](../raw/postgres-17/src/backend/access/transam/README#L402-L415)). Not every change is logged: code writes WAL for a [relation](#relation) only when `RelationNeedsWAL()` allows it, which it never does for temporary or unlogged relations ([rel.h#RelationNeedsWAL](../raw/postgres-17/src/include/utils/rel.h#L617-L631), [transam/README:416-418](../raw/postgres-17/src/backend/access/transam/README#L416-L418)). Source code calls the WAL "XLOG" ([transam/README:402](../raw/postgres-17/src/backend/access/transam/README#L402)). A WAL-logged change follows a fixed recipe: [pin](#buffer-pin) and lock the buffer, enter a [critical section](#critical-section), change the page, `MarkBufferDirty()`, `XLogBeginInsert()` and `XLogRegister*()`, `XLogInsert()`, then `PageSetLSN()` with the record's [LSN](#lsn) ([transam/README:437-466](../raw/postgres-17/src/backend/access/transam/README#L437-L466)). The same stream also serves point-in-time recovery and [hot standby](#hot-standby) replication through log shipping ([transam/README:402-404](../raw/postgres-17/src/backend/access/transam/README#L402-L404)).
+The write-ahead log (WAL) is the sequential journal of changes to the cluster. It is written before the changed data pages, so replaying it after a crash restores a consistent state ([glossary.sgml#glossary-wal](../raw/postgres-17/doc/src/sgml/glossary.sgml#L2269-L2279), [transam/README:402-415](../raw/postgres-17/src/backend/access/transam/README#L402-L415)). Not every change is logged: the `RelationNeedsWAL()` predicate is false for temporary and unlogged [relations](#relation) ([rel.h#RelationNeedsWAL](../raw/postgres-17/src/include/utils/rel.h#L617-L631), [transam/README:416-418](../raw/postgres-17/src/backend/access/transam/README#L416-L418)). Source code calls the WAL "XLOG" ([transam/README:402](../raw/postgres-17/src/backend/access/transam/README#L402)). For WAL-logged modifications of shared-buffer pages, the recipe is: [pin](#buffer-pin) and lock the buffer, enter a [critical section](#critical-section), change the page, `MarkBufferDirty()`, `XLogBeginInsert()` and `XLogRegister*()`, `XLogInsert()`, then `PageSetLSN()` with the record's [LSN](#lsn) ([transam/README:437-466](../raw/postgres-17/src/backend/access/transam/README#L437-L466)). The same stream also serves point-in-time recovery and [hot standby](#hot-standby) replication through log shipping ([transam/README:402-404](../raw/postgres-17/src/backend/access/transam/README#L402-L404)).
 
 **Version notes:**
-- PostgreSQL 12: Holds. Source calls it XLOG, it serves crash recovery, point-in-time recovery and hot standby, `RelationNeedsWAL()` is false for non-permanent relations, and the write-ahead rule and WAL-logging recipe are the same ([transam/README:391-409](../raw/postgres-12/src/backend/access/transam/README#L391-L409), [rel.h#RelationNeedsWAL](../raw/postgres-12/src/include/utils/rel.h#L515-L520), [transam/README:428-456](../raw/postgres-12/src/backend/access/transam/README#L428-L456)).
+- PostgreSQL 12: Holds. Source calls it XLOG, it serves crash recovery, point-in-time recovery and hot standby, `RelationNeedsWAL()` is false for non-permanent relations, and the write-ahead rule and WAL-logging recipe are the same ([transam/README:391-409](../raw/postgres-12/src/backend/access/transam/README#L391-L409), [rel.h#RelationNeedsWAL](../raw/postgres-12/src/include/utils/rel.h#L515-L520), [transam/README:428-456](../raw/postgres-12/src/backend/access/transam/README#L428-L456)). The predicate is not an exclusive gate on every WAL record involving an unlogged relation: heap init-fork creation and the B-tree init metapage are logged even though ordinary unlogged data uses a different path ([heapam_handler.c#init-creation](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624), [nbtree.c#init-metapage](../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183)).
 - PostgreSQL 14: Holds. The WAL (XLOG in code) guarantees crash recovery and also serves point-in-time recovery and hot standby, `RelationNeedsWAL()` skips non-permanent relations, and a WAL-logged change follows the same recipe ([glossary.sgml#glossary-wal](../raw/postgres-14/doc/src/sgml/glossary.sgml#L1964-L1976), [transam/README:402-405](../raw/postgres-14/src/backend/access/transam/README#L402-L405), [rel.h#RelationNeedsWAL](../raw/postgres-14/src/include/utils/rel.h#L604-L618), [transam/README:438-466](../raw/postgres-14/src/backend/access/transam/README#L438-L466)).
 - PostgreSQL 18: Holds ([glossary.sgml#glossary-wal](../raw/postgres-18/doc/src/sgml/glossary.sgml#L2318-L2328), [transam/README:402-415](../raw/postgres-18/src/backend/access/transam/README#L402-L415), [rel.h#RelationNeedsWAL](../raw/postgres-18/src/include/utils/rel.h#L628-L642), [transam/README:437-466](../raw/postgres-18/src/backend/access/transam/README#L437-L466)).
 - PostgreSQL 19: Holds, except that the WAL level actually in effect can be `logical` while `wal_level` is `replica`; see [WAL level](#wal-level) ([logicalctl.c:5-22](../raw/postgres-19/src/backend/replication/logical/logicalctl.c#L5-L22)). The glossary and README definitions, `RelationNeedsWAL()`, the XLOG name and the lock / critical section / change / `MarkBufferDirty()` / `XLogInsert()` / `PageSetLSN()` recipe are unchanged ([glossary.sgml#glossary-wal](../raw/postgres-19/doc/src/sgml/glossary.sgml#L2385-L2397), [transam/README:399-416](../raw/postgres-19/src/backend/access/transam/README#L399-L416), [rel.h#RelationNeedsWAL](../raw/postgres-19/src/include/utils/rel.h#L628-L642), [transam/README:437-466](../raw/postgres-19/src/backend/access/transam/README#L437-L466)).
@@ -4905,7 +4940,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (386 files):
+**PostgreSQL 12** (387 files):
 
 - [pg_depend.h#FormData_pg_depend](../raw/postgres-12/src/include/catalog/pg_depend.h#L36-L64)
 - [pg_namespace.h#FormData_pg_namespace](../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44)
@@ -5120,6 +5155,7 @@ One representative citation per cited source file, grouped by version:
 - [localbuf.c#LocalPrefetchBuffer](../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L57-L90)
 - [buffile.c:14-38](../raw/postgres-12/src/backend/storage/file/buffile.c#L14-L38)
 - [fd.c:333](../raw/postgres-12/src/backend/storage/file/fd.c#L333)
+- [reinit.c#ResetUnloggedRelations](../raw/postgres-12/src/backend/storage/file/reinit.c#L36-L358)
 - [freespace.c:16-20](../raw/postgres-12/src/backend/storage/freespace/freespace.c#L16-L20)
 - [ipc/Makefile:11-13](../raw/postgres-12/src/backend/storage/ipc/Makefile#L11-L13)
 - [dsm.c:3-4](../raw/postgres-12/src/backend/storage/ipc/dsm.c#L3-L4)
