@@ -3453,11 +3453,14 @@ Related: [Buffer manager](#buffer-manager), [Asynchronous I/O](#asynchronous-io)
 
 ### Recursive CTE
 
-**Aliases:** `WITH RECURSIVE`, `RecursiveUnion`, `RecursiveUnionPath`, `WorkTableScan`, worktable, `self_reference`, `recursive_worktable_factor`. **Checked on:** PostgreSQL 17.
+**Aliases:** `WITH RECURSIVE`, `RecursiveUnion`, `RecursiveUnionPath`, `WorkTableScan`, worktable, `self_reference`, `recursive_worktable_factor` (17). **Checked on:** PostgreSQL 12, 17.
 
 A recursive CTE is a `WITH RECURSIVE` query whose second branch refers to the CTE itself. It runs as a `RecursiveUnion` plan node. The non-recursive term runs once, and then the recursive term runs again and again over a worktable that holds the rows the previous round produced, until a round produces none ([nodeRecursiveunion.c#ExecRecursiveUnion-algorithm](../raw/postgres-17/src/backend/executor/nodeRecursiveunion.c#L62-L71), [plannodes.h#RecursiveUnion](../raw/postgres-17/src/include/nodes/plannodes.h#L317-L346)). The recursive term reads that worktable through a `WorkTableScan` ([plannodes.h#WorkTableScan](../raw/postgres-17/src/include/nodes/plannodes.h#L657-L665)). For `UNION` without `ALL`, the node also keeps a hash table of the rows already seen ([nodeRecursiveunion.c:6-7](../raw/postgres-17/src/backend/executor/nodeRecursiveunion.c#L6-L7)).
 
 The [planner](#planner) never inlines a recursive CTE into the outer query ([subselect.c#SS_process_ctes-inline-test](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L941-L949)), and `generate_recursion_path()` plans its two terms ([prepunion.c#generate_recursion_path](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L380-L386)). The planner cannot know how many rounds will run, so it sizes the worktable as `recursive_worktable_factor` times the non-recursive term's rows; the setting defaults to 10 ([costsize.c#set_cte_size_estimates-selfref](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L5990-L5997), [cost.h:33](../raw/postgres-17/src/include/optimizer/cost.h#L33), [guc_tables.c#recursive_worktable_factor](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3799-L3808)).
+
+**Version notes:**
+- PostgreSQL 12: The executor likewise repeats the recursive term over a worktable until no new rows appear ([nodeRecursiveunion.c#ExecRecursiveUnion](../raw/postgres-12/src/backend/executor/nodeRecursiveunion.c#L60-L71)). Its planner uses a fixed factor of 10 for a self-referencing CTE's worktable row estimate; PostgreSQL 12 has no `recursive_worktable_factor` setting ([costsize.c#set_cte_size_estimates](../raw/postgres-12/src/backend/optimizer/path/costsize.c#L5090-L5112)).
 
 Related: [Common table expression](#common-table-expression), [Set operation](#set-operation), [Param](#param), [GUC](#guc), [Planner](#planner)
 
@@ -4882,7 +4885,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (381 files):
+**PostgreSQL 12** (382 files):
 
 - [bloomfilter.c#membership](../raw/postgres-12/src/backend/lib/bloomfilter.c#L1-L15)
 - [configure.in#blocksize](../raw/postgres-12/configure.in#L250-L277)
@@ -5030,6 +5033,7 @@ One representative citation per cited source file, grouped by version:
 - [nodeHashjoin.c:1227](../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L1227)
 - [nodeIndexonlyscan.c#IndexOnlyNext](../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L161-L169)
 - [nodeIndexscan.c:133](../raw/postgres-12/src/backend/executor/nodeIndexscan.c#L133)
+- [nodeRecursiveunion.c#ExecRecursiveUnion](../raw/postgres-12/src/backend/executor/nodeRecursiveunion.c#L60-L71)
 - [nodeSeqscan.c:50](../raw/postgres-12/src/backend/executor/nodeSeqscan.c#L50)
 - [nodeSubplan.c:1051](../raw/postgres-12/src/backend/executor/nodeSubplan.c#L1051)
 - [spi.c:89](../raw/postgres-12/src/backend/executor/spi.c#L89)
