@@ -78,6 +78,7 @@ verified_by_agent: not yet
   - [Declarative partitioning](#declarative-partitioning)
   - [Deduplication](#deduplication)
   - [Default roles](#default-roles)
+  - [Dependency](#dependency)
   - [Dirty buffer](#dirty-buffer)
   - [disable_cost](#disable_cost)
   - [Dynamic shared memory](#dynamic-shared-memory)
@@ -272,6 +273,7 @@ verified_by_agent: not yet
   - [Row-level security](#row-level-security)
   - [Sample scan](#sample-scan)
   - [ScalarArrayOpExpr](#scalararrayopexpr)
+  - [Schema](#schema)
   - [Security barrier](#security-barrier)
   - [SECURITY DEFINER](#security-definer)
   - [Security invoker view](#security-invoker-view)
@@ -373,6 +375,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 
 - On 2026-10-15, the PostgreSQL 12 corruption-log reference added [Log severity](#log-severity) and [SQLSTATE](#sqlstate), checked on 12 only, and narrow PostgreSQL 12 notes for [All-zero page](#all-zero-page) and [Control file](#control-file). The latter notes do not extend the PostgreSQL 17 bulk-extension sizing and catalog-counter discussion or PostgreSQL 19 control-file layout to 12. The glossary has 343 terms.
 - On 2026-10-21, the PostgreSQL 12 relation-tail check page added [Relation mapper](#relation-mapper), checked on 12 only, and PostgreSQL 12 notes on page and segment geometry for [All-zero page](#all-zero-page), [Free space map](#free-space-map), [Visibility map](#visibility-map) and [Storage manager](#storage-manager). The glossary has 344 terms.
+
+- On 2026-10-21, the DROP SCHEMA question added [Dependency](#dependency) and [Schema](#schema), checked on PostgreSQL 12 only, and qualified the PostgreSQL 12 Storage manager note for already-open segment state.
 
 ## Source Pins
 
@@ -1258,6 +1262,14 @@ Four of them serve monitoring. `pg_read_all_settings` reads every configuration 
 Each check decides for itself which role it honors. `pg_stat_get_activity()` shows another role's state and query to members of `pg_read_all_stats` ([pgstatfuncs.c:653-656](../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L653-L656)). `GetConfigOptionByNum()` shows superuser-only settings to members of `pg_read_all_settings` ([guc.c#GetConfigOptionByNum](../raw/postgres-12/src/backend/utils/misc/guc.c#L8998-L9008)). The `pgstattuple` 1.5 update script grants that module's functions to `pg_stat_scan_tables` ([pgstattuple--1.4--1.5.sql:6-119](../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L6-L119)). `pg_stat_get_progress_info()`, by contrast, tests only whether the reader has the privileges of the role running the command, so `pg_read_all_stats` does not reveal another role's progress details ([pgstatfuncs.c:516-532](../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L516-L532)).
 
 Related: [Role membership](#role-membership), [pg_stat_activity](#pg_stat_activity), [Progress reporting](#progress-reporting), [pgstattuple](#pgstattuple), [GUC](#guc)
+
+### Dependency
+
+**Aliases:** object dependency, `pg_depend`, `DEPENDENCY_NORMAL`, `CASCADE`, `RESTRICT`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, an object dependency records that one database object relies on another, so deletion can either refuse or include dependent objects. A `pg_depend` row identifies both objects and the dependency type; not every inherent relationship needs an explicit row ([pg_depend.h#dependency-layout](../raw/postgres-12/src/include/catalog/pg_depend.h#L3-L16), [pg_depend.h#FormData_pg_depend](../raw/postgres-12/src/include/catalog/pg_depend.h#L36-L64)). For `DROP SCHEMA`, the omitted option means `RESTRICT`: normal dependencies block deletion. Explicit `CASCADE` allows those dependents to be deleted; automatic/internal/partition/extension flags can authorize dependent cleanup even with `RESTRICT` ([gram.y#opt_drop_behavior](../raw/postgres-12/src/backend/parser/gram.y#L2564-L2568), [dependency.c#reportDependentObjects](../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203)). An ordinary table has a normal dependency on its schema, regardless of its file contents ([heap.c#namespace-dependency](../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408)).
+
+Related: [Schema](#schema), [Catalog](#catalog), [OID](#oid), [Extension](#extension)
 
 ### Dirty buffer
 
@@ -3771,6 +3783,14 @@ For [cost](#cost) estimates, `estimate_array_length()` counts the elements: exac
 
 Related: [B-tree](#b-tree), [Access method](#access-method), [IndexOptInfo](#indexoptinfo), [Bitmap scan](#bitmap-scan), [Index scan](#index-scan), [SubLink](#sublink), [Qual](#qual), [Cost](#cost)
 
+### Schema
+
+**Aliases:** namespace, `pg_namespace`, `relnamespace`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, a schema is a named namespace within a database. Its `pg_namespace` row records its identity, name, owner and privileges; a relation's `pg_class.relnamespace` identifies its namespace ([pg_namespace.h#FormData_pg_namespace](../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44), [pg_class.h#relnamespace](../raw/postgres-12/src/include/catalog/pg_class.h#L34-L38)). A schema is not a separate directory of relation files: `GetRelationPath()` constructs paths from database, tablespace and physical relation identifiers, plus backend and fork information ([relpath.c#GetRelationPath](../raw/postgres-12/src/common/relpath.c#L129-L205)). Thus an empty relation file does not remove the object's schema dependency ([heap.c#namespace-dependency](../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408)).
+
+Related: [Catalog](#catalog), [Dependency](#dependency), [Relation](#relation), [Tablespace](#tablespace)
+
 ### Security barrier
 
 **Aliases:** `security_barrier` view option, security barrier quals, `securityQuals`, `security_level`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4132,7 +4152,7 @@ Related: [Selectivity](#selectivity), [reltuples and relpages](#reltuples-and-re
 The storage manager is the layer below the [buffer manager](#buffer-manager) that turns "block N of [fork](#fork) F of [relation](#relation) R" into file operations. All relation file operations dispatch through `smgr.c` ([smgr.c:1-12](../raw/postgres-17/src/backend/storage/smgr/smgr.c#L1-L12)). `smgr.c` calls through the `f_smgr` function table, which has one implementation: `md.c`, the historical "magnetic disk" manager ([smgr.c#smgrsw](../raw/postgres-17/src/backend/storage/smgr/smgr.c#L107-L120), [md.c:1-12](../raw/postgres-17/src/backend/storage/smgr/md.c#L1-L12)). `md.c` splits each relation fork into segment files of at most `RELSEG_SIZE` [blocks](#block) ([md.c:42-56](../raw/postgres-17/src/backend/storage/smgr/md.c#L42-L56)). `RELSEG_SIZE` is fixed at build time: by configure's `--with-segsize` (default 1 GB) or `--with-segsize-blocks`, or by Meson's `segsize` and `segsize_blocks` options ([configure.ac:294-318](../raw/postgres-17/configure.ac#L294-L318), [meson_options.txt:15-19](../raw/postgres-17/meson_options.txt#L15-L19)). In PostgreSQL 17 the read callback is vectored: `smgr_readv` reads several blocks in one call ([smgr.c#f_smgr](../raw/postgres-17/src/backend/storage/smgr/smgr.c#L91-L93)).
 
 **Version notes:**
-- PostgreSQL 12: Differs: the table has a single-block `smgr_read` callback, and `RELSEG_SIZE` comes from `--with-segsize` in `configure.in`, with no block-count option ([smgr.c#f_smgr](../raw/postgres-12/src/backend/storage/smgr/smgr.c#L40-L64), [md.c:44-50](../raw/postgres-12/src/backend/storage/smgr/md.c#L44-L50), [configure.in:288-293](../raw/postgres-12/configure.in#L288-L293)). On disk a fork is zero or more full segments, one partial segment, then optional inactive segments of zero length. `mdtruncate()` empties segments it no longer needs instead of deleting them, including segment K+1 when it truncates to exactly K full segments, and `mdnblocks()` treats the first segment shorter than `RELSEG_SIZE` as the end ([md.c#segment-layout](../raw/postgres-12/src/backend/storage/smgr/md.c#L52-L66), [md.c#mdtruncate](../raw/postgres-12/src/backend/storage/smgr/md.c#L761-L849), [md.c#mdnblocks](../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755)).
+- PostgreSQL 12: Differs: the table has a single-block `smgr_read` callback, and `RELSEG_SIZE` comes from `--with-segsize` in `configure.in`, with no block-count option ([smgr.c#f_smgr](../raw/postgres-12/src/backend/storage/smgr/smgr.c#L40-L64), [md.c:44-50](../raw/postgres-12/src/backend/storage/smgr/md.c#L44-L50), [configure.in:288-293](../raw/postgres-12/configure.in#L288-L293)). On disk a fork is zero or more full segments, one partial segment, then optional inactive segments of zero length. `mdtruncate()` empties segments it no longer needs instead of deleting them, including segment K+1 when it truncates to exactly K full segments, and `mdnblocks()` starts at the last already-open segment, trusts earlier open segments as full, and returns at the first short segment it measures; after an external truncation, a previously opened segment list can therefore retain a larger apparent extent ([md.c#segment-layout](../raw/postgres-12/src/backend/storage/smgr/md.c#L52-L66), [md.c#mdtruncate](../raw/postgres-12/src/backend/storage/smgr/md.c#L761-L849), [md.c#mdnblocks](../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755)).
 - PostgreSQL 14: Differs in the same way as 12: a single-block `smgr_read`, and `RELSEG_SIZE` from `--with-segsize` only ([smgr.c#f_smgr](../raw/postgres-14/src/backend/storage/smgr/smgr.c#L40-L65), [md.c:45-51](../raw/postgres-14/src/backend/storage/smgr/md.c#L45-L51), [configure.ac:292-297](../raw/postgres-14/configure.ac#L292-L297)).
 - PostgreSQL 18: Differs: the table adds `smgr_maxcombine` and `smgr_startreadv`, which starts a read as an [asynchronous I/O](#asynchronous-io) handle ([smgr.c#f_smgr](../raw/postgres-18/src/backend/storage/smgr/smgr.c#L105-L113), [md.c:44-50](../raw/postgres-18/src/backend/storage/smgr/md.c#L44-L50)). The build options are as in 17 ([meson_options.txt:15-19](../raw/postgres-18/meson_options.txt#L15-L19)).
 - PostgreSQL 19: Differs: as in 18, the table has `smgr_maxcombine` and `smgr_startreadv` ([smgr.c#f_smgr](../raw/postgres-19/src/backend/storage/smgr/smgr.c#L105-L113), [md.c:46-52](../raw/postgres-19/src/backend/storage/smgr/md.c#L46-L52)).
@@ -4458,7 +4478,7 @@ Related: [SPI](#spi), [PL/pgSQL](#plpgsql), [Range table](#range-table), [Tuple]
 
 **Aliases:** relation truncation, vacuum truncation, `lazy_truncate_heap`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-In this wiki, truncation means [VACUUM](#vacuum) cutting empty pages off the end of a table and giving that disk space back to the operating system. VACUUM tries it only when at least 1000 pages, or at least one-sixteenth of the table, at the end could be freed, and it skips truncation while the [wraparound failsafe](#vacuum-failsafe) is active ([vacuumlazy.c#should_attempt_truncation](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2510-L2544), [vacuumlazy.c#REL_TRUNCATE_MINIMUM](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L62-L72)). Plain VACUUM does its main work under [ShareUpdateExclusiveLock](#shareupdateexclusivelock), but `lazy_truncate_heap()` needs [AccessExclusiveLock](#accessexclusivelock) ([vacuum.c:2049-2055](../raw/postgres-17/src/backend/commands/vacuum.c#L2049-L2055)). It never waits in the lock queue for it: it retries a conditional lock every 50 ms, and after 5 s it gives up truncating ([vacuumlazy.c#lazy_truncate_heap](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2570-L2607), [vacuumlazy.c#VACUUM_TRUNCATE_LOCK_TIMEOUT](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L82-L83)). `RelationTruncate()` cuts the [relation](#relation)'s files to the new length and drops the buffers for removed blocks ([storage.c#RelationTruncate](../raw/postgres-17/src/backend/catalog/storage.c#L280-L289)). The `vacuum_truncate` storage option can turn truncation off per table, and the `TRUNCATE` option of the `VACUUM` command overrides that setting for one run ([rel.h#StdRdOptions](../raw/postgres-17/src/include/utils/rel.h#L345-L346), [vacuum.c#ExecVacuum](../raw/postgres-17/src/backend/commands/vacuum.c#L253-L254), [vacuum.c#vacuum_rel](../raw/postgres-17/src/backend/commands/vacuum.c#L2190-L2201)). This is different from the SQL `TRUNCATE` command, which removes all rows from a set of tables ([ref/truncate.sgml:33](../raw/postgres-17/doc/src/sgml/ref/truncate.sgml#L33)).
+In this entry, truncation means [VACUUM](#vacuum) cutting empty pages off the end of a table and giving that disk space back to the operating system. VACUUM tries it only when at least 1000 pages, or at least one-sixteenth of the table, at the end could be freed, and it skips truncation while the [wraparound failsafe](#vacuum-failsafe) is active ([vacuumlazy.c#should_attempt_truncation](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2510-L2544), [vacuumlazy.c#REL_TRUNCATE_MINIMUM](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L62-L72)). Plain VACUUM does its main work under [ShareUpdateExclusiveLock](#shareupdateexclusivelock), but `lazy_truncate_heap()` needs [AccessExclusiveLock](#accessexclusivelock) ([vacuum.c:2049-2055](../raw/postgres-17/src/backend/commands/vacuum.c#L2049-L2055)). It never waits in the lock queue for it: it retries a conditional lock every 50 ms, and after 5 s it gives up truncating ([vacuumlazy.c#lazy_truncate_heap](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L2570-L2607), [vacuumlazy.c#VACUUM_TRUNCATE_LOCK_TIMEOUT](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L82-L83)). `RelationTruncate()` cuts the [relation](#relation)'s files to the new length and drops the buffers for removed blocks ([storage.c#RelationTruncate](../raw/postgres-17/src/backend/catalog/storage.c#L280-L289)). The `vacuum_truncate` storage option can turn truncation off per table, and the `TRUNCATE` option of the `VACUUM` command overrides that setting for one run ([rel.h#StdRdOptions](../raw/postgres-17/src/include/utils/rel.h#L345-L346), [vacuum.c#ExecVacuum](../raw/postgres-17/src/backend/commands/vacuum.c#L253-L254), [vacuum.c#vacuum_rel](../raw/postgres-17/src/backend/commands/vacuum.c#L2190-L2201)). This is different from the SQL `TRUNCATE` command, which removes all rows from a set of tables ([ref/truncate.sgml:33](../raw/postgres-17/doc/src/sgml/ref/truncate.sgml#L33)).
 
 **Version notes:**
 - PostgreSQL 12: Differs: `should_attempt_truncation()` has no failsafe test, but it skips truncation whenever `old_snapshot_threshold` is enabled ([vacuumlazy.c#should_attempt_truncation](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1852-L1866)). The 1000-page or one-sixteenth rule, the `vacuum_truncate` storage option, the 50 ms / 5 s conditional lock retry and `RelationTruncate()` are the same ([vacuumlazy.c#REL_TRUNCATE_MINIMUM](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L68-L72), [rel.h:275](../raw/postgres-12/src/include/utils/rel.h#L275), [vacuumlazy.c#lazy_truncate_heap](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1897-L1926), [vacuumlazy.c:82-83](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L82-L83), [storage.c#RelationTruncate](../raw/postgres-12/src/backend/catalog/storage.c#L222-L230)).
@@ -4885,7 +4905,12 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (382 files):
+**PostgreSQL 12** (386 files):
+
+- [pg_depend.h#FormData_pg_depend](../raw/postgres-12/src/include/catalog/pg_depend.h#L36-L64)
+- [pg_namespace.h#FormData_pg_namespace](../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44)
+- [dependency.c#reportDependentObjects](../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203)
+- [relpath.c#GetRelationPath](../raw/postgres-12/src/common/relpath.c#L129-L205)
 
 - [bloomfilter.c#membership](../raw/postgres-12/src/backend/lib/bloomfilter.c#L1-L15)
 - [configure.in#blocksize](../raw/postgres-12/configure.in#L250-L277)
