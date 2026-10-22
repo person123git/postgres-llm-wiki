@@ -44,7 +44,7 @@ Follow AGENTS.md. In PostgreSQL v18, question: how does VACUUM decide to truncat
 - `Follow AGENTS.md` binds the agent to the evidence, citation, verification, and bookkeeping rules. Some harnesses load `AGENTS.md` on their own; naming it makes the binding explicit either way.
 - `In PostgreSQL vNN` picks the pinned checkout the answer must cite, and the wiki tree the page lands in. Omit it and the agent works on the primary version and says so.
 - The answer is filed as a page, not chat output: a `type: question` page under `wiki/vNN/questions/<category>/` that restates your question verbatim, answers it inline with citations into `raw/postgres-NN/`, and lists what stayed unresolved under `## Open Questions`. The agent then updates the indexes and appends to `wiki/log.md`.
-- Expect one round trip before drafting if the question has typos: `AGENTS.md` makes the agent ask whether to correct them, because the page restates your wording verbatim.
+- Typos do not cost a round trip: `AGENTS.md` has the agent correct typos and grammar itself, restate the corrected question on the page, and record each correction in `wiki/log.md`, or in its reply when the task writes no log entry. It asks before drafting only when a correction could change the meaning, or when you asked to keep your wording as written.
 - In a fresh clone the first thing to ask for is the evidence base itself, since the agent cannot cite what is not on disk.
 
 ### What a clone does not carry
