@@ -21,8 +21,15 @@ verified_by_agent: not yet
   - [State changes and rollback](#state-changes-and-rollback)
   - [Cases that change the result](#cases-that-change-the-result)
   - [Catalog damage branches](#catalog-damage-branches)
+  - [Measured results](#measured-results)
   - [Build boundaries and existing tests](#build-boundaries-and-existing-tests)
   - [Causal summary](#causal-summary)
+- [Measurement Script](#measurement-script)
+  - [Usage](#usage)
+  - [Last run](#last-run)
+  - [Stages](#stages)
+  - [Non-default settings in the measurement](#non-default-settings-in-the-measurement)
+  - [The script](#the-script)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -39,19 +46,21 @@ Follow AGENTS.md. In PostgreSQL 12, how does DROP SCHEMA work, and what happens 
 
 **Emptying the files does not make the schema empty.** Plain `DROP SCHEMA s` defaults to `RESTRICT`. If ordinary tables still have their [catalog](../../../glossary.md#catalog) entries and [dependencies](../../../glossary.md#dependency) on the schema, PostgreSQL refuses the drop even when their files contain no bytes. The decision follows dependency records, not row counts or file lengths. [gram.y#opt_drop_behavior](../../../../raw/postgres-12/src/backend/parser/gram.y#L2564-L2568) [heap.c#namespace-dependency](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408) [dependency.c#reportDependentObjects](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1093-L1203)
 
-**The refusal is not immediate.** The dependency walk locks every dependent object it finds before the `RESTRICT` check runs, and the lock it takes on a relation is [AccessExclusiveLock](../../../glossary.md#accessexclusivelock). So a plain `DROP SCHEMA` can first wait behind concurrent users of the emptied tables. While it waits, new lock requests on those tables from sessions that hold no lock on them join the [lock queue](../../../glossary.md#lock-queue) behind it. Steps 3 and 4 of [From the command to the deletion list](#from-the-command-to-the-deletion-list) trace this. [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#report-after-walk](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L401-L429) [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985)
+**The refusal is not immediate.** The dependency walk locks every dependent object it finds before the `RESTRICT` check runs, and the lock it takes on a relation is [AccessExclusiveLock](../../../glossary.md#accessexclusivelock). So a plain `DROP SCHEMA` can first wait behind concurrent users of the emptied tables. While it waits, new lock requests on those tables from sessions that hold no lock on them join the [lock queue](../../../glossary.md#lock-queue) behind it. Steps 3 and 4 of [From the command to the deletion list](#from-the-command-to-the-deletion-list) trace this, and the pinned build reproduced it; see [Measured results](#measured-results). [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#report-after-walk](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L401-L429) [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985)
 
-**With explicit `CASCADE`, empty files of user [relations](../../../glossary.md#relation) alone do not prevent the ordinary drop path from succeeding.** With usable catalogs, required locks and permissions, ordinary built-in objects, and no failing added trigger or hook, PostgreSQL deletes the metadata and schedules the files for removal without scanning the affected tables or validating their index pages. This is a source-derived conclusion for the pinned PostgreSQL **12.2** checkout, not a runtime reproduction. It is not a guarantee for a database whose catalogs were also damaged. [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437) [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266) [storage.c#RelationDropStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L144-L173)
+**With explicit `CASCADE`, empty files of user [relations](../../../glossary.md#relation) alone do not prevent the ordinary drop path from succeeding.** Several conditions must still hold: usable catalogs, the required locks and permissions, ordinary built-in objects, no failing added trigger or hook, and no serialization failure in a `SERIALIZABLE` dropping transaction. Under them, PostgreSQL deletes the metadata and schedules the files for removal without scanning the affected tables or validating their index [pages](../../../glossary.md#page). A build of the pinned PostgreSQL **12.2** checkout reproduced this with every file of a fixture schema emptied, TOAST tables, indexes, sequences and numbered segments included; see [Measured results](#measured-results). It is not a guarantee for a database whose catalogs were also damaged. [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437) [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266) [storage.c#RelationDropStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L144-L173)
+
+**`CASCADE` also changes surviving tables outside the schema.** A foreign key belongs to its referencing table but has a normal dependency on the referenced columns. So when the referenced table is in the dropped schema, `CASCADE` drops a constraint of a table that can live in another schema. The deletion takes `AccessExclusiveLock` on that table, which survives without its foreign key. Triggers, column defaults and policies of outside tables that use functions in the schema are removed the same way. [Deleting objects does not scan their data](#deleting-objects-does-not-scan-their-data) lists the cases. [pg_constraint.c#normal-dependency-on-referenced-columns](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L274-L298) [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580)
 
 ### What was emptied, and what DROP still needs
 
-This answer reads the shell command in the question as truncating the named file to zero length, not as overwriting every original byte with a zero while keeping the length. That is shell behavior, which the pinned PostgreSQL checkout cannot establish, so it is an assumption of this page; see [Open Questions](#open-questions). Here, `file.txt` means an actual relation-file pathname. A [schema](../../../glossary.md#schema) is a namespace recorded in `pg_namespace`, not a directory that contains all its objects. Relation paths use database, [tablespace](../../../glossary.md#tablespace) and physical relation identifiers (the [relfilenode](../../../glossary.md#relfilenumber)), not the schema name. [pg_namespace.h#FormData_pg_namespace](../../../../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44) [relpath.c#GetRelationPath](../../../../raw/postgres-12/src/common/relpath.c#L129-L205)
+This answer reads the shell command in the question as truncating the named file to zero length, not as overwriting every original byte with a zero while keeping the length. That is shell behavior, which the pinned PostgreSQL checkout cannot establish, so it is an assumption of this page, which the measurement observed on its own platform; see [Open Questions](#open-questions). Here, `file.txt` means an actual relation-file pathname. A [schema](../../../glossary.md#schema) is a namespace recorded in `pg_namespace`, not a directory that contains all its objects. Relation paths use database, [tablespace](../../../glossary.md#tablespace) and physical relation identifiers (the [relfilenode](../../../glossary.md#relfilenumber)), not the schema name. [pg_namespace.h#FormData_pg_namespace](../../../../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44) [relpath.c#GetRelationPath](../../../../raw/postgres-12/src/common/relpath.c#L129-L205)
 
 “All its objects” therefore needs a boundary. Tables, indexes, sequences, materialized views and TOAST tables can have physical relation storage. Views, foreign tables, partitioned tables, partitioned indexes and functions do not each have a corresponding data file to empty. A table can also have multiple [forks](../../../glossary.md#fork) and numbered [segments](../../../glossary.md#storage-manager). Emptying one pathname changes that file, not all those related files or the catalog rows describing the object. The answer assumes the user-object files were emptied and the catalogs were left usable. [heap.c#storage-bearing-kinds](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1943-L1952) [index.c#drop-storage](../../../../raw/postgres-12/src/backend/catalog/index.c#L2199-L2203) [dependency.c#object-dispatch](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1341-L1378) [functioncmds.c#RemoveFunctionById](../../../../raw/postgres-12/src/backend/commands/functioncmds.c#L1180-L1206) [storage.sgml#forks-and-segments](../../../../raw/postgres-12/doc/src/sgml/storage.sgml#L199-L243)
 
 | Information or state | Origin and freshness | How deletion uses it |
 |---|---|---|
-| Schema identity and owner | Stored `pg_namespace` row, accessed through catalog lookup | Resolves the name, locks the schema object, then checks ownership. It is not inferred from disk files. [namespace.c#get_namespace_oid](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3030-L3047) [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088) [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951) |
+| Schema identity and owner | Stored `pg_namespace` row, accessed through catalog lookup | Resolves the name, locks the schema object, then checks ownership: a superuser passes, and so does any role with the owner's privileges, which includes inheriting members of the owning role. It is not inferred from disk files. [namespace.c#get_namespace_oid](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3030-L3047) [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088) [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951) [acl.c#has_privs_of_role](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4907-L4922) |
 | Object addresses and dependency edges | `ObjectAddress` identifies a catalog, object and possible subobject; stored `pg_depend` rows connect them | Builds and orders the objects to delete; determines whether `RESTRICT` blocks deletion. [objectaddress.h#ObjectAddress](../../../../raw/postgres-12/src/include/catalog/objectaddress.h#L21-L29) [pg_depend.h#FormData_pg_depend](../../../../raw/postgres-12/src/include/catalog/pg_depend.h#L36-L66) [dependency.c#dependency-scan](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L829-L866) |
 | Relation descriptor and physical identity | Catalog-derived [relcache](../../../glossary.md#relcache) descriptor. `RelationInitPhysicalAddr()` fills `rd_node` from the `pg_class` row's tablespace and `relfilenode`, or from the [relation mapper](../../../glossary.md#relation-mapper) for a mapped catalog | `RelationDropStorage` copies the identifier into a pending-delete entry. An external file truncation does not edit this catalog mapping. [relcache.c#RelationBuildDesc](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1055-L1084) [relcache.c:1227](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1227) [relcache.c#RelationInitPhysicalAddr](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1271-L1331) [storage.c#RelationDropStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L148-L172) |
 | File existence and length | Current filesystem state; independently changed by the shell command | Commit-time cleanup opens/truncates or unlinks paths. It does not ask how many table rows survived. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) |
@@ -66,15 +75,15 @@ DROP SCHEMA s [CASCADE | RESTRICT]
   |     +-- missing -> notice with IF EXISTS, otherwise error
   |     +-- schema lock held elsewhere -> wait
   |
-  +-- Check schema ownership; a superuser passes [A]
-  |     +-- not the owner -> error
+  +-- Check ownership; superuser or a role with the owner's privileges [A]
+  |     +-- any other role -> error 42501
   |
   +-- Walk pg_depend; lock each dependent before recursing into it [B]
   |     +-- dependent locked elsewhere -> wait, under RESTRICT too
   |     +-- uncached catalog-file read -> can fail; see catalog branches [B]
   |     +-- dependency rows absent without an error -> list incomplete
   |
-  +-- Default RESTRICT + blocking dependencies -> error before deletion [B]
+  +-- Default RESTRICT + blocking dependencies -> error 2BP01, no deletion [B]
   |     (every dependent found is already locked; the abort releases them)
   |
   +-- Explicit CASCADE, or no blocking dependencies [B]
@@ -83,6 +92,7 @@ DROP SCHEMA s [CASCADE | RESTRICT]
         |     +-- existing user-file contents are not scanned for deletion
         |     +-- schedule storage removal using physical relation identifiers
         |     +-- deletion routines lock more tables, some outside the schema
+        |     +-- outside tables can survive without foreign keys or triggers
         |
         +-- Transaction aborts -> do not execute these commit-only deletes [D]
         |                         external file truncation is not undone
@@ -95,28 +105,28 @@ DROP SCHEMA s [CASCADE | RESTRICT]
               +-- missing path / filesystem failure can limit cleanup
 ```
 
-- **A:** [dropcmds.c#RemoveObjects](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L49-L123), [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088), [dropcmds.c#ownership-check](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L104-L109), [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951). The schema lock is taken inside `get_object_address()`, before the ownership check.
-- **B:** [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437), [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901), [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554), [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985), [dependency.c#RESTRICT-error](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203). The two catalog-damage branches are explained, with their evidence and cache/setting conditions, in [Catalog damage branches](#catalog-damage-branches). The incomplete-list branch is a deduction from this catalog-driven enumeration, not a measured damaged-catalog outcome.
-- **C:** [dependency.c#deletion-order](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L974-L1010), [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998), [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266), [schemacmds.c#RemoveSchemaById](../../../../raw/postgres-12/src/backend/commands/schemacmds.c#L214-L235), [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530). The extra deletion-time locks are listed under [Deleting objects does not scan their data](#deleting-objects-does-not-scan-their-data).
+- **A:** [dropcmds.c#RemoveObjects](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L49-L123), [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088), [dropcmds.c#ownership-check](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L104-L109), [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951), [acl.c#has_privs_of_role](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4907-L4922), [aclchk.c#not-owner-error](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L3576-L3577), [aclchk.c#insufficient-privilege](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L3623-L3625), [errcodes.txt:332](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L332). The schema lock is taken inside `get_object_address()`, before the ownership check. Step 2 explains which roles have the owner's privileges.
+- **B:** [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437), [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901), [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554), [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985), [dependency.c#RESTRICT-error](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203). The `RESTRICT` error carries SQLSTATE `2BP01` (dependent objects still exist) [errcodes.txt:271](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L271). The two catalog-damage branches are explained, with their evidence and cache/setting conditions, in [Catalog damage branches](#catalog-damage-branches). The incomplete-list branch is a deduction from this catalog-driven enumeration, not a measured damaged-catalog outcome.
+- **C:** [dependency.c#deletion-order](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L974-L1010), [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998), [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266), [schemacmds.c#RemoveSchemaById](../../../../raw/postgres-12/src/backend/commands/schemacmds.c#L214-L235), [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530), [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580). The extra deletion-time locks, and what surviving tables lose, are listed under [Deleting objects does not scan their data](#deleting-objects-does-not-scan-their-data).
 - **D:** [storage.c#pending-delete-lifecycle](../../../../raw/postgres-12/src/backend/catalog/storage.c#L36-L65), [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L398-L462), [smgr.c#smgrdounlinkall](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L433-L495).
 - **E:** [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359), [sync.c#checkpoint-cycle](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L145-L214).
 
 ### From the command to the deletion list
 
 1. **Parse the requested behavior.** The [grammar](../../../glossary.md#grammar) makes a `DropStmt` with the names, object kind, `missing_ok` and `behavior`. The omitted behavior is `DROP_RESTRICT`; writing `CASCADE` selects `DROP_CASCADE`. `standard_ProcessUtility()` passes `DROP SCHEMA` to `ProcessUtilitySlow()` because event triggers support schema objects. From there the statement takes `ExecDropStmt` → `RemoveObjects`. [gram.y#DropStmt](../../../../raw/postgres-12/src/backend/parser/gram.y#L6184-L6203) [gram.y#SCHEMA](../../../../raw/postgres-12/src/backend/parser/gram.y#L6304-L6313) [gram.y#opt_drop_behavior](../../../../raw/postgres-12/src/backend/parser/gram.y#L2564-L2568) [utility.c#standard_ProcessUtility-drop](../../../../raw/postgres-12/src/backend/tcop/utility.c#L834-L844) [event_trigger.c#EventTriggerSupportsObjectType](../../../../raw/postgres-12/src/backend/commands/event_trigger.c#L1097-L1141) [utility.c#drop-dispatch](../../../../raw/postgres-12/src/backend/tcop/utility.c#L1590-L1594) [utility.c#ExecDropStmt](../../../../raw/postgres-12/src/backend/tcop/utility.c#L1731-L1751)
-2. **Resolve, lock and authorize the schema.** `RemoveObjects()` asks `get_object_address()` for the schema with `AccessExclusiveLock`. That function maps the name to `NamespaceRelationId` and the schema's [OID](../../../glossary.md#oid), then locks the schema object. Only after the lock is granted does `RemoveObjects()` check ownership; a superuser bypasses the ownership check. The schema owner can cascade to contained objects owned by others. `IF EXISTS` changes missing-schema handling to a notice; it does not ignore dependencies or general failures. [dropcmds.c#get_object_address-call](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L71-L75) [objectaddress.c#schema-address](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1186-L1190) [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088) [dropcmds.c#ownership-check](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L104-L109) [objectaddress.c#schema-ownership](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L2337-L2341) [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951) [dropcmds.c#RemoveObjects](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L49-L123) [drop_schema.sgml#ownership](../../../../raw/postgres-12/doc/src/sgml/ref/drop_schema.sgml#L35-L39)
+2. **Resolve, lock and authorize the schema.** `RemoveObjects()` asks `get_object_address()` for the schema with `AccessExclusiveLock`. That function maps the name to `NamespaceRelationId` and the schema's [OID](../../../glossary.md#oid), then locks the schema object. Only after the lock is granted does `RemoveObjects()` check ownership. A schema belongs to no namespace, so `get_object_namespace()` returns none and `check_object_ownership()` calls `pg_namespace_ownercheck()`. That function passes a superuser at once. For any other role it returns `has_privs_of_role(role, owner)`: the owner passes, and so does a member of the owning role that inherits its privileges ([role membership](../../../glossary.md#role-membership)). Every other role gets error `42501`, "must be owner of schema". The schema owner can cascade to contained objects owned by others. `IF EXISTS` changes missing-schema handling to a notice; it does not ignore dependencies or general failures. [dropcmds.c#get_object_address-call](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L71-L75) [objectaddress.c#schema-address](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1186-L1190) [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088) [dropcmds.c#ownership-check](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L104-L109) [objectaddress.c#namespace-has-no-namespace](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L341-L352) [objectaddress.c#get_object_namespace](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L2493-L2504) [objectaddress.c#schema-ownership](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L2337-L2341) [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951) [acl.c#has_privs_of_role](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4907-L4922) [acl.c#roles_has_privs_of](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4732-L4817) [aclchk.c#not-owner-error](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L3576-L3577) [dropcmds.c#RemoveObjects](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L49-L123) [drop_schema.sgml#ownership](../../../../raw/postgres-12/doc/src/sgml/ref/drop_schema.sgml#L35-L39)
 3. **Walk dependencies, locking as the walk goes.** `performMultipleDeletions()` opens `pg_depend`, takes the schema's deletion lock again and calls `findDependentObjects()`. That function recursively follows references and puts dependents before their referenced object. Before it recurses into a dependent, it takes that object's deletion lock, which is `AccessExclusiveLock` for a relation, and rechecks that the `pg_depend` row is still live. The walk is not bounded by the schema, so it also locks dependents that live in other schemas. [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437) [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) [dependency.c#deletion-order](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L974-L1010)
 4. **Apply RESTRICT or CASCADE only after the walk.** `reportDependentObjects()` runs once the list is complete. The ordinary table-to-schema edge is `DEPENDENCY_NORMAL`, so a table with no data still blocks default `RESTRICT`. Automatic/internal/partition/[extension](../../../glossary.md#extension) dependency flags can allow dependent cleanup even under `RESTRICT`; this does not make an ordinary table's schema edge automatic. [dependency.c#report-after-walk](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L401-L429) [dependency.c#dependency-flags](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1155) [heap.c#namespace-dependency](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408)
 
 Because the check comes last, a refused `RESTRICT` drop has already taken the deletion lock on every object the walk found. If another session holds a conflicting lock on one of them, the drop waits for that lock before it can report the dependencies. The `RESTRICT` error then aborts the transaction, and the abort releases the locks. [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#RESTRICT-error](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1187-L1203) [xact.c#abort-lock-release](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L2714-L2716)
 
-While an `AccessExclusiveLock` request from the drop waits, later requests on the same object follow these branches. The existing-lock state belongs to the requesting session, not to the drop. [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985) [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381)
+While an `AccessExclusiveLock` request from the drop waits, later requests on the same object follow these branches. Which branch applies depends on the [lock modes](../../../glossary.md#lock-mode) that the *requesting* session already holds on the object, not on the drop's. `AccessExclusiveLock` conflicts with every mode, including the weakest. [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985) [lock.c#LockConflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103) [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381)
 
 | Requesting session's state | Lock decision | Consequence |
 |---|---|---|
-| Holds no lock on the object | Its request conflicts with the waiting drop and joins the queue behind it | A later `SELECT` can wait even though it would be compatible with the current reader. [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985) [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381) |
-| Already holds the requested mode | `LockAcquireExtended()` increments the local acquisition count and returns immediately | Repeating the same lock acquisition does not enter the queue. [lock.c#already-held-mode](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L828-L840) |
-| Holds another mode that conflicts with the waiting drop | `ProcSleep()` checks for an early deadlock and otherwise chooses a position before the first waiter blocked by that held mode; it grants the new mode immediately if neither other holders nor earlier requests conflict | The session can proceed immediately, queue at that earlier position, or receive a deadlock error. Insertion ahead of the drop is not mandatory. [proc.c#existing-holder-queue-position](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1100-L1204) |
+| Holds no lock on the object | Its request conflicts with the waiting drop and joins the end of the queue | A later `SELECT` can wait even though it would be compatible with the current reader. Measured: a new session's `ACCESS SHARE` request was granted at once before the drop arrived, and timed out with `55P03` under its 1-second [`lock_timeout`](../../../glossary.md#statement_timeout-and-lock_timeout) while the drop waited; see [Measured results](#measured-results). [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985) [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381) |
+| Already holds the requested mode | `LockAcquireExtended()` increments the local acquisition count and returns immediately | Repeating the same lock acquisition does not enter the queue. Measured; see [Measured results](#measured-results). [lock.c#already-held-mode](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L828-L840) |
+| Holds a different mode | `ProcSleep()` scans the queue from the front and stops at the first waiter whose request conflicts with a mode this session holds. Because the drop's request conflicts with every mode, that waiter is the drop or one ahead of it. There `ProcSleep()` reports an early [deadlock](../../../glossary.md#deadlock) if this session must also wait for that waiter's held locks. Otherwise it grants the new mode at once if neither other sessions' held locks nor the requests ahead conflict, and failing that it queues the session there. | The session proceeds at once, waits ahead of the drop, or receives a deadlock error; it never queues behind the drop. Measured: a session holding `ACCESS SHARE` got `ROW EXCLUSIVE` within its 2-second `lock_timeout` while the drop kept waiting; see [Measured results](#measured-results). [proc.c#existing-holder-queue-position](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1100-L1204) |
 
 The deletion set is not bounded by the schema name. `CASCADE` follows dependent objects into other schemas. Internal and extension ownership can also redirect traversal toward an owning object; `CASCADE` is not a filesystem wildcard limited to the files that were emptied. [dependency.c#dependency-scan](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L829-L866) [dependency.c#extension-and-internal-dependencies](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L594-L734) [drop_schema.sgml#cross-schema-cascade](../../../../raw/postgres-12/doc/src/sgml/ref/drop_schema.sgml#L89-L95)
 
@@ -124,15 +134,19 @@ A regular table's [TOAST](../../../glossary.md#toast) table, when present, illus
 
 ### Deleting objects does not scan their data
 
-The generic deletion dispatcher selects `index_drop()` for an index and `heap_drop_with_catalog()` for a whole non-index relation. For a sequence it also deletes the `pg_sequence` row. These routines remove metadata and schedule storage deletion; they do not perform a row-by-row `DELETE`, scan the target heap, or run an index integrity check. Related objects such as indexes and constraints are handled by dependency traversal before their table. [dependency.c#doDeletion](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1341-L1369) [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1844-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266)
+The generic deletion dispatcher selects `index_drop()` for an index and `heap_drop_with_catalog()` for a whole non-index relation. For a sequence it also deletes the `pg_sequence` row. These routines remove metadata and schedule storage deletion; they do not perform a row-by-row `DELETE`, scan the target [heap](../../../glossary.md#heap), or run an index integrity check. Related objects such as indexes and constraints are handled by dependency traversal before their table. [dependency.c#doDeletion](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1341-L1369) [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1844-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266)
 
 “Open the relation” here is not “read its first data page.” `relation_open()` obtains the lock and a relcache descriptor. Building that descriptor reads catalog metadata and initializes access-method information. Thus a zero-byte user index can be dropped through the ordinary path without reading its [metapage](../../../glossary.md#metapage), while an unusable catalog index needed to build the descriptor can still make the operation fail. [relation.c#relation_open](../../../../raw/postgres-12/src/backend/access/common/relation.c#L47-L78) [relcache.c#RelationBuildDesc](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1055-L1084) [relcache.c#access-method-initialization](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1188-L1217) [index.c#index-drop-open](../../../../raw/postgres-12/src/backend/catalog/index.c#L2047-L2056)
 
-Locks come from two places. The dependency walk has already taken `AccessExclusiveLock` on every relation it found, under `RESTRICT` as well as `CASCADE`; see steps 3 and 4 above. [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) On the `CASCADE` path, the deletion routines then lock more tables:
+Locks come from two places. The dependency walk has already taken `AccessExclusiveLock` on every relation it found, under `RESTRICT` as well as `CASCADE`; see steps 3 and 4 above. [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) On the `CASCADE` path, the deletion routines then lock more tables, including tables that survive the drop. The cases below are examples, not a complete list:
 
 - Dropping an index locks its owning table. [index.c#index-drop-locks](../../../../raw/postgres-12/src/backend/catalog/index.c#L2029-L2056)
 - Dropping a [partition](../../../glossary.md#declarative-partitioning) locks its parent. If the parent has a default partition and the dropped partition is not that default partition, it also locks the default partition. [heap.c#partition-locks](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1861-L1886)
-- Dropping a table cascades to its foreign-key constraints, which carry an automatic dependency on it. Each such constraint owns "action" [foreign key triggers](../../../glossary.md#foreign-key-trigger) that live on the referenced table. `RemoveTriggerById()` takes `AccessExclusiveLock` on the table a trigger belongs to. Thus removing the constraint locks the referenced table, which can be in another schema; that removal alone does not drop the referenced table. [pg_constraint.c#auto-dependency-on-table](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L233-L258) [tablecmds.c#createForeignKeyActionTriggers](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L9940-L10002) [trigger.c#internal-constraint-dependency](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1019-L1030) [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530) The referenced table is also deleted if another dependency includes it in the deletion set, for example its own normal dependency on the schema being dropped. [heap.c#namespace-dependency](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408) [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437)
+- **A dropped table references another table.** Dropping a table cascades to its foreign-key constraints, which carry an automatic dependency on it. Each such constraint owns "action" [foreign key triggers](../../../glossary.md#foreign-key-trigger) that live on the referenced table. `RemoveTriggerById()` takes `AccessExclusiveLock` on the table a trigger belongs to. Thus removing the constraint locks the referenced table, which can be in another schema; that removal alone does not drop the referenced table. [pg_constraint.c#auto-dependency-on-table](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L233-L258) [tablecmds.c#createForeignKeyActionTriggers](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L9940-L10002) [trigger.c#internal-constraint-dependency](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1019-L1030) [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530) The referenced table is also deleted if another dependency includes it in the deletion set, for example its own normal dependency on the schema being dropped. [heap.c#namespace-dependency](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408) [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437)
+- **Another table references a dropped table.** The foreign-key constraint belongs to the referencing table, but it has a normal dependency on the referenced columns, so dropping the referenced table cascades to it. `RemoveConstraintById()` takes `AccessExclusiveLock` on the constraint's own table, and `RemoveTriggerById()` locks that table again for the constraint's "check" triggers. The referencing table can be in another schema. It survives, but without its foreign key. [pg_constraint.c#normal-dependency-on-referenced-columns](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L274-L298) [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580) [trigger.c#internal-constraint-dependency](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1019-L1030) [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530)
+- **An object of an outside table uses a function in the schema.** A trigger keeps a normal dependency on its trigger function, so dropping the function drops the trigger, and `RemoveTriggerById()` locks the trigger's table. A column default keeps normal dependencies on what its expression uses, and so does a row-level security policy. The routines that remove them also open their table with `AccessExclusiveLock`. The table survives, without that trigger, default or policy. [trigger.c#function-dependency](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1006-L1017) [heap.c#default-expression-dependencies](../../../../raw/postgres-12/src/backend/catalog/heap.c#L2312-L2320) [heap.c#RemoveAttrDefaultById-lock](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1808-L1812) [policy.c#policy-expression-dependencies](../../../../raw/postgres-12/src/backend/commands/policy.c#L847-L853) [policy.c#RemovePolicyById-lock](../../../../raw/postgres-12/src/backend/commands/policy.c#L385-L390)
+
+The pinned build showed both foreign-key cases and the trigger case. Inside the dropping transaction, the backend held `AccessExclusiveLock` on the surviving tables `other.parent`, `other.child_ref` and `other.audit`. After commit, `other.child_ref` had lost its foreign key, `other.audit` its trigger, and `other.parent` its action triggers. See [Measured results](#measured-results).
 
 Empty files do not remove any of these lock requirements. The current session's own open uses are checked by `CheckTableNotInUse()`. [heap.c#drop-locks-and-in-use-check](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1861-L1908)
 
@@ -144,9 +158,9 @@ Finally, `RemoveSchemaById()` deletes the `pg_namespace` row. Generic deletion a
 
 For ordinary non-temporary relations outside [recovery](../../../glossary.md#crash-recovery), `mdunlinkfork()` truncates the first main-fork segment to zero and queues its later unlink. For every other fork it unlinks the first file at once. Then, for each fork whose first-file step succeeded, the main fork included, it unlinks the numbered segments `.1`, `.2`, … in order. The delayed main file reserves the physical identifier until a suitable [checkpoint](../../../glossary.md#checkpoint) completes; this avoids premature reuse. A request arriving during a checkpoint waits for a later checkpoint cycle. Temporary relations and recovery use the immediate-unlink branch instead. [md.c#deferred-unlink-reason](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L217-L261) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) [sync.c#checkpoint-cycle](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L145-L214)
 
-**An existing zero-byte segment does not stop this cleanup.** Consider existing paths `12345`, `12345.1` and `12345.2`, all emptied by the shell command. The main-file truncation succeeds, unlinking `.1` succeeds regardless of its length, and the loop then attempts `.2`. This source-derived example follows filename operations; there is no `mdnblocks()` call that would stop at `.1` because it is short. By contrast, the size-probing path used by scans returns at a short segment it measures. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L300-L359) [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L715-L755)
+**An existing zero-byte segment does not stop this cleanup.** Consider existing paths `12345`, `12345.1` and `12345.2`, all emptied by the shell command. The main-file truncation succeeds, unlinking `.1` succeeds regardless of its length, and the loop then attempts `.2`. The example follows filename operations; there is no `mdnblocks()` call that would stop at `.1` because it is short. The `cascade` leg of the measurement reproduced it with the three emptied segments of `s.big`. By contrast, the size-probing path used by scans returns at a short segment it measures. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L300-L359) [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L715-L755)
 
-**Missing filenames differ from empty files.** If `.1` was removed rather than emptied, its unlink returns `ENOENT` and this traversal does not reach `.2`. If the first segment operation fails, the additional-segment loop is not entered at all. Other filesystem failures produce warnings and can also leave files behind. Therefore SQL-level success does not prove that every damaged or orphaned pathname was removed. A zero-byte first main-fork file remaining before the eligible checkpoint, however, is expected cleanup state. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L284-L359) [smgr.c#unlink-warning-contract](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L481-L495)
+**Missing filenames differ from empty files.** If `.1` was removed rather than emptied, its unlink returns `ENOENT` and this traversal does not reach `.2`; the `missing` leg of the measurement reproduced this. If the first segment operation fails, the additional-segment loop is not entered at all. Other filesystem failures produce warnings and can also leave files behind. Therefore SQL-level success does not prove that every damaged or orphaned pathname was removed. A zero-byte first main-fork file remaining before the eligible checkpoint, however, is expected cleanup state. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L284-L359) [smgr.c#unlink-warning-contract](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L481-L495)
 
 ### State changes and rollback
 
@@ -166,29 +180,61 @@ The transaction machinery also protects the ordering between [WAL](../../../glos
 
 | Condition / state | Default or ordinary path, and what changes it | Consequence |
 |---|---|---|
-| Schema still has ordinary objects; no `CASCADE` | Default `RESTRICT` checks normal dependencies, not contents, and checks them only after the walk has locked every dependent | Refusal even with empty data files. It can wait for those locks before it refuses. [gram.y#default](../../../../raw/postgres-12/src/backend/parser/gram.y#L2564-L2568) [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#RESTRICT-error](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1133-L1203) |
-| Explicit `CASCADE`; only user files emptied | The command option allows normal dependent objects to be deleted; the storage-removal path does not scan their contents | Empty heap, index, sequence, auxiliary fork or segment files alone do not invalidate this path. No repair setting is required by it. [dependency.c#doDeletion](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1341-L1369) [storage.c#RelationDropStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L144-L173) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) |
+| Schema still has ordinary objects; no `CASCADE` | Default `RESTRICT` checks normal dependencies, not contents, and checks them only after the walk has locked every dependent | Refusal even with empty data files. It can wait for those locks before it refuses. Measured: with all 29 files of the fixture schema at zero bytes, the refusal listed 11 dependents. [gram.y#default](../../../../raw/postgres-12/src/backend/parser/gram.y#L2564-L2568) [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#RESTRICT-error](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1133-L1203) |
+| Explicit `CASCADE`; only user files emptied | The command option allows normal dependent objects to be deleted; the storage-removal path does not scan their contents | Empty heap, index, sequence, auxiliary fork or segment files alone do not invalidate this path. No repair setting is required by it. Measured: the drop committed with every heap, index, sequence, materialized-view, TOAST, fork and segment file of the fixture schema emptied. [dependency.c#doDeletion](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1341-L1369) [storage.c#RelationDropStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L144-L173) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) |
 | Catalogs or their indexes were emptied too | Name resolution, dependency enumeration and metadata deletion need usable catalog information; default catalog scans use indexes. [genam.c#systable_beginscan](../../../../raw/postgres-12/src/backend/access/index/genam.c#L361-L366) | Uncached truncated-file reads can fail. Cached pages, an explicitly enabled zero-fill setting, or a forced heap scan can produce different outcomes. The exact branches are in [Catalog damage branches](#catalog-damage-branches). [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629) [genam.c#heap-scan-fallback](../../../../raw/postgres-12/src/backend/access/index/genam.c#L413-L425) [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L795) |
 | Added [event trigger](../../../glossary.md#event-trigger) or C [hook](../../../glossary.md#hook) | Core dispatch normally runs without an installed utility hook; an empty event-trigger run list returns. Installed code is invoked when present | Extra SQL or an exception can change the outcome before commit. The pinned tests explicitly exercise a trigger rejecting `DROP SCHEMA ... CASCADE`, both through a nested `DROP TABLE` and directly for an object the schema drop removes. [utility.c:76](../../../../raw/postgres-12/src/backend/tcop/utility.c#L76) [utility.c#ProcessUtility-hook](../../../../raw/postgres-12/src/backend/tcop/utility.c#L355-L362) [event_trigger.c#EventTriggerDDLCommandStart](../../../../raw/postgres-12/src/backend/commands/event_trigger.c#L809-L817) [dependency.c#object-drop-hook](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1240-L1242) [event_trigger.out#rejected-schema-drop](../../../../raw/postgres-12/src/test/regress/expected/event_trigger.out#L277-L291) [event_trigger.out#direct-rejection](../../../../raw/postgres-12/src/test/regress/expected/event_trigger.out#L293-L308) |
-| Concurrent sessions or current-session object use | The dependency walk locks every dependent, under `RESTRICT` as well as `CASCADE`. `CASCADE` deletion then also locks partition parents, default partitions and foreign-key referenced tables, which can lie outside the schema. In-use checks apply regardless of file length | It can wait or fail before file cleanup. While it waits, new requests from sessions that hold no lock on the object queue behind it. [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) [heap.c#partition-locks](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1861-L1886) [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530) [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985) [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381) [heap.c#CheckTableNotInUse](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1890-L1908) |
+| Concurrent sessions or current-session object use | The dependency walk locks every dependent, under `RESTRICT` as well as `CASCADE`. `CASCADE` deletion then also locks other tables, among them surviving tables outside the schema: partition parents and default partitions, the tables on both sides of a cross-schema foreign key, and tables whose triggers, defaults or policies use schema functions. In-use checks apply regardless of file length | It can wait or fail before file cleanup. While it waits, new requests from sessions that hold no lock on the object queue behind it. [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1554) [heap.c#partition-locks](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1861-L1886) [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530) [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580) [heap.c#RemoveAttrDefaultById-lock](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1808-L1812) [policy.c#RemovePolicyById-lock](../../../../raw/postgres-12/src/backend/commands/policy.c#L385-L390) [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985) [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381) [heap.c#CheckTableNotInUse](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1890-L1908) |
+| The dropping transaction runs at `SERIALIZABLE` instead of the default `READ COMMITTED` | Before a table's storage is scheduled, `heap_drop_with_catalog()` calls `CheckTableForSerializableConflictIn()`. That returns at once unless serializable transactions are running, the dropping transaction is itself serializable, and the table takes part in predicate locking, which temporary tables, catalogs and materialized views do not. Otherwise it flags a read/write conflict from every other serializable transaction that holds a predicate lock on the table | Flagging a conflict can raise `40001` "could not serialize access due to read/write dependencies among transactions" in the dropping transaction, whatever the file contents. This branch is read from the source and was not measured. [guc.c#default_transaction_isolation](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4254-L4262) [heap.c#serializable-conflict-check](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1902-L1908) [predicate.c#CheckTableForSerializableConflictIn](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4540-L4600) [predicate.c#SerializationNeededForWrite](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L560-L572) [predicate.c#PredicateLockingNeededForRelation](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L497-L503) [predicate.c#FlagRWConflict](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4617-L4623) [predicate.c#writer-failure](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4776-L4794) [errcodes.txt:323](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L323) |
 | Files truncated while the server remains active | External changes do not execute PostgreSQL's buffer invalidation and discard path. A previously cached page can remain available; a [dirty buffer](../../../glossary.md#dirty-buffer) can later be written | Do not interpret the external command as a coordinated clearing of all server state. The commit-time drop explicitly discards remaining buffers instead. [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L795) [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2740-L2778) [smgr.c#discard-buffers](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L459-L479) |
-| Missing segment or filesystem failure | Normally consecutive filenames can be removed; a missing name or failed unlink interrupts enumeration | Warning or silent `ENOENT` handling can leave later files behind; `CASCADE` does not search the directory for orphans. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L284-L359) |
+| Missing segment or filesystem failure | Normally consecutive filenames can be removed; a missing name or failed unlink interrupts enumeration | Warning or silent `ENOENT` handling can leave later files behind; `CASCADE` does not search the directory for orphans. Measured: with segment `.1` removed, segments `.2` and `.3` survived the commit and the next checkpoint, and the server logged no warning. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L284-L359) |
 
 ### Catalog damage branches
 
-**Catalog damage has no single guaranteed outcome.** Outside recovery, the default `pg_depend` path uses catalog indexes, with `ignore_system_indexes = off` and `zero_damaged_pages = off`. A requested block absent from shared buffers must be read from storage. The branch table follows that read from buffer lookup through segment opening, file reading and tuple or index-page interpretation. [dependency.c#catalog-index-scans](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L559-L560) [dependency.c#dependent-index-scan](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L861-L862) [genam.c#systable_beginscan](../../../../raw/postgres-12/src/backend/access/index/genam.c#L361-L366) [guc.c#ignore_system_indexes](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1784-L1793) [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1162) [bufmgr.c#buffer-hit-or-read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L795) [bufmgr.c#read-and-verify](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L894-L925)
+**Catalog damage has no single guaranteed outcome.** Outside recovery, the default `pg_depend` path uses catalog indexes, with `ignore_system_indexes = off` and `zero_damaged_pages = off`. A requested [block](../../../glossary.md#block) absent from shared buffers must be read from storage. The branch table follows that read from buffer lookup through segment opening, file reading and tuple or index-page interpretation. [dependency.c#catalog-index-scans](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L559-L560) [dependency.c#dependent-index-scan](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L861-L862) [genam.c#systable_beginscan](../../../../raw/postgres-12/src/backend/access/index/genam.c#L361-L366) [guc.c#ignore_system_indexes](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1784-L1793) [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1162) [bufmgr.c#buffer-hit-or-read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L795) [bufmgr.c#read-and-verify](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L894-L925)
 
 | Condition / state | Decision and output | Consequence for the drop |
 |---|---|---|
 | The requested catalog page is still valid in shared buffers | Buffer lookup returns that page without reading the externally truncated file | Old catalog contents can still supply the lookup or dependency rows. [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L795) |
-| A buffer miss requires opening a later segment beyond a short earlier segment | Outside recovery, `_mdfd_getseg()` rejects the short earlier segment before `mdread()` can perform its file read. An already-open target segment bypasses this size check | `previous segment is only N blocks` can stop the command. Enabling `zero_damaged_pages` does not suppress this earlier error. [md.c#segment-already-open](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1112-L1141) [md.c#segment-size-check](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1143-L1204) |
+| A buffer miss targets a segment this backend has not opened, and a segment before it is short | Outside recovery, `_mdfd_getseg()` measures the segments from the last one this backend already has open, or from the first if none is open, up to the target, and rejects a short one before `mdread()` can perform its file read. It does not measure an already-open target segment, or an already-open segment before the last open one; a short segment of that kind is trusted as full | `previous segment is only N blocks` can stop the command. Enabling `zero_damaged_pages` does not suppress this earlier error. With earlier segments already open, the read can instead go ahead to the target segment's own file read, which the next rows describe. [md.c#segment-already-open](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1112-L1141) [md.c#segment-size-check](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1143-L1204) |
 | The segment opens, but the file read returns less than one full block; settings remain at their defaults and the server is outside recovery | `mdread()` raises `could not read block ... read only ... bytes` | The read fails rather than silently omitting a catalog row. A negative file-read result also raises an error independently of the short-read setting. [md.c#read-errors-and-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629) |
-| A session explicitly sets `zero_damaged_pages = on` instead of its default `off`, and an indexed catalog-heap fetch reaches the short-read branch with a usable index | `mdread()` supplies zeros. Page verification accepts an [all-zero page](../../../glossary.md#all-zero-page); the heap tuple search finds no item on the zero-filled page | This fetch can silently omit a dependency row even though the catalog scan still uses its index. It does not establish that the rest of the drop succeeds. [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1162) [md.c#short-read-zero-fill](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L614-L629) [bufpage.c#all-zero-acceptance](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L130-L142) [heapam_handler.c#heapam_index_fetch_tuple](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L129-L156) [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L348-L360) [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1550-L1557) |
+| `zero_damaged_pages` is `on` instead of its default `off`, and an indexed catalog-heap fetch reaches the short-read branch with a usable index. The setting is superuser-only (`PGC_SUSET`): it can come from the server configuration, or a superuser can set it at connection start or with `SET` [guc.h#PGC_SUSET](../../../../raw/postgres-12/src/include/utils/guc.h#L63-L64) | `mdread()` supplies zeros. Page verification accepts an [all-zero page](../../../glossary.md#all-zero-page); the heap tuple search finds no item on the zero-filled page | This fetch can silently omit a dependency row even though the catalog scan still uses its index. It does not establish that the rest of the drop succeeds. [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1162) [md.c#short-read-zero-fill](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L614-L629) [bufpage.c#all-zero-acceptance](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L130-L142) [heapam_handler.c#heapam_index_fetch_tuple](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L129-L156) [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L348-L360) [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1550-L1557) |
 | The same zero-fill setting supplies a zero page to a catalog [B-tree](../../../glossary.md#b-tree) reader instead of a heap reader | `_bt_checkpage()` rejects the zero page even though `mdread()` returned without a short-read error | `index ... contains unexpected zero page` can still stop the command. Zero-fill does not make a damaged B-tree usable. [md.c#short-read-zero-fill](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L614-L629) [nbtpage.c#read-and-check](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L763-L769) [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L689-L719) |
 | Connection startup explicitly sets `ignore_system_indexes = on` instead of its default `off` | `systable_beginscan()` chooses a heap scan. The heap scan takes its block bound from relation size; `mdnblocks()` starts at the last open segment, trusts earlier open segments as full, and returns at the first short segment it measures | With fresh segment-open state, truncation can shorten the scan and omit dependency rows without requesting the erased blocks. Previously opened segments can give a larger bound instead. [guc.c#ignore_system_indexes](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1784-L1793) [genam.c#heap-scan-fallback](../../../../raw/postgres-12/src/backend/access/index/genam.c#L413-L425) [heapam.c#scan-size](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L216-L231) [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) |
 | A required metadata lookup finds no row | Name resolution or a deletion routine reports the missing metadata | The command can fail with a missing-schema or catalog-lookup error even if no storage read raised an error. [namespace.c#get_namespace_oid](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3030-L3047) [heap.c#catalog-lookup-failure](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1871-L1873) |
 
-The silent indexed-fetch branch is a source-derived chain: **usable index supplies a heap location → uncached heap read reaches a short file → explicit zero-fill setting substitutes an all-zero page → heap lookup finds no tuple → dependency enumeration can miss that row**. It is not a measured damaged-catalog result. `systable_getnext()` uses `index_getnext_slot()`, whose heap-fetch loop advances to another index entry when a heap fetch returns no tuple. [genam.c#systable_getnext](../../../../raw/postgres-12/src/backend/access/index/genam.c#L444-L456) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L636) Normally the short read errors; the changed setting suppresses only that error, while the segment-opening and B-tree validation checks remain separate. [heapam_handler.c#heapam_index_fetch_tuple](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L129-L156) [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629) [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L348-L360) [heapam.c#empty-page-search](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1550-L1557) [heapam.c#no-tuple-result](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1652-L1655) [dependency.c#dependency-enumeration](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L861-L873)
+The silent indexed-fetch branch is a source-derived chain: **usable index supplies a heap location → uncached heap read reaches a short file → explicit zero-fill setting substitutes an all-zero page → heap lookup finds no tuple → dependency enumeration can miss that row**. It is not a measured damaged-catalog result. `systable_getnext()` uses `index_getnext_slot()`, whose heap-fetch loop advances to another index entry when a heap fetch returns no tuple. [genam.c#systable_getnext](../../../../raw/postgres-12/src/backend/access/index/genam.c#L444-L456) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L636) Normally the short read errors. On this path the changed setting suppresses only that short-read error; the segment-opening and B-tree checks remain separate. Elsewhere the same setting also turns an invalid page header into a warning and a zeroed page. A truncated file never reaches that header check with damaged contents, because `mdread()` has already supplied an all-zero page, which verification accepts. [bufmgr.c#invalid-header-zeroing](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L918) [heapam_handler.c#heapam_index_fetch_tuple](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L129-L156) [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629) [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L348-L360) [heapam.c#empty-page-search](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1550-L1557) [heapam.c#no-tuple-result](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1652-L1655) [dependency.c#dependency-enumeration](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L861-L873)
+
+### Measured results
+
+The [Measurement Script](#measurement-script) built the pin as 12.2 with one non-default compile-time knob, 1 MB segments, and ran an isolated cluster. Its fixture schema `s` held:
+
+- a table `s.t` with a serial key, a primary-key index and TOAST data;
+- a 3.5 MB table `s.big` with numbered segments `.1` to `.3`, an index, a free space map and a visibility map;
+- a sequence, a materialized view, a view and two functions;
+- a table that references the table `other.parent` and a table that `other.child_ref` references, so foreign keys cross the boundary to the schema `other` in both directions;
+- the trigger function of the trigger `audit_trg` on `other.audit`.
+
+With the server stopped, `cat /dev/null >` emptied all 29 files of 14 relations with storage: the 10 in `s`, plus the TOAST tables and TOAST indexes of its tables. A second schema `s2` held another 3.5 MB table, whose segment `.1` was removed instead of emptied. The numbers below are from the run recorded under [Last run](#last-run).
+
+| Leg | What ran | Measured result | Claim it backs |
+|---|---|---|---|
+| `restrict` | `DROP SCHEMA s` | `2BP01`, "cannot drop schema s because other objects depend on it", listing 11 dependents, among them `constraint child_ref_pid_fkey on table other.child_ref` and `trigger audit_trg on table other.audit`. All 29 files unchanged. | `RESTRICT` follows dependency records, not file lengths |
+| `locks` | Session A holds `ACCESS SHARE` on `s.t`, then a plain `DROP SCHEMA s` starts | The drop held `AccessExclusiveLock` on the schema object and on `s.t_id_seq`, and waited for `AccessExclusiveLock` on `s.t`. A new session's `ACCESS SHARE` request had been granted at once before the drop arrived; during the wait it timed out with `55P03` under a 1-second `lock_timeout`. Session A re-acquired `ACCESS SHARE` and got `ROW EXCLUSIVE` within its 2-second `lock_timeout`. After A committed, the drop refused with `2BP01`. | The walk locks dependents before the `RESTRICT` check; each row of the lock-queue table, for the third row its immediate-grant outcome |
+| `owner` | `DROP SCHEMA s_own` under `SET ROLE`, rolled back | A role that does not own `s_own` but is an inheriting member of its owner role dropped it. A non-member got `42501`, "must be owner of schema s_own". | Ownership through `has_privs_of_role()` |
+| `rollback` | `BEGIN; DROP SCHEMA s CASCADE;` a `pg_locks` query, `ROLLBACK` | `NOTICE` "drop cascades to 11 other objects". Before the rollback, the backend held granted `AccessExclusiveLock` on the surviving tables `other.parent`, `other.child_ref` and `other.audit`. After it, `s` still had 11 relations and all 29 files were present at 0 bytes. | Deletion-time locks outside the schema; rollback discards the commit-only deletes and does not restore truncated contents |
+| `cascade` | `DROP SCHEMA s CASCADE`, then `CHECKPOINT` | After commit, only the 14 first main-fork files remained, each at 0 bytes. Every numbered segment, `_fsm` and `_vm` file was gone, including the three emptied segments of `s.big`. `other.child_ref` kept its 10 rows but no foreign key, `other.audit` had no user trigger, and `other.parent` had no action triggers. After one `CHECKPOINT`, no file of `s` remained. | No data scan; zero-length segments do not stop the unlink loop; deferred first-file unlink; surviving tables lose dependent objects |
+| `missing` | `DROP SCHEMA s2 CASCADE` with `s2.big`'s segment `.1` removed, then `CHECKPOINT` | Segments `.2` and `.3` survived the commit and the checkpoint as zero-length orphans, and the server logged no warning | A missing filename ends the segment loop silently |
+
+The server restarted after the files were emptied, so no page of these relations was cached. A read of any main-fork page of them would therefore have raised the short-read error. All three `CASCADE` drops, the rolled-back one and the two committed ones, completed without that error. [md.c#read-errors-and-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629)
+
+Three non-default conditions shape these numbers; [Non-default settings in the measurement](#non-default-settings-in-the-measurement) gives the default, cause and mechanism of each:
+
+- The 1 MB segment size gives small tables numbered segments.
+- `autovacuum = off` and `checkpoint_timeout = 1h` keep background work from locking fixture tables or removing deferred files before the script looks.
+- The probes' short `lock_timeout` values turn a lock wait into the `55P03` error the script can observe. With the default `lock_timeout = 0`, the blocked session would instead wait until the drop's transaction ended. [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2397) [proc.c#lock-timeout-timer](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1242-L1264) [postgres.c#lock-timeout-error](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3087) [errcodes.txt:418](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L418)
+
+The measurement did not cover damaged catalogs, the `SERIALIZABLE` branch, already-open segment state, or default 1 GB segments; those rows remain source-derived. No measured result disagreed with the source reading.
 
 ### Build boundaries and existing tests
 
@@ -196,11 +242,801 @@ This is core backend behavior. The catalog build lists `pg_namespace.h` and `pg_
 
 Relation opening does initialize [access-method](../../../glossary.md#access-method) information, so the ordinary built-in-object conclusion does not certify arbitrary third-party access methods or their external storage. Hooks and extension dependencies are additional boundaries, described above. [relcache.c#access-method-initialization](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1188-L1217) [relcache.c#index-AM-initialization](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L1403-L1428) [dependency.c#extension-dependency](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L594-L621)
 
-The checked regression tests cover schema creation/rename followed by cascade deletion and catalog verification, missing-schema handling, and event-trigger rejection/recursive DDL. These cited test cases do not inject zero-length relation files. No server was built or run for this page, and no measurement results are reported. [namespace.sql#schema-test](../../../../raw/postgres-12/src/test/regress/sql/namespace.sql#L5-L44) [drop_if_exists.sql#schema-test](../../../../raw/postgres-12/src/test/regress/sql/drop_if_exists.sql#L51-L59) [event_trigger.sql#drop-rejection-test](../../../../raw/postgres-12/src/test/regress/sql/event_trigger.sql#L207-L261)
+The checked regression tests cover schema creation and rename followed by cascade deletion, missing-schema handling, and event-trigger rejection and recursive DDL. In the namespace test, the expected `NOTICE` that lists the two cascaded objects is what checks the deletion set. Its follow-up `pg_class` count cannot fail after the drop: the subquery that looks up the dropped schema's OID returns NULL, so `relnamespace = NULL` matches no row. These cited test cases do not inject zero-length relation files. This page's own [Measurement Script](#measurement-script) does, on a server built from the pin. [namespace.sql#schema-test](../../../../raw/postgres-12/src/test/regress/sql/namespace.sql#L5-L44) [namespace.out#cascade-notice-and-count](../../../../raw/postgres-12/src/test/regress/expected/namespace.out#L60-L70) [drop_if_exists.sql#schema-test](../../../../raw/postgres-12/src/test/regress/sql/drop_if_exists.sql#L51-L59) [event_trigger.sql#drop-rejection-test](../../../../raw/postgres-12/src/test/regress/sql/event_trigger.sql#L207-L261)
 
 ### Causal summary
 
-**User files emptied while catalogs remain usable → schema dependencies remain → the dependency walk locks every dependent, waiting for any held elsewhere → default `RESTRICT` then refuses when ordinary objects still depend on the schema; explicit `CASCADE` permits dependency-ordered metadata deletion → commit discards buffers and removes files without scanning their contents → eligible checkpoint finishes deferred first-main-file unlink.** Catalog damage, missing filenames, lock/permission failures and added code have the separate outcomes above. Rolling back the SQL drop does not reverse the external truncation. [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437) [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [storage.c#pending-deletion](../../../../raw/postgres-12/src/backend/catalog/storage.c#L36-L65) [smgr.c#smgrdounlinkall](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L433-L495) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) [sync.c#SyncPostCheckpoint](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L168-L214)
+**User files emptied while catalogs remain usable → schema dependencies remain → the dependency walk locks every dependent, waiting for any held elsewhere → default `RESTRICT` then refuses when ordinary objects still depend on the schema; explicit `CASCADE` permits dependency-ordered metadata deletion, which also removes outside objects that depend on the schema, such as foreign keys of surviving tables → commit discards buffers and removes files without scanning their contents → eligible checkpoint finishes deferred first-main-file unlink.** Catalog damage, missing filenames, lock and permission failures, serialization failures and added code have the separate outcomes above. Rolling back the SQL drop does not reverse the external truncation. The pinned build reproduced each step of this chain for emptied user files; see [Measured results](#measured-results). [pg_constraint.c#normal-dependency-on-referenced-columns](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L274-L298) [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437) [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) [storage.c#pending-deletion](../../../../raw/postgres-12/src/backend/catalog/storage.c#L36-L65) [smgr.c#smgrdounlinkall](../../../../raw/postgres-12/src/backend/storage/smgr/smgr.c#L433-L495) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) [sync.c#SyncPostCheckpoint](../../../../raw/postgres-12/src/backend/storage/sync/sync.c#L168-L214)
+
+## Measurement Script
+
+### Usage
+
+| Item | Value |
+|---|---|
+| Purpose | Builds the pin as 12.2 with 1 MB segments and empties every file of a disposable schema while the server is stopped. It then runs `DROP SCHEMA` six ways: with `RESTRICT`; with `RESTRICT` under lock contention; as a non-owner member of the owning role; as a `CASCADE` that rolls back; as a committed `CASCADE` followed by `CHECKPOINT`; and with one segment removed instead of emptied. Backs every number under [Measured results](#measured-results) and the "Measured" notes in the lock table, the deletion section and [Cases that change the result](#cases-that-change-the-result). |
+| Invocation | From the repository root, extract the Bash fence below to `.wiki-runtime/tmp/ds12-run.sh`, then run `bash .wiki-runtime/tmp/ds12-run.sh [stage ...]`. The script checks the pinned checkout and keeps every build and data file under `.wiki-runtime/tmp/ds12/`. |
+| Stages | Default order: `build cluster fixture empty restrict locks owner rollback cascade missing report`. `stop` and `clean` tear down and are not in the default order. |
+| Environment | `PORT12` (default `55444`) is the isolated port; `JOBS` (default `8`) sets parallel build jobs. The checkout, sandbox paths and `RELSEG_SIZE` are fixed in the script. |
+| Prerequisites | A C toolchain, make, bison and flex; readline and zlib development headers, because `build` uses the default configure options; the pinned checkout at `raw/postgres-12/`; about 150 MB of free disk for the build, installation and cluster. Locale `C`, encoding `UTF8`. Only POSIX utilities besides `bash`, `git` and the built PostgreSQL programs. |
+| Output | Files under `.wiki-runtime/tmp/ds12/out/`. Read `platform.txt` first, then `results.txt`, `restrict.txt`, `locks_d_held.txt`, `locks_c1.txt`, `rollback.txt`, `cascade_survivors.txt`, and the `files_s_*.txt` and `files_s2_*.txt` listings. |
+| Runtime | On the review host (Apple arm64, `JOBS=8`): about 46 seconds from an empty sandbox, most of it the build; about 2 seconds to re-run every stage while the build is present. |
+| Cleanup | `bash .wiki-runtime/tmp/ds12-run.sh stop clean` stops the owned cluster, verifies that no PID file, process started from the sandbox's binaries, socket or listener remains, and deletes `.wiki-runtime/tmp/ds12/`, including its build. Remove the extracted `ds12-run.sh` afterwards. |
+
+To extract the published script without editing it, run this from the repository root:
+
+```sh
+sed -n '/^```bash$/,/^```$/p' wiki/v12/questions/storage-and-vacuum/drop-schema-zeroed-relation-files.md | sed '1d;$d' > .wiki-runtime/tmp/ds12-run.sh
+bash -n .wiki-runtime/tmp/ds12-run.sh
+bash .wiki-runtime/tmp/ds12-run.sh
+```
+
+### Last run
+
+On 2026-10-22 the final published script text was extracted with the command above and run from an empty sandbox on Darwin 27.0.0 arm64 against PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`. All 15 assertions passed, and a second run with the build present gave the same results. The server reported:
+
+- `block_size` 8192 and `segment_size` 128 blocks (1 MB, from the patched `RELSEG_SIZE 128`), with maximum data alignment 8;
+- `data_checksums` off and `shared_buffers` 16384 blocks (128 MB, the value `initdb` wrote);
+- `autovacuum` off, `checkpoint_timeout` 3600 s and `default_transaction_isolation` read committed.
+
+The cluster was then stopped and the sandbox deleted with `stop clean`.
+
+### Stages
+
+| Stage | What it does | Needs |
+|---|---|---|
+| `build` | Configures 12.2 out of tree under `$SANDBOX/build` with default options, patches the generated `pg_config.h` to `RELSEG_SIZE 128`, then builds and installs. Skipped when a matching build exists. | nothing |
+| `cluster` | Runs `initdb -A trust --locale=C --encoding=UTF8` (checksums off, the default), writes socket-only settings plus `autovacuum = off` and `checkpoint_timeout = '1h'`, starts on `PORT12`, and records `platform.txt` | `build` |
+| `fixture` | Recreates database `ds` and the roles `ds12_owner`, `ds12_member` (a member of `ds12_owner`) and `ds12_other`. Builds schemas `s`, `s2`, `s_own` and `other`, vacuums, saves the inventory of `s` and `s2` and every file with its length, and asserts that the segments, forks and TOAST data exist. | `cluster` |
+| `empty` | Stops the server, empties every file of `s` and `s2` with `cat /dev/null >`, removes `s2.big`'s segment `.1`, restarts, and asserts that every remaining file is 0 bytes. Refuses to run twice; re-run `fixture` first. | `fixture` |
+| `restrict` | Runs `DROP SCHEMA s`; expects `2BP01` and unchanged files | `empty` |
+| `locks` | Session A, fed through a FIFO, holds `ACCESS SHARE` on `s.t`, and a baseline session gets the same lock. Session D then runs `DROP SCHEMA s`, and the stage records D's locks. A new session's request under a 1 s `lock_timeout` must fail with `55P03`. A then asks again for `ACCESS SHARE` and for `ROW EXCLUSIVE` under a 2 s `lock_timeout`, and commits. D must fail with `2BP01`. | `empty` |
+| `owner` | As `ds12_member`, drops `s_own` in a rolled-back transaction; as `ds12_other`, expects `42501` | `fixture` |
+| `rollback` | Runs `DROP SCHEMA s CASCADE` and a `pg_locks` query inside a transaction, then `ROLLBACK`. Expects the cross-schema notices and locks, an unchanged relation count and unchanged files. | `empty` |
+| `cascade` | Runs `DROP SCHEMA s CASCADE`, lists the files after commit and after one `CHECKPOINT`, and checks the surviving tables in `other`. Consumes `s`. | `empty` |
+| `missing` | Runs `DROP SCHEMA s2 CASCADE`, lists the files after commit and after one `CHECKPOINT`, and checks the server log. Consumes `s2`. | `empty` |
+| `report` | Prints `results.txt` | any |
+| `stop` | Stops the owned cluster and verifies that no `postmaster.pid`, process started from `$BIN`, socket or listener on `PORT12` remains. It matches command lines that begin with `$BIN/`, so a calling shell whose command line merely mentions the data directory does not count. | none |
+| `clean` | Runs `stop`, then deletes `$SANDBOX`, refusing a sandbox it does not own | none |
+
+Every fixture object is disposable. `cascade` and `missing` consume the schemas they drop; re-run `fixture` and `empty` before running them again. `restrict`, `locks`, `owner` and `rollback` leave the fixture as they found it.
+
+### Non-default settings in the measurement
+
+| Setting or state | Default at the pin | Value in the script, and why |
+|---|---|---|
+| `RELSEG_SIZE` | 131,072 blocks (1 GB at 8 kB) [configure.in#segsize](../../../../raw/postgres-12/configure.in#L279-L295) [pg_config.h.in#RELSEG_SIZE](../../../../raw/postgres-12/src/include/pg_config.h.in#L853-L864) | 128 blocks (1 MB), patched only in the out-of-tree generated header, because `--with-segsize` takes whole gigabytes. It gives the 3.5 MB fixture tables segments `.1` to `.3`. The segment assertions of `fixture`, `cascade` and `missing` depend on it. `mdunlinkfork()` names segments by number and never compares them with `RELSEG_SIZE`, so the default runs the same loop; a table just needs more than 1 GB before it has a `.1`. [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L326-L359) |
+| `autovacuum` | `on` [guc.c#autovacuum](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1425-L1433) | `off` (`PGC_SIGHUP`, in `postgresql.conf` before the first start), so that no worker locks a fixture table during `locks` or touches fixture files between stages. With the default, a worker could add a lock holder or waiter on `s.t` and change the lock choreography; the drop path itself does not change. |
+| `checkpoint_timeout` | 300 s [guc.c#checkpoint_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2566-L2575) | 3,600 s (`PGC_SIGHUP`), so that no timed checkpoint runs between a committed drop and the file listing after it. Such a checkpoint would remove the deferred first main-fork files before the script sees them. The script then issues `CHECKPOINT` itself. With the default, the same files go at the next timed or requested checkpoint. |
+| `lock_timeout` | 0, disabled [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2397) | 60 s for every session through `PGOPTIONS`; 1 s with `SET LOCAL` for the baseline and blocked probes; 2 s with `SET LOCAL` for session A. All are `PGC_USERSET`, so they apply to that session or transaction only. The 1 s value is why the blocked probe ends with `55P03`; with 0 it would wait until the drop's transaction ended. The 2 s bound on session A shows that its new mode did not queue behind the drop. |
+| `statement_timeout` | 0, disabled [guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386) | 5 min through `PGOPTIONS` (`PGC_USERSET`), to bound runaway statements. No result depends on it. |
+| Roles | — | `ds12_member` is created `IN ROLE ds12_owner` with the default `INHERIT`; the `owner` leg depends on that membership. |
+| Fixture data | — | `s.t`'s values are 3,200 bytes of md5 hex digits; `fixture` asserts that its TOAST table is non-empty before anything is emptied. |
+
+`listen_addresses = ''`, `unix_socket_directories` and port 55444 isolate the cluster; all three are `PGC_POSTMASTER` settings written before the first start. [guc.c#socket-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3935-L3959) [guc.c#port](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2176-L2184) Files are emptied with `cat /dev/null > <file>`, as the question specifies. Data checksums stay off, the `initdb` default; no leg reads a page of an emptied file.
+
+### The script
+
+```bash
+#!/usr/bin/env bash
+#
+# ds12.sh - the measurement script for the wiki page
+# wiki/v12/questions/storage-and-vacuum/drop-schema-zeroed-relation-files.md
+#
+# It builds the pinned PostgreSQL 12 checkout out of tree with a shortened
+# RELSEG_SIZE, starts an isolated cluster, creates disposable schemas, empties
+# their relation files with "cat /dev/null > <file>" while the server is
+# stopped, and then runs DROP SCHEMA with RESTRICT and with CASCADE.  It
+# records the errors, the locks a waiting drop holds and waits for, the
+# cascade notices, and the files left on disk after commit and checkpoint.
+#
+# The build is NON-DEFAULT in one compile-time knob: RELSEG_SIZE is patched
+# from the pin's default 131072 blocks (1 GB) to 128 blocks (1 MB) in the
+# generated pg_config.h of the out-of-tree build, because configure's
+# --with-segsize accepts only whole gigabytes in PostgreSQL 12.  It lets a
+# 3.5 MB table own the numbered segments .1, .2 and .3.  The unlink loop
+# under test, mdunlinkfork(), names segments by number and never compares
+# them with RELSEG_SIZE.
+#
+# Every fixture object is disposable.  The script creates and drops its own
+# database ds and the roles ds12_owner, ds12_member and ds12_other in its own
+# cluster; do not point it at a cluster anyone cares about.
+#
+# Files are emptied with "cat /dev/null > <file>", as the question specifies:
+# the shell's ">" opens the file with O_TRUNC, so the file keeps its name at
+# zero length.
+#
+# Usage, from the repository root:
+#   bash .wiki-runtime/tmp/ds12-run.sh                    # default stages
+#   bash .wiki-runtime/tmp/ds12-run.sh fixture empty restrict locks
+#   bash .wiki-runtime/tmp/ds12-run.sh stop clean         # tear down
+#
+# Stages: build cluster fixture empty restrict locks owner rollback cascade
+#         missing report stop clean
+#
+# Environment: PORT12 JOBS
+set -uo pipefail
+set -e
+# A write to a session that has already exited must fail as an error that
+# runs the exit trap, not kill the shell with SIGPIPE.
+trap '' PIPE
+
+WIKI_ROOT="$PWD"
+SRC12="$WIKI_ROOT/raw/postgres-12"
+SANDBOX="$WIKI_ROOT/.wiki-runtime/tmp/ds12"
+PIN12=45b88269a353ad93744772791feb6d01bc7e1e42
+PORT12="${PORT12:-55444}"
+JOBS="${JOBS:-8}"
+DB=ds
+
+# RELSEG_SIZE for the patched build, in blocks (1 MB at BLCKSZ 8192).
+RELSEG_BLOCKS=128
+
+BUILD="$SANDBOX/build"; INST="$SANDBOX/install"; DATA="$SANDBOX/data"
+OUT="$SANDBOX/out"; SOCK="$SANDBOX/sock"; BIN="$INST/bin"
+export PGPORT="$PORT12" PGHOST="$SOCK"
+
+# statement_timeout and lock_timeout are PGC_USERSET in PostgreSQL 12.  They
+# travel through PGOPTIONS, so every session is bounded; the lock probes set
+# a shorter lock_timeout themselves with SET LOCAL.
+export PGOPTIONS="-c statement_timeout=5min -c lock_timeout=60s"
+
+# -X ignores ~/.psqlrc.  ON_ERROR_STOP makes psql stop with exit status 3 at
+# the first error in SQL read from standard input; VERBOSITY=verbose prints
+# the SQLSTATE of every error and notice.
+PSQL=("$BIN/psql" -X -q -At -v ON_ERROR_STOP=1 -v VERBOSITY=verbose)
+
+say()  { printf '\n== %s\n' "$*" >&2; }
+note() { printf '   %s\n' "$*" >&2; }
+die()  { printf '!! %s\n' "$*" >&2; exit 1; }
+pass() { printf 'PASS %s\n' "$*" | tee -a "$OUT/results.txt" >&2; }
+
+# Background psql sessions started by the locks stage.
+BG=""
+
+owned() {
+  [ -f "$SANDBOX/.ds12-owned" ] &&
+    [ "$(cat "$SANDBOX/.ds12-owned")" = "$PIN12 $WIKI_ROOT" ]
+}
+
+# A failing stage must not leave sessions or the cluster running.  Output is
+# kept for diagnosis; the clean stage removes the sandbox afterwards.
+on_exit() {
+  local rc=$? p
+  trap - EXIT
+  { exec 3>&-; } 2> /dev/null || true
+  for p in $BG; do kill "$p" 2> /dev/null || true; done
+  if [ "$rc" -ne 0 ] && [ -f "$SANDBOX/.started" ] && owned; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop >&2 || true
+    rm -f "$SANDBOX/.started"
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+
+# This script owns exactly one short sandbox name.  Never adopt a pre-existing
+# cluster or delete a directory that this script did not create.
+own_sandbox() {
+  case "$WIKI_ROOT" in
+    */postgres-llm-wiki) ;;
+    *) die "run from the postgres-llm-wiki repository root" ;;
+  esac
+  [ -f "$WIKI_ROOT/AGENTS.md" ] || die "repository root not found"
+  owned || die "sandbox is not owned by this script: $SANDBOX"
+  export TMPDIR="$SANDBOX/tmp"
+  mkdir -p "$TMPDIR" "$OUT"
+}
+source_pin() {
+  [ "$(git --no-optional-locks -C "$SRC12" rev-parse HEAD)" = "$PIN12" ] \
+    || die "PostgreSQL 12 checkout is not at $PIN12"
+  [ -z "$(git --no-optional-locks -C "$SRC12" status --porcelain --untracked-files=no)" ] \
+    || die "PostgreSQL 12 checkout has tracked changes"
+}
+
+sql() { # sql <db>: run the SQL on standard input; any error is fatal
+  "${PSQL[@]}" -d "$1" || die "SQL failed on $1"
+}
+must_fail() { # must_fail <name> <sqlstate> <db>: the SQL on stdin must stop with <sqlstate>
+  local name=$1 state=$2 db=$3 rc=0
+  "${PSQL[@]}" -d "$db" > "$OUT/$name.txt" 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || { cat "$OUT/$name.txt" >&2; die "$name: psql exit $rc, expected 3"; }
+  grep -q "ERROR:  $state:" "$OUT/$name.txt" \
+    || { cat "$OUT/$name.txt" >&2; die "$name: no $state error"; }
+}
+expect_line() { # expect_line <file> <exact line>
+  grep -F -x -q -- "$2" "$OUT/$1" || { cat "$OUT/$1" >&2; die "$1 lacks the line: $2"; }
+}
+expect_text() { # expect_text <file> <fixed text>
+  grep -F -q -- "$2" "$OUT/$1" || { cat "$OUT/$1" >&2; die "$1 lacks: $2"; }
+}
+
+# wait_until <what> <SQL boolean>: poll every 0.1 s, for at most 30 s.
+wait_until() {
+  sql "$DB" > /dev/null <<SQL
+DO /* wiki_ds12_wait */ \$\$
+BEGIN
+  FOR i IN 1..300 LOOP
+    IF ($2) THEN RETURN; END IF;
+    PERFORM pg_sleep(0.1);
+  END LOOP;
+  RAISE EXCEPTION 'timed out waiting until: $1';
+END
+\$\$;
+SQL
+  note "reached: $1"
+}
+
+server_start() {
+  # Mark the intent before pg_ctl: a partial start is still ours to stop.
+  printf '%s\n' "$DATA" > "$SANDBOX/.started"
+  "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w -t 60 start > /dev/null 2>&1 \
+    || die "pg_ctl start failed, see $OUT/server.log"
+}
+server_stop() {
+  "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop > /dev/null 2>&1 || die "pg_ctl stop failed"
+  rm -f "$SANDBOX/.started"
+}
+
+# inventory <schema>: name|relkind|path of every relation with storage in the
+# schema, plus the TOAST tables of its tables and their TOAST indexes.  Saved
+# while the catalog rows still exist; later snapshots reuse the paths.
+inventory() {
+  sql "$DB" > "$OUT/inv_$1.txt" <<SQL
+SELECT /* wiki_ds12_inventory */ c.relname || '|' || c.relkind || '|' || pg_relation_filepath(c.oid)
+FROM pg_class AS c
+WHERE c.relkind IN ('r', 'i', 'S', 'm', 't')
+  AND (c.relnamespace = '$1'::regnamespace
+       OR c.oid IN (SELECT reltoastrelid FROM pg_class WHERE relnamespace = '$1'::regnamespace)
+       OR c.oid IN (SELECT i.indexrelid FROM pg_index AS i
+                    WHERE i.indrelid IN (SELECT reltoastrelid FROM pg_class
+                                         WHERE relnamespace = '$1'::regnamespace)))
+ORDER BY c.relname;
+SQL
+  note "inv_$1.txt: $(wc -l < "$OUT/inv_$1.txt" | tr -d '[:space:]') relations with storage"
+}
+# files_of <path>: every existing file of one relation with its length in
+# bytes: the first segment, the numbered segments, and the other forks.
+files_of() {
+  local f
+  for f in "$DATA/$1" "$DATA/$1".[0-9]* "$DATA/$1"_*; do
+    [ -e "$f" ] || continue
+    printf '%s %s\n' "${f#"$DATA"/}" "$(wc -c < "$f" | tr -d '[:space:]')"
+  done
+}
+# snapshot <schema> <label>: files_of for every inventoried relation.
+snapshot() {
+  local rel kind p
+  : > "$OUT/files_$1_$2.txt"
+  while IFS='|' read -r rel kind p; do
+    files_of "$p" >> "$OUT/files_$1_$2.txt"
+  done < "$OUT/inv_$1.txt"
+  note "files_$1_$2.txt: $(wc -l < "$OUT/files_$1_$2.txt" | tr -d '[:space:]') files"
+}
+path_of() { # path_of <schema> <relname>: the inventoried path
+  grep -E "^$2[|]" "$OUT/inv_$1.txt" | cut -d'|' -f3
+}
+
+# --------------------------------------------------------------- build -------
+keep_build_logs() {
+  local l
+  for l in configure make install; do
+    [ -f "$BUILD/$l.log" ] && cp "$BUILD/$l.log" "$OUT/$l.log"
+  done
+  return 0
+}
+stage_build() {
+  say "build 12.2 out of tree from $SRC12, RELSEG_SIZE=$RELSEG_BLOCKS"
+  source_pin
+  if [ -e "$SANDBOX" ]; then
+    own_sandbox
+  else
+    mkdir -p "$SANDBOX" || die "could not create sandbox"
+    printf '%s %s\n' "$PIN12" "$WIKI_ROOT" > "$SANDBOX/.ds12-owned"
+    own_sandbox
+  fi
+  mkdir -p "$BUILD"
+  if [ -x "$BIN/postgres" ]; then
+    [ "$(cat "$SANDBOX/.build-spec" 2> /dev/null)" = "$PIN12 $RELSEG_BLOCKS" ] \
+      || die "existing build has a different pin or segment size"
+    note "matching build already present"
+    return 0
+  fi
+  [ -x "$SRC12/configure" ] || die "no pinned checkout at $SRC12"
+  # Default configure options apart from the install prefix.
+  ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" > configure.log 2>&1 ) \
+    || { keep_build_logs; die "configure failed, see $OUT/configure.log"; }
+  # Non-default compile-time knob for this measurement: configure accepts
+  # --with-segsize only in whole gigabytes, so the generated pg_config.h is
+  # patched to a 1 MB segment instead of building multi-gigabyte fixtures.
+  sed "s/^#define RELSEG_SIZE .*/#define RELSEG_SIZE $RELSEG_BLOCKS/" \
+      "$BUILD/src/include/pg_config.h" > "$BUILD/src/include/pg_config.h.new" \
+    || die "could not patch RELSEG_SIZE"
+  mv "$BUILD/src/include/pg_config.h.new" "$BUILD/src/include/pg_config.h"
+  sed -n '/^#define RELSEG_SIZE /{p;q;}' "$BUILD/src/include/pg_config.h" | tee "$OUT/relseg_size.txt"
+  [ "$(sed -n 's/^#define RELSEG_SIZE[[:space:]]*//p' "$OUT/relseg_size.txt")" = "$RELSEG_BLOCKS" ] \
+    || die "RELSEG_SIZE patch did not take"
+  ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
+    || { keep_build_logs; grep 'error:' "$BUILD/make.log" | head -n 3 >&2
+         die "make failed, see $OUT/make.log"; }
+  keep_build_logs
+  printf '%s %s\n' "$PIN12" "$RELSEG_BLOCKS" > "$SANDBOX/.build-spec"
+  note "$("$BIN/postgres" --version)"
+}
+
+# ------------------------------------------------------------- cluster -------
+# Cluster settings, all written before the first start:
+#   listen_addresses, unix_socket_directories, port   PGC_POSTMASTER
+#   autovacuum, checkpoint_timeout                    PGC_SIGHUP
+# autovacuum is off so no worker takes locks on, reads or truncates a fixture
+# table between stages.  checkpoint_timeout is 1 h so that no timed checkpoint
+# runs between a committed drop and the file listing that follows it; the
+# script then issues CHECKPOINT itself.  Data checksums are off by default.
+stage_cluster() {
+  say "isolated 12.2 cluster, socket-only, port $PORT12"
+  own_sandbox
+  source_pin
+  [ "$(cat "$SANDBOX/.build-spec" 2> /dev/null)" = "$PIN12 $RELSEG_BLOCKS" ] \
+    || die "build specification mismatch"
+  mkdir -p "$SOCK"
+  if "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    [ -f "$SANDBOX/.started" ] || die "refusing to adopt an unowned running server"
+    note "already running"
+  else
+    [ -z "$(ls -A "$SOCK")" ] || die "socket directory is not free"
+    "$BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT12" && die "port $PORT12 is occupied"
+    if [ ! -d "$DATA" ]; then
+      "$BIN/initdb" -D "$DATA" -A trust --locale=C --encoding=UTF8 \
+        > "$OUT/initdb.log" 2>&1 || die "initdb failed, see $OUT/initdb.log"
+      {
+        printf "listen_addresses = ''\n"
+        printf "unix_socket_directories = '%s'\n" "$SOCK"
+        printf "port = %s\n" "$PORT12"
+        printf "autovacuum = off\n"
+        printf "checkpoint_timeout = '1h'\n"
+      } >> "$DATA/postgresql.conf"
+    fi
+    server_start
+  fi
+  {
+    uname -srm
+    "$BIN/postgres" --version
+    printf 'RELSEG_SIZE from build: %s\n' "$(cat "$OUT/relseg_size.txt" 2> /dev/null)"
+    sql postgres <<'SQL'
+SELECT /* wiki_ds12_platform */ name || '=' || setting || coalesce(' ' || unit, '') || ' (' || context || ')'
+FROM pg_settings
+WHERE name IN ('block_size', 'segment_size', 'data_checksums', 'shared_buffers',
+               'autovacuum', 'checkpoint_timeout', 'deadlock_timeout',
+               'default_transaction_isolation', 'lock_timeout', 'statement_timeout')
+ORDER BY name;
+SELECT /* wiki_ds12_platform */ 'max_data_alignment=' || max_data_alignment
+       || ' blocks_per_segment=' || blocks_per_segment FROM pg_control_init();
+SQL
+  } > "$OUT/platform.txt"
+  cat "$OUT/platform.txt" >&2
+  expect_line platform.txt "block_size=8192 (internal)"
+  grep -q "blocks_per_segment=$RELSEG_BLOCKS\$" "$OUT/platform.txt" || die "segment size mismatch"
+}
+
+# ------------------------------------------------------------- fixture -------
+# Disposable fixture.  Schema s is the schema whose files are emptied; s2 is
+# the missing-segment case; s_own is an empty schema for the ownership check;
+# other holds the tables that survive.  Rerunning this stage starts over.
+stage_fixture() {
+  say "fixture: database ds, schemas s, s2, s_own, other"
+  own_sandbox
+  [ -z "$BG" ] || die "background sessions still running"
+  rm -f "$SANDBOX/.emptied" "$OUT/results.txt"
+  sql postgres > /dev/null <<'SQL'
+DROP /* wiki_ds12_fixture */ DATABASE IF EXISTS ds;
+DROP /* wiki_ds12_fixture */ ROLE IF EXISTS ds12_member, ds12_other, ds12_owner;
+CREATE /* wiki_ds12_fixture */ ROLE ds12_owner;
+CREATE /* wiki_ds12_fixture */ ROLE ds12_member IN ROLE ds12_owner;
+CREATE /* wiki_ds12_fixture */ ROLE ds12_other;
+CREATE /* wiki_ds12_fixture */ DATABASE ds;
+SQL
+  sql "$DB" > /dev/null <<'SQL'
+CREATE /* wiki_ds12_fixture */ SCHEMA s;
+CREATE /* wiki_ds12_fixture */ SCHEMA s2;
+CREATE /* wiki_ds12_fixture */ SCHEMA other;
+CREATE /* wiki_ds12_fixture */ SCHEMA s_own AUTHORIZATION ds12_owner;
+
+-- s.t: a serial key, its B-tree index, and TOAST data.  Each body is 100
+-- md5 strings, 3,200 bytes of hex digits; the stage checks below that the
+-- TOAST table ends up non-empty.
+CREATE /* wiki_ds12_fixture */ TABLE s.t (id serial PRIMARY KEY, body text);
+INSERT /* wiki_ds12_fixture */ INTO s.t (body)
+  SELECT (SELECT string_agg(md5(i || ':' || g), '') FROM generate_series(1, 100) AS g)
+  FROM generate_series(1, 200) AS i;
+
+-- s.big and s2.big: 15,000 rows of about 236 bytes, about 3.5 MB, so with
+-- 1 MB segments each owns the numbered segments .1, .2 and .3.
+CREATE /* wiki_ds12_fixture */ TABLE s.big (id int, pad text);
+INSERT /* wiki_ds12_fixture */ INTO s.big SELECT i, repeat('x', 200) FROM generate_series(1, 15000) AS i;
+CREATE /* wiki_ds12_fixture */ INDEX big_id_idx ON s.big (id);
+CREATE /* wiki_ds12_fixture */ TABLE s2.big (id int, pad text);
+INSERT /* wiki_ds12_fixture */ INTO s2.big SELECT i, repeat('x', 200) FROM generate_series(1, 15000) AS i;
+
+CREATE /* wiki_ds12_fixture */ SEQUENCE s.seq;
+SELECT /* wiki_ds12_fixture */ nextval('s.seq');
+CREATE /* wiki_ds12_fixture */ MATERIALIZED VIEW s.mv AS SELECT id FROM s.big WHERE id % 10 = 0;
+CREATE /* wiki_ds12_fixture */ VIEW s.v AS SELECT id FROM s.t;
+CREATE /* wiki_ds12_fixture */ FUNCTION s.f() RETURNS int LANGUAGE sql AS 'SELECT 1';
+
+-- Foreign keys across the schema boundary in both directions.
+CREATE /* wiki_ds12_fixture */ TABLE other.parent (id int PRIMARY KEY);
+INSERT /* wiki_ds12_fixture */ INTO other.parent SELECT generate_series(1, 10);
+CREATE /* wiki_ds12_fixture */ TABLE s.child (id int, pid int REFERENCES other.parent (id));
+INSERT /* wiki_ds12_fixture */ INTO s.child SELECT i, i FROM generate_series(1, 10) AS i;
+CREATE /* wiki_ds12_fixture */ TABLE s.parent (id int PRIMARY KEY);
+INSERT /* wiki_ds12_fixture */ INTO s.parent SELECT generate_series(1, 10);
+CREATE /* wiki_ds12_fixture */ TABLE other.child_ref (id int, pid int REFERENCES s.parent (id));
+INSERT /* wiki_ds12_fixture */ INTO other.child_ref SELECT i, i FROM generate_series(1, 10) AS i;
+
+-- A trigger on a table outside s whose trigger function lives in s.
+CREATE /* wiki_ds12_fixture */ FUNCTION s.trg_fn() RETURNS trigger LANGUAGE plpgsql
+  AS 'BEGIN RETURN NEW; END';
+CREATE /* wiki_ds12_fixture */ TABLE other.audit (id int);
+CREATE /* wiki_ds12_fixture */ TRIGGER audit_trg BEFORE INSERT ON other.audit
+  FOR EACH ROW EXECUTE FUNCTION s.trg_fn();
+
+-- VACUUM writes the free space map and visibility map forks.
+VACUUM /* wiki_ds12_fixture */ (ANALYZE) s.t, s.big, s.child, s.parent, s.mv, s2.big;
+SQL
+  sql "$DB" > "$OUT/fixture_state.txt" <<'SQL'
+SELECT /* wiki_ds12_fixture */ 'relations_in_s=' || count(*) FROM pg_class WHERE relnamespace = 's'::regnamespace;
+SELECT /* wiki_ds12_fixture */ 't_toast_bytes_positive=' || (pg_relation_size(reltoastrelid) > 0) FROM pg_class WHERE oid = 's.t'::regclass;
+SELECT /* wiki_ds12_fixture */ 'child_ref_fk=' || count(*) FROM pg_constraint WHERE conrelid = 'other.child_ref'::regclass AND contype = 'f';
+SELECT /* wiki_ds12_fixture */ 'audit_user_triggers=' || count(*) FROM pg_trigger WHERE tgrelid = 'other.audit'::regclass AND NOT tgisinternal;
+SELECT /* wiki_ds12_fixture */ 'parent_ri_triggers=' || count(*) FROM pg_trigger WHERE tgrelid = 'other.parent'::regclass AND tgisinternal;
+SQL
+  cat "$OUT/fixture_state.txt" >&2
+  expect_line fixture_state.txt "t_toast_bytes_positive=true"
+  expect_line fixture_state.txt "child_ref_fk=1"
+  expect_line fixture_state.txt "audit_user_triggers=1"
+  expect_line fixture_state.txt "parent_ri_triggers=2"
+  inventory s
+  inventory s2
+  snapshot s fixture
+  snapshot s2 fixture
+  local p q
+  p=$(path_of s big); q=$(path_of s2 big)
+  for f in "$p.1" "$p.2" "$p.3" "${p}_fsm" "${p}_vm" "$q.1" "$q.2" "$q.3" "${q}_fsm" "${q}_vm"; do
+    grep -q "^$f [1-9]" "$OUT/files_s_fixture.txt" "$OUT/files_s2_fixture.txt" \
+      || die "fixture file missing or empty: $f"
+  done
+  touch "$SANDBOX/.fixture"
+  pass "fixture: s.big and s2.big own segments .1 .2 .3 plus _fsm and _vm; s.t has TOAST data"
+}
+
+# --------------------------------------------------------------- empty -------
+# While the server is stopped, every file of every relation in s becomes zero
+# length.  In s2 the same happens, except that s2.big's segment .1 is removed.
+stage_empty() {
+  say "empty the relation files while the server is stopped"
+  own_sandbox
+  [ -f "$SANDBOX/.fixture" ] || die "run the fixture stage first"
+  [ ! -f "$SANDBOX/.emptied" ] || die "files already emptied; re-run fixture first"
+  server_stop
+  local rel kind p f q
+  for sch in s s2; do
+    while IFS='|' read -r rel kind p; do
+      for f in "$DATA/$p" "$DATA/$p".[0-9]* "$DATA/$p"_*; do
+        [ -e "$f" ] || continue
+        cat /dev/null > "$f"
+      done
+    done < "$OUT/inv_$sch.txt"
+  done
+  q=$(path_of s2 big)
+  rm "$DATA/$q.1"
+  touch "$SANDBOX/.emptied"
+  server_start
+  snapshot s emptied
+  snapshot s2 emptied
+  [ -z "$(grep -v ' 0$' "$OUT/files_s_emptied.txt")" ] || die "a file of s is not empty"
+  [ -z "$(grep -v ' 0$' "$OUT/files_s2_emptied.txt")" ] || die "a file of s2 is not empty"
+  grep -q "^$q.1 " "$OUT/files_s2_emptied.txt" && die "s2.big segment .1 still exists"
+  pass "empty: $(wc -l < "$OUT/files_s_emptied.txt" | tr -d '[:space:]') files of s and $(wc -l < "$OUT/files_s2_emptied.txt" | tr -d '[:space:]') files of s2 at 0 bytes; s2.big .1 removed"
+}
+
+# ------------------------------------------------------------ restrict -------
+stage_restrict() {
+  say "plain DROP SCHEMA, which means RESTRICT"
+  own_sandbox
+  [ -f "$SANDBOX/.emptied" ] || die "run the empty stage first"
+  must_fail restrict 2BP01 "$DB" <<'SQL'
+DROP /* wiki_ds12_restrict */ SCHEMA s;
+SQL
+  expect_text restrict.txt "cannot drop schema s because other objects depend on it"
+  expect_text restrict.txt "table s.t depends on schema s"
+  expect_text restrict.txt "table s.big depends on schema s"
+  snapshot s after_restrict
+  cmp -s "$OUT/files_s_emptied.txt" "$OUT/files_s_after_restrict.txt" || die "files changed"
+  pass "restrict: DROP SCHEMA s refused with 2BP01 ($(grep -c 'depends on' "$OUT/restrict.txt") dependents listed); files unchanged"
+}
+
+# --------------------------------------------------------------- locks -------
+# Session A holds AccessShareLock on s.t.  A plain DROP SCHEMA (session D)
+# then queues for AccessExclusiveLock on s.t before RESTRICT is checked.
+stage_locks() {
+  say "RESTRICT locks dependents during the walk, before it refuses"
+  own_sandbox
+  [ -f "$SANDBOX/.emptied" ] || die "run the empty stage first"
+  local fifo="$SANDBOX/a.fifo" a_pid d_pid rc
+  rm -f "$fifo"
+  mkfifo "$fifo"
+  "${PSQL[@]}" -d "$DB" < "$fifo" > "$OUT/locks_a.txt" 2>&1 &
+  a_pid=$!; BG="$BG $a_pid"
+  exec 3> "$fifo"
+  cat >&3 <<'SQL'
+BEGIN /* wiki_ds12_locks_a */;
+SET /* wiki_ds12_locks_a */ LOCAL lock_timeout = '2s';
+LOCK /* wiki_ds12_locks_a */ TABLE s.t IN ACCESS SHARE MODE;
+SELECT /* wiki_ds12_locks_a */ 'a: AccessShareLock held';
+SQL
+  wait_until "session A holds AccessShareLock on s.t" \
+    "EXISTS (SELECT 1 FROM pg_locks WHERE relation = 's.t'::regclass AND mode = 'AccessShareLock' AND granted)"
+
+  # Baseline: with no drop waiting, a new session gets the same lock at once.
+  sql "$DB" > "$OUT/locks_c0.txt" 2>&1 <<'SQL'
+BEGIN /* wiki_ds12_locks_c0 */;
+SET /* wiki_ds12_locks_c0 */ LOCAL lock_timeout = '1s';
+LOCK /* wiki_ds12_locks_c0 */ TABLE s.t IN ACCESS SHARE MODE;
+SELECT /* wiki_ds12_locks_c0 */ 'c0: AccessShareLock granted';
+COMMIT /* wiki_ds12_locks_c0 */;
+SQL
+  expect_line locks_c0.txt "c0: AccessShareLock granted"
+  pass "locks: with no drop waiting, a new session got AccessShareLock on s.t at once"
+
+  "${PSQL[@]}" -d "$DB" > "$OUT/locks_d.txt" 2>&1 3>&- <<'SQL' &
+DROP /* wiki_ds12_locks_d */ SCHEMA s;
+SQL
+  d_pid=$!; BG="$BG $d_pid"
+  wait_until "the drop waits for AccessExclusiveLock on s.t" \
+    "EXISTS (SELECT 1 FROM pg_locks WHERE relation = 's.t'::regclass AND mode = 'AccessExclusiveLock' AND NOT granted)"
+  sql "$DB" > "$OUT/locks_d_held.txt" <<'SQL'
+SELECT /* wiki_ds12_locks */ l.locktype || '|'
+       || coalesce(l.relation::regclass::text, l.classid::regclass::text || ':' || coalesce(n.nspname, l.objid::text))
+       || '|' || l.mode || '|' || l.granted
+FROM pg_locks AS l
+LEFT JOIN pg_namespace AS n ON l.classid = 'pg_namespace'::regclass AND n.oid = l.objid
+WHERE l.pid = (SELECT pid FROM pg_locks
+               WHERE relation = 's.t'::regclass AND mode = 'AccessExclusiveLock' AND NOT granted)
+  AND l.locktype IN ('relation', 'object')
+ORDER BY 1;
+SQL
+  cat "$OUT/locks_d_held.txt" >&2
+  expect_line locks_d_held.txt "object|pg_namespace:s|AccessExclusiveLock|true"
+  expect_line locks_d_held.txt "relation|s.t|AccessExclusiveLock|false"
+  pass "locks: the RESTRICT drop holds the schema lock and waits for AccessExclusiveLock on s.t"
+
+  # A session that holds no lock on s.t now queues behind the waiting drop.
+  must_fail locks_c1 55P03 "$DB" <<'SQL'
+BEGIN /* wiki_ds12_locks_c1 */;
+SET /* wiki_ds12_locks_c1 */ LOCAL lock_timeout = '1s';
+LOCK /* wiki_ds12_locks_c1 */ TABLE s.t IN ACCESS SHARE MODE;
+SQL
+  expect_text locks_c1.txt "canceling statement due to lock timeout"
+  pass "locks: while the drop waits, a session holding no lock timed out (55P03) asking for AccessShareLock"
+
+  # Session A asks again for the mode it holds, then for a new mode.
+  cat >&3 <<'SQL'
+LOCK /* wiki_ds12_locks_a */ TABLE s.t IN ACCESS SHARE MODE;
+SELECT /* wiki_ds12_locks_a */ 'a: same mode again';
+LOCK /* wiki_ds12_locks_a */ TABLE s.t IN ROW EXCLUSIVE MODE;
+SELECT /* wiki_ds12_locks_a */ 'a: RowExclusiveLock granted';
+SQL
+  wait_until "session A holds RowExclusiveLock on s.t" \
+    "EXISTS (SELECT 1 FROM pg_locks WHERE relation = 's.t'::regclass AND mode = 'RowExclusiveLock' AND granted)"
+  wait_until "the drop still waits" \
+    "EXISTS (SELECT 1 FROM pg_locks WHERE relation = 's.t'::regclass AND mode = 'AccessExclusiveLock' AND NOT granted)"
+
+  # Release A; the drop then finishes its walk and refuses.
+  printf '%s\n' "COMMIT /* wiki_ds12_locks_a */;" >&3
+  exec 3>&-
+  rc=0; wait "$a_pid" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$OUT/locks_a.txt" >&2; die "session A exited $rc"; }
+  rc=0; wait "$d_pid" || rc=$?
+  BG=""
+  rm -f "$fifo"
+  [ "$rc" -eq 3 ] || { cat "$OUT/locks_d.txt" >&2; die "the drop exited $rc, expected 3"; }
+  expect_text locks_d.txt "ERROR:  2BP01:"
+  expect_line locks_a.txt "a: same mode again"
+  expect_line locks_a.txt "a: RowExclusiveLock granted"
+  pass "locks: A re-acquired AccessShareLock and got RowExclusiveLock within its 2 s lock_timeout while the drop waited"
+  pass "locks: after A committed, the waiting drop refused with 2BP01"
+}
+
+# --------------------------------------------------------------- owner -------
+# s_own belongs to ds12_owner.  ds12_member is a member of ds12_owner that
+# inherits its privileges; ds12_other is not.  Both drops roll back.
+stage_owner() {
+  say "the schema ownership check and role membership"
+  own_sandbox
+  sql "$DB" > "$OUT/owner_roles.txt" <<'SQL'
+SELECT /* wiki_ds12_owner */ 'owner=' || nspowner::regrole FROM pg_namespace WHERE nspname = 's_own';
+SELECT /* wiki_ds12_owner */ 'member_inherits=' || rolinherit FROM pg_roles WHERE rolname = 'ds12_member';
+SELECT /* wiki_ds12_owner */ 'member_of_owner=' || pg_has_role('ds12_member', 'ds12_owner', 'MEMBER');
+SQL
+  expect_line owner_roles.txt "owner=ds12_owner"
+  expect_line owner_roles.txt "member_inherits=true"
+  expect_line owner_roles.txt "member_of_owner=true"
+  sql "$DB" > "$OUT/owner_member.txt" 2>&1 <<'SQL'
+BEGIN /* wiki_ds12_owner_member */;
+SET /* wiki_ds12_owner_member */ LOCAL ROLE ds12_member;
+DROP /* wiki_ds12_owner_member */ SCHEMA s_own;
+SELECT /* wiki_ds12_owner_member */ 'member: s_own rows left=' || count(*) FROM pg_namespace WHERE nspname = 's_own';
+ROLLBACK /* wiki_ds12_owner_member */;
+SQL
+  expect_line owner_member.txt "member: s_own rows left=0"
+  must_fail owner_other 42501 "$DB" <<'SQL'
+BEGIN /* wiki_ds12_owner_other */;
+SET /* wiki_ds12_owner_other */ LOCAL ROLE ds12_other;
+DROP /* wiki_ds12_owner_other */ SCHEMA s_own;
+SQL
+  expect_text owner_other.txt "must be owner of schema s_own"
+  sql "$DB" > "$OUT/owner_after.txt" <<'SQL'
+SELECT /* wiki_ds12_owner */ 's_own rows=' || count(*) FROM pg_namespace WHERE nspname = 's_own';
+SQL
+  expect_line owner_after.txt "s_own rows=1"
+  pass "owner: a non-owner member of the owning role dropped s_own (rolled back); a non-member got 42501"
+}
+
+# ------------------------------------------------------------ rollback -------
+stage_rollback() {
+  say "DROP SCHEMA s CASCADE in a transaction that rolls back"
+  own_sandbox
+  [ -f "$SANDBOX/.emptied" ] || die "run the empty stage first"
+  sql "$DB" > "$OUT/rollback.txt" 2>&1 <<'SQL'
+SELECT /* wiki_ds12_rollback */ 'before: relations_in_s=' || count(*) FROM pg_class WHERE relnamespace = 's'::regnamespace;
+BEGIN /* wiki_ds12_rollback */;
+DROP /* wiki_ds12_rollback */ SCHEMA s CASCADE;
+SELECT /* wiki_ds12_rollback */ 'lock|' || c.relname || '|' || l.mode || '|' || l.granted
+FROM pg_locks AS l JOIN pg_class AS c ON c.oid = l.relation
+WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation'
+  AND c.relnamespace = 'other'::regnamespace AND c.relkind = 'r'
+ORDER BY 1;
+ROLLBACK /* wiki_ds12_rollback */;
+SELECT /* wiki_ds12_rollback */ 'after: relations_in_s=' || count(*) FROM pg_class WHERE relnamespace = 's'::regnamespace;
+SQL
+  expect_text rollback.txt "drop cascades to constraint child_ref_pid_fkey on table other.child_ref"
+  expect_text rollback.txt "drop cascades to trigger audit_trg on table other.audit"
+  expect_line rollback.txt "lock|parent|AccessExclusiveLock|true"
+  expect_line rollback.txt "lock|child_ref|AccessExclusiveLock|true"
+  expect_line rollback.txt "lock|audit|AccessExclusiveLock|true"
+  [ "$(sed -n 's/^before: //p' "$OUT/rollback.txt")" = "$(sed -n 's/^after: //p' "$OUT/rollback.txt")" ] \
+    || die "the rollback did not restore the relation count"
+  snapshot s after_rollback
+  cmp -s "$OUT/files_s_emptied.txt" "$OUT/files_s_after_rollback.txt" || die "files changed"
+  pass "rollback: CASCADE held AccessExclusiveLock on surviving other.parent, other.child_ref and other.audit"
+  pass "rollback: after ROLLBACK, $(sed -n 's/^after: //p' "$OUT/rollback.txt"); files still present at 0 bytes"
+}
+
+# ------------------------------------------------------------- cascade -------
+stage_cascade() {
+  say "DROP SCHEMA s CASCADE commits"
+  own_sandbox
+  [ -f "$SANDBOX/.emptied" ] || die "run the empty stage first"
+  sql "$DB" > "$OUT/cascade_check.txt" <<'SQL'
+SELECT /* wiki_ds12_cascade */ 'schema_s=' || count(*) FROM pg_namespace WHERE nspname = 's';
+SQL
+  expect_line cascade_check.txt "schema_s=1"
+  sql "$DB" > "$OUT/cascade.txt" 2>&1 <<'SQL'
+DROP /* wiki_ds12_cascade */ SCHEMA s CASCADE;
+SQL
+  snapshot s after_commit
+  # After commit each relation keeps only its first main-fork file, emptied
+  # and queued for unlink at the next checkpoint.
+  cut -d'|' -f3 "$OUT/inv_s.txt" | sed 's/$/ 0/' | sort > "$OUT/expected_s_after_commit.txt"
+  sort "$OUT/files_s_after_commit.txt" > "$OUT/sorted_s_after_commit.txt"
+  diff "$OUT/expected_s_after_commit.txt" "$OUT/sorted_s_after_commit.txt" > "$OUT/diff_s_after_commit.txt" \
+    || { cat "$OUT/diff_s_after_commit.txt" >&2; die "unexpected files after commit"; }
+  sql "$DB" > "$OUT/cascade_survivors.txt" <<'SQL'
+SELECT /* wiki_ds12_cascade */ 'schema_s=' || count(*) FROM pg_namespace WHERE nspname = 's';
+SELECT /* wiki_ds12_cascade */ 'other_tables=' || count(*) FROM pg_class WHERE relnamespace = 'other'::regnamespace AND relkind = 'r';
+SELECT /* wiki_ds12_cascade */ 'child_ref_fk=' || count(*) FROM pg_constraint WHERE conrelid = 'other.child_ref'::regclass AND contype = 'f';
+SELECT /* wiki_ds12_cascade */ 'audit_user_triggers=' || count(*) FROM pg_trigger WHERE tgrelid = 'other.audit'::regclass AND NOT tgisinternal;
+SELECT /* wiki_ds12_cascade */ 'parent_ri_triggers=' || count(*) FROM pg_trigger WHERE tgrelid = 'other.parent'::regclass AND tgisinternal;
+SELECT /* wiki_ds12_cascade */ 'child_ref_rows=' || count(*) FROM other.child_ref;
+SQL
+  cat "$OUT/cascade_survivors.txt" >&2
+  for l in schema_s=0 other_tables=3 child_ref_fk=0 audit_user_triggers=0 parent_ri_triggers=0 child_ref_rows=10; do
+    expect_line cascade_survivors.txt "$l"
+  done
+  pass "cascade: committed; $(wc -l < "$OUT/inv_s.txt" | tr -d '[:space:]') first main-fork files remain at 0 bytes, every numbered segment and other fork is gone"
+  pass "cascade: other.child_ref survives without its foreign key; other.audit without its trigger; other.parent without its RI triggers"
+  sql "$DB" > /dev/null <<'SQL'
+CHECKPOINT /* wiki_ds12_cascade */;
+SQL
+  snapshot s after_checkpoint
+  [ ! -s "$OUT/files_s_after_checkpoint.txt" ] \
+    || { cat "$OUT/files_s_after_checkpoint.txt" >&2; die "files remain after CHECKPOINT"; }
+  pass "cascade: after one CHECKPOINT no file of s remains"
+}
+
+# ------------------------------------------------------------- missing -------
+stage_missing() {
+  say "a missing segment stops the unlink loop; empty segments do not"
+  own_sandbox
+  [ -f "$SANDBOX/.emptied" ] || die "run the empty stage first"
+  local q
+  q=$(path_of s2 big)
+  sql "$DB" > "$OUT/missing.txt" 2>&1 <<'SQL'
+DROP /* wiki_ds12_missing */ SCHEMA s2 CASCADE;
+SQL
+  snapshot s2 after_commit
+  for l in "$q 0" "$q.2 0" "$q.3 0"; do expect_line files_s2_after_commit.txt "$l"; done
+  for f in "${q}_fsm" "${q}_vm"; do
+    grep -q "^$f " "$OUT/files_s2_after_commit.txt" && die "$f survived the commit"
+  done
+  sql "$DB" > /dev/null <<'SQL'
+CHECKPOINT /* wiki_ds12_missing */;
+SQL
+  snapshot s2 after_checkpoint
+  printf '%s\n' "$q.2 0" "$q.3 0" > "$OUT/expected_s2_after_checkpoint.txt"
+  sort "$OUT/files_s2_after_checkpoint.txt" | diff "$OUT/expected_s2_after_checkpoint.txt" - \
+    > "$OUT/diff_s2_after_checkpoint.txt" \
+    || { cat "$OUT/diff_s2_after_checkpoint.txt" >&2; die "unexpected s2 files after CHECKPOINT"; }
+  if grep -F -q 'could not remove file' "$OUT/server.log"; then
+    die "the server log has a file-removal warning"
+  fi
+  pass "missing: with s2.big .1 removed, .2 and .3 survived the commit and the CHECKPOINT as orphans, with no warning"
+}
+
+# -------------------------------------------------------------- report -------
+stage_report() {
+  say "results"
+  own_sandbox
+  cat "$OUT/results.txt" >&2
+  note "read platform.txt first, then results.txt, restrict.txt, locks_d_held.txt and rollback.txt"
+}
+
+# ---------------------------------------------------------- stop, clean ------
+# Processes still running from this sandbox's binaries: the postmaster's
+# command line starts with "$BIN/postgres -D $DATA", and a leftover psql's
+# with "$BIN/psql".  Anchoring at the start keeps the match off this grep and
+# off any calling shell whose own command line merely mentions the paths.
+procs_from_sandbox() {
+  ps -A -o args= | grep -c -- "^$BIN/" || true
+}
+stage_stop() {
+  say "stop cluster"
+  [ -e "$SANDBOX" ] || { note "sandbox absent"; return 0; }
+  own_sandbox
+  if "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1; then
+    [ -f "$SANDBOX/.started" ] || die "refusing to stop an unowned server"
+    server_stop
+  else
+    note "not running"
+  fi
+  [ ! -f "$DATA/postmaster.pid" ] || die "postmaster.pid survived"
+  [ "$(procs_from_sandbox)" -eq 0 ] || die "a process from $BIN is still running"
+  [ ! -d "$SOCK" ] || [ -z "$(ls -A "$SOCK")" ] || die "socket directory is not free"
+  if [ -x "$BIN/pg_isready" ]; then
+    "$BIN/pg_isready" -q -h "$SOCK" -p "$PORT12" && die "socket is still active"
+    "$BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT12" && die "port $PORT12 is occupied"
+  fi
+  rm -f "$SANDBOX/.started"
+  note "stopped: no pid file, process, socket, or listener on port $PORT12"
+}
+stage_clean() {
+  say "delete sandbox $SANDBOX"
+  stage_stop
+  [ -e "$SANDBOX" ] || return 0
+  own_sandbox
+  rm -rf "$SANDBOX"
+  note "deleted $SANDBOX"
+}
+
+# ------------------------------------------------------------- driver --------
+stages="$*"
+[ $# -eq 0 ] && stages="build cluster fixture empty restrict locks owner rollback cascade missing report"
+for st in $stages; do
+  case "$(type -t "stage_$st" 2> /dev/null)" in
+    function) "stage_$st" ;;
+    *) die "unknown stage: $st" ;;
+  esac
+done
+```
 
 ## Context Reviewed
 
@@ -210,28 +1046,32 @@ The checked regression tests cover schema creation/rename followed by cascade de
 - Catalog and object-address structures, generated headers, reverse header inclusion and catalog build; ordinary regression and event-trigger tests.
 - Review fix on 2026-10-21: lock acquisition during name lookup and the dependency walk, and the lock manager's wait-queue rule; foreign-key constraint dependencies, action-trigger creation and trigger removal; partition-drop locks; physical-address setup in the relcache; utility dispatch to `ProcessUtilitySlow`; index use in catalog scans, buffer-miss reads, the short-read and missing-segment errors; and the `zero_damaged_pages` and `ignore_system_indexes` definitions.
 - Review fix on 2026-10-22: indexed heap fetch and empty-page interpretation; B-tree zero-page rejection; already-open segment bypass; immediate lock reacquisition and the conditional early grant in `ProcSleep()`; and referenced-table membership in the deletion set.
-- Shared glossary and matching-version pages about zeroed relation files, amcheck, last-segment checks, partitioned indexes, and old-file disposal after VACUUM FULL. PostgreSQL 12 has no common-concept pages to link for these mechanisms.
+- Second review fix on 2026-10-22: the normal dependency of a foreign key on the referenced columns and the lock `RemoveConstraintById()` takes; trigger-function, column-default and policy dependencies and the locks their removal takes; `CheckTableForSerializableConflictIn()` and the serialization-failure branch; `pg_namespace_ownercheck()`, `has_privs_of_role()` and `roles_has_privs_of()`; the start point of `_mdfd_getseg()`'s size check; the `PGC_SUSET` context of `zero_damaged_pages` and its invalid-header branch; the namespace regression test's post-drop count; and, for the measurement, the GUC definitions it changes, the lock-timeout timer and error site, the SQLSTATE table and the default segment size.
+- Shared glossary and matching-version pages about zeroed relation files, amcheck, last-segment checks, partitioned indexes, old-file disposal after VACUUM FULL, the post-drop health checklist and the empty-file failure scenarios. PostgreSQL 12 has no common-concept pages to link for these mechanisms.
 
 ## Evidence Map
 
 | Claim | Primary evidence |
 |---|---|
-| File emptiness does not satisfy `RESTRICT` | [heap.c#schema-edge](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408), [dependency.c#RESTRICT](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203) |
+| File emptiness does not satisfy `RESTRICT` | [heap.c#schema-edge](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1388-L1408), [dependency.c#RESTRICT](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203); measured `restrict.txt` |
 | Cascade collects catalog dependencies before deletion | [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437) |
 | The schema is locked during lookup, before the ownership check | [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088), [dropcmds.c#ownership-check](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L104-L109) |
-| Every dependent is locked during the walk, before the `RESTRICT` check; while the drop waits, sessions holding no lock on the object queue behind it | [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901), [dependency.c#report-after-walk](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L401-L429), [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985), [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381) |
-| `CASCADE` deletion locks foreign-key referenced tables, which can be outside the schema | [pg_constraint.c#auto-dependency-on-table](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L233-L258), [tablecmds.c#createForeignKeyActionTriggers](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L9940-L10002), [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530) |
-| Ordinary deletion needs metadata, not target page contents | [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998), [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266) |
-| Existing zero-length segments do not stop unlink traversal | [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359) |
-| Abort and commit choose different cleanup entries | [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L398-L462) |
+| The ownership check passes a superuser and any role with the owner's privileges, including inheriting members of the owning role | [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951), [acl.c#has_privs_of_role](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4907-L4922), [acl.c#roles_has_privs_of](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4732-L4817); measured `owner_member.txt`, `owner_other.txt` |
+| Every dependent is locked during the walk, before the `RESTRICT` check; while the drop waits, sessions holding no lock on the object queue behind it | [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901), [dependency.c#report-after-walk](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L401-L429), [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985), [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381); measured `locks_d_held.txt`, `locks_c0.txt`, `locks_c1.txt` |
+| A session that already holds a lock on the object is granted at once, waits ahead of the drop, or gets a deadlock error | [lock.c#already-held-mode](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L828-L840), [lock.c#LockConflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103), [proc.c#existing-holder-queue-position](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1100-L1204); measured `locks_a.txt` |
+| `CASCADE` deletion locks surviving tables outside the schema and removes their dependent foreign keys and triggers | [pg_constraint.c#auto-dependency-on-table](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L233-L258), [pg_constraint.c#normal-dependency-on-referenced-columns](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L274-L298), [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580), [tablecmds.c#createForeignKeyActionTriggers](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L9940-L10002), [trigger.c#function-dependency](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1006-L1017), [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530); measured `rollback.txt`, `cascade_survivors.txt` |
+| A `SERIALIZABLE` drop can fail on a read/write conflict | [heap.c#serializable-conflict-check](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1902-L1908), [predicate.c#CheckTableForSerializableConflictIn](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4540-L4600), [predicate.c#writer-failure](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4776-L4794); not measured |
+| Ordinary deletion needs metadata, not target page contents | [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998), [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266), [md.c#read-errors-and-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629); measured: no short-read error in `rollback.txt`, `cascade.txt` or `missing.txt` after a restart with the files emptied |
+| Existing zero-length segments do not stop unlink traversal; a missing filename stops it silently | [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359); measured `files_s_after_commit.txt`, `files_s2_after_checkpoint.txt` |
+| Abort and commit choose different cleanup entries | [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L398-L462); measured `files_s_after_rollback.txt`, `files_s_after_checkpoint.txt` |
 | Catalog loss and installed code limit the conclusion | [dependency.c#dependency-scan](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L829-L866), [event_trigger.out#rejected-schema-drop](../../../../raw/postgres-12/src/test/regress/expected/event_trigger.out#L277-L291) |
 | Catalog outcomes depend on the buffer hit, segment-open state, settings and page reader | [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629), [md.c#_mdfd_getseg](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1112-L1204), [heapam_handler.c#heap-fetch](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L129-L156), [heapam.c#empty-page-search](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1550-L1557), [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L689-L719) |
 
 ## Open Questions
 
 - The exact set of files emptied, remaining catalog integrity, installed triggers/hooks/access methods, and concurrent server activity are not supplied. This page establishes conditional engine behavior; it cannot certify the outcome on the affected database.
-- No runtime reproduction of the exact all-files-emptied fixture was performed here. The zero-file conclusion follows from the pinned deletion path, and is distinct from the earlier pages' measurements of scans and integrity checks. The damaged-catalog outcomes and the lock waits are likewise read from the source, not measured.
-- That `cat /dev/null > file` truncates the file to zero length is shell behavior, which the pinned PostgreSQL checkout cannot establish, so the page assumes it. For user files the assumption does not change the deletion outcome, because the deletion path never reads their contents and removes storage by filename. The short-file branches in [Catalog damage branches](#catalog-damage-branches) do assume truncation, because their read errors come from short files. [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359)
+- The measurement covers emptied user-relation files with intact catalogs, at 1 MB segments, on one platform; see [Last run](#last-run). The damaged-catalog branches, the `SERIALIZABLE` failure branch, the `_mdfd_getseg()` open-segment branch and default 1 GB segments are read from the source, not measured. No measured result disagreed with the source reading.
+- That `cat /dev/null > file` truncates the file to zero length is shell behavior, which the pinned PostgreSQL checkout cannot establish, so the page assumes it. The measurement's `empty` stage observed it on its platform, where every file it emptied this way then had 0 bytes. For user files the assumption does not change the deletion outcome, because the deletion path never reads their contents and removes storage by filename. The short-file branches in [Catalog damage branches](#catalog-damage-branches) do assume truncation, because their read errors come from short files. [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359)
 - **Comparison-page conflicts remain outside this fix.** The [zeroed-file size explanation](zeroed-relation-file.md#why-scans-stay-silent-the-size-check-stops-early) states an unconditional first-short-segment rule, while its [warm-backend explanation](zeroed-relation-file.md#when-errors-do-appear) correctly allows an earlier short segment to be trusted as full. The [last-segment page's truncation row](zeroed-last-segment-check-all-tables.md#what-zeroing-a-file-leaves-behind) and [size-read explanation](zeroed-last-segment-check-all-tables.md#why-reading-the-last-blocks-cannot-see-a-truncated-segment) use the same unqualified rule, while that page's [lead](zeroed-last-segment-check-all-tables.md#answer-up-front) allows different open-state behavior. The pinned implementation supports the qualified statements: `mdnblocks()` starts at the last open segment and trusts earlier open segments. Their fresh-state measurements are not disputed; those pages and scripts were not changed. [md.c#mdnblocks-open-state](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L715-L737)
 - PostgreSQL 12 lacks common-concept pages for schema dependency deletion and the relation-file deletion lifecycle. Those would be useful separate pages; none was created as a side effect of this answer.
 
@@ -242,6 +1082,10 @@ The checked regression tests cover schema creation/rename followed by cascade de
 - [heapam_handler.c#heapam_index_fetch_tuple](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L117-L156), [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1526-L1655), [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L348-L360), [bufpage.c#all-zero-acceptance](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L130-L142) — how a zero-filled catalog heap page supplies no tuple.
 - [nbtpage.c#read-and-check](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L763-L769), [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L689-L719) — B-tree rejection after zero-fill.
 - [dropcmds.c#RemoveObjects](../../../../raw/postgres-12/src/backend/commands/dropcmds.c#L49-L123), [objectaddress.c#lock-after-lookup](../../../../raw/postgres-12/src/backend/catalog/objectaddress.c#L1076-L1088) — command-level resolution, locking and authorization.
+- [aclchk.c#pg_namespace_ownercheck](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951), [acl.c#has_privs_of_role](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4907-L4922), [acl.c#roles_has_privs_of](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L4732-L4817) — schema ownership through inherited role membership.
+- [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580), [heap.c#RemoveAttrDefaultById-lock](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1808-L1812), [policy.c#RemovePolicyById-lock](../../../../raw/postgres-12/src/backend/commands/policy.c#L385-L390) — removal locks on surviving tables outside the schema.
+- [predicate.c#CheckTableForSerializableConflictIn](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4498-L4608), [predicate.c#OnConflict_CheckForSerializationFailure](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4653-L4809) — the `SERIALIZABLE` drop branch.
+- [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2397), [proc.c#lock-timeout-timer](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1242-L1264), [postgres.c#lock-timeout-error](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3087), [errcodes.txt:271](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L271), [errcodes.txt:418](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L418) — the timeout and SQLSTATEs the measurement observes.
 - [utility.c#standard_ProcessUtility-drop](../../../../raw/postgres-12/src/backend/tcop/utility.c#L834-L844), [event_trigger.c#EventTriggerSupportsObjectType](../../../../raw/postgres-12/src/backend/commands/event_trigger.c#L1097-L1141) — dispatch to `ProcessUtilitySlow`.
 - [dependency.c#performMultipleDeletions](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L374-L437), [dependency.c#lock-before-recursing](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L883-L901) — discovery, locking, checks and deletion.
 - [lock.c#join-wait-queue](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L976-L985), [lmgr/README#lock-acquisition-rules](../../../../raw/postgres-12/src/backend/storage/lmgr/README#L362-L381) — ordinary queuing and the existing-holder exceptions detailed above.
@@ -261,3 +1105,5 @@ The checked regression tests cover schema creation/rename followed by cascade de
 - [A Manually Zeroed Relation File in PostgreSQL 12 (unverified)](zeroed-relation-file.md)
 - [Can amcheck Detect Zeroed Relation Segments in PostgreSQL 12? (unverified)](../indexing/amcheck-zeroed-relation-segments.md)
 - [Checking Every Table, Catalogs Included, for a Zeroed Last Segment (unverified)](zeroed-last-segment-check-all-tables.md)
+- [Failure Scenarios That Can Leave Schema Relation Files Empty in PostgreSQL 12 (unverified)](schema-empty-relation-files-failure-scenarios.md)
+- [Database Health After Schema Files Were Zeroed and the Schema Dropped in PostgreSQL 12 (unverified)](../server-administration/health-after-zeroed-schema-drop.md)

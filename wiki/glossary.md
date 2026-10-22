@@ -3720,7 +3720,7 @@ Related: [Buffer manager](#buffer-manager), [Clock sweep](#clock-sweep), [VACUUM
 Role membership lets one role act with another role's privileges. Each `GRANT role TO member` is a row of `pg_auth_members` that carries three options: `admin_option` (may grant the role onward), `inherit_option` (uses the role's privileges without `SET ROLE`) and `set_option` (may `SET ROLE` to it) ([pg_auth_members.h:36-38](../raw/postgres-17/src/include/catalog/pg_auth_members.h#L36-L38), [grant.sgml:286-290](../raw/postgres-17/doc/src/sgml/ref/grant.sgml#L286-L290)). The role-level `INHERIT` attribute (`pg_authid.rolinherit`) only supplies the default for a new grant that omits the option ([pg_authid.h:36](../raw/postgres-17/src/include/catalog/pg_authid.h#L36)). Privilege checks such as [row-level security](#row-level-security) policy matching call `has_privs_of_role()`, which walks memberships through `roles_is_member_of()` and follows only grants with `inherit_option` ([acl.c#has_privs_of_role](../raw/postgres-17/src/backend/utils/adt/acl.c#L5151-L5168), [acl.c#roles_is_member_of](../raw/postgres-17/src/backend/utils/adt/acl.c#L5019-L5112)). The owner of the current database is also an implicit member of `pg_database_owner`, with no `pg_auth_members` row ([acl.c:5112](../raw/postgres-17/src/backend/utils/adt/acl.c#L5112)).
 
 **Version notes:**
-- PostgreSQL 12: Differs: a membership row has only `admin_option`, and inheritance is decided per role by `rolinherit`; there is no `pg_database_owner` ([pg_auth_members.h:35](../raw/postgres-12/src/include/catalog/pg_auth_members.h#L35), [pg_authid.h:36](../raw/postgres-12/src/include/catalog/pg_authid.h#L36), [acl.c#roles_is_member_of](../raw/postgres-12/src/backend/utils/adt/acl.c#L4830-L4896)).
+- PostgreSQL 12: Differs: a membership row has only `admin_option`, and inheritance is decided per role by `rolinherit`; there is no `pg_database_owner` ([pg_auth_members.h:35](../raw/postgres-12/src/include/catalog/pg_auth_members.h#L35), [pg_authid.h:36](../raw/postgres-12/src/include/catalog/pg_authid.h#L36)). `has_privs_of_role()` walks memberships through a separate function, `roles_has_privs_of()`, which skips the memberships of any role whose `rolinherit` is false; `roles_is_member_of()` recurses regardless of `rolinherit` and serves plain membership tests such as `is_member_of_role()` ([acl.c#has_privs_of_role](../raw/postgres-12/src/backend/utils/adt/acl.c#L4907-L4922), [acl.c#roles_has_privs_of](../raw/postgres-12/src/backend/utils/adt/acl.c#L4732-L4817), [acl.c#roles_is_member_of](../raw/postgres-12/src/backend/utils/adt/acl.c#L4820-L4896), [acl.c#is_member_of_role](../raw/postgres-12/src/backend/utils/adt/acl.c#L4931-L4945)). Schema ownership checks use `has_privs_of_role()`, so an inheriting member of a schema's owner role passes them ([aclchk.c#pg_namespace_ownercheck](../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951)).
 - PostgreSQL 14: Differs: as in 12, inheritance is per role, not per grant; `pg_database_owner` implicit membership exists ([pg_auth_members.h:35](../raw/postgres-14/src/include/catalog/pg_auth_members.h#L35), [pg_authid.h:36](../raw/postgres-14/src/include/catalog/pg_authid.h#L36), [acl.c:4828](../raw/postgres-14/src/backend/utils/adt/acl.c#L4828)).
 - PostgreSQL 18: Holds ([pg_auth_members.h:36-38](../raw/postgres-18/src/include/catalog/pg_auth_members.h#L36-L38), [acl.c#roles_is_member_of](../raw/postgres-18/src/backend/utils/adt/acl.c#L5153-L5246)).
 - PostgreSQL 19: Holds; the three options gain `BKI_DEFAULT` markings ([pg_auth_members.h:47-53](../raw/postgres-19/src/include/catalog/pg_auth_members.h#L47-L53), [acl.c#roles_is_member_of](../raw/postgres-19/src/backend/utils/adt/acl.c#L5178-L5271)).
@@ -4940,7 +4940,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (387 files):
+**PostgreSQL 12** (389 files):
 
 - [pg_depend.h#FormData_pg_depend](../raw/postgres-12/src/include/catalog/pg_depend.h#L36-L64)
 - [pg_namespace.h#FormData_pg_namespace](../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44)
@@ -5061,6 +5061,7 @@ One representative citation per cited source file, grouped by version:
 - [xlogarchive.c#XLogArchiveNotifySeg](../raw/postgres-12/src/backend/access/transam/xlogarchive.c#L541-L551)
 - [xloginsert.c:917](../raw/postgres-12/src/backend/access/transam/xloginsert.c#L917)
 - [bootparse.y:1-5](../raw/postgres-12/src/backend/bootstrap/bootparse.y#L1-L5)
+- [aclchk.c#pg_namespace_ownercheck](../raw/postgres-12/src/backend/catalog/aclchk.c#L4927-L4951)
 - [catalog.c:330](../raw/postgres-12/src/backend/catalog/catalog.c#L330)
 - [genbki.pl:1-8](../raw/postgres-12/src/backend/catalog/genbki.pl#L1-L8)
 - [heap.c#StorePartitionBound](../raw/postgres-12/src/backend/catalog/heap.c#L3726-L3761)
@@ -5167,6 +5168,7 @@ One representative citation per cited source file, grouped by version:
 - [lmgr.c#LockRelationIdForSession](../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L356-L362)
 - [lock.c#LockConflicts](../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103)
 - [lwlock.c:1123](../raw/postgres-12/src/backend/storage/lmgr/lwlock.c#L1123)
+- [proc.c#existing-holder-queue-position](../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1100-L1185)
 - [bufpage.c:301](../raw/postgres-12/src/backend/storage/page/bufpage.c#L301)
 - [md.c:44-50](../raw/postgres-12/src/backend/storage/smgr/md.c#L44-L50)
 - [smgr.c#f_smgr](../raw/postgres-12/src/backend/storage/smgr/smgr.c#L40-L64)
