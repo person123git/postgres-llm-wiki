@@ -235,6 +235,7 @@ verified_by_agent: not yet
   - [Posting list](#posting-list)
   - [Posting tree](#posting-tree)
   - [Postmaster](#postmaster)
+  - [Predicate lock](#predicate-lock)
   - [Prefetch](#prefetch)
   - [Prepared statement](#prepared-statement)
   - [PROC_IN_SAFE_IC](#proc_in_safe_ic)
@@ -281,6 +282,7 @@ verified_by_agent: not yet
   - [Semi join and anti join](#semi-join-and-anti-join)
   - [seq_page_cost and random_page_cost](#seq_page_cost-and-random_page_cost)
   - [Sequential scan](#sequential-scan)
+  - [Serializable snapshot isolation](#serializable-snapshot-isolation)
   - [Session-level lock](#session-level-lock)
   - [Set operation](#set-operation)
   - [set_plan_references](#set_plan_references)
@@ -381,6 +383,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-21, the DROP SCHEMA question added [Dependency](#dependency) and [Schema](#schema), checked on PostgreSQL 12 only, and qualified the PostgreSQL 12 Storage manager note for already-open segment state.
 
 - On 2026-10-21, the empty-schema failure-scenarios question added [TRUNCATE](#truncate) and [Unlogged relation](#unlogged-relation), checked on PostgreSQL 12 only, and a PostgreSQL 12 qualification for [Subtransaction](#subtransaction). The WAL entry now distinguishes the normal-data predicate and shared-buffer recipe from the PostgreSQL 12 unlogged initialization-fork records. There are 348 terms.
+
+- On 2026-10-22, the DROP SCHEMA review added [Predicate lock](#predicate-lock) and [Serializable snapshot isolation](#serializable-snapshot-isolation), including read/write conflicts, dangerous structures and prepared pivots, checked on PostgreSQL 12 only. There are 350 terms.
 
 ## Source Pins
 
@@ -3292,6 +3296,14 @@ The postmaster is the first process of a server instance. It starts the auxiliar
 
 Related: [Backend](#backend), [Background worker](#background-worker), [Crash recovery](#crash-recovery)
 
+### Predicate lock
+
+**Aliases:** predicate locking, SIREAD, `PREDICATELOCK`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, a predicate lock records what a transaction at the `SERIALIZABLE` [isolation level](#isolation-level) has read, including ranges where matching rows could appear. It never blocks another transaction. [Serializable snapshot isolation](#serializable-snapshot-isolation) uses these records to detect a read/write conflict when a later write changes something the reader examined ([predicate.c#SIREAD](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L27-L59)). A record can survive the reader's commit until overlapping transactions finish; a read-only transaction proven safe can release its records earlier ([predicate.c#lifetime-and-safe-readers](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L50-L81)). In source, a `PREDICATELOCK` links a read target to its `SERIALIZABLEXACT`, the transaction's tracking record ([predicate_internals.h#PREDICATELOCK](../raw/postgres-12/src/include/storage/predicate_internals.h#L305-L339)).
+
+Related: [Isolation level](#isolation-level), [Serializable snapshot isolation](#serializable-snapshot-isolation), [Heavyweight lock](#heavyweight-lock)
+
 ### Prefetch
 
 **Aliases:** prefetch advice, `PrefetchBuffer()`, `PrefetchSharedBuffer()`, `PrefetchLocalBuffer()`, `smgrprefetch()`, `FilePrefetch()`, `posix_fadvise(POSIX_FADV_WILLNEED)`, `USE_PREFETCH`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3888,6 +3900,18 @@ A sequential scan reads every page of a table and tests each row against the que
 - PostgreSQL 19: Differs: as in 18, a disabled path is counted in `disabled_nodes`, but the flag now comes from the [relation](#relation)'s [pgs_mask](#pgs_mask) planner strategy mask rather than directly from `enable_seqscan` ([costsize.c:279](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L279), [costsize.c:332-336](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L332-L336)). The rest holds, including the read stream ([heapam.c:1299](../raw/postgres-19/src/backend/access/heap/heapam.c#L1299)).
 
 Related: [Index scan](#index-scan), [Bitmap scan](#bitmap-scan), [Cost](#cost), [Read stream](#read-stream), [Ring buffer](#ring-buffer), [Synchronized scan](#synchronized-scan)
+
+### Serializable snapshot isolation
+
+**Aliases:** SSI, rw-conflict, read/write conflict, dangerous structure, pivot transaction, prepared pivot, `SXACT_FLAG_PREPARED`, `SXACT_FLAG_DOOMED`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, serializable snapshot isolation (SSI) tracks read/write conflicts that could make concurrent transactions' results inconsistent with any execution one transaction at a time. It applies when `SERIALIZABLE` is selected instead of the default `READ COMMITTED`; conflict checks can abort a transaction to prevent that result ([guc.c#isolation-settings](../raw/postgres-12/src/backend/utils/misc/guc.c#L4254-L4273), [predicate.c#write-gate](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L560-L572), [predicate.c#conflict-check](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4617-L4654), [predicate.c#failure](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4776-L4808), [README-SSI#SSI](../raw/postgres-12/src/backend/storage/lmgr/README-SSI#L89-L100)).
+
+A read/write conflict points from a reader to a concurrent writer whose change it did not see: `reader → writer`. The reader must come first in a possible serial execution ([predicate_internals.h#conflict-lists](../raw/postgres-12/src/include/storage/predicate_internals.h#L87-L90), [README-SSI#rw-conflict](../raw/postgres-12/src/backend/storage/lmgr/README-SSI#L133-L148)). A **dangerous structure** has two adjacent conflicts, `Tin → Tpivot → Tout`; the middle transaction is the **pivot**. An anomaly requires `Tout` to commit first, and, if `Tin` is read-only, before `Tin` took its snapshot. The structure alone need not form a cycle, so SSI can reject a transaction even when no anomaly would have occurred ([predicate.c#dangerous-structure](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4634-L4649), [README-SSI#false-positives](../raw/postgres-12/src/backend/storage/lmgr/README-SSI#L160-L183)).
+
+A **prepared pivot** has passed `PreCommit_CheckForSerializationFailure()`, which sets `SXACT_FLAG_PREPARED` in its `SERIALIZABLEXACT`. This state also occurs during ordinary commit and the flag remains set after commit; SQL `PREPARE TRANSACTION` is not required. The conflict checks can no longer select that transaction for rollback, so a qualifying conflict with a still-uncommitted prepared pivot can abort the transaction currently checking its commit instead. A transaction selected for rollback is marked **doomed** with `SXACT_FLAG_DOOMED` ([predicate.c#prepared-state](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L267-L278), [predicate.c#pre-commit](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4839-L4907), [predicate_internals.h#commit-state](../raw/postgres-12/src/include/storage/predicate_internals.h#L62-L77)).
+
+Related: [Isolation level](#isolation-level), [Predicate lock](#predicate-lock), [Snapshot](#snapshot), [Two-phase commit](#two-phase-commit)
 
 ### Session-level lock
 
@@ -4901,6 +4925,8 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 ## Open Questions
 
+- [Predicate lock](#predicate-lock) and [Serializable snapshot isolation](#serializable-snapshot-isolation), added on 2026-10-22, were checked on PostgreSQL 12 only. Their applicability to the other recorded pins has not been checked.
+
 - Verification depth. On 2026-09-23, eight review agents read all 4,273 citations against their pinned checkouts and reported 421 defects, 24 of them factual errors. All were corrected, and six entries were added. The agent that made each correction re-read the source for it. The orchestrator re-checked every high-severity correction and a sample of the others. No second full pass has read the corrected text, so `verified_by_agent` stays `not yet`. Later the same day five entries were added for a PostgreSQL 17 question page: [Asynchronous commit](#asynchronous-commit), [Hint bits](#hint-bits), [Prefetch](#prefetch), [Sibling link](#sibling-link) and [WAL writer](#wal-writer). Two agents drafted them on all five checkouts and checked every citation's file and range mechanically; the orchestrator re-read a sample of their citations against the source.
 - TAP is not expanded. No pinned checkout spells out the acronym, so the [TAP test](#tap-test) entry gives no expansion.
 - One absence has no line to cite. The [work_mem](#work_mem) v12 note says that 12's hash aggregation cannot spill to disk at run time. That rests on a search of 12's `nodeAgg.c` that finds no spill code; only the plan-time memory check is cited.
@@ -4943,8 +4969,11 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (390 files):
+**PostgreSQL 12** (393 files):
 
+- [predicate.c#SIREAD](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L27-L81)
+- [predicate_internals.h#SERIALIZABLEXACT](../raw/postgres-12/src/include/storage/predicate_internals.h#L57-L129)
+- [README-SSI#rw-conflicts](../raw/postgres-12/src/backend/storage/lmgr/README-SSI#L133-L183)
 - [pg_depend.h#FormData_pg_depend](../raw/postgres-12/src/include/catalog/pg_depend.h#L36-L64)
 - [pg_namespace.h#FormData_pg_namespace](../raw/postgres-12/src/include/catalog/pg_namespace.h#L24-L44)
 - [dependency.c#reportDependentObjects](../raw/postgres-12/src/backend/catalog/dependency.c#L1113-L1203)
