@@ -207,7 +207,7 @@ The silent indexed-fetch branch is a source-derived chain: **usable index suppli
 
 ### Measured results
 
-The [Measurement Script](#measurement-script) built the pin as 12.2 with one non-default compile-time knob, 1 MB segments, and ran an isolated cluster. Its fixture schema `s` held:
+An earlier revision of the [Measurement Script](#measurement-script) built the pin as 12.2 with one non-default compile-time knob, 1 MB segments, and ran an isolated cluster. The revised script's safety checks have not yet been rerun; see [Last run](#last-run). Its fixture schema `s` held:
 
 - a table `s.t` with a serial key, a primary-key index and TOAST data;
 - a 3.5 MB table `s.big` with numbered segments `.1` to `.3`, an index, a free space map and a visibility map;
@@ -226,7 +226,7 @@ With the server stopped, `cat /dev/null >` emptied all 29 files of 14 relations 
 | `cascade` | `DROP SCHEMA s CASCADE`, then `CHECKPOINT` | After commit, only the 14 first main-fork files remained, each at 0 bytes. Every numbered segment, `_fsm` and `_vm` file was gone, including the three emptied segments of `s.big`. `other.child_ref` kept its 10 rows but no foreign key, `other.audit` had no user trigger, and `other.parent` had no action triggers. After one `CHECKPOINT`, no file of `s` remained. | No data scan; zero-length segments do not stop the unlink loop; deferred first-file unlink; surviving tables lose dependent objects |
 | `missing` | `DROP SCHEMA s2 CASCADE` with `s2.big`'s segment `.1` removed, then `CHECKPOINT` | Segments `.2` and `.3` survived the commit and the checkpoint as zero-length orphans, and the server logged no warning | A missing filename ends the segment loop silently |
 
-The server restarted after the files were emptied, so no page of these relations was cached. A read of any main-fork page of them would therefore have raised the short-read error. All three `CASCADE` drops, the rolled-back one and the two committed ones, completed without that error. [md.c#read-errors-and-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629)
+The server restarted after the files were emptied, so no page of these relations was cached. An uncached read of an existing block in an emptied first main-fork segment would have raised a short-read error; a read targeting a later segment could instead have failed in `_mdfd_getseg()` before reaching `mdread()`, because the preceding segment was short. All three `CASCADE` drops, the rolled-back one and the two committed ones, completed without either error. [md.c#read-errors-and-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629) [md.c#segment-gap](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1179-L1204)
 
 Three non-default conditions shape these numbers; [Non-default settings in the measurement](#non-default-settings-in-the-measurement) gives the default, cause and mechanism of each:
 
@@ -254,14 +254,14 @@ The checked regression tests cover schema creation and rename followed by cascad
 
 | Item | Value |
 |---|---|
-| Purpose | Builds the pin as 12.2 with 1 MB segments and empties every file of a disposable schema while the server is stopped. It then runs `DROP SCHEMA` six ways: with `RESTRICT`; with `RESTRICT` under lock contention; as a non-owner member of the owning role; as a `CASCADE` that rolls back; as a committed `CASCADE` followed by `CHECKPOINT`; and with one segment removed instead of emptied. Backs every number under [Measured results](#measured-results) and the "Measured" notes in the lock table, the deletion section and [Cases that change the result](#cases-that-change-the-result). |
-| Invocation | From the repository root, extract the Bash fence below to `.wiki-runtime/tmp/ds12-run.sh`, then run `bash .wiki-runtime/tmp/ds12-run.sh [stage ...]`. The script checks the pinned checkout and keeps every build and data file under `.wiki-runtime/tmp/ds12/`. |
+| Purpose | Builds the pin as 12.2 with 1 MB segments and empties every file of a disposable schema while the server is stopped. It then runs `DROP SCHEMA` six ways: with `RESTRICT`; with `RESTRICT` under lock contention; as a non-owner member of the owning role; as a `CASCADE` that rolls back; as a committed `CASCADE` followed by `CHECKPOINT`; and with one segment removed instead of emptied. Repeats the earlier revision's tests behind every number under [Measured results](#measured-results) and the "Measured" notes in the lock table, the deletion section and [Cases that change the result](#cases-that-change-the-result), pending a fresh run. |
+| Invocation | From the repository root, extract the Bash fence below to `.wiki-runtime/tmp/ds12-run.sh`, then run `bash .wiki-runtime/tmp/ds12-run.sh [stage ...]`. The script checks the pinned checkout, clears inherited `PG*` settings (including `PGSERVICE` and `PGHOSTADDR`), sets its own socket and port, and verifies the connected data directory before recreating the fixture. It keeps every build and data file under `.wiki-runtime/tmp/ds12/`. |
 | Stages | Default order: `build cluster fixture empty restrict locks owner rollback cascade missing report`. `stop` and `clean` tear down and are not in the default order. |
 | Environment | `PORT12` (default `55444`) is the isolated port; `JOBS` (default `8`) sets parallel build jobs. The checkout, sandbox paths and `RELSEG_SIZE` are fixed in the script. |
-| Prerequisites | A C toolchain, make, bison and flex; readline and zlib development headers, because `build` uses the default configure options; the pinned checkout at `raw/postgres-12/`; about 150 MB of free disk for the build, installation and cluster. Locale `C`, encoding `UTF8`. Only POSIX utilities besides `bash`, `git` and the built PostgreSQL programs. |
+| Prerequisites | A C toolchain, make, bison and flex; readline and zlib development headers, because `build` uses the default configure options; the pinned checkout at `raw/postgres-12/`; the project's `.wiki-runtime/venv/bin/python` for a local TCP bind check; about 150 MB of free disk for the build, installation and cluster. Locale `C`, encoding `UTF8`. Only POSIX utilities besides `bash`, `git`, the project venv and the built PostgreSQL programs. |
 | Output | Files under `.wiki-runtime/tmp/ds12/out/`. Read `platform.txt` first, then `results.txt`, `restrict.txt`, `locks_d_held.txt`, `locks_c1.txt`, `rollback.txt`, `cascade_survivors.txt`, and the `files_s_*.txt` and `files_s2_*.txt` listings. |
 | Runtime | On the review host (Apple arm64, `JOBS=8`): about 46 seconds from an empty sandbox, most of it the build; about 2 seconds to re-run every stage while the build is present. |
-| Cleanup | `bash .wiki-runtime/tmp/ds12-run.sh stop clean` stops the owned cluster, verifies that no PID file, process started from the sandbox's binaries, socket or listener remains, and deletes `.wiki-runtime/tmp/ds12/`, including its build. Remove the extracted `ds12-run.sh` afterwards. |
+| Cleanup | `bash .wiki-runtime/tmp/ds12-run.sh stop clean` stops the owned cluster, verifies that no PID file, process started from the sandbox's binaries or socket remains and that the local TCP port can be bound, then deletes `.wiki-runtime/tmp/ds12/`, including its build. If shutdown fails, the `.started` marker remains for a later stop attempt. Remove the extracted `ds12-run.sh` afterwards. |
 
 To extract the published script without editing it, run this from the repository root:
 
@@ -273,7 +273,7 @@ bash .wiki-runtime/tmp/ds12-run.sh
 
 ### Last run
 
-On 2026-10-22 the final published script text was extracted with the command above and run from an empty sandbox on Darwin 27.0.0 arm64 against PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`. All 15 assertions passed, and a second run with the build present gave the same results. The server reported:
+On 2026-10-22 the earlier script revision was extracted with the command above and run from an empty sandbox on Darwin 27.0.0 arm64 against PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`. All 15 assertions passed, and a second run with the build present gave the same results. The connection isolation, TCP port probe and failure-cleanup changes in the script below have passed static checks but have not yet been rerun; the fixture SQL and measured assertions are unchanged. The server reported:
 
 - `block_size` 8192 and `segment_size` 128 blocks (1 MB, from the patched `RELSEG_SIZE 128`), with maximum data alignment 8;
 - `data_checksums` off and `shared_buffers` 16384 blocks (128 MB, the value `initdb` wrote);
@@ -286,8 +286,8 @@ The cluster was then stopped and the sandbox deleted with `stop clean`.
 | Stage | What it does | Needs |
 |---|---|---|
 | `build` | Configures 12.2 out of tree under `$SANDBOX/build` with default options, patches the generated `pg_config.h` to `RELSEG_SIZE 128`, then builds and installs. Skipped when a matching build exists. | nothing |
-| `cluster` | Runs `initdb -A trust --locale=C --encoding=UTF8` (checksums off, the default), writes socket-only settings plus `autovacuum = off` and `checkpoint_timeout = '1h'`, starts on `PORT12`, and records `platform.txt` | `build` |
-| `fixture` | Recreates database `ds` and the roles `ds12_owner`, `ds12_member` (a member of `ds12_owner`) and `ds12_other`. Builds schemas `s`, `s2`, `s_own` and `other`, vacuums, saves the inventory of `s` and `s2` and every file with its length, and asserts that the segments, forks and TOAST data exist. | `cluster` |
+| `cluster` | Checks that `127.0.0.1:PORT12` can be bound; runs `initdb -A trust --locale=C --encoding=UTF8` (checksums off, the default), writes socket-only settings plus `autovacuum = off` and `checkpoint_timeout = '1h'`, starts on `PORT12`, and records `platform.txt` after checking the connected data directory | `build` |
+| `fixture` | Checks that the connection reaches the owned cluster, then recreates database `ds` and the roles `ds12_owner`, `ds12_member` (a member of `ds12_owner`) and `ds12_other`. Builds schemas `s`, `s2`, `s_own` and `other`, vacuums, saves the inventory of `s` and `s2` and every file with its length, and asserts that the segments, forks and TOAST data exist. | `cluster` |
 | `empty` | Stops the server, empties every file of `s` and `s2` with `cat /dev/null >`, removes `s2.big`'s segment `.1`, restarts, and asserts that every remaining file is 0 bytes. Refuses to run twice; re-run `fixture` first. | `fixture` |
 | `restrict` | Runs `DROP SCHEMA s`; expects `2BP01` and unchanged files | `empty` |
 | `locks` | Session A, fed through a FIFO, holds `ACCESS SHARE` on `s.t`, and a baseline session gets the same lock. Session D then runs `DROP SCHEMA s`, and the stage records D's locks. A new session's request under a 1 s `lock_timeout` must fail with `55P03`. A then asks again for `ACCESS SHARE` and for `ROW EXCLUSIVE` under a 2 s `lock_timeout`, and commits. D must fail with `2BP01`. | `empty` |
@@ -296,7 +296,7 @@ The cluster was then stopped and the sandbox deleted with `stop clean`.
 | `cascade` | Runs `DROP SCHEMA s CASCADE`, lists the files after commit and after one `CHECKPOINT`, and checks the surviving tables in `other`. Consumes `s`. | `empty` |
 | `missing` | Runs `DROP SCHEMA s2 CASCADE`, lists the files after commit and after one `CHECKPOINT`, and checks the server log. Consumes `s2`. | `empty` |
 | `report` | Prints `results.txt` | any |
-| `stop` | Stops the owned cluster and verifies that no `postmaster.pid`, process started from `$BIN`, socket or listener on `PORT12` remains. It matches command lines that begin with `$BIN/`, so a calling shell whose command line merely mentions the data directory does not count. | none |
+| `stop` | Stops the owned cluster and verifies that no `postmaster.pid`, process started from `$BIN` or socket remains and that `127.0.0.1:PORT12` can be bound. It matches command lines that begin with `$BIN/`, so a calling shell whose command line merely mentions the data directory does not count. | none |
 | `clean` | Runs `stop`, then deletes `$SANDBOX`, refusing a sandbox it does not own | none |
 
 Every fixture object is disposable. `cascade` and `missing` consume the schemas they drop; re-run `fixture` and `empty` before running them again. `restrict`, `locks`, `owner` and `rollback` leave the fixture as they found it.
@@ -354,12 +354,15 @@ Every fixture object is disposable. `cascade` and `missing` consume the schemas 
 # Stages: build cluster fixture empty restrict locks owner rollback cascade
 #         missing report stop clean
 #
-# Environment: PORT12 JOBS
+# Environment: PORT12 JOBS.  Discard inherited libpq PG* settings so a
+# PGSERVICE or PGHOSTADDR cannot redirect a disposable fixture's DROP commands.
 set -uo pipefail
 set -e
 # A write to a session that has already exited must fail as an error that
 # runs the exit trap, not kill the shell with SIGPIPE.
 trap '' PIPE
+
+for var in ${!PG@}; do unset "$var"; done
 
 WIKI_ROOT="$PWD"
 SRC12="$WIKI_ROOT/raw/postgres-12"
@@ -399,16 +402,20 @@ owned() {
     [ "$(cat "$SANDBOX/.ds12-owned")" = "$PIN12 $WIKI_ROOT" ]
 }
 
-# A failing stage must not leave sessions or the cluster running.  Output is
-# kept for diagnosis; the clean stage removes the sandbox afterwards.
+# A failing stage signals its background sessions and attempts to stop the
+# cluster.  Output is kept for diagnosis.  If shutdown fails, leave the marker
+# so stop can retry.
 on_exit() {
   local rc=$? p
   trap - EXIT
   { exec 3>&-; } 2> /dev/null || true
   for p in $BG; do kill "$p" 2> /dev/null || true; done
   if [ "$rc" -ne 0 ] && [ -f "$SANDBOX/.started" ] && owned; then
-    "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop >&2 || true
-    rm -f "$SANDBOX/.started"
+    if "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop >&2; then
+      rm -f "$SANDBOX/.started"
+    else
+      note "shutdown not confirmed; keeping .started for stop clean"
+    fi
   fi
   exit "$rc"
 }
@@ -435,6 +442,25 @@ source_pin() {
 
 sql() { # sql <db>: run the SQL on standard input; any error is fatal
   "${PSQL[@]}" -d "$1" || die "SQL failed on $1"
+}
+assert_sql_target() {
+  local target
+  [ -f "$SANDBOX/.started" ] && "$BIN/pg_ctl" -D "$DATA" status > /dev/null 2>&1 \
+    || die "owned cluster is not running"
+  target=$("${PSQL[@]}" -d postgres -c 'SHOW data_directory') \
+    || die "cannot verify the fixture connection"
+  [ "$target" = "$DATA" ] || die "SQL target is $target, not $DATA"
+}
+tcp_port_free() {
+  local python="$WIKI_ROOT/.wiki-runtime/venv/bin/python"
+  [ -x "$python" ] || die "project venv is required for the TCP port check"
+  "$python" - "$PORT12" <<'PY' || die "TCP port $PORT12 is not free on 127.0.0.1"
+import socket
+import sys
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    probe.bind(("127.0.0.1", int(sys.argv[1])))
+PY
 }
 must_fail() { # must_fail <name> <sqlstate> <db>: the SQL on stdin must stop with <sqlstate>
   local name=$1 state=$2 db=$3 rc=0
@@ -583,7 +609,7 @@ stage_cluster() {
     note "already running"
   else
     [ -z "$(ls -A "$SOCK")" ] || die "socket directory is not free"
-    "$BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT12" && die "port $PORT12 is occupied"
+    tcp_port_free
     if [ ! -d "$DATA" ]; then
       "$BIN/initdb" -D "$DATA" -A trust --locale=C --encoding=UTF8 \
         > "$OUT/initdb.log" 2>&1 || die "initdb failed, see $OUT/initdb.log"
@@ -597,6 +623,7 @@ stage_cluster() {
     fi
     server_start
   fi
+  assert_sql_target
   {
     uname -srm
     "$BIN/postgres" --version
@@ -624,6 +651,7 @@ SQL
 stage_fixture() {
   say "fixture: database ds, schemas s, s2, s_own, other"
   own_sandbox
+  assert_sql_target
   [ -z "$BG" ] || die "background sessions still running"
   rm -f "$SANDBOX/.emptied" "$OUT/results.txt"
   sql postgres > /dev/null <<'SQL'
@@ -1011,12 +1039,9 @@ stage_stop() {
   [ ! -f "$DATA/postmaster.pid" ] || die "postmaster.pid survived"
   [ "$(procs_from_sandbox)" -eq 0 ] || die "a process from $BIN is still running"
   [ ! -d "$SOCK" ] || [ -z "$(ls -A "$SOCK")" ] || die "socket directory is not free"
-  if [ -x "$BIN/pg_isready" ]; then
-    "$BIN/pg_isready" -q -h "$SOCK" -p "$PORT12" && die "socket is still active"
-    "$BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT12" && die "port $PORT12 is occupied"
-  fi
+  tcp_port_free
   rm -f "$SANDBOX/.started"
-  note "stopped: no pid file, process, socket, or listener on port $PORT12"
+  note "stopped: no pid file, process, or socket; 127.0.0.1:$PORT12 is free"
 }
 stage_clean() {
   say "delete sandbox $SANDBOX"
@@ -1061,7 +1086,7 @@ done
 | A session that already holds a lock on the object is granted at once, waits ahead of the drop, or gets a deadlock error | [lock.c#already-held-mode](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L828-L840), [lock.c#LockConflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L99-L103), [proc.c#existing-holder-queue-position](../../../../raw/postgres-12/src/backend/storage/lmgr/proc.c#L1100-L1204); measured `locks_a.txt` |
 | `CASCADE` deletion locks surviving tables outside the schema and removes their dependent foreign keys and triggers | [pg_constraint.c#auto-dependency-on-table](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L233-L258), [pg_constraint.c#normal-dependency-on-referenced-columns](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L274-L298), [pg_constraint.c#RemoveConstraintById-lock](../../../../raw/postgres-12/src/backend/catalog/pg_constraint.c#L572-L580), [tablecmds.c#createForeignKeyActionTriggers](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L9940-L10002), [trigger.c#function-dependency](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1006-L1017), [trigger.c#RemoveTriggerById](../../../../raw/postgres-12/src/backend/commands/trigger.c#L1525-L1530); measured `rollback.txt`, `cascade_survivors.txt` |
 | A `SERIALIZABLE` drop can fail on a read/write conflict | [heap.c#serializable-conflict-check](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1902-L1908), [predicate.c#CheckTableForSerializableConflictIn](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4540-L4600), [predicate.c#writer-failure](../../../../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L4776-L4794); not measured |
-| Ordinary deletion needs metadata, not target page contents | [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998), [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266), [md.c#read-errors-and-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629); measured: no short-read error in `rollback.txt`, `cascade.txt` or `missing.txt` after a restart with the files emptied |
+| Ordinary deletion needs metadata, not target page contents | [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998), [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266), [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L589-L629), [md.c#segment-gap](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1179-L1204); measured: no main-fork read error in `rollback.txt`, `cascade.txt` or `missing.txt` after a restart with the files emptied |
 | Existing zero-length segments do not stop unlink traversal; a missing filename stops it silently | [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359); measured `files_s_after_commit.txt`, `files_s2_after_checkpoint.txt` |
 | Abort and commit choose different cleanup entries | [storage.c#smgrDoPendingDeletes](../../../../raw/postgres-12/src/backend/catalog/storage.c#L398-L462); measured `files_s_after_rollback.txt`, `files_s_after_checkpoint.txt` |
 | Catalog loss and installed code limit the conclusion | [dependency.c#dependency-scan](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L829-L866), [event_trigger.out#rejected-schema-drop](../../../../raw/postgres-12/src/test/regress/expected/event_trigger.out#L277-L291) |
@@ -1071,8 +1096,9 @@ done
 
 - The exact set of files emptied, remaining catalog integrity, installed triggers/hooks/access methods, and concurrent server activity are not supplied. This page establishes conditional engine behavior; it cannot certify the outcome on the affected database.
 - The measurement covers emptied user-relation files with intact catalogs, at 1 MB segments, on one platform; see [Last run](#last-run). The damaged-catalog branches, the `SERIALIZABLE` failure branch, the `_mdfd_getseg()` open-segment branch and default 1 GB segments are read from the source, not measured. No measured result disagreed with the source reading.
+- The revised measurement script's connection isolation, TCP port probe and failure-cleanup paths have not been run yet; the recorded results are from the earlier script revision. Static tests do not establish whether the revised script reproduces all 15 assertions.
 - That `cat /dev/null > file` truncates the file to zero length is shell behavior, which the pinned PostgreSQL checkout cannot establish, so the page assumes it. The measurement's `empty` stage observed it on its platform, where every file it emptied this way then had 0 bytes. For user files the assumption does not change the deletion outcome, because the deletion path never reads their contents and removes storage by filename. The short-file branches in [Catalog damage branches](#catalog-damage-branches) do assume truncation, because their read errors come from short files. [heap.c#heap_drop_with_catalog](../../../../raw/postgres-12/src/backend/catalog/heap.c#L1854-L1998) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2193-L2266) [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L359)
-- **Comparison-page conflicts remain outside this fix.** The [zeroed-file size explanation](zeroed-relation-file.md#why-scans-stay-silent-the-size-check-stops-early) states an unconditional first-short-segment rule, while its [warm-backend explanation](zeroed-relation-file.md#when-errors-do-appear) correctly allows an earlier short segment to be trusted as full. The [last-segment page's truncation row](zeroed-last-segment-check-all-tables.md#what-zeroing-a-file-leaves-behind) and [size-read explanation](zeroed-last-segment-check-all-tables.md#why-reading-the-last-blocks-cannot-see-a-truncated-segment) use the same unqualified rule, while that page's [lead](zeroed-last-segment-check-all-tables.md#answer-up-front) allows different open-state behavior. The pinned implementation supports the qualified statements: `mdnblocks()` starts at the last open segment and trusts earlier open segments. Their fresh-state measurements are not disputed; those pages and scripts were not changed. [md.c#mdnblocks-open-state](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L715-L737)
+- The [zeroed-file size explanation](zeroed-relation-file.md#why-scans-stay-silent-the-size-check-stops-early) and the [last-segment page's truncation row](zeroed-last-segment-check-all-tables.md#what-zeroing-a-file-leaves-behind) and [size-read explanation](zeroed-last-segment-check-all-tables.md#why-reading-the-last-blocks-cannot-see-a-truncated-segment) now name fresh segment-open state. Their previously recorded results remain measurements of fresh-state behavior. With later segments already open, `mdnblocks()` starts at the last open segment and trusts earlier open segments. [md.c#mdnblocks-open-state](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L715-L737)
 - PostgreSQL 12 lacks common-concept pages for schema dependency deletion and the relation-file deletion lifecycle. Those would be useful separate pages; none was created as a side effect of this answer.
 
 ## Source References

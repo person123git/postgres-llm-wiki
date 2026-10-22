@@ -70,7 +70,7 @@ The measurement below therefore uses a build whose `RELSEG_SIZE` is 128 blocks (
 ```text
 Open relation after the external file change
   |-- first main file missing -> open error
-  |-- first short segment found -> size-bounded relation end is before its missing blocks
+  |-- first short segment measured -> size-bounded end is before its missing blocks
   |     |-- sequential scan / ordinary VACUUM / COPY TO -> bounded by that end
   |     |-- index or FSM names a later block -> shared-buffer hit, or disk read/error
   |-- backend already opened later segments -> size may remain stale
@@ -103,7 +103,7 @@ And for the same middle-segment truncation seen by a **warm** backend — one th
 
 ### Why scans stay silent: the size check stops early
 
-Every sequential read path first asks how many blocks the relation has. `RelationGetNumberOfBlocks()` calls `smgrnblocks()` → `mdnblocks()`, which walks the segment files and returns `segno * RELSEG_SIZE + nblocks` at the **first** segment that is shorter than `RELSEG_SIZE`, or `segno * RELSEG_SIZE` at the first segment that fails to open. A zero-length segment is therefore interpreted as end-of-relation, not corruption: whatever exists in later files becomes unreachable to size-bounded scans. [bufmgr.h#RelationGetNumberOfBlocks](../../../../raw/postgres-12/src/include/storage/bufmgr.h#L188-L199) [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L705-L755) [md.c#_mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1226-L1241)
+Every sequential read path first asks how many blocks the relation has. `RelationGetNumberOfBlocks()` calls `smgrnblocks()` → `mdnblocks()`. The latter starts at the **last already-open segment**, trusting earlier open segments as full, then returns `segno * RELSEG_SIZE + nblocks` at the first segment it measures as shorter than `RELSEG_SIZE`, or `segno * RELSEG_SIZE` at the first later segment that fails to open. In a fresh backend, an emptied segment is measured and treated as end-of-relation, not corruption: whatever exists in later files becomes unreachable to size-bounded scans. With later segments already open, an emptied earlier segment can instead be trusted as full and a scan can reach its missing blocks. [bufmgr.h#RelationGetNumberOfBlocks](../../../../raw/postgres-12/src/include/storage/bufmgr.h#L188-L199) [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L705-L755) [md.c#_mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1226-L1241)
 
 The consumers all bound themselves by that number:
 
@@ -957,7 +957,7 @@ done
 
 | Claim | Evidence |
 |---|---|
-| `mdnblocks` returns at the first short or missing segment, re-measuring only the last *open* segment | [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L705-L755); measured `count(*)` 2,282 after zeroing `.1` |
+| `mdnblocks` trusts segments before the last *open* one and returns at the first short or missing segment it examines from there | [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L705-L755); measured `count(*)` 2,282 in a fresh backend after zeroing `.1` |
 | Sequential scans, ordinary vacuum, and `COPY TO` use the measured block bound; other conditions can still make them fail | [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L226-L295), [vacuumlazy.c#nblocks](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L549-L556), [copy.c#CopyTo](../../../../raw/postgres-12/src/backend/commands/copy.c#L2114-L2137); measured rc=0 with fewer rows in fresh-backend zeroed-main-fork legs |
 | `pg_dump` inherits the COPY outcome, including its failure | [pg_dump.c#dumpTableData_copy](../../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1826-L1929); measured exit 0 with 2,282 rows, exit 1 on the deleted-first-file leg |
 | Short reads error `XX001` unless `zero_damaged_pages` or recovery zeroes them | [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630); measured `read only 0 of 8192 bytes` |

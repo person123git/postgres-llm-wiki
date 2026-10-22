@@ -79,7 +79,7 @@ A relation's main [fork](../../../glossary.md#fork) is stored as numbered segmen
 
 | Operation | Example | File afterwards | What the server sees |
 |---|---|---|---|
-| Truncate to zero length | `cat /dev/null > <file>` | Same name, 0 bytes | A shorter relation. `mdnblocks()` stops at the first segment shorter than `RELSEG_SIZE`. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) |
+| Truncate to zero length | `cat /dev/null > <file>` | Same name, 0 bytes | A fresh backend measures a shorter relation: `mdnblocks()` stops at the first short segment it measures, but trusts segments before the last one already open. An already-open later segment can therefore preserve a larger apparent extent. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) |
 | Overwrite with zero bytes | `dd if=/dev/zero ... conv=notrunc` | Same length, all-zero pages | The same length, with [all-zero pages](../../../glossary.md#all-zero-page). `PageIsVerified()` accepts an all-zero page, so a heap scan can read it as empty. A B-tree reader that reaches one rejects it. [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L162) [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L689-L719) |
 
 Truncating the *last* segment produces a layout the storage manager allows: full segments followed by one zero-length file. VACUUM produces exactly the same layout when it truncates a relation to an exact multiple of `RELSEG_SIZE`: `mdtruncate()` then empties segment K+1 and keeps it. [md.c#mdtruncate](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L819-L838) So the file layout alone cannot tell damage from a legitimate truncation; the measured `t_bound` control shows the identical layout from a real VACUUM.
@@ -88,7 +88,7 @@ Truncating the *last* segment produces a layout the storage manager allows: full
 
 | Value | Meaning | Source | Live or stored | Later use in the check |
 |---|---|---|---|---|
-| `cur_blocks` | Blocks a backend that opens the relation now would see | `stat()` of each segment file, combined the way `mdnblocks()` combines them | Live | The baseline every witness is compared with, and the range the tail read covers |
+| `cur_blocks` | Blocks a backend with fresh segment-open state would see | `stat()` of each segment file, combined the way `mdnblocks()` combines them from the first segment when none is already open | Live | The baseline every witness is compared with, and the range the tail read covers; a warm backend can use a larger bound [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) |
 | `fsm_pages` | Pages in the `_fsm` fork | `stat()` of its consecutive segment files | Live file size; its contents describe the past | FSM witness |
 | `vm_pages` | Pages in the `_vm` fork | `stat()` of its consecutive segment files | Live file size; its contents describe the past | VM witness |
 | `relpages` | Page count stored by VACUUM, ANALYZE or index build | `pg_class` row | Stored; a VACUUM that counts no pages can preserve it | `relpages` witness |
@@ -135,7 +135,7 @@ Separately: B-tree leaf TIDs >= heap blocks .................. index TID witness
 
 ### Why reading the last blocks cannot see a truncated segment
 
-1. **Every size-bounded read starts from `mdnblocks()`.** It returns `segno * RELSEG_SIZE + nblocks` at the first segment shorter than `RELSEG_SIZE`. An emptied last segment therefore moves the end of the relation back to the end of the previous segment. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755)
+1. **Every size-bounded read starts from `mdnblocks()`.** It starts at the last already-open segment, trusting earlier ones as full, and returns `segno * RELSEG_SIZE + nblocks` at the first short segment it measures. With fresh segment-open state, an emptied last segment therefore moves the end of the relation back to the end of the previous segment; a warm backend's bound may differ. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755)
 2. **A probe by `ctid` is filtered against that end.** A TID scan keeps a TID only if its block is below the scan's `rs_nblocks`, so `WHERE ctid = '(4000,1)'` on a lost page returns no row and raises no error. The measured `t_last` probe returned 1 row before the damage and 0 after it, with a `Tid Scan` plan. [heapam_handler.c#heapam_tuple_tid_valid](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L209-L215) [nodeTidscan.c:178-182](../../../../raw/postgres-12/src/backend/executor/nodeTidscan.c#L178-L182)
 3. **A bitmap heap scan also drops pages past the end.** `heapam_scan_bitmap_next_block()` ignores any page at or past `rs_nblocks`, so a bitmap scan returns fewer rows instead of failing. [heapam_handler.c:2192-2199](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2192-L2199)
 4. **Reading the files directly does not help either.** `pg_read_binary_file()` at an offset past the end of a file returns an empty value, because `fread()` simply reads nothing. [genfile.c#read_binary_file](../../../../raw/postgres-12/src/backend/utils/adt/genfile.c#L157-L172) The last pages that do exist belong to the previous, intact segment.
@@ -534,7 +534,7 @@ An orphan is not always damage; see [Branches, limits and false positives](#bran
 
 ### Index TID witness
 
-Use it on tables the first query flags, or on tables whose small size or missing forks make the fork witnesses blind. It reads each B-tree index of the table in full through shared buffers, so its cost is the size of those indexes. The heap size comes from the first short segment, matching the storage manager rather than `pg_relation_size()`; `t_mid` in the measurement checks this distinction. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L307)
+Use it on tables the first query flags, or on tables whose small size or missing forks make the fork witnesses blind. It reads each B-tree index of the table in full through shared buffers, so its cost is the size of those indexes. The heap size comes from the first short segment, matching a storage manager with fresh segment-open state rather than `pg_relation_size()`; `t_mid` in the measurement checks this distinction. A warm backend with later segments already open may use a larger bound. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L307)
 
 ```sql
 -- PostgreSQL 12 with contrib pageinspect installed; superuser only.
@@ -673,7 +673,7 @@ Run the check before any maintenance on a suspect database. A VACUUM, a `REINDEX
 
 ### Final causal summary
 
-**A last segment is emptied → `mdnblocks()` reports a shorter relation → the "last N blocks" now lie in the intact previous segment and read cleanly → populated FSM or VM forks, `pg_class.relpages`, or indexes may still describe the old size → the first query compares the file length with the forks and `relpages`, and the `pageinspect` query compares it with the indexes → a mismatch provides a witness subject to concurrent activity and legitimate state changes.** Later maintenance can erase witnesses: ANALYZE rewrites `relpages`, VACUUM may rewrite it or truncate forks, `REINDEX` removes old index entries, and a rewrite replaces files. Reading tail pages remains useful for the other kind of zeroing, overwriting at unchanged length. For catalogs, the same query covers every catalog in the database. Lost rows of `pg_class` itself show up as orphan files.
+**With fresh segment-open state: a last segment is emptied → `mdnblocks()` reports a shorter relation → the "last N blocks" now lie in the intact previous segment and read cleanly → populated FSM or VM forks, `pg_class.relpages`, or indexes may still describe the old size → the first query compares the file length with the forks and `relpages`, and the `pageinspect` query compares it with the indexes → a mismatch provides a witness subject to concurrent activity and legitimate state changes.** A backend with previously opened segments can have a different bound. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) Later maintenance can erase witnesses: ANALYZE rewrites `relpages`, VACUUM may rewrite it or truncate forks, `REINDEX` removes old index entries, and a rewrite replaces files. Reading tail pages remains useful for the other kind of zeroing, overwriting at unchanged length. For catalogs, the same query covers every catalog in the database. Lost rows of `pg_class` itself show up as orphan files.
 
 ## Measurement Script
 
@@ -1343,7 +1343,7 @@ done
 
 | Claim | Primary evidence |
 |---|---|
-| An emptied last segment shortens the relation; tail pages then read cleanly | [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755); measured `check.txt` |
+| An emptied last segment shortens the relation for a backend with fresh segment-open state; tail pages then read cleanly | [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755); measured `check.txt` |
 | Full segments plus a zero-length segment is also a legitimate layout | [md.c#segment-layout](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L52-L66), [md.c#mdtruncate](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L819-L838); measured `t_bound` |
 | `ctid` and bitmap probes silently drop pages past the end | [heapam_handler.c#heapam_tuple_tid_valid](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L209-L215), [heapam_handler.c:2192-2199](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2192-L2199); measured `tid_probe.txt` |
 | FSM geometry and the witness test | [fsm_internals.h#SlotsPerFSMPage](../../../../raw/postgres-12/src/include/storage/fsm_internals.h#L51-L61), [freespace.c#fsm_logical_to_physical](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L446-L476), [freespace.c#fsm_readbuf](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L545-L607) |
