@@ -324,6 +324,7 @@ verified_by_agent: not yet
   - [TID](#tid)
   - [Timeline](#timeline)
   - [TOAST](#toast)
+  - [Torn page](#torn-page)
   - [track_activity_query_size](#track_activity_query_size)
   - [Transaction ID](#transaction-id)
   - [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout)
@@ -385,6 +386,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-21, the empty-schema failure-scenarios question added [TRUNCATE](#truncate) and [Unlogged relation](#unlogged-relation), checked on PostgreSQL 12 only, and a PostgreSQL 12 qualification for [Subtransaction](#subtransaction). The WAL entry now distinguishes the normal-data predicate and shared-buffer recipe from the PostgreSQL 12 unlogged initialization-fork records. There are 348 terms.
 
 - On 2026-10-22, the DROP SCHEMA review added [Predicate lock](#predicate-lock) and [Serializable snapshot isolation](#serializable-snapshot-isolation), including read/write conflicts, dangerous structures and prepared pivots, checked on PostgreSQL 12 only. There are 350 terms.
+
+- On 2026-10-22, the PostgreSQL 12 on-disk index TID check added [Torn page](#torn-page), checked on PostgreSQL 12 only. There are 351 terms.
 
 ## Source Pins
 
@@ -4436,6 +4439,14 @@ TOAST (The Oversized-Attribute Storage Technique) is how PostgreSQL stores colum
 
 Related: [BLCKSZ](#blcksz), [Heap](#heap), [Tuple](#tuple), [varlena](#varlena)
 
+### Torn page
+
+**Aliases:** torn write, torn read, partially written page. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, a torn page is a [page](#page) whose bytes mix two versions, because one write of the page did not land as a unit. The `full_page_writes` documentation describes the write side: a page write in progress during an operating-system crash can leave "an on-disk page that contains a mix of old and new data", which the row-level change data in [WAL](#wal) cannot repair. That is why the first change to each page after a [checkpoint](#checkpoint) is logged as a [full-page image](#full-page-image) ([config.sgml#guc-full-page-writes](../raw/postgres-12/doc/src/sgml/config.sgml#L2692-L2710)). A reader can see the same mix without any crash. A file copy that reads a page while the server writes it may get a "torn" (partially written) copy, which is why an online backup forces full-page writes ([xlog.c:10236-10248](../raw/postgres-12/src/backend/access/transam/xlog.c#L10236-L10248)). For the same reason, a base backup that verifies checksums re-reads a block once after a checksum failure, and reports the block only if the second read fails too ([basebackup.c#torn-block-retry](../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1493)). [Data checksums](#data-checksums) cover the whole page, so they can reveal a torn page ([checksum_impl.h#pg_checksum_page](../raw/postgres-12/src/include/storage/checksum_impl.h#L187-L208)).
+
+Related: [Data checksums](#data-checksums), [Full-page image](#full-page-image), [Checkpoint](#checkpoint), [Page](#page)
+
 ### track_activity_query_size
 
 **Aliases:** `pgstat_track_activity_query_size`, `st_activity_raw`, `BackendActivityBuffer`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4969,8 +4980,10 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (393 files):
+**PostgreSQL 12** (395 files):
 
+- [basebackup.c#torn-block-retry](../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1493)
+- [checksum_impl.h#pg_checksum_page](../raw/postgres-12/src/include/storage/checksum_impl.h#L187-L208)
 - [predicate.c#SIREAD](../raw/postgres-12/src/backend/storage/lmgr/predicate.c#L27-L81)
 - [predicate_internals.h#SERIALIZABLEXACT](../raw/postgres-12/src/include/storage/predicate_internals.h#L57-L129)
 - [README-SSI#rw-conflicts](../raw/postgres-12/src/backend/storage/lmgr/README-SSI#L133-L183)

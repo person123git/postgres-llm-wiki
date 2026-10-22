@@ -16,6 +16,8 @@ Shared vocabulary for every version lives in the [Wiki Glossary (unverified)](gl
 
 ## Coverage Notes
 
+- 2026-10-22: **filed and measured v12**, [Checking Every B-Tree Index TID Against Its Heap From Disk, Bypassing Shared Buffers, in PostgreSQL 12 (unverified)](v12/questions/indexing/index-heap-tid-check-on-disk.md), at unchanged 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`. New question page with a psql check that reads table, TOAST and B-tree index pages from the files with `pg_read_binary_file()`, validates them, and decodes them with `pageinspect`; no amcheck. Its published script passed every assertion from an empty sandbox and with the build present, on clusters with data checksums off and on. Added the shared glossary term Torn page (PostgreSQL 12 only); the glossary now has 351 terms.
+
 - 2026-10-22: **seventeenth review and measurement v12**, [DROP SCHEMA After Relation Files Were Emptied in PostgreSQL 12 (unverified)](v12/questions/storage-and-vacuum/drop-schema-zeroed-relation-files.md), at unchanged 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Checked that every output file the page names is produced by a run; no in-scope issue was found. The unchanged script passed all 16 assertions from an empty sandbox and with the build present.
 
 - 2026-10-22: **sixteenth review and measurement v12**, [DROP SCHEMA After Relation Files Were Emptied in PostgreSQL 12 (unverified)](v12/questions/storage-and-vacuum/drop-schema-zeroed-relation-files.md), at unchanged 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`. Rechecked the fifteenth review's statement-start wording and the `wait_until` quoting fix; no new in-scope issue was found. The unchanged script passed all 16 assertions from an empty sandbox and with the build present.
