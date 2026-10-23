@@ -162,6 +162,7 @@ verified_by_agent: not yet
   - [Mackert-Lohman formula](#mackert-lohman-formula)
   - [maintenance_work_mem](#maintenance_work_mem)
   - [Materialize node](#materialize-node)
+  - [Materialized view](#materialized-view)
   - [Memoize](#memoize)
   - [Memory context](#memory-context)
   - [Merge join](#merge-join)
@@ -388,6 +389,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-22, the DROP SCHEMA review added [Predicate lock](#predicate-lock) and [Serializable snapshot isolation](#serializable-snapshot-isolation), including read/write conflicts, dangerous structures and prepared pivots, checked on PostgreSQL 12 only. There are 350 terms.
 
 - On 2026-10-22, the PostgreSQL 12 on-disk index TID check added [Torn page](#torn-page), checked on PostgreSQL 12 only. There are 351 terms.
+
+- On 2026-10-23, the PostgreSQL 12 visible-count checker plan added [Materialized view](#materialized-view), checked on PostgreSQL 12 only, and PostgreSQL 12 qualifications for [indcheckxmin](#indcheckxmin) and [TransactionXmin](#transactionxmin). The indcheckxmin explanation now makes the horizon condition explicit. There are 352 terms.
 
 ## Source Pins
 
@@ -1937,11 +1940,14 @@ Related: [Pathkey](#pathkey), [Tuplesort](#tuplesort), [Index scan](#index-scan)
 
 ### indcheckxmin
 
-**Aliases:** `pg_index.indcheckxmin`, index usability horizon. **Checked on:** PostgreSQL 17.
+**Aliases:** `pg_index.indcheckxmin`, index usability horizon. **Checked on:** PostgreSQL 12, 17.
 
 `indcheckxmin` is a [`pg_index`](#pg_index) flag that makes an index unusable to some transactions for a while after it is built. Its catalog comment asks "must we wait for xmin to be old?" ([pg_index.h:43](../raw/postgres-17/src/include/catalog/pg_index.h#L43)). A new index's columns may change within an existing [HOT](#hot) chain, a "broken" chain the index cannot represent, so a non-concurrent `CREATE INDEX` makes the index usable only by transactions whose snapshots are not older than it ([README.HOT#create-index](../raw/postgres-17/src/backend/access/heap/README.HOT#L304-L311)). The flag enforces that: a transaction may use the index only once the `xmin` of the index's `pg_index` row is older than its [TransactionXmin](#transactionxmin), so any incompatible rows in HOT chains are dead to it ([README.HOT#indcheckxmin](../raw/postgres-17/src/backend/access/heap/README.HOT#L341-L353)).
 
-`index_build()` sets the flag only for a non-concurrent `CREATE INDEX` that met broken HOT chains ([index.c#index_build-indcheckxmin](../raw/postgres-17/src/backend/catalog/index.c#L3099-L3101)). `reindex_index()` clears it, or keeps or forces it when the rebuild met such chains ([index.c#reindex_index-indcheckxmin](../raw/postgres-17/src/backend/catalog/index.c#L3800-L3850)). While the flag holds, `get_relation_info()` leaves the index out of planning and marks the plan a [transient plan](#transient-plan), so a cached plan is rebuilt once the index becomes usable ([plancat.c#get_relation_info-indcheckxmin](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L269-L281)).
+`index_build()` sets the flag only for a non-concurrent `CREATE INDEX` that met broken HOT chains ([index.c#index_build-indcheckxmin](../raw/postgres-17/src/backend/catalog/index.c#L3099-L3101)). `reindex_index()` clears it, or keeps or forces it when the rebuild met such chains ([index.c#reindex_index-indcheckxmin](../raw/postgres-17/src/backend/catalog/index.c#L3800-L3850)). While the flag is true **and the index row's xmin does not precede TransactionXmin**, `get_relation_info()` leaves the index out of planning and marks the plan a [transient plan](#transient-plan). A true flag alone does not make an index unusable after the horizon has passed ([plancat.c#get_relation_info-indcheckxmin](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L269-L281)).
+
+**Version notes:**
+- PostgreSQL 12: The same two-part planner gate applies; failure also marks the plan transient, and a cached transient plan is invalidated when its saved TransactionXmin changes ([plancat.c#indcheckxmin](../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234), [plancache.c#transient-horizon](../raw/postgres-12/src/backend/utils/cache/plancache.c#L829-L836)). The creation condition differs from the broken-chain-only description above: 12.2 also considers `EarlyPruningEnabled(heapRelation)`, while excluding reindex and concurrent builds from that flag-setting branch ([index.c#indcheckxmin-build](../raw/postgres-12/src/backend/catalog/index.c#L2939-L2952)). Early pruning is disabled by the default `old_snapshot_threshold = -1`; a nonnegative startup setting enables that branch for relations that allow early pruning ([snapmgr.h#EarlyPruningEnabled](../raw/postgres-12/src/include/utils/snapmgr.h#L46), [guc.c#old_snapshot_threshold](../raw/postgres-12/src/backend/utils/misc/guc.c#L3040-L3049)).
 
 Related: [pg_index](#pg_index), [TransactionXmin](#transactionxmin), [Transient plan](#transient-plan), [HOT](#hot), [Invalid index](#invalid-index), [CONCURRENTLY](#concurrently)
 
@@ -2359,6 +2365,14 @@ Several places use it. A nested loop may materialize its cheapest inner path ([j
 - PostgreSQL 19: Holds, except that the optional uses are gated by [strategy-mask](#pgs_mask) bits, which `enable_material` sets together with the join setting ([planner.c#default_pgs_mask-material](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L516-L529)). A nested loop builds its Materialize inner path only when `PGS_NESTLOOP_MATERIALIZE` is allowed ([joinpath.c:1901-1920](../raw/postgres-19/src/backend/optimizer/path/joinpath.c#L1901-L1920)). A merge join materializes its inner input when `PGS_MERGEJOIN_MATERIALIZE` is allowed and that looks cheaper or plain merge joins are disabled, and still must do so when the input cannot mark and restore ([costsize.c#final_cost_mergejoin-materialize](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L4102-L4133)). The other claims hold ([pathnodes.h#MaterialPath](../raw/postgres-19/src/include/nodes/pathnodes.h#L2329-L2339), [nodeMaterial.c:31-35](../raw/postgres-19/src/backend/executor/nodeMaterial.c#L31-L35), [nodeMaterial.c:65](../raw/postgres-19/src/backend/executor/nodeMaterial.c#L65), [costsize.c#cost_material](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L2570-L2581), [planner.c:552-560](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L552-L560), [subselect.c:547-559](../raw/postgres-19/src/backend/optimizer/plan/subselect.c#L547-L559), [allpaths.c:957-962](../raw/postgres-19/src/backend/optimizer/path/allpaths.c#L957-L962), [config.sgml#guc-enable-material](../raw/postgres-19/doc/src/sgml/config.sgml#L6028-L6032)).
 
 Related: [Nested loop join](#nested-loop-join), [Merge join](#merge-join), [Memoize](#memoize), [work_mem](#work_mem), [Planner](#planner)
+
+### Materialized view
+
+**Aliases:** matview, `RELKIND_MATVIEW`, `relispopulated`. **Checked on:** PostgreSQL 12.
+
+A materialized view stores the results of a query in a table-like relation. Ordinary reads return those stored rows rather than running the defining query again: the rewriter skips its SELECT rule. `REFRESH MATERIALIZED VIEW` is the operation that regenerates its data ([rules.sgml#materialized-views](../raw/postgres-12/doc/src/sgml/rules.sgml#L898-L929), [rewriteHandler.c#materialized-view-reads](../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L1900-L1911)). Its `pg_class.relkind` is `'m'`, and `relispopulated` records whether it has query results; an unpopulated materialized view is not an ordinary empty table, because executing a scan of it raises an error ([pg_class.h#materialized-state](../raw/postgres-12/src/include/catalog/pg_class.h#L110-L117), [pg_class.h#RELKIND_MATVIEW](../raw/postgres-12/src/include/catalog/pg_class.h#L159), [execUtils.c#unpopulated-scan](../raw/postgres-12/src/backend/executor/execUtils.c#L694-L714)).
+
+Related: [Relation](#relation), [Heap](#heap), [Rewriter](#rewriter), [pg_class](#pg_class)
 
 ### Memoize
 
@@ -4488,13 +4502,14 @@ Related: [statement_timeout and lock_timeout](#statement_timeout-and-lock_timeou
 
 ### TransactionXmin
 
-**Aliases:** `TransactionXmin`, `MyProc->xmin`, `RecentXmin` (contrast). **Checked on:** PostgreSQL 17, 19.
+**Aliases:** `TransactionXmin`, `MyProc->xmin`, `MyPgXact->xmin`, `RecentXmin` (contrast). **Checked on:** PostgreSQL 12, 17, 19.
 
 `TransactionXmin` is a backend-local transaction ID: "the oldest xmin of any snapshot in use in the current transaction", the same value the backend advertises as `MyProc->xmin` ([procarray.c#TransactionXmin](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2164-L2168), [snapmgr.c:98](../raw/postgres-17/src/backend/utils/time/snapmgr.c#L98)). `RecentXmin`, by contrast, is the xmin of the most recent snapshot (same lines). The first snapshot a transaction takes sets `TransactionXmin` ([procarray.c#TransactionXmin-first-snapshot](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2128-L2129)), and it advances, or is cleared, as the transaction's snapshots are released ([snapmgr.c#SnapshotResetXmin](../raw/postgres-17/src/backend/utils/time/snapmgr.c#L896-L931)).
 
 It is the horizon behind [indcheckxmin](#indcheckxmin): a transaction may use such an index only once the index's `pg_index` row is older than its `TransactionXmin` ([plancat.c#get_relation_info-indcheckxmin](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L269-L281)). A [transient plan](#transient-plan) records the value it was built under and is rebuilt when it changes ([plancache.c#CheckCachedPlan-transient](../raw/postgres-17/src/backend/utils/cache/plancache.c#L866-L873)).
 
 **Version notes:**
+- PostgreSQL 12: The planner uses the same backend horizon, but the shared field is `MyPgXact->xmin`. `GetSnapshotData()` describes the horizons and initializes both values together for the first snapshot ([procarray.c#horizons](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1489-L1499), [procarray.c#first-snapshot](../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1709-L1710), [plancat.c#indcheckxmin](../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234)). Unlike the PostgreSQL 17 reset routine cited above, this pin's `SnapshotResetXmin()` advances or clears only `MyPgXact->xmin`, not the backend-local `TransactionXmin`; do not assume every exposed xmin value is interchangeable ([snapmgr.c#SnapshotResetXmin](../raw/postgres-12/src/backend/utils/time/snapmgr.c#L1010-L1028)). Cached transient plans compare their saved horizon with `TransactionXmin` ([plancache.c#transient-horizon](../raw/postgres-12/src/backend/utils/cache/plancache.c#L829-L836)).
 - PostgreSQL 19: Holds ([procarray.c#TransactionXmin](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L2101-L2105), [snapmgr.c:159](../raw/postgres-19/src/backend/utils/time/snapmgr.c#L159), [procarray.c#TransactionXmin-first-snapshot](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L2067-L2068), [snapmgr.c#SnapshotResetXmin](../raw/postgres-19/src/backend/utils/time/snapmgr.c#L926-L955), [plancat.c#get_relation_info-indcheckxmin](../raw/postgres-19/src/backend/optimizer/util/plancat.c#L257-L269), [plancache.c#CheckCachedPlan-transient](../raw/postgres-19/src/backend/utils/cache/plancache.c#L997-L1004)).
 
 Related: [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [indcheckxmin](#indcheckxmin), [Transient plan](#transient-plan), [Transaction ID](#transaction-id)
@@ -4980,7 +4995,11 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (395 files):
+**PostgreSQL 12** (398 files):
+
+- [snapmgr.h#EarlyPruningEnabled](../raw/postgres-12/src/include/utils/snapmgr.h#L46)
+- [rules.sgml#materialized-views](../raw/postgres-12/doc/src/sgml/rules.sgml#L898-L929)
+- [execUtils.c#unpopulated-scan](../raw/postgres-12/src/backend/executor/execUtils.c#L694-L714)
 
 - [basebackup.c#torn-block-retry](../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1493)
 - [checksum_impl.h#pg_checksum_page](../raw/postgres-12/src/include/storage/checksum_impl.h#L187-L208)
