@@ -3,7 +3,7 @@ type: question
 version: 12
 pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
 verified: false
-verified_by_agent: gpt-6-astra-max-thinking 2026-10-23T17:40:53Z
+verified_by_agent: not yet
 ---
 
 # SQL Heap and Index Visible-Count Checker in PostgreSQL 12 (unverified)
@@ -183,11 +183,11 @@ Prioritize executor-based counts with mandatory access-path validation. Do not a
 
 ### Feasibility and execution contract
 
-**A verified positive result is feasible with SQL and ordinary [executor](../../../glossary.md#executor) scans. An unattended, universally complete checker is not guaranteed under literal SQL alone.** The deliverable is a SQL generator plus a staged SQL execution and validation protocol. It uses checker-owned temporary tables to retain exact counts, and the operator retains and imports the corresponding executed plans. Choosing a particular index remains best effort; accepting a count requires evidence from that execution. The reasons are PostgreSQL's [utility-command](../../../glossary.md#utility-command) interface for [EXPLAIN](../../../glossary.md#explain), its prepared-statement meaning of SQL `EXECUTE`, and its cost-based choice of index paths. [explain.sgml#execution-and-results](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L78-L105) [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) [indxpath.c#build_index_paths](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050)
+**A verified positive result is feasible with SQL and ordinary [executor](../../../glossary.md#executor) scans. An unattended, universally complete checker is not guaranteed under literal SQL alone.** The deliverable is a SQL generator plus a staged SQL execution and validation protocol. It uses checker-owned temporary tables to retain exact counts, and the operator retains and imports the corresponding executed plans. Choosing a particular index remains best effort; accepting a count requires evidence from that execution. The reasons are PostgreSQL's [utility-command](../../../glossary.md#utility-command) interface for [EXPLAIN](../../../glossary.md#explain), its [prepared-statement](../../../glossary.md#prepared-statement) meaning of SQL `EXECUTE`, and its cost-based choice of index paths. [explain.sgml#execution-and-results](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L78-L105) [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) [indxpath.c#build_index_paths](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050)
 
 The user approved implementation after the planning review. This page now includes the complete operator-assisted SQL implementation and a separate reproduction harness. The original planning-only Question remains above as the request that motivated the design. The evidence target is **PostgreSQL 12.2**, commit `45b88269a353ad93744772791feb6d01bc7e1e42`. The checkout identifies itself as 12.2. “Official documentation” below means the official PostgreSQL SGML documentation shipped in that same checkout, checked alongside implementation source. Later 12.x minor releases require a compatibility check before claiming validation on them. The SQL version guard checks `server_version_num`, not the provenance of an arbitrary server binary; the measurement harness builds the exact pin. [configure.in#version](../../../../raw/postgres-12/configure.in#L19-L34)
 
-The implementation runs on a primary and requires no extension. Its only DML writes are to its own temporary result tables. Create those tables before entering the checking transaction: a `READ ONLY` transaction permits DML on temporary tables but rejects `CREATE`, including temporary-table creation. Read/write is the default; the explicit transaction option activates that guard. A standby cannot create the temporary tables this design needs. [set_transaction.sgml#read-only](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L126-L139) [execMain.c#ExecCheckXactReadOnly](../../../../raw/postgres-12/src/backend/executor/execMain.c#L759-L795) [namespace.c#temporary-recovery-refusal](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3915-L3927)
+The implementation runs on a primary and requires no extension. Its only DML writes are to its own temporary result tables. Create those tables before entering the checking transaction. A `READ ONLY` transaction permits DML on temporary tables, because the executor's read-only check skips relations in a temporary namespace. It rejects `CREATE`, including temporary-table creation, because `check_xact_readonly()` refuses a `CreateStmt` whenever the transaction is read-only. Read/write is the default; the explicit transaction option activates that guard. A [standby](../../../glossary.md#hot-standby) cannot create the temporary tables this design needs. [set_transaction.sgml#read-only](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L126-L139) [execMain.c#ExecCheckXactReadOnly](../../../../raw/postgres-12/src/backend/executor/execMain.c#L759-L795) [utility.c#check_xact_readonly](../../../../raw/postgres-12/src/backend/tcop/utility.c#L128-L140) [utility.c#create-refusal](../../../../raw/postgres-12/src/backend/tcop/utility.c#L176-L224) [namespace.c#temporary-recovery-refusal](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3915-L3927)
 
 | Capability | Assessment and handling |
 |---|---|
@@ -195,7 +195,7 @@ The implementation runs on a primary and requires no extension. Its only DML wri
 | Bind an exact count to its executed access path | Feasible with `EXPLAIN ANALYZE INSERT ... SELECT count(*) ...` into a pre-existing temporary table. The same execution inserts the count and produces the plan; see [capture protocol](#capturing-an-exact-count-and-its-executed-plan). |
 | Execute arbitrary SQL text returned by an inventory query | A generated string is not executed by ordinary SQL `EXECUTE`; that command executes a named prepared statement. Have the operator execute the generated SQL in the same session. [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) |
 | Put an `EXPLAIN` utility result directly in a SQL CTE or `INSERT ... SELECT` | No ordinary relational `EXPLAIN` interface is provided by this command. Its result goes to the client. Import that result explicitly before running the SQL validator. [explain.sgml#command-and-output](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L32-L46) [explain.sgml#outputs](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L268-L275) |
-| Use `query_to_xml()` as a dynamic-EXPLAIN workaround | Rejected for this pin. It executes through read-only SPI and requires `SPI_OK_SELECT`; SPI's read-only test rejects utility statements. It can execute suitable SELECT text, but does not solve this executed-plan capture problem. [xml.c#query_to_xml_internal](../../../../raw/postgres-12/src/backend/utils/adt/xml.c#L2671-L2689) [spi.c#read-only-check](../../../../raw/postgres-12/src/backend/executor/spi.c#L2258-L2263) [utility.c#CommandIsReadOnly](../../../../raw/postgres-12/src/backend/tcop/utility.c#L99-L118) |
+| Use `query_to_xml()` as a dynamic-EXPLAIN workaround | Rejected for this pin. It executes through read-only [SPI](../../../glossary.md#spi) and requires `SPI_OK_SELECT`; SPI's read-only test rejects utility statements. It can execute suitable SELECT text, but does not solve this executed-plan capture problem. [xml.c#query_to_xml_internal](../../../../raw/postgres-12/src/backend/utils/adt/xml.c#L2671-L2689) [spi.c#read-only-check](../../../../raw/postgres-12/src/backend/executor/spi.c#L2258-L2263) [utility.c#CommandIsReadOnly](../../../../raw/postgres-12/src/backend/tcop/utility.c#L99-L118) |
 | Choose every eligible [B-tree](../../../glossary.md#b-tree) by name and stop automatically after a match | No such guarantee follows from scan settings or ordering. Literal SQL also has no procedural loop over dynamically generated statements. Use a staged “generate next attempt” protocol; offer a procedural wrapper separately. [indices.sgml#index-versus-sort](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L480-L502) [plpgsql.sgml#dynamic-commands](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1157-L1185) |
 
 “Reliable” means a completed, correctly identified executor observation under the stated snapshot and scope, with a validated plan and faithful capture. It does not mean a proof that a damaged database has retained all historical rows. “Best effort” describes obtaining a suitable index path and achieving candidate coverage; an unsuccessful attempt must never manufacture a reliable result.
@@ -204,15 +204,17 @@ The implementation runs on a primary and requires no extension. Its only DML wri
 
 The checker delegates [MVCC](../../../glossary.md#mvcc) visibility to PostgreSQL's executor. A [sequential scan](../../../glossary.md#sequential-scan) passes the execution [snapshot](../../../glossary.md#snapshot) into the table access method. An ordinary [index scan](../../../glossary.md#index-scan) passes the same snapshot into [heap](../../../glossary.md#heap) fetching after obtaining index tuple identifiers. [nodeSeqscan.c#SeqNext](../../../../raw/postgres-12/src/backend/executor/nodeSeqscan.c#L50-L82) [nodeIndexscan.c#IndexNext](../../../../raw/postgres-12/src/backend/executor/nodeIndexscan.c#L105-L149) [indexam.c#index_fetch_heap](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L573)
 
-| Value | Meaning and origin | Use |
-|---|---|---|
-| `T` | Database [OID](../../../glossary.md#oid) plus physical [relation](../../../glossary.md#relation) OID, with recorded schema/name and catalog classification | Stable identity for one target during the coordinated run |
-| `S` | Snapshot retained by the checking transaction; record `txid_current_snapshot()::text` | Associates both accepted scan results with the same visibility boundary |
-| `H(T,S)` | Stored `bigint` from an accepted sequential-scan count | Baseline |
-| `J` | Actual index OID resolved from the executed plan and inventory | Coverage identity; the intended candidate is recorded separately |
-| `I(T,J,S)` | Stored `bigint` from an accepted full ordinary Index Scan count | Comparison with `H` |
-| `delta` | `I::numeric - H::numeric` | Zero means equal cardinality; negative means fewer returned rows through that index |
-| Candidate state | Inventory facts, snapshot-usability evidence, attempted and actually scanned OIDs | Determines whether “none matched” means `MISMATCH`, `INCONCLUSIVE`, or `ERROR` |
+| Value | Meaning and origin | Live or stored | Use |
+|---|---|---|---|
+| `T` | Database [OID](../../../glossary.md#oid) plus physical [relation](../../../glossary.md#relation) OID, with recorded schema/name and catalog classification | Stored in `hic_object` when the run starts | Stable identity for one target during the coordinated run |
+| `S` | Snapshot retained by the checking transaction; record `txid_current_snapshot()::text` | Live while the repeatable-read transaction lasts; its text is stored in `hic_run` and on every count and plan row ([snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370)) | Associates both accepted scan results with the same visibility boundary |
+| `H(T,S)` | `bigint` from an accepted sequential-scan count | Stored | Baseline |
+| `J` | Actual index OID resolved from the executed plan and inventory | Stored | Coverage identity; the intended candidate is recorded separately |
+| `I(T,J,S)` | `bigint` from an accepted full ordinary Index Scan count | Stored | Comparison with `H` |
+| `delta` | `I::numeric - H::numeric` | Derived in `hic_attempt_report` | Zero means equal cardinality; negative means fewer returned rows through that index |
+| `indcheckxmin` and `pg_index.xmin` | The index's usability flag and the xmin of its `pg_index` row | Stored in the catalog. The inventory copies the row its snapshot sees; the planner reads the relcache copy, which a relcache rebuild refreshes ([relcache.c#index-xmin-refresh](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L2210-L2224)) | With `TransactionXmin`, decides whether the planner may use the index ([plancat.c#indcheckxmin](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234)) |
+| `TransactionXmin` | The backend's oldest snapshot xmin in the current transaction | Live and backend-local; the transaction's first snapshot sets it ([procarray.c#horizons](../../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1489-L1499), [procarray.c#first-snapshot](../../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1709-L1710)) | The planner skips an index with `indcheckxmin` set until its `pg_index.xmin` precedes this value |
+| Candidate state | Inventory facts, snapshot-usability evidence, attempted and actually scanned OIDs | Stored inventory plus derived report state | Determines whether “none matched” means `MISMATCH`, `INCONCLUSIVE`, or `ERROR` |
 
 `txid_current_snapshot()` is the version-12 SQL snapshot interface. `count(*)` returns `bigint` and counts all input rows, including rows whose keys are NULL. Neither `reltuples` nor EXPLAIN's estimated rows is one of these count values. [func.sgml#snapshot-interface](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L19384-L19418) [func.sgml#count](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L14917-L14936) [pg_class.h#estimates](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L59-L63)
 
@@ -263,30 +265,30 @@ These are checker rules. The source-grounded conditions feeding them are the inv
 
 ### Scope and catalog inventory
 
-Resolve the requested schema to a `pg_namespace` OID, then inventory its `pg_class` rows without first filtering by privileges or index existence. Join the table's `relam` to `pg_am`; separately join `pg_index.indrelid = pg_class.oid`, the index's own `pg_class` row, and its index `pg_am` row. Require table `amtype = 't'` and index `amtype = 'i'` in their respective classifications. Keep a relation row even when the left join finds no index. These catalogs distinguish namespace, relation kind, table versus index access method, and index-to-table ownership. [pg_class.h#identity-and-AM](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L30-L54) [pg_class.h#kinds](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L154-L167) [pg_index.h#catalog](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L29-L57) [pg_am.h#method-types](../../../../raw/postgres-12/src/include/catalog/pg_am.h#L53-L56) [pg_am.dat#built-in-methods](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L15-L35)
+Resolve the requested schema to a `pg_namespace` OID, then inventory its [`pg_class`](../../../glossary.md#pg_class) rows without first filtering by privileges or index existence. Join the table's `relam` to `pg_am`; separately join [`pg_index`](../../../glossary.md#pg_index) rows on `pg_index.indrelid = pg_class.oid`, the index's own `pg_class` row, and its index `pg_am` row. Require table `amtype = 't'` and index `amtype = 'i'` in their respective classifications. Keep a relation row even when the left join finds no index. These catalogs distinguish namespace, relation kind, table versus index access method, and index-to-table ownership. [pg_class.h#identity-and-AM](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L30-L54) [pg_class.h#kinds](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L154-L167) [pg_index.h#catalog](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L29-L57) [pg_am.h#method-types](../../../../raw/postgres-12/src/include/catalog/pg_am.h#L53-L56) [pg_am.dat#built-in-methods](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L15-L35)
 
 The inventory specification is:
 
 | Catalog condition | Classification and treatment |
 |---|---|
-| `relkind = 'r'`, built-in heap table AM | In scope: ordinary tables and physical table partitions, including ordinary inheritance parents that store their own rows |
+| `relkind = 'r'`, built-in heap table AM | In scope: ordinary tables and physical table partitions, including ordinary [inheritance](../../../glossary.md#inheritance) parents that store their own rows |
 | `relkind = 'm'`, heap AM, `relispopulated` | In scope: count the stored rows of the [materialized view](../../../glossary.md#materialized-view), not the defining query |
-| `relkind = 'p'` | `NOT_APPLICABLE` as a scan target; produce a child-summary record |
+| `relkind = 'p'` | `NOT_APPLICABLE: partitioned_parent_summary` as a scan target; `hic_parent_result` summarizes its children |
 | `relkind = 'm'`, not populated | `NOT_APPLICABLE: unpopulated_materialized_view`; never invent a zero count |
-| `relkind = 'r'` or `'m'`, another table AM | `NOT_APPLICABLE: unsupported_table_am`; report a physical-object coverage gap |
-| View `'v'`, foreign table `'f'`, sequence `'S'` | `NOT_APPLICABLE`, each with its own reason; no local heap-count claim |
-| Index `'i'` or partitioned index `'I'` | Inventory as index metadata, not as a second table to count |
-| TOAST `'t'`, composite type `'c'`, any other kind | Explicitly outside this initial table/materialized-view scope |
+| `relkind = 'r'` or `'m'`, another table AM | `NOT_APPLICABLE: unsupported_table_access_method`, with the `unsupported_table_am` flag set; report a physical-object coverage gap |
+| View `'v'`, foreign table `'f'`, sequence `'S'` | `NOT_APPLICABLE` with the reason `view`, `foreign_table` or `sequence`; no local heap-count claim |
+| Index `'i'` or [partitioned index](../../../glossary.md#partitioned-index) `'I'` | `NOT_APPLICABLE: index_metadata`; inventoried as index metadata, not as a second table to count |
+| [TOAST](../../../glossary.md#toast) `'t'`, composite type `'c'`, any other kind | `NOT_APPLICABLE: outside_physical_heap_scope`; explicitly outside this initial table/materialized-view scope |
 
 The classifications use `relkind`, `relam`, `relispopulated`, and `relispartition`, not file size or the existence of a parent. PostgreSQL excludes partitioned parents from its storage-bearing kinds. Ordinary materialized-view reads skip rule expansion, and execution of an unpopulated materialized view raises an error. [pg_class.h#state](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L104-L119) [pg_class.h#storage-kinds](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L183-L192) [rewriteHandler.c#materialized-view-reads](../../../../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L1900-L1911) [execUtils.c#unpopulated-refusal](../../../../raw/postgres-12/src/backend/executor/execUtils.c#L694-L714) [rules.sgml#materialized-views](../../../../raw/postgres-12/doc/src/sgml/rules.sgml#L898-L929)
 
-**Default schema boundary: namespace only.** Include physical relations whose own `relnamespace` is the requested schema. Include such a partition even when its parent is elsewhere. Exclude an outside-schema partition from scanning even when its parent is inside the schema, but list it in that parent's summary as `outside_requested_schema`. A parent summary must say whether it covers all descendants or only the selected subset.
+**Default schema boundary: namespace only.** Include physical relations whose own `relnamespace` is the requested schema. Include such a partition even when its parent is elsewhere. Exclude an outside-schema partition from scanning even when its parent is inside the schema, but keep it in that parent's summary: its `hic_partition.outside_schema` flag is true, and `hic_parent_result.outside_schema_descendants` counts it. A parent summary must say whether it covers all descendants or only the selected subset.
 
 Offer an explicit `include_external_partition_descendants` option. When enabled, recursively traverse `pg_inherits` from partitioned parents in the requested schema and include their physical descendants across schemas, deduplicated by relation OID. Record the added schemas and apply their privileges too. Restrict traversal to table relationships: `pg_inherits` also carries partitioned-index links in this implementation. Do not automatically expand ordinary inheritance into this optional partition closure. [pg_inherits.h#parent-links](../../../../raw/postgres-12/src/include/catalog/pg_inherits.h#L30-L37) [index.c#index-inheritance-link](../../../../raw/postgres-12/src/backend/catalog/index.c#L1002-L1010) [ddl.sgml#declarative-storage](../../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L3611-L3626)
 
 Every physical-target scan uses `FROM ONLY schema.relation`. Without `ONLY`, a parent query also scans inherited descendants; that would mix multiple physical objects into its baseline. A partitioned-parent summary aggregates child statuses and coverage, never accepts equality of aggregate parent totals as a replacement for individual child passes. The optional sum of child counts is meaningful as a common-snapshot total only in schema-wide snapshot mode. [select.sgml#ONLY](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L355-L365)
 
-Retain `relpersistence` in the inventory. Permanent and unlogged heap relations are eligible for this executor comparison; their durability is not being assessed. Own-session temporary application tables can be included when they are the explicitly requested scope. Classify another session's temporary relation as `ERROR: unsupported_remote_temp` before attempting a count: the reader cannot see its owner's local buffers. Keep the object in discovery rather than silently dropping it. Always exclude checker-owned scratch OIDs from the target set. [pg_class.h#persistence](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L165-L167) [bufmgr.c#temporary-relation-access](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L640-L658)
+Retain `relpersistence` in the inventory. Permanent and [unlogged](../../../glossary.md#unlogged-relation) heap relations are eligible for this executor comparison; their durability is not being assessed. Own-session temporary application tables can be included when they are the explicitly requested scope. Classify another session's temporary relation as `ERROR: unsupported_remote_temp` before attempting a count: the reader cannot see its owner's local buffers. Keep the object in discovery rather than silently dropping it. Always exclude checker-owned scratch OIDs from the target set. [pg_class.h#persistence](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L165-L167) [bufmgr.c#temporary-relation-access](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L640-L658)
 
 ### Index eligibility and ordering generation
 
@@ -299,18 +301,20 @@ pg_index.indpred IS NULL
 pg_index.indisvalid AND pg_index.indisready AND pg_index.indislive
 ```
 
-Keep rejected indexes with reason codes such as `partial`, `invalid`, `not_ready`, `not_live`, `partitioned_index`, and `unsupported_index_am`. A [partial index](../../../glossary.md#partial-index) with a logically trivial predicate still fails this requested `indpred IS NULL` contract. The three state flags have distinct meanings; they are not estimates of physical correctness. The planner rejects invalid and partitioned indexes, while the relcache's usable index list omits indexes marked not live. [catalogs.sgml#index-state](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L3822-L3865) [pg_index.h#predicate](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L53-L57) [plancat.c#validity-and-partitioned-indexes](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L234) [relcache.c#non-live-indexes](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4383-L4400)
+Keep rejected indexes with the reason codes the installation emits: `partial_index`, `invalid_index`, `index_not_ready`, `index_not_live`, `nonphysical_index` (a partitioned index) and `unsupported_index_am`. A [partial index](../../../glossary.md#partial-index) with a logically trivial predicate still fails this requested `indpred IS NULL` contract. The three state flags have distinct meanings; they are not estimates of physical correctness. The [planner](../../../glossary.md#planner) rejects invalid and partitioned indexes, while the [relcache](../../../glossary.md#relcache)'s usable index list omits indexes marked not live. [catalogs.sgml#index-state](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L3822-L3865) [pg_index.h#predicate](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L53-L57) [plancat.c#validity-and-partitioned-indexes](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L199-L234) [relcache.c#non-live-indexes](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L4383-L4400)
 
-**Snapshot usability is an additional gate.** [`indcheckxmin`](../../../glossary.md#indcheckxmin) does not mean “always reject this index.” When true, the planner requires the `xmin` of the index's relcache `pg_index` tuple to precede the backend's [TransactionXmin](../../../glossary.md#transactionxmin). Otherwise it skips the index and marks the plan transient. This protects snapshots that could see incompatible [HOT](../../../glossary.md#hot) chain versions. [plancat.c#indcheckxmin](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234) [catalogs.sgml#indcheckxmin](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L3835-L3844)
+**Snapshot usability is an additional gate.** [`indcheckxmin`](../../../glossary.md#indcheckxmin) does not mean “always reject this index.” When true, the planner requires the `xmin` of the index's relcache `pg_index` tuple to precede the backend's [TransactionXmin](../../../glossary.md#transactionxmin). Otherwise it skips the index and marks the plan [transient](../../../glossary.md#transient-plan). This protects snapshots that could see incompatible [HOT](../../../glossary.md#hot) chain versions. [plancat.c#indcheckxmin](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234) [catalogs.sgml#indcheckxmin](../../../../raw/postgres-12/doc/src/sgml/catalogs.sgml#L3835-L3844)
 
-Record `indcheckxmin`, the observed `pg_index.xmin`, and the snapshot descriptor. Do not reproduce that gate with `xmin::text::bigint < txid_snapshot_xmin(...)`: the planner uses wrap-aware transaction-ID comparison and a backend horizon, and its relcache tuple is not necessarily the catalog row an earlier SQL statement observed. The initial design treats a true flag as **usability unresolved until an actual accepted plan uses that index**, rather than guessing the horizon. A refused candidate remains unresolved/untested unless there is independent conclusive exclusion evidence. It therefore blocks `MISMATCH` and `NO_ELIGIBLE_INDEX`, but does not block a valid pass through another index. [transam.c#TransactionIdPrecedes](../../../../raw/postgres-12/src/backend/access/transam/transam.c#L296-L312) [procarray.c#horizons](../../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1489-L1499) [relcache.c#index-xmin-refresh](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L2210-L2224)
+Record `indcheckxmin`, the observed `pg_index.xmin`, and the snapshot descriptor. Do not reproduce that gate with `xmin::text::bigint < txid_snapshot_xmin(...)`: the planner uses wrap-aware [transaction-ID](../../../glossary.md#transaction-id) comparison and a backend horizon, and its relcache tuple is not necessarily the catalog row an earlier SQL statement observed. The initial design treats a true flag as **usability unresolved until an actual accepted plan uses that index**, rather than guessing the horizon. A refused candidate remains unresolved/untested unless there is independent conclusive exclusion evidence. It therefore blocks `MISMATCH` and `NO_ELIGIBLE_INDEX`, but does not block a valid pass through another index. [transam.c#TransactionIdPrecedes](../../../../raw/postgres-12/src/backend/access/transam/transam.c#L296-L312) [procarray.c#horizons](../../../../raw/postgres-12/src/backend/storage/ipc/procarray.c#L1489-L1499) [relcache.c#index-xmin-refresh](../../../../raw/postgres-12/src/backend/utils/cache/relcache.c#L2210-L2224)
 
-Non-partial status is insufficient across [access methods](../../../glossary.md#access-method). B-tree advertises ordinary tuple scans, ordering, optional search keys, and NULL support. Hash omits NULL entries and requires a search key; GIN and BRIN have no ordinary `amgettuple` callback. Other methods and their operator classes need a separate completeness argument. Defer hash, GiST, SP-GiST, GIN, BRIN and extension AMs in the first implementation; do not use bitmap deduplication or a row-restricting predicate to simulate their full scan. [nbtree.c#bthandler](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L109-L142) [hashutil.c#NULL-omission](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L337) [hash.c#capabilities](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L60-L74) [ginutil.c#scan-callbacks](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L63-L73) [brin.c#scan-callbacks](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L111-L121)
+Non-partial status is insufficient across [access methods](../../../glossary.md#access-method). B-tree advertises ordinary tuple scans, ordering, optional search keys, and NULL support. Hash omits NULL entries and requires a search key; GIN and BRIN have no ordinary `amgettuple` callback. Other methods and their operator classes need a separate completeness argument. Defer hash, GiST, SP-GiST, GIN, BRIN and extension AMs in the first implementation; do not use [bitmap-scan](../../../glossary.md#bitmap-scan) deduplication or a row-restricting predicate to simulate their full scan. [nbtree.c#bthandler](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L109-L142) [hashutil.c#NULL-omission](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L312-L337) [hash.c#capabilities](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L60-L74) [ginutil.c#scan-callbacks](../../../../raw/postgres-12/src/backend/access/gin/ginutil.c#L63-L73) [brin.c#scan-callbacks](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L111-L121)
 
 For each structural B-tree candidate, generate an ordering specification as follows:
 
 1. Walk key positions `1..indnkeyatts`, not all `indnatts`. Included columns do not define index order. The deparser resolves `indkey`; the generator reads `indclass`, `indcollation`, and `indoption` at their corresponding zero-based vector positions. [pg_index.h#key-metadata](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L32-L57) [pathkeys.c#INCLUDE-exclusion](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L487-L492) [ruleutils.c#index-keys](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1304-L1350)
-2. Obtain each column or [expression](../../../glossary.md#expression-index) with `pg_get_indexdef(index_oid, position, false)`. On this pin the positive-position form requests only the variable/expression and suppresses index decorations. Do not split `pg_get_expr(indexprs, ...)` at commas or paste a full `CREATE INDEX` key specification into `ORDER BY`. Expressions themselves can contain commas, and an opclass name is not an `ORDER BY` suffix. [ruleutils.c#column-deparse](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1085-L1131) [ruleutils.c#expression-and-decoration](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1331-L1399)
+2. Obtain each column or [expression](../../../glossary.md#expression-index) with `pg_get_indexdef(index_oid, position, false)`. On this pin the positive-position form requests only the variable/expression and suppresses index decorations. It also wraps any key that is not a bare function call in parentheses. Do not split `pg_get_expr(indexprs, ...)` at commas or paste a full `CREATE INDEX` key specification into `ORDER BY`. Expressions themselves can contain commas, and an opclass name is not an `ORDER BY` suffix. [ruleutils.c#column-deparse](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1085-L1131) [ruleutils.c#expression-and-decoration](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1331-L1399)
+
+   Wrap each deparsed key in another pair of parentheses, except a key that deparses to a bare numeric literal, such as an index on `(2)`. Parentheses do not protect such a key. With the default `operator_precedence_warning = off`, the grammar discards redundant parentheses, and a SELECT's `ORDER BY` follows SQL92 rules: a bare integer constant names an output column by position, and any other bare constant is an error. `pg_get_indexdef()` prints a non-negative `integer` constant, and a `numeric` constant with a decimal point, without a type label. The generator therefore emits such a key as `CAST(<key> AS <its type>)`. The parser returns a same-type cast of a constant as the constant itself, so the sort key still equals the index expression. [ruleutils.c#get_const_expr-bare-numbers](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L9554-L9585) [gram.y#parenthesized-expression](../../../../raw/postgres-12/src/backend/parser/gram.y#L13464-L13497) [guc.c#operator_precedence_warning](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1806-L1814) [analyze.c#SQL92-order-by](../../../../raw/postgres-12/src/backend/parser/analyze.c#L1252-L1256) [parse_clause.c#integer-constant](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1931-L1966) [parse_coerce.c#same-type-no-op](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L156-L169)
 3. Append the exact indexed [collation](../../../glossary.md#collation) when `indcollation` is nonzero. Qualify its namespace and quote identifiers. Generate and execute under the same controlled `search_path` so deparsed expression names resolve consistently. [ruleutils.c#index-collation](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1372-L1381) [pathkeys.c#sort-identity](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L512-L522)
 4. Resolve the [operator class and family](../../../glossary.md#operator-class). For ordinary default ordering, `ASC`/`DESC` can suffice. For a nondefault family such as a pattern opclass, derive the same-type B-tree less-than or greater-than operator from `pg_opclass` and `pg_amop`, then use `USING OPERATOR(qualified_operator)`. Use strategy 1 for forward ascending and 5 for forward descending, with `amoppurpose = 's'`; these are B-tree search-family members, not `amoppurpose = 'o'` distance-ordering operators. Validate type compatibility instead of adding arbitrary casts. If overloaded/polymorphic/custom operators cannot be reconstructed confidently, retain the candidate as untested. [pg_amop.h#operator-metadata](../../../../raw/postgres-12/src/include/catalog/pg_amop.h#L54-L80) [parse_clause.c#SORTBY_USING](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L3263-L3295) [lsyscache.c#ordering-operator](../../../../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L216-L242)
 5. Decode `INDOPTION_DESC` and `INDOPTION_NULLS_FIRST`; specify NULL positioning explicitly for every key. A backward scan reverses both ordering and NULL positioning for every key. The generator emits complete forward ordering; a complete reverse-order variant remains optional and is not implemented here. The validator accepts either actual scan direction. [pg_index.h#ordering-bits](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L70-L76) [pathkeys.c#scan-direction](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L497-L519) [indices.sgml#ordering](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L505-L542)
@@ -319,11 +323,11 @@ The generator must treat quoted schema, relation, column, collation and function
 
 The implementation checks dependencies and index-column types **before** calling the deparser. Deparsing a non-NULL constant invokes its type-output function, so “we will not execute the generated query” is not enough to avoid all user code during inspection. The generator conservatively defers non-stock functions/operators and unreviewed types, including domains; it permits enums and reviewed stock opclasses/operators. Its OID cutoff follows `FirstNormalObjectId`; it is a coverage policy for the pinned stock catalogs, not an authentication boundary against modified catalogs, malicious code or EXPLAIN hooks. [ruleutils.c#get_const_expr](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L9522-L9550) [transam.h#FirstNormalObjectId](../../../../raw/postgres-12/src/include/access/transam.h#L136-L141) [explain.c#index-name-hook](../../../../raw/postgres-12/src/backend/commands/explain.c#L2844-L2862)
 
-Compatible ordering encourages a path; it does not name an index. With index-only scans disabled, the planner builds an ordinary index path only when restrictions, useful ordering, or another qualifying reason makes it useful. An index containing only a constant expression may lose its useful ordering and get no such path. Identically ordered indexes may repeatedly select the same cheaper index. These are coverage limits, not proof of corruption. [indxpath.c#path-generation-gate](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050) [pathkeys.c#redundant-ordering](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L524-L546)
+Compatible ordering encourages a path; it does not name an index. With index-only scans disabled, the planner builds an ordinary index path only when restrictions, useful ordering, or another qualifying reason makes it useful. An index containing only a constant expression gets no such path: a constant sort key falls into an equivalence class that contains a constant, and the planner drops a pathkey for such a class as redundant, so no useful ordering remains. Identically ordered indexes may repeatedly select the same cheaper index. These are coverage limits, not proof of corruption. [indxpath.c#path-generation-gate](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050) [equivclass.c#constant-member](../../../../raw/postgres-12/src/backend/optimizer/path/equivclass.c#L560-L570) [pathnodes.h#EC_MUST_BE_REDUNDANT](../../../../raw/postgres-12/src/include/nodes/pathnodes.h#L945-L950) [pathkeys.c#pathkey_is_redundant](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L132-L140) [pathkeys.c#redundant-ordering](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L524-L546)
 
 ### Snapshot permissions and DDL coordination
 
-Use `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` after scratch-table setup. The default isolation level is read committed, which takes a new snapshot for later statements. Repeatable read retains the transaction's first snapshot; the checker must not perform application DML between the two scans. Recording a snapshot descriptor helps audit provenance but does not recreate a completed transaction's snapshot later. [guc.c#isolation-default](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4255-L4272) [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [mvcc.sgml#repeatable-read](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L454-L479)
+Use `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` after scratch-table setup. The default [isolation level](../../../glossary.md#isolation-level) is read committed, which takes a new snapshot for later statements. Repeatable read retains the transaction's first snapshot; the checker must not perform application DML between the two scans. Recording a snapshot descriptor helps audit provenance but does not recreate a completed transaction's snapshot later. [guc.c#isolation-default](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4255-L4272) [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [mvcc.sgml#repeatable-read](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L454-L479)
 
 | Transaction mode | Guarantee | Operational trade-off |
 |---|---|---|
@@ -332,7 +336,7 @@ Use `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` after scratch-table setup.
 
 The run's inventory manifest must also remain complete across per-relation transactions. Require the membership/identity DDL freeze for the whole run, or re-inventory and invalidate a schema report whose target set changed. Shorter per-relation snapshots do not remove that scope-completeness requirement.
 
-A long snapshot can retain old row versions that VACUUM would otherwise remove because its cleanup cutoff depends on active transaction horizons. Ordinary scan locks are compatible with DML, but conflicting DDL can wait behind the checker. [vacuum.c#cleanup-horizon](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L858-L865) [vacuum.c#GetOldestXmin](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L902-L912) [lock.c#lock-conflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)
+A long snapshot can retain old row versions that VACUUM would otherwise remove because its cleanup cutoff depends on the [xmin horizon](../../../glossary.md#xmin-horizon) of active transactions. Ordinary scan locks are compatible with DML, but conflicting DDL can wait behind the checker. [vacuum.c#cleanup-horizon](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L858-L865) [vacuum.c#GetOldestXmin](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L902-L912) [lock.c#lock-conflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)
 
 Require schema `USAGE`, relation `SELECT`, and database `TEMP` privileges for scratch tables, plus permission to execute any functions used by the generated expressions. Table-wide SELECT is the proposed minimum privilege policy, even where a narrower column grant could execute one particular query. [namespace.c#schema-usage](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L2903-L2910) [namespace.c#temporary-privilege](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3889-L3905) [execMain.c#relation-permissions](../../../../raw/postgres-12/src/backend/executor/execMain.c#L637-L665) [execExpr.c#function-permission](../../../../raw/postgres-12/src/backend/executor/execExpr.c#L2159-L2163)
 
@@ -354,15 +358,15 @@ All [GUC](../../../glossary.md#guc) settings in this table are `user` / `PGC_USE
 | `enable_indexscan` | `on` | `off` | `on` | Heap profile adds the ordinary index-scan penalty |
 | `enable_indexonlyscan` | `on` | `off` | `off` | `check_index_only()` rejects index-only paths when off |
 | `enable_bitmapscan` | `on` | `off` | `off` | Discourage bitmap paths; reject them in either accepted plan |
-| `max_parallel_workers_per_gather` | `2` | `0` | `0` | Simplify execution to a serial scan; also reject any parallel plan actually produced |
-| `enable_sort` | `on` | Leave on | Start on; optional retry off | A sort penalty may help an ordered index compete; it is not a per-index hint |
+| `max_parallel_workers_per_gather` | `2` | `0` | `0` | Simplify execution to a serial scan: with the limit at 0 the planner builds no partial scan paths ([allpaths.c#create_plain_partial_paths](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L796-L805)); also reject any parallel plan actually produced |
+| `enable_sort` | `on` | Leave on | Start on; optional retry off | Off adds `disable_cost` to an explicit sort ([costsize.c#cost_sort](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L1705-L1706)), which may help an ordered index compete; it is not a per-index hint |
 | `row_security` | `on` | `off` | `off` | Error if RLS would filter the target |
-| `search_path` | `"$user", public` | `pg_catalog, pg_temp` | Same | Qualify all target objects and deparse names in this controlled context |
+| `search_path` | `"$user", public` | `pg_catalog, pg_temp` | Same | Qualify all target objects and deparse names in this controlled context: the deparser schema-qualifies a function name only when an unqualified lookup on this path would not find it ([ruleutils.c#generate_function_name](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10935-L10956)) |
 | `quote_all_identifiers` | `off` | `off` | `off` | Fix deparser/EXPLAIN identifier spelling independently of the caller's settings |
-| `lock_timeout` | `0`, disabled | Starting budget `'2s'` | Same | Bound each lock wait; adapt to the operating window |
-| `statement_timeout` | `0`, disabled | Starting budget `'15min'` | Same | Bound each statement; timeout is an error, never a zero count |
+| `lock_timeout` | `0`, disabled | Starting budget `'2s'` | Same | Bound each lock wait; expiry raises SQLSTATE `55P03` ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095)); adapt to the operating window |
+| `statement_timeout` | `0`, disabled | Starting budget `'15min'` | Same | Bound each statement; expiry raises SQLSTATE `57014` ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095)), which is an error, never a zero count |
 
-The nondefault scan profiles change costing, not the acceptance contract. `enable_seqscan = off` and `enable_indexscan = off` add `disable_cost`; disabling index-only scans is checked when constructing an index-only path. The official sequential-scan and sort documentation expressly says these methods cannot be suppressed entirely. [costsize.c#seqscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L225-L232) [costsize.c#indexscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L525-L535) [costsize.c#bitmap-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L963-L970) [indxpath.c#index-only-gate](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L1898-L1907) [config.sgml#seqscan-and-sort](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4616-L4648)
+The nondefault scan profiles change costing, not the acceptance contract. `enable_seqscan = off` and `enable_indexscan = off` add [`disable_cost`](../../../glossary.md#disable_cost); disabling index-only scans is checked when constructing an index-only path. The official sequential-scan and sort documentation expressly says these methods cannot be suppressed entirely. [costsize.c#seqscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L225-L232) [costsize.c#indexscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L525-L535) [costsize.c#bitmap-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L963-L970) [indxpath.c#index-only-gate](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L1898-L1907) [config.sgml#seqscan-and-sort](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4616-L4648)
 
 The heap counting shape is:
 
@@ -388,7 +392,7 @@ Disabling [index-only scans](../../../glossary.md#index-only-scan) is deliberate
 
 ### Capturing an exact count and its executed plan
 
-Do not execute `EXPLAIN` and then a separate plain count and claim the first plan proves the second execution. Plain EXPLAIN does not run the plan; a later statement can be replanned. Nor does `EXPLAIN ANALYZE SELECT count(*) ...` return the aggregate value: it discards SELECT output. Its Aggregate node returns one row regardless of that row's count value. Instrumentation stores floating-point row counters and EXPLAIN prints rows per loop, rounded to zero decimal places; those counters should not replace the exact `bigint` aggregate. [explain.c#execution-and-destination](../../../../raw/postgres-12/src/backend/commands/explain.c#L494-L541) [instrument.h#row-counters](../../../../raw/postgres-12/src/include/executor/instrument.h#L44-L65) [explain.c#rows-per-loop](../../../../raw/postgres-12/src/backend/commands/explain.c#L1505-L1534) [explain.sgml#discarded-output](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L87-L105)
+Do not execute `EXPLAIN` and then a separate plain count and claim the first plan proves the second execution. Plain EXPLAIN does not run the plan; a later statement can be replanned. Nor does `EXPLAIN ANALYZE SELECT count(*) ...` return the aggregate value: it discards SELECT output. Its Aggregate node returns one row regardless of that row's count value. [Instrumentation](../../../glossary.md#plan-node-instrumentation) stores floating-point row counters and EXPLAIN prints rows per loop, rounded to zero decimal places; those counters should not replace the exact `bigint` aggregate. [explain.c#execution-and-destination](../../../../raw/postgres-12/src/backend/commands/explain.c#L494-L541) [instrument.h#row-counters](../../../../raw/postgres-12/src/include/executor/instrument.h#L44-L65) [explain.c#rows-per-loop](../../../../raw/postgres-12/src/backend/commands/explain.c#L1505-L1534) [explain.sgml#discarded-output](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L87-L105)
 
 Use this protocol for each attempt:
 
@@ -413,7 +417,7 @@ The index attempt uses the same explained INSERT with a new attempt ID and the o
 
 `EXPLAIN ANALYZE` executes INSERT side effects even though it discards ordinary output, and `ExecutorRun(..., 0L, ...)` runs the plan to completion. Therefore the stored count and the plan describe one execution. `TIMING OFF` removes per-node timing overhead while preserving row instrumentation and total execution timing; it is an EXPLAIN option, not a server GUC. `FORMAT JSON` changes the default text output to structured output. [explain.c#run-to-completion](../../../../raw/postgres-12/src/backend/commands/explain.c#L501-L541) [explain.sgml#side-effects](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L87-L105) [explain.sgml#timing-and-summary](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L195-L223) [explain.sgml#format](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L227-L235)
 
-Bare EXPLAIN defaults `ANALYZE`, `VERBOSE`, `BUFFERS` and `SETTINGS` to false. This protocol turns them on to execute the statement, expose schema-qualified names/output expressions, and retain buffer and planner-setting evidence. `TIMING` and `SUMMARY` normally follow `ANALYZE`; the protocol explicitly disables the former and keeps the latter. `SETTINGS` reports only nondefault parameters affecting planning, so it cannot replace the run's separate effective-setting record. [explain.c#option-defaults](../../../../raw/postgres-12/src/backend/commands/explain.c#L154-L221) [explain.c#NewExplainState](../../../../raw/postgres-12/src/backend/commands/explain.c#L285-L295) [explain.sgml#verbose](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L130-L139) [explain.sgml#settings](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L156-L162)
+Bare EXPLAIN defaults `ANALYZE`, `VERBOSE`, `BUFFERS` and `SETTINGS` to false. This protocol turns them on to execute the statement, expose schema-qualified names/output expressions, and retain buffer and planner-setting evidence. `TIMING` and `SUMMARY` normally follow `ANALYZE`; the protocol explicitly disables the former and keeps the latter. [`SETTINGS`](../../../glossary.md#explain-settings) reports only nondefault parameters affecting planning, so it cannot replace the run's separate effective-setting record. [explain.c#option-defaults](../../../../raw/postgres-12/src/backend/commands/explain.c#L154-L221) [explain.c#NewExplainState](../../../../raw/postgres-12/src/backend/commands/explain.c#L285-L295) [explain.sgml#verbose](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L130-L139) [explain.sgml#settings](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L156-L162)
 
 The literal-SQL bridge assumes faithful capture of unedited server output. A SQL validator can reject mismatched identifiers and bad shapes; it does not cryptographically authenticate a JSON literal supplied by an operator. Record who associated each plan with its attempt, and leave the attempt pending if that association cannot be established.
 
@@ -467,8 +471,9 @@ The installation implements these logical records with explicit keys and checks.
 | Relation | Relation OID and captured qualified name, `relkind`, table AM OID/name, persistence, population/RLS flags, parent OIDs, inclusion/exclusion reason, accepted heap attempt ID/count, matching actual index OID, status, scope-gap flags |
 | Candidate | Relation/index OIDs and qualified names, index AM, definition when safe to deparse, key expressions/order metadata, predicate/state flags, observed catalog xmin, structural eligibility, snapshot-usability state, exclusion reason, attempted/actually-checked flags, untested reason |
 | Attempt | Attempt ID, intended and actual index OIDs, phase, query text, settings, snapshot reference, exact count `bigint`, heap count reference, `delta numeric`, executed plan `jsonb`, validation decision/reasons, start/capture/import timestamps and plan execution time, accepted/rejected/error fields |
-| Error | Run/relation/candidate/attempt references as available, stage, SQLSTATE, message/detail/hint, whether the snapshot survived, whether other accepted evidence remains valid |
-| Parent/schema summary | Counts by relation status, distinct eligible/checked/matching/untested indexes, outside-schema descendants, unsupported AMs, unresolved errors, scope-completeness and objective-success booleans |
+| Error | `hic_error`: attempt ID, which leads to the relation and the intended candidate, plus stage, SQLSTATE, message, detail, hint and whether the snapshot survived. `hic_run_error`: run-level stage, SQLSTATE and message. Whether accepted evidence still covers a failed candidate is derived as `uncovered_error_attempts` in the relation records, not stored |
+| Parent summary | `hic_parent_result`: descendant and physical-child counts, outside-schema descendants, `all_descendants_in_scope`, `all_descendants_supported` and `subtree_success`; per-child statuses come from the relation records |
+| Schema summary | `hic_schema_result`: counts by relation status, unsupported table AMs, eligible/checked/matching/untested index totals over in-scope relations, observed mismatches and attempt errors, `inventory_complete`, `evidence_valid`, `heap_scope_all_pass`, `schema_success`, `exhaustive_coverage_complete` and `all_tested_indexes_match` |
 
 A timestamp is not a snapshot identifier, and a transaction ID is not the snapshot's in-progress transaction list. Use the version-12 snapshot function rather than inventing a timestamp-based comparison. The implementation deliberately assigns a transaction ID with `txid_current()` at run initialization and records it with each count/import; its active-transaction guard then uses `txid_current_if_assigned()` to avoid assigning a new ID just to inspect a completed run. [func.sgml#transaction-and-snapshot-functions](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L19384-L19418)
 
@@ -505,7 +510,7 @@ Any in-scope `MISMATCH`, `INCONCLUSIVE`, `NO_ELIGIBLE_INDEX`, or `ERROR` makes `
 
 Partition summaries must carry `all_descendants_in_scope` and `all_descendants_supported`. An outside-schema child under namespace-only mode does not fail the namespace check, but prevents presenting the parent's summary as a check of the entire partition tree. Likewise, a foreign partition is an explicit hole in any claimed all-children heap comparison. Never add a parent's summary to the physical relation denominator.
 
-For exhaustive mode, retain the requested existential PASS semantics and add `all_tested_indexes_match`, `exhaustive_coverage_complete`, and anomaly counts. A PASS with another index mismatch or attempt error is visibly qualified in the report. An optional stricter operational flag can require zero attempt errors and zero observed mismatches; do not silently redefine the requested objective.
+For exhaustive mode, retain the requested existential PASS semantics and add `all_tested_indexes_match`, `exhaustive_coverage_complete`, and anomaly counts, at both the relation and the schema level. A PASS with another index mismatch or attempt error is visibly qualified in the report. An optional stricter operational flag can require zero attempt errors and zero observed mismatches; do not silently redefine the requested objective.
 
 ### Concurrency performance and correctness limits
 
@@ -830,8 +835,7 @@ WHERE a.atttypid >= 16384 AND typ.typtype <> 'e';
 
 CREATE /* wiki_hic12_key_inventory */ TEMP VIEW hic_index_keys AS
 SELECT i.indexrelid AS index_oid, k.n AS key_number,
-       CASE WHEN obj.in_heap_scope AND ic.relam = 403 AND u.index_oid IS NULL
-            THEN pg_catalog.pg_get_indexdef(i.indexrelid, k.n, false) END AS expression_sql,
+       key_text.expression_sql,
        a.atttypid AS key_type_oid, opc.oid AS opclass_oid,
        opn.nspname::text AS opclass_schema, opc.opcname::text AS opclass_name,
        opc.opcfamily AS opfamily_oid, i.indcollation[k.n - 1] AS collation_oid,
@@ -841,14 +845,17 @@ SELECT i.indexrelid AS index_oid, k.n AS key_number,
        ordering.oprname::text AS operator_name,
        ordering.operator_schema,
        CASE WHEN ordering.oid IS NOT NULL
-                  AND obj.in_heap_scope
-                  AND ic.relam = 403 AND u.index_oid IS NULL
+                  AND key_text.expression_sql IS NOT NULL
                   AND opn.nspname = 'pg_catalog'
                   AND opc.oid < 16384
                   AND (a.atttypid < 16384 OR typ.typtype = 'e')
                   AND (i.indcollation[k.n - 1] = 0 OR coll.oid IS NOT NULL)
-            THEN format('(%s)%s USING OPERATOR(%I.%s) NULLS %s',
-                  pg_catalog.pg_get_indexdef(i.indexrelid, k.n, false),
+            THEN format('%s%s USING OPERATOR(%I.%s) NULLS %s',
+                  CASE WHEN i.indkey[k.n - 1] = 0
+                            AND key_text.expression_sql ~ '^[(]*[0-9]+([.][0-9]+)?[)]*$'
+                       THEN format('CAST(%s AS %s)', key_text.expression_sql,
+                                   pg_catalog.format_type(a.atttypid, NULL))
+                       ELSE format('(%s)', key_text.expression_sql) END,
                   CASE WHEN coll.oid IS NULL THEN ''
                        ELSE format(' COLLATE %I.%I', cn.nspname, coll.collname) END,
                   ordering.operator_schema, ordering.oprname,
@@ -859,6 +866,10 @@ JOIN pg_catalog.pg_index AS i ON i.indrelid = obj.relation_oid
 JOIN pg_catalog.pg_class AS ic ON ic.oid = i.indexrelid
 LEFT JOIN pg_temp.hic_untrusted_indexes AS u ON u.index_oid = i.indexrelid
 CROSS JOIN LATERAL pg_catalog.generate_series(1, i.indnkeyatts::integer) AS k(n)
+CROSS JOIN LATERAL (
+    SELECT /* wiki_hic12_key_deparse */ CASE WHEN obj.in_heap_scope AND ic.relam = 403 AND u.index_oid IS NULL
+                THEN pg_catalog.pg_get_indexdef(i.indexrelid, k.n, false) END AS expression_sql
+) AS key_text
 JOIN pg_catalog.pg_attribute AS a ON a.attrelid = i.indexrelid AND a.attnum = k.n
 JOIN pg_catalog.pg_type AS typ ON typ.oid = a.atttypid
 JOIN pg_catalog.pg_opclass AS opc ON opc.oid = i.indclass[k.n - 1]
@@ -1326,6 +1337,10 @@ SELECT run.run_id, run.database_name, run.schema_name, run.snapshot_text,
        count(*) FILTER (WHERE r.status = 'ERROR') AS error_relations,
        count(*) FILTER (WHERE r.status = 'NOT_APPLICABLE') AS excluded_objects,
        count(*) FILTER (WHERE r.unsupported_table_am) AS unsupported_table_ams,
+       COALESCE(sum(r.eligible_indexes) FILTER (WHERE r.in_heap_scope), 0) AS eligible_indexes,
+       COALESCE(sum(r.checked_indexes) FILTER (WHERE r.in_heap_scope), 0) AS checked_indexes,
+       COALESCE(sum(r.matching_indexes) FILTER (WHERE r.in_heap_scope), 0) AS matching_indexes,
+       COALESCE(sum(r.untested_indexes) FILTER (WHERE r.in_heap_scope), 0) AS untested_indexes,
        integrity.evidence_valid
            AND count(*) FILTER (WHERE r.in_heap_scope) > 0
            AND bool_and(r.status = 'PASS') FILTER (WHERE r.in_heap_scope) AS heap_scope_all_pass,
@@ -1335,6 +1350,9 @@ SELECT run.run_id, run.database_name, run.schema_name, run.snapshot_text,
            AND count(*) FILTER (WHERE r.unsupported_table_am) = 0 AS schema_success,
        COALESCE(bool_and(r.exhaustive_coverage_complete) FILTER (WHERE r.in_heap_scope), false)
            AS exhaustive_coverage_complete,
+       COALESCE(sum(r.checked_indexes) FILTER (WHERE r.in_heap_scope), 0) > 0
+           AND COALESCE(sum(r.mismatching_attempts) FILTER (WHERE r.in_heap_scope), 0) = 0
+           AS all_tested_indexes_match,
        COALESCE(sum(r.mismatching_attempts), 0) AS observed_index_mismatches,
        COALESCE(sum(r.error_attempts), 0) AS attempt_errors
 FROM pg_temp.hic_run AS run
@@ -1458,7 +1476,7 @@ SELECT statement.*,
            attempt_id
        ) AS import_template,
        format(
-           E'ROLLBACK /* wiki_hic12_recover_attempt */ TO SAVEPOINT hic_attempt;\nINSERT /* wiki_hic12_record_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived) VALUES (%s, <SQL-quoted stage>, <SQL-quoted SQLSTATE or NULL>, <SQL-quoted message>, true);\nRELEASE /* wiki_hic12_release_error */ SAVEPOINT hic_attempt;',
+           E'ROLLBACK /* wiki_hic12_recover_attempt */ TO SAVEPOINT hic_attempt;\nINSERT /* wiki_hic12_record_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, detail, hint, snapshot_survived) VALUES (%s, <SQL-quoted stage>, <SQL-quoted SQLSTATE or NULL>, <SQL-quoted message>, <SQL-quoted detail or NULL>, <SQL-quoted hint or NULL>, true);\nRELEASE /* wiki_hic12_release_error */ SAVEPOINT hic_attempt;',
            attempt_id
        ) AS error_template
 FROM statement;
@@ -1522,7 +1540,7 @@ This is a generated-statement protocol, not a stored procedure. Execute the step
 
 5. Execute that row's `sql_text` unchanged and save its complete JSON result. **EXPLAIN must remain the last command in this submitted batch.** Execute `post_count_sql` as a separate submission before asking for another attempt. It restores planner controls for the metadata queries; it cannot change the already captured count or plan.
 6. On success, fill `import_template` with a properly SQL-quoted JSON value from **that exact execution**, execute it, and inspect `hic_attempt_report`. The template imports the document and releases the savepoint. A syntactically valid but unacceptable plan remains recorded with its rejection reasons; it earns no count credit.
-7. On execution, JSON-import or inspection failure, preserve SQLSTATE/message/detail/hint in the client. Execute `error_template`, filling the stage (`execution`, `capture` or `inspection`), diagnostic fields and attempt ID. Its rollback-to-savepoint removes any count or partially imported evidence but preserves the attempt record created before the savepoint. Execute `post_count_sql` separately if the failure path rolled back its settings. Retry only through the next generated attempt. If the connection or the whole transaction is lost, stop: a savepoint in a replacement transaction is not recovery of this run.
+7. On execution, JSON-import or inspection failure, preserve SQLSTATE/message/detail/hint in the client. Execute `error_template`, filling the stage (`execution`, `capture` or `inspection`), SQLSTATE, message, detail and hint; the template already carries the attempt ID. Its rollback-to-savepoint removes any count or partially imported evidence but preserves the attempt record created before the savepoint. Execute `post_count_sql` separately if the failure path rolled back its settings. Retry only through the next generated attempt. If the connection or the whole transaction is lost, stop: a savepoint in a replacement transaction is not recovery of this run.
 8. Repeat from progress. `AWAITING_EVIDENCE_OR_ERROR` means finish the pending import/recovery first. An empty `hic_next` alone does not establish success: `INVALID_RUN`, `NOT_ACTIVE` and `ERROR` are stop states. `ATTEMPTS_COMPLETE_REVIEW_REPORT` means examine the reports, including all untested reasons and errors.
 9. Export the result tables and views through the client while the session still exists. Finalize only after the report has been reviewed:
 
@@ -1541,7 +1559,7 @@ The generated SQL and result API above are checker policy. The engine mechanisms
 
 If installation fails before the error table exists, the client must retain the error; there is no SQL report to read from that failed setup. If the DDL agreement is broken after initialization, set `hic_run.invalid_reason` to the observed reason, export the invalidated evidence and end the run. The checker does not automatically detect every DDL race or enforce the agreement.
 
-The implementation keeps generation policy separate from eligibility. It generates orderings only for reviewed stock operators/opclasses and supported types; user-defined functions/operators, domains and other unreviewed types can leave an otherwise eligible B-tree untested. It avoids deparsing those expressions, rather than merely declining to execute their generated query. This is a conservative coverage policy, **not a security sandbox** for hostile database code or server hooks. Plain table-level SELECT is required by preflight even if a narrower privilege combination could execute a particular query. Relations with no eligible candidate need no heap attempt and retain a NULL baseline, never a fabricated zero.
+The implementation keeps generation policy separate from eligibility. It generates orderings only for reviewed stock operators/opclasses and supported types; user-defined functions/operators, domains and other unreviewed types can leave an otherwise eligible B-tree untested. It avoids deparsing those expressions, rather than merely declining to execute their generated query. A key that deparses to a bare numeric literal is emitted as a same-type `CAST`, so `ORDER BY` can never read it as an output-column position; see step 2 of the [ordering generation](#index-eligibility-and-ordering-generation). This is a conservative coverage policy, **not a security sandbox** for hostile database code or server hooks. Plain table-level SELECT is required by preflight even if a narrower privilege combination could execute a particular query. Relations with no eligible candidate need no heap attempt and retain a NULL baseline, never a fabricated zero.
 
 `hic_check_plan()` declares `ROWS 1` because its aggregate-based validator returns one verdict row. This changes the planner's row estimate, not the function's execution semantics; the default estimate for a set-returning function would be 1000 and is inappropriate for these repeated report joins. [functioncmds.c#default-rows](../../../../raw/postgres-12/src/backend/commands/functioncmds.c#L1134-L1139) [create_function.sgml#ROWS](../../../../raw/postgres-12/doc/src/sgml/ref/create_function.sgml#L468-L477)
 
@@ -1558,7 +1576,7 @@ The matrix below is the **design-level test target**, including cases broader th
 | Multiple keys with mixed ASC/DESC and NULL positioning; INCLUDE columns | Generate compatible key order without ordering by INCLUDE columns; validate both accepted scan directions |
 | Expression indexes, including NULL-returning expressions and expressions containing commas | Per-position deparse round-trips without splitting expression text; either accepted full scan or an explicit untested reason |
 | Nondefault collations, pattern opclasses, quoted/mixed-case names and schemas | Correct identifier quoting and family-specific ordering; record actual index; do not accept a sorted sequential fallback as an index result |
-| Constant-expression index and two indexes with equivalent ordering | Exercise absent full-index path and repeated selection; untested OIDs remain untested, so no false exhaustive MISMATCH |
+| Constant-expression keys, including integer and decimal literals, and two indexes with equivalent ordering | Literal keys reach `ORDER BY` as constant expressions, never as output positions; exercise absent full-index path and repeated selection; untested OIDs remain untested, so no false exhaustive MISMATCH |
 | HOT updates, redirects, pruning; non-HOT indexed-column updates | Compare one snapshot's visible row versions; the stronger bags use visible `ctid`, not raw root TID |
 | Deletes; aborted insert/update/delete; an open writer at snapshot creation | Both paths agree with the visibility boundary; physical old/aborted entries do not become visible counts |
 | Concurrent writers before, between and after the two scans | Both accepted observations retain `S`; a control run using separate read-committed snapshots demonstrates why that mode is rejected |
@@ -1587,13 +1605,13 @@ The published [Measurement Script](#measurement-script) passed a fresh out-of-tr
 
 | Executed case | Observed result and assertion |
 |---|---|
-| Namespace-only positive schema | **13 physical relations PASS**, zero observed count mismatches. Includes empty heap, mixed NULL/duplicate keys, `lower(k)` plus a comma-containing `coalesce` expression, `text_pattern_ops`, explicit `"C"` collation, mixed key directions/NULL placement and INCLUDE, unique/nonunique indexes, inheritance parent/child, physical partition, populated and empty-populated materialized views, unlogged heap and quoted relation/column/index names. The aborted inserted row is absent. |
-| Explicit descendant closure | **14 physical relations PASS**; the outside-schema physical leaf is added, its unrelated neighbor is not. A foreign leaf keeps `all_descendants_supported` and `subtree_success` false. Namespace success is not an all-children heap claim. |
+| Namespace-only positive schema | **13 physical relations PASS**, zero observed count mismatches; all **13 eligible indexes** are checked and matching, none untested. Includes empty heap, mixed NULL/duplicate keys, `lower(k)` plus a comma-containing `coalesce` expression, `text_pattern_ops`, explicit `"C"` collation, mixed key directions/NULL placement and INCLUDE, unique/nonunique indexes, inheritance parent/child, physical partition, populated and empty-populated materialized views, unlogged heap and quoted relation/column/index names. The aborted inserted row is absent. |
+| Explicit descendant closure | **14 physical relations PASS**, with 14 of 14 eligible indexes checked and matching; the outside-schema physical leaf is added, its unrelated neighbor is not. A foreign leaf keeps `all_descendants_supported` and `subtree_success` false. Namespace success is not an all-children heap claim. |
 | Own temporary schema | The application temporary table with an `hic_` prefix passes with **2 rows**. The checker's OID-registered objects are excluded. |
 | Concurrent DML between counts | Both accepted counts remain **100** in the checking snapshot. The writer's later snapshot sees **95**: updates preserve cardinality, six committed deletes remove rows, one committed insert adds a row, and the aborted insert adds none. The fixture uses fillfactor 50 to leave room for HOT updates and asserts both HOT and non-HOT transaction counters. |
 | Native `indcheckxmin` gate | With a separate old-XID holder active, a HOT update followed by a nonconcurrent index build sets the flag; the checker sees **120 heap rows**, cannot obtain an accepted index scan and reports **INCONCLUSIVE**. After ending the holder, a **new checking transaction** reports **PASS**, still with the flag true. Both checking snapshots are taken after the build; the distinction is their backend horizon, not inventory invisibility of the new index. |
-| Equivalent-order candidate competition | Exhaustive mode reports PASS but incomplete coverage. Both attempts intended for `wide_idx` actually use `compact_idx`; the wider INCLUDE index remains untested. The fixture analyzes the table and deliberately makes the INCLUDE payload wide. |
-| Negative inventory/path cases | Four relations report **NO_ELIGIBLE_INDEX**: absent index, partial-only, hash-only, and a genuinely invalid concurrent unique build. Three report **INCONCLUSIVE**: constant ordering loses its useful index path, or generation is deferred for a user function/domain. No case is converted to a zero-count pass. |
+| Equivalent-order candidate competition | Exhaustive mode reports PASS but incomplete coverage. Both attempts intended for `wide_idx` actually use `compact_idx`; the wider INCLUDE index remains untested. The schema totals read 2 eligible, 1 checked and matching and 1 untested, with `all_tested_indexes_match` true and `exhaustive_coverage_complete` false. The fixture analyzes the table and deliberately makes the INCLUDE payload wide. |
+| Negative inventory/path cases | Eight physical relations. Four report **NO_ELIGIBLE_INDEX**: absent index, partial-only, hash-only, and a genuinely invalid concurrent unique build. Four report **INCONCLUSIVE**: the constant keys `(1)`, `(2)` and `(1.5)` lose their useful index path, with two rejected attempts per index and no attempt error, or generation is deferred for a user function/domain. Each constant key's generated ordering starts with `CAST(`. A parser probe in the fixtures shows why: the uncast forms fail, `((2))` with SQLSTATE `42P10` ("ORDER BY position 2 is not in select list") and `((1.5))` with `42601` ("non-integer constant in ORDER BY"), while the `CAST` forms run. No case is converted to a zero-count pass. |
 | Role/permission cases | An ordinary effective role selected with SET ROLE, without superuser or BYPASSRLS privileges, checks the unrestricted positive schema. A forced-RLS owner gets ERROR with SQLSTATE `42501`, not a filtered count; an authorized superuser counts both RLS-table rows. Missing table SELECT or schema USAGE remains an inventoried ERROR. |
 | Lost-plan retry | Discarding the first executed plan and rolling back its savepoint leaves one retained capture error. The same-snapshot retry establishes PASS; there are **three attempt records**, two accepted and one failed. |
 | Validator and evaluator units | **33 plan-shape assertions** pass. Additional synthetic records test state-flag exclusions, complete-coverage MISMATCH with a recovered failure, one mismatch plus an untested candidate yielding INCONCLUSIVE, missing evidence, incorrect settings/attempt marker, mixed snapshots, PASS with an optional error, unsupported-AM aggregation and equal-size but different identity bags. These records do not represent physical index corruption. |
@@ -1627,10 +1645,13 @@ The implementation and its tests preserve the original review decisions:
 | One observed mismatch is weaker than the requested relation MISMATCH | Require complete actual candidate coverage before that verdict |
 | Raw page items or raw index TIDs are not the visible population | Use the executor; keep physical inspection separate |
 | Literal SQL does not supply an automatic EXPLAIN-result ingestion/error-handling loop | Make operator interaction explicit; offer PL/pgSQL only as a relaxation |
+| A key that deparses to a bare numeric literal is read by `ORDER BY` as an output position, or rejected | Emit it as a same-type `CAST`; a parser probe and a literal-key fixture keep that case measured |
 
 The review compared the complete plan, its query shapes, statuses, diagrams and test expectations with pinned implementation and official documentation, the relevant glossary definitions, matching-version comparison pages and the new navigation summaries. One existing glossary contradiction was identified and corrected: its `indcheckxmin` entry said the planner leaves an index out “while the flag holds,” whereas the source also requires the horizon test to fail. One pinned documentation wording discrepancy is retained under Open Questions: the index-scan switch is described as enabling/disabling plans, while implementation uses a cost penalty. No unresolved contradiction is intended outside Open Questions.
 
 Implementation testing also caught two concrete capture/identity issues: a trailing command could hide the batch's EXPLAIN result, and the JSON index name uses SQL identifier quoting. The final generator separates the post-count controls; the identity helper applies the same quoting independently of the caller's later settings. The exact published installation and Bash blocks were compared byte for byte with their tested artifacts, and the extracted script was run from an empty sandbox and with the build retained. Human verification remains separate from these agent tests. Universal coverage, automatic DDL protection, unattended literal-SQL orchestration and corruption-detection rates are not claimed.
+
+A later 2026-10-23 review found that the generator wrapped every deparsed key only in parentheses, so a key on `(2)` or `(1.5)` produced a failing statement and a relation ERROR, and that the `(1)` fixture had passed only because position 1 is the inner query's constant. The generator now casts such keys; the same review aligned the documented reason codes and record fields with the installed SQL, added schema-level index totals, replaced `pgrep` in the harness with POSIX `ps`, and re-ran the full suite from an empty sandbox and with the build retained.
 
 Final causal chain: coordinated scope and one retained snapshot → captured inventory → generated explained count INSERT → exact count and faithfully imported plan → context/shape validation → actual-index coverage → relation/schema verdicts → export and COMMIT. A new run starts the chain again; it does not reuse a completed snapshot's baseline.
 
@@ -1650,17 +1671,17 @@ With no arguments, the default order is `prepare build init verify cleanup`. Eve
 
 | Item | Contract |
 |---|---|
-| Purpose | Test the installed SQL, the count-and-plan bridge, verdict rules, scope rules, concurrent DML, permissions and the native `indcheckxmin` gate. |
+| Purpose | Test the installed SQL, the count-and-plan bridge, verdict rules, scope rules, concurrent DML, permissions, the native `indcheckxmin` gate and the literal-key `ORDER BY` generation. Its results back the [Measured coverage](#measured-coverage-and-remaining-test-gaps) table and the concurrency arithmetic below it. |
 | `prepare` | Verify the pin and clean raw checkout, create or recognize the owned sandbox, extract this page's SQL installation block, emit the embedded fixtures/test driver, and compile the port probe. |
 | `build` | Run `prepare`, stop an already-running owned cluster, and build/install PostgreSQL out of tree. Reuses an existing build. |
 | `init` | Run `prepare`; initialize UTF-8/C-locale disposable data if absent; start only the owned Unix-socket server on port 55447. |
 | `verify` | Run `init`; capture platform/settings; create a new uniquely named fixture database and run every assertion. Repeated invocations do not reuse fixture tables. |
 | `cleanup` | Cleanly stop the owned cluster, check PID/process/socket/loopback-port teardown, then delete `.wiki-runtime/tmp/hic12/`, including its build and results. Idempotent when absent. |
 | Environment | Explicit inputs: `JOBS=2`, `CC=cc`. Ordinary tool lookup uses `PATH`; the compiler accepts its normal build environment. The script fixes `LC_ALL=C`, `PGCLIENTENCODING=UTF8`, `TMPDIR` and `PGPASSFILE` inside the sandbox, and unsets connection-service/host-address and `PGOPTIONS` overrides. Client connection arguments are explicit. |
-| Prerequisites | Bash, Git, POSIX utilities, `pgrep`, a PostgreSQL source-build toolchain and C compiler. No network, Python, external harness, extension download or planner-hint extension is used by the published script. The repository path must be short and contain no whitespace or shell metacharacters. |
+| Prerequisites | Bash, Git and POSIX utilities, including `ps`. Building the pinned Git checkout needs GNU make 3.80 or later, a C99 compiler, Bison 1.875 or later, Flex 2.5.31 or later and Perl 5.8.3 or later; the last three are needed because a Git checkout has no generated parser and scanner files. [installation.sgml#required-make-and-compiler](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97) [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318) No network, Python, external harness, extension download or planner-hint extension is used by the published script. The repository path must be short and contain no whitespace or shell metacharacters. |
 | Build | `--without-readline --without-zlib`, with a private install prefix. These omit client command-line editing and zlib support; they are not planner or visibility settings. |
-| Output | Read `suite-current.log` and `last-test-output` first. Each scenario exports attempts with plans, candidates, objects and run metadata as CSV under `results/<unique-database>/`; platform facts are in `platform.txt`, `platform-sql.txt` and `build-options.txt`. Keep a private copy before cleanup if needed. |
-| Runtime | The recorded fresh run spent 101 seconds building and 15 seconds verifying, roughly two minutes overall; the earlier build-retained verification legs also took 15 seconds. The script prints each stage's actual `elapsed_seconds`. These are local correctness-test timings, not production-scan performance estimates. |
+| Output | Read `suite-current.log` and `last-test-output` first. Each scenario exports attempts with plans, candidates, objects and run metadata as CSV under `results/<unique-database>/`; platform facts are in `platform.txt`, `platform-sql.txt` and `build-options.txt`. `processes.txt` holds the process listing from the last teardown check. Keep a private copy before cleanup if needed. |
+| Runtime | The recorded fresh run spent 99 seconds building and 16 seconds verifying, roughly two minutes overall; the build-retained `verify` re-run took 15 seconds. The script prints each stage's actual `elapsed_seconds`. These are local correctness-test timings, not production-scan performance estimates. |
 
 **Last run:** 2026-10-23, PostgreSQL 12.2 built from `45b88269a353ad93744772791feb6d01bc7e1e42`; Linux `6.18.54.1-microsoft-standard-WSL2`, `x86_64`, GCC 13.3.0, 64-bit; block size 8192 bytes, maximum data alignment 8 bytes; UTF-8 encoding, C collation/ctype, data checksums disabled. The script records these platform facts rather than assuming them for other hosts.
 
@@ -1712,6 +1733,8 @@ owned() {
 same_server() {
     local actual
     actual=$("$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$socket" -p 55447 -U hic_dba -d postgres \
+        -c "SET /* wiki_hic12_own_timeout */ statement_timeout = '10s'" \
+        -c "SET /* wiki_hic12_own_lock_timeout */ lock_timeout = '2s'" \
         -c "SHOW /* wiki_hic12_own_directory */ data_directory;")
     [ "$actual" = "$data" ]
 }
@@ -1722,7 +1745,8 @@ stop_owned() {
         "$bin/pg_ctl" -D "$data" -m fast -w stop
     fi
     [ ! -e "$data/postmaster.pid" ]
-    if pgrep -f -- "$data"; then return 1; fi
+    ps -A -o pid= -o args= > "$work/processes.txt"
+    if grep -F -- "$data" "$work/processes.txt"; then return 1; fi
     [ ! -e "$socket/.s.PGSQL.55447" ]
     [ ! -e "$socket/.s.PGSQL.55447.lock" ]
     "$work/port-free"
@@ -1962,6 +1986,26 @@ CREATE /* wiki_hic12_hash_index */ INDEX hash_idx ON hic_negative.hash_only USIN
 CREATE /* wiki_hic12_constant_table */ TABLE hic_negative.constant_index(id integer);
 INSERT /* wiki_hic12_constant_rows */ INTO hic_negative.constant_index VALUES (1), (2);
 CREATE /* wiki_hic12_constant_index */ INDEX constant_idx ON hic_negative.constant_index((1));
+CREATE /* wiki_hic12_literal_table */ TABLE hic_negative.constant_literals(id integer);
+INSERT /* wiki_hic12_literal_rows */ INTO hic_negative.constant_literals VALUES (1), (2);
+CREATE /* wiki_hic12_integer_literal_index */ INDEX constant_two_idx ON hic_negative.constant_literals((2));
+CREATE /* wiki_hic12_decimal_literal_index */ INDEX constant_decimal_idx ON hic_negative.constant_literals((1.5));
+\set ON_ERROR_STOP off
+SELECT /* wiki_hic12_positional_probe */ count(*) FROM (
+    SELECT /* wiki_hic12_positional_order */ 1 FROM ONLY hic_negative.constant_literals
+    ORDER BY ((2)) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;
+\set positional_sqlstate :SQLSTATE
+SELECT /* wiki_hic12_decimal_probe */ count(*) FROM (
+    SELECT /* wiki_hic12_decimal_order */ 1 FROM ONLY hic_negative.constant_literals
+    ORDER BY ((1.5)) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;
+\set decimal_sqlstate :SQLSTATE
+\set ON_ERROR_STOP on
+SELECT /* wiki_hic12_positional_assert */ 1 / (:'positional_sqlstate' = '42P10')::integer;
+SELECT /* wiki_hic12_decimal_assert */ 1 / (:'decimal_sqlstate' = '42601')::integer;
+SELECT /* wiki_hic12_cast_probe */ count(*) FROM (
+    SELECT /* wiki_hic12_cast_order */ 1 FROM ONLY hic_negative.constant_literals
+    ORDER BY CAST((2) AS integer) USING OPERATOR(pg_catalog.<) NULLS LAST,
+             CAST((1.5) AS numeric) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;
 CREATE /* wiki_hic12_user_function */ FUNCTION hic_negative.increment(integer) RETURNS integer
 LANGUAGE sql IMMUTABLE AS 'SELECT /* wiki_hic12_fixture_increment */ $1 + 1';
 CREATE /* wiki_hic12_user_expression */ TABLE hic_negative.user_expression(id integer);
@@ -2124,7 +2168,10 @@ ls -ld "$out"
 keeper_pid=
 trap 'if [ -n "$keeper_pid" ]; then touch "$out/keeper.release"; wait "$keeper_pid" || :; fi' EXIT
 psql=("$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$work/socket" -p 55447 -U hic_dba -d "$db")
-"$bin/createdb" -h "$work/socket" -p 55447 -U hic_dba "$db"
+"$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$work/socket" -p 55447 -U hic_dba -d postgres \
+    -c "SET /* wiki_hic12_suite_timeout */ statement_timeout = '60s'" \
+    -c "SET /* wiki_hic12_suite_lock_timeout */ lock_timeout = '2s'" \
+    -c "CREATE /* wiki_hic12_suite_database */ DATABASE $db"
 "${psql[@]}" -f "$work/fixtures.sql" > "$out/fixtures.log" 2>&1
 "${psql[@]}" -f "$work/checker.sql" -f "$work/validator-tests.sql" > "$out/validator.log" 2>&1
 
@@ -2247,6 +2294,11 @@ SELECT 'checker_objects_excluded', NOT EXISTS (
 );
 INSERT /* wiki_hic12_positive_all_counts */ INTO pg_temp.hic_assert
 SELECT 'counts_have_validated_plans', bool_and(accepted) FROM pg_temp.hic_attempt_result;
+INSERT /* wiki_hic12_positive_index_totals */ INTO pg_temp.hic_assert
+SELECT 'thirteen_indexes_checked_and_matching', eligible_indexes = 13 AND checked_indexes = 13
+       AND matching_indexes = 13 AND untested_indexes = 0
+       AND observed_index_mismatches = 0 AND all_tested_indexes_match
+FROM pg_temp.hic_schema_result;
 SQL
 finish_case
 
@@ -2307,19 +2359,28 @@ begin_case negative hic_negative false false hic_dba
 cat >> "$driver" <<'SQL'
 INSERT /* wiki_hic12_negative_schema */ INTO pg_temp.hic_assert SELECT 'schema_not_pass', NOT schema_success FROM pg_temp.hic_schema_result;
 INSERT /* wiki_hic12_negative_scope_size */ INTO pg_temp.hic_assert
-SELECT 'all_seven_physical_relations', physical_relations = 7 FROM pg_temp.hic_schema_result;
+SELECT 'all_eight_physical_relations', physical_relations = 8 FROM pg_temp.hic_schema_result;
 INSERT /* wiki_hic12_negative_no_indexes */ INTO pg_temp.hic_assert
 SELECT 'no_eligible_' || relation_name, status = 'NO_ELIGIBLE_INDEX'
 FROM pg_temp.hic_relation_result WHERE relation_name IN ('no_index', 'partial_only', 'hash_only', 'invalid_index');
 INSERT /* wiki_hic12_negative_inconclusive */ INTO pg_temp.hic_assert
 SELECT 'inconclusive_' || relation_name, status = 'INCONCLUSIVE'
-FROM pg_temp.hic_relation_result WHERE relation_name IN ('constant_index', 'user_expression', 'domain_table');
+FROM pg_temp.hic_relation_result WHERE relation_name IN ('constant_index', 'constant_literals', 'user_expression', 'domain_table');
 INSERT /* wiki_hic12_negative_deparse_guard */ INTO pg_temp.hic_assert
 SELECT 'user_code_not_deparsed', definition IS NULL AND order_sql IS NULL AND generation_reason = 'unreviewed_user_code_or_type'
 FROM pg_temp.hic_index WHERE index_name = 'user_expression_idx';
 INSERT /* wiki_hic12_negative_rejected_baseline_reuse */ INTO pg_temp.hic_assert
 SELECT 'constant_order_did_not_force_index', count(*) = 2 AND NOT bool_or(accepted)
 FROM pg_temp.hic_attempt_result WHERE intended_index_oid = 'hic_negative.constant_idx'::regclass;
+INSERT /* wiki_hic12_negative_literal_keys */ INTO pg_temp.hic_assert
+SELECT 'literal_keys_untested_without_errors', count(*) = 4 AND count(DISTINCT intended_index_oid) = 2
+       AND NOT bool_or(accepted) AND NOT bool_or(error_present)
+FROM pg_temp.hic_attempt_result
+WHERE relation_oid = 'hic_negative.constant_literals'::regclass AND phase = 'index';
+INSERT /* wiki_hic12_negative_literal_cast */ INTO pg_temp.hic_assert
+SELECT 'literal_key_cast_' || index_name, order_sql LIKE 'CAST(%'
+FROM pg_temp.hic_index
+WHERE relation_oid IN ('hic_negative.constant_index'::regclass, 'hic_negative.constant_literals'::regclass);
 SQL
 finish_case
 
@@ -2333,6 +2394,10 @@ FROM pg_temp.hic_attempt_result WHERE intended_index_oid = 'hic_choice.wide_idx'
 INSERT /* wiki_hic12_choice_untested */ INTO pg_temp.hic_assert
 SELECT 'wide_remains_untested', NOT actually_checked AND intended_attempts = 2
 FROM pg_temp.hic_candidate_result WHERE index_name = 'wide_idx';
+INSERT /* wiki_hic12_choice_totals */ INTO pg_temp.hic_assert
+SELECT 'schema_index_totals', eligible_indexes = 2 AND checked_indexes = 1 AND matching_indexes = 1
+       AND untested_indexes = 1 AND all_tested_indexes_match AND NOT exhaustive_coverage_complete
+FROM pg_temp.hic_schema_result;
 SQL
 finish_case
 
@@ -2678,6 +2743,7 @@ done
 - Comparison pages: NULL values in indexes; CREATE INDEX CONCURRENTLY; invalid-index outcomes; physical index statistics; partitioned indexes; EXPLAIN ANALYZE BUFFERS; relation-tail checking; post-schema-drop health. Navigation and dated records were used for context, not as PostgreSQL evidence.
 - PostgreSQL 12 has no common-concept pages. This answer supplies the mechanism context needed here and does not create a concept page.
 - Implementation-specific context: client result handling in `PQexecFinish()`, SQL-quoted EXPLAIN index names, custom type-output calls during deparsing, row estimates for SQL set-returning helpers, initialization/attempt error channels and historical reports after COMMIT.
+- Review re-check: the ORDER BY parse path for deparsed keys (`pg_get_indexdef()` parenthesization and constant printing, the grammar's parenthesis handling, SQL92 `ORDER BY` targets, same-type coercion), constant pathkey redundancy, `check_xact_readonly()`, partial-path creation, `cost_sort()`, function-name qualification and the timeout error sites.
 - Runtime verification: the complete published SQL and extracted test harness were exercised on an isolated exact-pin build, including fresh and build-retained workflows. Only the owned sandbox was used; no application database, network fetch, subagent, commit or push was used.
 
 ## Evidence Map
@@ -2693,6 +2759,7 @@ done
 | RLS off errors rather than granting bypass | [rls.c](../../../../raw/postgres-12/src/backend/utils/misc/rls.c#L80-L132) | [config.sgml](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L7395-L7405), [rowsecurity.sql](../../../../raw/postgres-12/src/test/regress/sql/rowsecurity.sql#L1511-L1542) |
 | Same-execution count/plan capture | [explain.c](../../../../raw/postgres-12/src/backend/commands/explain.c#L494-L541) | [explain.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L87-L105) |
 | Preserve the utility result and resolve its actual index name | [fe-exec.c#last-result](../../../../raw/postgres-12/src/interfaces/libpq/fe-exec.c#L2096-L2141), [explain.c#quoted-index](../../../../raw/postgres-12/src/backend/commands/explain.c#L2844-L2862) | The published suite checks quoted identifiers and post-COMMIT reports |
+| A bare numeric-literal key needs a same-type `CAST` in `ORDER BY` | [gram.y](../../../../raw/postgres-12/src/backend/parser/gram.y#L13464-L13497), [analyze.c](../../../../raw/postgres-12/src/backend/parser/analyze.c#L1252-L1256), [parse_clause.c](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1931-L1966), [ruleutils.c](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L9554-L9585), [parse_coerce.c](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L156-L169) | Parser probe and literal-key fixture in the published measurement script |
 | Inspection itself can invoke a type-output function | [ruleutils.c#get_const_expr](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L9522-L9550) | User-function/domain fixtures retain untested candidates rather than silently excluding them |
 | Nonconcurrent build's broken-HOT-chain usability gate | [index.c#index_build](../../../../raw/postgres-12/src/backend/catalog/index.c#L2921-L2971), [plancat.c#horizon](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234) | Old-holder/new-transaction fixture in the published measurement script |
 | SQL orchestration limitation | [xml.c](../../../../raw/postgres-12/src/backend/utils/adt/xml.c#L2671-L2689), [utility.c](../../../../raw/postgres-12/src/backend/tcop/utility.c#L99-L118) | [execute.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50), [psql-ref.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L2059-L2094) |
@@ -2804,6 +2871,13 @@ done
 - [pqcomm.c#socket-permissions](../../../../raw/postgres-12/src/backend/libpq/pqcomm.c#L692-L699)
 - [postinit.c#encoding-default](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L394-L401)
 - [installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)
+- [gram.y#parenthesized-expression](../../../../raw/postgres-12/src/backend/parser/gram.y#L13464-L13497)
+- [analyze.c#SQL92-order-by](../../../../raw/postgres-12/src/backend/parser/analyze.c#L1252-L1256)
+- [parse_coerce.c#same-type-no-op](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L156-L169)
+- [equivclass.c#constant-member](../../../../raw/postgres-12/src/backend/optimizer/path/equivclass.c#L560-L570)
+- [pathnodes.h#EC_MUST_BE_REDUNDANT](../../../../raw/postgres-12/src/include/nodes/pathnodes.h#L945-L950)
+- [allpaths.c#create_plain_partial_paths](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L796-L805)
+- [postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095)
 
 ## Navigation
 
