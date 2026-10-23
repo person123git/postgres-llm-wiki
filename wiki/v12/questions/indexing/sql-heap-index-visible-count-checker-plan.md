@@ -29,6 +29,12 @@ verified_by_agent: not yet
   - [Measured coverage and remaining test gaps](#measured-coverage-and-remaining-test-gaps)
   - [Optional relaxations](#optional-relaxations)
   - [Review of the implementation](#review-of-the-implementation)
+  - [Follow-up: a Bash and SQL runner](#follow-up-a-bash-and-sql-runner)
+  - [How the runner talks to psql](#how-the-runner-talks-to-psql)
+  - [The runner's control flow](#the-runners-control-flow)
+  - [Runner branches and failure handling](#runner-branches-and-failure-handling)
+  - [Running the runner](#running-the-runner)
+  - [Runner script](#runner-script)
 - [Measurement Script](#measurement-script)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
@@ -179,13 +185,19 @@ Deliver:
 
 Prioritize executor-based counts with mandatory access-path validation. Do not attempt to reimplement PostgreSQL MVCC visibility using pageinspect unless you establish why that is necessary and feasible. Review the plan first, then implement only after user confirmation.
 
+Follow-up (2026-10-23):
+
+Use Bash and SQL for the script.
+
+> Scope: before drafting, the asker chose two readings. "The script" is a runner that performs the operator's part of the checker unattended, not only the measurement harness. Bash makes every decision, and psql receives only SQL statements, plus `\echo` sync lines. The checker SQL stays the single source of the checks, the harness now tests the runner, and the harness's embedded C port probe is replaced by Bash.
+
 ## Answer
 
 ### Feasibility and execution contract
 
-**A verified positive result is feasible with SQL and ordinary [executor](../../../glossary.md#executor) scans. An unattended, universally complete checker is not guaranteed under literal SQL alone.** The deliverable is a SQL generator plus a staged SQL execution and validation protocol. It uses checker-owned temporary tables to retain exact counts, and the operator retains and imports the corresponding executed plans. Choosing a particular index remains best effort; accepting a count requires evidence from that execution. The reasons are PostgreSQL's [utility-command](../../../glossary.md#utility-command) interface for [EXPLAIN](../../../glossary.md#explain), its [prepared-statement](../../../glossary.md#prepared-statement) meaning of SQL `EXECUTE`, and its cost-based choice of index paths. [explain.sgml#execution-and-results](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L78-L105) [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) [indxpath.c#build_index_paths](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050)
+**A verified positive result is feasible with SQL and ordinary [executor](../../../glossary.md#executor) scans. An unattended, universally complete checker is not guaranteed under literal SQL alone.** The deliverable is a SQL generator plus a staged SQL execution and validation protocol. It uses checker-owned temporary tables to retain exact counts, and the operator retains and imports the corresponding executed plans. The follow-up adds a Bash runner that plays the operator's part unattended through one [psql](../../../glossary.md#psql) session; it automates the orchestration, not the coverage, so universal completeness is still not guaranteed. See [the runner](#follow-up-a-bash-and-sql-runner). Choosing a particular index remains best effort; accepting a count requires evidence from that execution. The reasons are PostgreSQL's [utility-command](../../../glossary.md#utility-command) interface for [EXPLAIN](../../../glossary.md#explain), its [prepared-statement](../../../glossary.md#prepared-statement) meaning of SQL `EXECUTE`, and its cost-based choice of index paths. [explain.sgml#execution-and-results](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L78-L105) [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) [indxpath.c#build_index_paths](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050)
 
-The user approved implementation after the planning review. This page now includes the complete operator-assisted SQL implementation and a separate reproduction harness. The original planning-only Question remains above as the request that motivated the design. The evidence target is **PostgreSQL 12.2**, commit `45b88269a353ad93744772791feb6d01bc7e1e42`. The checkout identifies itself as 12.2. “Official documentation” below means the official PostgreSQL SGML documentation shipped in that same checkout, checked alongside implementation source. Later 12.x minor releases require a compatibility check before claiming validation on them. The SQL version guard checks `server_version_num`, not the provenance of an arbitrary server binary; the measurement harness builds the exact pin. [configure.in#version](../../../../raw/postgres-12/configure.in#L19-L34)
+The user approved implementation after the planning review. This page now includes the complete operator-assisted SQL implementation, the follow-up's Bash and SQL runner, and a separate reproduction harness. The original planning-only Question remains above as the request that motivated the design. The evidence target is **PostgreSQL 12.2**, commit `45b88269a353ad93744772791feb6d01bc7e1e42`. The checkout identifies itself as 12.2. “Official documentation” below means the official PostgreSQL SGML documentation shipped in that same checkout, checked alongside implementation source. Later 12.x minor releases require a compatibility check before claiming validation on them. The SQL version guard checks `server_version_num`, not the provenance of an arbitrary server binary; the measurement harness builds the exact pin. [configure.in#version](../../../../raw/postgres-12/configure.in#L19-L34)
 
 The implementation runs on a primary and requires no extension. Its only DML writes are to its own temporary result tables. Create those tables before entering the checking transaction. A `READ ONLY` transaction permits DML on temporary tables, because the executor's read-only check skips relations in a temporary namespace. It rejects `CREATE`, including temporary-table creation, because `check_xact_readonly()` refuses a `CreateStmt` whenever the transaction is read-only. Read/write is the default; the explicit transaction option activates that guard. A [standby](../../../glossary.md#hot-standby) cannot create the temporary tables this design needs. [set_transaction.sgml#read-only](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L126-L139) [execMain.c#ExecCheckXactReadOnly](../../../../raw/postgres-12/src/backend/executor/execMain.c#L759-L795) [utility.c#check_xact_readonly](../../../../raw/postgres-12/src/backend/tcop/utility.c#L128-L140) [utility.c#create-refusal](../../../../raw/postgres-12/src/backend/tcop/utility.c#L176-L224) [namespace.c#temporary-recovery-refusal](../../../../raw/postgres-12/src/backend/catalog/namespace.c#L3915-L3927)
 
@@ -193,10 +205,10 @@ The implementation runs on a primary and requires no extension. Its only DML wri
 |---|---|
 | Catalog inventory, SQL text generation, exact counting, JSON validation and report aggregation | Feasible with core SQL. Keep dynamic object names in generated statements, using catalog-derived identifiers and quoting. The catalog and deparser interfaces are detailed below. |
 | Bind an exact count to its executed access path | Feasible with `EXPLAIN ANALYZE INSERT ... SELECT count(*) ...` into a pre-existing temporary table. The same execution inserts the count and produces the plan; see [capture protocol](#capturing-an-exact-count-and-its-executed-plan). |
-| Execute arbitrary SQL text returned by an inventory query | A generated string is not executed by ordinary SQL `EXECUTE`; that command executes a named prepared statement. Have the operator execute the generated SQL in the same session. [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) |
+| Execute arbitrary SQL text returned by an inventory query | A generated string is not executed by ordinary SQL `EXECUTE`; that command executes a named prepared statement. Have the operator, or the follow-up's Bash runner, execute the generated SQL in the same session. [execute.sgml#prepared-statement](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50) |
 | Put an `EXPLAIN` utility result directly in a SQL CTE or `INSERT ... SELECT` | No ordinary relational `EXPLAIN` interface is provided by this command. Its result goes to the client. Import that result explicitly before running the SQL validator. [explain.sgml#command-and-output](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L32-L46) [explain.sgml#outputs](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L268-L275) |
 | Use `query_to_xml()` as a dynamic-EXPLAIN workaround | Rejected for this pin. It executes through read-only [SPI](../../../glossary.md#spi) and requires `SPI_OK_SELECT`; SPI's read-only test rejects utility statements. It can execute suitable SELECT text, but does not solve this executed-plan capture problem. [xml.c#query_to_xml_internal](../../../../raw/postgres-12/src/backend/utils/adt/xml.c#L2671-L2689) [spi.c#read-only-check](../../../../raw/postgres-12/src/backend/executor/spi.c#L2258-L2263) [utility.c#CommandIsReadOnly](../../../../raw/postgres-12/src/backend/tcop/utility.c#L99-L118) |
-| Choose every eligible [B-tree](../../../glossary.md#b-tree) by name and stop automatically after a match | No such guarantee follows from scan settings or ordering. Literal SQL also has no procedural loop over dynamically generated statements. Use a staged “generate next attempt” protocol; offer a procedural wrapper separately. [indices.sgml#index-versus-sort](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L480-L502) [plpgsql.sgml#dynamic-commands](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1157-L1185) |
+| Choose every eligible [B-tree](../../../glossary.md#b-tree) by name and stop automatically after a match | No such guarantee follows from scan settings or ordering. Literal SQL also has no procedural loop over dynamically generated statements. Use a staged “generate next attempt” protocol; the follow-up's Bash runner loops over it, and a procedural wrapper remains a separate option. [indices.sgml#index-versus-sort](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L480-L502) [plpgsql.sgml#dynamic-commands](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1157-L1185) |
 
 “Reliable” means a completed, correctly identified executor observation under the stated snapshot and scope, with a validated plan and faithful capture. It does not mean a proof that a damaged database has retained all historical rows. “Best effort” describes obtaining a suitable index path and achieving candidate coverage; an unsuccessful attempt must never manufacture a reliable result.
 
@@ -400,7 +412,7 @@ Use this protocol for each attempt:
 2. Start repeatable read, fix scope and snapshot, save the proposed SQL text/settings, and establish an attempt [savepoint](../../../glossary.md#subtransaction).
 3. Execute **one explained INSERT** that reads the target and stores its `count(*)` in the temporary capture table.
 4. Retain the JSON plan returned to the client with that statement's run/attempt identity. Read the inserted count using the same keys.
-5. Import that exact JSON result into the temporary audit table with a literal SQL INSERT, using proper literal escaping, or retain it in the operator's query transcript and mark the audit pending until imported. This is an explicit manual bridge in literal SQL mode.
+5. Import that exact JSON result into the temporary audit table with a literal SQL INSERT, using proper literal escaping, or retain it in the operator's query transcript and mark the audit pending until imported. This is an explicit manual bridge in literal SQL mode; the follow-up's runner performs the same import with a dollar-quoted literal.
 6. Run the SQL validator over the imported JSON and saved statement contract. Only a validated attempt may supply `H` or `I`; any missing or incorrectly associated evidence leaves the result unaccepted.
 
 For example, a heap attempt has this shape after the generator has saved its attempt record, established the savepoint and applied the heap profile:
@@ -419,17 +431,17 @@ The index attempt uses the same explained INSERT with a new attempt ID and the o
 
 Bare EXPLAIN defaults `ANALYZE`, `VERBOSE`, `BUFFERS` and `SETTINGS` to false. This protocol turns them on to execute the statement, expose schema-qualified names/output expressions, and retain buffer and planner-setting evidence. `TIMING` and `SUMMARY` normally follow `ANALYZE`; the protocol explicitly disables the former and keeps the latter. [`SETTINGS`](../../../glossary.md#explain-settings) reports only nondefault parameters affecting planning, so it cannot replace the run's separate effective-setting record. [explain.c#option-defaults](../../../../raw/postgres-12/src/backend/commands/explain.c#L154-L221) [explain.c#NewExplainState](../../../../raw/postgres-12/src/backend/commands/explain.c#L285-L295) [explain.sgml#verbose](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L130-L139) [explain.sgml#settings](../../../../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L156-L162)
 
-The literal-SQL bridge assumes faithful capture of unedited server output. A SQL validator can reject mismatched identifiers and bad shapes; it does not cryptographically authenticate a JSON literal supplied by an operator. Record who associated each plan with its attempt, and leave the attempt pending if that association cannot be established.
+The literal-SQL bridge assumes faithful capture of unedited server output. A SQL validator can reject mismatched identifiers and bad shapes; it does not cryptographically authenticate a JSON literal supplied by an operator. Record who associated each plan with its attempt, and leave the attempt pending if that association cannot be established. Under the runner, the association is the runner's: it imports only the text that psql printed for that attempt's statement, and it keeps the plan file and a transcript of every request.
 
 The generated count also projects its attempt ID as a `bigint` constant beside `count(*)`. The validator checks that marker in the verbose Aggregate output and checks the saved transaction, snapshot, backend, role and scan settings. Those checks catch accidental mismatches; they do not authenticate an old document manually imported into a new run.
 
-The generator deliberately ends `sql_text` with EXPLAIN. `PQexecFinish()` returns the last result of a multi-command submission, so appending settings-reset commands can hide the JSON result from a client using that interface. `post_count_sql` is returned separately for this reason. [fe-exec.c#PQexecFinish](../../../../raw/postgres-12/src/interfaces/libpq/fe-exec.c#L2096-L2141)
+The generator deliberately ends `sql_text` with EXPLAIN. `PQexecFinish()` returns the last result of a multi-command submission, so appending settings-reset commands can hide the JSON result from a client using that interface. `post_count_sql` is returned separately for this reason. psql reading a script does not hit this case, because it sends each semicolon-terminated statement as its own query and prints each result. [mainloop.c#send-on-semicolon](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L410-L440) [fe-exec.c#PQexecFinish](../../../../raw/postgres-12/src/interfaces/libpq/fe-exec.c#L2096-L2141)
 
 On this pin, the JSON `"Index Name"` value already contains SQL identifier quoting: `explain_get_index_name()` calls `quote_identifier()` before `ExplainIndexScanDetails()` emits the property. Resolve it using the same quoting convention, not direct equality to raw `pg_class.relname`. The checker fixes `quote_all_identifiers = off` for captures and in its identity helper, so a caller's restored setting after COMMIT does not change historical matching. The setting's default is off and its context is `user`; it is not a scan-forcing control. [explain.c#index-name](../../../../raw/postgres-12/src/backend/commands/explain.c#L2844-L2862) [explain.c#index-JSON](../../../../raw/postgres-12/src/backend/commands/explain.c#L2991-L3025) [guc.c#quote-all-identifiers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1816-L1824)
 
 The temporary write is allowed in `READ ONLY`; creating the capture table inside that transaction is not. `EXPLAIN ANALYZE CREATE TEMP TABLE AS ...` would also retain a query result, but conflicts with the recommended read-only transaction mode, so it is not the baseline design. [execMain.c#temporary-DML](../../../../raw/postgres-12/src/backend/executor/execMain.c#L769-L791) [set_transaction.sgml#read-only](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L126-L139)
 
-Literal SQL cannot automatically catch an execution error, retrieve its diagnostics, branch to `ROLLBACK TO SAVEPOINT`, and resume the dynamic loop. The operator must do that, or stop and preserve the transcript. Keep the core process fail-closed: a transaction abort, disconnect, missing plan or missing result never becomes an empty table or a pass. A generated script must mark these interaction points, not bury them in a `DO` block. [plpgsql.sgml#dynamic-execution](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1157-L1185) [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55)
+Literal SQL cannot automatically catch an execution error, retrieve its diagnostics, branch to `ROLLBACK TO SAVEPOINT`, and resume the dynamic loop. The operator must do that, or stop and preserve the transcript; the follow-up's runner does it in Bash. Keep the core process fail-closed: a transaction abort, disconnect, missing plan or missing result never becomes an empty table or a pass. A generated script must mark these interaction points, not bury them in a `DO` block. [plpgsql.sgml#dynamic-execution](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1157-L1185) [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55)
 
 Before retrying an attempt, reapply and record its scan profile. Rolling back to a savepoint also cancels SET/SET LOCAL commands issued after that savepoint. [set.sgml#savepoint-settings](../../../../raw/postgres-12/doc/src/sgml/ref/set.sgml#L61-L65)
 
@@ -579,7 +591,7 @@ Do not implement SQL MVCC visibility from header `xmin`/`xmax` fields. The execu
 
 ### Executable SQL installation
 
-Run this complete block once in a dedicated checking session, before starting its read-only checking transaction. It creates only checker-owned temporary objects and `LANGUAGE sql` helpers. It does not execute generated count statements, import client output, or catch exceptions automatically. The operator workflow below supplies those steps.
+Run this complete block once in a dedicated checking session, before starting its read-only checking transaction. It creates only checker-owned temporary objects and `LANGUAGE sql` helpers. It does not execute generated count statements, import client output, or catch exceptions automatically. The operator workflow below supplies those steps, and the follow-up's runner performs them unattended.
 
 ```sql
 SET /* wiki_hic12_install_path */ search_path = pg_catalog, pg_temp;
@@ -1516,7 +1528,7 @@ SELECT i.indexrelid FROM pg_catalog.pg_index AS i JOIN relations AS r ON r.oid =
 
 The installation block implements one **schema-wide**, serial, primary-server run per dedicated session. It defaults to namespace-only scope and stopping after the first match. It allows two heap attempts and two attempts directed at each eligible candidate: an index attempt first leaves sorting enabled, then discourages sorting. An accepted scan of a different eligible index credits that actual OID; it does not consume that index's intended-attempt budget or prove the requested index was used. Exhaustive mode continues after a match but cannot guarantee exhaustive coverage.
 
-This is a generated-statement protocol, not a stored procedure. Execute the steps separately:
+This is a generated-statement protocol, not a stored procedure. Execute the steps separately, or let the follow-up's [runner](#follow-up-a-bash-and-sql-runner) execute them:
 
 1. Arrange the DDL coordination and privileges described above. Connect as the checking role, without an open transaction, and run the complete installation block. The default installation timeouts are 60 seconds and 2 seconds; generated checking statements use 15 minutes and 2 seconds. Review these budgets for the workload before running.
 2. Configure the schema. `ddl_stable = true` is an **operator attestation**, not a lock or an automatically checked fact. Substitute the intended schema for `public`. Change the two optional booleans only when that scope is intended.
@@ -1539,7 +1551,7 @@ This is a generated-statement protocol, not a stored procedure. Execute the step
    ```
 
 5. Execute that row's `sql_text` unchanged and save its complete JSON result. **EXPLAIN must remain the last command in this submitted batch.** Execute `post_count_sql` as a separate submission before asking for another attempt. It restores planner controls for the metadata queries; it cannot change the already captured count or plan.
-6. On success, fill `import_template` with a properly SQL-quoted JSON value from **that exact execution**, execute it, and inspect `hic_attempt_report`. The template imports the document and releases the savepoint. A syntactically valid but unacceptable plan remains recorded with its rejection reasons; it earns no count credit.
+6. On success, fill `import_template` with a properly SQL-quoted JSON value from **that exact execution**. Execute its `INSERT` line, inspect `hic_attempt_report`, and only then execute its `RELEASE` line. Inspect before releasing: once `RELEASE SAVEPOINT` has run, the savepoint no longer exists, so `ROLLBACK TO SAVEPOINT hic_attempt` fails with `savepoint "hic_attempt" does not exist` and an inspection failure would leave the whole checking transaction aborted. A syntactically valid but unacceptable plan remains recorded with its rejection reasons; it earns no count credit. [xact.c#ReleaseSavepoint](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4140-L4221) [xact.c#RollbackToSavepoint](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4249-L4308)
 7. On execution, JSON-import or inspection failure, preserve SQLSTATE/message/detail/hint in the client. Execute `error_template`, filling the stage (`execution`, `capture` or `inspection`), SQLSTATE, message, detail and hint; the template already carries the attempt ID. Its rollback-to-savepoint removes any count or partially imported evidence but preserves the attempt record created before the savepoint. Execute `post_count_sql` separately if the failure path rolled back its settings. Retry only through the next generated attempt. If the connection or the whole transaction is lost, stop: a savepoint in a replacement transaction is not recovery of this run.
 8. Repeat from progress. `AWAITING_EVIDENCE_OR_ERROR` means finish the pending import/recovery first. An empty `hic_next` alone does not establish success: `INVALID_RUN`, `NOT_ACTIVE` and `ERROR` are stop states. `ATTEMPTS_COMPLETE_REVIEW_REPORT` means examine the reports, including all untested reasons and errors.
 9. Export the result tables and views through the client while the session still exists. Finalize only after the report has been reviewed:
@@ -1601,7 +1613,7 @@ The acceptance gate is that all positive fixtures produce a count only from vali
 
 ### Measured coverage and remaining test gaps
 
-The published [Measurement Script](#measurement-script) passed a fresh out-of-tree build and full suite, then a `verify` rerun with the build retained. These are results of this checker on disposable healthy fixtures, not evidence that every index or damaged database can be diagnosed.
+The published [Measurement Script](#measurement-script) passed a fresh out-of-tree build and full suite, then a `verify` rerun with the build retained; both runs passed all 124 assertions. Every case drives the checker through the follow-up's runner, either as a program or through the runner functions the harness sources. These are results of this checker on disposable healthy fixtures, not evidence that every index or damaged database can be diagnosed.
 
 | Executed case | Observed result and assertion |
 |---|---|
@@ -1616,17 +1628,24 @@ The published [Measurement Script](#measurement-script) passed a fresh out-of-tr
 | Lost-plan retry | Discarding the first executed plan and rolling back its savepoint leaves one retained capture error. The same-snapshot retry establishes PASS; there are **three attempt records**, two accepted and one failed. |
 | Validator and evaluator units | **33 plan-shape assertions** pass. Additional synthetic records test state-flag exclusions, complete-coverage MISMATCH with a recovered failure, one mismatch plus an untested candidate yielding INCONCLUSIVE, missing evidence, incorrect settings/attempt marker, mixed snapshots, PASS with an optional error, unsupported-AM aggregation and equal-size but different identity bags. These records do not represent physical index corruption. |
 | Initialization and history | Missing DDL attestation and missing schema cannot establish a run; the initialization-error channel is exercised. Empty physical scope is not success. Reports retain their verdict after COMMIT, including when the caller's `quote_all_identifiers = on` setting is restored. |
+| Runner as a program | Five invocations. `hic_positive` exits **0**, with 26 saved plans and all seven CSV reports; `hic_negative` exits **1** with `schema_success=false`; a missing schema exits **2** and exports the `initialization` row with SQLSTATE `23514`; no `HIC_DDL_STABLE=yes` and an invalid yes/no value each exit **64**, the first without creating an output directory. |
+| Error reports parsed from psql | The forced-RLS attempts are recorded with SQLSTATE `42501`, the server message and its HINT, “To disable the policy for the table's owner, use ALTER TABLE NO FORCE ROW LEVEL SECURITY.” |
+| Lock timeout | A second session takes `ACCESS EXCLUSIVE` on `hic_lock.t` after inventory. Both heap attempts fail after the 2-second `lock_timeout` with SQLSTATE `55P03`; the relation is `ERROR` with no heap count, not a zero count. |
+| Truncated plan | The harness cuts a saved plan to its first three lines before import. jsonb rejects it with SQLSTATE `22P02` and a DETAIL; the runner records a `capture` error, and the retry passes with `uncovered_error_attempts = 0`. |
+| Lost session | After one accepted attempt, `pg_terminate_backend()` ends the checking backend. The next request gets no sync line, the runner reports the session lost, and psql exits with status **2**; its error log shows `FATAL:  57P01:`. No report is produced. |
+| psql interpolation guard | Through psql, `(ARRAY[1, 2, 3])[1:"ERROR"]` fails with SQLSTATE `42601`, while `[1 : "ERROR"]` returns `{1,2}`. The guard index deparses as `(a[1:"ERROR"])`; the runner refuses both of its index attempts, records two execution errors with no SQLSTATE and sends no count, so the relation is `ERROR` with heap count 2. |
 
 The concurrency arithmetic is `100 - 6 + 1 = 95` for the writer's current view, while the checker's retained snapshot produces `H = I = 100`. The held-snapshot behavior comes from repeatable read and heap visibility; the deliberate HOT fixture and retained-old-horizon index refusal have separate causes, detailed below. [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [heapam.c#HOT-search](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1559-L1622) [plancat.c#indcheckxmin-gate](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234)
 
-**Not exercised by this suite:** physical file corruption; a real custom table AM; arbitrary expression/opclass/type combinations; non-C locale coverage or ICU-specific behavior; multiple inheritance and multilevel/attach/detach races; another backend's temporary relation; denied TEMP/function EXECUTE; a separate non-superuser BYPASSRLS role; open writers at initial snapshot acquisition; concurrent pruning/redirect coverage; forced lock/statement timeouts, cancellation, malformed JSON syntax or disconnect; standby operation; large-schema scaling and production I/O costs. Backward direction is covered by a plan unit, not a measured backward executor leg. The optional visible-`ctid` bag scan/capture pipeline is not implemented or measured; only the duplicate-sensitive comparison algebra is unit-tested.
+**Not exercised by this suite:** physical file corruption; a real custom table AM; arbitrary expression/opclass/type combinations; non-C locale coverage or ICU-specific behavior; multiple inheritance and multilevel/attach/detach races; another backend's temporary relation; denied TEMP/function EXECUTE; a separate non-superuser BYPASSRLS role; open writers at initial snapshot acquisition; concurrent pruning/redirect coverage; forced statement timeouts or query cancellation; a connection lost while a statement is running, since the measured loss happens between requests; standby operation; large-schema scaling and production I/O costs. The runner was run only with GNU Bash 5.2.21 and the psql built from the pin, against a server whose `lc_messages` is `C`. Backward direction is covered by a plan unit, not a measured backward executor leg. The optional visible-`ctid` bag scan/capture pipeline is not implemented or measured; only the duplicate-sensitive comparison algebra is unit-tested.
 
 ### Optional relaxations
 
 Keep these choices separate from the literal SQL baseline:
 
+- **A Bash and SQL runner, implemented by the follow-up.** The [runner](#follow-up-a-bash-and-sql-runner) drives one psql session from Bash and keeps every check in the installed SQL. It is the relaxation the asker authorized; the PL/pgSQL wrapper below remains unimplemented.
 - **A PL/pgSQL wrapper, only if authorized.** A [PL/pgSQL](../../../glossary.md#plpgsql) function/procedure can loop over catalog rows, use dynamic `EXECUTE`, receive the EXPLAIN JSON result, manage exceptions and save error diagnostics. It must retain the explained temporary INSERT technique for an exact count and preserve the same validator and status rules. Use invoker privileges; do not mark a function wrapper STABLE or IMMUTABLE, because SPI's nonvolatile-function read-only check rejects these commands. It improves orchestration; it cannot force a named index or eliminate coverage gaps. [plpgsql.sgml#dynamic-commands](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1157-L1185) [plpgsql.sgml#data-versus-identifiers](../../../../raw/postgres-12/doc/src/sgml/plpgsql.sgml#L1225-L1249) [spi.c#nonvolatile-command-refusal](../../../../raw/postgres-12/src/backend/executor/spi.c#L2258-L2263)
-- **psql conveniences.** Built-in `psql` has `\gexec` for executing generated SQL and `\if` for client-side branches. These are client meta-commands, not literal SQL. `\gexec` does not itself import each generated EXPLAIN result into an audit table, and generated rows cannot contain psql meta-commands or variable references. Treat this as an optional client guide, not a promised fully automated capture layer. [psql-ref.sgml#gexec](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L2059-L2094) [psql-ref.sgml#if](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L2233-L2260)
+- **psql conveniences.** Built-in `psql` has `\gexec` for executing generated SQL and `\if` for client-side branches. These are client meta-commands, not literal SQL. `\gexec` does not itself import each generated EXPLAIN result into an audit table, and generated rows cannot contain psql meta-commands or variable references. Treat this as an optional client guide, not a promised fully automated capture layer. The follow-up's runner does not use these meta-commands: the asker required psql to receive only SQL statements and sync lines. [psql-ref.sgml#gexec](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L2059-L2094) [psql-ref.sgml#if](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L2233-L2260)
 - **Exported-snapshot coordination.** Separate sessions can import an exported snapshot before their first query if the exporting transaction remains available. This adds orchestration and still retains a long snapshot; it is unnecessary for the first serial design. [set_transaction.sgml#snapshot-import](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L155-L177)
 - **Stronger diagnostics.** Identity bags remain SQL-only but add storage and time. pageinspect is a separate extension/privilege choice for selected mismatch investigation. Other AM support, other PostgreSQL versions and physical fault injection each need their own evidence and tests.
 
@@ -1644,7 +1663,9 @@ The implementation and its tests preserve the original review decisions:
 | PostgreSQL 12 cannot `LOCK TABLE` a materialized view | Use an ordinary read under explicit DDL coordination |
 | One observed mismatch is weaker than the requested relation MISMATCH | Require complete actual candidate coverage before that verdict |
 | Raw page items or raw index TIDs are not the visible population | Use the executor; keep physical inspection separate |
-| Literal SQL does not supply an automatic EXPLAIN-result ingestion/error-handling loop | Make operator interaction explicit; offer PL/pgSQL only as a relaxation |
+| Literal SQL does not supply an automatic EXPLAIN-result ingestion/error-handling loop | Make operator interaction explicit; the follow-up's Bash runner automates it, and PL/pgSQL remains an unimplemented relaxation |
+| An inspection after `RELEASE SAVEPOINT` cannot be rolled back to the attempt savepoint | Operator step 6 now inspects before releasing; the runner inspects inside the savepoint |
+| psql rewrites `:name`, `:'name'` and `:"name"` outside quotes | The runner dollar-quotes every value it sends and refuses a count statement with a colon followed by a quote or brace |
 | A key that deparses to a bare numeric literal is read by `ORDER BY` as an output position, or rejected | Emit it as a same-type `CAST`; a parser probe and a literal-key fixture keep that case measured |
 
 The review compared the complete plan, its query shapes, statuses, diagrams and test expectations with pinned implementation and official documentation, the relevant glossary definitions, matching-version comparison pages and the new navigation summaries. One existing glossary contradiction was identified and corrected: its `indcheckxmin` entry said the planner leaves an index out “while the flag holds,” whereas the source also requires the horizon test to fail. One pinned documentation wording discrepancy is retained under Open Questions: the index-scan switch is described as enabling/disabling plans, while implementation uses a cost penalty. No unresolved contradiction is intended outside Open Questions.
@@ -1655,9 +1676,689 @@ A later 2026-10-23 review found that the generator wrapped every deparsed key on
 
 Final causal chain: coordinated scope and one retained snapshot → captured inventory → generated explained count INSERT → exact count and faithfully imported plan → context/shape validation → actual-index coverage → relation/schema verdicts → export and COMMIT. A new run starts the chain again; it does not reuse a completed snapshot's baseline.
 
+### Follow-up: a Bash and SQL runner
+
+**The follow-up replaces the operator with a Bash program; the checker's SQL, its plan validator and its verdict rules do not change.** The [runner](#runner-script) opens one [psql](../../../glossary.md#psql) session and installs the same SQL block. It then executes each generated count statement as the database returns it, saves the JSON plan that statement printed, and imports that plan. It records every failure through the attempt's savepoint, exports the reports, commits, and exits with a status that says whether the schema passed. The literal-SQL protocol above remains valid without Bash; the runner automates that protocol and adds no acceptance rule.
+
+The asker scoped the follow-up: Bash makes every decision, and psql receives only SQL statements plus one `\echo` line per request. That line is needed because no SQL statement can report back once a transaction has aborted. The server then rejects every statement except `COMMIT`, `PREPARE TRANSACTION`, `ROLLBACK` and `ROLLBACK TO SAVEPOINT`, while a psql meta-command never reaches the server. [postgres.c#aborted-transaction-filter](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1091-L1105) [postgres.c#IsTransactionExitStmt](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L2600-L2615) [command.c#exec_command_echo](../../../../raw/postgres-12/src/bin/psql/command.c#L1116-L1152)
+
+The runner leaves these properties as the protocol defines them:
+
+- One serial, schema-wide `REPEATABLE READ READ ONLY` transaction holds the snapshot, because the runner sends the generated start script, which opens it.
+- Each count and its plan come from one explained `INSERT`, because the runner sends each generated `sql_text` without changing its text.
+- The planner still chooses the index. The generator's two-attempt budgets and the coverage limits above are unchanged, so the runner adds speed, not coverage.
+- `HIC_DDL_STABLE=yes` is the operator's attestation of the DDL-stable window, just as `ddl_stable = true` was; the runner checks nothing about DDL.
+
+### How the runner talks to psql
+
+**Bash and psql exchange one request and one reply at a time through two named pipes.** psql reads SQL from one pipe as its standard input and writes results to the other. Because neither is a terminal, psql runs non-interactively: it prints no prompt, and it does not ask the server for a locale-derived client encoding, so the database encoding applies unless `PGCLIENTENCODING` is set. [startup.c#notty](../../../../raw/postgres-12/src/bin/psql/startup.c#L182) [mainloop.c#interactive](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L66) [startup.c#client-encoding](../../../../raw/postgres-12/src/bin/psql/startup.c#L264-L265) [psql-ref.sgml#client-encoding](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L710-L719)
+
+The exchange works because psql flushes its output at the points where the runner waits. It flushes standard output before reading each input line, after printing each query result, and after each backslash command. Therefore, when psql has printed the sync line and is waiting for more input, the whole reply is already in the pipe. [mainloop.c#flush-before-read](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L147) [common.c#flush-after-result](../../../../raw/postgres-12/src/bin/psql/common.c#L1299) [command.c#flush-after-backslash](../../../../raw/postgres-12/src/bin/psql/command.c#L259-L260)
+
+| Value | Meaning | Source | Live or stored | Later use |
+|---|---|---|---|---|
+| Request | SQL text the runner sends | Built by Bash, or fetched from `hic_start_script`, `hic_next` or `hic_control_profile()` | Stored in the session's `transcript.sql` | psql runs it statement by statement |
+| Sync line | `HIC12_SYNC_<pid>_<session>_<n>` followed by psql's `ERROR` and `SQLSTATE` | psql's `\echo`, after the request's last statement | Live | Ends the reply and reports the last statement's outcome |
+| Reply | Standard-output lines before the sync line: rows, EXPLAIN JSON or COPY CSV | psql | Copied to the session's `response` file | Values, the plan file and the report CSVs |
+| Request errors | psql's error reports printed during this request | psql standard error, appended to `stderr.log` | This request's slice is kept in `stderr.last` | Failure test, then SQLSTATE, message, detail and hint |
+| Failed flag | Whether any statement of the request failed | Sync line `ERROR`, or an error report in the slice | Live | Every branch below |
+| Plan file | The JSON one `EXPLAIN` printed | Reply to the attempt request | Stored as `plans/attempt-<id>.json` | Imported into `hic_plan` and kept for audit |
+| Attempt bound | Most attempts the generator can offer | `2 × heap-scope relations + 2 × eligible indexes`, read after inventory | Held in Bash | Stops a loop that would exceed it |
+
+One request goes through these steps:
+
+1. Bash refuses a request whose last non-blank line does not end with a semicolon. psql runs a backslash line at once even while a statement is incomplete, so a sync line after an unterminated statement would arrive before that statement ran. [mainloop.c#backslash-line](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L457-L491)
+2. Bash records the size of psql's error log, writes the request, then writes `\echo HIC12_SYNC_... :ERROR :SQLSTATE`.
+3. psql sends each semicolon-terminated statement as its own query and prints its rows; with `-q` it prints no command tags. [mainloop.c#send-on-semicolon](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L410-L440) [common.c#PrintQueryStatus](../../../../raw/postgres-12/src/bin/psql/common.c#L1211-L1225)
+4. psql prints a server error to standard error as [libpq](../../../glossary.md#libpq) formats it. In this stdin mode the line carries no file or line prefix. With `VERBOSITY` set to `verbose`, the first line reads `SEVERITY:  SQLSTATE: message`, and `DETAIL:` and `HINT:` lines follow. [common.c#AcceptResult](../../../../raw/postgres-12/src/bin/psql/common.c#L530-L538) [startup.c#stdin-terse-logging](../../../../raw/postgres-12/src/bin/psql/startup.c#L438-L446) [startup.c#log_locus_callback](../../../../raw/postgres-12/src/bin/psql/startup.c#L101-L114) [logging.c#locus-prefix](../../../../raw/postgres-12/src/common/logging.c#L164-L179) [fe-protocol3.c#verbose-message](../../../../raw/postgres-12/src/interfaces/libpq/fe-protocol3.c#L1017-L1046) [fe-protocol3.c#detail-and-hint](../../../../raw/postgres-12/src/interfaces/libpq/fe-protocol3.c#L1090-L1095) [startup.c#verbosity_hook](../../../../raw/postgres-12/src/bin/psql/startup.c#L1113-L1123)
+5. psql reaches the `\echo` line, replaces `:ERROR` and `:SQLSTATE` with the values it set for the last query, prints the line and flushes. [psqlscanslash.l#argument-variables](../../../../raw/postgres-12/src/bin/psql/psqlscanslash.l#L374-L389) [common.c#SetResultVariables](../../../../raw/postgres-12/src/bin/psql/common.c#L544-L584) [psql-ref.sgml#ERROR](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3647-L3655) [psql-ref.sgml#SQLSTATE](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3962-L3971)
+6. Bash copies standard-output lines into the reply until the sync line, then cuts this request's slice of the error log.
+7. Bash marks the request failed when `ERROR` is `true` or the slice holds an error report: a report whose SQLSTATE class is not `00`, `01` or `02`, the success, warning and no-data classes. On failure it parses the first report. [errcodes.txt#classes-00-02](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L77-L99)
+
+Step 7 needs both signals. Inside a transaction block, a failed statement makes every later one fail with SQLSTATE `25P02`, so the last statement's `ERROR` covers the whole request. Outside a block, each statement commits on its own, and a failure in the middle leaves the last `ERROR` false; only the error-log slice shows it. [postgres.c#aborted-transaction-filter](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1091-L1105)
+
+**Bash never builds a single-quoted literal.** Each value it sends, such as the schema name, the role name, an error message or a plan, goes between dollar-quote tags that do not occur in the value. Inside a [dollar-quoted](../../../glossary.md#dollar-quoting) string the server applies no escape processing. psql treats the text as a literal, because its lexer recognizes backslash commands and variable references only outside quotes. [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L588) [syntax.sgml#tag-rules](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L610-L621) [scan.l#dolqdelim](../../../../raw/postgres-12/src/backend/parser/scan.l#L292-L294) [psqlscan.l#dollar-quote](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588) [psqlscan.l#backslash-and-variables](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L702-L766) [psql-ref.sgml#no-interpolation-in-quotes](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L4055-L4061)
+
+**psql rewrites unquoted variable references, so the runner guards the one text it does not write.** Outside quotes, psql replaces `:name`, `:'name'` and `:"name"` whenever a psql variable of that name exists, and psql always defines variables such as `ERROR`. Its lexer reads `::` as a typecast token first, so a cast is never taken for a reference. [psqlscan.l#variable-substitution](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762) [psqlscan.l#typecast](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L301) [psql-ref.sgml#interpolation](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L4020-L4053)
+
+The runner's own statements are fixed text with dollar-quoted values. The generated statements are fixed text too, except for the deparsed key expressions inside each count statement. The deparser prints an array slice with no space around its colon, so a slice whose bound is a quoted column becomes `a[1:"ERROR"]`, which psql would rewrite. [ruleutils.c#printSubscripts](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10614-L10637) The fixtures measure the hazard: through psql, `(ARRAY[1, 2, 3])[1:"ERROR"]` fails with SQLSTATE `42601`, while `[1 : "ERROR"]` returns `{1,2}`.
+
+Therefore the runner checks each count statement for a colon that does not follow another colon and is followed by `'`, `"` or `{`. When it finds one, it sends only the attempt's prelude, which inserts the attempt row, sets the savepoint and applies the scan profile. It then rolls back to the savepoint and records an `execution` error with no SQLSTATE and the message “runner did not send the count statement”. Under the status rules above, an error that no accepted scan covers makes the relation `ERROR`, never `PASS`. The check is conservative: the same characters inside a string constant are refused too.
+
+### The runner's control flow
+
+The runner's decisions, in order. Every arrow is a Bash branch on the request's failed flag, the reply or psql ending.
+
+```text
+validate HIC_* environment ─ invalid ──────────────────────────────> exit 64, no connection
+open psql on two named pipes; SELECT 1 ─ psql ends ───────────────> exit 2
+[HIC_ROLE] SET ROLE <dollar-quoted name> ─ fails ─────────────────> exit 2
+BEGIN; installation block; COMMIT; progress = CONFIGURE_AND_START ─ no ─> exit 2
+INSERT hic_config (schema, ddl_stable = true, options)
+start script, part 1: BEGIN REPEATABLE READ READ ONLY ... hic_run
+    └ fails ─> ROLLBACK; hic_run_error 'initialization'; export run errors ─> exit 2
+start script, part 2: inventory INSERTs; inventory_complete
+    └ fails ─> ROLLBACK; hic_run_error 'inventory'; export run errors ──────> exit 2
+bound = 2 × heap-scope relations + 2 × eligible indexes
+┌─> progress state
+│     ATTEMPTS_COMPLETE_REVIEW_REPORT ─────────────────────> finish
+│     not ATTEMPT_AVAILABLE ───────────────────────────────> stop
+│   fetch attempt id, sql_text, prelude, count statement; id > bound ─> stop
+│   count statement has colon + quote or brace?
+│     yes ─> send prelude; recover(execution, no SQLSTATE); controls ─┐
+│   send sql_text unchanged                                          │
+│     failed ─> recover(execution, parsed error); controls ──────────┤
+│     no JSON or plan not saved ─> recover(capture); controls ───────┤
+│   send controls (post_count_sql); save plans/attempt-<id>.json     │
+│   INSERT hic_plan ($tag$<json>$tag$::jsonb)                        │
+│     failed ─> recover(capture, parsed error); controls ────────────┤
+│   SELECT verdict FROM hic_attempt_result                           │
+│     failed ─> recover(inspection, parsed error); controls ─────────┤
+│   RELEASE SAVEPOINT hic_attempt                                    │
+└────────────────────────────────────────────────────────────────────┘
+recover = ROLLBACK TO SAVEPOINT; INSERT hic_error; RELEASE
+    └ rollback fails ─> stop (the transaction is lost)
+stop: SELECT 1 works ─> finish, then exit 2
+      SELECT 1 fails ─> ROLLBACK; hic_run_error 'snapshot'; export run errors ─> exit 2
+finish: UPDATE finished; COPY seven reports; COMMIT; same schema_success after COMMIT?
+    └ no ─> exit 2
+exit 0 when schema_success is true, else 1; psql ending anywhere ─> exit 2
+```
+
+1. **Before connecting**, Bash checks the environment: a schema, `HIC_DDL_STABLE=yes`, `yes` or `no` for the two options, a readable SQL file and a new output directory. Any failure exits 64 before psql starts.
+2. **The session** starts psql with `-X -w -q -A -t`, `ON_ERROR_STOP=0` and `VERBOSITY=verbose`: no startup file, no password prompt, no command tags, unaligned rows without headers, continue after errors, and verbose error reports. A first `SELECT 1` must return `1`. An optional `SET ROLE` takes the name as a dollar-quoted string, which the grammar accepts for a role. [psql-ref.sgml#no-psqlrc](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L553-L563) [psql-ref.sgml#no-password](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L496-L514) [psql-ref.sgml#quiet](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L374-L387) [psql-ref.sgml#no-align](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L65-L75) [psql-ref.sgml#tuples-only](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L433-L443) [psql-ref.sgml#set-variable](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L469-L484) [psql-ref.sgml#ON_ERROR_STOP](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3844-L3861) [psql-ref.sgml#VERBOSITY](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3984-L3996) [gram.y#SET-ROLE](../../../../raw/postgres-12/src/backend/parser/gram.y#L1524-L1531)
+3. **Installation** runs the page's SQL block between `BEGIN` and `COMMIT`. A failed statement aborts the block, so `COMMIT` ends it with a rollback and the confirming query on `hic_progress` fails because the views do not exist. The runner then stops before configuring anything.
+4. **Initialization** fetches the generated start script and sends it in two parts, split at the first inventory `INSERT`, so a failure is recorded under the right stage. A missing schema fails part 1 on the run row's `schema_oid <> 0` check with SQLSTATE `23514`.
+5. **Each attempt** sends `sql_text` exactly as fetched. On success the runner first sends `post_count_sql`, which restores planner controls before the metadata queries, as operator step 5 does. It then saves the plan file, imports it, reads the validator's verdict and releases the savepoint. The verdict is read before the release, because a savepoint that no longer exists cannot be rolled back to; see [operator step 6](#operator-workflow-and-implementation-policy).
+6. **Recovery** rolls back to `hic_attempt`, records `hic_error` with the parsed SQLSTATE, message, detail and hint, and releases the savepoint. The rollback succeeds only while the savepoint exists: with no savepoint, the server raises `savepoint "hic_attempt" does not exist` and the transaction stays aborted, so the runner stops. [xact.c#RollbackToSavepoint](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4249-L4308) [xact.c#ReleaseSavepoint](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4140-L4221)
+7. **Finishing** sets `finished` and exports seven reports with `COPY (query) TO STDOUT`. A read-only transaction allows this, because the read-only test in `COPY` applies only to `COPY FROM` into a non-temporary table. psql writes the COPY data to its query output, which is the reply pipe. The runner commits, reads `schema_success` again, and requires the committed report to keep the verdict. [copy.c#read-only-COPY-FROM](../../../../raw/postgres-12/src/backend/commands/copy.c#L1060-L1066) [common.c#copy-out-stream](../../../../raw/postgres-12/src/bin/psql/common.c#L1097-L1130) [copy.c#handleCopyOut](../../../../raw/postgres-12/src/bin/psql/copy.c#L437-L467)
+8. **Closing** ends psql's input. psql reaches end of file and exits normally, and the backend shuts down the connection; its exit callback aborts any transaction that is still open. [mainloop.c#end-of-input](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L172-L190) [postgres.c#client-EOF](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4433-L4455) [postinit.c#ShutdownPostgres](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L1189-L1193)
+
+### Runner branches and failure handling
+
+| Condition / state | Behavior | Consequence |
+|---|---|---|
+| Missing schema name, no `HIC_DDL_STABLE=yes`, a bad `yes`/`no` value, unreadable SQL file, existing output directory | Refuse before starting psql | Exit 64; measured without creating an output directory |
+| psql cannot connect | No sync line arrives for the first `SELECT 1` | Exit 2; the session's `stderr.log` keeps psql's message |
+| A statement in the installation fails | The whole block rolls back | Exit 2 with no checker objects |
+| The schema does not exist | Start script part 1 fails with `23514`; `ROLLBACK`; `hic_run_error` row with stage `initialization` | Exit 2; measured, and `run-errors.csv` is exported |
+| An inventory statement fails | Same, with stage `inventory` | Exit 2 |
+| The count statement fails, for example forced RLS (`42501`) or a lock wait past `lock_timeout` (`55P03`) | Recover with stage `execution` and the parsed report | That attempt earns nothing; measured for both codes, including the RLS hint |
+| psql printed no plan, or the runner cannot save it | Recover with stage `capture` | No count credit |
+| The server rejects the imported plan, such as truncated JSON | Recover with stage `capture`; truncated JSON gives `22P02` with a DETAIL | Measured; the retry passes. jsonb input runs the JSON parser, whose end-of-input report carries that code and DETAIL. [jsonb.c#jsonb_from_cstring](../../../../raw/postgres-12/src/backend/utils/adt/jsonb.c#L238-L257) [json.c#report_parse_error](../../../../raw/postgres-12/src/backend/utils/adt/json.c#L1126-L1137) |
+| Reading the verdict fails | Recover with stage `inspection`, still inside the savepoint | No count credit |
+| The count statement contains a colon followed by a quote or brace | Send only the prelude; recover with stage `execution` and no SQLSTATE | Measured: relation `ERROR`, no count sent |
+| `ROLLBACK TO SAVEPOINT` fails | The transaction is lost; `ROLLBACK`; `hic_run_error` with stage `snapshot` | Exit 2 |
+| Progress state `INVALID_RUN`, `NOT_ACTIVE` or `ERROR`, or an attempt beyond the bound | Stop; a `SELECT 1` probe still works, so the runner exports the reports and commits | Exit 2 |
+| The backend ends, for example through `pg_terminate_backend()` | psql sees the lost connection and, being non-interactive, exits with status 2 before printing the sync line | Exit 2 and no report; measured with `FATAL:  57P01:`. [common.c#CheckConnection](../../../../raw/postgres-12/src/bin/psql/common.c#L386-L397) [psql-ref.sgml#exit-status](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L635-L643) [signalfuncs.c#pg_terminate_backend](../../../../raw/postgres-12/src/backend/storage/ipc/signalfuncs.c#L128-L137) [postgres.c#administrator-termination](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3008-L3011) |
+| The committed report changes `schema_success` | Stop | Exit 2 |
+| Interrupt or termination of the runner | Its exit trap stops psql and closes the pipe | The backend aborts the transaction when it reads end of input, so no partial run commits; a statement already running is bounded by its 15-minute `statement_timeout` |
+
+The run's state changes at these events:
+
+| Event | State before | State after | Effect on later steps |
+|---|---|---|---|
+| Session opens | No psql process | psql connected, no transaction | Requests can be sent |
+| Installation commits | No checker objects | Temporary tables, views and SQL functions for this session | Survive `COMMIT`, vanish with the session |
+| Start script part 1 | Autocommit | Read-only repeatable-read transaction with its snapshot and run row | Every later count uses this snapshot |
+| Attempt prelude | No savepoint | Attempt row, then savepoint `hic_attempt` with the scan profile | A failure after this point is recoverable |
+| Release or recovery | Savepoint open | Savepoint gone; evidence kept, or rolled back with an error row | The generator sees the attempt as complete |
+| `COMMIT` | Checking transaction | Autocommit; reports still readable in the session | No new attempt can start |
+| Session closes | Temporary objects | Gone; the exported CSV files and plan files remain | A new run starts from installation |
+
+Key interaction: the checker's SQL decides *what* counts as evidence, while Bash decides *what happens next*. The SQL cannot see a client-side failure, and Bash cannot see a verdict without asking. Therefore every Bash branch either reads a SQL value or records a SQL row, and the generator's view of the run stays complete.
+
+Final causal chain: environment check → one psql session on two pipes → installation → configuration → start script with one snapshot → for each generated attempt: unchanged count statement, plan file, import and verdict inside its savepoint, or a recorded error → reports exported → `COMMIT` → exit status from `schema_success`. A lost transaction or session ends the run with status 2 instead of a report.
+
+### Running the runner
+
+Extract both blocks from this page, then run the runner with a libpq connection environment. Run it from any directory; it writes only below its output directory.
+
+```text
+fence=$(printf '\140\140\140')
+page=wiki/v12/questions/indexing/sql-heap-index-visible-count-checker-plan.md
+sed -n '/^### Executable SQL installation$/,/^### /p' "$page" | sed -n "/^${fence}sql$/,/^${fence}$/p" | sed '1d;$d' > hic12-checker.sql
+sed -n '/^### Runner script$/,/^##/p' "$page" | sed -n "/^${fence}bash$/,/^${fence}$/p" | sed '1d;$d' > hic12-check.sh
+HIC_SCHEMA=app HIC_DDL_STABLE=yes PGHOST=/var/run/postgresql PGDATABASE=appdb bash hic12-check.sh
+```
+
+| Item | Contract |
+|---|---|
+| Environment | `HIC_SCHEMA`, required; `HIC_DDL_STABLE=yes`, required; `HIC_INCLUDE_EXTERNAL_PARTITIONS` and `HIC_EXHAUSTIVE`, `yes` or `no`, default `no`; `HIC_SQL`, default `hic12-checker.sql` beside the runner; `HIC_OUT`, default `hic12-run-<UTC time>-<pid>` in the current directory; `HIC_PSQL`, default `psql`; `HIC_ROLE`, optional role for `SET ROLE`. The connection comes from libpq's environment, such as `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSERVICE` and `PGPASSFILE`. [libpq.sgml#environment](../../../../raw/postgres-12/doc/src/sgml/libpq.sgml#L7296-L7319) |
+| Prerequisites | Bash with `mkfifo`, `sed`, `grep`, `tail`, `wc`, `cp`, `tr`, `cat` and `date`; no Bash 4 features are used. The psql measured here is the 12.2 build from the pin. The server must be the 12.2 primary that the SQL block's version guard accepts. |
+| Output | A new `0700` directory: `summary.txt` first, then `schema.csv`, `relations.csv`, `candidates.csv`, `attempts.csv`, `parents.csv`, `run-errors.csv` and `run.csv`; `plans/attempt-<id>.json`; and `session-main/` with every request in `transcript.sql` and psql's errors in `stderr.log`. |
+| Exit status | 0, run completed with `schema_success`; 1, run completed without it; 2, run did not complete; 64, refused before connecting. |
+| Settings | `application_name` defaults to `hic12-check` through `PGAPPNAME` unless the caller sets it; it is a connection-time label, not a planner input. The client-side psql variables are `ON_ERROR_STOP=0`, psql's default, and `VERBOSITY=verbose` instead of `default`. psql runs with `LC_ALL=C`, which affects only psql's own message translations; the server's messages follow its `lc_messages`. The checking settings are the ones the generated SQL sets, listed under [settings and query shapes](#settings-and-query-shapes). [libpq.sgml#PGOPTIONS](../../../../raw/postgres-12/doc/src/sgml/libpq.sgml#L7410-L7419) |
+| Safety | No password is placed on a command line; use a password file or service file. The output directory can contain data values that error messages include, such as key values in a DETAIL. The runner writes only to its own temporary tables, and it never stops or retries after a lost session. |
+
+The parser reads the SQLSTATE from the report itself, so a server whose `lc_messages` translates the severity word still parses. The `DETAIL:` and `HINT:` labels come from libpq, which `LC_ALL=C` keeps in English.
+
+### Runner script
+
+```bash
+# hic12-check.sh: unattended Bash and SQL runner for the PostgreSQL 12.2
+# heap and index visible-count checker. Bash makes every decision. psql
+# receives SQL statements, plus one \echo sync line per request that prints
+# psql's ERROR and SQLSTATE variables.
+#
+#   HIC_SCHEMA=app HIC_DDL_STABLE=yes bash hic12-check.sh
+#
+# The connection comes from the standard libpq environment (PGHOST, PGPORT,
+# PGDATABASE, PGUSER, PGSERVICE, PGPASSFILE). Exit status: 0 run completed
+# with schema_success; 1 run completed without it; 2 run did not complete;
+# 64 usage error. Sourcing this file defines the functions without running.
+
+: "${HIC_PSQL:=psql}"
+: "${HIC_S:=main}"
+HIC_OPEN=${HIC_OPEN:-}
+HIC_ERROR_LINE='^[^ ]+:  ([1-9A-Z][0-9A-Z]|0[3-9A-Z])[0-9A-Z]{3}: '
+HIC_GUARD='(^|[^:]):['"'"'"{]'
+
+hic_say() { printf 'hic12-check: %s\n' "$*"; }
+hic_warn() { printf 'hic12-check: %s\n' "$*" >&2; }
+
+# ---- session layer: one psql process per named session --------------------
+
+hic_open() {
+    # hic_open NAME FD_IN FD_OUT: start psql reading SQL from a FIFO.
+    local name=$1 fdin=$2 fdout=$3 dir other closers=
+    dir="$HIC_OUT/session-$name"
+    trap '' PIPE
+    mkdir -m 700 "$dir" && mkfifo -m 600 "$dir/in" "$dir/out" || return 2
+    : > "$dir/stderr.log"
+    : > "$dir/transcript.sql"
+    for other in $HIC_OPEN; do
+        eval "closers=\"\$closers \${HIC_FDIN_$other}>&- \${HIC_FDOUT_$other}<&-\""
+    done
+    eval "LC_ALL=C \"\$HIC_PSQL\" -X -w -q -A -t -v ON_ERROR_STOP=0 -v VERBOSITY=verbose \
+        < \"\$dir/in\" > \"\$dir/out\" 2>> \"\$dir/stderr.log\" $closers &"
+    eval "HIC_PID_$name=\$! HIC_FDIN_$name=$fdin HIC_FDOUT_$name=$fdout"
+    eval "HIC_DIR_$name=\$dir HIC_SEQ_$name=0"
+    eval "exec $fdin>\"\$dir/in\" $fdout<\"\$dir/out\""
+    HIC_OPEN="$HIC_OPEN $name"
+    if hic_sql "$name" 'SELECT /* wiki_hic12_runner_hello */ 1;' && [ "$HIC_VALUE" = 1 ]; then
+        return 0
+    fi
+    hic_warn "session $name did not start; see $dir/stderr.log"
+    return 2
+}
+
+hic_close() {
+    # hic_close NAME [kill]: end of input lets psql exit; the server then
+    # rolls back any transaction that is still open.
+    local name=$1 pid fdin fdout rest= other rc=0
+    eval "pid=\${HIC_PID_$name:-} fdin=\${HIC_FDIN_$name:-} fdout=\${HIC_FDOUT_$name:-}"
+    [ -n "$pid" ] || return 0
+    if [ "${2:-}" = kill ]; then kill "$pid" 2> /dev/null; fi
+    eval "exec $fdin>&-"
+    wait "$pid" || rc=$?
+    eval "exec $fdout<&-"
+    eval "HIC_PID_$name="
+    for other in $HIC_OPEN; do
+        [ "$other" = "$name" ] || rest="$rest $other"
+    done
+    HIC_OPEN=$rest
+    return "$rc"
+}
+
+hic_cleanup() {
+    local name
+    for name in $HIC_OPEN; do
+        hic_close "$name" kill || :
+    done
+}
+
+hic_request() {
+    # hic_request NAME FILE: send FILE and one \echo sync line, then copy the
+    # stdout lines that precede the sync line into the session's response
+    # file and this request's stderr into stderr.last. Sets HIC_ERROR and
+    # HIC_SQLSTATE (last statement) and HIC_FAILED (any statement). Returns 2
+    # when psql ends first or the request does not end with a semicolon.
+    local name=$1 file=$2 dir fdin fdout seq marker line before status=
+    eval "dir=\$HIC_DIR_$name fdin=\$HIC_FDIN_$name fdout=\$HIC_FDOUT_$name seq=\$HIC_SEQ_$name"
+    HIC_ERROR= HIC_SQLSTATE= HIC_FAILED=true
+    : > "$dir/response"
+    : > "$dir/stderr.last"
+    if ! grep -v -E '^[[:space:]]*$' "$file" | tail -n 1 | grep -q -E ';[[:space:]]*$'; then
+        hic_warn "refusing request without a final semicolon: $file"
+        return 2
+    fi
+    seq=$((seq + 1))
+    eval "HIC_SEQ_$name=$seq"
+    marker="HIC12_SYNC_$$_${name}_$seq"
+    before=$(wc -c < "$dir/stderr.log")
+    { printf '%s\n' "-- request $seq"; cat "$file"; } >> "$dir/transcript.sql"
+    if ! { cat "$file"; printf '\n\\echo %s :ERROR :SQLSTATE\n' "$marker"; } >&"$fdin" 2> /dev/null; then
+        return 2
+    fi
+    while IFS= read -r line; do
+        case $line in
+            "$marker "*) status=${line#"$marker "}; break ;;
+        esac
+        printf '%s\n' "$line"
+    done <&"$fdout" > "$dir/response"
+    tail -c +"$((before + 1))" "$dir/stderr.log" > "$dir/stderr.last"
+    [ -n "$status" ] || return 2
+    HIC_ERROR=${status%% *}
+    HIC_SQLSTATE=${status#* }
+    printf '%s\n' "-- sync $status" >> "$dir/transcript.sql"
+    if [ "$HIC_ERROR" = false ] && ! grep -E -q "$HIC_ERROR_LINE" "$dir/stderr.last"; then
+        HIC_FAILED=false
+    fi
+    return 0
+}
+
+hic_sql() {
+    # hic_sql NAME TEXT: returns 0 when every statement succeeded, 1 when one
+    # failed, 2 when the session is gone. HIC_VALUE is the first result line.
+    local name=$1 dir
+    eval "dir=\$HIC_DIR_$name"
+    printf '%s\n' "$2" > "$dir/request"
+    HIC_VALUE=
+    hic_request "$name" "$dir/request" || return 2
+    if [ -s "$dir/response" ]; then IFS= read -r HIC_VALUE < "$dir/response" || :; fi
+    [ "$HIC_FAILED" = false ] || return 1
+}
+
+hic_parse_error() {
+    # Sets HIC_ERR_CODE, HIC_ERR_MESSAGE, HIC_ERR_DETAIL and HIC_ERR_HINT from
+    # the first error report that psql printed for the last request.
+    local f start end first rest
+    eval "f=\$HIC_DIR_$1/stderr.last"
+    HIC_ERR_CODE= HIC_ERR_MESSAGE= HIC_ERR_DETAIL= HIC_ERR_HINT=
+    start=$(grep -n -E "$HIC_ERROR_LINE" "$f" | sed -n '1s/:.*//p')
+    [ -n "$start" ] || return 1
+    first=$(sed -n "${start}p" "$f")
+    rest=${first#*:  }
+    HIC_ERR_CODE=${rest%%:*}
+    HIC_ERR_MESSAGE=${rest#*: }
+    end=$(sed -n "$((start + 1)),\$p" "$f" | grep -n -E '^[^ ]+:  [0-9A-Z]{5}: ' | sed -n '1s/:.*//p')
+    if [ -n "$end" ]; then end=$((start + end - 1)); else end='$'; fi
+    HIC_ERR_DETAIL=$(sed -n "${start},${end}p" "$f" | sed -n 's/^DETAIL:  //p' | sed -n 1p)
+    HIC_ERR_HINT=$(sed -n "${start},${end}p" "$f" | sed -n 's/^HINT:  //p' | sed -n 1p)
+    return 0
+}
+
+hic_literal() {
+    # Dollar-quote $1 with a tag that does not occur in it.
+    local n=0 tag
+    while :; do
+        tag="\$hic12_q$n\$"
+        case $1 in *"$tag"*) n=$((n + 1)) ;; *) break ;; esac
+    done
+    HIC_LITERAL="$tag$1$tag"
+}
+
+hic_fetch() {
+    # hic_fetch FILE SQL: save a multi-line text value returned by SQL.
+    local dir
+    eval "dir=\$HIC_DIR_$HIC_S"
+    hic_sql "$HIC_S" "$2" || return
+    [ -s "$dir/response" ] || return 1
+    cp "$dir/response" "$1"
+}
+
+# ---- checker layer ----------------------------------------------------------
+
+hic_install() {
+    # Install the page's SQL block in one transaction, then confirm it.
+    local dir
+    eval "dir=\$HIC_DIR_$HIC_S"
+    {
+        printf '%s\n' 'BEGIN /* wiki_hic12_runner_install */;'
+        cat "$1"
+        printf '%s\n' 'COMMIT /* wiki_hic12_runner_installed */;'
+    } > "$dir/install.sql"
+    hic_request "$HIC_S" "$dir/install.sql" || return 2
+    [ "$HIC_FAILED" = false ] || hic_parse_error "$HIC_S" || :
+    hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_install_check */ state FROM pg_temp.hic_progress;' || return
+    [ "$HIC_VALUE" = CONFIGURE_AND_START ]
+}
+
+hic_configure() {
+    # hic_configure SCHEMA EXTERNAL EXHAUSTIVE (booleans as true or false).
+    hic_literal "$1"
+    hic_sql "$HIC_S" "INSERT /* wiki_hic12_runner_config */ INTO pg_temp.hic_config(target_schema, ddl_stable, include_external_partitions, exhaustive) VALUES ($HIC_LITERAL, true, $2, $3);"
+}
+
+hic_run_error() {
+    # Record a run-level failure outside the checking transaction.
+    local code=NULL
+    case $2 in [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]) code="'$2'" ;; esac
+    hic_literal "${3:-run failed without a server message}"
+    hic_sql "$HIC_S" "INSERT /* wiki_hic12_runner_run_error */ INTO pg_temp.hic_run_error(event_id, requested_schema, stage, sqlstate, message) SELECT COALESCE((SELECT max(event_id) FROM pg_temp.hic_run_error), 0) + 1, target_schema, '$1', $code, $HIC_LITERAL FROM pg_temp.hic_config;"
+}
+
+hic_initialize() {
+    # Run the generated start script in its two halves so that a failure is
+    # attributed to initialization or to inventory. Returns 0, 1 recorded
+    # failure, or 2 session lost.
+    local dir stage
+    eval "dir=\$HIC_DIR_$HIC_S"
+    hic_fetch "$dir/start-run.sql" "SELECT /* wiki_hic12_runner_start_run */ substr(sql_text, 1, strpos(sql_text, 'INSERT /* wiki_hic12_capture_objects */') - 1) FROM pg_temp.hic_start_script WHERE strpos(sql_text, 'INSERT /* wiki_hic12_capture_objects */') > 0;" || return
+    hic_fetch "$dir/start-inventory.sql" "SELECT /* wiki_hic12_runner_start_inventory */ substr(sql_text, strpos(sql_text, 'INSERT /* wiki_hic12_capture_objects */')) FROM pg_temp.hic_start_script WHERE strpos(sql_text, 'INSERT /* wiki_hic12_capture_objects */') > 0;" || return
+    for stage in initialization inventory; do
+        if [ "$stage" = initialization ]; then
+            hic_request "$HIC_S" "$dir/start-run.sql" || return 2
+        else
+            hic_request "$HIC_S" "$dir/start-inventory.sql" || return 2
+        fi
+        if [ "$HIC_FAILED" = true ]; then
+            hic_parse_error "$HIC_S" || HIC_ERR_CODE=$HIC_SQLSTATE
+            HIC_STOP="$stage failed: ${HIC_ERR_MESSAGE:-no server message}"
+            hic_sql "$HIC_S" 'ROLLBACK /* wiki_hic12_runner_abandon_start */;'
+            [ $? -ne 2 ] || return 2
+            hic_run_error "$stage" "$HIC_ERR_CODE" "$HIC_ERR_MESSAGE"
+            [ $? -ne 2 ] || return 2
+            return 1
+        fi
+    done
+    hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_started */ r.inventory_complete AND i.evidence_valid AND i.active_snapshot FROM pg_temp.hic_run AS r JOIN pg_temp.hic_run_integrity AS i USING (run_id);' || return
+    [ "$HIC_VALUE" = t ] || { HIC_STOP='run did not start cleanly'; return 1; }
+    hic_fetch "$dir/post-count.sql" 'SELECT /* wiki_hic12_runner_controls */ pg_temp.hic_control_profile();' || return
+    hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_bound */ 2 * count(*) FILTER (WHERE in_heap_scope) + 2 * (SELECT count(*) FROM pg_temp.hic_index WHERE eligible) FROM pg_temp.hic_object;' || return
+    HIC_MAX_ATTEMPTS=$HIC_VALUE
+}
+
+hic_attempt_fetch() {
+    # Read the next generated attempt. Returns 3 when none is offered.
+    local dir meta
+    eval "dir=\$HIC_DIR_$HIC_S"
+    hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_state */ state FROM pg_temp.hic_progress;' || return
+    case $HIC_VALUE in
+        ATTEMPT_AVAILABLE) ;;
+        ATTEMPTS_COMPLETE_REVIEW_REPORT) return 3 ;;
+        *) HIC_STOP="progress state $HIC_VALUE"; return 1 ;;
+    esac
+    hic_sql "$HIC_S" "SELECT /* wiki_hic12_runner_next */ attempt_id || ' ' || phase || ' ' || relation_oid || ' ' || COALESCE(intended_index_oid::text, '-') FROM pg_temp.hic_next;" || return
+    meta=$HIC_VALUE
+    HIC_ATTEMPT_ID=${meta%% *}; meta=${meta#* }
+    HIC_ATTEMPT_PHASE=${meta%% *}; meta=${meta#* }
+    HIC_ATTEMPT_RELATION=${meta%% *}
+    HIC_ATTEMPT_INDEX=${meta#* }
+    case $HIC_ATTEMPT_ID in ''|*[!0-9]*) HIC_STOP='no attempt identifier'; return 1 ;; esac
+    if [ "$HIC_ATTEMPT_ID" -gt "${HIC_MAX_ATTEMPTS:-0}" ]; then
+        HIC_STOP="attempt $HIC_ATTEMPT_ID exceeds the bound of $HIC_MAX_ATTEMPTS"
+        return 1
+    fi
+    hic_fetch "$dir/attempt.sql" 'SELECT /* wiki_hic12_runner_statement */ sql_text FROM pg_temp.hic_next;' || return
+    hic_fetch "$dir/prelude.sql" "SELECT /* wiki_hic12_runner_prelude */ substr(sql_text, 1, strpos(sql_text, chr(10) || 'EXPLAIN /* wiki_hic12_executed_count */')) FROM pg_temp.hic_next WHERE strpos(sql_text, chr(10) || 'EXPLAIN /* wiki_hic12_executed_count */') > 0;" || return
+    hic_fetch "$dir/count.sql" "SELECT /* wiki_hic12_runner_count */ substr(sql_text, strpos(sql_text, chr(10) || 'EXPLAIN /* wiki_hic12_executed_count */') + 1) FROM pg_temp.hic_next WHERE strpos(sql_text, chr(10) || 'EXPLAIN /* wiki_hic12_executed_count */') > 0;" || return
+}
+
+hic_attempt_execute() {
+    # Send the generated statement unchanged and save its JSON plan. Returns
+    # 4 when a statement failed and 5 when no plan could be kept; both leave
+    # recovery to the caller.
+    local dir plans
+    eval "dir=\$HIC_DIR_$HIC_S"
+    plans="$HIC_OUT/plans"
+    hic_request "$HIC_S" "$dir/attempt.sql" || return 2
+    if [ "$HIC_FAILED" = true ]; then
+        hic_parse_error "$HIC_S" || HIC_ERR_CODE=$HIC_SQLSTATE
+        return 4
+    fi
+    HIC_ERR_CODE= HIC_ERR_DETAIL= HIC_ERR_HINT=
+    if [ ! -s "$dir/response" ]; then
+        HIC_ERR_MESSAGE='psql printed no EXPLAIN output'
+        return 5
+    fi
+    if ! { mkdir -p "$plans" && cp "$dir/response" "$plans/attempt-$HIC_ATTEMPT_ID.json"; }; then
+        HIC_ERR_MESSAGE="runner could not save the EXPLAIN output under $plans"
+        return 5
+    fi
+}
+
+hic_attempt_import() {
+    # Import the saved plan as a dollar-quoted literal. Returns 4 when the
+    # server rejects it and 5 when the saved plan is missing.
+    local dir json n=0 tag
+    eval "dir=\$HIC_DIR_$HIC_S"
+    json="$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json"
+    if [ ! -s "$json" ]; then
+        HIC_ERR_CODE= HIC_ERR_MESSAGE="saved plan is missing: $json" HIC_ERR_DETAIL= HIC_ERR_HINT=
+        return 5
+    fi
+    while grep -F -q -e "\$hic12_plan$n\$" "$json"; do n=$((n + 1)); done
+    tag="\$hic12_plan$n\$"
+    {
+        printf 'INSERT /* wiki_hic12_runner_import_plan */ INTO pg_temp.hic_plan(attempt_id, document) VALUES (%s, %s' "$HIC_ATTEMPT_ID" "$tag"
+        cat "$json"
+        printf '%s::jsonb);\n' "$tag"
+    } > "$dir/import.sql"
+    hic_request "$HIC_S" "$dir/import.sql" || return 2
+    if [ "$HIC_FAILED" = true ]; then
+        hic_parse_error "$HIC_S" || HIC_ERR_CODE=$HIC_SQLSTATE
+        return 4
+    fi
+}
+
+hic_attempt_inspect() {
+    # Read the validator's verdict while the savepoint still exists, so a
+    # failure here can still be rolled back. Returns 4 on failure.
+    hic_sql "$HIC_S" "SELECT /* wiki_hic12_runner_inspect */ 'accepted=' || accepted || ' count=' || COALESCE(row_count::text, '-') || ' actual_index=' || COALESCE(actual_index_oid::text, '-') || ' reasons=' || COALESCE(NULLIF(array_to_string(rejection_reasons, ','), ''), '-') FROM pg_temp.hic_attempt_result WHERE attempt_id = $HIC_ATTEMPT_ID;"
+    case $? in
+        0) HIC_VERDICT=$HIC_VALUE ;;
+        2) return 2 ;;
+        *) hic_parse_error "$HIC_S" || HIC_ERR_CODE=$HIC_SQLSTATE; return 4 ;;
+    esac
+}
+
+hic_record_error() {
+    # hic_record_error STAGE CODE MESSAGE DETAIL HINT for the current attempt.
+    local code=NULL message detail=NULL hint=NULL
+    case $2 in [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]) code="'$2'" ;; esac
+    hic_literal "${3:-error without a server message}"; message=$HIC_LITERAL
+    if [ -n "$4" ]; then hic_literal "$4"; detail=$HIC_LITERAL; fi
+    if [ -n "$5" ]; then hic_literal "$5"; hint=$HIC_LITERAL; fi
+    hic_sql "$HIC_S" "INSERT /* wiki_hic12_runner_record_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, detail, hint, snapshot_survived) VALUES ($HIC_ATTEMPT_ID, '$1', $code, $message, $detail, $hint, true);"
+}
+
+hic_recover() {
+    # hic_recover STAGE CODE MESSAGE DETAIL HINT: roll back to the attempt's
+    # savepoint, record the error and release the savepoint. Returns 1 when
+    # the savepoint is gone, which means the checking transaction is lost.
+    local rc
+    hic_sql "$HIC_S" 'ROLLBACK /* wiki_hic12_runner_recover */ TO SAVEPOINT hic_attempt;'
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        HIC_STOP="savepoint recovery failed after: ${3:-an error}"
+        return "$rc"
+    fi
+    hic_record_error "$@" || return
+    hic_sql "$HIC_S" 'RELEASE /* wiki_hic12_runner_release_error */ SAVEPOINT hic_attempt;'
+}
+
+hic_post_count() {
+    local dir
+    eval "dir=\$HIC_DIR_$HIC_S"
+    hic_request "$HIC_S" "$dir/post-count.sql" || return 2
+    [ "$HIC_FAILED" = false ] || { HIC_STOP='post-count controls failed'; return 1; }
+}
+
+hic_attempt_once() {
+    # One attempt: fetch, execute, restore planner controls, import, inspect,
+    # release. Returns 0 processed, 1 run cannot continue, 2 session lost,
+    # 3 no attempt offered.
+    local dir rc stage
+    eval "dir=\$HIC_DIR_$HIC_S"
+    hic_attempt_fetch || return
+    HIC_VERDICT=
+    if grep -E -q "$HIC_GUARD" "$dir/count.sql"; then
+        # psql would interpolate :'name', :"name" or :{?name} in this text.
+        hic_request "$HIC_S" "$dir/prelude.sql" || return 2
+        [ "$HIC_FAILED" = false ] || { HIC_STOP='attempt prelude failed'; return 1; }
+        hic_recover execution '' 'runner did not send the count statement: psql would interpolate a colon followed by a quote or brace' '' 'Run this attempt through the operator workflow with a client that sends the text unchanged.' || return
+        hic_post_count || return
+        HIC_VERDICT='refused by the interpolation guard'
+    else
+        stage=execution
+        hic_attempt_execute; rc=$?
+        if [ "$rc" -eq 0 ]; then
+            hic_post_count || return
+            stage=capture
+            hic_attempt_import; rc=$?
+        fi
+        if [ "$rc" -eq 0 ]; then
+            stage=inspection
+            hic_attempt_inspect; rc=$?
+        fi
+        case $rc in
+            0)
+                hic_sql "$HIC_S" 'RELEASE /* wiki_hic12_runner_accept */ SAVEPOINT hic_attempt;'
+                rc=$?
+                [ "$rc" -eq 0 ] || { HIC_STOP='release failed'; return "$rc"; } ;;
+            4|5)
+                hic_recover "$stage" "$HIC_ERR_CODE" "$HIC_ERR_MESSAGE" "$HIC_ERR_DETAIL" "$HIC_ERR_HINT" || return
+                hic_post_count || return
+                HIC_VERDICT="error stage=$stage sqlstate=${HIC_ERR_CODE:--}" ;;
+            *) return "$rc" ;;
+        esac
+    fi
+    hic_say "attempt $HIC_ATTEMPT_ID $HIC_ATTEMPT_PHASE relation=$HIC_ATTEMPT_RELATION intended_index=$HIC_ATTEMPT_INDEX $HIC_VERDICT"
+    return 0
+}
+
+hic_attempt_loop() {
+    local rc
+    while :; do
+        hic_attempt_once; rc=$?
+        case $rc in
+            0) ;;
+            3) return 0 ;;
+            *) return "$rc" ;;
+        esac
+    done
+}
+
+hic_export() {
+    # hic_export NAME QUERY: write the query result as CSV with a header.
+    local dir
+    eval "dir=\$HIC_DIR_$HIC_S"
+    hic_sql "$HIC_S" "COPY /* wiki_hic12_runner_export */ ($2) TO STDOUT WITH (FORMAT csv, HEADER true);" || return
+    cp "$dir/response" "$HIC_OUT/$1.csv"
+}
+
+hic_finish() {
+    # Mark the run finished, export every report, commit, and confirm that
+    # the committed report keeps its verdict.
+    local before
+    hic_sql "$HIC_S" 'UPDATE /* wiki_hic12_runner_finish */ pg_temp.hic_run SET finished = clock_timestamp();' || return
+    hic_export schema 'SELECT * FROM pg_temp.hic_schema_result' || return
+    hic_export relations 'SELECT * FROM pg_temp.hic_relation_result ORDER BY relation_oid' || return
+    hic_export candidates 'SELECT * FROM pg_temp.hic_candidate_result ORDER BY index_oid' || return
+    hic_export attempts 'SELECT * FROM pg_temp.hic_attempt_report ORDER BY attempt_id' || return
+    hic_export parents 'SELECT * FROM pg_temp.hic_parent_result ORDER BY relation_oid' || return
+    hic_export run-errors 'SELECT * FROM pg_temp.hic_run_error ORDER BY event_id' || return
+    hic_export run 'SELECT * FROM pg_temp.hic_run' || return
+    hic_sql "$HIC_S" "SELECT /* wiki_hic12_runner_summary */ concat_ws(' ', 'schema_success=' || schema_success, 'heap_scope_all_pass=' || heap_scope_all_pass, 'physical_relations=' || physical_relations, 'passed=' || passed_relations, 'mismatched=' || mismatched_relations, 'inconclusive=' || inconclusive_relations, 'no_eligible_index=' || no_index_relations, 'error=' || error_relations, 'unsupported_table_ams=' || unsupported_table_ams, 'eligible_indexes=' || eligible_indexes, 'checked_indexes=' || checked_indexes, 'untested_indexes=' || untested_indexes, 'observed_index_mismatches=' || observed_index_mismatches, 'attempt_errors=' || attempt_errors) FROM pg_temp.hic_schema_result;" || return
+    HIC_SUMMARY=$HIC_VALUE
+    hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_verdict */ schema_success FROM pg_temp.hic_schema_result;' || return
+    before=$HIC_VALUE
+    hic_sql "$HIC_S" 'COMMIT /* wiki_hic12_runner_commit */;' || return
+    hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_history */ schema_success FROM pg_temp.hic_schema_result;' || return
+    [ "$HIC_VALUE" = "$before" ] || { HIC_STOP='committed report changed its verdict'; return 1; }
+    HIC_SCHEMA_SUCCESS=$HIC_VALUE
+}
+
+hic_abandon() {
+    # The checking transaction can no longer run statements: roll it back
+    # and record the loss outside it.
+    hic_parse_error "$HIC_S" || HIC_ERR_CODE=$HIC_SQLSTATE
+    hic_sql "$HIC_S" 'ROLLBACK /* wiki_hic12_runner_abandon */;'
+    [ $? -ne 2 ] || return 2
+    hic_run_error snapshot "$HIC_ERR_CODE" "checking transaction lost: ${HIC_STOP:-unknown cause}"
+    [ $? -ne 2 ] || return 2
+    hic_export run-errors 'SELECT * FROM pg_temp.hic_run_error ORDER BY event_id' || :
+}
+
+hic_check() {
+    # hic_check SCHEMA EXTERNAL EXHAUSTIVE: the whole run in the open session.
+    # Returns 0 schema_success, 1 completed without it, 2 incomplete.
+    local rc
+    HIC_STOP= HIC_SUMMARY= HIC_SCHEMA_SUCCESS= HIC_MAX_ATTEMPTS=0
+    hic_install "$HIC_SQL"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        HIC_STOP="installation failed: ${HIC_ERR_MESSAGE:-see the session stderr log}"
+        return 2
+    fi
+    hic_configure "$1" "$2" "$3" || { HIC_STOP='configuration was refused'; return 2; }
+    hic_initialize; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ "$rc" -eq 2 ] || hic_export run-errors 'SELECT * FROM pg_temp.hic_run_error ORDER BY event_id' || :
+        return 2
+    fi
+    hic_attempt_loop; rc=$?
+    case $rc in
+        0) ;;
+        2) HIC_STOP=${HIC_STOP:-session lost}; return 2 ;;
+        *)
+            if hic_sql "$HIC_S" 'SELECT /* wiki_hic12_runner_probe */ 1;'; then
+                hic_finish || :
+            else
+                hic_abandon || :
+            fi
+            return 2 ;;
+    esac
+    hic_finish || return 2
+    [ "$HIC_SCHEMA_SUCCESS" = t ]
+}
+
+hic_main() {
+    local external exhaustive rc
+    set -u -o pipefail
+    umask 077
+    case "${1:-}" in
+        -h|--help) sed -n '1,13p' "${BASH_SOURCE[0]}"; return 0 ;;
+        '') ;;
+        *) hic_warn "unexpected argument: $1"; return 64 ;;
+    esac
+    [ -n "${HIC_SCHEMA:-}" ] || { hic_warn 'set HIC_SCHEMA to the schema to check'; return 64; }
+    [ "${HIC_DDL_STABLE:-}" = yes ] || { hic_warn 'set HIC_DDL_STABLE=yes to attest the DDL-stable window'; return 64; }
+    case "${HIC_INCLUDE_EXTERNAL_PARTITIONS:-no}" in yes) external=true ;; no) external=false ;; *) hic_warn 'HIC_INCLUDE_EXTERNAL_PARTITIONS must be yes or no'; return 64 ;; esac
+    case "${HIC_EXHAUSTIVE:-no}" in yes) exhaustive=true ;; no) exhaustive=false ;; *) hic_warn 'HIC_EXHAUSTIVE must be yes or no'; return 64 ;; esac
+    case "${BASH_SOURCE[0]}" in */*) : "${HIC_SQL:=${BASH_SOURCE[0]%/*}/hic12-checker.sql}" ;; *) : "${HIC_SQL:=hic12-checker.sql}" ;; esac
+    [ -r "$HIC_SQL" ] || { hic_warn "cannot read the installation SQL: $HIC_SQL"; return 64; }
+    : "${HIC_OUT:=hic12-run-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+    mkdir -m 700 "$HIC_OUT" || { hic_warn "cannot create a new output directory: $HIC_OUT"; return 64; }
+    export PGAPPNAME="${PGAPPNAME:-hic12-check}"
+    trap hic_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if hic_open main 7 8; then
+        if [ -n "${HIC_ROLE:-}" ]; then
+            hic_literal "$HIC_ROLE"
+            hic_sql main "SET /* wiki_hic12_runner_role */ ROLE $HIC_LITERAL;" || HIC_STOP='SET ROLE failed'
+        fi
+        if [ -z "${HIC_STOP:-}" ]; then
+            hic_check "$HIC_SCHEMA" "$external" "$exhaustive"; rc=$?
+        else
+            rc=2
+        fi
+        hic_close main || rc=2
+    else
+        HIC_STOP='psql session did not start'
+        rc=2
+    fi
+    trap - EXIT
+    {
+        printf 'exit_status=%s\n' "$rc"
+        printf 'stop_reason=%s\n' "${HIC_STOP:-}"
+        printf '%s\n' "${HIC_SUMMARY:-}" | tr ' ' '\n'
+    } > "$HIC_OUT/summary.txt"
+    hic_say "exit $rc ${HIC_SUMMARY:-${HIC_STOP:-}} (reports in $HIC_OUT)"
+    return "$rc"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    hic_main "$@"
+    exit
+fi
+```
+
 ## Measurement Script
 
-This is the **disposable verification harness**, not an extra requirement for the operator-assisted checker. Its fixtures deliberately create objects and change rows in an isolated cluster. Do not point them at an application database. The C helper only checks that the loopback TCP port is available; it does not inspect PostgreSQL data.
+This is the **disposable verification harness**, not an extra requirement for the operator-assisted checker. Its fixtures deliberately create objects and change rows in an isolated cluster. Do not point them at an application database. The script is Bash and SQL only: its loopback-port check is a Bash `/dev/tcp` connection attempt, which replaced the earlier embedded C probe, and it inspects no PostgreSQL data.
 
 Save the complete Bash block as `.wiki-runtime/tmp/hic12-measure.sh`. Run it from the repository root:
 
@@ -1671,25 +2372,28 @@ With no arguments, the default order is `prepare build init verify cleanup`. Eve
 
 | Item | Contract |
 |---|---|
-| Purpose | Test the installed SQL, the count-and-plan bridge, verdict rules, scope rules, concurrent DML, permissions, the native `indcheckxmin` gate and the literal-key `ORDER BY` generation. Its results back the [Measured coverage](#measured-coverage-and-remaining-test-gaps) table and the concurrency arithmetic below it. |
-| `prepare` | Verify the pin and clean raw checkout, create or recognize the owned sandbox, extract this page's SQL installation block, emit the embedded fixtures/test driver, and compile the port probe. |
+| Purpose | Test the installed SQL and the follow-up's runner: the count-and-plan bridge, verdict rules, scope rules, concurrent DML, permissions, the native `indcheckxmin` gate, the literal-key `ORDER BY` generation, the runner's exit statuses, error parsing, recovery paths and interpolation guard. Its results back the [Measured coverage](#measured-coverage-and-remaining-test-gaps) table and the concurrency arithmetic below it. |
+| `prepare` | Verify the pin and clean raw checkout, create or recognize the owned sandbox, extract this page's SQL installation block and runner block, check the runner's Bash syntax, and emit the embedded fixtures and test driver. |
 | `build` | Run `prepare`, stop an already-running owned cluster, and build/install PostgreSQL out of tree. Reuses an existing build. |
 | `init` | Run `prepare`; initialize UTF-8/C-locale disposable data if absent; start only the owned Unix-socket server on port 55447. |
-| `verify` | Run `init`; capture platform/settings; create a new uniquely named fixture database and run every assertion. Repeated invocations do not reuse fixture tables. |
+| `verify` | Run `init`; capture platform/settings; create a new uniquely named fixture database and run every assertion. The test driver sources the extracted runner for its in-session cases and runs it as a program for its exit-status cases. Repeated invocations do not reuse fixture tables. |
 | `cleanup` | Cleanly stop the owned cluster, check PID/process/socket/loopback-port teardown, then delete `.wiki-runtime/tmp/hic12/`, including its build and results. Idempotent when absent. |
-| Environment | Explicit inputs: `JOBS=2`, `CC=cc`. Ordinary tool lookup uses `PATH`; the compiler accepts its normal build environment. The script fixes `LC_ALL=C`, `PGCLIENTENCODING=UTF8`, `TMPDIR` and `PGPASSFILE` inside the sandbox, and unsets connection-service/host-address and `PGOPTIONS` overrides. Client connection arguments are explicit. |
-| Prerequisites | Bash, Git and POSIX utilities, including `ps`. Building the pinned Git checkout needs GNU make 3.80 or later, a C99 compiler, Bison 1.875 or later, Flex 2.5.31 or later and Perl 5.8.3 or later; the last three are needed because a Git checkout has no generated parser and scanner files. [installation.sgml#required-make-and-compiler](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97) [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318) No network, Python, external harness, extension download or planner-hint extension is used by the published script. The repository path must be short and contain no whitespace or shell metacharacters. |
+| Environment | The script reads only `JOBS`, default 2. Ordinary tool lookup uses `PATH`, and `configure` honors its usual compiler variables, which the script neither sets nor reads. The script fixes `LC_ALL=C`, `PGCLIENTENCODING=UTF8`, `TMPDIR` and `PGPASSFILE` inside the sandbox, and unsets connection-service/host-address and `PGOPTIONS` overrides. The test driver exports `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` and `PGAPPNAME=hic12-suite` for the runner, and sets `PGOPTIONS` only while it opens each case session. |
+| Prerequisites | Bash with `/dev/tcp` support, Git and POSIX utilities, including `ps` and `mkfifo`. Building the pinned Git checkout needs GNU make 3.80 or later, a C99 compiler, Bison 1.875 or later, Flex 2.5.31 or later and Perl 5.8.3 or later; the last three are needed because a Git checkout has no generated parser and scanner files. [installation.sgml#required-make-and-compiler](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97) [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318) No network, Python, external harness, extension download or planner-hint extension is used by the published script. The repository path must be short and contain no whitespace or shell metacharacters. |
 | Build | `--without-readline --without-zlib`, with a private install prefix. These omit client command-line editing and zlib support; they are not planner or visibility settings. |
-| Output | Read `suite-current.log` and `last-test-output` first. Each scenario exports attempts with plans, candidates, objects and run metadata as CSV under `results/<unique-database>/`; platform facts are in `platform.txt`, `platform-sql.txt` and `build-options.txt`. `processes.txt` holds the process listing from the last teardown check. Keep a private copy before cleanup if needed. |
-| Runtime | The recorded fresh run spent 99 seconds building and 16 seconds verifying, roughly two minutes overall; the build-retained `verify` re-run took 15 seconds. The script prints each stage's actual `elapsed_seconds`. These are local correctness-test timings, not production-scan performance estimates. |
+| Output | Read `suite-current.log` and `last-test-output` first. Each case writes the runner's output directory under `results/<unique-database>/<case>/`: the seven report CSVs, saved plans and the session transcript and error log. Program runs also write `<case>.log` and `summary.txt`. Platform facts are in `platform.txt`, `platform-sql.txt` and `build-options.txt`. `processes.txt` holds the process listing from the last teardown check. Keep a private copy before cleanup if needed. |
+| Runtime | The recorded fresh run spent 104 seconds building and 61 seconds verifying, under three minutes overall; the build-retained `verify` re-run took 57 seconds. About 4 seconds of each verification are the two deliberate 2-second lock timeouts. The script prints each stage's actual `elapsed_seconds`. These are local correctness-test timings, not production-scan performance estimates. |
 
-**Last run:** 2026-10-23, PostgreSQL 12.2 built from `45b88269a353ad93744772791feb6d01bc7e1e42`; Linux `6.18.54.1-microsoft-standard-WSL2`, `x86_64`, GCC 13.3.0, 64-bit; block size 8192 bytes, maximum data alignment 8 bytes; UTF-8 encoding, C collation/ctype, data checksums disabled. The script records these platform facts rather than assuming them for other hosts.
+**Last run:** 2026-10-23, PostgreSQL 12.2 built from `45b88269a353ad93744772791feb6d01bc7e1e42`; Linux `6.18.54.1-microsoft-standard-WSL2`, `x86_64`, GCC 13.3.0, 64-bit, GNU Bash 5.2.21; block size 8192 bytes, maximum data alignment 8 bytes; UTF-8 encoding, C collation/ctype, `lc_messages` C, `standard_conforming_strings` on, data checksums disabled. Both runs passed all 124 assertions. The script records these platform facts rather than assuming them for other hosts.
 
 Non-default setup is intentional:
 
 | Setting or fixture | Default → this run, apply scope | Why the result depends on it |
 |---|---|---|
-| Scan profiles, timeouts, search path and identifier quoting | The preceding settings table gives defaults and session/transaction scope. Fixture sessions use `statement_timeout = '60s'`, validator units use `'30s'`, both with `lock_timeout = '2s'`. Tests set session `quote_all_identifiers = on` before initialization, while counts use local off. | Count profiles seek the required path; post-count controls avoid applying scan-discouragement penalties to report queries. The quoting override deliberately exercises restoration after COMMIT. |
+| Scan profiles, timeouts, search path and identifier quoting | The preceding settings table gives defaults and session/transaction scope. Fixture sessions use `statement_timeout = '60s'`, validator units use `'30s'`, both with `lock_timeout = '2s'`. Each case session starts with `quote_all_identifiers = on` through `PGOPTIONS`, a connection-time session default, while counts use local off. | Count profiles seek the required path; post-count controls avoid applying scan-discouragement penalties to report queries. The quoting override deliberately exercises restoration after COMMIT, which the runner checks on every finish. [libpq.sgml#PGOPTIONS](../../../../raw/postgres-12/doc/src/sgml/libpq.sgml#L7410-L7419) |
+| Runner psql options | psql's defaults are `ON_ERROR_STOP` off and `VERBOSITY` `default`, with command tags printed → `ON_ERROR_STOP=0`, `VERBOSITY=verbose` and `-q`; client-side, per session | The runner continues after an error so that it can recover, and it reads the SQLSTATE from each verbose report. These are psql variables, not server settings. [psql-ref.sgml#ON_ERROR_STOP](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3844-L3861) [psql-ref.sgml#VERBOSITY](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3984-L3996) |
+| Lock holder, terminated backend and truncated plan | No second session, no termination and an unchanged plan by default → a second session holds `ACCESS EXCLUSIVE` on `hic_lock.t`; another calls `pg_terminate_backend()` on the checking backend; the harness cuts one saved plan | These fixtures force the `55P03`, lost-session and `22P02` branches. Without them those branches stay unexercised, as they were before the follow-up. |
+| psql-guard fixture | No such index by default → an index on `(a[1 : "ERROR"])`, created with spaces so that psql passes it unchanged | Its deparsed key has no spaces, which triggers the runner's guard; the measured result is a relation `ERROR`, not a pass. |
 | `port` | Default 5432 → 55447; `postmaster`, startup/restart | Uses a separate test endpoint, including the Unix-socket name. [configure.in#default-port](../../../../raw/postgres-12/configure.in#L149-L162) [guc.c#port](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2176-L2184) |
 | `listen_addresses`, `unix_socket_directories`, `unix_socket_permissions` | `localhost`, `/tmp`, `0777` → empty TCP-listen list, private sandbox socket directory, `0700`; all `postmaster`, startup/restart | Postmaster opens sockets from these lists and applies the Unix-socket mode. The disposable trust-authentication cluster is not exposed through a TCP listener or a generally accessible socket. [guc.c#socket-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3935-L3960) [guc.c#socket-mode](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2186-L2199) [pg_config_manual.h#socket-default](../../../../raw/postgres-12/src/include/pg_config_manual.h#L178-L182) [postmaster.c#TCP-list](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L1011-L1043) [postmaster.c#Unix-list](../../../../raw/postgres-12/src/backend/postmaster/postmaster.c#L1109-L1138) [pqcomm.c#socket-permissions](../../../../raw/postgres-12/src/backend/libpq/pqcomm.c#L692-L699) |
 | Effective role | No SET ROLE override → `hic_reader` in permission cases or `hic_dba` in administrative cases; `user`, session scope, subject to authorization | These branches must exercise actual current-role privileges, not merely label a superuser result as ordinary. [guc.c#role](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3824-L3834) [rls.c#role-check](../../../../raw/postgres-12/src/backend/utils/misc/rls.c#L80-L132) |
@@ -1700,7 +2404,7 @@ Non-default setup is intentional:
 
 The build normally includes readline and zlib support; the two configure options disable interactive line editing and compressed dump/archive support, respectively. Those features are unnecessary for this noninteractive SQL test. [installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)
 
-The one script below contains all fixtures and test orchestration. It reads the installation block from this same page, so there is only one maintained copy of the checker SQL.
+The one script below contains all fixtures and test orchestration. It reads the installation block and the runner block from this same page, so there is only one maintained copy of the checker SQL and of the runner. Its fixtures send psql only SQL statements: the expected-error probes run through the runner's session functions, and Bash checks their SQLSTATEs.
 
 ```bash
 set -uo pipefail
@@ -1715,7 +2419,6 @@ socket="$work/socket"
 page="$root/wiki/v12/questions/indexing/sql-heap-index-visible-count-checker-plan.md"
 pin=45b88269a353ad93744772791feb6d01bc7e1e42
 jobs=${JOBS:-2}
-compiler=${CC:-cc}
 case "$root" in *[!a-zA-Z0-9_./-]*) printf '%s\n' 'Use a short repository path without whitespace or shell metacharacters.' >&2; exit 1;; esac
 case "$jobs" in ''|*[!0-9]*|0) printf '%s\n' 'JOBS must be a positive integer.' >&2; exit 1;; esac
 [ "${#socket}" -le 80 ]
@@ -1738,6 +2441,22 @@ same_server() {
         -c "SHOW /* wiki_hic12_own_directory */ data_directory;")
     [ "$actual" = "$data" ]
 }
+port_free() {
+    # Nothing may accept a TCP connection on loopback port 55447. A refused
+    # IPv4 connection also shows that this Bash supports /dev/tcp.
+    if (exec 9<> /dev/tcp/127.0.0.1/55447) 2> "$work/port-ipv4.txt"; then
+        printf '%s\n' 'A listener accepted a connection on 127.0.0.1:55447.' >&2
+        return 1
+    fi
+    if ! grep -F -q 'Connection refused' "$work/port-ipv4.txt"; then
+        printf 'Bash could not probe the loopback port: %s\n' "$(cat "$work/port-ipv4.txt")" >&2
+        return 1
+    fi
+    if (exec 9<> /dev/tcp/::1/55447) 2> "$work/port-ipv6.txt"; then
+        printf '%s\n' 'A listener accepted a connection on [::1]:55447.' >&2
+        return 1
+    fi
+}
 stop_owned() {
     owned || return 1
     if [ -f "$data/postmaster.pid" ]; then
@@ -1749,7 +2468,7 @@ stop_owned() {
     if grep -F -- "$data" "$work/processes.txt"; then return 1; fi
     [ ! -e "$socket/.s.PGSQL.55447" ]
     [ ! -e "$socket/.s.PGSQL.55447.lock" ]
-    "$work/port-free"
+    port_free
 }
 on_exit() {
     local rc=$?
@@ -1776,54 +2495,6 @@ prepare() {
     mkdir -p "$work/build" "$work/socket" "$work/tmp"
     : > "$work/pgpass"
     materialize
-    cat > "$work/port-free.c" <<'HIC_PORT_C'
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <errno.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-
-int main(void)
-{
-    int fd, on = 1, rc;
-    struct sockaddr_in address;
-    struct sockaddr_in6 address6;
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_port = htons(55447);
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { perror("IPv4 socket"); return 1; }
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
-        perror("IPv4 reuse"); close(fd); return 1;
-    }
-    rc = bind(fd, (struct sockaddr *)&address, sizeof(address));
-    if (rc < 0) perror("IPv4 loopback port");
-    close(fd);
-    if (rc < 0) return 1;
-    fd = socket(AF_INET6, SOCK_STREAM, 0);
-    if (fd < 0) {
-        if (errno == EAFNOSUPPORT || errno == EPROTONOSUPPORT) return 0;
-        perror("IPv6 socket"); return 1;
-    }
-    memset(&address6, 0, sizeof(address6));
-    address6.sin6_family = AF_INET6;
-    address6.sin6_port = htons(55447);
-    address6.sin6_addr = in6addr_loopback;
-    if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) < 0 ||
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
-        perror("IPv6 options"); close(fd); return 1;
-    }
-    rc = bind(fd, (struct sockaddr *)&address6, sizeof(address6));
-    if (rc < 0 && errno == EADDRNOTAVAIL) { close(fd); return 0; }
-    if (rc < 0) perror("IPv6 loopback port");
-    close(fd);
-    return rc < 0;
-}
-HIC_PORT_C
-    "$compiler" -O2 -o "$work/port-free" "$work/port-free.c"
 }
 build() {
     prepare
@@ -1839,12 +2510,12 @@ build() {
 init() {
     prepare
     [ -x "$bin/pg_ctl" ]
-    "$work/port-free"
     if [ ! -f "$data/PG_VERSION" ]; then
         [ ! -e "$data" ]
         "$bin/initdb" -D "$data" -U hic_dba -A trust --locale=C --encoding=UTF8 > "$work/initdb.log" 2>&1
     fi
     if [ ! -f "$data/postmaster.pid" ]; then
+        port_free
         "$bin/pg_ctl" -D "$data" -l "$work/postgres.log" \
             -o "-p 55447 -c listen_addresses='' -c unix_socket_directories='$socket' -c unix_socket_permissions=0700" \
             -w start
@@ -1855,6 +2526,7 @@ verify() {
     init
     "$bin/pg_config" --configure > "$work/build-options.txt"
     uname -s -r -m > "$work/platform.txt"
+    bash --version | sed -n 1p >> "$work/platform.txt"
     "$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$socket" -p 55447 -U hic_dba -d postgres \
         > "$work/platform-sql.txt" <<'HIC_PLATFORM_SQL'
 SET /* wiki_hic12_platform_timeout */ statement_timeout = '60s';
@@ -1863,12 +2535,12 @@ SELECT /* wiki_hic12_platform_version */ version();
 SELECT /* wiki_hic12_platform_settings */ name, setting, context, boot_val
 FROM pg_catalog.pg_settings
 WHERE name IN (
-    'block_size', 'server_encoding', 'lc_collate', 'lc_ctype', 'TimeZone',
+    'block_size', 'server_encoding', 'lc_collate', 'lc_ctype', 'lc_messages', 'TimeZone',
     'enable_seqscan', 'enable_indexscan', 'enable_indexonlyscan', 'enable_bitmapscan',
     'enable_sort', 'max_parallel_workers_per_gather', 'row_security', 'quote_all_identifiers',
     'statement_timeout', 'lock_timeout', 'old_snapshot_threshold', 'listen_addresses',
     'unix_socket_directories', 'unix_socket_permissions', 'port', 'search_path', 'role',
-    'application_name', 'track_counts', 'default_table_access_method'
+    'application_name', 'standard_conforming_strings', 'track_counts', 'default_table_access_method'
 ) ORDER BY name;
 SELECT /* wiki_hic12_platform_control */ row_to_json(control) FROM pg_catalog.pg_control_init() AS control;
 HIC_PLATFORM_SQL
@@ -1886,7 +2558,7 @@ cleanup() {
 }
 
 materialize() {
-    local fence
+    local fence first_line
     fence=$(printf '\140\140\140')
     sed -n '/^### Executable SQL installation$/,/^### /p' "$page" |
         sed -n "/^${fence}sql$/,/^${fence}$/p" |
@@ -1894,12 +2566,16 @@ materialize() {
     [ -s "$work/checker.sql" ]
     IFS= read -r first_line < "$work/checker.sql"
     [ "$first_line" = 'SET /* wiki_hic12_install_path */ search_path = pg_catalog, pg_temp;' ]
+    sed -n '/^### Runner script$/,/^##/p' "$page" |
+        sed -n "/^${fence}bash$/,/^${fence}$/p" |
+        sed '1d;$d' > "$work/hic12-check.sh"
+    [ -s "$work/hic12-check.sh" ]
+    IFS= read -r first_line < "$work/hic12-check.sh"
+    [ "$first_line" = '# hic12-check.sh: unattended Bash and SQL runner for the PostgreSQL 12.2' ]
+    bash -n "$work/hic12-check.sh"
     cat > "$work/fixtures.sql" <<'HIC_FIXTURES_SQL'
 SET /* wiki_hic12_fixture_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_fixture_lock_timeout */ lock_timeout = '2s';
-SELECT /* wiki_hic12_fixture_role */ 'CREATE /* wiki_hic12_reader */ ROLE hic_reader'
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'hic_reader')
-\gexec
 CREATE /* wiki_hic12_positive_schema */ SCHEMA hic_positive;
 CREATE /* wiki_hic12_outside_schema */ SCHEMA hic_outside;
 CREATE /* wiki_hic12_negative_schema */ SCHEMA hic_negative;
@@ -1990,22 +2666,6 @@ CREATE /* wiki_hic12_literal_table */ TABLE hic_negative.constant_literals(id in
 INSERT /* wiki_hic12_literal_rows */ INTO hic_negative.constant_literals VALUES (1), (2);
 CREATE /* wiki_hic12_integer_literal_index */ INDEX constant_two_idx ON hic_negative.constant_literals((2));
 CREATE /* wiki_hic12_decimal_literal_index */ INDEX constant_decimal_idx ON hic_negative.constant_literals((1.5));
-\set ON_ERROR_STOP off
-SELECT /* wiki_hic12_positional_probe */ count(*) FROM (
-    SELECT /* wiki_hic12_positional_order */ 1 FROM ONLY hic_negative.constant_literals
-    ORDER BY ((2)) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;
-\set positional_sqlstate :SQLSTATE
-SELECT /* wiki_hic12_decimal_probe */ count(*) FROM (
-    SELECT /* wiki_hic12_decimal_order */ 1 FROM ONLY hic_negative.constant_literals
-    ORDER BY ((1.5)) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;
-\set decimal_sqlstate :SQLSTATE
-\set ON_ERROR_STOP on
-SELECT /* wiki_hic12_positional_assert */ 1 / (:'positional_sqlstate' = '42P10')::integer;
-SELECT /* wiki_hic12_decimal_assert */ 1 / (:'decimal_sqlstate' = '42601')::integer;
-SELECT /* wiki_hic12_cast_probe */ count(*) FROM (
-    SELECT /* wiki_hic12_cast_order */ 1 FROM ONLY hic_negative.constant_literals
-    ORDER BY CAST((2) AS integer) USING OPERATOR(pg_catalog.<) NULLS LAST,
-             CAST((1.5) AS numeric) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;
 CREATE /* wiki_hic12_user_function */ FUNCTION hic_negative.increment(integer) RETURNS integer
 LANGUAGE sql IMMUTABLE AS 'SELECT /* wiki_hic12_fixture_increment */ $1 + 1';
 CREATE /* wiki_hic12_user_expression */ TABLE hic_negative.user_expression(id integer);
@@ -2017,13 +2677,6 @@ CREATE /* wiki_hic12_domain_table */ TABLE hic_negative.domain_table(id hic_nega
 CREATE /* wiki_hic12_domain_index */ INDEX domain_idx ON hic_negative.domain_table(id);
 CREATE /* wiki_hic12_invalid_table */ TABLE hic_negative.invalid_index(id integer);
 INSERT /* wiki_hic12_invalid_rows */ INTO hic_negative.invalid_index VALUES (1), (1);
-\set ON_ERROR_STOP off
-CREATE /* wiki_hic12_invalid_index */ UNIQUE INDEX CONCURRENTLY invalid_idx ON hic_negative.invalid_index(id);
-\set invalid_sqlstate :SQLSTATE
-\set ON_ERROR_STOP on
-SELECT /* wiki_hic12_invalid_error_assert */ 1 / (:'invalid_sqlstate' = '23505')::integer;
-SELECT /* wiki_hic12_invalid_flag_assert */ 1 / (NOT indisvalid)::integer
-FROM pg_catalog.pg_index WHERE indexrelid = 'hic_negative.invalid_idx'::regclass;
 
 CREATE /* wiki_hic12_choice_table */ TABLE hic_choice.t(k integer, payload text);
 INSERT /* wiki_hic12_choice_rows */ INTO hic_choice.t SELECT n, repeat(md5(n::text), 24) FROM generate_series(1, 500) AS n;
@@ -2051,6 +2704,14 @@ INSERT /* wiki_hic12_concurrent_rows */ INTO hic_concurrent.t SELECT n, repeat('
 CREATE /* wiki_hic12_concurrent_index */ INDEX concurrent_idx ON hic_concurrent.t(id);
 CREATE /* wiki_hic12_gate_table */ TABLE hic_gate.t(k integer, payload text) WITH (fillfactor = 50);
 INSERT /* wiki_hic12_gate_rows */ INTO hic_gate.t SELECT n, repeat('a', 32) FROM generate_series(1, 120) AS n;
+CREATE /* wiki_hic12_lock_schema */ SCHEMA hic_lock;
+CREATE /* wiki_hic12_lock_table */ TABLE hic_lock.t(id integer);
+INSERT /* wiki_hic12_lock_rows */ INTO hic_lock.t SELECT n FROM generate_series(1, 10) AS n;
+CREATE /* wiki_hic12_lock_index */ INDEX lock_idx ON hic_lock.t(id);
+CREATE /* wiki_hic12_guard_schema */ SCHEMA hic_psql_guard;
+CREATE /* wiki_hic12_guard_table */ TABLE hic_psql_guard.psql_trigger(a integer[], "ERROR" integer);
+INSERT /* wiki_hic12_guard_rows */ INTO hic_psql_guard.psql_trigger VALUES (ARRAY[1, 2, 3], 2), (ARRAY[4, 5], 1);
+CREATE /* wiki_hic12_guard_index */ INDEX psql_guard_idx ON hic_psql_guard.psql_trigger ((a[1 : "ERROR"]));
 HIC_FIXTURES_SQL
     cat > "$work/validator-tests.sql" <<'HIC_VALIDATOR_SQL'
 SET /* wiki_hic12_unit_timeout */ statement_timeout = '30s';
@@ -2154,155 +2815,7 @@ CROSS JOIN LATERAL pg_temp.hic_check_plan(
 SELECT /* wiki_hic12_unit_result */ count(*) AS plan_assertions
 FROM hic_unit_assertions;
 HIC_VALIDATOR_SQL
-    cat > "$work/test.sh" <<'HIC_TEST_SH'
-set -uo pipefail
-set -e
-root=$(pwd)
-work="$root/.wiki-runtime/tmp/hic12"
-bin="$work/install/bin"
-db="hic_suite_$(date -u +%Y%m%d%H%M%S)_$$"
-out="$work/results/$db"
-ls -ld "$work"
-mkdir -p "$out"
-ls -ld "$out"
-keeper_pid=
-trap 'if [ -n "$keeper_pid" ]; then touch "$out/keeper.release"; wait "$keeper_pid" || :; fi' EXIT
-psql=("$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$work/socket" -p 55447 -U hic_dba -d "$db")
-"$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$work/socket" -p 55447 -U hic_dba -d postgres \
-    -c "SET /* wiki_hic12_suite_timeout */ statement_timeout = '60s'" \
-    -c "SET /* wiki_hic12_suite_lock_timeout */ lock_timeout = '2s'" \
-    -c "CREATE /* wiki_hic12_suite_database */ DATABASE $db"
-"${psql[@]}" -f "$work/fixtures.sql" > "$out/fixtures.log" 2>&1
-"${psql[@]}" -f "$work/checker.sql" -f "$work/validator-tests.sql" > "$out/validator.log" 2>&1
-
-cat > "$out/loop.sql" <<SQL
-SELECT /* wiki_hic12_test_next */ EXISTS(SELECT 1 FROM pg_temp.hic_next) AS have_attempt
-\\gset
-\\if :have_attempt
-\\o $out/plan.json
-\\set ON_ERROR_STOP off
-SELECT /* wiki_hic12_test_execute */ sql_text FROM pg_temp.hic_next
-\\gexec
-\\set attempt_failed :ERROR
-\\set ON_ERROR_STOP on
-\\o
-\\if :attempt_failed
-\\set failed_code :LAST_ERROR_SQLSTATE
-\\set failed_message :LAST_ERROR_MESSAGE
-ROLLBACK /* wiki_hic12_test_recover */ TO SAVEPOINT hic_attempt;
-INSERT /* wiki_hic12_test_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived)
-SELECT max(attempt_id), 'execution', :'failed_code', :'failed_message', true FROM pg_temp.hic_attempt;
-\\else
-\\set captured_json \`cat "$out/plan.json"\`
-INSERT /* wiki_hic12_test_plan */ INTO pg_temp.hic_plan(attempt_id, document)
-SELECT max(attempt_id), :'captured_json'::jsonb FROM pg_temp.hic_attempt;
-\\endif
-SELECT /* wiki_hic12_test_control */ pg_temp.hic_control_profile()
-\\gexec
-RELEASE /* wiki_hic12_test_accept */ SAVEPOINT hic_attempt;
-INSERT /* wiki_hic12_test_bound */ INTO pg_temp.hic_assert
-SELECT 'attempt_bound_' || max(attempt_id),
-       count(*) <= 2 * (SELECT count(*) FROM pg_temp.hic_object WHERE in_heap_scope)
-                   + 2 * (SELECT count(*) FROM pg_temp.hic_index WHERE eligible)
-FROM pg_temp.hic_attempt;
-\\i $out/loop.sql
-\\endif
-SQL
-sed '/^\\i /d' "$out/loop.sql" > "$out/once.sql"
-printf '' > "$out/manual.sql"
-
-begin_case() {
-    name=$1
-    schema=$2
-    external=$3
-    exhaustive=$4
-    role=$5
-    driver="$out/$name.sql"
-    cat > "$driver" <<SQL
-SET /* wiki_hic12_test_role */ ROLE $role;
-SET /* wiki_hic12_test_quote_restore */ quote_all_identifiers = on;
-\\i $work/checker.sql
-CREATE /* wiki_hic12_test_assertions */ TEMP TABLE hic_assert(label text PRIMARY KEY, ok boolean NOT NULL CHECK(ok));
-INSERT /* wiki_hic12_test_config */ INTO pg_temp.hic_config(target_schema, ddl_stable, include_external_partitions, exhaustive)
-VALUES ('$schema', true, $external, $exhaustive);
-SELECT /* wiki_hic12_test_start */ sql_text FROM pg_temp.hic_start_script
-\\gexec
-\\i $out/${6:-loop}.sql
-SQL
-}
-
-finish_case() {
-    cat >> "$driver" <<SQL
-INSERT /* wiki_hic12_test_finished */ INTO pg_temp.hic_assert
-SELECT 'no_pending_evidence', NOT EXISTS (SELECT 1 FROM pg_temp.hic_pending);
-INSERT /* wiki_hic12_test_terminal */ INTO pg_temp.hic_assert
-SELECT 'attempts_complete', state = 'ATTEMPTS_COMPLETE_REVIEW_REPORT' FROM pg_temp.hic_progress;
-INSERT /* wiki_hic12_test_language */ INTO pg_temp.hic_assert
-SELECT 'only_sql_helpers', bool_and(l.lanname = 'sql' AND NOT p.prosecdef)
-FROM pg_catalog.pg_proc AS p JOIN pg_catalog.pg_language AS l ON l.oid = p.prolang
-WHERE p.pronamespace = pg_my_temp_schema();
-UPDATE /* wiki_hic12_test_finish */ pg_temp.hic_run SET finished = clock_timestamp();
-\\o $out/$name-attempts.csv
-COPY /* wiki_hic12_test_export_attempts */ (SELECT * FROM pg_temp.hic_attempt_report ORDER BY attempt_id) TO STDOUT WITH (FORMAT CSV, HEADER true);
-\\o $out/$name-candidates.csv
-COPY /* wiki_hic12_test_export_candidates */ (SELECT * FROM pg_temp.hic_candidate_result ORDER BY index_oid) TO STDOUT WITH (FORMAT CSV, HEADER true);
-\\o $out/$name-objects.csv
-COPY /* wiki_hic12_test_export_objects */ (SELECT * FROM pg_temp.hic_relation_result ORDER BY relation_oid) TO STDOUT WITH (FORMAT CSV, HEADER true);
-\\o $out/$name-run.csv
-COPY /* wiki_hic12_test_export_run */ pg_temp.hic_run TO STDOUT WITH (FORMAT CSV, HEADER true);
-\\o
-SELECT /* wiki_hic12_test_relation_report */ qualified_name, status, heap_count, eligible_indexes, checked_indexes, untested_indexes
-FROM pg_temp.hic_relation_result WHERE in_heap_scope ORDER BY relation_oid;
-SELECT /* wiki_hic12_test_schema_report */ row_to_json(r) FROM pg_temp.hic_schema_result AS r;
-SELECT /* wiki_hic12_test_assertion_total */ '$name', count(*) FROM pg_temp.hic_assert;
-SELECT /* wiki_hic12_test_expected_history */ schema_success AS expected_schema_success FROM pg_temp.hic_schema_result
-\\gset
-COMMIT /* wiki_hic12_test_commit */;
-SELECT /* wiki_hic12_test_history */ schema_success FROM pg_temp.hic_schema_result;
-SELECT /* wiki_hic12_test_stable_history */ 1 / (schema_success = :'expected_schema_success'::boolean)::integer
-FROM pg_temp.hic_schema_result;
-SQL
-    "${psql[@]}" -f "$driver" > "$out/$name.log" 2>&1
-    cat "$out/$name.log"
-}
-
-begin_case positive hic_positive false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_positive_success */ INTO pg_temp.hic_assert SELECT 'schema_pass', schema_success FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_positive_scope_size */ INTO pg_temp.hic_assert
-SELECT 'all_thirteen_physical_relations', physical_relations = 13 FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_positive_empty */ INTO pg_temp.hic_assert
-SELECT 'empty_table', status = 'PASS' AND heap_count = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 'empty_table';
-INSERT /* wiki_hic12_positive_nulls */ INTO pg_temp.hic_assert
-SELECT 'nulls_duplicates_aborts', status = 'PASS' AND heap_count = 5 FROM pg_temp.hic_relation_result WHERE relation_name = 'nulls_duplicates';
-INSERT /* wiki_hic12_positive_parent_only */ INTO pg_temp.hic_assert
-SELECT 'inheritance_parent_only', status = 'PASS' AND heap_count = 1 FROM pg_temp.hic_relation_result WHERE relation_name = 'inh_parent';
-INSERT /* wiki_hic12_positive_child_only */ INTO pg_temp.hic_assert
-SELECT 'inheritance_child_only', status = 'PASS' AND heap_count = 2 FROM pg_temp.hic_relation_result WHERE relation_name = 'inh_child';
-INSERT /* wiki_hic12_positive_matviews */ INTO pg_temp.hic_assert
-SELECT 'empty_populated_matview', status = 'PASS' AND heap_count = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 'empty_mv';
-INSERT /* wiki_hic12_positive_unpopulated */ INTO pg_temp.hic_assert
-SELECT 'unpopulated_not_empty', status = 'NOT_APPLICABLE' FROM pg_temp.hic_relation_result WHERE relation_name = 'unpopulated_mv';
-INSERT /* wiki_hic12_positive_parent_gap */ INTO pg_temp.hic_assert
-SELECT 'parent_scope_and_foreign_gaps', NOT all_descendants_in_scope AND NOT all_descendants_supported AND NOT subtree_success
-FROM pg_temp.hic_parent_result;
-INSERT /* wiki_hic12_positive_external_excluded */ INTO pg_temp.hic_assert
-SELECT 'outside_partition_excluded', NOT EXISTS (SELECT 1 FROM pg_temp.hic_object WHERE schema_name = 'hic_outside');
-INSERT /* wiki_hic12_positive_owned_excluded */ INTO pg_temp.hic_assert
-SELECT 'checker_objects_excluded', NOT EXISTS (
-    SELECT 1 FROM pg_temp.hic_object AS obj JOIN pg_temp.hic_owned AS own USING (relation_oid)
-);
-INSERT /* wiki_hic12_positive_all_counts */ INTO pg_temp.hic_assert
-SELECT 'counts_have_validated_plans', bool_and(accepted) FROM pg_temp.hic_attempt_result;
-INSERT /* wiki_hic12_positive_index_totals */ INTO pg_temp.hic_assert
-SELECT 'thirteen_indexes_checked_and_matching', eligible_indexes = 13 AND checked_indexes = 13
-       AND matching_indexes = 13 AND untested_indexes = 0
-       AND observed_index_mismatches = 0 AND all_tested_indexes_match
-FROM pg_temp.hic_schema_result;
-SQL
-finish_case
-
-cat > "$out/writer.sql" <<'SQL'
+    cat > "$work/writer.sql" <<'HIC_WRITER_SQL'
 SET /* wiki_hic12_writer_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_writer_lock_timeout */ lock_timeout = '2s';
 BEGIN /* wiki_hic12_writer_begin */;
@@ -2322,311 +2835,8 @@ INSERT /* wiki_hic12_writer_abort_insert */ INTO hic_concurrent.t VALUES (3000, 
 ROLLBACK /* wiki_hic12_writer_abort */;
 SELECT /* wiki_hic12_writer_current */ 'current_rows', count(*) FROM hic_concurrent.t;
 SELECT /* wiki_hic12_writer_current_assert */ 1 / (count(*) = 95)::integer FROM hic_concurrent.t;
-SQL
-begin_case concurrent hic_concurrent false false hic_dba once
-cat >> "$driver" <<SQL
-INSERT /* wiki_hic12_before_writer */ INTO pg_temp.hic_assert
-SELECT 'only_heap_before_writer', count(*) = 1 AND bool_and(phase = 'heap' AND accepted AND row_count = 100)
-FROM pg_temp.hic_attempt_result;
-\\! "$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -h "$work/socket" -p 55447 -U hic_dba -d "$db" -f "$out/writer.sql" > "$out/writer.log" 2>&1 && touch "$out/writer.ok"
-\\set writer_ok \`if test -f "$out/writer.ok"; then printf true; else printf false; fi\`
-INSERT /* wiki_hic12_writer_succeeded */ INTO pg_temp.hic_assert VALUES ('writer_succeeded', :'writer_ok'::boolean);
-\\i $out/loop.sql
-INSERT /* wiki_hic12_snapshot_stable */ INTO pg_temp.hic_assert
-SELECT 'snapshot_survived_concurrent_changes', schema_success FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_old_rows_visible */ INTO pg_temp.hic_assert
-SELECT 'same_100_rows', count(*) = 2 AND bool_and(accepted AND row_count = 100) FROM pg_temp.hic_attempt_result;
-SQL
-finish_case
-cat "$out/writer.log"
-
-begin_case external hic_positive true false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_external_success */ INTO pg_temp.hic_assert SELECT 'schema_pass', schema_success FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_external_scope_size */ INTO pg_temp.hic_assert
-SELECT 'all_fourteen_physical_relations', physical_relations = 14 FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_external_leaf */ INTO pg_temp.hic_assert
-SELECT 'outside_leaf_checked', status = 'PASS' AND heap_count = 1 FROM pg_temp.hic_relation_result WHERE relation_name = 'partition_outside';
-INSERT /* wiki_hic12_external_unrelated */ INTO pg_temp.hic_assert
-SELECT 'outside_unrelated_excluded', NOT EXISTS (SELECT 1 FROM pg_temp.hic_object WHERE relation_name = 'unrelated');
-INSERT /* wiki_hic12_external_parent */ INTO pg_temp.hic_assert
-SELECT 'foreign_child_remains_explicit', all_descendants_in_scope AND NOT all_descendants_supported AND NOT subtree_success
-FROM pg_temp.hic_parent_result;
-SQL
-finish_case
-
-begin_case negative hic_negative false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_negative_schema */ INTO pg_temp.hic_assert SELECT 'schema_not_pass', NOT schema_success FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_negative_scope_size */ INTO pg_temp.hic_assert
-SELECT 'all_eight_physical_relations', physical_relations = 8 FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_negative_no_indexes */ INTO pg_temp.hic_assert
-SELECT 'no_eligible_' || relation_name, status = 'NO_ELIGIBLE_INDEX'
-FROM pg_temp.hic_relation_result WHERE relation_name IN ('no_index', 'partial_only', 'hash_only', 'invalid_index');
-INSERT /* wiki_hic12_negative_inconclusive */ INTO pg_temp.hic_assert
-SELECT 'inconclusive_' || relation_name, status = 'INCONCLUSIVE'
-FROM pg_temp.hic_relation_result WHERE relation_name IN ('constant_index', 'constant_literals', 'user_expression', 'domain_table');
-INSERT /* wiki_hic12_negative_deparse_guard */ INTO pg_temp.hic_assert
-SELECT 'user_code_not_deparsed', definition IS NULL AND order_sql IS NULL AND generation_reason = 'unreviewed_user_code_or_type'
-FROM pg_temp.hic_index WHERE index_name = 'user_expression_idx';
-INSERT /* wiki_hic12_negative_rejected_baseline_reuse */ INTO pg_temp.hic_assert
-SELECT 'constant_order_did_not_force_index', count(*) = 2 AND NOT bool_or(accepted)
-FROM pg_temp.hic_attempt_result WHERE intended_index_oid = 'hic_negative.constant_idx'::regclass;
-INSERT /* wiki_hic12_negative_literal_keys */ INTO pg_temp.hic_assert
-SELECT 'literal_keys_untested_without_errors', count(*) = 4 AND count(DISTINCT intended_index_oid) = 2
-       AND NOT bool_or(accepted) AND NOT bool_or(error_present)
-FROM pg_temp.hic_attempt_result
-WHERE relation_oid = 'hic_negative.constant_literals'::regclass AND phase = 'index';
-INSERT /* wiki_hic12_negative_literal_cast */ INTO pg_temp.hic_assert
-SELECT 'literal_key_cast_' || index_name, order_sql LIKE 'CAST(%'
-FROM pg_temp.hic_index
-WHERE relation_oid IN ('hic_negative.constant_index'::regclass, 'hic_negative.constant_literals'::regclass);
-SQL
-finish_case
-
-begin_case choice hic_choice false true hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_choice_schema */ INTO pg_temp.hic_assert
-SELECT 'existential_pass_without_exhaustive_coverage', schema_success AND NOT exhaustive_coverage_complete FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_choice_actual */ INTO pg_temp.hic_assert
-SELECT 'actual_not_intended', count(*) = 2 AND bool_and(accepted AND actual_index_oid = 'hic_choice.compact_idx'::regclass)
-FROM pg_temp.hic_attempt_result WHERE intended_index_oid = 'hic_choice.wide_idx'::regclass;
-INSERT /* wiki_hic12_choice_untested */ INTO pg_temp.hic_assert
-SELECT 'wide_remains_untested', NOT actually_checked AND intended_attempts = 2
-FROM pg_temp.hic_candidate_result WHERE index_name = 'wide_idx';
-INSERT /* wiki_hic12_choice_totals */ INTO pg_temp.hic_assert
-SELECT 'schema_index_totals', eligible_indexes = 2 AND checked_indexes = 1 AND matching_indexes = 1
-       AND untested_indexes = 1 AND all_tested_indexes_match AND NOT exhaustive_coverage_complete
-FROM pg_temp.hic_schema_result;
-SQL
-finish_case
-
-begin_case rls hic_rls false false hic_reader
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_rls_error */ INTO pg_temp.hic_assert
-SELECT 'rls_is_error_not_subset', status = 'ERROR' AND heap_count IS NULL FROM pg_temp.hic_relation_result WHERE relation_name = 't';
-INSERT /* wiki_hic12_rls_sqlstate */ INTO pg_temp.hic_assert
-SELECT 'rls_errors_preserved', count(*) = 2 AND bool_and(sqlstate = '42501') FROM pg_temp.hic_error;
-SQL
-finish_case
-
-for item in denied namespace_denied; do
-    begin_case "$item" "hic_$item" false false hic_reader
-    cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_permission_error */ INTO pg_temp.hic_assert
-SELECT 'permission_not_silently_skipped', status = 'ERROR' AND permission_error IS NOT NULL
-FROM pg_temp.hic_relation_result WHERE relation_name = 't';
-INSERT /* wiki_hic12_permission_no_attempt */ INTO pg_temp.hic_assert SELECT 'no_unpermitted_attempt', count(*) = 0 FROM pg_temp.hic_attempt;
-INSERT /* wiki_hic12_permission_scope */ INTO pg_temp.hic_assert
-SELECT 'denied_object_is_present', physical_relations = 1 FROM pg_temp.hic_schema_result;
-SQL
-    finish_case
-done
-
-begin_case empty_scope hic_empty_scope false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_empty_scope_assert */ INTO pg_temp.hic_assert
-SELECT 'no_vacuous_pass', physical_relations = 0 AND NOT schema_success AND NOT heap_scope_all_pass FROM pg_temp.hic_schema_result;
-SQL
-finish_case
-
-begin_case ordinary_role hic_positive false false hic_reader
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_ordinary_role_success */ INTO pg_temp.hic_assert
-SELECT 'non_superuser_can_check', schema_success AND physical_relations = 13 FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_ordinary_role_identity */ INTO pg_temp.hic_assert
-SELECT 'not_superuser_or_bypassrls', NOT rolsuper AND NOT rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = current_user;
-SQL
-finish_case
-
-begin_case rls_bypass hic_rls false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_rls_bypass_success */ INTO pg_temp.hic_assert
-SELECT 'privileged_role_sees_all_rows', status = 'PASS' AND heap_count = 2 FROM pg_temp.hic_relation_result WHERE relation_name = 't';
-SQL
-finish_case
-
-begin_case verdict_units hic_concurrent false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_eligibility_units */ INTO pg_temp.hic_assert
-SELECT label, pg_temp.hic_index_eligible(kind, am_oid, am_name, am_type, partial, valid, ready, live) = expected
-FROM (VALUES
-    ('eligible_btree', 'i', 403::oid, 'btree', 'i', false, true, true, true, true),
-    ('nonphysical_index', 'I', 403::oid, 'btree', 'i', false, true, true, true, false),
-    ('partial', 'i', 403::oid, 'btree', 'i', true, true, true, true, false),
-    ('invalid', 'i', 403::oid, 'btree', 'i', false, false, true, true, false),
-    ('not_ready', 'i', 403::oid, 'btree', 'i', false, true, false, true, false),
-    ('not_live', 'i', 403::oid, 'btree', 'i', false, true, true, false, false),
-    ('unknown_ready', 'i', 403::oid, 'btree', 'i', false, true, NULL::boolean, true, false),
-    ('unsupported_am', 'i', 0::oid, 'hash', 'i', false, true, true, true, false),
-    ('wrong_am_type', 'i', 403::oid, 'btree', 't', false, true, true, true, false)
-) AS fixture(label, kind, am_oid, am_name, am_type, partial, valid, ready, live, expected);
-
-SAVEPOINT /* wiki_hic12_synthetic_mismatch */ verdict_fixture;
-UPDATE /* wiki_hic12_synthetic_count */ pg_temp.hic_count AS c SET row_count = row_count + 1
-FROM pg_temp.hic_attempt AS a WHERE a.attempt_id = c.attempt_id AND a.phase = 'index';
-INSERT /* wiki_hic12_synthetic_covered_attempt */ INTO pg_temp.hic_attempt(
-    attempt_id, relation_oid, phase, intended_index_oid, variant, statement_text
-)
-SELECT 98, relation_oid, 'index', index_oid, 2, 'synthetic covered-candidate failure'
-FROM pg_temp.hic_index WHERE eligible;
-INSERT /* wiki_hic12_synthetic_covered_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived)
-VALUES (98, 'capture', NULL, 'synthetic failure with independent accepted coverage', true);
-SELECT /* wiki_hic12_mismatch_verdict */ status = 'MISMATCH' AND checked_indexes = eligible_indexes
-AND error_attempts = 1 AND uncovered_error_attempts = 0 AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_mismatch_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_mismatch_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_mismatch_assert */ INTO pg_temp.hic_assert VALUES ('synthetic_complete_mismatch', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_partial_coverage */ verdict_fixture;
-UPDATE /* wiki_hic12_synthetic_unmatched_count */ pg_temp.hic_count AS c SET row_count = row_count + 1
-FROM pg_temp.hic_attempt AS a WHERE a.attempt_id = c.attempt_id AND a.phase = 'index';
-INSERT /* wiki_hic12_synthetic_untested_candidate */ INTO pg_temp.hic_index
-SELECT (jsonb_populate_record(NULL::pg_temp.hic_index, to_jsonb(idx) || jsonb_build_object(
-    'index_oid', 4000000002::bigint, 'index_name', 'synthetic_untested_idx',
-    'qualified_name', 'hic_concurrent.synthetic_untested_idx'
-))).* FROM pg_temp.hic_index AS idx WHERE eligible;
-SELECT /* wiki_hic12_partial_coverage_verdict */ status = 'INCONCLUSIVE'
-AND checked_indexes = 1 AND untested_indexes = 1 AND mismatching_attempts = 1 AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_partial_coverage_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_partial_coverage_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_partial_coverage_assert */ INTO pg_temp.hic_assert
-VALUES ('one_mismatch_with_untested_candidate_is_inconclusive', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_missing_plan */ verdict_fixture;
-DELETE /* wiki_hic12_synthetic_remove_plan */ FROM pg_temp.hic_plan AS p
-USING pg_temp.hic_attempt AS a WHERE a.attempt_id = p.attempt_id AND a.phase = 'index';
-SELECT /* wiki_hic12_missing_plan_verdict */ status = 'INCONCLUSIVE'
-AND EXISTS (SELECT 1 FROM pg_temp.hic_pending) AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_missing_plan_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_missing_plan_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_missing_plan_assert */ INTO pg_temp.hic_assert VALUES ('missing_plan_is_not_pass', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_profile */ verdict_fixture;
-UPDATE /* wiki_hic12_synthetic_wrong_profile */ pg_temp.hic_count AS c
-SET settings = jsonb_set(settings, '{row_security}', '"on"'::jsonb)
-FROM pg_temp.hic_attempt AS a WHERE a.attempt_id = c.attempt_id AND a.phase = 'index';
-SELECT /* wiki_hic12_profile_verdict */ status = 'INCONCLUSIVE' AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_profile_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_profile_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_profile_assert */ INTO pg_temp.hic_assert VALUES ('profile_mismatch_is_not_pass', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_snapshot */ verdict_fixture;
-UPDATE /* wiki_hic12_synthetic_wrong_snapshot */ pg_temp.hic_count SET snapshot_text = 'wrong snapshot' WHERE attempt_id = 1;
-SELECT /* wiki_hic12_snapshot_verdict */ status = 'ERROR' AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_snapshot_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_snapshot_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_snapshot_assert */ INTO pg_temp.hic_assert VALUES ('mixed_snapshots_invalidate_run', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_marker */ verdict_fixture;
-UPDATE /* wiki_hic12_synthetic_wrong_marker */ pg_temp.hic_plan AS p
-SET document = jsonb_set(p.document, marker.path || ARRAY['Output', '0'], to_jsonb('999::bigint'::text))
-FROM (
-    SELECT plan.attempt_id, node.path
-    FROM pg_temp.hic_plan AS plan
-    JOIN pg_temp.hic_attempt AS a USING (attempt_id)
-    CROSS JOIN LATERAL pg_temp.hic_plan_nodes(plan.document) AS node
-    WHERE a.phase = 'index' AND node.node ->> 'Node Type' = 'Aggregate'
-) AS marker WHERE marker.attempt_id = p.attempt_id;
-SELECT /* wiki_hic12_marker_verdict */ status = 'INCONCLUSIVE' AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_marker_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_marker_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_marker_assert */ INTO pg_temp.hic_assert VALUES ('wrong_attempt_marker_is_not_pass', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_optional_error */ verdict_fixture;
-INSERT /* wiki_hic12_synthetic_attempt */ INTO pg_temp.hic_attempt(
-    attempt_id, relation_oid, phase, intended_index_oid, variant, statement_text
-)
-SELECT 99, relation_oid, 'index', index_oid, 2, 'synthetic verdict fixture only'
-FROM pg_temp.hic_index WHERE eligible;
-INSERT /* wiki_hic12_synthetic_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived)
-VALUES (99, 'execution', 'XX000', 'synthetic optional failure, not physical index corruption', true);
-SELECT /* wiki_hic12_optional_error_verdict */ status = 'PASS' AND error_attempts = 1 AS unit_ok
-FROM pg_temp.hic_relation_result WHERE relation_name = 't'
-\gset
-ROLLBACK /* wiki_hic12_optional_error_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_optional_error_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_optional_error_assert */ INTO pg_temp.hic_assert VALUES ('existential_pass_retains_optional_error', :'unit_ok'::boolean);
-
-SAVEPOINT /* wiki_hic12_synthetic_unsupported_am */ verdict_fixture;
-INSERT /* wiki_hic12_synthetic_unsupported_object */ INTO pg_temp.hic_object
-SELECT (jsonb_populate_record(NULL::pg_temp.hic_object, to_jsonb(obj) || jsonb_build_object(
-    'relation_oid', 4000000000::bigint, 'relation_name', 'synthetic_unsupported',
-    'qualified_name', 'hic_concurrent.synthetic_unsupported',
-    'table_am_oid', 4000000001::bigint, 'table_am', 'synthetic',
-    'in_heap_scope', false, 'exclusion_reason', 'unsupported_table_access_method',
-    'unsupported_table_am', true
-))).* FROM pg_temp.hic_object AS obj WHERE relation_name = 't';
-SELECT /* wiki_hic12_unsupported_verdict */ heap_scope_all_pass AND NOT schema_success AND unsupported_table_ams = 1 AS unit_ok
-FROM pg_temp.hic_schema_result
-\gset
-ROLLBACK /* wiki_hic12_unsupported_restore */ TO SAVEPOINT verdict_fixture;
-RELEASE /* wiki_hic12_unsupported_release */ SAVEPOINT verdict_fixture;
-INSERT /* wiki_hic12_unsupported_assert */ INTO pg_temp.hic_assert VALUES ('unsupported_am_prevents_blanket_success', :'unit_ok'::boolean);
-
-INSERT /* wiki_hic12_bag_cancellation */ INTO pg_temp.hic_assert
-WITH heap_bag(tid) AS (VALUES ('(0,1)'::tid), ('(0,2)'::tid)),
-index_bag(tid) AS (VALUES ('(0,1)'::tid), ('(0,1)'::tid)),
-missing AS (SELECT tid FROM heap_bag EXCEPT ALL SELECT tid FROM index_bag),
-extra AS (SELECT tid FROM index_bag EXCEPT ALL SELECT tid FROM heap_bag)
-SELECT 'equal_counts_can_hide_different_bags',
-       (SELECT count(*) FROM heap_bag) = (SELECT count(*) FROM index_bag)
-       AND (SELECT count(*) FROM missing) = 1 AND (SELECT count(*) FROM extra) = 1;
-SQL
-finish_case
-begin_case capture_retry hic_concurrent false false hic_dba manual
-cat >> "$driver" <<SQL
-\\o $out/discarded-plan.json
-SELECT /* wiki_hic12_discard_capture */ sql_text FROM pg_temp.hic_next
-\\gexec
-\\o
-ROLLBACK /* wiki_hic12_retry_capture_rollback */ TO SAVEPOINT hic_attempt;
-INSERT /* wiki_hic12_retry_capture_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived)
-SELECT max(attempt_id), 'capture', NULL, 'test deliberately discards the first executed plan', true FROM pg_temp.hic_attempt;
-RELEASE /* wiki_hic12_retry_capture_release */ SAVEPOINT hic_attempt;
-SELECT /* wiki_hic12_retry_capture_control */ pg_temp.hic_control_profile()
-\\gexec
-\\i $out/loop.sql
-INSERT /* wiki_hic12_retry_capture_assert */ INTO pg_temp.hic_assert
-SELECT 'capture_retry_keeps_same_snapshot', status = 'PASS' AND error_attempts = 1 AND uncovered_error_attempts = 0
-FROM pg_temp.hic_relation_result WHERE relation_name = 't';
-INSERT /* wiki_hic12_retry_capture_attempts */ INTO pg_temp.hic_assert
-SELECT 'one_failed_and_two_verified_attempts', count(*) = 3
-AND count(*) FILTER (WHERE accepted) = 2 AND count(*) FILTER (WHERE error_present) = 1
-FROM pg_temp.hic_attempt_result;
-SQL
-finish_case
-cat > "$out/keeper.sql" <<SQL
-SET /* wiki_hic12_keeper_timeout */ statement_timeout = '60s';
-SET /* wiki_hic12_keeper_lock_timeout */ lock_timeout = '2s';
-BEGIN /* wiki_hic12_keeper_begin */ ISOLATION LEVEL REPEATABLE READ READ ONLY;
-SELECT /* wiki_hic12_keeper_xid */ txid_current();
-\\! touch "$out/keeper.ready"
-\\! while ! test -f "$out/keeper.release"; do sleep 1; done
-COMMIT /* wiki_hic12_keeper_finish */;
-SQL
-"${psql[@]}" -f "$out/keeper.sql" > "$out/keeper.log" 2>&1 &
-keeper_pid=$!
-tries=0
-while [ ! -f "$out/keeper.ready" ]; do
-    kill -0 "$keeper_pid"
-    [ "$tries" -lt 30 ]
-    sleep 1
-    tries=$((tries + 1))
-done
-"${psql[@]}" > "$out/gate-setup.log" 2>&1 <<'SQL'
+HIC_WRITER_SQL
+    cat > "$work/gate-setup.sql" <<'HIC_GATE_SQL'
 SET /* wiki_hic12_gate_setup_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_gate_setup_lock_timeout */ lock_timeout = '2s';
 BEGIN /* wiki_hic12_gate_update_begin */;
@@ -2637,83 +2847,391 @@ COMMIT /* wiki_hic12_gate_update_commit */;
 CREATE /* wiki_hic12_gate_late_index */ INDEX gate_idx ON hic_gate.t(k);
 SELECT /* wiki_hic12_gate_flag_assert */ 1 / indcheckxmin::integer
 FROM pg_catalog.pg_index WHERE indexrelid = 'hic_gate.gate_idx'::regclass;
-SQL
-begin_case old_horizon hic_gate false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_old_horizon_status */ INTO pg_temp.hic_assert
-SELECT 'old_horizon_remains_inconclusive', status = 'INCONCLUSIVE' AND heap_count = 120 AND checked_indexes = 0
-FROM pg_temp.hic_relation_result WHERE relation_name = 't';
-INSERT /* wiki_hic12_old_horizon_candidate */ INTO pg_temp.hic_assert
-SELECT 'old_horizon_not_falsely_excluded', eligible AND indcheckxmin AND NOT actually_checked
-AND snapshot_usability = 'indcheckxmin_unresolved'
-FROM pg_temp.hic_candidate_result WHERE index_name = 'gate_idx';
-SQL
+HIC_GATE_SQL
+    cat > "$work/test.sh" <<'HIC_TEST_SH'
+set -u -o pipefail
+umask 077
+root=$(pwd -P)
+work="$root/.wiki-runtime/tmp/hic12"
+port=55447
+bin="$work/install/bin"
+. "$work/hic12-check.sh"
+HIC_PSQL="$bin/psql"
+HIC_SQL="$work/checker.sql"
+export PGHOST="$work/socket" PGPORT="$port" PGUSER=hic_dba PGDATABASE=postgres PGAPPNAME=hic12-suite
+db="hic_suite_$(date -u +%Y%m%d%H%M%S)_$$"
+out="$work/results/$db"
+mkdir -p "$out" || exit 1
+ls -ld "$work" "$out"
+passed=0
+case_name=setup
+trap hic_cleanup EXIT
+
+fail() { printf 'FAIL [%s] %s\n' "$case_name" "$*"; exit 1; }
+ok() { passed=$((passed + 1)); printf 'ok %s\n' "$1"; }
+sfile() { eval "printf '%s' \"\$HIC_DIR_$HIC_S/$1\""; }
+expect() {
+    # expect LABEL SQL: the SQL must succeed and return exactly one line, t.
+    hic_sql "$HIC_S" "$2" || fail "$1: status $?: $(cat "$(sfile stderr.last)")"
+    [ "$HIC_VALUE" = t ] && [ "$(grep -c '' "$(sfile response)")" -eq 1 ] \
+        || fail "$1: returned $(cat "$(sfile response)")"
+    ok "$1"
+}
+expect_error() {
+    # expect_error LABEL SQLSTATE SQL: the SQL must fail with that SQLSTATE.
+    local rc
+    hic_sql "$HIC_S" "$3"; rc=$?
+    [ "$rc" -eq 1 ] || fail "$1: expected SQLSTATE $2, request status $rc"
+    hic_parse_error "$HIC_S" && [ "$HIC_ERR_CODE" = "$2" ] || fail "$1: expected $2, got ${HIC_ERR_CODE:-none}"
+    ok "$1"
+}
+open_case() {
+    # open_case NAME [ROLE]: a session whose caller sets quote_all_identifiers.
+    case_name=$1
+    HIC_OUT="$out/$1"
+    mkdir -m 700 "$HIC_OUT" || fail 'output directory'
+    PGOPTIONS='-c quote_all_identifiers=on'
+    export PGOPTIONS
+    hic_open main 7 8 || fail 'session did not start'
+    unset PGOPTIONS
+    if [ -n "${2:-}" ]; then
+        hic_sql main "SET /* wiki_hic12_test_role */ ROLE $2;" || fail 'SET ROLE failed'
+    fi
+}
+start_run() {
+    hic_install "$HIC_SQL" || fail "installation: ${HIC_ERR_MESSAGE:-}"
+    hic_configure "$1" "$2" "$3" || fail 'configuration'
+    hic_initialize || fail "initialization: $HIC_STOP"
+}
+run_loop() { hic_attempt_loop || fail "attempt loop stopped: $HIC_STOP"; }
+finish_case() {
+    hic_finish || fail "finish: $HIC_STOP"
+    expect "${case_name}_only_sql_helpers" "SELECT /* wiki_hic12_test_language */ bool_and(l.lanname = 'sql' AND NOT p.prosecdef) FROM pg_catalog.pg_proc AS p JOIN pg_catalog.pg_language AS l ON l.oid = p.prolang WHERE p.pronamespace = pg_my_temp_schema();"
+}
+check_case() {
+    # check_case NAME SCHEMA EXTERNAL EXHAUSTIVE [ROLE]: one complete run.
+    open_case "$1" "${5:-}"
+    start_run "$2" "$3" "$4"
+    run_loop
+    finish_case
+}
+close_case() {
+    hic_close main || fail "psql exit status $?"
+    printf 'case %s closed\n' "$case_name"
+}
+synthetic() {
+    # synthetic LABEL SETUP CHECK: change evidence inside a savepoint, read the
+    # verdict, roll the change back, then assert the verdict in Bash.
+    local verdict
+    hic_sql main 'SAVEPOINT /* wiki_hic12_test_fixture */ verdict_fixture;' || fail "$1: savepoint"
+    hic_sql main "$2" || fail "$1: setup: $(cat "$(sfile stderr.last)")"
+    hic_sql main "$3" || fail "$1: check: $(cat "$(sfile stderr.last)")"
+    verdict=$HIC_VALUE
+    hic_sql main 'ROLLBACK /* wiki_hic12_test_restore */ TO SAVEPOINT verdict_fixture;' || fail "$1: rollback"
+    hic_sql main 'RELEASE /* wiki_hic12_test_release */ SAVEPOINT verdict_fixture;' || fail "$1: release"
+    [ "$verdict" = t ] || fail "$1: verdict $verdict"
+    ok "$1"
+}
+cli() {
+    # cli NAME EXPECTED_STATUS [VARIABLE=VALUE ...]: run the runner as a program.
+    local name=$1 want=$2 rc
+    shift 2
+    env "$@" HIC_PSQL="$HIC_PSQL" HIC_SQL="$HIC_SQL" HIC_OUT="$out/$name" PGDATABASE="$db" \
+        bash "$work/hic12-check.sh" > "$out/$name.log" 2>&1
+    rc=$?
+    case_name=$name
+    [ "$rc" -eq "$want" ] || fail "exit $rc, expected $want: $(cat "$out/$name.log")"
+    ok "${name}_exit_$want"
+}
+
+"$bin/psql" -X -q -v ON_ERROR_STOP=1 -c "SET /* wiki_hic12_suite_timeout */ statement_timeout = '60s'" \
+    -c "SET /* wiki_hic12_suite_lock_timeout */ lock_timeout = '2s'" \
+    -c "CREATE /* wiki_hic12_suite_database */ DATABASE $db" || fail 'database creation'
+export PGDATABASE="$db"
+
+case_name=fixtures
+HIC_OUT="$out/fixtures"
+mkdir -m 700 "$HIC_OUT" || fail 'output directory'
+hic_open main 7 8 || fail 'session did not start'
+hic_sql main "SELECT /* wiki_hic12_fixture_role */ count(*) FROM pg_catalog.pg_roles WHERE rolname = 'hic_reader';" || fail 'role lookup'
+if [ "$HIC_VALUE" = 0 ]; then
+    hic_sql main 'CREATE /* wiki_hic12_reader */ ROLE hic_reader;' || fail 'role creation'
+fi
+hic_request main "$work/fixtures.sql" || fail 'fixture session lost'
+[ "$HIC_FAILED" = false ] || fail "fixtures: $(cat "$(sfile stderr.last)")"
+ok fixtures_created
+expect_error positional_order_probe 42P10 'SELECT /* wiki_hic12_positional_probe */ count(*) FROM (SELECT /* wiki_hic12_positional_order */ 1 FROM ONLY hic_negative.constant_literals ORDER BY ((2)) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;'
+expect_error decimal_order_probe 42601 'SELECT /* wiki_hic12_decimal_probe */ count(*) FROM (SELECT /* wiki_hic12_decimal_order */ 1 FROM ONLY hic_negative.constant_literals ORDER BY ((1.5)) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;'
+expect cast_order_probe 'SELECT /* wiki_hic12_cast_probe */ count(*) = 2 FROM (SELECT /* wiki_hic12_cast_order */ 1 FROM ONLY hic_negative.constant_literals ORDER BY CAST((2) AS integer) USING OPERATOR(pg_catalog.<) NULLS LAST, CAST((1.5) AS numeric) USING OPERATOR(pg_catalog.<) NULLS LAST) AS probe;'
+expect_error invalid_concurrent_build 23505 'CREATE /* wiki_hic12_invalid_index */ UNIQUE INDEX CONCURRENTLY invalid_idx ON hic_negative.invalid_index(id);'
+expect invalid_flag_left_false "SELECT /* wiki_hic12_invalid_flag */ NOT indisvalid FROM pg_catalog.pg_index WHERE indexrelid = 'hic_negative.invalid_idx'::regclass;"
+expect_error psql_rewrites_colon_quote 42601 'SELECT /* wiki_hic12_psql_rewrite_probe */ (ARRAY[1, 2, 3])[1:"ERROR"] FROM (SELECT 2 AS "ERROR") AS s;'
+expect psql_keeps_spaced_colon 'SELECT /* wiki_hic12_psql_spaced_probe */ (ARRAY[1, 2, 3])[1 : "ERROR"] = ARRAY[1, 2] FROM (SELECT 2 AS "ERROR") AS s;'
+expect guard_key_deparses_unspaced "SELECT /* wiki_hic12_guard_deparse */ pg_catalog.pg_get_indexdef('hic_psql_guard.psql_guard_idx'::regclass, 1, false) = '(a[1:\"ERROR\"])';"
+close_case
+
+case_name=validator
+HIC_OUT="$out/validator"
+mkdir -m 700 "$HIC_OUT" || fail 'output directory'
+hic_open main 7 8 || fail 'session did not start'
+hic_install "$HIC_SQL" || fail 'installation'
+hic_request main "$work/validator-tests.sql" || fail 'validator session lost'
+[ "$HIC_FAILED" = false ] || fail "validator units: $(cat "$(sfile stderr.last)")"
+[ "$(sed -n '$p' "$(sfile response)")" = 33 ] || fail "validator units: $(cat "$(sfile response)")"
+ok validator_33_plan_shape_units
+close_case
+
+cli cli_positive 0 HIC_SCHEMA=hic_positive HIC_DDL_STABLE=yes PGOPTIONS='-c quote_all_identifiers=on'
+grep -F -x -q 'schema_success=true' "$out/cli_positive/summary.txt" || fail 'summary lacks schema_success=true'
+grep -F -x -q 'physical_relations=13' "$out/cli_positive/summary.txt" || fail 'summary lacks 13 relations'
+[ "$(ls "$out/cli_positive/plans" | grep -c -E '^attempt-[0-9]+[.]json$')" -eq 26 ] || fail 'expected 26 saved plans'
+for f in schema relations candidates attempts parents run-errors run; do
+    [ -s "$out/cli_positive/$f.csv" ] || fail "missing $f.csv"
+done
+ok cli_positive_reports
+cli cli_negative 1 HIC_SCHEMA=hic_negative HIC_DDL_STABLE=yes
+grep -F -x -q 'schema_success=false' "$out/cli_negative/summary.txt" || fail 'summary lacks schema_success=false'
+ok cli_negative_summary
+cli cli_missing_schema 2 HIC_SCHEMA=hic_missing_schema HIC_DDL_STABLE=yes
+grep -F -q ',initialization,23514,' "$out/cli_missing_schema/run-errors.csv" || fail 'run error not exported'
+grep -F -q 'stop_reason=initialization failed' "$out/cli_missing_schema/summary.txt" || fail 'stop reason not recorded'
+ok cli_missing_schema_recorded
+cli cli_no_attestation 64 HIC_SCHEMA=hic_positive
+[ ! -e "$out/cli_no_attestation" ] || fail 'created an output directory before refusing'
+ok cli_no_attestation_refused_before_connecting
+cli cli_bad_option 64 HIC_SCHEMA=hic_positive HIC_DDL_STABLE=yes HIC_EXHAUSTIVE=maybe
+
+check_case positive hic_positive false false
+expect schema_pass 'SELECT /* wiki_hic12_positive_success */ schema_success FROM pg_temp.hic_schema_result;'
+expect all_thirteen_physical_relations 'SELECT /* wiki_hic12_positive_scope */ physical_relations = 13 FROM pg_temp.hic_schema_result;'
+expect empty_table "SELECT /* wiki_hic12_positive_empty */ status = 'PASS' AND heap_count = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 'empty_table';"
+expect nulls_duplicates_aborts "SELECT /* wiki_hic12_positive_nulls */ status = 'PASS' AND heap_count = 5 FROM pg_temp.hic_relation_result WHERE relation_name = 'nulls_duplicates';"
+expect inheritance_parent_only "SELECT /* wiki_hic12_positive_parent */ status = 'PASS' AND heap_count = 1 FROM pg_temp.hic_relation_result WHERE relation_name = 'inh_parent';"
+expect inheritance_child_only "SELECT /* wiki_hic12_positive_child */ status = 'PASS' AND heap_count = 2 FROM pg_temp.hic_relation_result WHERE relation_name = 'inh_child';"
+expect empty_populated_matview "SELECT /* wiki_hic12_positive_matview */ status = 'PASS' AND heap_count = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 'empty_mv';"
+expect unpopulated_not_empty "SELECT /* wiki_hic12_positive_unpopulated */ status = 'NOT_APPLICABLE' FROM pg_temp.hic_relation_result WHERE relation_name = 'unpopulated_mv';"
+expect quoted_names_pass "SELECT /* wiki_hic12_positive_quoted */ status = 'PASS' AND heap_count = 2 FROM pg_temp.hic_relation_result WHERE relation_name = 'Odd table \"x\"';"
+expect parent_scope_and_foreign_gaps 'SELECT /* wiki_hic12_positive_parent_gap */ NOT all_descendants_in_scope AND NOT all_descendants_supported AND NOT subtree_success FROM pg_temp.hic_parent_result;'
+expect outside_partition_excluded "SELECT /* wiki_hic12_positive_outside */ NOT EXISTS (SELECT 1 FROM pg_temp.hic_object WHERE schema_name = 'hic_outside');"
+expect checker_objects_excluded 'SELECT /* wiki_hic12_positive_owned */ NOT EXISTS (SELECT 1 FROM pg_temp.hic_object AS obj JOIN pg_temp.hic_owned AS own USING (relation_oid));'
+expect counts_have_validated_plans 'SELECT /* wiki_hic12_positive_accepted */ bool_and(accepted) AND count(*) = 26 FROM pg_temp.hic_attempt_result;'
+expect thirteen_indexes_checked_and_matching 'SELECT /* wiki_hic12_positive_indexes */ eligible_indexes = 13 AND checked_indexes = 13 AND matching_indexes = 13 AND untested_indexes = 0 AND observed_index_mismatches = 0 AND all_tested_indexes_match FROM pg_temp.hic_schema_result;'
+expect aborted_row_absent "SELECT /* wiki_hic12_positive_abort */ heap_count = 5 FROM pg_temp.hic_relation_result WHERE relation_name = 'nulls_duplicates';"
+close_case
+
+check_case external hic_positive true false
+expect schema_pass 'SELECT /* wiki_hic12_external_success */ schema_success FROM pg_temp.hic_schema_result;'
+expect all_fourteen_physical_relations 'SELECT /* wiki_hic12_external_scope */ physical_relations = 14 FROM pg_temp.hic_schema_result;'
+expect outside_leaf_checked "SELECT /* wiki_hic12_external_leaf */ status = 'PASS' AND heap_count = 1 FROM pg_temp.hic_relation_result WHERE relation_name = 'partition_outside';"
+expect outside_unrelated_excluded "SELECT /* wiki_hic12_external_unrelated */ NOT EXISTS (SELECT 1 FROM pg_temp.hic_object WHERE relation_name = 'unrelated');"
+expect foreign_child_remains_explicit 'SELECT /* wiki_hic12_external_parent */ all_descendants_in_scope AND NOT all_descendants_supported AND NOT subtree_success FROM pg_temp.hic_parent_result;'
+expect fourteen_indexes_checked 'SELECT /* wiki_hic12_external_indexes */ eligible_indexes = 14 AND checked_indexes = 14 AND matching_indexes = 14 FROM pg_temp.hic_schema_result;'
+close_case
+
+check_case negative hic_negative false false
+expect schema_not_pass 'SELECT /* wiki_hic12_negative_success */ NOT schema_success FROM pg_temp.hic_schema_result;'
+expect all_eight_physical_relations 'SELECT /* wiki_hic12_negative_scope */ physical_relations = 8 FROM pg_temp.hic_schema_result;'
+expect four_no_eligible_index "SELECT /* wiki_hic12_negative_no_index */ count(*) = 4 AND bool_and(status = 'NO_ELIGIBLE_INDEX') FROM pg_temp.hic_relation_result WHERE relation_name IN ('no_index', 'partial_only', 'hash_only', 'invalid_index');"
+expect four_inconclusive "SELECT /* wiki_hic12_negative_inconclusive */ count(*) = 4 AND bool_and(status = 'INCONCLUSIVE') FROM pg_temp.hic_relation_result WHERE relation_name IN ('constant_index', 'constant_literals', 'user_expression', 'domain_table');"
+expect user_code_not_deparsed "SELECT /* wiki_hic12_negative_deparse */ definition IS NULL AND order_sql IS NULL AND generation_reason = 'unreviewed_user_code_or_type' FROM pg_temp.hic_index WHERE index_name = 'user_expression_idx';"
+expect constant_order_did_not_force_index "SELECT /* wiki_hic12_negative_constant */ count(*) = 2 AND NOT bool_or(accepted) FROM pg_temp.hic_attempt_result WHERE intended_index_oid = 'hic_negative.constant_idx'::regclass;"
+expect literal_keys_untested_without_errors "SELECT /* wiki_hic12_negative_literals */ count(*) = 4 AND count(DISTINCT intended_index_oid) = 2 AND NOT bool_or(accepted) AND NOT bool_or(error_present) FROM pg_temp.hic_attempt_result WHERE relation_oid = 'hic_negative.constant_literals'::regclass AND phase = 'index';"
+expect literal_keys_cast "SELECT /* wiki_hic12_negative_cast */ count(*) = 3 AND bool_and(order_sql LIKE 'CAST(%') FROM pg_temp.hic_index WHERE relation_oid IN ('hic_negative.constant_index'::regclass, 'hic_negative.constant_literals'::regclass);"
+close_case
+
+check_case choice hic_choice false true
+expect existential_pass_without_exhaustive_coverage 'SELECT /* wiki_hic12_choice_success */ schema_success AND NOT exhaustive_coverage_complete FROM pg_temp.hic_schema_result;'
+expect actual_not_intended "SELECT /* wiki_hic12_choice_actual */ count(*) = 2 AND bool_and(accepted AND actual_index_oid = 'hic_choice.compact_idx'::regclass) FROM pg_temp.hic_attempt_result WHERE intended_index_oid = 'hic_choice.wide_idx'::regclass;"
+expect wide_remains_untested "SELECT /* wiki_hic12_choice_untested */ NOT actually_checked AND intended_attempts = 2 FROM pg_temp.hic_candidate_result WHERE index_name = 'wide_idx';"
+expect schema_index_totals 'SELECT /* wiki_hic12_choice_totals */ eligible_indexes = 2 AND checked_indexes = 1 AND matching_indexes = 1 AND untested_indexes = 1 AND all_tested_indexes_match AND NOT exhaustive_coverage_complete FROM pg_temp.hic_schema_result;'
+close_case
+
+check_case psql_guard hic_psql_guard false false
+expect guard_order_contains_colon_quote "SELECT /* wiki_hic12_guard_order */ order_sql LIKE '%[1:\"ERROR\"]%' FROM pg_temp.hic_index WHERE index_name = 'psql_guard_idx';"
+expect guard_relation_is_error "SELECT /* wiki_hic12_guard_status */ status = 'ERROR' AND heap_count = 2 AND checked_indexes = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 'psql_trigger';"
+expect guard_refusals_recorded "SELECT /* wiki_hic12_guard_errors */ count(*) = 2 AND bool_and(e.stage = 'execution' AND e.sqlstate IS NULL AND e.message LIKE 'runner did not send%') FROM pg_temp.hic_error AS e JOIN pg_temp.hic_attempt AS a USING (attempt_id) WHERE a.phase = 'index';"
+expect guard_sent_no_count "SELECT /* wiki_hic12_guard_counts */ NOT EXISTS (SELECT 1 FROM pg_temp.hic_count AS c JOIN pg_temp.hic_attempt AS a USING (attempt_id) WHERE a.phase = 'index');"
+close_case
+
+check_case rls hic_rls false false hic_reader
+expect rls_is_error_not_subset "SELECT /* wiki_hic12_rls_status */ status = 'ERROR' AND heap_count IS NULL FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+expect rls_errors_parsed "SELECT /* wiki_hic12_rls_errors */ count(*) = 2 AND bool_and(stage = 'execution' AND sqlstate = '42501' AND message LIKE '%row-level security%' AND hint LIKE 'To disable the policy%') FROM pg_temp.hic_error;"
+close_case
+
+for item in denied namespace_denied; do
+    check_case "$item" "hic_$item" false false hic_reader
+    expect permission_not_silently_skipped "SELECT /* wiki_hic12_permission_error */ status = 'ERROR' AND permission_error IS NOT NULL FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+    expect no_unpermitted_attempt 'SELECT /* wiki_hic12_permission_attempts */ count(*) = 0 FROM pg_temp.hic_attempt;'
+    expect denied_object_is_present 'SELECT /* wiki_hic12_permission_scope */ physical_relations = 1 FROM pg_temp.hic_schema_result;'
+    close_case
+done
+
+check_case empty_scope hic_empty_scope false false
+expect no_vacuous_pass 'SELECT /* wiki_hic12_empty_scope */ physical_relations = 0 AND NOT schema_success AND NOT heap_scope_all_pass FROM pg_temp.hic_schema_result;'
+close_case
+
+check_case ordinary_role hic_positive false false hic_reader
+expect non_superuser_can_check 'SELECT /* wiki_hic12_ordinary_success */ schema_success AND physical_relations = 13 FROM pg_temp.hic_schema_result;'
+expect not_superuser_or_bypassrls 'SELECT /* wiki_hic12_ordinary_identity */ NOT rolsuper AND NOT rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = current_user;'
+close_case
+
+check_case rls_bypass hic_rls false false
+expect privileged_role_sees_all_rows "SELECT /* wiki_hic12_rls_bypass */ status = 'PASS' AND heap_count = 2 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+close_case
+
+open_case own_temp_scope
+hic_install "$HIC_SQL" || fail 'installation'
+hic_sql main 'CREATE /* wiki_hic12_temp_fixture */ TEMP TABLE hic_user_data(k integer) USING heap; INSERT /* wiki_hic12_temp_rows */ INTO pg_temp.hic_user_data VALUES (1), (NULL); CREATE /* wiki_hic12_temp_index */ INDEX hic_user_data_idx ON pg_temp.hic_user_data(k);' || fail 'temporary fixture'
+hic_sql main 'SELECT /* wiki_hic12_temp_schema */ nspname FROM pg_catalog.pg_namespace WHERE oid = pg_my_temp_schema();' || fail 'temporary schema'
+hic_configure "$HIC_VALUE" false false || fail 'configuration'
+hic_initialize || fail "initialization: $HIC_STOP"
+run_loop
 finish_case
-touch "$out/keeper.release"
-wait "$keeper_pid"
-keeper_pid=
-begin_case fresh_horizon hic_gate false false hic_dba
-cat >> "$driver" <<'SQL'
-INSERT /* wiki_hic12_new_horizon_status */ INTO pg_temp.hic_assert
-SELECT 'fresh_horizon_passes', status = 'PASS' AND heap_count = 120 FROM pg_temp.hic_relation_result WHERE relation_name = 't';
-INSERT /* wiki_hic12_new_horizon_candidate */ INTO pg_temp.hic_assert
-SELECT 'true_flag_can_be_usable', indcheckxmin AND actually_checked AND snapshot_usability = 'accepted_by_executed_plan'
-FROM pg_temp.hic_candidate_result WHERE index_name = 'gate_idx';
-SQL
+expect only_application_temp_relation 'SELECT /* wiki_hic12_temp_scope */ schema_success AND physical_relations = 1 FROM pg_temp.hic_schema_result;'
+expect prefix_does_not_hide_user_table "SELECT /* wiki_hic12_temp_name */ status = 'PASS' AND heap_count = 2 FROM pg_temp.hic_relation_result WHERE relation_name = 'hic_user_data';"
+close_case
+
+open_case bootstrap
+hic_install "$HIC_SQL" || fail 'installation'
+expect_error missing_ddl_attestation 23514 "INSERT /* wiki_hic12_missing_ddl_agreement */ INTO pg_temp.hic_config(target_schema, ddl_stable) VALUES ('hic_positive', false);"
+expect no_false_configuration 'SELECT /* wiki_hic12_no_configuration */ count(*) = 0 FROM pg_temp.hic_config;'
+hic_configure hic_missing_schema false false || fail 'configuration'
+hic_initialize
+rc=$?
+[ "$rc" -eq 1 ] || fail "initialization status $rc, expected 1"
+case $HIC_STOP in initialization*) ok missing_schema_stops_at_initialization ;; *) fail "stop reason $HIC_STOP" ;; esac
+expect initialization_error_recorded "SELECT /* wiki_hic12_initialization_error */ count(*) = 1 AND bool_and(stage = 'initialization' AND sqlstate = '23514' AND requested_schema = 'hic_missing_schema') FROM pg_temp.hic_run_error;"
+expect global_error_state "SELECT /* wiki_hic12_global_error */ state = 'ERROR' FROM pg_temp.hic_progress;"
+expect no_partial_success 'SELECT /* wiki_hic12_no_partial_success */ NOT EXISTS (SELECT 1 FROM pg_temp.hic_schema_result) AND NOT EXISTS (SELECT 1 FROM pg_temp.hic_next);'
+close_case
+
+open_case concurrent
+start_run hic_concurrent false false
+hic_attempt_once || fail "first attempt: $HIC_STOP"
+expect only_heap_before_writer "SELECT /* wiki_hic12_before_writer */ count(*) = 1 AND bool_and(phase = 'heap' AND accepted AND row_count = 100) FROM pg_temp.hic_attempt_result;"
+"$bin/psql" -X -q -v ON_ERROR_STOP=1 -f "$work/writer.sql" > "$out/writer.log" 2>&1 || fail "writer: $(cat "$out/writer.log")"
+ok writer_committed_changes
+run_loop
 finish_case
+expect snapshot_survived_concurrent_changes 'SELECT /* wiki_hic12_snapshot_stable */ schema_success FROM pg_temp.hic_schema_result;'
+expect same_100_rows 'SELECT /* wiki_hic12_old_rows_visible */ count(*) = 2 AND bool_and(accepted AND row_count = 100) FROM pg_temp.hic_attempt_result;'
+close_case
+cat "$out/writer.log"
+
+open_case verdict_units
+start_run hic_concurrent false false
+run_loop
+expect eligibility_units "SELECT /* wiki_hic12_eligibility_units */ count(*) = 9 AND bool_and(pg_temp.hic_index_eligible(kind, am_oid, am_name, am_type, partial, valid, ready, live) = expected) FROM (VALUES ('i', 403::oid, 'btree', 'i', false, true, true, true, true), ('I', 403::oid, 'btree', 'i', false, true, true, true, false), ('i', 403::oid, 'btree', 'i', true, true, true, true, false), ('i', 403::oid, 'btree', 'i', false, false, true, true, false), ('i', 403::oid, 'btree', 'i', false, true, false, true, false), ('i', 403::oid, 'btree', 'i', false, true, true, false, false), ('i', 403::oid, 'btree', 'i', false, true, NULL::boolean, true, false), ('i', 0::oid, 'hash', 'i', false, true, true, true, false), ('i', 403::oid, 'btree', 't', false, true, true, true, false)) AS fixture(kind, am_oid, am_name, am_type, partial, valid, ready, live, expected);"
+synthetic synthetic_complete_mismatch "UPDATE /* wiki_hic12_synthetic_count */ pg_temp.hic_count AS c SET row_count = row_count + 1 FROM pg_temp.hic_attempt AS a WHERE a.attempt_id = c.attempt_id AND a.phase = 'index'; INSERT /* wiki_hic12_synthetic_covered_attempt */ INTO pg_temp.hic_attempt(attempt_id, relation_oid, phase, intended_index_oid, variant, statement_text) SELECT 98, relation_oid, 'index', index_oid, 2, 'synthetic covered-candidate failure' FROM pg_temp.hic_index WHERE eligible; INSERT /* wiki_hic12_synthetic_covered_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived) VALUES (98, 'capture', NULL, 'synthetic failure with independent accepted coverage', true);" \
+    "SELECT /* wiki_hic12_mismatch_verdict */ status = 'MISMATCH' AND checked_indexes = eligible_indexes AND error_attempts = 1 AND uncovered_error_attempts = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic one_mismatch_with_untested_candidate_is_inconclusive "UPDATE /* wiki_hic12_synthetic_unmatched_count */ pg_temp.hic_count AS c SET row_count = row_count + 1 FROM pg_temp.hic_attempt AS a WHERE a.attempt_id = c.attempt_id AND a.phase = 'index'; INSERT /* wiki_hic12_synthetic_untested_candidate */ INTO pg_temp.hic_index SELECT (jsonb_populate_record(NULL::pg_temp.hic_index, to_jsonb(idx) || jsonb_build_object('index_oid', 4000000002::bigint, 'index_name', 'synthetic_untested_idx', 'qualified_name', 'hic_concurrent.synthetic_untested_idx'))).* FROM pg_temp.hic_index AS idx WHERE eligible;" \
+    "SELECT /* wiki_hic12_partial_coverage_verdict */ status = 'INCONCLUSIVE' AND checked_indexes = 1 AND untested_indexes = 1 AND mismatching_attempts = 1 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic missing_plan_is_not_pass "DELETE /* wiki_hic12_synthetic_remove_plan */ FROM pg_temp.hic_plan AS p USING pg_temp.hic_attempt AS a WHERE a.attempt_id = p.attempt_id AND a.phase = 'index';" \
+    "SELECT /* wiki_hic12_missing_plan_verdict */ status = 'INCONCLUSIVE' AND EXISTS (SELECT 1 FROM pg_temp.hic_pending) FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic profile_mismatch_is_not_pass "UPDATE /* wiki_hic12_synthetic_wrong_profile */ pg_temp.hic_count AS c SET settings = jsonb_set(settings, '{row_security}', '\"on\"'::jsonb) FROM pg_temp.hic_attempt AS a WHERE a.attempt_id = c.attempt_id AND a.phase = 'index';" \
+    "SELECT /* wiki_hic12_profile_verdict */ status = 'INCONCLUSIVE' FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic mixed_snapshots_invalidate_run "UPDATE /* wiki_hic12_synthetic_wrong_snapshot */ pg_temp.hic_count SET snapshot_text = 'wrong snapshot' WHERE attempt_id = 1;" \
+    "SELECT /* wiki_hic12_snapshot_verdict */ status = 'ERROR' FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic wrong_attempt_marker_is_not_pass "UPDATE /* wiki_hic12_synthetic_wrong_marker */ pg_temp.hic_plan AS p SET document = jsonb_set(p.document, marker.path || ARRAY['Output', '0'], to_jsonb('999::bigint'::text)) FROM (SELECT plan.attempt_id, node.path FROM pg_temp.hic_plan AS plan JOIN pg_temp.hic_attempt AS a USING (attempt_id) CROSS JOIN LATERAL pg_temp.hic_plan_nodes(plan.document) AS node WHERE a.phase = 'index' AND node.node ->> 'Node Type' = 'Aggregate') AS marker WHERE marker.attempt_id = p.attempt_id;" \
+    "SELECT /* wiki_hic12_marker_verdict */ status = 'INCONCLUSIVE' FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic existential_pass_retains_optional_error "INSERT /* wiki_hic12_synthetic_attempt */ INTO pg_temp.hic_attempt(attempt_id, relation_oid, phase, intended_index_oid, variant, statement_text) SELECT 99, relation_oid, 'index', index_oid, 2, 'synthetic verdict fixture only' FROM pg_temp.hic_index WHERE eligible; INSERT /* wiki_hic12_synthetic_error */ INTO pg_temp.hic_error(attempt_id, stage, sqlstate, message, snapshot_survived) VALUES (99, 'execution', 'XX000', 'synthetic optional failure, not physical index corruption', true);" \
+    "SELECT /* wiki_hic12_optional_error_verdict */ status = 'PASS' AND error_attempts = 1 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+synthetic unsupported_am_prevents_blanket_success "INSERT /* wiki_hic12_synthetic_unsupported_object */ INTO pg_temp.hic_object SELECT (jsonb_populate_record(NULL::pg_temp.hic_object, to_jsonb(obj) || jsonb_build_object('relation_oid', 4000000000::bigint, 'relation_name', 'synthetic_unsupported', 'qualified_name', 'hic_concurrent.synthetic_unsupported', 'table_am_oid', 4000000001::bigint, 'table_am', 'synthetic', 'in_heap_scope', false, 'exclusion_reason', 'unsupported_table_access_method', 'unsupported_table_am', true))).* FROM pg_temp.hic_object AS obj WHERE relation_name = 't';" \
+    'SELECT /* wiki_hic12_unsupported_verdict */ heap_scope_all_pass AND NOT schema_success AND unsupported_table_ams = 1 FROM pg_temp.hic_schema_result;'
+expect equal_counts_can_hide_different_bags "WITH /* wiki_hic12_bag_cancellation */ heap_bag(tid) AS (VALUES ('(0,1)'::tid), ('(0,2)'::tid)), index_bag(tid) AS (VALUES ('(0,1)'::tid), ('(0,1)'::tid)), missing AS (SELECT tid FROM heap_bag EXCEPT ALL SELECT tid FROM index_bag), extra AS (SELECT tid FROM index_bag EXCEPT ALL SELECT tid FROM heap_bag) SELECT (SELECT count(*) FROM heap_bag) = (SELECT count(*) FROM index_bag) AND (SELECT count(*) FROM missing) = 1 AND (SELECT count(*) FROM extra) = 1;"
+finish_case
+close_case
+
+open_case capture_retry
+start_run hic_concurrent false false
+hic_attempt_fetch || fail "fetch: $HIC_STOP"
+hic_attempt_execute || fail 'first execution failed'
+hic_post_count || fail 'controls'
+hic_recover capture '' 'test deliberately discards the first executed plan' '' '' || fail "recovery: $HIC_STOP"
+hic_post_count || fail 'controls'
+run_loop
+finish_case
+expect capture_retry_keeps_same_snapshot "SELECT /* wiki_hic12_retry_status */ status = 'PASS' AND error_attempts = 1 AND uncovered_error_attempts = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+expect one_failed_and_two_verified_attempts 'SELECT /* wiki_hic12_retry_attempts */ count(*) = 3 AND count(*) FILTER (WHERE accepted) = 2 AND count(*) FILTER (WHERE error_present) = 1 FROM pg_temp.hic_attempt_result;'
+close_case
+
+open_case malformed_json
+start_run hic_concurrent false false
+hic_attempt_fetch || fail "fetch: $HIC_STOP"
+hic_attempt_execute || fail 'first execution failed'
+hic_post_count || fail 'controls'
+plan="$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json"
+sed -n '1,3p' "$plan" > "$plan.cut" && mv "$plan.cut" "$plan" || fail 'could not truncate the plan'
+hic_attempt_import
+rc=$?
+[ "$rc" -eq 4 ] && [ "$HIC_ERR_CODE" = 22P02 ] && [ -n "$HIC_ERR_DETAIL" ] || fail "import status $rc, SQLSTATE ${HIC_ERR_CODE:-none}"
+ok truncated_plan_rejected_by_jsonb
+hic_recover capture "$HIC_ERR_CODE" "$HIC_ERR_MESSAGE" "$HIC_ERR_DETAIL" "$HIC_ERR_HINT" || fail "recovery: $HIC_STOP"
+hic_post_count || fail 'controls'
+run_loop
+finish_case
+expect malformed_plan_recorded "SELECT /* wiki_hic12_malformed_error */ count(*) = 1 AND bool_and(stage = 'capture' AND sqlstate = '22P02' AND detail IS NOT NULL) FROM pg_temp.hic_error;"
+expect malformed_plan_retry_passes "SELECT /* wiki_hic12_malformed_status */ status = 'PASS' AND error_attempts = 1 AND uncovered_error_attempts = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+close_case
+
+open_case lock_timeout
+start_run hic_lock false false
+hic_open aux 5 6 || fail 'lock holder did not start'
+hic_sql aux 'BEGIN /* wiki_hic12_lock_holder */; LOCK /* wiki_hic12_lock_table */ TABLE hic_lock.t IN ACCESS EXCLUSIVE MODE;' || fail 'lock holder'
+run_loop
+hic_sql aux 'ROLLBACK /* wiki_hic12_lock_release */;' || fail 'lock release'
+hic_close aux || fail 'lock holder exit status'
+finish_case
+expect lock_timeout_is_error "SELECT /* wiki_hic12_lock_status */ status = 'ERROR' AND heap_count IS NULL FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+expect lock_timeout_recorded "SELECT /* wiki_hic12_lock_errors */ count(*) = 2 AND bool_and(stage = 'execution' AND sqlstate = '55P03') FROM pg_temp.hic_error;"
+close_case
+
+open_case session_lost
+start_run hic_positive false false
+hic_attempt_once || fail "first attempt: $HIC_STOP"
+hic_sql main 'SELECT /* wiki_hic12_session_pid */ pg_backend_pid();' || fail 'backend pid'
+victim=$HIC_VALUE
+hic_open aux 5 6 || fail 'terminator did not start'
+hic_sql aux "SELECT /* wiki_hic12_terminate */ pg_terminate_backend($victim);" && [ "$HIC_VALUE" = t ] || fail 'termination request'
+tries=0
+while hic_sql aux "SELECT /* wiki_hic12_wait_exit */ count(*) FROM pg_catalog.pg_stat_activity WHERE pid = $victim;" && [ "$HIC_VALUE" != 0 ]; do
+    [ "$tries" -lt 30 ] || fail 'terminated backend did not exit'
+    sleep 1
+    tries=$((tries + 1))
+done
+hic_close aux || fail 'terminator exit status'
+hic_attempt_once
+rc=$?
+[ "$rc" -eq 2 ] || fail "attempt status $rc after termination, expected 2"
+ok lost_session_stops_the_run
+hic_close main
+rc=$?
+[ "$rc" -eq 2 ] || fail "psql exit status $rc, expected 2"
+ok psql_reports_lost_connection
+grep -F -q 'FATAL:  57P01:' "$HIC_OUT/session-main/stderr.log" || fail 'termination message missing'
+ok termination_reported_with_sqlstate
+
+case_name=keeper
+HIC_OUT="$out/keeper"
+mkdir -m 700 "$HIC_OUT" || fail 'output directory'
+hic_open aux 5 6 || fail 'horizon holder did not start'
+hic_sql aux 'BEGIN /* wiki_hic12_keeper_begin */ ISOLATION LEVEL REPEATABLE READ READ ONLY; SELECT /* wiki_hic12_keeper_xid */ txid_current();' || fail 'horizon holder'
+"$bin/psql" -X -q -v ON_ERROR_STOP=1 -f "$work/gate-setup.sql" > "$out/gate-setup.log" 2>&1 || fail "gate setup: $(cat "$out/gate-setup.log")"
+ok late_index_has_indcheckxmin
+check_case old_horizon hic_gate false false
+expect old_horizon_remains_inconclusive "SELECT /* wiki_hic12_old_horizon_status */ status = 'INCONCLUSIVE' AND heap_count = 120 AND checked_indexes = 0 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+expect old_horizon_not_falsely_excluded "SELECT /* wiki_hic12_old_horizon_candidate */ eligible AND indcheckxmin AND NOT actually_checked AND snapshot_usability = 'indcheckxmin_unresolved' FROM pg_temp.hic_candidate_result WHERE index_name = 'gate_idx';"
+close_case
+hic_sql aux 'COMMIT /* wiki_hic12_keeper_finish */;' || fail 'horizon release'
+hic_close aux || fail 'horizon holder exit status'
+check_case fresh_horizon hic_gate false false
+expect fresh_horizon_passes "SELECT /* wiki_hic12_new_horizon_status */ status = 'PASS' AND heap_count = 120 FROM pg_temp.hic_relation_result WHERE relation_name = 't';"
+expect true_flag_can_be_usable "SELECT /* wiki_hic12_new_horizon_candidate */ indcheckxmin AND actually_checked AND snapshot_usability = 'accepted_by_executed_plan' FROM pg_temp.hic_candidate_result WHERE index_name = 'gate_idx';"
+close_case
 cat "$out/gate-setup.log"
 
-name=own_temp_scope
-driver="$out/$name.sql"
-cat > "$driver" <<SQL
-\\i $work/checker.sql
-CREATE /* wiki_hic12_temp_assertions */ TEMP TABLE hic_assert(label text PRIMARY KEY, ok boolean NOT NULL CHECK(ok));
-INSERT /* wiki_hic12_register_test_helper */ INTO pg_temp.hic_owned VALUES ('pg_temp.hic_assert'::regclass);
-CREATE /* wiki_hic12_temp_fixture */ TEMP TABLE hic_user_data(k integer) USING heap;
-INSERT /* wiki_hic12_temp_rows */ INTO pg_temp.hic_user_data VALUES (1), (NULL);
-CREATE /* wiki_hic12_temp_index */ INDEX hic_user_data_idx ON pg_temp.hic_user_data(k);
-INSERT /* wiki_hic12_temp_configuration */ INTO pg_temp.hic_config(target_schema, ddl_stable)
-SELECT nspname, true FROM pg_catalog.pg_namespace WHERE oid = pg_my_temp_schema();
-SELECT /* wiki_hic12_temp_start */ sql_text FROM pg_temp.hic_start_script
-\\gexec
-\\i $out/loop.sql
-INSERT /* wiki_hic12_temp_scope_assert */ INTO pg_temp.hic_assert
-SELECT 'only_application_temp_relation', schema_success AND physical_relations = 1 FROM pg_temp.hic_schema_result;
-INSERT /* wiki_hic12_temp_name_assert */ INTO pg_temp.hic_assert
-SELECT 'prefix_does_not_hide_user_table', status = 'PASS' AND heap_count = 2
-FROM pg_temp.hic_relation_result WHERE relation_name = 'hic_user_data';
-SQL
-finish_case
-
-cat > "$out/bootstrap.sql" <<SQL
-\\i $work/checker.sql
-\\set ON_ERROR_STOP off
-INSERT /* wiki_hic12_missing_ddl_agreement */ INTO pg_temp.hic_config(target_schema, ddl_stable) VALUES ('hic_positive', false);
-\\set ddl_code :LAST_ERROR_SQLSTATE
-\\set ON_ERROR_STOP on
-SELECT /* wiki_hic12_ddl_guard_assert */ 1 / (:'ddl_code' = '23514')::integer;
-SELECT /* wiki_hic12_no_false_configuration */ 1 / (count(*) = 0)::integer FROM pg_temp.hic_config;
-INSERT /* wiki_hic12_missing_schema_configuration */ INTO pg_temp.hic_config(target_schema, ddl_stable) VALUES ('hic_missing_schema', true);
-\\set ON_ERROR_STOP off
-SELECT /* wiki_hic12_missing_schema_start */ sql_text FROM pg_temp.hic_start_script
-\\gexec
-\\set schema_code :LAST_ERROR_SQLSTATE
-\\set schema_message :LAST_ERROR_MESSAGE
-\\set ON_ERROR_STOP on
-ROLLBACK /* wiki_hic12_failed_initialization */;
-SELECT /* wiki_hic12_missing_schema_assert */ 1 / (:'schema_code' = '23514')::integer;
-INSERT /* wiki_hic12_initialization_error */ INTO pg_temp.hic_run_error(
-    event_id, requested_schema, stage, sqlstate, message
-) VALUES (1, 'hic_missing_schema', 'initialization', :'schema_code', :'schema_message');
-SELECT /* wiki_hic12_global_error_state */ 1 / (state = 'ERROR')::integer FROM pg_temp.hic_progress;
-SELECT /* wiki_hic12_no_partial_success */ 1 / (
-    NOT EXISTS (SELECT 1 FROM pg_temp.hic_schema_result)
-    AND NOT EXISTS (SELECT 1 FROM pg_temp.hic_next)
-)::integer;
-SELECT /* wiki_hic12_bootstrap_result */ 'bootstrap_assertions', 5;
-SQL
-"${psql[@]}" -f "$out/bootstrap.sql" > "$out/bootstrap.log" 2>&1
-cat "$out/bootstrap.log"
+case_name=summary
+printf 'assertions_passed=%s\n' "$passed"
 printf '%s\n' "$db" > "$work/last-test-database"
 printf '%s\n' "$out" > "$work/last-test-output"
 HIC_TEST_SH
@@ -2737,7 +3255,7 @@ done
 - Planner context: `get_relation_info()`, relcache index lists and xmin refresh, `build_index_paths()`, index-only eligibility, `build_index_pathkeys()`, deparsing, ordering-operator lookup, subquery pull-up and scan costs.
 - Executor context: EXPLAIN utility execution/destinations/instrumentation, ordinary and index-only scans, table-AM heap fetching, HOT root/redirect traversal and SQL `ctid`.
 - Snapshot and operational context: repeatable-read retention, read-only temporary DML, RLS checks, ordinary and materialized-view locks, VACUUM's cleanup horizon, timeouts and snapshot-age failures.
-- Extension/build boundary: all main operations use existing SQL catalogs and executor facilities. Catalog `.h`/`.dat` definitions feed generated bootstrap data and catalog headers; the checker introduces no C module or generated backend header. The reproduction harness's C port probe is teardown tooling only. pageinspect is a separately built contrib module with page/B-tree/BRIN/GIN/hash regression targets and was not used for the counts. [catalog/Makefile#catalog-inputs](../../../../raw/postgres-12/src/backend/catalog/Makefile#L55-L69) [catalog/Makefile#generated-headers](../../../../raw/postgres-12/src/backend/catalog/Makefile#L87-L101) [pageinspect/Makefile#module-and-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L1-L15)
+- Extension/build boundary: all main operations use existing SQL catalogs and executor facilities. Catalog `.h`/`.dat` definitions feed generated bootstrap data and catalog headers; the checker introduces no C module or generated backend header. The runner and the reproduction harness are Bash and SQL only; the harness's earlier C port probe is replaced by a Bash `/dev/tcp` check. pageinspect is a separately built contrib module with page/B-tree/BRIN/GIN/hash regression targets and was not used for the counts. [catalog/Makefile#catalog-inputs](../../../../raw/postgres-12/src/backend/catalog/Makefile#L55-L69) [catalog/Makefile#generated-headers](../../../../raw/postgres-12/src/backend/catalog/Makefile#L87-L101) [pageinspect/Makefile#module-and-tests](../../../../raw/postgres-12/contrib/pageinspect/Makefile#L1-L15)
 - Tests inspected: core expression/pattern-index, RLS, materialized-view and inheritance cases cited in the test section; adjacent index-only isolation coverage is not an end-to-end test of this design.
 - Glossary reviewed: heap/access method, B-tree, MVCC/snapshot/isolation, sequential/index/index-only scans, RLS, expression/partial indexes, collation/opclass, HOT, TID, pageinspect, PL/pgSQL, indcheckxmin and TransactionXmin. Added Materialized view and PostgreSQL 12 qualifications for the two horizon terms.
 - Comparison pages: NULL values in indexes; CREATE INDEX CONCURRENTLY; invalid-index outcomes; physical index statistics; partitioned indexes; EXPLAIN ANALYZE BUFFERS; relation-tail checking; post-schema-drop health. Navigation and dated records were used for context, not as PostgreSQL evidence.
@@ -2745,6 +3263,8 @@ done
 - Implementation-specific context: client result handling in `PQexecFinish()`, SQL-quoted EXPLAIN index names, custom type-output calls during deparsing, row estimates for SQL set-returning helpers, initialization/attempt error channels and historical reports after COMMIT.
 - Review re-check: the ORDER BY parse path for deparsed keys (`pg_get_indexdef()` parenthesization and constant printing, the grammar's parenthesis handling, SQL92 `ORDER BY` targets, same-type coercion), constant pathkey redundancy, `check_xact_readonly()`, partial-path creation, `cost_sort()`, function-name qualification and the timeout error sites.
 - Runtime verification: the complete published SQL and extracted test harness were exercised on an isolated exact-pin build, including fresh and build-retained workflows. Only the owned sandbox was used; no application database, network fetch, subagent, commit or push was used.
+- Follow-up runner context: psql's non-interactive stdin mode and client-encoding choice, its flush points, statement splitting and quiet output, its error printing and the libpq verbose message format, the `ERROR` and `SQLSTATE` variables, `\echo` and variable interpolation in SQL text and meta-command arguments, dollar quoting in both lexers, the typecast token, slice deparsing, the aborted-transaction statement filter, savepoint rollback and release states, `COPY TO` in read-only transactions and psql's COPY output, end-of-input and lost-connection exits, backend shutdown on client disconnect, `pg_terminate_backend()`, `SET ROLE` with a string constant, libpq environment variables and the JSON parser's end-of-input error. A first development run of the driver composed the runner's steps without creating the plan directory; every attempt then failed closed as a `capture` error with no PASS, and the runner now creates that directory where it saves each plan.
+- Follow-up glossary review: added psql, libpq and Dollar quoting, checked on PostgreSQL 12; re-read SQLSTATE, Subtransaction, EXPLAIN, Utility command, Prepared statement, SPI and PL/pgSQL, whose PostgreSQL 12 statements agree with the runner sections.
 
 ## Evidence Map
 
@@ -2765,6 +3285,11 @@ done
 | SQL orchestration limitation | [xml.c](../../../../raw/postgres-12/src/backend/utils/adt/xml.c#L2671-L2689), [utility.c](../../../../raw/postgres-12/src/backend/tcop/utility.c#L99-L118) | [execute.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/execute.sgml#L28-L50), [psql-ref.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L2059-L2094) |
 | Heap visibility and HOT resolution | [indexam.c](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635), [heapam.c](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1559-L1637) | [README.HOT](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L48-L122) |
 | Physical inspection is not visible-row counting | [rawpage.c](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L159-L169), [heapfuncs.c](../../../../raw/postgres-12/contrib/pageinspect/heapfuncs.c#L180-L224) | [pageinspect.sgml](../../../../raw/postgres-12/doc/src/sgml/pageinspect.sgml#L169-L175) |
+| Runner request/reply protocol over psql's standard input | [mainloop.c#flush-and-send](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L147-L440), [command.c#echo-and-flush](../../../../raw/postgres-12/src/bin/psql/command.c#L1116-L1152), [common.c#result-variables](../../../../raw/postgres-12/src/bin/psql/common.c#L544-L584) | [psql-ref.sgml#echo](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L1860-L1873); 124 measured assertions |
+| Runner error classification and parsing | [fe-protocol3.c#verbose-message](../../../../raw/postgres-12/src/interfaces/libpq/fe-protocol3.c#L1017-L1095), [logging.c#locus-prefix](../../../../raw/postgres-12/src/common/logging.c#L164-L179), [postgres.c#aborted-transaction-filter](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L1091-L1105) | [errcodes.txt#classes](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L77-L99); measured RLS, lock-timeout, truncated-plan and missing-schema cases |
+| Dollar-quoted values and the interpolation guard | [psqlscan.l#quotes-and-variables](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L766), [scan.l#dolqdelim](../../../../raw/postgres-12/src/backend/parser/scan.l#L292-L294), [ruleutils.c#printSubscripts](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10614-L10637) | [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L621), [psql-ref.sgml#interpolation](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L4020-L4061); measured slice probe and guard fixture |
+| Recovery only while the attempt savepoint exists | [xact.c#savepoint-states](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4140-L4308) | [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55); measured capture retry and truncated-plan retry |
+| Lost session and closed input end the run without a commit | [common.c#CheckConnection](../../../../raw/postgres-12/src/bin/psql/common.c#L386-L397), [postgres.c#client-EOF](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4433-L4455), [postinit.c#ShutdownPostgres](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L1189-L1193) | [psql-ref.sgml#exit-status](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L635-L643); measured `pg_terminate_backend()` case |
 | Duplicate-sensitive visible-identity comparison | [heaptuple.c](../../../../raw/postgres-12/src/backend/access/common/heaptuple.c#L636-L640), [heapam_handler.c](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L148-L167) | [select.sgml#EXCEPT-ALL](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L1281-L1294), [ddl.sgml#ctid](../../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L1198-L1205) |
 
 ## Open Questions
@@ -2774,6 +3299,8 @@ done
 - **Complete arbitrary-candidate coverage is not established.** Constant/redundant orderings, competing equivalent indexes, snapshot usability, custom expressions and operator resolution can leave eligible indexes untested. No SQL-only per-index forcing mechanism is proposed. This is a documented feasibility limit, not a promised future outcome.
 - **No physical fault-injection coverage yet.** Evaluator tests using synthetic records cannot establish detection rates for damaged index files. A real corruption suite needs separate authorization and a capability beyond the checker defined here.
 - **Operational/test gaps remain explicit.** The unexercised cases are listed under measured coverage. The SQL does not prove that the DDL agreement was honored or that damaged catalogs retained a complete inventory; `inventory_complete` means the inventory statements completed. The optional visible-identity capture pipeline and large-schema/performance validation remain future work.
+- **Runner portability is measured on one client stack.** The runner avoids Bash 4 features and uses POSIX utilities, but it ran only under GNU Bash 5.2.21 with the psql built from the pin. Another psql release could print errors or flush output differently; this page has no evidence for one, so use the pinned psql or re-run the harness with the intended client.
+- **The interpolation guard is conservative, and its refusals are not coverage.** A colon followed by a quote or brace inside a string constant of a key expression is refused as well, and a refused candidate leaves its relation `ERROR` under the existing status rules. Such a candidate can still be checked through the operator workflow with a client that sends the text unchanged.
 - **Concept-layer gap:** PostgreSQL 12 has no common-concept page for MVCC snapshots with heap/HOT index fetching or for executed-plan validation. Such pages could be separate follow-up tasks; none is created by this task.
 
 ## Source References
@@ -2878,6 +3405,24 @@ done
 - [pathnodes.h#EC_MUST_BE_REDUNDANT](../../../../raw/postgres-12/src/include/nodes/pathnodes.h#L945-L950)
 - [allpaths.c#create_plain_partial_paths](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L796-L805)
 - [postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095)
+- [startup.c#stdin-main-loop](../../../../raw/postgres-12/src/bin/psql/startup.c#L438-L446)
+- [mainloop.c#send-on-semicolon](../../../../raw/postgres-12/src/bin/psql/mainloop.c#L410-L440)
+- [common.c#SetResultVariables](../../../../raw/postgres-12/src/bin/psql/common.c#L544-L584)
+- [command.c#exec_command_echo](../../../../raw/postgres-12/src/bin/psql/command.c#L1116-L1152)
+- [psqlscanslash.l#argument-variables](../../../../raw/postgres-12/src/bin/psql/psqlscanslash.l#L374-L389)
+- [copy.c#handleCopyOut](../../../../raw/postgres-12/src/bin/psql/copy.c#L437-L467)
+- [psqlscan.l#variable-substitution](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762)
+- [logging.c#locus-prefix](../../../../raw/postgres-12/src/common/logging.c#L164-L179)
+- [fe-protocol3.c#verbose-message](../../../../raw/postgres-12/src/interfaces/libpq/fe-protocol3.c#L1017-L1046)
+- [errcodes.txt#classes-00-02](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L77-L99)
+- [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L588)
+- [scan.l#dolqdelim](../../../../raw/postgres-12/src/backend/parser/scan.l#L292-L294)
+- [xact.c#RollbackToSavepoint](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4249-L4308)
+- [copy.c#read-only-COPY-FROM](../../../../raw/postgres-12/src/backend/commands/copy.c#L1060-L1066)
+- [signalfuncs.c#pg_terminate_backend](../../../../raw/postgres-12/src/backend/storage/ipc/signalfuncs.c#L128-L137)
+- [libpq.sgml#environment](../../../../raw/postgres-12/doc/src/sgml/libpq.sgml#L7296-L7319)
+- [json.c#report_parse_error](../../../../raw/postgres-12/src/backend/utils/adt/json.c#L1126-L1137)
+- [jsonb.c#jsonb_from_cstring](../../../../raw/postgres-12/src/backend/utils/adt/jsonb.c#L238-L257)
 
 ## Navigation
 

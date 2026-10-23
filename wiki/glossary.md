@@ -81,6 +81,7 @@ verified_by_agent: not yet
   - [Dependency](#dependency)
   - [Dirty buffer](#dirty-buffer)
   - [disable_cost](#disable_cost)
+  - [Dollar quoting](#dollar-quoting)
   - [Dynamic shared memory](#dynamic-shared-memory)
   - [effective_cache_size](#effective_cache_size)
   - [effective_io_concurrency](#effective_io_concurrency)
@@ -150,6 +151,7 @@ verified_by_agent: not yet
   - [LATERAL](#lateral)
   - [Leaf page](#leaf-page)
   - [Leakproof function](#leakproof-function)
+  - [libpq](#libpq)
   - [Line pointer](#line-pointer)
   - [Lock mode](#lock-mode)
   - [Lock queue](#lock-queue)
@@ -246,6 +248,7 @@ verified_by_agent: not yet
   - [ProjectSet](#projectset)
   - [Promotion](#promotion)
   - [Pruning](#pruning)
+  - [psql](#psql)
   - [Publication](#publication)
   - [Qual](#qual)
   - [Query jumbling](#query-jumbling)
@@ -391,6 +394,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-22, the PostgreSQL 12 on-disk index TID check added [Torn page](#torn-page), checked on PostgreSQL 12 only. There are 351 terms.
 
 - On 2026-10-23, the PostgreSQL 12 visible-count checker plan added [Materialized view](#materialized-view), checked on PostgreSQL 12 only, and PostgreSQL 12 qualifications for [indcheckxmin](#indcheckxmin) and [TransactionXmin](#transactionxmin). The indcheckxmin explanation now makes the horizon condition explicit. There are 352 terms.
+
+- On 2026-10-23, the same page's Bash and SQL runner follow-up added [Dollar quoting](#dollar-quoting), [libpq](#libpq) and [psql](#psql), checked on PostgreSQL 12 only. There are 355 terms.
 
 ## Source Pins
 
@@ -1312,6 +1317,14 @@ The penalty applies to index scans, bitmap scans, TID scans, explicit sorts, has
 
 Related: [Cost](#cost), [Path](#path), [GUC](#guc), [Sequential scan](#sequential-scan), [Memoize](#memoize), [Planner](#planner)
 
+### Dollar quoting
+
+**Aliases:** dollar-quoted string, `$tag$...$tag$`, `$$`, `dolqdelim`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, dollar quoting writes a string constant between two identical delimiters, each a dollar sign, an optional tag and another dollar sign, such as `$q$Dianne's horse$q$`. Nothing inside is escaped: backslashes and single quotes are ordinary characters, and the string ends only at the same delimiter ([syntax.sgml#dollar-quoting](../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L588)). The tag follows the rules of an unquoted identifier without `$` and is case sensitive, and a dollar quote that follows a keyword or identifier needs whitespace before it ([syntax.sgml#tag-rules](../raw/postgres-12/doc/src/sgml/syntax.sgml#L610-L621)). The server's lexer recognizes the delimiter as `dolqdelim` ([scan.l:292-294](../raw/postgres-12/src/backend/parser/scan.l#L292-L294)). [psql](#psql)'s lexer tracks the same quotes in an exclusive state, so it recognizes neither backslash commands nor psql variable references inside them ([psqlscan.l:136](../raw/postgres-12/src/fe_utils/psqlscan.l#L136), [psqlscan.l#dollar-quote](../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588), [psqlscan.l#backslash-and-variables](../raw/postgres-12/src/fe_utils/psqlscan.l#L702-L766)). A tag that does not occur in the value therefore carries any text through both lexers unchanged.
+
+Related: [psql](#psql), [libpq](#libpq)
+
 ### Dynamic shared memory
 
 **Aliases:** DSM, DSA, `dsm_segment`, `dsa_area`, `dshash`, DSM registry, `dynamic_shared_memory_type`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2216,6 +2229,14 @@ A leakproof function has no side effects and reveals nothing about its arguments
 - PostgreSQL 19: Holds ([pg_proc.h:67](../raw/postgres-19/src/include/catalog/pg_proc.h#L67), [restrictinfo.c:135](../raw/postgres-19/src/backend/optimizer/util/restrictinfo.c#L135), [functioncmds.c:1165](../raw/postgres-19/src/backend/commands/functioncmds.c#L1165), [functioncmds.c:1452](../raw/postgres-19/src/backend/commands/functioncmds.c#L1452)).
 
 Related: [Row-level security](#row-level-security), [Security barrier](#security-barrier), [Function volatility](#function-volatility), [Qual](#qual)
+
+### libpq
+
+**Aliases:** libpq, `PQconnectdb`, `PQerrorMessage`, `pqBuildErrorMessage3`, `PGHOST`, `PGDATABASE`, `PGOPTIONS`, `PGSERVICE`, error verbosity, `PQERRORS_VERBOSE`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, libpq is the C client library through which [psql](#psql) and other client programs connect and run queries. When the calling program does not supply a connection parameter, libpq takes a default from environment variables such as `PGHOST`, `PGDATABASE`, `PGOPTIONS` and `PGSERVICE` ([libpq.sgml#libpq-envars](../raw/postgres-12/doc/src/sgml/libpq.sgml#L7296-L7319), [libpq.sgml#PGOPTIONS](../raw/postgres-12/doc/src/sgml/libpq.sgml#L7410-L7419)). libpq also builds the text that clients print for a server error: the severity, then at verbose verbosity the [SQLSTATE](#sqlstate), then the primary message, followed by `DETAIL:`, `HINT:` and further labeled lines ([fe-protocol3.c#pqBuildErrorMessage3](../raw/postgres-12/src/interfaces/libpq/fe-protocol3.c#L989-L1095)).
+
+Related: [psql](#psql), [SQLSTATE](#sqlstate)
 
 ### Line pointer
 
@@ -3437,6 +3458,14 @@ Pruning removes dead tuples from one heap page and shortens [HOT](#hot) chains w
 - PostgreSQL 19: Holds, except for two changes to on-access pruning, both new in 19. It takes a visibility-map buffer and, for a scan the planner marked read-only, can also set the page all-visible in the VM. And `pd_prune_xid` now also marks pages with recent inserts of unfrozen tuples, so such pages get this chance too ([heapam.c:2097-2098](../raw/postgres-19/src/backend/access/heap/heapam.c#L2097-L2098), [heapam.c:2501-2502](../raw/postgres-19/src/backend/access/heap/heapam.c#L2501-L2502), [pruneheap.c:255-262](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L255-L262), [pruneheap.c:288-296](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L288-L296), [pruneheap.c:364-366](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L364-L366)). The definition, the early returns, the free-space trigger, `heap_page_prune_and_freeze()` on both paths and the root line pointer rule are unchanged ([README.HOT#Pruning](../raw/postgres-19/src/backend/access/heap/README.HOT#L199-L219), [heapam.c:639](../raw/postgres-19/src/backend/access/heap/heapam.c#L639), [pruneheap.c#heap_page_prune_opt](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L272-L325), [pruneheap.c:368](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L368), [pruneheap.c#heap_page_prune_and_freeze](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L1124-L1147), [README.HOT:124-128](../raw/postgres-19/src/backend/access/heap/README.HOT#L124-L128)).
 
 Related: [Freezing](#freezing), [HOT](#hot), [Line pointer](#line-pointer), [VACUUM](#vacuum)
+
+### psql
+
+**Aliases:** psql, meta-command, backslash command, `\echo`, `\gexec`, `ON_ERROR_STOP`, `VERBOSITY`, psql variables `ERROR` and `SQLSTATE`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, psql is the terminal client shipped with the server. It reads SQL and its own backslash meta-commands, sends input to the server when it reaches a statement's terminating semicolon, and prints the results ([psql-ref.sgml#entering-commands](../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L739-L746), [mainloop.c:410-440](../raw/postgres-12/src/bin/psql/mainloop.c#L410-L440)). Meta-commands run in the client and never reach the server; `\echo`, for example, prints its arguments ([command.c#exec_command_echo](../raw/postgres-12/src/bin/psql/command.c#L1116-L1152)). Outside quoted text, psql replaces `:name`, `:'name'` and `:"name"` with the value of a psql variable of that name, and after each query it sets the variables `ERROR` and `SQLSTATE` ([psqlscan.l#variable-substitution](../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762), [common.c#SetResultVariables](../raw/postgres-12/src/bin/psql/common.c#L544-L584)). When its input source is not an interactive terminal, psql runs non-interactively. It continues after an error unless `ON_ERROR_STOP` is set, and it exits with status 2 when the connection is lost and 3 when `ON_ERROR_STOP` stopped a script ([mainloop.c:66](../raw/postgres-12/src/bin/psql/mainloop.c#L66), [psql-ref.sgml#ON_ERROR_STOP](../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3844-L3861), [psql-ref.sgml#exit-status](../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L635-L643)).
+
+Related: [libpq](#libpq), [Dollar quoting](#dollar-quoting), [Utility command](#utility-command)
 
 ### Publication
 
@@ -5007,7 +5036,17 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (401 files):
+**PostgreSQL 12** (410 files):
+
+- [syntax.sgml#dollar-quoting](../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L588)
+- [scan.l:292-294](../raw/postgres-12/src/backend/parser/scan.l#L292-L294)
+- [psqlscan.l#variable-substitution](../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762)
+- [libpq.sgml#libpq-envars](../raw/postgres-12/doc/src/sgml/libpq.sgml#L7296-L7319)
+- [fe-protocol3.c#pqBuildErrorMessage3](../raw/postgres-12/src/interfaces/libpq/fe-protocol3.c#L989-L1095)
+- [psql-ref.sgml#exit-status](../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L635-L643)
+- [mainloop.c:410-440](../raw/postgres-12/src/bin/psql/mainloop.c#L410-L440)
+- [command.c#exec_command_echo](../raw/postgres-12/src/bin/psql/command.c#L1116-L1152)
+- [common.c#SetResultVariables](../raw/postgres-12/src/bin/psql/common.c#L544-L584)
 
 - [snapmgr.h#EarlyPruningEnabled](../raw/postgres-12/src/include/utils/snapmgr.h#L46)
 - [rules.sgml#materialized-views](../raw/postgres-12/doc/src/sgml/rules.sgml#L898-L929)
