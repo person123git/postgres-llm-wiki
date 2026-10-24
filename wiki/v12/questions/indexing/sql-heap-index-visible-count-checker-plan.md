@@ -22,6 +22,7 @@ verified_by_agent: not yet
   - [Mandatory plan validation](#mandatory-plan-validation)
   - [Result records and aggregation](#result-records-and-aggregation)
   - [Concurrency performance and correctness limits](#concurrency-performance-and-correctness-limits)
+  - [Heap-side loss and the unresolved-TID signal](#heap-side-loss-and-the-unresolved-tid-signal)
   - [Stronger SQL diagnostics and pageinspect](#stronger-sql-diagnostics-and-pageinspect)
   - [Executable SQL installation](#executable-sql-installation)
   - [How the runner talks to psql](#how-the-runner-talks-to-psql)
@@ -207,6 +208,14 @@ Fix all issues.
 
 > Scope: fix every finding from the PostgreSQL 12 review, including the runner, measurement harness and affected descriptions, and rerun the measurements. This adds complete multiline-value handling, consistent text encoding and per-invocation server ownership to the same checking contract.
 
+Follow-up (2026-10-24):
+
+Follow AGENTS.md. In PostgreSQL 12, review the question page "SQL Heap and Index Visible-Count Checker in PostgreSQL 12 (unverified)". Find possible false negatives and edge cases. Propose a plan to fix the issues, but do not fix them.
+
+Implementation approval: Implement the plan.
+
+> Scope: the review found five false negatives and six edge cases. The asker chose a new relation status for anomalies, SQL-only unresolved-TID counters with documentation for heap-side loss, and one physical fault-injection leg in the harness. This adds `PASS_WITH_ANOMALY` to the six result statuses above, refuses server settings that hide damage, detects identity changes after the snapshot, and stops on any unreadable local evidence.
+
 ## Answer
 
 ### Feasibility and execution contract
@@ -221,6 +230,10 @@ The run uses one dedicated connection to a primary. It writes only its own tempo
 
 The checker guarantees neither a particular index choice nor complete candidate coverage. A usable positive result requires an accepted execution; matching counts do not prove complete index correctness. The [planner](../../../glossary.md#planner) decides which ordered index path is cheapest. [indxpath.c#build_index_paths](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050)
 
+**Count equality cannot detect heap-side data loss.** Both scans read the same heap, and an index scan silently skips an index entry whose heap row is gone, so lost rows drop out of both counts equally. A table whose heap blocks were all zeroed would pass with 0 = 0; the measured zeroed-block fixture loses 58 of 300 rows and still passes. The runner reports each accepted index scan's TIDs that reached no visible row, `unresolved_index_tids`, as a best-effort signal that never changes a status. The [heap-side loss](#heap-side-loss-and-the-unresolved-tid-signal) walkthrough gives the mechanism. [heapam.c#unresolved-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1590) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635)
+
+Three more rules keep positive evidence of damage from reading as success. A relation where one index matches while another index's accepted count differs, or where an attempt failed with a storage-class SQLSTATE, gets the added status `PASS_WITH_ANOMALY`. The run refuses server settings that zero or accept damaged pages. And a TRUNCATE, rewrite, refresh, re-creation or index rename committed after the snapshot makes the relation `ERROR` instead of a stale PASS.
+
 ### Values and decision flow
 
 The checker delegates [MVCC](../../../glossary.md#mvcc) visibility to PostgreSQL's [executor](../../../glossary.md#executor). A [sequential scan](../../../glossary.md#sequential-scan) passes the execution [snapshot](../../../glossary.md#snapshot) to the table access method. An ordinary [index scan](../../../glossary.md#index-scan) passes the same snapshot into [heap](../../../glossary.md#heap) fetching after obtaining index tuple identifiers. [nodeSeqscan.c#SeqNext](../../../../raw/postgres-12/src/backend/executor/nodeSeqscan.c#L50-L82) [nodeIndexscan.c#IndexNext](../../../../raw/postgres-12/src/backend/executor/nodeIndexscan.c#L105-L149) [indexam.c#index_fetch_heap](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L573)
@@ -233,6 +246,9 @@ The checker delegates [MVCC](../../../glossary.md#mvcc) visibility to PostgreSQL
 | `J` | Actual index OID resolved against retained catalog facts | Stored separately from the intended candidate | Determines actual coverage |
 | `I(T,J,S)` | Exact count from an accepted ordinary Index Scan | Temporary capture plus local records | Comparison with `H` |
 | `delta` | `I - H` | Derived by Bash for accepted index attempts | Difference of two nonnegative signed-64-bit counts; its range remains within signed 64 bits |
+| `unresolved_index_tids` | TIDs an accepted index scan returned minus the visible heap rows they reached, from this backend's per-transaction counters | Live counters read before and after the count; stored per attempt | Best-effort sign of index entries whose heap rows are gone; never changes a status ([pgstatfuncs.c#xact-tuple-counters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1683-L1711)) |
+| Anomaly | An accepted index count that differs from `H`, or an attempt error of SQLSTATE class XX, 58 or 01 | Derived by Bash from attempt records | Turns a match into `PASS_WITH_ANOMALY` |
+| `relfilenode` and names | Each table's and index's storage file number and name at `S` | Stored by the inventory; compared once with the current catalog | A difference is identity drift, which makes the relation `ERROR` |
 | Candidate state | Eligibility facts, generated ordering, intended attempts and actual accepted OIDs | Local files keyed by numeric OID and attempt ID | Drives retries, stopping and verdicts |
 | `indcheckxmin`, catalog `xmin`, `TransactionXmin` | Catalog flag, stored index-tuple xmin and backend horizon | The inventory stores the first two; the planner evaluates its current relcache tuple against the backend horizon | Determines snapshot usability; see [eligibility](#index-eligibility-and-ordering-generation) ([plancat.c#horizon](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234)) |
 
@@ -244,21 +260,24 @@ The objective is `PASS(T,S)` when at least one eligible, actually checked index 
 
 ```text
 validate configuration → one psql session → two temporary tables
-  → begin retained read-only snapshot → inventory catalog facts
+  → begin retained read-only snapshot → refuse damage-hiding server settings
+  → inventory catalog facts
   → Bash classifies each object
       outside scope ───────────────────────────────→ NOT_APPLICABLE
       permission/identity failure ─────────────────→ ERROR
       no eligible index ──────────────────────────→ NO_ELIGIBLE_INDEX
       supported target
         → up to two heap attempts; require an accepted baseline
+        → names and relfilenodes still match the snapshot?
+            no ───────────────────────────────────→ ERROR (identity drift)
         → for each eligible, not-yet-covered index with supported ordering
             up to two attempts: normal sort profile, then discouraged sort
-            savepoint → exact count INSERT + executed plan → native JSON decoding
-              SQL/client/capture failure → rollback → local error record
+            TID counters → savepoint → exact count INSERT + executed plan → native JSON decoding
+              SQL/client/capture failure or warning → rollback → local error record
               rejected plan             → release → local rejection record
-              accepted plan             → release → credit actual index OID
+              accepted plan             → release → credit actual index OID, unresolved TIDs
             matching count → stop this relation unless exhaustive
-        → Bash evaluates retained evidence and uncovered errors
+        → Bash evaluates retained evidence, anomalies and uncovered errors
   → verify transaction identity → COMMIT → Bash writes reports
   → summary marks completion only when reporting and session close succeed
 ```
@@ -346,13 +365,26 @@ Do not remove inaccessible tables from the inventory with a privilege predicate.
 
 Coordinate a DDL-stable window **before the first snapshot-acquiring statement and through the end of the applicable checking transaction**. This includes inventory/preflight queries and scratch-table INSERTs, not just the first target count. The window covers relation creation/drop/rename/schema moves, partition attachment/detachment, table rewrites, `TRUNCATE`, materialized-view refresh, and index creation/drop/rebuild. Ordinary reads acquire `ACCESS SHARE`; planner inspection also opens indexes and retains its locks. Those locks do not constitute a universal schema or concurrent-DDL freeze. In particular, the documented non-MVCC-safe rewrite/TRUNCATE case can affect a relation not yet accessed when an older snapshot was taken. [parse_relation.c#read-lock](../../../../raw/postgres-12/src/backend/parser/parse_relation.c#L1223-L1235) [plancat.c#index-locks](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L170-L196) [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702)
 
+**The runner detects identity drift itself.** After a relation's accepted heap attempt, the planner's `ACCESS SHARE` locks on the table and all of its indexes last until COMMIT, because a released savepoint passes its locks to the transaction. [plancat.c#index-locks](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L170-L196) [resowner.c#subtransaction-locks](../../../../raw/postgres-12/src/backend/utils/resowner/resowner.c#L594-L603)
+
+The runner then compares, for the table and each index, the snapshot-time name and [`relfilenode`](../../../glossary.md#relfilenumber) with the current catalog. `to_regclass()` and `pg_relation_filenode()` look names and rows up in the system caches rather than with the snapshot, and acquiring a lock first processes pending invalidations, so the caches reflect every commit up to the lock. A difference saves the relation's `identity_drift` and makes it `ERROR`; no index attempt follows. [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968) [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904) [lmgr.c#invalidations-on-lock](../../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L125-L139)
+
+| Change committed after `S`, before the lock | Effect without the check | What the check sees |
+|---|---|---|
+| [`TRUNCATE`](../../../glossary.md#truncate) or a [table-rewriting](../../../glossary.md#table-rewrite) `ALTER TABLE` | The table looks empty to `S`, so both counts are 0 [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702) | A new `relfilenode` |
+| Non-concurrent `REFRESH MATERIALIZED VIEW` | The refresh inserts frozen tuples, which `S` can see, so the counts describe post-snapshot data [matview.c#frozen-refresh](../../../../raw/postgres-12/src/backend/commands/matview.c#L460-L467) | A new `relfilenode` |
+| Drop and re-create under the same name | The count statement names, and counts, the new table | The name resolves to another OID |
+| `ALTER INDEX ... RENAME`, or the `REINDEX CONCURRENTLY` swap | Coverage is credited to the wrong index, because EXPLAIN prints the current name | The name resolves to another OID |
+
+An index rename takes `ShareUpdateExclusiveLock`, as does `REINDEX CONCURRENTLY` while it swaps names, and neither conflicts with `ACCESS SHARE`. Such a swap can therefore commit even after the identity check, so the runner also resolves each executed `Index Name` through `to_regclass()` and rejects the attempt, recording drift, when it maps to another OID. A rolled-back attempt releases its locks, which is why the check waits for the accepted heap attempt. New relations, new indexes and changed index flags are not detected; the DDL window remains an operator premise for them. [tablecmds.c#index-rename-lock](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L3305-L3312) [indexcmds.c#session-lock](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3070-L3074) [indexcmds.c#concurrent-swap](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3202-L3262) [lock.c#lock-conflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103)
+
 An optional pre-lock phase can use `LOCK TABLE ONLY ... IN ACCESS SHARE MODE` for known ordinary targets in deterministic OID order. This uses `SELECT` privilege. **Do not emit that command for a materialized view on PostgreSQL 12**: its `LOCK TABLE` implementation accepts tables, partitioned tables and views, but rejects materialized views. An ordinary read, such as a preflight `SELECT ... LIMIT 0`, can acquire the materialized-view read lock under the already established DDL coordination policy. That preflight is not a count and supplies no scan evidence. The implementation below does not add this pre-lock phase; ordinary count planning/execution acquires read locks as targets are reached. Ordinary refresh requests `ACCESS EXCLUSIVE`; concurrent refresh requests `EXCLUSIVE`, which permits `ACCESS SHARE`, so the latter must be covered by the explicit coordination policy rather than presumed blocked. [lockcmds.c#allowed-kinds](../../../../raw/postgres-12/src/backend/commands/lockcmds.c#L90-L103) [lockcmds.c#privilege](../../../../raw/postgres-12/src/backend/commands/lockcmds.c#L302-L310) [matview.c#refresh-lock](../../../../raw/postgres-12/src/backend/commands/matview.c#L159-L169) [lock.c#exclusive-conflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L93-L103)
 
-If identity, membership, eligibility or a DDL assumption changes, invalidate the affected attempt or run. Do not mix an old heap count with a count taken after restarting the transaction. Re-discover and recount in a new transaction with a new run/snapshot identifier.
+If identity, membership, eligibility or another DDL assumption changes, the affected attempt or run is not valid evidence; the runner detects only the identity drift described below. Do not mix an old heap count with a count taken after restarting the transaction. Re-discover and recount in a new transaction with a new run/snapshot identifier.
 
 ### Settings and query shapes
 
-All [GUC](../../../glossary.md#guc) settings in this table are `user` / `PGC_USERSET`; none requires reload or restart. The checking profiles use `SET LOCAL`. Installation also sets the dedicated session's search path, 60-second statement timeout and 2-second lock timeout before the checking transaction begins. Record effective values as well as the requested profile. The isolation level is selected at transaction start, before a query takes a snapshot. [guc.c#scan-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L881-L941) [guc.c#parallel-setting](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3007-L3015) [guc.c#row-security](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1571-L1578) [guc.c#timeouts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2396) [guc.c#search-path](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3789-L3797) [guc.c#quote-all-identifiers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1816-L1824) [set_transaction.sgml#isolation-timing](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L116-L123)
+All [GUC](../../../glossary.md#guc) settings in this table are `user` / `PGC_USERSET`; none requires reload or restart. The checking profiles use `SET LOCAL`. Installation also sets the dedicated session's search path, 60-second statement timeout and 2-second lock timeout before the checking transaction begins, and turns off `idle_in_transaction_session_timeout`: a role or database value would otherwise end the session while Bash works between statements. Record effective values as well as the requested profile. The isolation level is selected at transaction start, before a query takes a snapshot. [guc.c#scan-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L881-L941) [guc.c#parallel-setting](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3007-L3015) [guc.c#row-security](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1571-L1578) [guc.c#timeouts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2396) [guc.c#search-path](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3789-L3797) [guc.c#quote-all-identifiers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1816-L1824) [set_transaction.sgml#isolation-timing](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L116-L123)
 
 | Setting | Pin's default | Heap profile | Index profile | Purpose/mechanism |
 |---|---|---|---|---|
@@ -367,8 +399,20 @@ All [GUC](../../../glossary.md#guc) settings in this table are `user` / `PGC_USE
 | `quote_all_identifiers` | `off` | `off` | `off` | Fix deparser/EXPLAIN identifier spelling independently of the caller's settings |
 | `lock_timeout` | `0`, disabled | Starting budget `'2s'` | Same | Bound each lock wait; expiry raises SQLSTATE `55P03` ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095)); adapt to the operating window |
 | `statement_timeout` | `0`, disabled | Starting budget `'15min'` | Same | Bound each statement; expiry raises SQLSTATE `57014` ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095)), which is an error, never a zero count |
+| `idle_in_transaction_session_timeout` | `0`, disabled ([guc.c#idle-timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2400-L2408)) | `0` for the session | Same | Overrides a role or database value; the server arms this timer whenever the session waits inside a transaction ([postgres.c#idle-timer](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4141-L4152)) |
 
 The nondefault scan profiles change costing, not the acceptance contract. `enable_seqscan = off` and `enable_indexscan = off` add [`disable_cost`](../../../glossary.md#disable_cost); disabling index-only scans is checked when constructing an index-only path. The official sequential-scan and sort documentation expressly says these methods cannot be suppressed entirely. [costsize.c#seqscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L225-L232) [costsize.c#indexscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L525-L535) [costsize.c#bitmap-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L963-L970) [indxpath.c#index-only-gate](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L1898-L1907) [config.sgml#seqscan-and-sort](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4616-L4648)
+
+The runner reads five server settings it never sets. It refuses the run, with exit status 2 and the reason in `summary.txt`, unless four of them have their defaults; `data_checksums` is only recorded.
+
+| Setting | Default and context | Why a nondefault value is refused |
+|---|---|---|
+| `zero_damaged_pages` | `off`; `superuser` [guc.c#damage-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1133-L1162) | A page that fails verification is zeroed into a valid buffer, with a WARNING. A retry reads that cached buffer without verification and succeeds, and a read past the end of a file returns zeros with no report at all. [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) [bufmgr.c#valid-buffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L956) [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L763-L793) [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L631) |
+| `ignore_checksum_failure`, for [data checksums](../../../glossary.md#data-checksums) | `off`; `superuser` [guc.c#damage-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1133-L1162) | A page that fails its checksum but has a sane header is used. The only report is a WARNING with SQLSTATE 01000, because `PageIsVerified()` passes `ERRCODE_DATA_CORRUPTED` without `errcode()` and a WARNING defaults to 01000. [bufpage.c#checksum-warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L161) [elog.c#default-sqlstate](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388) |
+| `track_counts` | `on`; `superuser` [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1393-L1399) | Off leaves relations without statistics counters, so the unresolved-TID signal would read 0. [pgstat.c#initstats-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1751-L1772) |
+| `old_snapshot_threshold` | `-1`, disabled; `postmaster`, restart [guc.c#old_snapshot_threshold](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3041-L3049) | Enabled, [pruning](../../../glossary.md#pruning) can remove rows `S` still sees. Sequential-scan page reads test for that and raise "snapshot too old", but the index-path heap fetch never tests, so an index count can come out silently low. [heapam.c#seqscan-old-snapshot](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L402-L405) [bufmgr.h#TestForOldSnapshot](../../../../raw/postgres-12/src/include/storage/bufmgr.h#L264-L275) [heapam_handler.c#index-fetch](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L115-L167) |
+
+A superuser can change the first three for one session, per role or database, or in the configuration file with a reload; the last needs a restart. Separately, a count statement that prints a class-01 report fails its attempt, so such a warning never accompanies an accepted count.
 
 The heap counting shape is:
 
@@ -382,13 +426,13 @@ The initial index counting shape is:
 ```sql
 SELECT /* wiki_index_count_shape */ count(*)
 FROM (
-    SELECT 1
+    SELECT
     FROM ONLY target_schema.target_relation
     ORDER BY indexed_key ASC NULLS LAST
 ) AS ordered_rows;
 ```
 
-These illustrative shapes are embedded as explained count INSERTs in the runner. Replace the names and the entire ordering list using the inventory/deparser process above. A key with a different direction, NULL positioning, collation or operator family needs its corresponding specification. The inner SELECT intentionally has no restricting `WHERE`, `DISTINCT`, grouping, sampling, join, limit, offset or row-locking clause. The outer aggregate counts rows, not non-NULL keys. A sorting subquery is not subject to the simple-subquery pull-up rule on this pin; useful ordering can therefore motivate an index path, but the chosen plan is still subject to validation. [prepjointree.c#sorting-subquery](../../../../raw/postgres-12/src/backend/optimizer/prep/prepjointree.c#L1442-L1463) [indxpath.c#ordered-path](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050) [func.sgml#count](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L14917-L14936)
+These illustrative shapes are embedded as explained count INSERTs in the runner. Replace the names and the entire ordering list using the inventory/deparser process above. A key with a different direction, NULL positioning, collation or operator family needs its corresponding specification. The inner SELECT intentionally has no restricting `WHERE`, `DISTINCT`, grouping, sampling, join, limit, offset or row-locking clause. The outer aggregate counts rows, not non-NULL keys. The inner SELECT has no output column on purpose: `ORDER BY` first matches a bare column name against output names, and an unnamed item such as `SELECT 1` is named `?column?`. With an output column, a key column named `"?column?"` would sort by that constant instead; PostgreSQL 12 accepts an empty select list. [parse_clause.c#SQL92-name-rule](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1865-L1930) [parse_target.c#default-name](../../../../raw/postgres-12/src/backend/parser/parse_target.c#L1661) [gram.y#empty-target-list](../../../../raw/postgres-12/src/backend/parser/gram.y#L14633-L14634)  A sorting subquery is not subject to the simple-subquery pull-up rule on this pin; useful ordering can therefore motivate an index path, but the chosen plan is still subject to validation. [prepjointree.c#sorting-subquery](../../../../raw/postgres-12/src/backend/optimizer/prep/prepjointree.c#L1442-L1463) [indxpath.c#ordered-path](../../../../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L991-L1050) [func.sgml#count](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L14917-L14936)
 
 Disabling [index-only scans](../../../glossary.md#index-only-scan) is deliberate. Their [visibility-map](../../../glossary.md#visibility-map) shortcut can avoid the heap fetch entirely. An ordinary Index Scan instead calls `index_fetch_heap()`, whose table-AM implementation follows HOT chains and checks visibility using the scan snapshot. The checker wants the latter observation. [nodeIndexonlyscan.c#VM-shortcut](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L127-L170) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635) [heapam_handler.c#heap-fetch](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L146-L167)
 
@@ -398,12 +442,12 @@ Keep the count and its plan tied to **one execution**. Ordinary EXPLAIN does not
 
 Each Bash attempt follows this sequence:
 
-1. Allocate a monotonic attempt ID and save the intended relation, phase, candidate, variant and SQL text locally.
+1. Allocate a monotonic attempt ID and save the intended relation, phase, candidate, variant and SQL text locally. For an index attempt, also save this backend's TID counters for every index of the relation.
 2. Establish a [savepoint](../../../glossary.md#subtransaction), then apply the corresponding scan profile.
-3. Execute one explained INSERT that saves `attempt_id, count(*)` in `pg_temp.hic_count`. Built-in defaults record transaction, snapshot, backend, role, settings and capture time with that row.
+3. Execute one explained INSERT that saves `attempt_id, count(*)` in `pg_temp.hic_count`. Built-in defaults record transaction, snapshot, backend, role, settings and capture time with that row. A class-01 report printed by that statement fails the attempt.
 4. Save that request's EXPLAIN JSON as `plans/attempt-<id>.json`, restore the control profile, and import the saved JSON into `pg_temp.hic_plan` using a collision-free dollar-quoted literal.
-5. Decode the JSON into typed node/property records. Bash validates every node, the attempt marker, the exact captured count and its execution context, and resolves the actual index.
-6. Release the savepoint before publishing accepted local evidence. On execution, capture or inspection error, roll back to the savepoint, release it and record the error locally. Failed recovery ends the run. A rejected but successfully inspected plan is retained as a rejection and earns no coverage.
+5. Decode the JSON into typed node/property records. Bash validates every node, the attempt marker, the exact captured count and its execution context, and resolves the actual index. It then requires the executed index name to resolve to that same OID in the current catalog, and reads the counters again for the unresolved-TID count.
+6. Release the savepoint before publishing accepted local evidence. On execution, capture or inspection error, or a warning while counting, roll back to the savepoint, release it and record the error locally. Failed recovery ends the run. A rejected but successfully inspected plan is retained as a rejection and earns no coverage.
 
 The heap statement has this shape; the complete maintained template is in the runner:
 
@@ -436,7 +480,8 @@ Rollback cancels settings issued after the savepoint too, so every new attempt r
 | Completion | Every node executed once, with nonnegative numeric rows; no parallel-aware node or worker fields |
 | Shape | One child per wrapper, none per source; only ModifyTable, Aggregate, Seq Scan, Index Scan, Sort, Result, Subquery Scan and Materialize |
 | Restrictions | No Filter, Index Cond, Recheck Cond, join conditions, one-time filters, grouped keys, removed-row fields or subplans |
-| Identity | Actual index name resolves uniquely to an eligible index belonging to this target; ordinary forward/backward direction |
+| Identity | Actual index name resolves uniquely to an eligible index belonging to this target, and through `to_regclass()` to the same OID in the current catalog; ordinary forward/backward direction |
+| Reports | The count statement printed no error and no class-01 warning |
 | Count provenance | Exactly one captured count row for this ID; expected transaction, snapshot, backend, role, read-only mode and scan profile |
 
 Missing or wrongly typed required fields fail validation. Joins, Append, Gather, bitmap/index-only/TID/foreign/custom/sample scans, Limit, Unique, SetOp, ProjectSet, extra scans and unknown node kinds earn no acceptance. The narrow allowlist is checker policy. PostgreSQL supplies the node identities, loops, relation names and index details used by the gates. [explain.c#instrumentation](../../../../raw/postgres-12/src/backend/commands/explain.c#L1505-L1549) [explain.c#index-details](../../../../raw/postgres-12/src/backend/commands/explain.c#L2991-L3023) [explain.c#relation-details](../../../../raw/postgres-12/src/backend/commands/explain.c#L3156-L3162)
@@ -452,12 +497,12 @@ Reports and audit state are local files. Bash keeps OIDs and attempt IDs as nume
 | Record | Location and contents |
 |---|---|
 | Run and snapshot | `run.csv`, `run-facts`, `settings.json`: schema/database identity, server version, backend, session/checking roles, transaction ID, snapshot descriptor, transaction times, effective settings and scope/exhaustive policy |
-| Relations | `relations.csv` and `relations/<oid>/facts`: OIDs/names, kind, AM, persistence, population/RLS flags, parent OIDs, privileges, exclusions, accepted heap count and verdict/coverage totals |
+| Relations | `relations.csv` and `relations/<oid>/facts`: OIDs/names, kind, AM, persistence, population/RLS flags, parent OIDs, privileges, exclusions, accepted heap count, verdict/coverage totals, anomalies, storage-error attempts, the largest unresolved-TID count and any identity drift |
 | Candidates | `candidates.csv`, `indexes/<oid>/`: intended/actual coverage, state flags, catalog xmin, exclusion/generation reasons, safely deparsed definition, dependency/key facts and generated ordering |
-| Attempts | `attempts.csv`, `attempts/<id>/`: phase, intended/actual OIDs, variant, exact count, accepted/rejected/error state, delta, reasons, captured execution context, query, decoded plan facts, start/capture times and plan execution milliseconds |
+| Attempts | `attempts.csv`, `attempts/<id>/`: phase, intended/actual OIDs, variant, exact count, accepted/rejected/error state, delta, reasons, captured execution context, query, decoded plan facts, start/capture times, plan execution milliseconds, and for index attempts the TIDs returned and left unresolved |
 | Plans | `plans/attempt-<id>.json`: original executed JSON; malformed/truncated capture is retained for diagnosis |
-| Errors | Attempt columns/files plus `run-errors.csv`: stage, SQLSTATE, message, detail/hint when parsed, with the complete original report in the session error log |
-| Parent and schema summaries | `parents.csv` and `schema.csv`: descendant coverage, status counts, actual-index totals, mismatches/errors and success booleans |
+| Errors | Attempt columns/files with stage, SQLSTATE, message and, when parsed, detail and hint; `run-errors.csv` with stage, SQLSTATE and message; the complete original report stays in the session error log |
+| Parent and schema summaries | `parents.csv` and `schema.csv`: descendant coverage, status counts including `PASS_WITH_ANOMALY`, actual-index totals, mismatches/errors, anomaly and unresolved-TID totals, incomplete partition subtrees and success booleans |
 | Client audit | `session-main/transcript.sql`, `stderr.log`, request/response files: SQL sent and client/server output |
 
 A timestamp is not a snapshot descriptor. The run deliberately assigns `txid_current()` and records `txid_current_snapshot()`, rather than inferring visibility from a clock or treating a transaction ID as the list of in-progress transactions. [func.sgml#transaction-and-snapshot-functions](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L19384-L19418)
@@ -465,14 +510,17 @@ A timestamp is not a snapshot descriptor. The run deliberately assigns `txid_cur
 Apply relation statuses in this order:
 
 1. **NOT_APPLICABLE:** explicit object/scope classification excludes the object from physical heap checking.
-2. **ERROR:** a prerequisite failed, permission is missing, run evidence is invalid, or accepted heap baselines conflict.
+2. **ERROR:** a prerequisite failed, permission is missing, run evidence is invalid, accepted heap baselines conflict, or [identity drift](#snapshot-permissions-and-ddl-coordination) was found.
 3. **NO_ELIGIBLE_INDEX:** complete inventory contains no supported eligible index. Unsupported/partial/invalid indexes retain their reasons.
-4. **PASS:** an accepted heap count and at least one accepted actual-index count match. Other attempt errors or mismatches remain visible.
-5. **ERROR:** no match and an execution/capture/inspection error remains uncovered by accepted evidence for that baseline or intended candidate.
-6. **MISMATCH:** an accepted heap baseline exists, every eligible index was actually checked, and none matched.
-7. **INCONCLUSIVE:** no match, no preceding decisive error, and a baseline path or candidate remained unaccepted/untested.
+4. **PASS_WITH_ANOMALY:** an accepted heap count and at least one accepted actual-index count match, and the relation also has an anomaly: an accepted index count that differs from the heap count, or an attempt error whose SQLSTATE class is XX, 58 or 01.
+5. **PASS:** a match and no anomaly. Other attempt errors and rejections remain visible.
+6. **ERROR:** no match and an execution/capture/inspection error remains uncovered by accepted evidence for that baseline or intended candidate.
+7. **MISMATCH:** an accepted heap baseline exists, every eligible index was actually checked, and none matched.
+8. **INCONCLUSIVE:** no match, no preceding decisive error, and a baseline path or candidate remained unaccepted/untested.
 
-These are implemented in `hic_evaluate()`. An error becomes covered only when an accepted baseline exists, or an accepted scan actually covers its intended candidate. Successful retries preserve their earlier error records. One observed mismatch with another untested candidate is INCONCLUSIVE. A matching actual index can establish the requested existential PASS even when another attempt failed.
+These are implemented in `hic_evaluate()`. An error becomes covered only when an accepted baseline exists, or an accepted scan actually covers its intended candidate. An error of class XX (internal error, data or index corrupted), 58 (system or file error) or 01 (a warning while counting) is never covered, because a retry can succeed on a page that the failed read zeroed. [errcodes.txt#storage-classes](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L431-L437) [errcodes.txt#internal-class](../../../../raw/postgres-12/src/backend/utils/errcodes.txt#L489-L494) Successful retries preserve their earlier error records. One observed mismatch with another untested candidate is INCONCLUSIVE. A matching actual index still establishes the requested existential match when another attempt failed for an ordinary reason such as a lock timeout.
+
+`PASS_WITH_ANOMALY` extends the Question's six statuses at the asker's request in the 2026-10-24 follow-up. The existential match still holds, but positive evidence of damage keeps the relation from reading PASS. The unresolved-TID count never changes a status, because dead or snapshot-invisible versions also count.
 
 ```text
 heap_scope_all_pass = completed inventory and valid evidence
@@ -482,11 +530,11 @@ schema_success     = heap_scope_all_pass
                      AND no unsupported local table-AM coverage gap
 ```
 
-Any in-scope ERROR, MISMATCH, INCONCLUSIVE or NO_ELIGIBLE_INDEX makes schema success false. Empty physical scope is not success. Expected exclusions such as views, sequences, foreign tables and unpopulated materialized views do not by themselves fail this defined heap scope. An unsupported local table AM does block unqualified schema success.
+Any in-scope PASS_WITH_ANOMALY, ERROR, MISMATCH, INCONCLUSIVE or NO_ELIGIBLE_INDEX makes schema success false, so a completed run with an anomaly exits 1. Empty physical scope is not success. Expected exclusions such as views, sequences, foreign tables and unpopulated materialized views do not by themselves fail this defined heap scope. An unsupported local table AM does block unqualified schema success.
 
-Parent summaries report whether all descendants are included and supported, and whether every physical descendant passed. Namespace-only scope can pass while an outside-schema or foreign partition prevents a complete subtree claim. Parent rows never enter the physical-relation denominator.
+Parent summaries report whether all descendants are included and supported, and whether every physical descendant passed; `summary.txt` counts the partitioned parents whose subtree did not. Namespace-only scope can pass while an outside-schema or foreign partition prevents a complete subtree claim. Parent rows never enter the physical-relation denominator.
 
-Exhaustive mode preserves existential PASS and additionally reports actual candidate coverage, all-tested-match and anomaly totals. Checking every generated candidate query is not necessarily checking every index: repeated use of the same actual index earns one coverage unit. The relation's scalar totals plus its checked/matching OID files support the same assessment; the schema report exposes `exhaustive_coverage_complete` and `all_tested_indexes_match` explicitly.
+Exhaustive mode preserves the existential match and additionally reports actual candidate coverage, all-tested-match and anomaly totals. A mismatching index found after a match makes the relation `PASS_WITH_ANOMALY`, so `all_tested_indexes_match=false` no longer coexists with schema success. Checking every generated candidate query is not necessarily checking every index: repeated use of the same actual index earns one coverage unit. The relation's scalar totals plus its checked/matching OID files support the same assessment; the schema report exposes `exhaustive_coverage_complete` and `all_tested_indexes_match` explicitly.
 
 ### Concurrency performance and correctness limits
 
@@ -494,12 +542,12 @@ Exhaustive mode preserves existential PASS and additionally reports actual candi
 |---|---|
 | Concurrent INSERT/UPDATE/DELETE or abort | Both accepted scans use `S`, so later commits do not change the logical visible population. Old index entries can remain, but heap fetching applies `S` before returning a row. [mvcc.sgml#repeatable-read](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L454-L479) [indexam.c#visible-fetch](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L632) |
 | HOT update or pruning | One index root can lead to a later visible heap tuple or through a redirect. The heap AM resolves this; a raw root-TID census cannot substitute for it. [README.HOT#chain-and-redirect](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L48-L103) [heapam.c#HOT-search](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1559-L1622) |
-| DDL, refresh, or membership change during inventory/checking | May invalidate identity, eligibility, coverage, or old-snapshot assumptions; require the coordinated window and reject violations. Read locks alone cover only conflicting operations on already locked objects. [lock.c#conflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103) [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702) |
+| DDL, refresh, or membership change during inventory/checking | May invalidate identity, eligibility, coverage, or old-snapshot assumptions; require the coordinated window. Read locks alone cover only conflicting operations on already locked objects. The runner itself detects [identity drift](#snapshot-permissions-and-ddl-coordination) of each checked relation after its heap attempt, and nothing else. [lock.c#conflicts](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L65-L103) [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702) |
 | Many candidates or poorly correlated index order | One heap baseline plus potentially several full index traversals and heap fetches can be expensive. Ordered index access can perform substantially more scattered heap I/O than a sequential scan; sort alternatives may be cheaper. Early stopping and coverage-aware retry limits bound avoidable work. [indices.sgml#index-versus-sort](../../../../raw/postgres-12/doc/src/sgml/indices.sgml#L489-L502) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635) |
-| Long snapshot | Can hold back cleanup; observe duration and abort within an agreed operating window. With nondefault `old_snapshot_threshold`, cleanup can instead invalidate sufficiently old reads and cause an error. Its default is `-1`, disabled, and changing it requires server start; the checker records it and does not change it. [vacuum.c#cleanup-horizon](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L902-L912) [config.sgml#old-snapshot-threshold](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2378-L2396) |
-| Shared corruption or missing historical data | Both scans may agree on an already incomplete heap. Counts do not validate key values, ordering, uniqueness, payload/TOAST contents, unreachable pages, other indexes, or historical completeness. A full executor scan is the observation defined by this contract, not an independent physical census. [indexam.c#heap-based-results](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L632) [nbtsearch.c#endpoint-traversal](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L980-L997) |
+| Long snapshot | Can hold back cleanup; observe duration and abort within an agreed operating window. With nondefault `old_snapshot_threshold`, pruning can remove rows the snapshot still sees. Sequential-scan reads then raise "snapshot too old", but the index-path heap fetch does not test for it and can miss rows silently, so the runner [refuses](#settings-and-query-shapes) the setting. Its default is `-1`, disabled, and changing it requires a restart; the checker never changes it. [vacuum.c#cleanup-horizon](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L902-L912) [config.sgml#old-snapshot-threshold](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L2378-L2396) |
+| Shared corruption or missing historical data | Both scans agree on an incomplete heap: an index scan skips entries whose heap rows are gone, as the [heap-side loss](#heap-side-loss-and-the-unresolved-tid-signal) walkthrough below shows. Counts do not validate key values, ordering, uniqueness, payload/TOAST contents, unreachable pages, other indexes, or historical completeness. A full executor scan is the observation defined by this contract, not an independent physical census. [indexam.c#heap-based-results](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L632) [nbtsearch.c#endpoint-traversal](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L980-L997) |
 | Heap visibility metadata is damaged | Even the sequential heap path can trust the page's `PD_ALL_VISIBLE` flag outside recovery. Disabling index-only scans does not make the baseline an independent reimplementation of visibility or a guarantee against damaged heap metadata. [heapam.c#page-visible-fast-path](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L428-L453) |
-| Timeouts, cancellation, numeric overflow or storage errors | Record `ERROR` and preserve failure details. `count(*)` uses an `int8` transition and raises on overflow, rather than producing an arbitrary-precision count. [pg_aggregate.dat#count](../../../../raw/postgres-12/src/include/catalog/pg_aggregate.dat#L213-L219) [int8.c#int8inc-overflow](../../../../raw/postgres-12/src/backend/utils/adt/int8.c#L682-L705) |
+| Timeouts, cancellation, numeric overflow or storage errors | Record the attempt error and preserve failure details. Without a match the relation is `ERROR`; a storage-class error (XX, 58 or 01) with a match makes it `PASS_WITH_ANOMALY`. `count(*)` uses an `int8` transition and raises on overflow, rather than producing an arbitrary-precision count. [pg_aggregate.dat#count](../../../../raw/postgres-12/src/include/catalog/pg_aggregate.dat#L213-L219) [int8.c#int8inc-overflow](../../../../raw/postgres-12/src/backend/utils/adt/int8.c#L682-L705) |
 
 The run's lifecycle is also part of the result:
 
@@ -508,11 +556,35 @@ The run's lifecycle is also part of the result:
 | First checking query | Acquires the retained repeatable-read snapshot | Record `S`; apply it to all later attempts in that transaction |
 | An attempt fails and is rolled back to its savepoint | That attempt's writes disappear; the surrounding transaction can continue | Record the client error and confirm the run/snapshot still exists before retrying |
 | Commit, full rollback, disconnect or transaction restart | Ends the old checking snapshot | Never compare a new index count with an old baseline; preserve exported report/transcript separately |
-| Index rebuild, table rewrite, partition change or role change | Can change a premise of the saved inventory/plan | End or invalidate the affected run and rediscover |
+| Index rebuild, table rewrite, partition change or role change | Can change a premise of the saved inventory/plan | A changed name or `relfilenode` of a checked relation or its indexes makes that relation `ERROR`; other changes need a new run |
 
-The first and third rows follow the snapshot lifecycle; savepoint rollback is the recovery boundary for the second. The final row is a conservative checker policy. [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55)
+The first and third rows follow the snapshot lifecycle; savepoint rollback is the recovery boundary for the second. The final row combines the runner's identity check with the operator's DDL window. [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55)
 
 “No application-data writes” does not mean no disk writes: temporary result storage, executor work files, and ordinary heap maintenance such as pruning are separate from application DML. The read-only transaction contract itself explicitly does not prohibit every disk write. [set_transaction.sgml#read-only-boundary](../../../../raw/postgres-12/doc/src/sgml/ref/set_transaction.sgml#L126-L139) [heapam_handler.c#read-side-pruning](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L130-L148)
+
+### Heap-side loss and the unresolved-TID signal
+
+The count comparison detects an index that misses visible rows or returns one twice. It cannot detect heap rows that are gone:
+
+1. A zeroed heap page, an [all-zero page](../../../glossary.md#all-zero-page), has no [line pointers](../../../glossary.md#line-pointer), so the sequential scan returns nothing from it. [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360) [heapam.c:405](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L405)
+2. The index still holds entries for the lost rows. For each one, `heap_hot_search_buffer()` returns no row when the offset is past the page's line pointers, the line pointer is not normal, or the TID names a heap-only tuple at chain start. [heapam.c#unresolved-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1590)
+3. `index_getnext_slot()` then takes the next TID without any report. [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635)
+4. Both counts drop by the same rows, so the relation passes. The [identity-bag diagnostic](#stronger-sql-diagnostics-and-pageinspect) has the same blind spot, because both bags come from heap-filtered scans.
+
+The same holds for line pointers that became unused, an older page image, or commit-status damage that hides committed rows. The measured zeroed-block fixture lost 58 of 300 rows and passed with 242 = 242.
+
+To make such entries visible, the runner reads `pg_stat_get_xact_tuples_returned()` and `pg_stat_get_xact_tuples_fetched()` for the relation's indexes before and after each index count. For an index, the first counts TIDs that the access method returned and the second counts visible heap rows those TIDs reached. The backend reports both only when idle outside a transaction, so inside the checking transaction they are exact for this backend. [pgstatfuncs.c#xact-tuple-counters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1683-L1711) [indexam.c#returned-counter](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L541) [indexam.c#kill-prior-tuple](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L589) [pgstat.h#tuple-counters](../../../../raw/postgres-12/src/include/pgstat.h#L1369-L1383) [postgres.c#stats-flush](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4141-L4171) The fetched difference must equal the exact count, or the runner leaves the signal empty. The remainder, `unresolved_index_tids`, is reported per attempt, relation and schema; the zeroed-block fixture reports 58.
+
+The signal is evidence to diagnose, not proof, and it never changes a status:
+
+| Entry | Counted as unresolved |
+|---|---|
+| Its heap row was deleted or updated away before `S` and is not yet removed: a [dead tuple](../../../glossary.md#dead-tuple) | Yes |
+| It points to a version `S` cannot see, such as a later insert | Yes |
+| Its heap row is gone: zeroed page, unused line pointer | Yes |
+| An earlier index scan already marked it dead | No: the scan skips it |
+
+An index scan marks an entry dead, a [killed index tuple](../../../glossary.md#killed-index-tuple), when the heap search finds no live chain member, which includes a TID that reaches no tuple at all. Later scans outside recovery skip such entries. [heapam.c#all-dead](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1540) [indexam.c#kill-prior-tuple](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L589) [nbtree.c#remember-killed](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L253-L269) [nbtutils.c#_bt_killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812) [genam.c#ignore-killed](../../../../raw/postgres-12/src/backend/access/index/genam.c#L108-L119) [nbtsearch.c#skip-killed](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1476-L1486) So the first index scan that meets a lost row, by the checker or by an application, also hides it from every later scan: the measured deleted-row fixture reports 10 on its first run and 0 on the next. Only a physical census of index pages, which this runner does not perform, sees entries that are already marked.
 
 ### Stronger SQL diagnostics and pageinspect
 
@@ -536,7 +608,7 @@ FROM pg_temp.heap_visible_tids;
 
 Both differences must be empty to establish equality of the returned identity multisets. The default `EXCEPT` removes duplicates, whereas `EXCEPT ALL` preserves the excess multiplicity, which is necessary to detect the cancellation example. Keep separate run/attempt/snapshot identities, and filter to the intended bag if the scratch table holds several attempts. Relation identity is mandatory when bags contain more than one physical relation because a `ctid` is only a row-version location within its own table. [select.sgml#EXCEPT-ALL](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L1281-L1294) [ddl.sgml#ctid](../../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L1198-L1205)
 
-These are executor-visible [TIDs](../../../glossary.md#tid). After following HOT, the heap fetch updates the returned tuple's `t_self`, which supplies SQL `ctid`. Thus both bags identify the visible row version, rather than equating a raw index's chain-root TID with the visible successor. Materialization can be much larger than a count and can require substantial sorting/storage for `EXCEPT ALL`; it still does not validate stored index keys or search behavior for all predicates. [heapam.c#visible-HOT-member](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1582-L1619) [heapam_handler.c#returned-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L148-L167) [heaptuple.c#ctid-system-attribute](../../../../raw/postgres-12/src/backend/access/common/heaptuple.c#L636-L640)
+These are executor-visible [TIDs](../../../glossary.md#tid). After following HOT, the heap fetch updates the returned tuple's `t_self`, which supplies SQL `ctid`. Thus both bags identify the visible row version, rather than equating a raw index's chain-root TID with the visible successor. Like the counts, both bags come from heap-filtered scans, so neither shows an index entry whose heap row is gone ([heap-side loss](#heap-side-loss-and-the-unresolved-tid-signal)). Materialization can be much larger than a count and can require substantial sorting/storage for `EXCEPT ALL`; it still does not validate stored index keys or search behavior for all predicates. [heapam.c#visible-HOT-member](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1582-L1619) [heapam_handler.c#returned-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L148-L167) [heaptuple.c#ctid-system-attribute](../../../../raw/postgres-12/src/backend/access/common/heaptuple.c#L636-L640)
 
 [pageinspect](../../../glossary.md#pageinspect) is optional follow-up evidence, with separate privilege and consistency requirements:
 
@@ -590,7 +662,7 @@ The [runner](#runner-script) carries arbitrary text through four steps:
 
 This matters even for ordinary expression indexes: `pg_get_indexdef(..., false)` retains indentation, and deparsing `CASE` inserts newlines. Quoted identifiers also preserve embedded newlines. The runner therefore never reads generated ordering text as a single line. [ruleutils.c#index-pretty-flags](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1117-L1131) [ruleutils.c#CASE-newlines](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L7741-L7755) [ruleutils.c#CASE-expression](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L8309-L8315) [ruleutils.c#quoted-identifier-bytes](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10703-L10716)
 
-Bash dollar-quotes every arbitrary SQL value it sends, choosing a delimiter absent from that value. Both lexers preserve dollar-quoted content without interpolation. The runner never passes catalog text to `eval`; its only `eval` calls open and close the numbered file descriptors of its psql sessions. [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L621) [psqlscan.l#dollar-quotes](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588)
+Bash dollar-quotes every arbitrary SQL value it sends, choosing a tag that neither occurs in the value nor matches its end: a value ending in the tag without its final `$` would otherwise close the literal early. Both lexers preserve dollar-quoted content without interpolation. The runner never passes catalog text to `eval`; its only `eval` calls open and close the numbered file descriptors of its psql sessions. [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L621) [psqlscan.l#dollar-quotes](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588)
 
 Deparsed expressions require an additional guard. Outside quotes psql substitutes `:name`, `:'name'` and `:"name"`; it defines variables such as `ERROR` itself. The deparser can print an array slice as `a[1:"ERROR"]`, which psql would rewrite. The runner conservatively refuses count text with a colon not preceded by another colon and followed by a quote or brace. It records an execution error without sending that count. A similar sequence inside a literal is refused too; that conservatism remains a coverage limitation. Typecasts `::` are lexed separately. [psqlscan.l#substitution](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762) [psqlscan.l#typecast](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L301) [ruleutils.c#printSubscripts](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10614-L10637)
 
@@ -600,14 +672,16 @@ Deparsed expressions require an additional guard. Outside quotes psql substitute
 |---|---|---|
 | Missing schema/DDL attestation, invalid yes/no option or unusable output directory | Refuse before connecting | Exit 64 |
 | Installation, initialization or inventory fails | Record a run error where possible; roll back and end the session | Exit 2; no completed report |
-| Count execution, plan import or inspection errors | Recover inside the attempt savepoint; record stage/SQLSTATE/message/detail/hint | No coverage; same-snapshot bounded retry remains possible |
+| A [refused server setting](#settings-and-query-shapes) is in effect | Record the stop reason after the first snapshot; roll back | Exit 2; no count runs |
+| Count execution, plan import or inspection errors, or a warning while counting | Recover inside the attempt savepoint; record stage/SQLSTATE/message/detail/hint | No coverage; same-snapshot bounded retry remains possible; an XX, 58 or 01 error is an anomaly and never covered |
+| Name or `relfilenode` changed after the snapshot | Record identity drift after the accepted heap attempt, or reject an attempt whose executed index name moved | Relation `ERROR`; no further index attempts |
 | Executed plan fails acceptance gates | Retain rejection and reasons after releasing savepoint | No coverage; candidate may remain untested |
 | Valid attempt | Release savepoint, then publish accepted count and actual-index identity | May establish baseline, coverage or PASS |
 | Savepoint recovery or connection fails | Invalidate the run; do not reconnect | Exit 2 |
 | No candidate can be accepted | Apply the defined status precedence | Completed non-success exits 1 |
 | Final context differs from retained transaction/snapshot/backend/role | End as incomplete | Exit 2 |
-| COMMIT, report writing or session close fails | Keep partial audit output, omit a successful completion marker | Exit 2 |
-| Complete inventory, checking, commit and reporting succeed | Write seven reports and `summary.txt` | Exit 0 for schema success, otherwise 1 |
+| COMMIT, report writing or session close fails, or a local evidence file cannot be read | Keep partial audit output, omit a successful completion marker | Exit 2 |
+| Complete inventory, checking, commit and reporting succeed | Write seven reports and `summary.txt` | Exit 0 for schema success, otherwise 1; `PASS_WITH_ANOMALY` is not success |
 
 | Event | Database state | Local evidence state |
 |---|---|---|
@@ -640,8 +714,9 @@ HIC_SCHEMA=app HIC_DDL_STABLE=yes HIC_OUT=.wiki-runtime/hic12-results PGHOST=/va
 | Programs/output | `HIC_PSQL`, default `psql`; `HIC_OUT`, default `hic12-run-<UTC time>-<pid>` in the current directory, must be new; no `HIC_SQL` input |
 | Connection | Standard libpq environment, including `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSERVICE` and `PGPASSFILE`; `PGAPPNAME` defaults to `hic12-check` ([libpq.sgml#environment](../../../../raw/postgres-12/doc/src/sgml/libpq.sgml#L7296-L7319)) |
 | Prerequisites | Bash without Bash-4-only features, pinned psql, `mkfifo`, `sed`, `grep`, `tail`, `wc`, `cp`, `tr`, `cat`, `date`, `paste` and ordinary directory utilities; no JSON parser, extension or PL/pgSQL installation |
-| Reports | Read `summary.txt` first; exit 0/1 plus `completed=true` establishes completion. Then `schema.csv`, `relations.csv`, `candidates.csv`, `attempts.csv`, `parents.csv`, `run-errors.csv`, `run.csv`, and the supporting facts/plans/transcript |
-| Exit codes | 0 completed schema success; 1 completed without schema success; 2 incomplete; 64 configuration refused |
+| Reports | Read `summary.txt` first; exit 0/1 plus `completed=true` establishes completion. `summary.txt` also counts `pass_with_anomaly`, `anomalies`, `unresolved_index_tids` and `incomplete_partition_subtrees`. Then `schema.csv`, `relations.csv`, `candidates.csv`, `attempts.csv`, `parents.csv`, `run-errors.csv`, `run.csv`, and the supporting facts/plans/transcript |
+| Exit codes | 0 completed schema success; 1 completed without schema success, including any `PASS_WITH_ANOMALY`; 2 incomplete, including a refused server setting; 64 configuration refused |
+| Server settings | Refuses `zero_damaged_pages` or `ignore_checksum_failure` on, `track_counts` off and an enabled `old_snapshot_threshold`; sets `idle_in_transaction_session_timeout = 0` for its own session |
 | Permissions | Output directory mode 0700 and umask 077. Reports can contain error values; use password/service files rather than command-line passwords |
 
 psql runs with `-X -w -q -A -t`, `ON_ERROR_STOP=0` and `VERBOSITY=verbose`. The default ON_ERROR_STOP is already off; keeping it off permits Bash to recover after server errors. Verbosity changes from default to verbose so diagnostics include SQLSTATE. `-X` suppresses startup files, `-w` suppresses password prompts, `-q` suppresses command tags, and unaligned tuples-only output supports the transport. These are client options/variables, not GUCs. [psql-ref.sgml#no-psqlrc](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L553-L563) [psql-ref.sgml#no-password](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L496-L514) [psql-ref.sgml#quiet](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L374-L387) [psql-ref.sgml#no-align](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L65-L75) [psql-ref.sgml#tuples-only](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L433-L443) [psql-ref.sgml#ON_ERROR_STOP](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3844-L3861) [psql-ref.sgml#VERBOSITY](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L3984-L3996)
@@ -676,9 +751,14 @@ The matrix below is the **design-level test target**, including cases broader th
 | Timeout, cancel, permission error, malformed JSON, missing capture row and disconnect | ERROR or invalidated run; no stale value reuse, zero substitution or accidental continuation with a new snapshot |
 | All tables PASS; one NO_ELIGIBLE_INDEX; one INCONCLUSIVE; one ERROR; zero physical targets; unsupported table-AM inventory record; another session's temporary table | Schema aggregation follows the explicit booleans and cannot hide a required relation; another backend's temporary relation is rejected before any count |
 | Count equality with differing identity bags, supplied as synthetic evaluator data | Equal cardinalities can still produce nonempty EXCEPT ALL results; duplicate-sensitive comparison works |
-| One mismatching accepted index plus an untested candidate; all candidates mismatch; one match plus another failure | Respect INCONCLUSIVE/MISMATCH/PASS distinctions and retain per-attempt diagnostics |
+| One mismatching accepted index plus an untested candidate; all candidates mismatch; one match plus another ordinary failure | Respect INCONCLUSIVE/MISMATCH/PASS distinctions and retain per-attempt diagnostics |
+| One match plus a mismatching accepted index, or plus an XX, 58 or 01 attempt error | `PASS_WITH_ANOMALY` and no schema success; a storage-class error is never covered by a retry |
+| `zero_damaged_pages`, `ignore_checksum_failure`, `track_counts` or `old_snapshot_threshold` changed from its default | Refused before any count |
+| TRUNCATE, REFRESH, drop and re-create, or an index-name swap after the snapshot | Relation `ERROR` with identity drift, never a stale PASS |
+| Deleted rows not yet vacuumed; a zeroed heap block | The unresolved-TID count equals the entries without a visible row, on the first scan only |
+| A key column named `?column?`; a value ending in the dollar-quote tag; a role-level idle timeout; an unreadable evidence file | Correct ordering, literal round trip, surviving session, and exit 2 respectively |
 
-Tests of deliberately corrupted on-disk indexes are a separate boundary. Ordinary SQL DML maintains indexes, and pageinspect only exposes page contents; this plan does not establish a supported SQL-only method to create arbitrary missing/duplicate physical index entries. Use synthetic count/plan/bag records to test the verdict evaluator, clearly labelled as unit tests. A real corruption campaign would require a separately approved fault-injection capability or supplied damaged disposable database; synthetic evaluator tests must not be reported as physical corruption detection coverage.
+Tests of deliberately corrupted on-disk indexes are a separate boundary. Ordinary SQL DML maintains indexes, and pageinspect only exposes page contents; this plan does not establish a supported SQL-only method to create arbitrary missing/duplicate physical index entries. Use synthetic count/plan/bag records to test the verdict evaluator, clearly labelled as unit tests. A real corruption campaign would require a separately approved fault-injection capability or supplied damaged disposable database; synthetic evaluator tests must not be reported as physical corruption detection coverage. At the asker's request in the 2026-10-24 follow-up, the harness now has one such physical leg: it stops the owned server, zeroes one heap block of a disposable table and fills one heap block of another with 0xFF bytes, then restarts. Damaged index pages and other corruption shapes remain outside the suite.
 
 Likewise, this pin supplies heap as its only built-in table AM. Test unsupported table-AM classification with synthetic inventory records; a real custom-AM integration test would need a separately authorized capability, not an unannounced extension dependency. [pg_am.dat#built-in-methods](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L15-L35)
 
@@ -686,7 +766,7 @@ The acceptance gate is that all positive fixtures produce a count only from vali
 
 ### Measured coverage and remaining test gaps
 
-The current Bash-owned implementation passed **160 assertions** in the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
+The current Bash-owned implementation passed **220 assertions** in the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
 
 | Exercised case | Result |
 |---|---|
@@ -698,7 +778,7 @@ The current Bash-owned implementation passed **160 assertions** in the published
 | Snapshot held across committed HOT/non-HOT updates, deletes, insertion and aborted insertion | Checker heap baseline remains 100, while the writer's current count is 95 |
 | `indcheckxmin` horizon | Old holder yields INCONCLUSIVE; a new transaction after the holder ends passes without requiring the flag to clear |
 | Plan-shape units | 41 assertions: valid heap/index/backward plans and malformed, restricted, parallel, wrongly typed, missing, grouped, extra-branch, wrong-marker and unknown-node shapes |
-| Synthetic evaluator | 9 cases cover partial versus complete mismatch coverage, recovered/optional errors, conflicting baselines, invalid evidence and exact comparison at signed-bigint maximum |
+| Synthetic evaluator | 14 cases cover partial versus complete mismatch coverage, recovered/optional errors, conflicting baselines, invalid evidence and exact comparison at signed-bigint maximum. Two mismatches then a match, an XX001 error plus a match, and a warning-class heap error followed by an accepted retry each give `PASS_WITH_ANOMALY`; a rejected attempt whose executed index name moved, and saved drift, each give ERROR |
 | Truncated plan and rollback | `22P02` with DETAIL; count row is absent after savepoint rollback; same-snapshot retry passes and retains 1 failed attempt |
 | Held ACCESS EXCLUSIVE lock | Two heap attempts time out with `55P03`; relation ERROR, never an empty-table pass |
 | Disconnect and output failure | Terminated backend ends the next request as incomplete; an unusable report filename fails reporting |
@@ -709,12 +789,20 @@ The current Bash-owned implementation passed **160 assertions** in the published
 | Local evidence values | Empty values, embedded/trailing newlines and a literal sentinel character survive both single-value and multi-value save/load paths |
 | Harness startup ownership | Child `prepare`, `build`, `init`, `cleanup` and unknown-stage invocations refuse or fail without stopping the parent invocation's running server; it still accepts queries |
 | Installation contract | Completed sourced cases confirm exactly two temporary tables and no temporary functions/views |
+| Refused server settings | Guard units for all four settings; CLI runs with `zero_damaged_pages=on`, `ignore_checksum_failure=on` or `track_counts=off` exit 2 with the reason in `summary.txt` |
+| Identity drift after the snapshot | A second session's TRUNCATE, REFRESH, drop and re-create and index-name swap each make that relation ERROR with recorded drift (storage drift for TRUNCATE, name drift for the swap); the unchanged table passes |
+| Edge schema | A `"?column?"` key column passes with 3 rows; ten deleted rows' entries give `unresolved_index_tids=10`, and 0 on the next run because the first scan marked them dead |
+| Idle timeout | A 1-second session `idle_in_transaction_session_timeout` and a 2-second pause inside the checking transaction do not end the run |
+| Unreadable evidence | Replacing a relation's `scope` file with a directory makes reporting exit 2 instead of dropping the relation |
+| Dollar quoting and warnings | A value ending in `$hic12_q0` gets the next tag and round-trips; a class-01 report is found by the warning pattern, never as an error, and counts as a storage-class code |
+| Physical leg, zeroed block | 58 of 300 rows lost; PASS with heap 242, and `unresolved_index_tids=58` |
+| Physical leg, invalid header | Both heap attempts fail with `XX001`; relation ERROR with 2 storage errors; a CLI run with `zero_damaged_pages=on` is refused |
 
 The concurrent fixture's derived arithmetic is `100 - 6 + 1 = 95`, while both accepted checker scans retain the earlier 100-row population. Repeatable read retains its snapshot, and ordinary index fetching checks heap visibility against it. [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [indexam.c#visible-fetch](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L632)
 
 The HOT/horizon fixtures deliberately use heap fillfactor 50 instead of default 100, reserving room for same-page updates. The writer verifies HOT updates and also changes an indexed column to exercise non-HOT updates. A retained old transaction followed by a nonconcurrent index build creates the broken-chain horizon gate; the planner tests catalog xmin against `TransactionXmin`, not merely the flag. These special fixture causes are documented with their source evidence under [Measurement Script](#measurement-script). [heapam.c#HOT-decision](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3591-L3601) [plancat.c#horizon](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234)
 
-Not exercised: real physical corruption; real custom table AM; arbitrary custom opclass/type/expression combinations; non-C/ICU locale behavior; multilevel/multiple-inheritance and attach/detach races; another backend's temporary table; denied TEMP/function EXECUTE; a separate non-superuser BYPASSRLS role; an open writer at initial snapshot acquisition; pruning/redirect races; a default-versus-read-committed control leg; forced statement timeout/cancel; loss while a statement is running; standby support; large-schema/production-I/O scaling; actual backward executor traversal; not-ready/not-live catalog states; the optional identity-bag pipeline. The maximum-bigint case is synthetic evaluator input, not an enormous measured table. Units do not establish corruption-detection rates.
+Not exercised: physical corruption beyond the two damaged heap blocks, including damaged index pages; a checksum failure, because the test cluster has checksums off (the warning path is a parser unit); real custom table AM; arbitrary custom opclass/type/expression combinations; non-C/ICU locale behavior; multilevel/multiple-inheritance and attach/detach races; another backend's temporary table; denied TEMP/function EXECUTE; a separate non-superuser BYPASSRLS role; an open writer at initial snapshot acquisition; pruning/redirect races; a default-versus-read-committed control leg; forced statement timeout/cancel; loss while a statement is running; standby support; large-schema/production-I/O scaling; actual backward executor traversal; not-ready/not-live catalog states; the optional identity-bag pipeline. The maximum-bigint case is synthetic evaluator input, not an enormous measured table. Units do not establish corruption-detection rates.
 
 ### Optional relaxations
 
@@ -722,7 +810,7 @@ The implemented Bash runner is the user's authorized orchestration and checking-
 
 ### Runner script
 
-The script reads top to bottom in sections: small helpers, the psql session layer, setup, inventory, plan validation, attempts, verdicts, reports and the driver. Each catalog fact line is read into named variables (`r_*` for relations, `i_*` for indexes), and each attempt, relation or index keeps its evidence as one-value files (`hic_put` and `hic_get` handle one value, `hic_save` and `hic_load` several). The [measurement harness](#measurement-script) sources this file and calls its functions directly, so those function names and evidence files are part of its test interface.
+The script reads top to bottom in sections: small helpers, the psql session layer, setup, inventory, plan validation, attempts, verdicts, reports and the driver. Each catalog fact line is read into named variables (`r_*` for relations, `i_*` for indexes), and each attempt, relation or index keeps its evidence as one-value files (`hic_put` and `hic_get` handle one value, `hic_save` and `hic_load` several). The [measurement harness](#measurement-script) sources this file and calls its functions directly, so those function names and evidence files are part of its test interface. Since the false-negative fixes, `hic_server_guard` refuses damage-hiding settings, `hic_identity` checks names and relfilenodes after the heap attempt, `hic_tid_counters` and `hic_unresolved_tids` derive the unresolved-TID count, and every evidence read in the verdict and report functions stops the run when it fails.
 
 ```bash
 # hic12-check.sh: self-contained Bash checker for PostgreSQL 12.2
@@ -738,6 +826,8 @@ The script reads top to bottom in sections: small helpers, the psql session laye
 # (a new output directory) and HIC_PSQL (default psql). Exit status: 0 run
 # completed with schema_success; 1 run completed without it; 2 run did not
 # complete; 64 usage error. Sourcing this file only defines the functions.
+# The run refuses a server with zero_damaged_pages or ignore_checksum_failure
+# on, track_counts off, or old_snapshot_threshold enabled.
 
 : "${HIC_PSQL:=psql}"
 : "${HIC_S:=main}"                  # name of the checking session
@@ -747,6 +837,11 @@ HIC_OPEN=${HIC_OPEN:-}              # names of the open psql sessions
 HIC_REPORT_LINE='^[^ ]+:  [0-9A-Z]{5}: '
 # The same, for error classes only: 00, 01 and 02 are success, warning, no data.
 HIC_ERROR_LINE='^[^ ]+:  ([1-9A-Z][0-9A-Z]|0[3-9A-Z])[0-9A-Z]{3}: '
+# Warnings (class 01). A count attempt that prints one is treated as failed.
+HIC_WARNING_LINE='^[^ ]+:  01[0-9A-Z]{3}: '
+# SQLSTATE classes that point at damaged storage: XX internal or corrupted
+# data, 58 file/system errors, and 01 warnings raised while counting.
+HIC_STORAGE_CODE='^(XX|58|01)'
 # Count text containing psql's :'var', :"var" or :{?var} forms is not sent.
 HIC_GUARD="(^|[^:]):['\"{]"
 HIC_FIRST_USER_OID=16384            # FirstNormalObjectId
@@ -773,7 +868,8 @@ hic_literal() {
     local n=0 tag
     while :; do
         tag="\$hic12_q$n\$"
-        case $1 in *"$tag"*) n=$((n + 1)) ;; *) break ;; esac
+        # A value ending in the tag minus its final $ would close it early too.
+        case $1 in *"$tag"*|*"${tag%\$}") n=$((n + 1)) ;; *) break ;; esac
     done
     HIC_LITERAL="$tag$1$tag"
 }
@@ -960,15 +1056,16 @@ hic_data() {
 }
 
 hic_parse_error() {
-    # hic_parse_error NAME: set HIC_ERR_CODE, HIC_ERR_MESSAGE, HIC_ERR_DETAIL
-    # and HIC_ERR_HINT from the first error report of NAME's last request.
-    # Returns 1 when that request printed no error report.
-    local line rest s_dir s_in s_out s_pid s_seq
+    # hic_parse_error NAME [PATTERN]: set HIC_ERR_CODE, HIC_ERR_MESSAGE,
+    # HIC_ERR_DETAIL and HIC_ERR_HINT from the first report of NAME's last
+    # request that matches PATTERN (default: an error report). Returns 1 when
+    # that request printed no such report.
+    local line rest pattern=${2:-$HIC_ERROR_LINE} s_dir s_in s_out s_pid s_seq
     hic_session "$1" || return 1
     HIC_ERR_CODE= HIC_ERR_MESSAGE= HIC_ERR_DETAIL= HIC_ERR_HINT=
     while IFS= read -r line || [ -n "$line" ]; do
         if [ -z "$HIC_ERR_CODE" ]; then
-            [[ $line =~ $HIC_ERROR_LINE ]] || continue
+            [[ $line =~ $pattern ]] || continue
             rest=${line#*:  }                   # "SQLSTATE: message"
             HIC_ERR_CODE=${rest%%:*}
             HIC_ERR_MESSAGE=${rest#*: }
@@ -1013,6 +1110,7 @@ hic_install() {
     hic_sql "$HIC_S" "SET /* wiki_hic12_install_path */ search_path = pg_catalog, pg_temp;
 SET /* wiki_hic12_install_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_install_lock */ lock_timeout = '2s';
+SET /* wiki_hic12_install_idle */ idle_in_transaction_session_timeout = 0;
 BEGIN /* wiki_hic12_install_begin */;
 CREATE /* wiki_hic12_count_table */ TEMP TABLE hic_count (
     attempt_id bigint PRIMARY KEY, row_count bigint NOT NULL CHECK (row_count >= 0),
@@ -1063,20 +1161,45 @@ SET /* wiki_hic12_scope_lock */ LOCAL lock_timeout = '2s';" || return
  'x' || encode(convert_to(version(),'UTF8'),'hex'), transaction_timestamp(),
  current_setting('transaction_isolation'), current_setting('transaction_read_only'),
  'x'||encode(convert_to(session_user::text,'UTF8'),'hex'),
- (SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database());" || return
+ (SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()),
+ current_setting('zero_damaged_pages'), current_setting('ignore_checksum_failure'),
+ current_setting('track_counts'), current_setting('old_snapshot_threshold'),
+ current_setting('data_checksums');" || return
     IFS='|' read -r HIC_SERVER HIC_RECOVERY HIC_BACKEND HIC_XID HIC_SNAPSHOT HIC_ROLE_HEX \
         HIC_SCHEMA_OID HIC_DATABASE HIC_VERSION HIC_STARTED HIC_ISOLATION HIC_READONLY \
-        HIC_SESSION_ROLE HIC_DATABASE_OID < "$HIC_OUT/run-facts" || return 1
+        HIC_SESSION_ROLE HIC_DATABASE_OID HIC_ZERO_DAMAGED HIC_IGNORE_CHECKSUM \
+        HIC_TRACK_COUNTS HIC_OLD_SNAPSHOT HIC_DATA_CHECKSUMS < "$HIC_OUT/run-facts" || return 1
     if [ "$HIC_SERVER" != 120002 ] || [ "$HIC_RECOVERY" != f ] || [ "$HIC_SCHEMA_OID" = 0 ] \
         || [ "$HIC_ISOLATION" != 'repeatable read' ] || [ "$HIC_READONLY" != on ]; then
         HIC_STOP='requires PostgreSQL 12.2 primary, an existing schema, repeatable read and read only'
         return 1
     fi
+    hic_server_guard "$HIC_ZERO_DAMAGED" "$HIC_IGNORE_CHECKSUM" "$HIC_TRACK_COUNTS" "$HIC_OLD_SNAPSHOT" \
+        || return 1
     hic_profiles control || return
     hic_data "$HIC_OUT/settings.json" "SELECT /* wiki_hic12_run_settings */ jsonb_object_agg(name,current_setting(name))
 FROM unnest(ARRAY['enable_seqscan','enable_indexscan','enable_indexonlyscan','enable_bitmapscan','enable_sort',
 'max_parallel_workers_per_gather','row_security','search_path','quote_all_identifiers','statement_timeout','lock_timeout',
-'transaction_isolation','transaction_read_only','old_snapshot_threshold','client_encoding']) setting(name);"
+'transaction_isolation','transaction_read_only','old_snapshot_threshold','client_encoding',
+'zero_damaged_pages','ignore_checksum_failure','track_counts','data_checksums',
+'idle_in_transaction_session_timeout']) setting(name);"
+}
+
+hic_server_guard() {
+    # hic_server_guard ZERO_DAMAGED IGNORE_CHECKSUM TRACK_COUNTS OLD_SNAPSHOT:
+    # refuse settings that can hide damage or bias a count. zero_damaged_pages
+    # zeroes a bad page in a buffer a retry then reuses; ignore_checksum_failure
+    # uses a failed page and reports only a class-01 warning; track_counts off
+    # disables the unresolved-TID counters; old_snapshot_threshold lets pruning
+    # remove rows the index-path heap fetch then misses without an error.
+    local why=
+    [ "$1" = off ] || why="${why:+$why, }zero_damaged_pages=$1"
+    [ "$2" = off ] || why="${why:+$why, }ignore_checksum_failure=$2"
+    [ "$3" = on ] || why="${why:+$why, }track_counts=$3"
+    [ "$4" = -1 ] || why="${why:+$why, }old_snapshot_threshold=$4"
+    [ -z "$why" ] && return 0
+    HIC_STOP="refusing server settings: $why"
+    return 1
 }
 
 hic_run_error() {
@@ -1096,13 +1219,13 @@ hic_read_relation() {   # columns of wiki_hic12_object_facts
 }
 hic_read_index() {      # columns of wiki_hic12_index_facts
     IFS='|' read -r i_oid i_relid i_schema i_name i_ident i_kind i_am i_amname i_amtype \
-        i_partial i_valid i_ready i_live i_checkxmin i_xmin i_nkeys i_pred i_extra
+        i_partial i_valid i_ready i_live i_checkxmin i_xmin i_nkeys i_filenode i_pred i_extra
 }
 
 hic_inventory() {
     # Classify every relation in the schema, plus the partitions that its
     # partitioned tables reach in other schemas when HIC_EXTERNAL is true.
-    local line oid dir scope reason permission ids
+    local line oid dir scope reason permission drift ids
     hic_data "$HIC_OUT/objects.raw" "WITH /* wiki_hic12_scope */ RECURSIVE scope(oid) AS (
  SELECT oid FROM pg_catalog.pg_class WHERE relnamespace = $HIC_SCHEMA_OID
  UNION SELECT inh.inhrelid FROM scope s
@@ -1153,7 +1276,8 @@ LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam ORDER BY c.oid;" || return
         elif [ "$r_usage" != t ]; then permission=schema_usage_denied
         elif [ "$r_select" != t ]; then permission=table_select_denied
         fi
-        hic_save "$dir" scope reason permission || return 2
+        drift=                          # set later if identity changes after S
+        hic_save "$dir" scope reason permission drift || return 2
     done < "$HIC_OUT/objects.raw"
     ids=$(paste -s -d, "$HIC_OUT/relation-ids")
     hic_data "$HIC_OUT/partitions.raw" "WITH /* wiki_hic12_partition_tree */ RECURSIVE tree(parent_oid,oid) AS (
@@ -1177,13 +1301,13 @@ hic_indexes() {
     local oid dir scope line iid idir eligible reason
     while IFS= read -r oid; do
         dir="$HIC_OUT/relations/$oid"
-        hic_get "$dir" scope; scope=$HIC_VALUE
+        hic_get "$dir" scope || return 2; scope=$HIC_VALUE
         hic_data "$dir/indexes.raw" "SELECT /* wiki_hic12_index_facts */ c.oid, i.indrelid,
  'x'||encode(convert_to(n.nspname::text,'UTF8'),'hex'),
  'x'||encode(convert_to(c.relname::text,'UTF8'),'hex'),
  'x'||encode(convert_to(quote_ident(c.relname),'UTF8'),'hex'),
  c.relkind, c.relam, 'x'||encode(convert_to(am.amname::text,'UTF8'),'hex'), am.amtype, i.indpred IS NOT NULL,
- i.indisvalid,i.indisready,i.indislive,i.indcheckxmin,i.xmin::text,i.indnkeyatts,
+ i.indisvalid,i.indisready,i.indislive,i.indcheckxmin,i.xmin::text,i.indnkeyatts,c.relfilenode,
  'x'||encode(convert_to(COALESCE(i.indpred::text,''),'UTF8'),'hex')
 FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid
 JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_am am ON am.oid=c.relam
@@ -1454,7 +1578,8 @@ hic_validate() {
 
 hic_prepare_attempt() {
     # Allocate attempt HIC_ATTEMPT_ID (directory HIC_A), write its count
-    # statement, open its savepoint and apply its planner profile.
+    # statement, save the index TID counters, open its savepoint and apply
+    # its planner profile.
     local source
     HIC_ATTEMPT_ID=$((HIC_ATTEMPT_ID + 1))
     HIC_A="$HIC_OUT/attempts/$HIC_ATTEMPT_ID"
@@ -1467,14 +1592,49 @@ hic_prepare_attempt() {
     source="ONLY $HIC_TEXT"
     if [ "$HIC_PHASE" = index ]; then
         # An inner ORDER BY in the index's key order invites a full index scan.
+        # The inner SELECT has no output column, so ORDER BY's output-name rule
+        # cannot capture a key that is a bare column name such as "?column?".
         hic_get "$HIC_OUT/indexes/$HIC_INTENDED" order || return 2
-        source="(SELECT /* wiki_hic12_full_order */ 1 FROM $source ORDER BY $HIC_VALUE) AS ordered_rows"
+        source="(SELECT /* wiki_hic12_full_order */ FROM $source ORDER BY $HIC_VALUE) AS ordered_rows"
+        hic_tid_counters "$HIC_A/tids-before" || return
     fi
     printf '%s\n' "EXPLAIN /* wiki_hic12_executed_count */ (ANALYZE, VERBOSE, BUFFERS, SETTINGS, TIMING OFF, SUMMARY ON, FORMAT JSON)
 INSERT /* wiki_hic12_capture */ INTO pg_temp.hic_count(attempt_id,row_count)
 SELECT /* wiki_hic12_exact_count */ $HIC_ATTEMPT_ID::bigint,count(*) FROM $source;" > "$HIC_A/count.sql" || return 2
     hic_sql "$HIC_S" 'SAVEPOINT /* wiki_hic12_attempt_boundary */ hic_attempt;' || return
     hic_profiles "$HIC_PHASE"
+}
+
+hic_tid_counters() {
+    # hic_tid_counters FILE: save "index|returned|fetched" for every index of
+    # the relation. These are this backend's per-transaction counts of TIDs an
+    # index scan returned and of visible heap rows those TIDs reached; the
+    # backend reports them only after the transaction, so they are exact here.
+    local ids
+    ids=$(paste -s -d, "$HIC_OUT/relations/$HIC_RELATION/index-ids") || return 2
+    hic_data "$1" "SELECT /* wiki_hic12_index_tid_counters */ c.i, pg_stat_get_xact_tuples_returned(c.i),
+ pg_stat_get_xact_tuples_fetched(c.i) FROM unnest(ARRAY[${ids:-0}]::oid[]) AS c(i) ORDER BY c.i;"
+}
+
+hic_unresolved_tids() {
+    # Set HIC_TIDS_RETURNED and HIC_UNRESOLVED for the actual index: TIDs it
+    # returned during this attempt, and how many of them reached no visible
+    # heap row (dead or invisible versions, or entries whose heap row is gone).
+    # The rows fetched must equal the exact count, else both stay empty.
+    local iid r f before_r= before_f= after_r= after_f=
+    HIC_TIDS_RETURNED= HIC_UNRESOLVED=
+    [ "$HIC_PHASE" = index ] && [ -n "$HIC_ACTUAL_INDEX" ] && hic_uint "$HIC_COUNT" || return 0
+    hic_tid_counters "$HIC_A/tids-after" || return
+    while IFS='|' read -r iid r f; do
+        [ "$iid" = "$HIC_ACTUAL_INDEX" ] && before_r=$r before_f=$f
+    done < "$HIC_A/tids-before"
+    while IFS='|' read -r iid r f; do
+        [ "$iid" = "$HIC_ACTUAL_INDEX" ] && after_r=$r after_f=$f
+    done < "$HIC_A/tids-after"
+    hic_uint "$before_r" && hic_uint "$before_f" && hic_uint "$after_r" && hic_uint "$after_f" || return 0
+    [ $((after_f - before_f)) = "$HIC_COUNT" ] || return 0
+    HIC_TIDS_RETURNED=$((after_r - before_r))
+    HIC_UNRESOLVED=$((HIC_TIDS_RETURNED - HIC_COUNT))
 }
 
 hic_read_count() {
@@ -1514,16 +1674,28 @@ hic_attempt_import() {
 }
 
 hic_resolve_index() {
-    # Map the plan's (quoted) Index Name to exactly one eligible index.
-    local iid matches=0
+    # Map the plan's (quoted) Index Name to exactly one eligible index, then
+    # require that name to resolve to the same index in the current catalog.
+    # EXPLAIN prints an index's current name, while the inventory is the
+    # catalog at the snapshot: a rename or swap committed after the snapshot
+    # would otherwise credit coverage to the wrong index.
+    local iid matches=0 nsp
     HIC_ACTUAL_INDEX=
     [ "$HIC_PHASE" = index ] || return 0
     while IFS= read -r iid; do
-        hic_get "$HIC_OUT/indexes/$iid" eligible; [ "$HIC_VALUE" = true ] || continue
+        hic_get "$HIC_OUT/indexes/$iid" eligible || return 2
+        [ "$HIC_VALUE" = true ] || continue
         hic_read_index < "$HIC_OUT/indexes/$iid/facts" || return 1
         if [ "$i_ident" = "$HIC_ACTUAL_NAME" ]; then HIC_ACTUAL_INDEX=$iid matches=$((matches + 1)); fi
     done < "$HIC_OUT/relations/$HIC_RELATION/index-ids"
-    [ "$matches" = 1 ] || { HIC_ACTUAL_INDEX=; hic_reject actual_index_not_uniquely_eligible; }
+    [ "$matches" = 1 ] || { HIC_ACTUAL_INDEX=; hic_reject actual_index_not_uniquely_eligible; return 0; }
+    hic_read_index < "$HIC_OUT/indexes/$HIC_ACTUAL_INDEX/facts" || return 1
+    hic_decode "$i_schema" || return 1
+    hic_literal "$HIC_TEXT"; nsp=$HIC_LITERAL
+    hic_decode "$HIC_ACTUAL_NAME" || return 1
+    hic_literal "$HIC_TEXT"
+    hic_sql "$HIC_S" "SELECT /* wiki_hic12_executed_index */ COALESCE(to_regclass(quote_ident($nsp)||'.'||$HIC_LITERAL)::oid,0);" || return
+    [ "$HIC_VALUE" = "$HIC_ACTUAL_INDEX" ] || hic_reject actual_index_identity_changed
 }
 
 hic_attempt_inspect() {
@@ -1531,6 +1703,7 @@ hic_attempt_inspect() {
     hic_validate "$HIC_A/plan-facts" || return
     hic_read_count || return
     hic_resolve_index || return
+    hic_unresolved_tids || return
     HIC_ACCEPTED=false
     [ -n "$HIC_REASONS" ] || HIC_ACCEPTED=true
 }
@@ -1559,9 +1732,15 @@ hic_attempt_run() {
     fi
     hic_request "$HIC_S" "$HIC_A/count.sql" || return 2
     [ "$HIC_FAILED" = false ] || { hic_attempt_error 'count statement failed'; return 1; }
+    hic_session "$HIC_S" || return 2
+    # A warning while counting, such as a checksum failure the server was set
+    # to ignore, means the count may rest on damaged pages: fail the attempt.
+    if grep -E -q "$HIC_WARNING_LINE" "$s_dir/stderr.last"; then
+        hic_parse_error "$HIC_S" "$HIC_WARNING_LINE" || HIC_ERR_MESSAGE='warning while counting'
+        return 1
+    fi
 
     stage=capture
-    hic_session "$HIC_S" || return 2
     cp "$s_dir/response" "$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json" \
         || { HIC_ERR_MESSAGE='could not save executed plan'; return 1; }
     hic_profiles control || return 2
@@ -1578,9 +1757,10 @@ hic_attempt_run() {
 hic_attempt_once() {
     # Run one attempt inside savepoint hic_attempt and publish its record.
     # Failed and rejected attempts return 0; nonzero stops the run.
-    local stage status=error count actual reasons execution_ms captured
+    local stage status=error count actual reasons execution_ms captured tids_returned unresolved
     local sqlstate= message= detail= hint=
     HIC_COUNT= HIC_ACTUAL_INDEX= HIC_REASONS= HIC_ACCEPTED=false HIC_EXECUTION_MS= HIC_CAPTURED=
+    HIC_TIDS_RETURNED= HIC_UNRESOLVED=
     hic_prepare_attempt || return
     hic_attempt_run
     case $? in
@@ -1592,33 +1772,69 @@ hic_attempt_once() {
         1)  # Recoverable: keep the diagnostics, then roll the attempt back.
             sqlstate=$HIC_ERR_CODE message=$HIC_ERR_MESSAGE detail=$HIC_ERR_DETAIL hint=$HIC_ERR_HINT
             hic_recover || { HIC_STOP='attempt recovery failed'; return 2; }
-            HIC_COUNT= HIC_ACTUAL_INDEX= HIC_ACCEPTED=false ;;
+            HIC_COUNT= HIC_ACTUAL_INDEX= HIC_ACCEPTED=false HIC_TIDS_RETURNED= HIC_UNRESOLVED= ;;
         *)  return 2 ;;
     esac
     # Evidence is published only after the savepoint was released or rolled back.
     count=$HIC_COUNT actual=$HIC_ACTUAL_INDEX reasons=$HIC_REASONS
     execution_ms=$HIC_EXECUTION_MS captured=$HIC_CAPTURED
-    hic_save "$HIC_A" status count actual reasons execution_ms captured stage sqlstate message detail hint || return 2
+    tids_returned=$HIC_TIDS_RETURNED unresolved=$HIC_UNRESOLVED
+    hic_save "$HIC_A" status count actual reasons execution_ms captured stage sqlstate message detail hint \
+        tids_returned unresolved || return 2
     hic_say "attempt=$HIC_ATTEMPT_ID phase=$HIC_PHASE relation=$HIC_RELATION intended=$HIC_INTENDED actual=${HIC_ACTUAL_INDEX:--} status=$status"
+}
+
+hic_identity() {
+    # hic_identity OID: after the accepted heap attempt, the planner's locks on
+    # the table and every index last until COMMIT. Compare each one's
+    # snapshot-time name and relfilenode with the current catalog. TRUNCATE, a
+    # rewrite, a refresh, a drop and re-create or an index rename committed
+    # after the snapshot changes one of them; save that as drift.
+    local oid=$1 dir="$HIC_OUT/relations/$1" rows iid nsp id now_oid now_node want drift=
+    hic_read_relation < "$dir/facts" || return 2
+    hic_decode "$r_qualified" || return 1
+    hic_literal "$HIC_TEXT"
+    rows="($oid::oid,$HIC_LITERAL::text,$r_filenode::oid)"
+    while IFS= read -r iid; do
+        hic_read_index < "$HIC_OUT/indexes/$iid/facts" || return 2
+        hic_decode "$i_schema" || return 1
+        hic_literal "$HIC_TEXT"; nsp=$HIC_LITERAL
+        hic_decode "$i_name" || return 1
+        hic_literal "$HIC_TEXT"
+        rows="$rows,($iid::oid,format('%I.%I',$nsp,$HIC_LITERAL),$i_filenode::oid)"
+    done < "$dir/index-ids"
+    hic_data "$dir/identity.raw" "SELECT /* wiki_hic12_identity */ x.id,COALESCE(to_regclass(x.qualified)::oid,0),
+ COALESCE(pg_relation_filenode(x.id),0),x.filenode FROM (VALUES $rows) AS x(id,qualified,filenode) ORDER BY x.id;" || return
+    while IFS='|' read -r id now_oid now_node want; do
+        [ "$now_oid" = "$id" ] || drift="${drift:+$drift,}name_$id"
+        [ "$now_node" = "$want" ] || drift="${drift:+$drift,}storage_$id"
+    done < "$dir/identity.raw"
+    [ -s "$dir/identity.raw" ] || drift=identity_unreadable
+    hic_put "$dir" drift "$drift"
 }
 
 # ---- verdicts: derived from published attempts only ---------------------------
 
+hic_matched() { case $1 in PASS|PASS_WITH_ANOMALY) return 0 ;; esac; return 1; }
+
 hic_evaluate() {
     # hic_evaluate OID: derive the relation's status from published attempts,
-    # save it with its counts, and set HIC_STATUS and HIC_HEAP.
+    # save it with its counts, and set HIC_STATUS, HIC_HEAP and HIC_DRIFT.
+    # Every evidence read is checked, so a lost file stops the run instead of
+    # changing a verdict.
     local oid=$1 dir="$HIC_OUT/relations/$1" iid aid verdict
-    local scope permission phase status count actual intended
-    local heap= conflicting=false eligible=0 checked_count matching_count
-    local mismatch_count=0 error_count=0 uncovered=0 match=
+    local scope permission drift phase status count actual intended sqlstate reasons unresolved
+    local heap= conflicting=false eligible=0 checked_count matching_count anomalies
+    local mismatch_count=0 error_count=0 storage_errors=0 uncovered=0 match= unresolved_index_tids=
     : > "$dir/checked" && : > "$dir/matching" || return 2
-    hic_load "$dir" scope permission
+    hic_load "$dir" scope permission drift || return 2
     while IFS= read -r iid; do
-        hic_get "$HIC_OUT/indexes/$iid" eligible; [ "$HIC_VALUE" != true ] || eligible=$((eligible + 1))
+        hic_get "$HIC_OUT/indexes/$iid" eligible || return 2
+        [ "$HIC_VALUE" != true ] || eligible=$((eligible + 1))
     done < "$dir/index-ids"
     # Pass 1: the accepted heap baseline. Two different accepted counts conflict.
     while IFS= read -r aid; do
-        hic_load "$HIC_OUT/attempts/$aid" phase status count
+        hic_load "$HIC_OUT/attempts/$aid" phase status count || return 2
         [ "$phase:$status" = heap:accepted ] || continue
         hic_uint "$count" || return 2
         if [ -n "$heap" ] && [ "$heap" != "$count" ]; then conflicting=true; fi
@@ -1626,12 +1842,15 @@ hic_evaluate() {
     done < "$dir/attempt-ids"
     # Pass 2: accepted index counts, credited to the index that actually ran.
     while IFS= read -r aid; do
-        hic_load "$HIC_OUT/attempts/$aid" phase status
+        hic_load "$HIC_OUT/attempts/$aid" phase status count actual reasons unresolved || return 2
         if [ "$status" = error ]; then error_count=$((error_count + 1)); fi
+        case ,$reasons, in *,actual_index_identity_changed,*) drift=${drift:-index_identity_changed} ;; esac
         [ "$phase:$status" = index:accepted ] || continue
-        hic_load "$HIC_OUT/attempts/$aid" count actual
         hic_uint "$actual" && hic_uint "$count" || return 2
         hic_add_line "$dir/checked" "$actual" || return 2
+        if hic_uint "$unresolved" && { [ -z "$unresolved_index_tids" ] || [ "$unresolved" -gt "$unresolved_index_tids" ]; }; then
+            unresolved_index_tids=$unresolved
+        fi
         [ -n "$heap" ] || continue
         if [ "$count" = "$heap" ]; then
             hic_add_line "$dir/matching" "$actual" || return 2
@@ -1641,38 +1860,47 @@ hic_evaluate() {
         fi
     done < "$dir/attempt-ids"
     # Pass 3: errors not replaced by an accepted heap count or intended index.
+    # A storage-class error (XX, 58, or a warning while counting) is never
+    # replaced: a retry can succeed on a page the failed read zeroed.
     while IFS= read -r aid; do
-        hic_load "$HIC_OUT/attempts/$aid" status phase intended
+        hic_load "$HIC_OUT/attempts/$aid" status phase intended sqlstate || return 2
         [ "$status" = error ] || continue
-        if [ "$phase" = heap ]; then
+        if [[ $sqlstate =~ $HIC_STORAGE_CODE ]]; then
+            storage_errors=$((storage_errors + 1)) uncovered=$((uncovered + 1))
+        elif [ "$phase" = heap ]; then
             [ -n "$heap" ] || uncovered=$((uncovered + 1))
         elif ! grep -F -x -q "$intended" "$dir/checked"; then
             uncovered=$((uncovered + 1))
         fi
     done < "$dir/attempt-ids"
+    anomalies=$((mismatch_count + storage_errors))
     checked_count=$(($(wc -l < "$dir/checked")))        # $((...)) drops BSD wc's padding
     matching_count=$(($(wc -l < "$dir/matching")))
     if [ "$scope" != true ]; then verdict=NOT_APPLICABLE
-    elif [ "${HIC_EVIDENCE_VALID:-true}" != true ] || [ -n "$permission" ] || [ "$conflicting" = true ]; then verdict=ERROR
+    elif [ "${HIC_EVIDENCE_VALID:-true}" != true ] || [ -n "$permission" ] || [ "$conflicting" = true ] \
+        || [ -n "$drift" ]; then verdict=ERROR
     elif [ "$eligible" -eq 0 ]; then verdict=NO_ELIGIBLE_INDEX
+    elif [ -n "$heap" ] && [ "$matching_count" -gt 0 ] && [ "$anomalies" -gt 0 ]; then verdict=PASS_WITH_ANOMALY
     elif [ -n "$heap" ] && [ "$matching_count" -gt 0 ]; then verdict=PASS
     elif [ "$uncovered" -gt 0 ]; then verdict=ERROR
     elif [ -n "$heap" ] && [ "$checked_count" -eq "$eligible" ]; then verdict=MISMATCH
     else verdict=INCONCLUSIVE
     fi
     hic_put "$dir" status "$verdict" || return 2
-    hic_save "$dir" heap eligible checked_count matching_count mismatch_count error_count match || return 2
-    HIC_STATUS=$verdict HIC_HEAP=$heap
+    hic_save "$dir" heap eligible checked_count matching_count mismatch_count error_count storage_errors \
+        anomalies unresolved_index_tids match drift || return 2
+    HIC_STATUS=$verdict HIC_HEAP=$heap HIC_DRIFT=$drift
 }
 
 hic_attempt_loop() {
-    # Per relation: up to two heap attempts, then up to two per index until
-    # one matches (or every index is tried, in exhaustive mode).
+    # Per relation: up to two heap attempts, an identity check, then up to two
+    # attempts per index until one matches (or every index is tried, in
+    # exhaustive mode).
     local oid dir iid scope permission eligible
     while IFS= read -r oid; do
         dir="$HIC_OUT/relations/$oid"
         hic_evaluate "$oid" || return
-        hic_load "$dir" scope permission eligible
+        hic_load "$dir" scope permission eligible || return 2
         [ "$scope" = true ] && [ -z "$permission" ] && [ "$eligible" -gt 0 ] || continue
         hic_read_relation < "$dir/facts" || return 2
         HIC_RELATION=$oid HIC_REL_SCHEMA=$r_schema HIC_REL_NAME=$r_name HIC_REL_QUALIFIED=$r_qualified
@@ -1683,13 +1911,19 @@ hic_attempt_loop() {
             [ -z "$HIC_HEAP" ] || break
         done
         [ -n "$HIC_HEAP" ] || continue
+        hic_identity "$oid" || return
+        hic_evaluate "$oid" || return
+        [ -z "$HIC_DRIFT" ] || continue
         HIC_PHASE=index
         while IFS= read -r iid; do
-            hic_get "$HIC_OUT/indexes/$iid" eligible; [ "$HIC_VALUE" = true ] || continue
-            hic_get "$HIC_OUT/indexes/$iid" generation; [ -z "$HIC_VALUE" ] || continue
+            hic_get "$HIC_OUT/indexes/$iid" eligible || return 2
+            [ "$HIC_VALUE" = true ] || continue
+            hic_get "$HIC_OUT/indexes/$iid" generation || return 2
+            [ -z "$HIC_VALUE" ] || continue
             for HIC_VARIANT in 1 2; do
                 hic_evaluate "$oid" || return
-                if [ "$HIC_STATUS" = PASS ] && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then break; fi
+                if hic_matched "$HIC_STATUS" && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then break; fi
+                [ -z "$HIC_DRIFT" ] || break
                 # An attempt intended for another index may already have used this one.
                 if grep -F -x -q "$iid" "$dir/checked"; then break; fi
                 HIC_INTENDED=$iid
@@ -1706,18 +1940,21 @@ hic_report_relation() {
     # One relations.csv row; adds to hic_reports' totals (dynamic scope).
     local oid=$1 dir="$HIC_OUT/relations/$1" schema_name relation_name untested
     local scope reason permission status heap eligible checked_count matching_count mismatch_count error_count match
+    local storage_errors anomalies unresolved_index_tids drift
     hic_evaluate "$oid" || return 2
     hic_load "$dir" scope reason permission status heap eligible checked_count matching_count \
-        mismatch_count error_count match
+        mismatch_count error_count match storage_errors anomalies unresolved_index_tids drift || return 2
     hic_read_relation < "$dir/facts" || return 2
     hic_decode "$r_schema" || return 2; schema_name=$HIC_TEXT
     hic_decode "$r_name" || return 2; relation_name=$HIC_TEXT
     untested=$((eligible - checked_count))
     hic_csv "$HIC_OUT/relations.csv" "$oid" "$schema_name" "$relation_name" "$r_kind" "$scope" "$reason" \
         "$permission" "$status" "$heap" "$eligible" "$checked_count" "$matching_count" "$untested" \
-        "$mismatch_count" "$error_count" "$match" || return 2
+        "$mismatch_count" "$error_count" "$match" "$anomalies" "$storage_errors" "$unresolved_index_tids" \
+        "$drift" || return 2
     case $status in
         PASS) passed=$((passed + 1)) ;;
+        PASS_WITH_ANOMALY) anomalous=$((anomalous + 1)) ;;
         MISMATCH) mismatched=$((mismatched + 1)) ;;
         INCONCLUSIVE) inconclusive=$((inconclusive + 1)) ;;
         NO_ELIGIBLE_INDEX) no_index=$((no_index + 1)) ;;
@@ -1734,23 +1971,25 @@ hic_report_relation() {
         total_matching=$((total_matching + matching_count))
         total_untested=$((total_untested + untested))
         [ "$checked_count" -eq "$eligible" ] || exhaustive=false
+        total_unresolved=$((total_unresolved + ${unresolved_index_tids:-0}))
     fi
     total_mismatches=$((total_mismatches + mismatch_count))
     total_errors=$((total_errors + error_count))
+    total_anomalies=$((total_anomalies + anomalies))
 }
 
 hic_report_candidates() {
     # One candidates.csv row per index: was it actually checked, and if not, why.
-    local oid=$1 dir="$HIC_OUT/relations/$1" iid idir aid status attempted actual untested usability
+    local oid=$1 dir="$HIC_OUT/relations/$1" iid idir aid status drift attempted actual untested usability
     local eligible reason generation schema_name index_name
-    hic_get "$dir" status; status=$HIC_VALUE
+    hic_load "$dir" status drift || return 2
     while IFS= read -r iid; do
         idir="$HIC_OUT/indexes/$iid"
         hic_read_index < "$idir/facts" || return 2
-        hic_load "$idir" eligible reason generation
+        hic_load "$idir" eligible reason generation || return 2
         attempted=0
         while IFS= read -r aid; do
-            hic_get "$HIC_OUT/attempts/$aid" intended
+            hic_get "$HIC_OUT/attempts/$aid" intended || return 2
             [ "$HIC_VALUE" != "$iid" ] || attempted=$((attempted + 1))
         done < "$dir/attempt-ids"
         actual=false usability=not_established
@@ -1760,7 +1999,8 @@ hic_report_candidates() {
         if [ "$eligible" != true ]; then untested=$reason
         elif [ "$actual" = true ]; then untested=
         elif [ -n "$generation" ]; then untested=$generation
-        elif [ "$status" = PASS ] && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then untested=stopped_after_first_match
+        elif [ -n "$drift" ]; then untested=relation_identity_changed
+        elif hic_matched "$status" && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then untested=stopped_after_first_match
         elif [ "$attempted" -ge 2 ]; then untested=attempt_budget_exhausted_without_actual_coverage
         else untested=not_yet_checked
         fi
@@ -1775,22 +2015,24 @@ hic_report_attempts() {
     # One attempts.csv row per attempt; delta = index count - heap count.
     local oid=$1 dir="$HIC_OUT/relations/$1" aid heap delta
     local phase intended actual variant status count reasons stage sqlstate message detail hint
-    local execution_ms started captured
-    hic_get "$dir" heap; heap=$HIC_VALUE
+    local execution_ms started captured tids_returned unresolved
+    hic_get "$dir" heap || return 2; heap=$HIC_VALUE
     while IFS= read -r aid; do
         hic_load "$HIC_OUT/attempts/$aid" phase intended actual variant status count reasons stage \
-            sqlstate message detail hint execution_ms started captured
+            sqlstate message detail hint execution_ms started captured tids_returned unresolved || return 2
         delta=
         if [ "$phase" = index ] && [ "$status" = accepted ] && [ -n "$heap" ]; then delta=$((count - heap)); fi
         hic_csv "$HIC_OUT/attempts.csv" "$aid" "$oid" "$phase" "$intended" "$actual" "$variant" "$status" \
             "$count" "$delta" "$reasons" "$stage" "$sqlstate" "$message" "$detail" "$hint" \
-            "plans/attempt-$aid.json" "$execution_ms" "$started" "$captured" || return 2
+            "plans/attempt-$aid.json" "$execution_ms" "$started" "$captured" "$tids_returned" "$unresolved" \
+            || return 2
     done < "$dir/attempt-ids"
 }
 
 hic_report_parent() {
     # For a partitioned table, one parents.csv row: are all descendants in
-    # scope and supported, and did every leaf pass?
+    # scope and supported, and did every leaf pass? Adds to hic_reports'
+    # count of incomplete subtrees (dynamic scope).
     local oid=$1 parent child kind ns am schema_hex name_hex
     local descendants=0 outside=0 leaves=0 all_in_scope=true all_supported=true subtree=true
     hic_read_relation < "$HIC_OUT/relations/$oid/facts" || return 2
@@ -1810,6 +2052,7 @@ hic_report_parent() {
     done < "$HIC_OUT/partitions.raw"
     if [ "$descendants" = 0 ]; then all_in_scope=false all_supported=false; fi
     [ "$leaves" -gt 0 ] || subtree=false
+    [ "$subtree" = true ] || incomplete_subtrees=$((incomplete_subtrees + 1))
     hic_csv "$HIC_OUT/parents.csv" "$oid" "$descendants" "$outside" "$all_in_scope" "$all_supported" \
         "$leaves" "$subtree"
 }
@@ -1817,15 +2060,16 @@ hic_report_parent() {
 hic_reports() {
     # Write the five CSV reports from published evidence; set HIC_SUMMARY.
     local oid report
-    local physical=0 passed=0 mismatched=0 inconclusive=0 no_index=0 errored=0 excluded=0 unsupported=0
+    local physical=0 passed=0 anomalous=0 mismatched=0 inconclusive=0 no_index=0 errored=0 excluded=0 unsupported=0
     local total_eligible=0 total_checked=0 total_matching=0 total_untested=0 total_mismatches=0 total_errors=0
+    local total_anomalies=0 total_unresolved=0 incomplete_subtrees=0
     local exhaustive=true all_match=false
     for report in relations candidates attempts parents schema; do
         : > "$HIC_OUT/$report.csv" || return 2
     done
-    hic_csv "$HIC_OUT/relations.csv" relation_oid schema_name relation_name relkind in_heap_scope exclusion_reason permission_error status heap_count eligible_indexes checked_indexes matching_indexes untested_indexes mismatching_attempts error_attempts matching_index_oid || return 2
+    hic_csv "$HIC_OUT/relations.csv" relation_oid schema_name relation_name relkind in_heap_scope exclusion_reason permission_error status heap_count eligible_indexes checked_indexes matching_indexes untested_indexes mismatching_attempts error_attempts matching_index_oid anomalies storage_error_attempts unresolved_index_tids identity_drift || return 2
     hic_csv "$HIC_OUT/candidates.csv" index_oid relation_oid schema_name index_name eligible exclusion_reason generation_reason indcheckxmin catalog_xmin actually_checked intended_attempts untested_reason snapshot_usability || return 2
-    hic_csv "$HIC_OUT/attempts.csv" attempt_id relation_oid phase intended_index_oid actual_index_oid variant status row_count delta rejection_reasons error_stage sqlstate message detail hint plan_file execution_ms started captured || return 2
+    hic_csv "$HIC_OUT/attempts.csv" attempt_id relation_oid phase intended_index_oid actual_index_oid variant status row_count delta rejection_reasons error_stage sqlstate message detail hint plan_file execution_ms started captured index_tids_returned unresolved_index_tids || return 2
     hic_csv "$HIC_OUT/parents.csv" relation_oid descendants outside_schema_descendants all_descendants_in_scope all_descendants_supported physical_children subtree_success || return 2
     while IFS= read -r oid; do
         hic_report_relation "$oid" || return 2
@@ -1840,11 +2084,12 @@ hic_reports() {
     fi
     [ "$physical" -gt 0 ] || exhaustive=false
     if [ "$total_checked" -gt 0 ] && [ "$total_mismatches" -eq 0 ]; then all_match=true; fi
-    hic_csv "$HIC_OUT/schema.csv" schema_success heap_scope_all_pass physical_relations passed_relations mismatched_relations inconclusive_relations no_index_relations error_relations excluded_objects unsupported_table_ams eligible_indexes checked_indexes matching_indexes untested_indexes exhaustive_coverage_complete all_tested_indexes_match observed_index_mismatches attempt_errors || return 2
-    hic_csv "$HIC_OUT/schema.csv" "$HIC_SCHEMA_SUCCESS" "$HIC_HEAP_ALL_PASS" "$physical" "$passed" "$mismatched" \
-        "$inconclusive" "$no_index" "$errored" "$excluded" "$unsupported" "$total_eligible" "$total_checked" \
-        "$total_matching" "$total_untested" "$exhaustive" "$all_match" "$total_mismatches" "$total_errors" || return 2
-    HIC_SUMMARY="schema_success=$HIC_SCHEMA_SUCCESS physical_relations=$physical passed=$passed mismatched=$mismatched inconclusive=$inconclusive no_eligible_index=$no_index error=$errored eligible_indexes=$total_eligible checked_indexes=$total_checked untested_indexes=$total_untested observed_index_mismatches=$total_mismatches attempt_errors=$total_errors"
+    hic_csv "$HIC_OUT/schema.csv" schema_success heap_scope_all_pass physical_relations passed_relations pass_with_anomaly_relations mismatched_relations inconclusive_relations no_index_relations error_relations excluded_objects unsupported_table_ams eligible_indexes checked_indexes matching_indexes untested_indexes exhaustive_coverage_complete all_tested_indexes_match observed_index_mismatches attempt_errors anomalies unresolved_index_tids incomplete_partition_subtrees || return 2
+    hic_csv "$HIC_OUT/schema.csv" "$HIC_SCHEMA_SUCCESS" "$HIC_HEAP_ALL_PASS" "$physical" "$passed" "$anomalous" \
+        "$mismatched" "$inconclusive" "$no_index" "$errored" "$excluded" "$unsupported" "$total_eligible" \
+        "$total_checked" "$total_matching" "$total_untested" "$exhaustive" "$all_match" "$total_mismatches" \
+        "$total_errors" "$total_anomalies" "$total_unresolved" "$incomplete_subtrees" || return 2
+    HIC_SUMMARY="schema_success=$HIC_SCHEMA_SUCCESS physical_relations=$physical passed=$passed pass_with_anomaly=$anomalous mismatched=$mismatched inconclusive=$inconclusive no_eligible_index=$no_index error=$errored eligible_indexes=$total_eligible checked_indexes=$total_checked untested_indexes=$total_untested observed_index_mismatches=$total_mismatches attempt_errors=$total_errors anomalies=$total_anomalies unresolved_index_tids=$total_unresolved incomplete_partition_subtrees=$incomplete_subtrees"
 }
 
 hic_finish() {
@@ -1972,13 +2217,13 @@ bash .wiki-runtime/hic12-measure.sh
 | `verify` | Record platform/configuration, create a unique disposable database, and run the whole suite |
 | `cleanup` | Fast-stop the owned server, confirm PID/process/socket/port teardown, then delete the sandbox including build/results |
 | Environment | `JOBS`, default 2; normal compiler/PATH lookup. The harness fixes LC_ALL=C, PGCLIENTENCODING=UTF8, TMPDIR/PGPASSFILE under the sandbox; unsets host-address/service/PGOPTIONS overrides; test sessions use the private socket and roles. Test names use UTC time and PID |
-| Prerequisites | Bash with `/dev/tcp`, Git, POSIX utilities including `ps`, `paste`, `cmp`, `mkfifo`; GNU make, C99 compiler, Bison/Flex and Perl required by a Git-source build. No network or extra extension. ([installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97), [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318)) |
+| Prerequisites | Bash with `/dev/tcp`, Git, POSIX utilities including `ps`, `paste`, `cmp`, `mkfifo`, `dd`, `tr` and `sleep`; GNU make, C99 compiler, Bison/Flex and Perl required by a Git-source build. No network or extra extension. ([installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97), [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318)) |
 | Build | `--without-readline --without-zlib`, private install prefix; omits optional interactive editing/compression facilities, not visibility/planning behavior ([installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)) |
 | Output | `.wiki-runtime/tmp/hic12/suite-current.log`, `platform.txt`, `platform-sql.txt`, `build-options.txt`, then `results/<unique-db>/<case>/`; `last-test-output` names the latest result directory |
-| Runtime | Fresh build: 117s; expanded verification with the build retained: 126s. A fresh build plus verification is about 4 minutes; a retained-build verification is about 2 minutes. These correctness-fixture timings do not predict production scan cost |
-| Teardown | Each invocation stops only a server it started. A persistent sandbox marker identifies retained artifacts, not startup ownership. A pre-existing running server is refused and left running, including on an early error. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup |
+| Runtime | Fresh build: 79s; verification: 167s right after that build and 170s with the build retained, including the physical leg's stop and restart. A fresh build plus verification is about 4 minutes; a retained-build verification is about 3 minutes. These correctness-fixture timings do not predict production scan cost |
+| Teardown | Each invocation stops only a server it started. A persistent sandbox marker identifies retained artifacts, not startup ownership. The `verify` stage stops and restarts its own server once, for the physical leg. A pre-existing running server is refused and left running, including on an early error. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup |
 
-**Last run:** 2026-10-24 America/Toronto (successful verification 10:57 to 10:59 UTC), after the corrective review. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0, 64-bit, GNU Bash 5.3.20 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. The server was built out of tree from an absent sandbox (`prepare build`, build 117s). The final `verify` invocation used that build and a new disposable database, passed all 160 assertions in 126s, and stopped its server on exit. The multiline cases exercised four accepted actual indexes; both unusual AM names remained classified as unsupported. Child invocations left the parent server running. The final `cleanup` stage took 2s, confirmed PID/process/socket/port teardown and deleted the sandbox including its build and results. Earlier dated measurements remain historical.
+**Last run:** 2026-10-24 America/Toronto, after the false-negative fixes. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0, 64-bit, GNU Bash 5.3.20 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. From an absent sandbox, `prepare build` (build 79s) and then `init verify` (verify 167s) passed all 220 assertions. A second `verify` with the build retained (12:44 to 12:46 UTC, 170s) passed all 220 again, and `cleanup` (2s) confirmed PID/process/socket/port teardown and deleted the sandbox including its build and results. In both runs the physical leg's zeroed block held 58 of 300 rows of a 6-block heap. Earlier dated measurements remain historical.
 
 Non-default behavior is intentional. The [settings table](#settings-and-query-shapes) gives the checker profiles, their defaults, mechanisms and transaction/session scope. These additional fixture changes supply specific test conditions:
 
@@ -1995,6 +2240,11 @@ Non-default behavior is intentional. The [settings table](#settings-and-query-sh
 | Multiline key text | Ordinary column names/literals → explicitly quoted newline names and a literal containing newlines; a stock `CASE` expression also produces newlines without a special setting | Quoting preserves identifier bytes, and `CASE` deparsing adds indentation even with `pretty=false`; these fixtures exercise complete local-value reads and generated-query execution ([ruleutils.c#identifier-bytes](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10703-L10716), [ruleutils.c#pretty-flags](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1117-L1131), [ruleutils.c#CASE-formatting](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L8309-L8315)) |
 | Collation name | Stock `C` collation → a copy with a newline in its name | `CREATE COLLATION ... FROM` copies the source locale/provider properties; this changes the name, not the comparison semantics, and exercises encoded server-quoted collation transport ([collationcmds.c#from-properties](../../../../raw/postgres-12/src/backend/commands/collationcmds.c#L119-L145)) |
 | Custom index-AM identities | Built-in hash OID 405/name `hash` → two new AM OIDs with pipe/newline names, stock `hashhandler` and integer hash support | `CREATE ACCESS METHOD` stores the supplied name and handler under a new OID. The checker's explicit built-in identity policy classifies both as unsupported before ordering generation; the fixture tests inventory framing, not broader AM completeness ([pg_am.dat#hash-identity](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L21-L23), [amcmds.c#new-name-and-handler](../../../../raw/postgres-12/src/backend/commands/amcmds.c#L74-L95)) |
+| Deleted-row fixture | `autovacuum_enabled` default true → false on `hic_edge.deleted`; storage parameter | Keeps the ten deleted rows' index entries until the checker reads them, so `unresolved_index_tids` is 10 on the first run; with the default, autovacuum could remove them first ([reloptions.c#autovacuum_enabled](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L108-L115), [autovacuum.c#av_enabled](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3026)) |
+| Damage-hiding settings | Defaults `off`, `off`, `on` → `zero_damaged_pages=on`, `ignore_checksum_failure=on` or `track_counts=off` through PGOPTIONS for one superuser CLI run each; session scope | Exercises the refusal, exit 2; no count runs under them ([guc.c#damage-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1133-L1162), [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1393-L1399)) |
+| Idle timeout | Default 0 → 1 second through PGOPTIONS; user context, session scope | Shows that the runner's own session setting keeps the checking session alive across a 2-second pause ([guc.c#idle-timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2400-L2408)) |
+| Drift DDL | No concurrent DDL by default → a second session runs TRUNCATE, REFRESH, DROP and CREATE, and three ALTER INDEX RENAME after the checker's snapshot | Each changed relation is ERROR; without the DDL all five would pass ([mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702)) |
+| Physical damage | Intact files by default → with the owned server stopped, `dd ... conv=notrunc` writes block 1 of `hic_damage_zero.t` as zeros and block 1 of `hic_damage_header.t` as 0xFF bytes | Verification accepts an all-zero page, so both scans lose the zeroed block's 58 rows; the 0xFF block fails verification, so every read of it raises XX001 ([bufpage.c#all-zero-accepted](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L123-L142), [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925)). Undamaged, both tables would pass with 300 rows |
 | Lock/error/output fixtures | No blocker/truncation/termination/output obstacle by default → explicit second-session lock, cut JSON, terminated backend, report filename directory | Exercises 55P03, JSON parse failure, connection loss and local I/O failure; no default-leg measurement is claimed ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095), [json.c#parse-error](../../../../raw/postgres-12/src/backend/utils/adt/json.c#L1126-L1137), [signalfuncs.c#termination](../../../../raw/postgres-12/src/backend/storage/ipc/signalfuncs.c#L128-L137)) |
 
 All CREATE/ALTER/INSERT/UPDATE/DELETE/DROP statements in this harness are **disposable fixtures**, confined to its owned cluster and test databases. Plan and evaluator units are synthetic evidence, not damaged-index experiments. The driver and its expected-error probes use only Bash and SQL, with the same `\echo` synchronization as the checker.
@@ -2362,7 +2612,66 @@ CREATE /* wiki_hic12_guard_schema */ SCHEMA hic_psql_guard;
 CREATE /* wiki_hic12_guard_table */ TABLE hic_psql_guard.psql_trigger(a integer[], "ERROR" integer);
 INSERT /* wiki_hic12_guard_rows */ INTO hic_psql_guard.psql_trigger VALUES (ARRAY[1, 2, 3], 2), (ARRAY[4, 5], 1);
 CREATE /* wiki_hic12_guard_index */ INDEX psql_guard_idx ON hic_psql_guard.psql_trigger ((a[1 : "ERROR"]));
+
+-- Edge cases: a key column whose name equals the default output name of an
+-- unnamed SELECT item, and index entries left behind by committed deletes.
+-- autovacuum_enabled = off keeps those entries until the checker reads them.
+CREATE /* wiki_hic12_edge_schema */ SCHEMA hic_edge;
+CREATE /* wiki_hic12_output_name_table */ TABLE hic_edge.output_name("?column?" integer);
+INSERT /* wiki_hic12_output_name_rows */ INTO hic_edge.output_name VALUES (3), (1), (NULL);
+CREATE /* wiki_hic12_output_name_index */ INDEX output_name_idx ON hic_edge.output_name("?column?");
+CREATE /* wiki_hic12_deleted_table */ TABLE hic_edge.deleted(id integer, pad text) WITH (autovacuum_enabled = off);
+CREATE /* wiki_hic12_deleted_index */ INDEX deleted_idx ON hic_edge.deleted(id);
+INSERT /* wiki_hic12_deleted_rows */ INTO hic_edge.deleted SELECT n, 'p' FROM generate_series(1, 100) AS n;
+DELETE /* wiki_hic12_deleted_remove */ FROM hic_edge.deleted WHERE id <= 10;
+
+-- Identity drift: each relation is changed by another session after the
+-- checker's snapshot and before the checker first locks it.
+CREATE /* wiki_hic12_drift_schema */ SCHEMA hic_drift;
+CREATE /* wiki_hic12_drift_base_schema */ SCHEMA hic_drift_base;
+CREATE /* wiki_hic12_drift_truncated */ TABLE hic_drift.truncated(id integer);
+INSERT /* wiki_hic12_drift_truncated_rows */ INTO hic_drift.truncated SELECT n FROM generate_series(1, 5) AS n;
+CREATE /* wiki_hic12_drift_truncated_index */ INDEX truncated_idx ON hic_drift.truncated(id);
+CREATE /* wiki_hic12_drift_mv_base */ TABLE hic_drift_base.mv_base(id integer);
+INSERT /* wiki_hic12_drift_mv_base_rows */ INTO hic_drift_base.mv_base VALUES (1), (2), (3);
+CREATE /* wiki_hic12_drift_refreshed */ MATERIALIZED VIEW hic_drift.refreshed AS SELECT id FROM hic_drift_base.mv_base;
+CREATE /* wiki_hic12_drift_refreshed_index */ INDEX refreshed_idx ON hic_drift.refreshed(id);
+CREATE /* wiki_hic12_drift_recreated */ TABLE hic_drift.recreated(id integer);
+INSERT /* wiki_hic12_drift_recreated_rows */ INTO hic_drift.recreated VALUES (1), (2), (3), (4);
+CREATE /* wiki_hic12_drift_recreated_index */ INDEX recreated_idx ON hic_drift.recreated(id);
+CREATE /* wiki_hic12_drift_swapped */ TABLE hic_drift.swapped(a integer, b integer);
+INSERT /* wiki_hic12_drift_swapped_rows */ INTO hic_drift.swapped VALUES (1, 3), (2, 2), (3, 1);
+CREATE /* wiki_hic12_drift_swap_a */ INDEX swap_a ON hic_drift.swapped(a);
+CREATE /* wiki_hic12_drift_swap_b */ INDEX swap_b ON hic_drift.swapped(b);
+CREATE /* wiki_hic12_drift_stable */ TABLE hic_drift.stable(id integer);
+INSERT /* wiki_hic12_drift_stable_rows */ INTO hic_drift.stable VALUES (1), (2);
+CREATE /* wiki_hic12_drift_stable_index */ INDEX stable_idx ON hic_drift.stable(id);
+
+-- Physical fault leg: these tables get one damaged heap block each while the
+-- owned server is stopped. About 50 rows fit in one 8 kB block.
+CREATE /* wiki_hic12_damage_zero_schema */ SCHEMA hic_damage_zero;
+CREATE /* wiki_hic12_damage_zero_table */ TABLE hic_damage_zero.t(id integer, pad text);
+INSERT /* wiki_hic12_damage_zero_rows */ INTO hic_damage_zero.t SELECT n, repeat('z', 100) FROM generate_series(1, 300) AS n;
+CREATE /* wiki_hic12_damage_zero_index */ INDEX damage_zero_idx ON hic_damage_zero.t(id);
+CREATE /* wiki_hic12_damage_header_schema */ SCHEMA hic_damage_header;
+CREATE /* wiki_hic12_damage_header_table */ TABLE hic_damage_header.t(id integer, pad text);
+INSERT /* wiki_hic12_damage_header_rows */ INTO hic_damage_header.t SELECT n, repeat('h', 100) FROM generate_series(1, 300) AS n;
+CREATE /* wiki_hic12_damage_header_index */ INDEX damage_header_idx ON hic_damage_header.t(id);
 HIC_FIXTURES_SQL
+    cat > "$work/drift.sql" <<'HIC_DRIFT_SQL'
+SET /* wiki_hic12_drift_timeout */ statement_timeout = '60s';
+SET /* wiki_hic12_drift_lock_timeout */ lock_timeout = '2s';
+TRUNCATE /* wiki_hic12_drift_truncate */ hic_drift.truncated;
+INSERT /* wiki_hic12_drift_mv_base_more */ INTO hic_drift_base.mv_base VALUES (4), (5);
+REFRESH /* wiki_hic12_drift_refresh */ MATERIALIZED VIEW hic_drift.refreshed;
+DROP /* wiki_hic12_drift_drop */ TABLE hic_drift.recreated;
+CREATE /* wiki_hic12_drift_recreate */ TABLE hic_drift.recreated(id integer);
+INSERT /* wiki_hic12_drift_recreate_rows */ INTO hic_drift.recreated VALUES (1), (2), (3), (4);
+CREATE /* wiki_hic12_drift_recreate_index */ INDEX recreated_idx ON hic_drift.recreated(id);
+ALTER /* wiki_hic12_drift_swap_1 */ INDEX hic_drift.swap_a RENAME TO swap_tmp;
+ALTER /* wiki_hic12_drift_swap_2 */ INDEX hic_drift.swap_b RENAME TO swap_a;
+ALTER /* wiki_hic12_drift_swap_3 */ INDEX hic_drift.swap_tmp RENAME TO swap_b;
+HIC_DRIFT_SQL
     cat > "$work/writer.sql" <<'HIC_WRITER_SQL'
 SET /* wiki_hic12_writer_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_writer_lock_timeout */ lock_timeout = '2s';
@@ -2536,7 +2845,7 @@ expect_error() {
 }
 open_case() {
     case_name=$1; HIC_OUT="$out/$1"; mkdir -m 700 "$HIC_OUT" || fail directory
-    export PGOPTIONS='-c quote_all_identifiers=on'
+    export PGOPTIONS="-c quote_all_identifiers=on ${CASE_OPTIONS:-}"
     hic_open main 7 8 || fail connection
     unset PGOPTIONS
     if [ -n "${2:-}" ]; then hic_sql main "SET /* wiki_hic12_test_role */ ROLE $2;" || fail role; fi
@@ -2754,6 +3063,7 @@ synth() {
     printf '%s\n' "$id" >> "$REL_DIR/attempt-ids"
     hic_put "$base" phase "$phase"; hic_put "$base" status "$state"; hic_put "$base" count "$value"
     hic_put "$base" intended "$intended"; hic_put "$base" actual "$actual"
+    hic_put "$base" sqlstate "${7:-}"; hic_put "$base" reasons "${8:-}"; hic_put "$base" unresolved ''
 }
 eval_is() { hic_evaluate "$REL_OID" || fail evaluator; [ "$HIC_STATUS" = "$1" ] || fail "evaluator $HIC_STATUS expected $1"; ok "evaluator $1 $2"; }
 : > "$REL_DIR/attempt-ids"
@@ -2765,7 +3075,7 @@ eval_is MISMATCH complete_coverage
 synth 4 index error '' "${ids[1]}" ''
 eval_is MISMATCH recovered_error
 synth 5 index accepted 10 "${ids[0]}" "${ids[0]}"
-eval_is PASS matching_actual_index
+eval_is PASS_WITH_ANOMALY matching_actual_index_after_mismatches
 HIC_EVIDENCE_VALID=false; eval_is ERROR invalid_evidence; HIC_EVIDENCE_VALID=true
 synth 6 heap accepted 11 '' ''
 eval_is ERROR conflicting_baselines
@@ -2779,6 +3089,22 @@ synth 10 index error '' "${ids[1]}" ''
 eval_is ERROR uncovered_execution_error
 synth 11 index accepted 10 "${ids[0]}" "${ids[0]}"
 eval_is PASS optional_error_after_match
+synth 12 index error '' "${ids[1]}" '' XX001
+eval_is PASS_WITH_ANOMALY storage_error_after_match
+: > "$REL_DIR/attempt-ids"
+synth 13 heap error '' '' '' 01000
+synth 14 heap accepted 10 '' ''
+synth 15 index accepted 10 "${ids[0]}" "${ids[0]}"
+eval_is PASS_WITH_ANOMALY retry_after_warning
+: > "$REL_DIR/attempt-ids"
+synth 16 heap accepted 10 '' ''
+synth 17 index rejected 10 "${ids[0]}" "${ids[0]}" '' actual_index_identity_changed
+eval_is ERROR index_identity_changed
+: > "$REL_DIR/attempt-ids"
+synth 18 heap accepted 10 '' ''
+synth 19 index accepted 10 "${ids[0]}" "${ids[0]}"
+hic_put "$REL_DIR" drift storage_1; eval_is ERROR relation_drift; hic_put "$REL_DIR" drift ''
+eval_is PASS drift_cleared
 hic_sql main 'ROLLBACK /* wiki_hic12_synthetic_end */;' || fail rollback
 close_case
 # Truncated JSON and count rollback: retry in the same snapshot.
@@ -2799,7 +3125,7 @@ ok truncated_json_rejected
 hic_recover || fail recover
 expect rolled_back_count 'SELECT /* wiki_hic12_rollback_assert */ count(*)=0 FROM pg_temp.hic_count;'
 # Keep failed evidence locally after rollback, as the normal path does.
-for spec in 'status:error' 'count:' 'actual:' 'reasons:' 'stage:capture' 'sqlstate:22P02' 'message:truncated' 'detail:expected more JSON' 'hint:' 'execution_ms:' 'captured:'; do
+for spec in 'status:error' 'count:' 'actual:' 'reasons:' 'stage:capture' 'sqlstate:22P02' 'message:truncated' 'detail:expected more JSON' 'hint:' 'execution_ms:' 'captured:' 'tids_returned:' 'unresolved:'; do
     hic_put "$HIC_A" "${spec%%:*}" "${spec#*:}" || fail error_record
 done
 run_loop; finish_case
@@ -2861,7 +3187,117 @@ for local_value in '' $'first\nsecond\n\n' '.'; do
     [ "$loaded" = "$local_value" ] || fail saved_roundtrip
     ok local_value_roundtrip
 done
+# A value ending in the dollar-quote tag minus its final $ gets another tag.
+hic_literal 'tail$hic12_q0'
+case $HIC_LITERAL in '$hic12_q1$'*) ok literal_suffix_tag ;; *) fail "literal tag $HIC_LITERAL" ;; esac
+expect literal_suffix_roundtrip "SELECT /* wiki_hic12_literal_probe */ $HIC_LITERAL = 'tail\$hic12_q0';"
+# A warning-only report is found by the warning pattern and never as an error.
+printf '%s\n' 'WARNING:  01000: page verification failed, calculated checksum 1 but expected 2' > "$(sfile stderr.last)"
+if hic_parse_error main; then fail warning_read_as_error; fi
+hic_parse_error main "$HIC_WARNING_LINE" && [ "$HIC_ERR_CODE" = 01000 ] || fail warning_parse
+[[ $HIC_ERR_CODE =~ $HIC_STORAGE_CODE ]] || fail warning_storage_class
+ok warning_report_classified
 close_case
+# Settings that hide damage or bias counts are refused.
+hic_server_guard off off on -1 || fail guard_default
+ok server_guard_default
+for args in 'on off on -1' 'off on on -1' 'off off off -1' 'off off on 60'; do
+    set -- $args
+    if hic_server_guard "$@"; then fail "guard accepted $args"; fi
+    ok "server_guard_refuses_${args// /_}"
+done
+for setting in zero_damaged_pages=on ignore_checksum_failure=on track_counts=off; do
+    cli "cli_refuse_${setting%%=*}" 2 HIC_SCHEMA=hic_positive HIC_DDL_STABLE=yes PGOPTIONS="-c $setting"
+    grep -F -q "refusing server settings: $setting" "$out/cli_refuse_${setting%%=*}/summary.txt" || fail "reason $setting"
+    ok "refusal_recorded_${setting%%=*}"
+done
+# A "?column?" key column, and index entries whose rows were deleted.
+check_case edge hic_edge false false
+sum_is passed 2
+sum_is unresolved_index_tids 10
+relation output_name; field_is status PASS; field_is heap 3
+relation deleted; field_is status PASS; field_is heap 90; field_is unresolved_index_tids 10
+close_case
+# The first scan marked those ten entries LP_DEAD, so a later scan skips them.
+check_case edge_again hic_edge false false
+relation deleted; field_is status PASS; field_is unresolved_index_tids 0
+close_case
+# A role-level idle-in-transaction timeout must not end the checking session.
+CASE_OPTIONS='-c idle_in_transaction_session_timeout=1000'
+open_case idle
+CASE_OPTIONS=
+start_run hic_lock false false
+sleep 2
+run_loop; finish_case
+sum_is passed 1
+close_case
+# DDL committed after the snapshot, before the checker locks each relation.
+open_case drift
+start_run hic_drift false false
+"$bin/psql" -X -q -v ON_ERROR_STOP=1 -f "$work/drift.sql" > "$HIC_OUT/drift.log" 2>&1 || fail drift_ddl
+run_loop; finish_case
+sum_is physical_relations 5
+sum_is error 4
+sum_is passed 1
+for name in truncated refreshed recreated swapped; do
+    relation "$name"; field_is status ERROR
+    hic_get "$REL_DIR" drift || fail drift_read
+    [ -n "$HIC_VALUE" ] || fail "no drift for $name"
+    ok "drift_recorded_$name"
+done
+relation truncated; hic_get "$REL_DIR" drift
+case $HIC_VALUE in *storage_*) ok truncate_storage_drift ;; *) fail "truncate drift $HIC_VALUE" ;; esac
+relation swapped; hic_get "$REL_DIR" drift
+case $HIC_VALUE in *name_*) ok swap_name_drift ;; *) fail "swap drift $HIC_VALUE" ;; esac
+relation stable; field_is status PASS
+close_case
+# A lost evidence file makes reporting fail instead of dropping a relation.
+open_case evidence_read
+start_run hic_lock false false
+run_loop
+relation t
+rm "$REL_DIR/scope" && mkdir "$REL_DIR/scope" || fail evidence_fixture
+hic_finish; rc=$?
+[ "$rc" = 2 ] || fail "unreadable evidence returned $rc"
+ok unreadable_evidence_incomplete
+close_case
+# Physical fault leg: stop the owned server, damage block 1 of two disposable
+# tables, and restart it with the same settings. Block 1 of the first table
+# becomes all zeros; block 1 of the second gets an invalid header (all 0xFF).
+case_name=damage
+damage_sql() {
+    "$bin/psql" -X -qAt -v ON_ERROR_STOP=1 -c "SET /* wiki_hic12_damage_timeout */ statement_timeout = '60s'" \
+        -c "SET /* wiki_hic12_damage_lock */ lock_timeout = '2s'" -c "$1"
+}
+lost=$(damage_sql "SELECT /* wiki_hic12_damage_lost */ count(*) FROM hic_damage_zero.t WHERE (ctid::text::point)[0] = 1") || fail damage_lost
+blocks=$(damage_sql "SELECT /* wiki_hic12_damage_blocks */ pg_relation_size('hic_damage_zero.t') / 8192") || fail damage_blocks
+zero_path=$(damage_sql "SELECT /* wiki_hic12_damage_zero_path */ pg_relation_filepath('hic_damage_zero.t')") || fail zero_path
+header_path=$(damage_sql "SELECT /* wiki_hic12_damage_header_path */ pg_relation_filepath('hic_damage_header.t')") || fail header_path
+hic_uint "$lost" && [ "$lost" -gt 0 ] && [ "$blocks" -ge 3 ] || fail "damage layout lost=$lost blocks=$blocks"
+printf 'lost_rows=%s heap_blocks=%s\n' "$lost" "$blocks" > "$out/damage-layout.txt"
+"$bin/pg_ctl" -D "$work/data" -m fast -w stop > "$out/damage-stop.log" 2>&1 || fail damage_stop
+dd if=/dev/zero of="$work/data/$zero_path" bs=8192 seek=1 count=1 conv=notrunc 2> "$out/dd-zero.log" || fail dd_zero
+dd if=/dev/zero bs=8192 count=1 2> "$out/dd-ff.log" | tr '\000' '\377' > "$out/ff.blk" || fail ff_block
+[ "$(($(wc -c < "$out/ff.blk")))" = 8192 ] || fail ff_size
+dd if="$out/ff.blk" of="$work/data/$header_path" bs=8192 seek=1 count=1 conv=notrunc 2> "$out/dd-header.log" || fail dd_header
+"$bin/pg_ctl" -D "$work/data" -l "$work/postgres.log" \
+    -o "-p 55447 -c listen_addresses='' -c unix_socket_directories='$work/socket' -c unix_socket_permissions=0700" \
+    -w start > "$out/damage-start.log" 2>&1 || fail damage_start
+ok damage_injected
+# Zeroed block: both scans lose its rows, so the counts agree (PASS); only the
+# unresolved-TID counter shows the index entries whose rows are gone.
+check_case damage_zero hic_damage_zero false false
+sum_is passed 1
+relation t; field_is status PASS; field_is heap "$((300 - lost))"; field_is unresolved_index_tids "$lost"
+close_case
+# Invalid header: every heap read fails with XX001, so there is no baseline.
+check_case damage_header hic_damage_header false false
+sum_is error 1
+relation t; field_is status ERROR; field_is storage_errors 2
+grep -F -q '"XX001"' "$HIC_OUT/attempts.csv" || fail damage_sqlstate
+ok damage_header_xx001
+close_case
+cli cli_damage_zero_damaged_pages 2 HIC_SCHEMA=hic_damage_header HIC_DDL_STABLE=yes PGOPTIONS='-c zero_damaged_pages=on'
 
 printf '%s\n' "$out" > "$work/last-test-output"
 printf 'passed=%s\n' "$passed"
@@ -2890,6 +3326,7 @@ done
 - Glossary: reviewed linked scan, heap, MVCC/snapshot, index state, opclass/collation, HOT, permissions/RLS, EXPLAIN, psql/libpq, dollar quoting, SQLSTATE, savepoint, GUC, TID and pageinspect entries against their PostgreSQL 12 qualifications. No definition change is needed.
 - PostgreSQL 12 has no matching common-concept pages; no concept page was created or edited.
 - Contradiction comparison: assembled explanation, embedded runner and harness, manifests/reports/tests, matching glossary and own navigation entries; same-version concurrent-index, invalid-index, partitioned-index, EXPLAIN, physical-index-statistics and health/tail-check pages searched for shared claims. The earlier SQL-owned architecture is replaced consistently rather than retained as a second implementation.
+- 2026-10-24 false-negative review and fixes: index heap fetch of TIDs that reach no row, killed-tuple hints, per-transaction statistics counters and their flush point, `zero_damaged_pages`, `ignore_checksum_failure` and `old_snapshot_threshold` paths, default SQLSTATEs of warnings, syscache-based name and relfilenode lookup, lock levels of index rename and `REINDEX CONCURRENTLY`, subtransaction lock release, `REFRESH` frozen inserts and `ORDER BY` output-name matching.
 - Verification: the single published harness exercises the runner and its fixtures. Runtime records and teardown appear below/in the task log; no application cluster, raw source edit, network fetch, subagent, commit or push is part of this refactor.
 
 ## Evidence Map
@@ -2917,6 +3354,11 @@ done
 | Recovery only while the attempt savepoint exists | [xact.c#savepoint-states](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4140-L4308) | [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55); measured capture retry and truncated-plan retry |
 | Lost session and closed input end the run without a commit | [common.c#CheckConnection](../../../../raw/postgres-12/src/bin/psql/common.c#L386-L397), [postgres.c#client-EOF](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4433-L4455), [postinit.c#ShutdownPostgres](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L1189-L1193) | [psql-ref.sgml#exit-status](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L635-L643); measured `pg_terminate_backend()` case |
 | Duplicate-sensitive visible-identity comparison | [heaptuple.c](../../../../raw/postgres-12/src/backend/access/common/heaptuple.c#L636-L640), [heapam_handler.c](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L148-L167) | [select.sgml#EXCEPT-ALL](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L1281-L1294), [ddl.sgml#ctid](../../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L1198-L1205) |
+| Heap-side loss is invisible to both counts | [heapam.c#unresolved-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1590), [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635) | Physical zeroed-block leg in the published measurement script |
+| Unresolved-TID counters and killed-tuple hints | [pgstatfuncs.c#xact-tuple-counters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1683-L1711), [indexam.c#kill-prior-tuple](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L589), [nbtutils.c#_bt_killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812) | Deleted-row fixture: 10, then 0 |
+| Refused damage-hiding settings | [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925), [bufpage.c#checksum-warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L161), [elog.c#default-sqlstate](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388) | Guard units, CLI refusals and the invalid-header leg |
+| Identity drift after the snapshot | [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904), [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968), [tablecmds.c#index-rename-lock](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L3305-L3312) | [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702); drift fixtures |
+| An empty inner select list avoids ORDER BY output-name capture | [parse_clause.c#SQL92-name-rule](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1865-L1930), [gram.y#empty-target-list](../../../../raw/postgres-12/src/backend/parser/gram.y#L14633-L14634) | `?column?` fixture |
 | Native decoding and UTF-8/hex transport, with Bash acceptance | [jsonfuncs.c#array-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1976-L2014), [jsonfuncs.c#object-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1655-L1695), [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69), [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432) | Typed malformed-plan units, text/CSV and complete local-value round trips, four executed multiline-ordering fixtures and two unusual AM-name classifications in the published harness |
 
 
@@ -2926,8 +3368,9 @@ done
 - Complete candidate coverage remains best effort: equivalent/constant orderings, planner choice, unsafe expressions and snapshot usability may leave an eligible index untested.
 - Pinned documentation says enable_indexscan enables/disables paths, but implementation adds a cost penalty. Source wins; acceptance requires the executed path, not the setting. [config.sgml#indexscan-wording](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4449-L4462) [costsize.c#indexscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L525-L535)
 - The interpolation guard deliberately refuses some harmless literal text too. It records errors and provides no coverage for refused candidates.
-- DDL stability and intact catalog inventory are premises, not proved by this runner. Successful inventory means its queries completed, not that lost historical objects were recovered.
-- Physical corruption detection rates and production scalability are unmeasured. The detailed test gaps remain under measured coverage. Identity-bag capture/pageinspect diagnosis and alternative transaction architectures are optional future work.
+- DDL stability is detected only as identity drift of each checked relation and its indexes after the accepted heap attempt; new relations, new indexes, changed index flags and an intact catalog inventory remain premises. Successful inventory means its queries completed, not that lost historical objects were recovered.
+- Corruption detection rates and production scalability are unmeasured; the harness damages only two heap blocks. The detailed test gaps remain under measured coverage. Identity-bag capture, or a cheaper order-independent identity checksum that would catch a misdirected TID cancelling itself, pageinspect diagnosis and alternative transaction architectures are optional future work.
+- The unresolved-TID signal cannot tell dead, snapshot-invisible and orphaned index entries apart, and misses entries an earlier scan already marked dead. A census of index pages would see them, but this runner uses no extension.
 - Platform portability is limited to the recorded client/server stack. Avoiding Bash-4-only features is not proof of execution on every Bash release, locale or platform.
 - Concept-layer gap: no PostgreSQL 12 common-concept page covers retained MVCC/HOT fetching or executed-plan validation; these would require separate tasks.
 
@@ -3061,6 +3504,25 @@ done
 - [ruleutils.c#quoted-identifier-bytes](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10703-L10716)
 - [collationcmds.c#from-properties](../../../../raw/postgres-12/src/backend/commands/collationcmds.c#L119-L145)
 - [amcmds.c#new-name-and-handler](../../../../raw/postgres-12/src/backend/commands/amcmds.c#L74-L95)
+- [pgstatfuncs.c#xact-tuple-counters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1683-L1711)
+- [resowner.c#subtransaction-locks](../../../../raw/postgres-12/src/backend/utils/resowner/resowner.c#L594-L603)
+- [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968)
+- [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904)
+- [lmgr.c#invalidations-on-lock](../../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L125-L139)
+- [tablecmds.c#index-rename-lock](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L3305-L3312)
+- [indexcmds.c#session-lock](../../../../raw/postgres-12/src/backend/commands/indexcmds.c#L3070-L3074)
+- [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L631)
+- [bufpage.c#checksum-warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L161)
+- [elog.c#default-sqlstate](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388)
+- [pgstat.c#initstats-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1751-L1772)
+- [bufmgr.h#TestForOldSnapshot](../../../../raw/postgres-12/src/include/storage/bufmgr.h#L264-L275)
+- [parse_target.c#default-name](../../../../raw/postgres-12/src/backend/parser/parse_target.c#L1661)
+- [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360)
+- [pgstat.h#tuple-counters](../../../../raw/postgres-12/src/include/pgstat.h#L1369-L1383)
+- [nbtutils.c#_bt_killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812)
+- [genam.c#ignore-killed](../../../../raw/postgres-12/src/backend/access/index/genam.c#L108-L119)
+- [reloptions.c#autovacuum_enabled](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L108-L115)
+- [autovacuum.c#av_enabled](../../../../raw/postgres-12/src/backend/postmaster/autovacuum.c#L3026)
 
 
 ## Navigation
