@@ -195,6 +195,12 @@ Implementation approval: Implement the plan.
 
 > Current scope: one self-contained Bash checker owns all checking decisions. SQL remains for catalog reads, native quoting/deparsing, same-execution exact-count capture and JSON decoding. This supersedes the historical requirement that the installed SQL remain the source of all checks.
 
+Follow-up (2026-10-23):
+
+Review the "Runner script" section and make its code more readable and simpler.
+
+> Scope: a readability revision of the same runner. The checking contract is unchanged; its SQL differs only by one redundant join removed from the plan-decoding query.
+
 ## Answer
 
 ### Feasibility and execution contract
@@ -569,7 +575,7 @@ The transport reads until that unique marker, preserving stdout and the request'
 
 SQL's `convert_to(...,'UTF8')` produces encoded bytes and `encode(...,'hex')` serializes them. Empty fields stay explicit, so tabs, pipes, quotes, backslashes, newlines and non-ASCII names cannot become field delimiters. JSON decoding emits types and child shapes as well as values; it does not disguise malformed required fields as absent ones. [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432) [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69)
 
-Bash dollar-quotes every arbitrary SQL value it sends, choosing a delimiter absent from that value. Both lexers preserve dollar-quoted content without interpolation. The runner does not use `eval` on catalog text; the existing transport's `eval` handles only internal session names and file-descriptor numbers. [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L621) [psqlscan.l#dollar-quotes](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588)
+Bash dollar-quotes every arbitrary SQL value it sends, choosing a delimiter absent from that value. Both lexers preserve dollar-quoted content without interpolation. The runner never passes catalog text to `eval`; its only `eval` calls open and close the numbered file descriptors of its psql sessions. [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L621) [psqlscan.l#dollar-quotes](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588)
 
 Deparsed expressions require an additional guard. Outside quotes psql substitutes `:name`, `:'name'` and `:"name"`; it defines variables such as `ERROR` itself. The deparser can print an array slice as `a[1:"ERROR"]`, which psql would rewrite. The runner conservatively refuses count text with a colon not preceded by another colon and followed by a quote or brace. It records an execution error without sending that count. A similar sequence inside a literal is refused too; that conservatism remains a coverage limitation. Typecasts `::` are lexed separately. [psqlscan.l#substitution](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762) [psqlscan.l#typecast](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L301) [ruleutils.c#printSubscripts](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10614-L10637)
 
@@ -697,6 +703,8 @@ The implemented Bash runner is the user's authorized orchestration and checking-
 
 ### Runner script
 
+The script reads top to bottom in sections: small helpers, the psql session layer, setup, inventory, plan validation, attempts, verdicts, reports and the driver. Each catalog fact line is read into named variables (`r_*` for relations, `i_*` for indexes), and each attempt, relation or index keeps its evidence as one-value files (`hic_put` and `hic_get` handle one value, `hic_save` and `hic_load` several). The [measurement harness](#measurement-script) sources this file and calls its functions directly, so those function names and evidence files are part of its test interface.
+
 ```bash
 # hic12-check.sh: self-contained Bash checker for PostgreSQL 12.2
 # heap and index visible-count checker. Bash makes every decision. psql
@@ -706,143 +714,42 @@ The implemented Bash runner is the user's authorized orchestration and checking-
 #   HIC_SCHEMA=app HIC_DDL_STABLE=yes bash hic12-check.sh
 #
 # The connection comes from the standard libpq environment (PGHOST, PGPORT,
-# PGDATABASE, PGUSER, PGSERVICE, PGPASSFILE). Exit status: 0 run completed
-# with schema_success; 1 run completed without it; 2 run did not complete;
-# 64 usage error. Sourcing this file defines the functions without running.
+# PGDATABASE, PGUSER, PGSERVICE, PGPASSFILE). Options: HIC_EXHAUSTIVE and
+# HIC_INCLUDE_EXTERNAL_PARTITIONS (yes or no, default no), HIC_ROLE, HIC_OUT
+# (a new output directory) and HIC_PSQL (default psql). Exit status: 0 run
+# completed with schema_success; 1 run completed without it; 2 run did not
+# complete; 64 usage error. Sourcing this file only defines the functions.
 
 : "${HIC_PSQL:=psql}"
-: "${HIC_S:=main}"
-HIC_OPEN=${HIC_OPEN:-}
+: "${HIC_S:=main}"                  # name of the checking session
+HIC_OPEN=${HIC_OPEN:-}              # names of the open psql sessions
+
+# A psql verbose report line looks like "ERROR:  42P01: message".
+HIC_REPORT_LINE='^[^ ]+:  [0-9A-Z]{5}: '
+# The same, for error classes only: 00, 01 and 02 are success, warning, no data.
 HIC_ERROR_LINE='^[^ ]+:  ([1-9A-Z][0-9A-Z]|0[3-9A-Z])[0-9A-Z]{3}: '
-HIC_GUARD='(^|[^:]):['"'"'"{]'
+# Count text containing psql's :'var', :"var" or :{?var} forms is not sent.
+HIC_GUARD="(^|[^:]):['\"{]"
+HIC_FIRST_USER_OID=16384            # FirstNormalObjectId
+HIC_CATALOG_NS=11                   # pg_catalog
+HIC_HEAP_HEX=x68656170              # "heap" in the hex transport
+HIC_COUNT_HEX=x6869635f636f756e74   # "hic_count" in the hex transport
+
+# ---- small helpers -----------------------------------------------------------
 
 hic_say() { printf 'hic12-check: %s\n' "$*"; }
 hic_warn() { printf 'hic12-check: %s\n' "$*" >&2; }
 
-# ---- session layer: one psql process per named session --------------------
-
-hic_open() {
-    # hic_open NAME FD_IN FD_OUT: start psql reading SQL from a FIFO.
-    local name=$1 fdin=$2 fdout=$3 dir other closers=
-    dir="$HIC_OUT/session-$name"
-    trap '' PIPE
-    mkdir -m 700 "$dir" && mkfifo -m 600 "$dir/in" "$dir/out" || return 2
-    : > "$dir/stderr.log" || return 2
-    : > "$dir/transcript.sql" || return 2
-    for other in $HIC_OPEN; do
-        eval "closers=\"\$closers \${HIC_FDIN_$other}>&- \${HIC_FDOUT_$other}<&-\""
-    done
-    eval "PGCLIENTENCODING=UTF8 LC_ALL=C \"\$HIC_PSQL\" -X -w -q -A -t -v ON_ERROR_STOP=0 -v VERBOSITY=verbose \
-        < \"\$dir/in\" > \"\$dir/out\" 2>> \"\$dir/stderr.log\" $closers &"
-    eval "HIC_PID_$name=\$! HIC_FDIN_$name=$fdin HIC_FDOUT_$name=$fdout"
-    eval "HIC_DIR_$name=\$dir HIC_SEQ_$name=0"
-    eval "exec $fdin>\"\$dir/in\" $fdout<\"\$dir/out\""
-    HIC_OPEN="$HIC_OPEN $name"
-    if hic_sql "$name" 'SELECT /* wiki_hic12_runner_hello */ 1;' && [ "$HIC_VALUE" = 1 ]; then
-        return 0
-    fi
-    hic_warn "session $name did not start; see $dir/stderr.log"
-    return 2
-}
-
-hic_close() {
-    # hic_close NAME [kill]: end of input lets psql exit; the server then
-    # rolls back any transaction that is still open.
-    local name=$1 pid fdin fdout rest= other rc=0
-    eval "pid=\${HIC_PID_$name:-} fdin=\${HIC_FDIN_$name:-} fdout=\${HIC_FDOUT_$name:-}"
-    [ -n "$pid" ] || return 0
-    if [ "${2:-}" = kill ]; then kill "$pid" 2> /dev/null; fi
-    eval "exec $fdin>&-"
-    wait "$pid" || rc=$?
-    eval "exec $fdout<&-"
-    eval "HIC_PID_$name="
-    for other in $HIC_OPEN; do
-        [ "$other" = "$name" ] || rest="$rest $other"
-    done
-    HIC_OPEN=$rest
-    return "$rc"
-}
-
-hic_cleanup() {
-    local name
-    for name in $HIC_OPEN; do
-        hic_close "$name" kill || :
-    done
-}
-
-hic_request() {
-    # hic_request NAME FILE: send FILE and one \echo sync line, then copy the
-    # stdout lines that precede the sync line into the session's response
-    # file and this request's stderr into stderr.last. Sets HIC_ERROR and
-    # HIC_SQLSTATE (last statement) and HIC_FAILED (any statement). Returns 2
-    # when psql ends first or the request does not end with a semicolon.
-    local name=$1 file=$2 dir fdin fdout seq marker line before status=
-    eval "dir=\$HIC_DIR_$name fdin=\$HIC_FDIN_$name fdout=\$HIC_FDOUT_$name seq=\$HIC_SEQ_$name"
-    HIC_ERROR= HIC_SQLSTATE= HIC_FAILED=true
-    : > "$dir/response" || return 2
-    : > "$dir/stderr.last" || return 2
-    if ! grep -v -E '^[[:space:]]*$' "$file" | tail -n 1 | grep -q -E ';[[:space:]]*$'; then
-        hic_warn "refusing request without a final semicolon: $file"
-        return 2
-    fi
-    seq=$((seq + 1))
-    eval "HIC_SEQ_$name=$seq"
-    marker="HIC12_SYNC_$$_${name}_$seq"
-    before=$(wc -c < "$dir/stderr.log")
-    { printf '%s\n' "-- request $seq"; cat "$file"; } >> "$dir/transcript.sql" || return 2
-    if ! { cat "$file"; printf '\n\\echo %s :ERROR :SQLSTATE\n' "$marker"; } >&"$fdin" 2> /dev/null; then
-        return 2
-    fi
-    while IFS= read -r line; do
-        case $line in
-            "$marker "*) status=${line#"$marker "}; break ;;
-        esac
-        printf '%s\n' "$line"
-    done <&"$fdout" > "$dir/response"
-    tail -c +"$((before + 1))" "$dir/stderr.log" > "$dir/stderr.last" || return 2
-    [ -n "$status" ] || return 2
-    HIC_ERROR=${status%% *}
-    HIC_SQLSTATE=${status#* }
-    printf '%s\n' "-- sync $status" >> "$dir/transcript.sql" || return 2
-    if [ "$HIC_ERROR" = false ] && ! grep -E -q "$HIC_ERROR_LINE" "$dir/stderr.last"; then
-        HIC_FAILED=false
-    fi
-    return 0
-}
-
-hic_sql() {
-    # hic_sql NAME TEXT: returns 0 when every statement succeeded, 1 when one
-    # failed, 2 when the session is gone. HIC_VALUE is the first result line.
-    local name=$1 dir
-    eval "dir=\$HIC_DIR_$name"
-    printf '%s\n' "$2" > "$dir/request" || return 2
-    HIC_VALUE=
-    hic_request "$name" "$dir/request" || return 2
-    if [ -s "$dir/response" ]; then IFS= read -r HIC_VALUE < "$dir/response" || :; fi
-    [ "$HIC_FAILED" = false ] || return 1
-}
-
-hic_parse_error() {
-    # Sets HIC_ERR_CODE, HIC_ERR_MESSAGE, HIC_ERR_DETAIL and HIC_ERR_HINT from
-    # the first error report that psql printed for the last request.
-    local f start end first rest
-    eval "f=\$HIC_DIR_$1/stderr.last"
-    HIC_ERR_CODE= HIC_ERR_MESSAGE= HIC_ERR_DETAIL= HIC_ERR_HINT=
-    start=$(grep -n -E "$HIC_ERROR_LINE" "$f" | sed -n '1s/:.*//p')
-    [ -n "$start" ] || return 1
-    first=$(sed -n "${start}p" "$f")
-    rest=${first#*:  }
-    HIC_ERR_CODE=${rest%%:*}
-    HIC_ERR_MESSAGE=${rest#*: }
-    end=$(sed -n "$((start + 1)),\$p" "$f" | grep -n -E '^[^ ]+:  [0-9A-Z]{5}: ' | sed -n '1s/:.*//p')
-    if [ -n "$end" ]; then end=$((start + end - 1)); else end='$'; fi
-    HIC_ERR_DETAIL=$(sed -n "${start},${end}p" "$f" | sed -n 's/^DETAIL:  //p' | sed -n 1p)
-    HIC_ERR_HINT=$(sed -n "${start},${end}p" "$f" | sed -n 's/^HINT:  //p' | sed -n 1p)
-    return 0
-}
+hic_uint() { case $1 in ''|*[!0-9]*) return 1 ;; esac; }
+hic_decimal() { [[ $1 =~ ^[0-9]+([.][0-9]+)?$ ]]; }
+hic_one() { [[ $1 =~ ^1([.]0+)?$ ]]; }
+hic_zero() { [[ $1 =~ ^0([.]0+)?$ ]]; }
+hic_user_oid() { [ "$1" -ge "$HIC_FIRST_USER_OID" ]; }
+hic_heap_am() { [ "$1" = 2 ] && [ "$2" = "$HIC_HEAP_HEX" ] && [ "$3" = t ]; }  # relam, hex amname, amtype
+hic_btree_am() { [ "$1" = 403 ] && [ "$2" = btree ] && [ "$3" = i ]; }         # relam, amname, amtype
 
 hic_literal() {
-    # Dollar-quote $1 with a tag that does not occur in it.
+    # hic_literal TEXT: set HIC_LITERAL to TEXT dollar-quoted with an unused tag.
     local n=0 tag
     while :; do
         tag="\$hic12_q$n\$"
@@ -851,58 +758,216 @@ hic_literal() {
     HIC_LITERAL="$tag$1$tag"
 }
 
-# ---- data transport and local state -----------------------------------------
-# Arbitrary SQL text fields travel as x-prefixed UTF-8 hex. OIDs and counts
-# travel as decimal digits. No eval ever receives catalog text.
+# Arbitrary SQL text travels as "x" plus its UTF-8 bytes in hex; OIDs and
+# counts travel as decimal digits. Catalog text never reaches eval.
 hic_decode() {
-    local h=${1#x} escapes= pair
+    # hic_decode HEX: set HIC_TEXT; refuses malformed hex and NUL bytes.
+    local hex=${1#x} escapes= pair
     case $1 in x*) ;; *) return 1 ;; esac
-    case $h in *[!0-9a-f]* ) return 1 ;; esac
-    [ $((${#h} % 2)) -eq 0 ] || return 1
-    while [ -n "$h" ]; do
-        pair=${h:0:2}; h=${h:2}
+    case $hex in *[!0-9a-f]*) return 1 ;; esac
+    [ $((${#hex} % 2)) -eq 0 ] || return 1
+    while [ -n "$hex" ]; do
+        pair=${hex:0:2} hex=${hex:2}
         [ "$pair" != 00 ] || return 1
         escapes="$escapes\\x$pair"
     done
     printf -v HIC_TEXT '%b' "$escapes"
 }
-hic_encode() {
-    # For numeric identity fragments only; arbitrary text is encoded by SQL.
-    local s=$1 c n
-    HIC_HEX=x
-    while [ -n "$s" ]; do
-        c=${s:0:1}; s=${s:1}; printf -v n '%02x' "'$c"
-        HIC_HEX=$HIC_HEX$n
+
+hic_csv() {
+    # hic_csv FILE FIELD...: append one CSV row, every field quoted.
+    local file=$1 row= sep= value
+    shift
+    for value in "$@"; do
+        value=${value//\"/\"\"}
+        row="$row$sep\"$value\""
+        sep=,
+    done
+    printf '%s\n' "$row" >> "$file"
+}
+
+# Local evidence is one value per file: DIR/NAME holds one line.
+hic_put() { printf '%s\n' "$3" > "$1/$2"; }                    # hic_put DIR NAME VALUE
+hic_get() { HIC_VALUE=; IFS= read -r HIC_VALUE < "$1/$2"; }    # hic_get DIR NAME
+hic_save() {
+    # hic_save DIR VAR...: write each variable VAR to DIR/VAR.
+    local _dir=$1 _var
+    shift
+    for _var in "$@"; do
+        hic_put "$_dir" "$_var" "${!_var-}" || return 2
     done
 }
-hic_put() { printf '%s\n' "$3" > "$1/$2"; }
-hic_get() { HIC_VALUE=; IFS= read -r HIC_VALUE < "$1/$2"; }
-hic_csv() {
-    local file=$1 value sep=
+hic_load() {
+    # hic_load DIR VAR...: read each DIR/VAR into the caller's variable VAR.
+    local _dir=$1 _var
     shift
-    { for value in "$@"; do
-        value=${value//\"/\"\"}
-        printf '%s"%s"' "$sep" "$value" || return 2; sep=,
-      done
-      printf '\n'
-    } >> "$file"
+    for _var in "$@"; do
+        printf -v "$_var" '%s' ''
+        IFS= read -r "$_var" < "$_dir/$_var" || :
+    done
 }
+hic_add_line() { grep -F -x -q "$2" "$1" || printf '%s\n' "$2" >> "$1"; }  # add LINE to a set FILE
+
+# ---- session layer: one psql process per named session ------------------------
+# Bash 3.2 has no associative arrays, so session NAME keeps its state in
+# HIC_DIR_NAME, HIC_FDIN_NAME, HIC_FDOUT_NAME, HIC_PID_NAME and HIC_SEQ_NAME.
+# eval is used only to open and close those numbered file descriptors.
+
+hic_session() {
+    # hic_session NAME: copy NAME's state into the caller's s_* variables.
+    local v
+    case $1 in ''|*[!a-z]*) return 2 ;; esac
+    v=HIC_DIR_$1;   s_dir=${!v-}
+    v=HIC_FDIN_$1;  s_in=${!v-}
+    v=HIC_FDOUT_$1; s_out=${!v-}
+    v=HIC_PID_$1;   s_pid=${!v-}
+    v=HIC_SEQ_$1;   s_seq=${!v-0}
+}
+hic_session_set() { printf -v "HIC_$2_$1" '%s' "$3"; }        # hic_session_set NAME FIELD VALUE
+
+hic_open() {
+    # hic_open NAME FD_IN FD_OUT: start psql reading SQL from a FIFO that the
+    # runner writes through FD_IN; results come back through FD_OUT.
+    local name=$1 fdin=$2 fdout=$3 dir="$HIC_OUT/session-$1" other s_dir s_in s_out s_pid s_seq
+    case $name in ''|*[!a-z]*) return 2 ;; esac
+    hic_uint "$fdin" && hic_uint "$fdout" || return 2
+    trap '' PIPE    # writing to an exited psql must fail, not end the runner
+    mkdir -m 700 "$dir" && mkfifo -m 600 "$dir/in" "$dir/out" || return 2
+    : > "$dir/stderr.log" && : > "$dir/transcript.sql" || return 2
+    (
+        # Close the other sessions' descriptors in this child. A copy left
+        # open here would keep their psql from ever reading end of input.
+        for other in $HIC_OPEN; do
+            hic_session "$other"
+            eval "exec $s_in>&- $s_out<&-"
+        done
+        export PGCLIENTENCODING=UTF8 LC_ALL=C
+        exec "$HIC_PSQL" -X -w -q -A -t -v ON_ERROR_STOP=0 -v VERBOSITY=verbose \
+            < "$dir/in" > "$dir/out" 2>> "$dir/stderr.log"
+    ) &
+    hic_session_set "$name" PID "$!"
+    hic_session_set "$name" DIR "$dir"
+    hic_session_set "$name" FDIN "$fdin"
+    hic_session_set "$name" FDOUT "$fdout"
+    hic_session_set "$name" SEQ 0
+    eval "exec $fdin>\"\$dir/in\" $fdout<\"\$dir/out\""
+    HIC_OPEN="$HIC_OPEN $name"
+    hic_sql "$name" 'SELECT /* wiki_hic12_runner_hello */ 1;' && [ "$HIC_VALUE" = 1 ] && return 0
+    hic_warn "session $name did not start; see $dir/stderr.log"
+    return 2
+}
+
+hic_close() {
+    # hic_close NAME [kill]: closing psql's input ends it; the server then
+    # rolls back any transaction that is still open.
+    local name=$1 other rest= rc=0 s_dir s_in s_out s_pid s_seq
+    hic_session "$name" || return 2
+    [ -n "$s_pid" ] || return 0
+    if [ "${2:-}" = kill ]; then kill "$s_pid" 2> /dev/null; fi
+    eval "exec $s_in>&-"
+    wait "$s_pid" || rc=$?
+    eval "exec $s_out<&-"
+    hic_session_set "$name" PID ''
+    for other in $HIC_OPEN; do [ "$other" = "$name" ] || rest="$rest $other"; done
+    HIC_OPEN=$rest
+    return "$rc"
+}
+
+hic_cleanup() {
+    local name
+    for name in $HIC_OPEN; do hic_close "$name" kill || :; done
+}
+
+hic_request() {
+    # hic_request NAME FILE: send FILE and one \echo sync line, then copy the
+    # stdout lines before the sync line to the session's response file, and
+    # this request's stderr to stderr.last. Sets HIC_ERROR and HIC_SQLSTATE
+    # (last statement) and HIC_FAILED (any statement). Returns 2 when psql
+    # ends first or FILE does not end with a semicolon.
+    local name=$1 file=$2 marker line before status= s_dir s_in s_out s_pid s_seq
+    hic_session "$name" || return 2
+    HIC_ERROR= HIC_SQLSTATE= HIC_FAILED=true
+    : > "$s_dir/response" && : > "$s_dir/stderr.last" || return 2
+    if ! grep -v -E '^[[:space:]]*$' "$file" | tail -n 1 | grep -q -E ';[[:space:]]*$'; then
+        hic_warn "refusing request without a final semicolon: $file"
+        return 2
+    fi
+    s_seq=$((s_seq + 1))
+    hic_session_set "$name" SEQ "$s_seq"
+    marker="HIC12_SYNC_$$_${name}_$s_seq"
+    before=$(wc -c < "$s_dir/stderr.log")
+    { printf '%s\n' "-- request $s_seq"; cat "$file"; } >> "$s_dir/transcript.sql" || return 2
+    { cat "$file"; printf '\n\\echo %s :ERROR :SQLSTATE\n' "$marker"; } >&"$s_in" 2> /dev/null || return 2
+    while IFS= read -r line; do
+        case $line in "$marker "*) status=${line#"$marker "}; break ;; esac
+        printf '%s\n' "$line"
+    done <&"$s_out" > "$s_dir/response"
+    tail -c +"$((before + 1))" "$s_dir/stderr.log" > "$s_dir/stderr.last" || return 2
+    [ -n "$status" ] || return 2    # psql ended before the sync line
+    HIC_ERROR=${status%% *} HIC_SQLSTATE=${status#* }
+    printf '%s\n' "-- sync $status" >> "$s_dir/transcript.sql" || return 2
+    # ERROR describes only the last statement, so also scan the stderr slice.
+    if [ "$HIC_ERROR" = false ] && ! grep -E -q "$HIC_ERROR_LINE" "$s_dir/stderr.last"; then
+        HIC_FAILED=false
+    fi
+    return 0
+}
+
+hic_sql() {
+    # hic_sql NAME TEXT: returns 0 when every statement succeeded, 1 when one
+    # failed, 2 when the session is gone. HIC_VALUE is the first result line.
+    local s_dir s_in s_out s_pid s_seq
+    hic_session "$1" || return 2
+    HIC_VALUE=
+    printf '%s\n' "$2" > "$s_dir/request" || return 2
+    hic_request "$1" "$s_dir/request" || return 2
+    if [ -s "$s_dir/response" ]; then IFS= read -r HIC_VALUE < "$s_dir/response" || :; fi
+    [ "$HIC_FAILED" = false ] || return 1
+}
+
 hic_data() {
-    # Save a query's complete response; callers parse only the saved file.
-    local file=$1 dir
-    eval "dir=\$HIC_DIR_$HIC_S"
+    # hic_data FILE SQL: run SQL in the checking session; save its response.
+    local s_dir s_in s_out s_pid s_seq
+    hic_session "$HIC_S" || return 2
     hic_sql "$HIC_S" "$2" || return
-    cp "$dir/response" "$file"
+    cp "$s_dir/response" "$1"
 }
-hic_uint() { case $1 in ''|*[!0-9]*) return 1 ;; esac; }
-hic_decimal() { [[ $1 =~ ^[0-9]+([.][0-9]+)?$ ]]; }
-hic_one() { [[ $1 =~ ^1([.]0+)?$ ]]; }
-hic_zero() { [[ $1 =~ ^0([.]0+)?$ ]]; }
+
+hic_parse_error() {
+    # hic_parse_error NAME: set HIC_ERR_CODE, HIC_ERR_MESSAGE, HIC_ERR_DETAIL
+    # and HIC_ERR_HINT from the first error report of NAME's last request.
+    # Returns 1 when that request printed no error report.
+    local line rest s_dir s_in s_out s_pid s_seq
+    hic_session "$1" || return 1
+    HIC_ERR_CODE= HIC_ERR_MESSAGE= HIC_ERR_DETAIL= HIC_ERR_HINT=
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ -z "$HIC_ERR_CODE" ]; then
+            [[ $line =~ $HIC_ERROR_LINE ]] || continue
+            rest=${line#*:  }                   # "SQLSTATE: message"
+            HIC_ERR_CODE=${rest%%:*}
+            HIC_ERR_MESSAGE=${rest#*: }
+        elif [[ $line =~ $HIC_REPORT_LINE ]]; then
+            break                               # the next report starts
+        else
+            case $line in
+                'DETAIL:  '*) [ -n "$HIC_ERR_DETAIL" ] || HIC_ERR_DETAIL=${line#'DETAIL:  '} ;;
+                'HINT:  '*) [ -n "$HIC_ERR_HINT" ] || HIC_ERR_HINT=${line#'HINT:  '} ;;
+            esac
+        fi
+    done < "$s_dir/stderr.last"
+    [ -n "$HIC_ERR_CODE" ]
+}
+
+# ---- setup: temporary tables, checking transaction, planner profiles ---------
+
 hic_profiles() {
+    # hic_profiles heap|index|control: heap allows only sequential scans;
+    # index allows only ordinary index scans, and its second variant also
+    # disables sorting; control turns every scan method and sorting back on.
     local seq=on idx=on sort=on only=on bitmap=on
     case $1 in
-        heap) idx=off; only=off; bitmap=off ;;
-        index) seq=off; only=off; bitmap=off
+        heap) idx=off only=off bitmap=off ;;
+        index) seq=off only=off bitmap=off
                [ "${HIC_VARIANT:-1}" = 1 ] || sort=off ;;
         control) ;;
         *) return 1 ;;
@@ -915,8 +980,9 @@ SET /* wiki_hic12_profile_sort */ LOCAL enable_sort = $sort;
 SET /* wiki_hic12_profile_quote */ LOCAL quote_all_identifiers = off;
 SET /* wiki_hic12_profile_path */ LOCAL search_path = pg_catalog, pg_temp;"
 }
+
 hic_install() {
-    # The only installed objects. No views, functions, triggers or rules.
+    # Create the two temporary tables, the only installed objects.
     hic_sql "$HIC_S" "SET /* wiki_hic12_install_path */ search_path = pg_catalog, pg_temp;
 SET /* wiki_hic12_install_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_install_lock */ lock_timeout = '2s';
@@ -951,8 +1017,9 @@ UNION SELECT indexrelid FROM pg_catalog.pg_index JOIN rels ON indrelid = oid;" |
 FROM pg_catalog.pg_namespace WHERE oid = pg_my_temp_schema();" || return
     HIC_CAPTURE_SCHEMA=$HIC_VALUE
 }
+
 hic_start() {
-    local meta schemahex
+    # Open the repeatable-read, read-only checking transaction; record run facts.
     hic_literal "$HIC_SCHEMA"
     hic_sql "$HIC_S" "BEGIN /* wiki_hic12_begin */ ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET /* wiki_hic12_scope_path */ LOCAL search_path = pg_catalog, pg_temp;
@@ -970,22 +1037,45 @@ SET /* wiki_hic12_scope_lock */ LOCAL lock_timeout = '2s';" || return
  current_setting('transaction_isolation'), current_setting('transaction_read_only'),
  'x'||encode(convert_to(session_user::text,'UTF8'),'hex'),
  (SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database());" || return
-    IFS='|' read -r HIC_SERVER HIC_RECOVERY HIC_BACKEND HIC_XID HIC_SNAPSHOT HIC_ROLE_HEX HIC_SCHEMA_OID HIC_DATABASE HIC_VERSION HIC_STARTED HIC_ISOLATION HIC_READONLY HIC_SESSION_ROLE HIC_DATABASE_OID < "$HIC_OUT/run-facts" || return 1
-    [ "$HIC_SERVER" = 120002 ] && [ "$HIC_RECOVERY" = f ] && [ "$HIC_SCHEMA_OID" != 0 ] \
-        && [ "$HIC_ISOLATION" = 'repeatable read' ] && [ "$HIC_READONLY" = on ] || {
-        HIC_STOP='requires PostgreSQL 12.2 primary, an existing schema, repeatable read and read only'; return 1; }
+    IFS='|' read -r HIC_SERVER HIC_RECOVERY HIC_BACKEND HIC_XID HIC_SNAPSHOT HIC_ROLE_HEX \
+        HIC_SCHEMA_OID HIC_DATABASE HIC_VERSION HIC_STARTED HIC_ISOLATION HIC_READONLY \
+        HIC_SESSION_ROLE HIC_DATABASE_OID < "$HIC_OUT/run-facts" || return 1
+    if [ "$HIC_SERVER" != 120002 ] || [ "$HIC_RECOVERY" != f ] || [ "$HIC_SCHEMA_OID" = 0 ] \
+        || [ "$HIC_ISOLATION" != 'repeatable read' ] || [ "$HIC_READONLY" != on ]; then
+        HIC_STOP='requires PostgreSQL 12.2 primary, an existing schema, repeatable read and read only'
+        return 1
+    fi
     hic_profiles control || return
     hic_data "$HIC_OUT/settings.json" "SELECT /* wiki_hic12_run_settings */ jsonb_object_agg(name,current_setting(name))
 FROM unnest(ARRAY['enable_seqscan','enable_indexscan','enable_indexonlyscan','enable_bitmapscan','enable_sort',
 'max_parallel_workers_per_gather','row_security','search_path','quote_all_identifiers','statement_timeout','lock_timeout',
 'transaction_isolation','transaction_read_only','old_snapshot_threshold','client_encoding']) setting(name);"
 }
+
 hic_run_error() {
+    # hic_run_error STAGE [SQLSTATE [MESSAGE]]: one run-errors.csv row.
     hic_csv "$HIC_OUT/run-errors.csv" "$1" "${2:-}" "${3:-run failed}" || return 2
 }
-# ---- inventory: SQL returns facts, Bash classifies them ----------------------
+
+# ---- inventory: SQL returns facts, Bash classifies them ------------------------
+# Fact lines are '|'-separated in their query's column order. These readers
+# name the columns, setting the r_* and i_* variables; a non-empty *_extra
+# means the line had too many fields.
+
+hic_read_relation() {   # columns of wiki_hic12_object_facts
+    IFS='|' read -r r_oid r_nspoid r_schema r_name r_qualified r_kind r_am r_amname r_amtype \
+        r_persistence r_populated r_partition r_rls r_force_rls r_filenode \
+        r_other_temp r_usage r_select r_parents r_extra
+}
+hic_read_index() {      # columns of wiki_hic12_index_facts
+    IFS='|' read -r i_oid i_relid i_schema i_name i_ident i_kind i_am i_amname i_amtype \
+        i_partial i_valid i_ready i_live i_checkxmin i_xmin i_nkeys i_pred i_extra
+}
+
 hic_inventory() {
-    local oid rest dir kind am amname amt pop other usage sel scope reason perm scope_ids
+    # Classify every relation in the schema, plus the partitions that its
+    # partitioned tables reach in other schemas when HIC_EXTERNAL is true.
+    local line oid dir scope reason permission ids
     hic_data "$HIC_OUT/objects.raw" "WITH /* wiki_hic12_scope */ RECURSIVE scope(oid) AS (
  SELECT oid FROM pg_catalog.pg_class WHERE relnamespace = $HIC_SCHEMA_OID
  UNION SELECT inh.inhrelid FROM scope s
@@ -1008,35 +1098,41 @@ FROM scope s JOIN pg_catalog.pg_class c ON c.oid=s.oid
 JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
 LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam ORDER BY c.oid;" || return
     : > "$HIC_OUT/relation-ids" || return 2
-    while IFS='|' read -r -a HIC_R; do
-        [ "${#HIC_R[@]}" -eq 19 ] || return 1
-        oid=${HIC_R[0]}; hic_uint "$oid" || return 1
-        grep -x -F -q "$oid" "$HIC_OUT/owned" && continue
-        dir="$HIC_OUT/relations/$oid"; mkdir -p "$dir" || return 2
+    while IFS= read -r line; do
+        oid=${line%%|*}
+        hic_uint "$oid" || return 1
+        if grep -x -F -q "$oid" "$HIC_OUT/owned"; then continue; fi    # the runner's own tables
+        dir="$HIC_OUT/relations/$oid"
+        mkdir -p "$dir" && : > "$dir/index-ids" && : > "$dir/attempt-ids" || return 2
         printf '%s\n' "$oid" >> "$HIC_OUT/relation-ids" || return 2
-        cp /dev/null "$dir/index-ids" || return 2
-        hic_put "$dir" facts "$(IFS='|'; printf '%s' "${HIC_R[*]}")" || return 2
-        kind=${HIC_R[5]}; am=${HIC_R[6]}; amname=${HIC_R[7]}; amt=${HIC_R[8]}; pop=${HIC_R[10]}
-        scope=false; reason=; perm=
-        case $kind in
+        hic_put "$dir" facts "$line" || return 2
+        hic_read_relation < "$dir/facts" && [ -n "$r_parents" ] && [ -z "$r_extra" ] || return 1
+        scope=false reason=
+        case $r_kind in
             r|m)
-                if [ "$kind" = m ] && [ "$pop" != t ]; then reason=unpopulated_materialized_view
-                elif [ "$am" != 2 ] || [ "$amname" != x68656170 ] || [ "$amt" != t ]; then reason=unsupported_table_access_method
-                else scope=true; fi ;;
-            p) reason=partitioned_parent_summary ;; v) reason=view ;; f) reason=foreign_table ;;
-            S) reason=sequence ;; i|I) reason=index_metadata ;; *) reason=outside_physical_heap_scope ;;
+                if [ "$r_kind" = m ] && [ "$r_populated" != t ]; then reason=unpopulated_materialized_view
+                elif ! hic_heap_am "$r_am" "$r_amname" "$r_amtype"; then reason=unsupported_table_access_method
+                else scope=true
+                fi ;;
+            p) reason=partitioned_parent_summary ;;
+            v) reason=view ;;
+            f) reason=foreign_table ;;
+            S) reason=sequence ;;
+            i|I) reason=index_metadata ;;
+            *) reason=outside_physical_heap_scope ;;
         esac
-        if [ "${HIC_R[15]}" = t ]; then perm=unsupported_remote_temp
-        elif [ "${HIC_R[16]}" != t ]; then perm=schema_usage_denied
-        elif [ "${HIC_R[17]}" != t ]; then perm=table_select_denied; fi
-        hic_put "$dir" scope "$scope" && hic_put "$dir" reason "$reason" && hic_put "$dir" permission "$perm" || return 2
+        permission=
+        if [ "$r_other_temp" = t ]; then permission=unsupported_remote_temp
+        elif [ "$r_usage" != t ]; then permission=schema_usage_denied
+        elif [ "$r_select" != t ]; then permission=table_select_denied
+        fi
+        hic_save "$dir" scope reason permission || return 2
     done < "$HIC_OUT/objects.raw"
-    scope_ids=$(paste -s -d, "$HIC_OUT/relation-ids")
-    [ -n "$scope_ids" ] || scope_ids=0
+    ids=$(paste -s -d, "$HIC_OUT/relation-ids")
     hic_data "$HIC_OUT/partitions.raw" "WITH /* wiki_hic12_partition_tree */ RECURSIVE tree(parent_oid,oid) AS (
  SELECT p.oid, inh.inhrelid FROM pg_catalog.pg_class p
  JOIN pg_catalog.pg_inherits inh ON inh.inhparent=p.oid
- WHERE p.relkind='p' AND p.oid IN ($scope_ids)
+ WHERE p.relkind='p' AND p.oid IN (${ids:-0})
  UNION SELECT tree.parent_oid, inh.inhrelid FROM tree
  JOIN pg_catalog.pg_class p ON p.oid=tree.oid AND p.relkind='p'
  JOIN pg_catalog.pg_inherits inh ON inh.inhparent=p.oid
@@ -1048,10 +1144,13 @@ FROM tree JOIN pg_catalog.pg_class c ON c.oid=tree.oid
 JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace ORDER BY 1,2;" || return
     hic_indexes
 }
+
 hic_indexes() {
-    local oid iid dir eligible why gen kind am amname amt pred valid ready live
+    # Classify every index; generate orderings for eligible in-scope B-trees.
+    local oid dir scope line iid idir eligible reason
     while IFS= read -r oid; do
         dir="$HIC_OUT/relations/$oid"
+        hic_get "$dir" scope; scope=$HIC_VALUE
         hic_data "$dir/indexes.raw" "SELECT /* wiki_hic12_index_facts */ c.oid, i.indrelid,
  'x'||encode(convert_to(n.nspname::text,'UTF8'),'hex'),
  'x'||encode(convert_to(c.relname::text,'UTF8'),'hex'),
@@ -1062,33 +1161,41 @@ hic_indexes() {
 FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid
 JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_am am ON am.oid=c.relam
 WHERE i.indrelid=$oid ORDER BY c.oid;" || return
-        while IFS='|' read -r -a HIC_I; do
-            [ "${#HIC_I[@]}" -eq 17 ] || return 1
-            iid=${HIC_I[0]}; hic_uint "$iid" || return 1
-            mkdir -p "$HIC_OUT/indexes/$iid" || return 2
+        while IFS= read -r line; do
+            iid=${line%%|*}
+            hic_uint "$iid" || return 1
+            idir="$HIC_OUT/indexes/$iid"
+            mkdir -p "$idir" || return 2
             printf '%s\n' "$iid" >> "$dir/index-ids" || return 2
-            hic_put "$HIC_OUT/indexes/$iid" facts "$(IFS='|'; printf '%s' "${HIC_I[*]}")" || return 2
-            eligible=true; why=; gen=
-            kind=${HIC_I[5]}; am=${HIC_I[6]}; amname=${HIC_I[7]}; amt=${HIC_I[8]}
-            if [ "$kind" != i ]; then eligible=false; why=nonphysical_index
-            elif [ "$am" != 403 ] || [ "$amname" != btree ] || [ "$amt" != i ]; then eligible=false; why=unsupported_index_am
-            elif [ "${HIC_I[9]}" != f ]; then eligible=false; why=partial_index
-            elif [ "${HIC_I[10]}" != t ]; then eligible=false; why=invalid_index
-            elif [ "${HIC_I[11]}" != t ]; then eligible=false; why=index_not_ready
-            elif [ "${HIC_I[12]}" != t ]; then eligible=false; why=index_not_live; fi
-            hic_put "$HIC_OUT/indexes/$iid" eligible "$eligible" && hic_put "$HIC_OUT/indexes/$iid" reason "$why" || return 2
-            hic_get "$dir" scope
-            if [ "$HIC_VALUE" = true ] && [ "$eligible" = true ]; then
-                hic_order "$iid" "${HIC_I[15]}" || return
+            hic_put "$idir" facts "$line" || return 2
+            hic_read_index < "$idir/facts" && [ -n "$i_pred" ] && [ -z "$i_extra" ] || return 1
+            reason=
+            if [ "$i_kind" != i ]; then reason=nonphysical_index
+            elif ! hic_btree_am "$i_am" "$i_amname" "$i_amtype"; then reason=unsupported_index_am
+            elif [ "$i_partial" != f ]; then reason=partial_index
+            elif [ "$i_valid" != t ]; then reason=invalid_index
+            elif [ "$i_ready" != t ]; then reason=index_not_ready
+            elif [ "$i_live" != t ]; then reason=index_not_live
+            fi
+            eligible=true
+            [ -z "$reason" ] || eligible=false
+            hic_save "$idir" eligible reason || return 2
+            if [ "$scope" = true ] && [ "$eligible" = true ]; then
+                hic_order "$iid" "$i_nkeys" || return
             else
-                hic_put "$HIC_OUT/indexes/$iid" generation relation_or_index_outside_supported_scope || return 2
+                hic_put "$idir" generation relation_or_index_outside_supported_scope || return 2
             fi
         done < "$dir/indexes.raw"
     done < "$HIC_OUT/relation-ids"
 }
+
 hic_order() {
-    local iid=$1 expected=$2 dir="$HIC_OUT/indexes/$1" code ref ns typ why= n=0
-    local expr type coll order= part op opname opschema nulls column
+    # hic_order INDEX_OID KEY_COUNT: save the ORDER BY list that follows the
+    # index's key order, or the reason the generator cannot represent it.
+    local iid=$1 expected=$2 dir="$HIC_OUT/indexes/$1" why= n=0 order= part nulls
+    local kind ref ns typtype expr type opname opschema
+    local keyno expr_hex type_hex opc opc_ns coll coll_ns_hex coll_name_hex desc nulls_first
+    local op op_ns op_name_hex op_schema_hex proc proc_ns attnum atttype extra
     hic_data "$dir/dependencies.raw" "WITH /* wiki_hic12_index_dependencies */ deps AS (
  SELECT d.* FROM pg_catalog.pg_depend d
  WHERE d.classid='pg_catalog.pg_class'::regclass AND d.objid=$iid
@@ -1107,15 +1214,16 @@ JOIN pg_catalog.pg_type t ON t.oid=a.atttypid
 WHERE d.refclassid='pg_catalog.pg_class'::regclass AND d.refobjid=i.indrelid
 UNION SELECT 't',t.oid,t.typnamespace,t.typtype FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_type t ON t.oid=a.atttypid WHERE a.attrelid=$iid AND a.attnum>0;" || return
-    while IFS='|' read -r code ref ns typ; do
+    # User-defined functions, operators and types (other than enums) are not reviewed.
+    while IFS='|' read -r kind ref ns typtype; do
         hic_uint "$ref" && hic_uint "$ns" || return 1
-        case $code in
-            p|o) if [ "$ref" -ge 16384 ] || [ "$ns" != 11 ]; then why=unreviewed_user_code_or_type; fi ;;
-            t) if [ "$ref" -ge 16384 ] && [ "$typ" != e ]; then why=unreviewed_user_code_or_type; fi ;;
+        case $kind in
+            p|o) if hic_user_oid "$ref" || [ "$ns" != "$HIC_CATALOG_NS" ]; then why=unreviewed_user_code_or_type; fi ;;
+            t) if hic_user_oid "$ref" && [ "$typtype" != e ]; then why=unreviewed_user_code_or_type; fi ;;
             *) return 1 ;;
         esac
     done < "$dir/dependencies.raw"
-    if [ -n "$why" ]; then hic_put "$dir" generation "$why"; return; fi
+    if [ -n "$why" ]; then hic_put "$dir" generation "$why" || return 2; return 0; fi
     hic_data "$dir/definition.sql" "SELECT /* wiki_hic12_index_definition */ pg_get_indexdef($iid);" || return
     hic_data "$dir/keys.raw" "SELECT /* wiki_hic12_key_facts */ k.n,
  'x'||encode(convert_to(pg_get_indexdef(i.indexrelid,k.n,false),'UTF8'),'hex'),
@@ -1143,50 +1251,55 @@ LEFT JOIN LATERAL (
 LEFT JOIN pg_catalog.pg_namespace onsp ON onsp.oid=op.oprnamespace
 LEFT JOIN pg_catalog.pg_proc proc ON proc.oid=op.oprcode
 WHERE i.indexrelid=$iid ORDER BY k.n;" || return
-    while IFS='|' read -r -a HIC_K; do
-        [ "${#HIC_K[@]}" -eq 19 ] || return 1
-        n=$((n+1)); [ "${HIC_K[0]}" = "$n" ] || return 1
-        if [ "${HIC_K[3]}" -ge 16384 ] || [ "${HIC_K[4]}" != 11 ] \
-            || [ "${HIC_K[10]}" = 0 ] || [ "${HIC_K[10]}" -ge 16384 ] || [ "${HIC_K[11]}" != 11 ] \
-            || [ "${HIC_K[14]}" -ge 16384 ] || [ "${HIC_K[15]}" != 11 ]; then
+    while IFS='|' read -r keyno expr_hex type_hex opc opc_ns coll coll_ns_hex coll_name_hex desc nulls_first \
+            op op_ns op_name_hex op_schema_hex proc proc_ns attnum atttype typtype extra; do
+        n=$((n + 1))
+        [ "$keyno" = "$n" ] && [ -n "$typtype" ] && [ -z "$extra" ] || return 1
+        # The ordering operator, its function and the opclass must be built in.
+        if hic_user_oid "$opc" || [ "$opc_ns" != "$HIC_CATALOG_NS" ] \
+            || [ "$op" = 0 ] || hic_user_oid "$op" || [ "$op_ns" != "$HIC_CATALOG_NS" ] \
+            || hic_user_oid "$proc" || [ "$proc_ns" != "$HIC_CATALOG_NS" ]; then
             why=ordering_not_represented_by_generator
         fi
-        if [ "${HIC_K[17]}" -ge 16384 ] && [ "${HIC_K[18]}" != e ]; then why=unreviewed_user_code_or_type; fi
-        hic_decode "${HIC_K[1]}" || return 1; expr=$HIC_TEXT
-        hic_decode "${HIC_K[2]}" || return 1; type=$HIC_TEXT
-        if [ "${HIC_K[16]}" = 0 ] && [[ $expr =~ ^[(]*[0-9]+([.][0-9]+)?[)]*$ ]]; then
-            part="CAST($expr AS $type)"
-        else part="($expr)"; fi
-        if [ "${HIC_K[5]}" != 0 ]; then
-            [ "${HIC_K[6]}" != x ] && [ "${HIC_K[7]}" != x ] || why=ordering_not_represented_by_generator
+        if hic_user_oid "$atttype" && [ "$typtype" != e ]; then why=unreviewed_user_code_or_type; fi
+        hic_decode "$expr_hex" || return 1; expr=$HIC_TEXT
+        hic_decode "$type_hex" || return 1; type=$HIC_TEXT
+        # ORDER BY reads a bare integer as a column position and rejects other
+        # bare constants, so a literal key is cast to its own type instead.
+        part="($expr)"
+        if [ "$attnum" = 0 ] && [[ $expr =~ ^[(]*[0-9]+([.][0-9]+)?[)]*$ ]]; then part="CAST($expr AS $type)"; fi
+        if [ "$coll" != 0 ]; then
+            [ "$coll_ns_hex" != x ] && [ "$coll_name_hex" != x ] || why=ordering_not_represented_by_generator
             # Quote identifiers with the server, not with shell substitutions.
             hic_sql "$HIC_S" "SELECT /* wiki_hic12_quote_collation */ quote_ident(n.nspname)||'.'||quote_ident(c.collname)
-FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE c.oid=${HIC_K[5]};" || return
+FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE c.oid=$coll;" || return
             part="$part COLLATE $HIC_VALUE"
         fi
-        hic_decode "${HIC_K[12]}" || return 1; opname=$HIC_TEXT
-        hic_decode "${HIC_K[13]}" || return 1; opschema=$HIC_TEXT
+        hic_decode "$op_name_hex" || return 1; opname=$HIC_TEXT
+        hic_decode "$op_schema_hex" || return 1; opschema=$HIC_TEXT
         [ "$opschema" = pg_catalog ] || why=ordering_not_represented_by_generator
-        nulls=LAST; [ "${HIC_K[9]}" != t ] || nulls=FIRST
-        part="$part USING OPERATOR(pg_catalog.$opname) NULLS $nulls"
-        if [ -n "$order" ]; then order="$order, $part"; else order=$part; fi
+        nulls=LAST; [ "$nulls_first" != t ] || nulls=FIRST
+        order="${order:+$order, }$part USING OPERATOR(pg_catalog.$opname) NULLS $nulls"
     done < "$dir/keys.raw"
     [ "$n" = "$expected" ] && [ "$n" -gt 0 ] || why=ordering_not_represented_by_generator
     hic_put "$dir" generation "$why" || return 2
-    [ -n "$why" ] || hic_put "$dir" order "$order"
+    if [ -z "$why" ]; then hic_put "$dir" order "$order" || return 2; fi
     return 0
 }
-# ---- plan decoding: the query exposes fields; every gate below is Bash ------
+
+# ---- plan decoding: the query exposes fields; every gate below is Bash --------
+
 hic_plan_facts() {
+    # hic_plan_facts ATTEMPT_ID FILE: decode the imported plan into D (document),
+    # N (node), P (property) and O (Output element) records.
     hic_data "$2" "WITH /* wiki_hic12_plan_walk */ RECURSIVE doc AS (
  SELECT document d FROM pg_temp.hic_plan WHERE attempt_id=$1
 ), walk(path,node) AS (
  SELECT '0'::text,d#>'{0,Plan}' FROM doc WHERE jsonb_typeof(d#>'{0,Plan}')='object'
- UNION ALL SELECT w.path||'.'||c.ordinality,wc.value
+ UNION ALL SELECT w.path||'.'||wc.ordinality,wc.value
  FROM walk w CROSS JOIN LATERAL jsonb_array_elements(
  CASE WHEN jsonb_typeof(w.node->'Plans')='array' THEN w.node->'Plans' ELSE '[]'::jsonb END
  ) WITH ORDINALITY wc(value,ordinality)
- CROSS JOIN LATERAL (SELECT wc.ordinality::text) c
 ), records(path,rank,ord,line) AS (
  SELECT '',0,0::bigint,concat_ws('|','D',jsonb_typeof(d),
  CASE WHEN jsonb_typeof(d)='array' THEN jsonb_array_length(d)::text ELSE '-' END,
@@ -1209,15 +1322,19 @@ hic_plan_facts() {
 )
 SELECT /* wiki_hic12_plan_fields */ line FROM records ORDER BY path,rank,ord,line;"
 }
+
 hic_reject() { HIC_REASONS="${HIC_REASONS:+$HIC_REASONS,}$1"; }
+
 hic_node_finish() {
+    # Check the node just read; uses hic_validate's locals (dynamic scope).
+    local want=1                        # expected children: 1, or 0 for a scan
     [ -n "${nodepath:-}" ] || return 0
-    local want=1
     [ "$nodetype" = object ] || hic_reject node_shape
     case $plans_type in -|array) ;; *) hic_reject children_type ;; esac
     case $kind in
         'Seq Scan'|'Index Scan')
-            want=0; sources=$((sources+1))
+            want=0
+            sources=$((sources + 1))
             [ "$schema" = "$HIC_REL_SCHEMA" ] && [ "$relation" = "$HIC_REL_NAME" ] || hic_reject source_identity
             case $HIC_PHASE:$kind in 'heap:Seq Scan'|'index:Index Scan') ;; *) hic_reject source_kind ;; esac
             if [ "$kind" = 'Index Scan' ]; then
@@ -1226,80 +1343,102 @@ hic_node_finish() {
                 HIC_ACTUAL_NAME=$indexname
             fi ;;
         ModifyTable)
-            inserts=$((inserts+1))
+            inserts=$((inserts + 1))
             [ "$nodepath" = 0 ] && [ "$operation" = Insert ] && [ "$schema" = "$HIC_CAPTURE_SCHEMA" ] \
-                && [ "$relation" = x6869635f636f756e74 ] && hic_zero "$rows" || hic_reject capture_target ;;
+                && [ "$relation" = "$HIC_COUNT_HEX" ] && hic_zero "$rows" || hic_reject capture_target ;;
         Aggregate)
-            aggregates=$((aggregates+1))
+            aggregates=$((aggregates + 1))
             [ "$strategy" = Plain ] && [ "$partial" = Simple ] && hic_one "$rows" || hic_reject plain_count
-            [ "$output_type" = array ] && [ "$marker" = "$expected_marker" ] && [ "$count_output" = 'count(*)' ] || hic_reject attempt_binding ;;
+            [ "$output_type" = array ] && [ "$marker" = "$expected_marker" ] \
+                && [ "$count_output" = 'count(*)' ] || hic_reject attempt_binding ;;
         Sort|Result|'Subquery Scan'|Materialize) ;;
         *) hic_reject node_kind ;;
     esac
     [ "$children" = "$want" ] || hic_reject child_count
     hic_one "$loops" && hic_decimal "$rows" || hic_reject execution_fields
 }
+
 hic_validate() {
-    # hic_validate FACTS_FILE. Does not change accepted state.
-    local record path key typ hex extra nodepath= nodetype plans_type children kind schema relation
-    local operation rows loops strategy partial direction indexname output_type marker count_output
-    local expected_marker="'$HIC_ATTEMPT_ID'::bigint" value document=0 nodes=0 inserts=0 aggregates=0 sources=0
+    # hic_validate FACTS_FILE: set HIC_ACCEPTED, HIC_REASONS, HIC_ACTUAL_NAME
+    # and HIC_EXECUTION_MS. Never changes published evidence.
+    local record f2 f3 f4 f5 f6 key value expected_marker="'$HIC_ATTEMPT_ID'::bigint"
+    local document=0 nodes=0 inserts=0 aggregates=0 sources=0
+    # The current node's fields, checked by hic_node_finish.
+    local nodepath= nodetype plans_type children kind schema relation operation rows loops
+    local strategy partial direction indexname output_type marker count_output
     HIC_REASONS= HIC_ACTUAL_NAME= HIC_ACCEPTED=false HIC_EXECUTION_MS=
-    while IFS='|' read -r record path key typ hex extra; do
+    while IFS='|' read -r record f2 f3 f4 f5 f6; do
         case $record in
-            D)
-                document=$((document+1)); HIC_EXECUTION_MS=$extra
-                [ "$path" = array ] && [ "$key" = 1 ] && [ "$typ" = object ] && [ "$hex" = number ] \
-                    && hic_decimal "$extra" || hic_reject document_shape ;;
-            N)
+            D)  # D|document type|array length|element type|time type|Execution Time
+                document=$((document + 1)) HIC_EXECUTION_MS=$f6
+                [ "$f2" = array ] && [ "$f3" = 1 ] && [ "$f4" = object ] && [ "$f5" = number ] \
+                    && hic_decimal "$f6" || hic_reject document_shape ;;
+            N)  # N|path|node type|Plans type|child count: a new node starts
                 hic_node_finish
-                nodepath=$path; nodetype=$key; plans_type=$typ; children=$hex
-                kind= schema= relation= operation= rows= loops= strategy= partial= direction= indexname= output_type= marker= count_output=
-                nodes=$((nodes+1)) ;;
-            P)
-                [ "$path" = "$nodepath" ] || hic_reject field_path
-                hic_decode "$key" || { hic_reject field_encoding; continue; }; key=$HIC_TEXT
-                hic_decode "$hex" || { hic_reject field_encoding; continue; }; value=$HIC_TEXT
+                nodepath=$f2 nodetype=$f3 plans_type=$f4 children=$f5
+                kind= schema= relation= operation= rows= loops= strategy= partial= direction=
+                indexname= output_type= marker= count_output=
+                nodes=$((nodes + 1)) ;;
+            P)  # P|path|key hex|value type|value hex
+                [ "$f2" = "$nodepath" ] || hic_reject field_path
+                hic_decode "$f3" || { hic_reject field_encoding; continue; }
+                key=$HIC_TEXT
+                hic_decode "$f5" || { hic_reject field_encoding; continue; }
+                value=$HIC_TEXT
                 case $key in
                     'Node Type'|Schema|'Relation Name'|Operation|Strategy|'Partial Mode'|'Scan Direction'|'Index Name'|'Parent Relationship')
-                        [ "$typ" = string ] || hic_reject field_type ;;
-                    'Actual Rows'|'Actual Loops') [ "$typ" = number ] || hic_reject field_type ;;
+                        [ "$f4" = string ] || hic_reject field_type ;;
+                    'Actual Rows'|'Actual Loops') [ "$f4" = number ] || hic_reject field_type ;;
                 esac
                 case $key in
-                    'Node Type') kind=$value ;; Schema) schema=$hex ;; 'Relation Name') relation=$hex ;;
-                    Operation) operation=$value ;; Strategy) strategy=$value ;; 'Partial Mode') partial=$value ;;
-                    'Actual Rows') rows=$value ;; 'Actual Loops') loops=$value ;;
-                    'Scan Direction') direction=$value ;; 'Index Name') indexname=$hex ;;
-                    Output) output_type=$typ ;;
-                    'Parallel Aware') [ "$typ" = boolean ] && [ "$value" = false ] || hic_reject parallel ;;
+                    'Node Type') kind=$value ;;
+                    Schema) schema=$f5 ;;
+                    'Relation Name') relation=$f5 ;;
+                    Operation) operation=$value ;;
+                    Strategy) strategy=$value ;;
+                    'Partial Mode') partial=$value ;;
+                    'Actual Rows') rows=$value ;;
+                    'Actual Loops') loops=$value ;;
+                    'Scan Direction') direction=$value ;;
+                    'Index Name') indexname=$f5 ;;
+                    Output) output_type=$f4 ;;
+                    'Parallel Aware') [ "$f4" = boolean ] && [ "$value" = false ] || hic_reject parallel ;;
                     'Parent Relationship') case $value in InitPlan|SubPlan) hic_reject subplan ;; esac ;;
                     Filter|'Index Cond'|'Recheck Cond'|'Join Filter'|'One-Time Filter'|'Rows Removed by Filter'|\
                     'Rows Removed by Index Recheck'|'Group Key'|'Grouping Sets'|'Hash Cond'|'Merge Cond'|\
                     InitPlan|SubPlan|Workers|'Workers Planned'|'Workers Launched') hic_reject restricted_or_parallel ;;
                 esac ;;
-            O)
-                [ "$path" = "$nodepath" ] && [ "$typ" = string ] || hic_reject output_shape
-                hic_decode "$hex" || { hic_reject output_encoding; continue; }
-                case $key in 1) marker=$HIC_TEXT ;; 2) count_output=$HIC_TEXT ;; esac ;;
+            O)  # O|path|position|element type|element hex
+                [ "$f2" = "$nodepath" ] && [ "$f4" = string ] || hic_reject output_shape
+                hic_decode "$f5" || { hic_reject output_encoding; continue; }
+                case $f3 in 1) marker=$HIC_TEXT ;; 2) count_output=$HIC_TEXT ;; esac ;;
             *) hic_reject unknown_record ;;
         esac
     done < "$1"
     hic_node_finish
-    [ "$document" = 1 ] && [ "$nodes" -gt 0 ] && [ "$inserts" = 1 ] && [ "$aggregates" = 1 ] && [ "$sources" = 1 ] || hic_reject plan_counts
+    [ "$document" = 1 ] && [ "$nodes" -gt 0 ] && [ "$inserts" = 1 ] && [ "$aggregates" = 1 ] \
+        && [ "$sources" = 1 ] || hic_reject plan_counts
     [ -n "$HIC_REASONS" ] || HIC_ACCEPTED=true
     return 0
 }
-# ---- attempts and recovery --------------------------------------------------
+
+# ---- attempts and recovery ----------------------------------------------------
+
 hic_prepare_attempt() {
-    local dir="$HIC_OUT/relations/$HIC_RELATION" source
-    HIC_ATTEMPT_ID=$((HIC_ATTEMPT_ID+1))
+    # Allocate attempt HIC_ATTEMPT_ID (directory HIC_A), write its count
+    # statement, open its savepoint and apply its planner profile.
+    local source
+    HIC_ATTEMPT_ID=$((HIC_ATTEMPT_ID + 1))
     HIC_A="$HIC_OUT/attempts/$HIC_ATTEMPT_ID"
     mkdir -p "$HIC_A" "$HIC_OUT/plans" || return 2
     hic_put "$HIC_A" relation "$HIC_RELATION" && hic_put "$HIC_A" phase "$HIC_PHASE" \
-        && hic_put "$HIC_A" intended "$HIC_INTENDED" && hic_put "$HIC_A" variant "$HIC_VARIANT" && hic_put "$HIC_A" started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 2
-    printf '%s\n' "$HIC_ATTEMPT_ID" >> "$dir/attempt-ids" || return 2
-    hic_decode "$HIC_REL_QUALIFIED" || return 1; source="ONLY $HIC_TEXT"
+        && hic_put "$HIC_A" intended "$HIC_INTENDED" && hic_put "$HIC_A" variant "$HIC_VARIANT" \
+        && hic_put "$HIC_A" started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 2
+    printf '%s\n' "$HIC_ATTEMPT_ID" >> "$HIC_OUT/relations/$HIC_RELATION/attempt-ids" || return 2
+    hic_decode "$HIC_REL_QUALIFIED" || return 1
+    source="ONLY $HIC_TEXT"
     if [ "$HIC_PHASE" = index ]; then
+        # An inner ORDER BY in the index's key order invites a full index scan.
         hic_get "$HIC_OUT/indexes/$HIC_INTENDED" order
         source="(SELECT /* wiki_hic12_full_order */ 1 FROM $source ORDER BY $HIC_VALUE) AS ordered_rows"
     fi
@@ -1309,15 +1448,19 @@ SELECT /* wiki_hic12_exact_count */ $HIC_ATTEMPT_ID::bigint,count(*) FROM $sourc
     hic_sql "$HIC_S" 'SAVEPOINT /* wiki_hic12_attempt_boundary */ hic_attempt;' || return
     hic_profiles "$HIC_PHASE"
 }
+
 hic_read_count() {
-    local cid xid snapshot backend role seq idx only bitmap parallel rls path quote isolation readonly
+    # Check the one captured count row: same transaction, snapshot, backend,
+    # role, and this attempt's planner profile.
+    local xid snapshot backend role seq idx only bitmap parallel rls path quote isolation readonly settings_hex
     hic_data "$HIC_A/count.raw" "SELECT /* wiki_hic12_capture_facts */ row_count,transaction_id,snapshot_text,backend_pid,
  'x'||encode(convert_to(checking_role,'UTF8'),'hex'),settings->>'seq',settings->>'index',settings->>'only',settings->>'bitmap',
  settings->>'parallel',settings->>'rls',settings->>'path',settings->>'quote',settings->>'isolation',settings->>'readonly',captured,
  'x'||encode(convert_to(settings::text,'UTF8'),'hex')
 FROM pg_temp.hic_count WHERE attempt_id=$HIC_ATTEMPT_ID;" || return
     [ "$(wc -l < "$HIC_A/count.raw")" -eq 1 ] || { hic_reject count_missing; return 0; }
-    IFS='|' read -r HIC_COUNT xid snapshot backend role seq idx only bitmap parallel rls path quote isolation readonly HIC_CAPTURED HIC_SETTINGS_HEX < "$HIC_A/count.raw" || return 1
+    IFS='|' read -r HIC_COUNT xid snapshot backend role seq idx only bitmap parallel rls path quote \
+        isolation readonly HIC_CAPTURED settings_hex < "$HIC_A/count.raw" || return 1
     hic_uint "$HIC_COUNT" || hic_reject count_type
     [ "$xid" = "$HIC_XID" ] && [ "$snapshot" = "$HIC_SNAPSHOT" ] && [ "$backend" = "$HIC_BACKEND" ] \
         && [ "$role" = "$HIC_ROLE_HEX" ] || hic_reject capture_context
@@ -1326,31 +1469,35 @@ FROM pg_temp.hic_count WHERE attempt_id=$HIC_ATTEMPT_ID;" || return
         && [ "$isolation" = 'repeatable read' ] && [ "$readonly" = on ] || hic_reject capture_settings
     case $HIC_PHASE:$seq:$idx in heap:on:off|index:off:on) ;; *) hic_reject capture_profile ;; esac
 }
+
 hic_attempt_import() {
+    # Import the saved plan into pg_temp.hic_plan as a dollar-quoted literal.
     local json="$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json" tag n=0
     [ -s "$json" ] || { HIC_ERR_MESSAGE='missing executed plan'; return 1; }
-    while grep -F -q -e "\$hic12_plan$n\$" "$json"; do n=$((n+1)); done
+    while grep -F -q -e "\$hic12_plan$n\$" "$json"; do n=$((n + 1)); done
     tag="\$hic12_plan$n\$"
-    { printf 'INSERT /* wiki_hic12_import_plan */ INTO pg_temp.hic_plan(attempt_id,document) VALUES (%s,%s' "$HIC_ATTEMPT_ID" "$tag"
-      cat "$json"
-      printf '%s::jsonb);\n' "$tag"
+    {
+        printf 'INSERT /* wiki_hic12_import_plan */ INTO pg_temp.hic_plan(attempt_id,document) VALUES (%s,%s' "$HIC_ATTEMPT_ID" "$tag"
+        cat "$json"
+        printf '%s::jsonb);\n' "$tag"
     } > "$HIC_A/import.sql" || return 2
     hic_request "$HIC_S" "$HIC_A/import.sql" || return 2
     [ "$HIC_FAILED" = false ]
 }
+
 hic_resolve_index() {
+    # Map the plan's (quoted) Index Name to exactly one eligible index.
     local iid matches=0
     HIC_ACTUAL_INDEX=
     [ "$HIC_PHASE" = index ] || return 0
     while IFS= read -r iid; do
         hic_get "$HIC_OUT/indexes/$iid" eligible; [ "$HIC_VALUE" = true ] || continue
-        IFS='|' read -r -a HIC_I < "$HIC_OUT/indexes/$iid/facts" || return 1
-        if [ "${HIC_I[4]}" = "$HIC_ACTUAL_NAME" ]; then
-            HIC_ACTUAL_INDEX=$iid; matches=$((matches+1))
-        fi
+        hic_read_index < "$HIC_OUT/indexes/$iid/facts" || return 1
+        if [ "$i_ident" = "$HIC_ACTUAL_NAME" ]; then HIC_ACTUAL_INDEX=$iid matches=$((matches + 1)); fi
     done < "$HIC_OUT/relations/$HIC_RELATION/index-ids"
     [ "$matches" = 1 ] || { HIC_ACTUAL_INDEX=; hic_reject actual_index_not_uniquely_eligible; }
 }
+
 hic_attempt_inspect() {
     hic_plan_facts "$HIC_ATTEMPT_ID" "$HIC_A/plan-facts" || return
     hic_validate "$HIC_A/plan-facts" || return
@@ -1359,137 +1506,149 @@ hic_attempt_inspect() {
     HIC_ACCEPTED=false
     [ -n "$HIC_REASONS" ] || HIC_ACCEPTED=true
 }
+
 hic_recover() {
     hic_sql "$HIC_S" 'ROLLBACK /* wiki_hic12_recover */ TO SAVEPOINT hic_attempt;' || return
     hic_sql "$HIC_S" 'RELEASE /* wiki_hic12_release_error */ SAVEPOINT hic_attempt;' || return
     hic_profiles control
 }
+
+hic_attempt_error() {
+    # Keep the runner's own message, else parse psql's report, else use $1.
+    [ -n "$HIC_ERR_MESSAGE" ] || hic_parse_error "$HIC_S" || HIC_ERR_MESSAGE=$1
+}
+
+hic_attempt_run() {
+    # Execute, save, import and inspect, setting hic_attempt_once's stage.
+    # Returns 0 when inspected, 1 for an error the savepoint can recover
+    # (HIC_ERR_* describe it), 2 when the run cannot continue.
+    local rc s_dir s_in s_out s_pid s_seq
+    HIC_ERR_CODE= HIC_ERR_MESSAGE= HIC_ERR_DETAIL= HIC_ERR_HINT=
+    stage=execution
+    if grep -E -q "$HIC_GUARD" "$HIC_A/count.sql"; then
+        HIC_ERR_MESSAGE='runner did not send the count statement: psql interpolation guard'
+        return 1
+    fi
+    hic_request "$HIC_S" "$HIC_A/count.sql" || return 2
+    [ "$HIC_FAILED" = false ] || { hic_attempt_error 'count statement failed'; return 1; }
+
+    stage=capture
+    hic_session "$HIC_S" || return 2
+    cp "$s_dir/response" "$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json" \
+        || { HIC_ERR_MESSAGE='could not save executed plan'; return 1; }
+    hic_profiles control || return 2
+    hic_attempt_import; rc=$?
+    [ "$rc" != 2 ] || return 2
+    [ "$rc" = 0 ] || { hic_attempt_error 'capture or inspection failed'; return 1; }
+
+    stage=inspection
+    hic_attempt_inspect; rc=$?
+    [ "$rc" != 2 ] || return 2
+    [ "$rc" = 0 ] || { hic_attempt_error 'capture or inspection failed'; return 1; }
+}
+
 hic_attempt_once() {
-    local rc=0 dir stage=execution status=error code= message= detail= hint= accepted=false
-    eval "dir=\$HIC_DIR_$HIC_S"
+    # Run one attempt inside savepoint hic_attempt and publish its record.
+    # Failed and rejected attempts return 0; nonzero stops the run.
+    local stage status=error count actual reasons execution_ms captured
+    local sqlstate= message= detail= hint=
     HIC_COUNT= HIC_ACTUAL_INDEX= HIC_REASONS= HIC_ACCEPTED=false HIC_EXECUTION_MS= HIC_CAPTURED=
     hic_prepare_attempt || return
-    if grep -E -q "$HIC_GUARD" "$HIC_A/count.sql"; then
-        message='runner did not send the count statement: psql interpolation guard'
-    else
-        hic_request "$HIC_S" "$HIC_A/count.sql" || return 2
-        if [ "$HIC_FAILED" = true ]; then
-            hic_parse_error "$HIC_S" || :
-            code=$HIC_ERR_CODE; message=$HIC_ERR_MESSAGE; detail=$HIC_ERR_DETAIL; hint=$HIC_ERR_HINT
-        else
-            stage=capture
-            if cp "$dir/response" "$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json"; then
-                hic_profiles control || return
-                hic_attempt_import; rc=$?
-                case $rc in 2) return 2 ;; esac
-                if [ "$rc" = 0 ]; then
-                    stage=inspection
-                    hic_attempt_inspect; rc=$?
-                    case $rc in 2) return 2 ;; esac
-                    if [ "$rc" = 0 ]; then
-                        accepted=$HIC_ACCEPTED; status=rejected
-                        [ "$accepted" != true ] || status=accepted
-                    fi
-                fi
-                if [ "$rc" != 0 ]; then
-                    hic_parse_error "$HIC_S" || :
-                    code=$HIC_ERR_CODE; message=${HIC_ERR_MESSAGE:-capture or inspection failed}
-                    detail=$HIC_ERR_DETAIL; hint=$HIC_ERR_HINT
-                fi
-            else message='could not save executed plan'; fi
-        fi
-    fi
-    if [ "$status" = error ]; then
-        hic_recover || { HIC_STOP='attempt recovery failed'; return 2; }
-        HIC_COUNT= HIC_ACTUAL_INDEX=; accepted=false
-    else
-        hic_sql "$HIC_S" 'RELEASE /* wiki_hic12_accept */ SAVEPOINT hic_attempt;' || return 2
-        hic_profiles control || return 2
-    fi
-    # Only publish evidence after successful savepoint recovery/release.
-    hic_put "$HIC_A" status "$status" && hic_put "$HIC_A" count "$HIC_COUNT" \
-        && hic_put "$HIC_A" actual "$HIC_ACTUAL_INDEX" && hic_put "$HIC_A" reasons "$HIC_REASONS" \
-        && hic_put "$HIC_A" execution_ms "${HIC_EXECUTION_MS:-}" && hic_put "$HIC_A" captured "${HIC_CAPTURED:-}" \
-        && hic_put "$HIC_A" stage "$stage" && hic_put "$HIC_A" sqlstate "$code" \
-        && hic_put "$HIC_A" message "$message" && hic_put "$HIC_A" detail "$detail" && hic_put "$HIC_A" hint "$hint" || return 2
+    hic_attempt_run
+    case $? in
+        0)  # Inspected: releasing the savepoint keeps the count and plan rows.
+            hic_sql "$HIC_S" 'RELEASE /* wiki_hic12_accept */ SAVEPOINT hic_attempt;' || return 2
+            hic_profiles control || return 2
+            status=rejected
+            [ "$HIC_ACCEPTED" != true ] || status=accepted ;;
+        1)  # Recoverable: keep the diagnostics, then roll the attempt back.
+            sqlstate=$HIC_ERR_CODE message=$HIC_ERR_MESSAGE detail=$HIC_ERR_DETAIL hint=$HIC_ERR_HINT
+            hic_recover || { HIC_STOP='attempt recovery failed'; return 2; }
+            HIC_COUNT= HIC_ACTUAL_INDEX= HIC_ACCEPTED=false ;;
+        *)  return 2 ;;
+    esac
+    # Evidence is published only after the savepoint was released or rolled back.
+    count=$HIC_COUNT actual=$HIC_ACTUAL_INDEX reasons=$HIC_REASONS
+    execution_ms=$HIC_EXECUTION_MS captured=$HIC_CAPTURED
+    hic_save "$HIC_A" status count actual reasons execution_ms captured stage sqlstate message detail hint || return 2
     hic_say "attempt=$HIC_ATTEMPT_ID phase=$HIC_PHASE relation=$HIC_RELATION intended=$HIC_INTENDED actual=${HIC_ACTUAL_INDEX:--} status=$status"
 }
-# The evaluator is also used by fixture tests. It reads only published attempts.
+
+# ---- verdicts: derived from published attempts only ---------------------------
+
 hic_evaluate() {
-    local oid=$1 dir="$HIC_OUT/relations/$1" iid aid phase state count actual intended recovered
-    local eligible=0 checked=0 matching=0 mismatches=0 errors=0 uncovered=0 heap= distinct=false
-    local scope reason perm status matchid= base= value
+    # hic_evaluate OID: derive the relation's status from published attempts,
+    # save it with its counts, and set HIC_STATUS and HIC_HEAP.
+    local oid=$1 dir="$HIC_OUT/relations/$1" iid aid verdict
+    local scope permission phase status count actual intended
+    local heap= conflicting=false eligible=0 checked_count matching_count
+    local mismatch_count=0 error_count=0 uncovered=0 match=
     : > "$dir/checked" && : > "$dir/matching" || return 2
-    hic_get "$dir" scope; scope=$HIC_VALUE
-    hic_get "$dir" reason; reason=$HIC_VALUE
-    hic_get "$dir" permission; perm=$HIC_VALUE
+    hic_load "$dir" scope permission
     while IFS= read -r iid; do
-        hic_get "$HIC_OUT/indexes/$iid" eligible
-        [ "$HIC_VALUE" != true ] || eligible=$((eligible+1))
+        hic_get "$HIC_OUT/indexes/$iid" eligible; [ "$HIC_VALUE" != true ] || eligible=$((eligible + 1))
     done < "$dir/index-ids"
-    if [ -f "$dir/attempt-ids" ]; then
-        while IFS= read -r aid; do
-            base="$HIC_OUT/attempts/$aid"
-            hic_get "$base" status; state=$HIC_VALUE
-            hic_get "$base" phase; phase=$HIC_VALUE
-            if [ "$state" = accepted ] && [ "$phase" = heap ]; then
-                hic_get "$base" count; value=$HIC_VALUE
-                hic_uint "$value" || return 2
-                if [ -n "$heap" ] && [ "$heap" != "$value" ]; then distinct=true; fi
-                heap=$value
-            fi
-        done < "$dir/attempt-ids"
-        while IFS= read -r aid; do
-            base="$HIC_OUT/attempts/$aid"
-            hic_get "$base" status; state=$HIC_VALUE
-            hic_get "$base" phase; phase=$HIC_VALUE
-            if [ "$state" = accepted ] && [ "$phase" = index ]; then
-                hic_get "$base" actual; actual=$HIC_VALUE
-                hic_get "$base" count; count=$HIC_VALUE
-                hic_uint "$actual" && hic_uint "$count" || return 2
-                grep -F -x -q "$actual" "$dir/checked" || printf '%s\n' "$actual" >> "$dir/checked" || return 2
-                if [ -n "$heap" ] && [ "$count" = "$heap" ]; then
-                    grep -F -x -q "$actual" "$dir/matching" || printf '%s\n' "$actual" >> "$dir/matching" || return 2
-                    [ -n "$matchid" ] || matchid=$actual
-                elif [ -n "$heap" ]; then mismatches=$((mismatches+1)); fi
-            elif [ "$state" = error ]; then errors=$((errors+1)); fi
-        done < "$dir/attempt-ids"
-        while IFS= read -r aid; do
-            base="$HIC_OUT/attempts/$aid"
-            hic_get "$base" status; [ "$HIC_VALUE" = error ] || continue
-            hic_get "$base" phase; phase=$HIC_VALUE
-            hic_get "$base" intended; intended=$HIC_VALUE
-            if [ "$phase" = heap ]; then
-                [ -n "$heap" ] || uncovered=$((uncovered+1))
-            elif ! grep -F -x -q "$intended" "$dir/checked"; then uncovered=$((uncovered+1)); fi
-        done < "$dir/attempt-ids"
+    # Pass 1: the accepted heap baseline. Two different accepted counts conflict.
+    while IFS= read -r aid; do
+        hic_load "$HIC_OUT/attempts/$aid" phase status count
+        [ "$phase:$status" = heap:accepted ] || continue
+        hic_uint "$count" || return 2
+        if [ -n "$heap" ] && [ "$heap" != "$count" ]; then conflicting=true; fi
+        heap=$count
+    done < "$dir/attempt-ids"
+    # Pass 2: accepted index counts, credited to the index that actually ran.
+    while IFS= read -r aid; do
+        hic_load "$HIC_OUT/attempts/$aid" phase status
+        if [ "$status" = error ]; then error_count=$((error_count + 1)); fi
+        [ "$phase:$status" = index:accepted ] || continue
+        hic_load "$HIC_OUT/attempts/$aid" count actual
+        hic_uint "$actual" && hic_uint "$count" || return 2
+        hic_add_line "$dir/checked" "$actual" || return 2
+        [ -n "$heap" ] || continue
+        if [ "$count" = "$heap" ]; then
+            hic_add_line "$dir/matching" "$actual" || return 2
+            [ -n "$match" ] || match=$actual
+        else
+            mismatch_count=$((mismatch_count + 1))
+        fi
+    done < "$dir/attempt-ids"
+    # Pass 3: errors not replaced by an accepted heap count or intended index.
+    while IFS= read -r aid; do
+        hic_load "$HIC_OUT/attempts/$aid" status phase intended
+        [ "$status" = error ] || continue
+        if [ "$phase" = heap ]; then
+            [ -n "$heap" ] || uncovered=$((uncovered + 1))
+        elif ! grep -F -x -q "$intended" "$dir/checked"; then
+            uncovered=$((uncovered + 1))
+        fi
+    done < "$dir/attempt-ids"
+    checked_count=$(($(wc -l < "$dir/checked")))        # $((...)) drops BSD wc's padding
+    matching_count=$(($(wc -l < "$dir/matching")))
+    if [ "$scope" != true ]; then verdict=NOT_APPLICABLE
+    elif [ "${HIC_EVIDENCE_VALID:-true}" != true ] || [ -n "$permission" ] || [ "$conflicting" = true ]; then verdict=ERROR
+    elif [ "$eligible" -eq 0 ]; then verdict=NO_ELIGIBLE_INDEX
+    elif [ -n "$heap" ] && [ "$matching_count" -gt 0 ]; then verdict=PASS
+    elif [ "$uncovered" -gt 0 ]; then verdict=ERROR
+    elif [ -n "$heap" ] && [ "$checked_count" -eq "$eligible" ]; then verdict=MISMATCH
+    else verdict=INCONCLUSIVE
     fi
-    checked=$(wc -l < "$dir/checked"); matching=$(wc -l < "$dir/matching")
-    if [ "$scope" != true ]; then status=NOT_APPLICABLE
-    elif [ "${HIC_EVIDENCE_VALID:-true}" != true ] || [ -n "$perm" ] || [ "$distinct" = true ]; then status=ERROR
-    elif [ "$eligible" -eq 0 ]; then status=NO_ELIGIBLE_INDEX
-    elif [ -n "$heap" ] && [ "$matching" -gt 0 ]; then status=PASS
-    elif [ "$uncovered" -gt 0 ]; then status=ERROR
-    elif [ -n "$heap" ] && [ "$checked" -eq "$eligible" ]; then status=MISMATCH
-    else status=INCONCLUSIVE; fi
-    hic_put "$dir" status "$status" && hic_put "$dir" heap "$heap" \
-        && hic_put "$dir" eligible "$eligible" && hic_put "$dir" checked_count "$checked" \
-        && hic_put "$dir" matching_count "$matching" && hic_put "$dir" mismatch_count "$mismatches" \
-        && hic_put "$dir" error_count "$errors" && hic_put "$dir" match "$matchid" || return 2
-    HIC_STATUS=$status; HIC_HEAP=$heap
+    hic_put "$dir" status "$verdict" || return 2
+    hic_save "$dir" heap eligible checked_count matching_count mismatch_count error_count match || return 2
+    HIC_STATUS=$verdict HIC_HEAP=$heap
 }
+
 hic_attempt_loop() {
-    local oid iid dir scope perm eligible gen variant done_index
+    # Per relation: up to two heap attempts, then up to two per index until
+    # one matches (or every index is tried, in exhaustive mode).
+    local oid dir iid scope permission eligible
     while IFS= read -r oid; do
         dir="$HIC_OUT/relations/$oid"
         hic_evaluate "$oid" || return
-        hic_get "$dir" scope; scope=$HIC_VALUE
-        hic_get "$dir" permission; perm=$HIC_VALUE
-        hic_get "$dir" eligible; eligible=$HIC_VALUE
-        [ "$scope" = true ] && [ -z "$perm" ] && [ "$eligible" -gt 0 ] || continue
-        IFS='|' read -r -a HIC_R < "$dir/facts" || return 2
-        HIC_RELATION=$oid; HIC_REL_SCHEMA=${HIC_R[2]}; HIC_REL_NAME=${HIC_R[3]}; HIC_REL_QUALIFIED=${HIC_R[4]}
-        HIC_PHASE=heap; HIC_INTENDED=
+        hic_load "$dir" scope permission eligible
+        [ "$scope" = true ] && [ -z "$permission" ] && [ "$eligible" -gt 0 ] || continue
+        hic_read_relation < "$dir/facts" || return 2
+        HIC_RELATION=$oid HIC_REL_SCHEMA=$r_schema HIC_REL_NAME=$r_name HIC_REL_QUALIFIED=$r_qualified
+        HIC_PHASE=heap HIC_INTENDED=
         for HIC_VARIANT in 1 2; do
             hic_attempt_once || return
             hic_evaluate "$oid" || return
@@ -1503,7 +1662,8 @@ hic_attempt_loop() {
             for HIC_VARIANT in 1 2; do
                 hic_evaluate "$oid" || return
                 if [ "$HIC_STATUS" = PASS ] && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then break; fi
-                grep -F -x -q "$iid" "$dir/checked" && break
+                # An attempt intended for another index may already have used this one.
+                if grep -F -x -q "$iid" "$dir/checked"; then break; fi
                 HIC_INTENDED=$iid
                 hic_attempt_once || return
             done
@@ -1511,150 +1671,198 @@ hic_attempt_loop() {
         hic_evaluate "$oid" || return
     done < "$HIC_OUT/relation-ids"
 }
-# ---- reports: CSV escaping and every aggregation rule live in Bash ----------
+
+# ---- reports: CSV escaping and every aggregation rule live in Bash ------------
+
+hic_report_relation() {
+    # One relations.csv row; adds to hic_reports' totals (dynamic scope).
+    local oid=$1 dir="$HIC_OUT/relations/$1" schema_name relation_name untested
+    local scope reason permission status heap eligible checked_count matching_count mismatch_count error_count match
+    hic_evaluate "$oid" || return 2
+    hic_load "$dir" scope reason permission status heap eligible checked_count matching_count \
+        mismatch_count error_count match
+    hic_read_relation < "$dir/facts" || return 2
+    hic_decode "$r_schema" || return 2; schema_name=$HIC_TEXT
+    hic_decode "$r_name" || return 2; relation_name=$HIC_TEXT
+    untested=$((eligible - checked_count))
+    hic_csv "$HIC_OUT/relations.csv" "$oid" "$schema_name" "$relation_name" "$r_kind" "$scope" "$reason" \
+        "$permission" "$status" "$heap" "$eligible" "$checked_count" "$matching_count" "$untested" \
+        "$mismatch_count" "$error_count" "$match" || return 2
+    case $status in
+        PASS) passed=$((passed + 1)) ;;
+        MISMATCH) mismatched=$((mismatched + 1)) ;;
+        INCONCLUSIVE) inconclusive=$((inconclusive + 1)) ;;
+        NO_ELIGIBLE_INDEX) no_index=$((no_index + 1)) ;;
+        ERROR) errored=$((errored + 1)) ;;
+        NOT_APPLICABLE) excluded=$((excluded + 1)) ;;
+    esac
+    case $r_kind in
+        r|m) hic_heap_am "$r_am" "$r_amname" "$r_amtype" || unsupported=$((unsupported + 1)) ;;
+    esac
+    if [ "$scope" = true ]; then
+        physical=$((physical + 1))
+        total_eligible=$((total_eligible + eligible))
+        total_checked=$((total_checked + checked_count))
+        total_matching=$((total_matching + matching_count))
+        total_untested=$((total_untested + untested))
+        [ "$checked_count" -eq "$eligible" ] || exhaustive=false
+    fi
+    total_mismatches=$((total_mismatches + mismatch_count))
+    total_errors=$((total_errors + error_count))
+}
+
+hic_report_candidates() {
+    # One candidates.csv row per index: was it actually checked, and if not, why.
+    local oid=$1 dir="$HIC_OUT/relations/$1" iid idir aid status attempted actual untested usability
+    local eligible reason generation schema_name index_name
+    hic_get "$dir" status; status=$HIC_VALUE
+    while IFS= read -r iid; do
+        idir="$HIC_OUT/indexes/$iid"
+        hic_read_index < "$idir/facts" || return 2
+        hic_load "$idir" eligible reason generation
+        attempted=0
+        while IFS= read -r aid; do
+            hic_get "$HIC_OUT/attempts/$aid" intended
+            [ "$HIC_VALUE" != "$iid" ] || attempted=$((attempted + 1))
+        done < "$dir/attempt-ids"
+        actual=false usability=not_established
+        if grep -F -x -q "$iid" "$dir/checked"; then actual=true usability=accepted_by_executed_plan
+        elif [ "$eligible" = true ] && [ "$i_checkxmin" = t ]; then usability=indcheckxmin_unresolved
+        fi
+        if [ "$eligible" != true ]; then untested=$reason
+        elif [ "$actual" = true ]; then untested=
+        elif [ -n "$generation" ]; then untested=$generation
+        elif [ "$status" = PASS ] && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then untested=stopped_after_first_match
+        elif [ "$attempted" -ge 2 ]; then untested=attempt_budget_exhausted_without_actual_coverage
+        else untested=not_yet_checked
+        fi
+        hic_decode "$i_schema" || return 2; schema_name=$HIC_TEXT
+        hic_decode "$i_name" || return 2; index_name=$HIC_TEXT
+        hic_csv "$HIC_OUT/candidates.csv" "$iid" "$oid" "$schema_name" "$index_name" "$eligible" "$reason" \
+            "$generation" "$i_checkxmin" "$i_xmin" "$actual" "$attempted" "$untested" "$usability" || return 2
+    done < "$dir/index-ids"
+}
+
+hic_report_attempts() {
+    # One attempts.csv row per attempt; delta = index count - heap count.
+    local oid=$1 dir="$HIC_OUT/relations/$1" aid heap delta
+    local phase intended actual variant status count reasons stage sqlstate message detail hint
+    local execution_ms started captured
+    hic_get "$dir" heap; heap=$HIC_VALUE
+    while IFS= read -r aid; do
+        hic_load "$HIC_OUT/attempts/$aid" phase intended actual variant status count reasons stage \
+            sqlstate message detail hint execution_ms started captured
+        delta=
+        if [ "$phase" = index ] && [ "$status" = accepted ] && [ -n "$heap" ]; then delta=$((count - heap)); fi
+        hic_csv "$HIC_OUT/attempts.csv" "$aid" "$oid" "$phase" "$intended" "$actual" "$variant" "$status" \
+            "$count" "$delta" "$reasons" "$stage" "$sqlstate" "$message" "$detail" "$hint" \
+            "plans/attempt-$aid.json" "$execution_ms" "$started" "$captured" || return 2
+    done < "$dir/attempt-ids"
+}
+
+hic_report_parent() {
+    # For a partitioned table, one parents.csv row: are all descendants in
+    # scope and supported, and did every leaf pass?
+    local oid=$1 parent child kind ns am schema_hex name_hex
+    local descendants=0 outside=0 leaves=0 all_in_scope=true all_supported=true subtree=true
+    hic_read_relation < "$HIC_OUT/relations/$oid/facts" || return 2
+    [ "$r_kind" = p ] || return 0
+    while IFS='|' read -r parent child kind ns am schema_hex name_hex; do
+        [ "$parent" = "$oid" ] || continue
+        descendants=$((descendants + 1))
+        [ "$ns" = "$HIC_SCHEMA_OID" ] || outside=$((outside + 1))
+        if [ ! -d "$HIC_OUT/relations/$child" ]; then all_in_scope=false subtree=false; fi
+        if [ "$kind" = p ]; then continue; fi
+        leaves=$((leaves + 1))
+        if [ "$kind" != r ] || [ "$am" != 2 ]; then all_supported=false subtree=false; fi
+        if [ -d "$HIC_OUT/relations/$child" ]; then
+            hic_evaluate "$child" || return 2
+            [ "$HIC_STATUS" = PASS ] || subtree=false
+        fi
+    done < "$HIC_OUT/partitions.raw"
+    if [ "$descendants" = 0 ]; then all_in_scope=false all_supported=false; fi
+    [ "$leaves" -gt 0 ] || subtree=false
+    hic_csv "$HIC_OUT/parents.csv" "$oid" "$descendants" "$outside" "$all_in_scope" "$all_supported" \
+        "$leaves" "$subtree"
+}
+
 hic_reports() {
-    local oid iid aid dir base scope reason perm status heap eligible checked matching mismatches errors match
-    local physical=0 passed=0 failed=0 inconclusive=0 noindex=0 errored=0 excluded=0 unsupported=0
-    local totaleligible=0 totalchecked=0 totalmatching=0 totaluntested=0 totalmismatches=0 totalerrors=0
-    local attempted untested usability actual state phase count intended variant reasons stage code message detail hint delta
-    local parent child kind ns am schemaname relname descendants outside included supported children subtree cstatus
-    local allscope allsupported exhaustive=true allmatch=false gen execution started captured
-    : > "$HIC_OUT/relations.csv" && : > "$HIC_OUT/candidates.csv" && : > "$HIC_OUT/attempts.csv" && : > "$HIC_OUT/parents.csv" || return 2
+    # Write the five CSV reports from published evidence; set HIC_SUMMARY.
+    local oid report
+    local physical=0 passed=0 mismatched=0 inconclusive=0 no_index=0 errored=0 excluded=0 unsupported=0
+    local total_eligible=0 total_checked=0 total_matching=0 total_untested=0 total_mismatches=0 total_errors=0
+    local exhaustive=true all_match=false
+    for report in relations candidates attempts parents schema; do
+        : > "$HIC_OUT/$report.csv" || return 2
+    done
     hic_csv "$HIC_OUT/relations.csv" relation_oid schema_name relation_name relkind in_heap_scope exclusion_reason permission_error status heap_count eligible_indexes checked_indexes matching_indexes untested_indexes mismatching_attempts error_attempts matching_index_oid || return 2
     hic_csv "$HIC_OUT/candidates.csv" index_oid relation_oid schema_name index_name eligible exclusion_reason generation_reason indcheckxmin catalog_xmin actually_checked intended_attempts untested_reason snapshot_usability || return 2
     hic_csv "$HIC_OUT/attempts.csv" attempt_id relation_oid phase intended_index_oid actual_index_oid variant status row_count delta rejection_reasons error_stage sqlstate message detail hint plan_file execution_ms started captured || return 2
     hic_csv "$HIC_OUT/parents.csv" relation_oid descendants outside_schema_descendants all_descendants_in_scope all_descendants_supported physical_children subtree_success || return 2
     while IFS= read -r oid; do
-        dir="$HIC_OUT/relations/$oid"; hic_evaluate "$oid" || return 2
-        IFS='|' read -r -a HIC_R < "$dir/facts" || return 2
-        hic_get "$dir" scope; scope=$HIC_VALUE; hic_get "$dir" reason; reason=$HIC_VALUE
-        hic_get "$dir" permission; perm=$HIC_VALUE; hic_get "$dir" status; status=$HIC_VALUE
-        hic_get "$dir" heap; heap=$HIC_VALUE; hic_get "$dir" eligible; eligible=$HIC_VALUE
-        hic_get "$dir" checked_count; checked=$HIC_VALUE; hic_get "$dir" matching_count; matching=$HIC_VALUE
-        hic_get "$dir" mismatch_count; mismatches=$HIC_VALUE; hic_get "$dir" error_count; errors=$HIC_VALUE
-        hic_get "$dir" match; match=$HIC_VALUE
-        hic_decode "${HIC_R[2]}" || return 2; schemaname=$HIC_TEXT
-        hic_decode "${HIC_R[3]}" || return 2; relname=$HIC_TEXT
-        hic_csv "$HIC_OUT/relations.csv" "$oid" "$schemaname" "$relname" "${HIC_R[5]}" "$scope" "$reason" "$perm" "$status" "$heap" "$eligible" "$checked" "$matching" "$((eligible-checked))" "$mismatches" "$errors" "$match" || return 2
-        case $status in PASS) passed=$((passed+1)) ;; MISMATCH) failed=$((failed+1)) ;;
-            INCONCLUSIVE) inconclusive=$((inconclusive+1)) ;; NO_ELIGIBLE_INDEX) noindex=$((noindex+1)) ;;
-            ERROR) errored=$((errored+1)) ;; NOT_APPLICABLE) excluded=$((excluded+1)) ;; esac
-        case ${HIC_R[5]} in r|m)
-            if [ "${HIC_R[6]}" != 2 ] || [ "${HIC_R[7]}" != x68656170 ] || [ "${HIC_R[8]}" != t ]; then unsupported=$((unsupported+1)); fi ;;
-        esac
-        if [ "$scope" = true ]; then
-            physical=$((physical+1)); totaleligible=$((totaleligible+eligible)); totalchecked=$((totalchecked+checked))
-            totalmatching=$((totalmatching+matching)); totaluntested=$((totaluntested+eligible-checked))
-            [ "$checked" -eq "$eligible" ] || exhaustive=false
-        fi
-        totalmismatches=$((totalmismatches+mismatches)); totalerrors=$((totalerrors+errors))
-        while IFS= read -r iid; do
-            base="$HIC_OUT/indexes/$iid"; IFS='|' read -r -a HIC_I < "$base/facts" || return 2
-            hic_get "$base" eligible; eligible=$HIC_VALUE; hic_get "$base" reason; reason=$HIC_VALUE
-            hic_get "$base" generation; gen=$HIC_VALUE
-            actual=false; untested=; usability=not_established; attempted=0
-            if [ -f "$dir/attempt-ids" ]; then
-                while IFS= read -r aid; do
-                    hic_get "$HIC_OUT/attempts/$aid" intended
-                    [ "$HIC_VALUE" != "$iid" ] || attempted=$((attempted+1))
-                done < "$dir/attempt-ids"
-            fi
-            if grep -F -x -q "$iid" "$dir/checked"; then actual=true; usability=accepted_by_executed_plan
-            elif [ "$eligible" = true ] && [ "${HIC_I[13]}" = t ]; then usability=indcheckxmin_unresolved; fi
-            if [ "$eligible" != true ]; then untested=$reason
-            elif [ "$actual" = true ]; then :
-            elif [ -n "$gen" ]; then untested=$gen
-            elif [ "$status" = PASS ] && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then untested=stopped_after_first_match
-            elif [ "$attempted" -ge 2 ]; then untested=attempt_budget_exhausted_without_actual_coverage
-            else untested=not_yet_checked; fi
-            hic_decode "${HIC_I[2]}" || return 2; schemaname=$HIC_TEXT
-            hic_decode "${HIC_I[3]}" || return 2; relname=$HIC_TEXT
-            hic_csv "$HIC_OUT/candidates.csv" "$iid" "$oid" "$schemaname" "$relname" "$eligible" "$reason" "$gen" "${HIC_I[13]}" "${HIC_I[14]}" "$actual" "$attempted" "$untested" "$usability" || return 2
-        done < "$dir/index-ids"
-        if [ -f "$dir/attempt-ids" ]; then
-            while IFS= read -r aid; do
-                base="$HIC_OUT/attempts/$aid"
-                hic_get "$base" phase; phase=$HIC_VALUE; hic_get "$base" intended; intended=$HIC_VALUE
-                hic_get "$base" actual; actual=$HIC_VALUE; hic_get "$base" variant; variant=$HIC_VALUE
-                hic_get "$base" status; state=$HIC_VALUE; hic_get "$base" count; count=$HIC_VALUE
-                hic_get "$base" reasons; reasons=$HIC_VALUE; hic_get "$base" stage; stage=$HIC_VALUE
-                hic_get "$base" sqlstate; code=$HIC_VALUE; hic_get "$base" message; message=$HIC_VALUE
-                hic_get "$base" detail; detail=$HIC_VALUE; hic_get "$base" hint; hint=$HIC_VALUE
-                hic_get "$base" execution_ms; execution=$HIC_VALUE
-                hic_get "$base" started; started=$HIC_VALUE; hic_get "$base" captured; captured=$HIC_VALUE
-                delta=
-                if [ "$phase" = index ] && [ "$state" = accepted ] && [ -n "$heap" ]; then delta=$((count-heap)); fi
-                hic_csv "$HIC_OUT/attempts.csv" "$aid" "$oid" "$phase" "$intended" "$actual" "$variant" "$state" "$count" "$delta" "$reasons" "$stage" "$code" "$message" "$detail" "$hint" "plans/attempt-$aid.json" "$execution" "$started" "$captured" || return 2
-            done < "$dir/attempt-ids"
-        fi
-        [ "${HIC_R[5]}" = p ] || continue
-        descendants=0; outside=0; children=0; allscope=true; allsupported=true; subtree=true
-        while IFS='|' read -r parent child kind ns am schemaname relname; do
-            [ "$parent" = "$oid" ] || continue
-            descendants=$((descendants+1))
-            [ "$ns" = "$HIC_SCHEMA_OID" ] || outside=$((outside+1))
-            if [ ! -d "$HIC_OUT/relations/$child" ]; then allscope=false; subtree=false; fi
-            if [ "$kind" != p ] && { [ "$kind" != r ] || [ "$am" != 2 ]; }; then allsupported=false; subtree=false; fi
-            if [ "$kind" != p ]; then
-                children=$((children+1))
-                if [ -d "$HIC_OUT/relations/$child" ]; then
-                    hic_evaluate "$child" || return 2
-                    [ "$HIC_STATUS" = PASS ] || subtree=false
-                fi
-            fi
-        done < "$HIC_OUT/partitions.raw"
-        if [ "$descendants" = 0 ]; then allscope=false; allsupported=false; fi
-        [ "$children" -gt 0 ] || subtree=false
-        hic_csv "$HIC_OUT/parents.csv" "$oid" "$descendants" "$outside" "$allscope" "$allsupported" "$children" "$subtree" || return 2
+        hic_report_relation "$oid" || return 2
+        hic_report_candidates "$oid" || return 2
+        hic_report_attempts "$oid" || return 2
+        hic_report_parent "$oid" || return 2
     done < "$HIC_OUT/relation-ids"
-    HIC_SCHEMA_SUCCESS=false; HIC_HEAP_ALL_PASS=false
+    HIC_SCHEMA_SUCCESS=false HIC_HEAP_ALL_PASS=false
     if [ "$physical" -gt 0 ] && [ "$physical" -eq "$passed" ] && [ "$HIC_EVIDENCE_VALID" = true ]; then
         HIC_HEAP_ALL_PASS=true
         [ "$unsupported" -ne 0 ] || HIC_SCHEMA_SUCCESS=true
     fi
     [ "$physical" -gt 0 ] || exhaustive=false
-    [ "$totalchecked" -le 0 ] || [ "$totalmismatches" -ne 0 ] || allmatch=true
-    : > "$HIC_OUT/schema.csv" || return 2
+    if [ "$total_checked" -gt 0 ] && [ "$total_mismatches" -eq 0 ]; then all_match=true; fi
     hic_csv "$HIC_OUT/schema.csv" schema_success heap_scope_all_pass physical_relations passed_relations mismatched_relations inconclusive_relations no_index_relations error_relations excluded_objects unsupported_table_ams eligible_indexes checked_indexes matching_indexes untested_indexes exhaustive_coverage_complete all_tested_indexes_match observed_index_mismatches attempt_errors || return 2
-    hic_csv "$HIC_OUT/schema.csv" "$HIC_SCHEMA_SUCCESS" "$HIC_HEAP_ALL_PASS" "$physical" "$passed" "$failed" "$inconclusive" "$noindex" "$errored" "$excluded" "$unsupported" "$totaleligible" "$totalchecked" "$totalmatching" "$totaluntested" "$exhaustive" "$allmatch" "$totalmismatches" "$totalerrors" || return 2
-    HIC_SUMMARY="schema_success=$HIC_SCHEMA_SUCCESS physical_relations=$physical passed=$passed mismatched=$failed inconclusive=$inconclusive no_eligible_index=$noindex error=$errored eligible_indexes=$totaleligible checked_indexes=$totalchecked untested_indexes=$totaluntested observed_index_mismatches=$totalmismatches attempt_errors=$totalerrors"
+    hic_csv "$HIC_OUT/schema.csv" "$HIC_SCHEMA_SUCCESS" "$HIC_HEAP_ALL_PASS" "$physical" "$passed" "$mismatched" \
+        "$inconclusive" "$no_index" "$errored" "$excluded" "$unsupported" "$total_eligible" "$total_checked" \
+        "$total_matching" "$total_untested" "$exhaustive" "$all_match" "$total_mismatches" "$total_errors" || return 2
+    HIC_SUMMARY="schema_success=$HIC_SCHEMA_SUCCESS physical_relations=$physical passed=$passed mismatched=$mismatched inconclusive=$inconclusive no_eligible_index=$no_index error=$errored eligible_indexes=$total_eligible checked_indexes=$total_checked untested_indexes=$total_untested observed_index_mismatches=$total_mismatches attempt_errors=$total_errors"
 }
+
 hic_finish() {
+    # Check the context is unchanged, COMMIT, then write the reports.
     local expected="$HIC_BACKEND|$HIC_XID|$HIC_SNAPSHOT|$HIC_ROLE_HEX|repeatable read|on"
     hic_sql "$HIC_S" "SELECT /* wiki_hic12_final_context */ pg_backend_pid(),txid_current(),txid_current_snapshot()::text,
  'x'||encode(convert_to(current_user::text,'UTF8'),'hex'),current_setting('transaction_isolation'),current_setting('transaction_read_only');" || return 2
-    [ "$HIC_VALUE" = "$expected" ] || { HIC_EVIDENCE_VALID=false; HIC_STOP='checking context changed'; return 2; }
+    [ "$HIC_VALUE" = "$expected" ] || { HIC_EVIDENCE_VALID=false HIC_STOP='checking context changed'; return 2; }
     hic_sql "$HIC_S" 'COMMIT /* wiki_hic12_commit */;' || return 2
     hic_reports || return 2
+    hic_decode "$HIC_ROLE_HEX" || return 2
     : > "$HIC_OUT/run.csv" || return 2
     hic_csv "$HIC_OUT/run.csv" schema_name schema_oid database_oid version_num backend_pid transaction_id snapshot checking_role session_role_hex started finished evidence_valid ddl_stable include_external_partitions exhaustive settings_file || return 2
-    hic_decode "$HIC_ROLE_HEX" || return 2
-    hic_csv "$HIC_OUT/run.csv" "$HIC_SCHEMA" "$HIC_SCHEMA_OID" "$HIC_DATABASE_OID" "$HIC_SERVER" "$HIC_BACKEND" "$HIC_XID" "$HIC_SNAPSHOT" "$HIC_TEXT" "$HIC_SESSION_ROLE" "$HIC_STARTED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HIC_EVIDENCE_VALID" true "$HIC_EXTERNAL" "$HIC_EXHAUSTIVE_BOOL" settings.json || return 2
+    hic_csv "$HIC_OUT/run.csv" "$HIC_SCHEMA" "$HIC_SCHEMA_OID" "$HIC_DATABASE_OID" "$HIC_SERVER" "$HIC_BACKEND" \
+        "$HIC_XID" "$HIC_SNAPSHOT" "$HIC_TEXT" "$HIC_SESSION_ROLE" "$HIC_STARTED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$HIC_EVIDENCE_VALID" true "$HIC_EXTERNAL" "$HIC_EXHAUSTIVE_BOOL" settings.json || return 2
 }
+
+# ---- driver ------------------------------------------------------------------
+
 hic_initialize() {
-    HIC_ATTEMPT_ID=0; HIC_EVIDENCE_VALID=true; HIC_STOP= HIC_SUMMARY= HIC_SCHEMA_SUCCESS=false
+    # Set up, open the checking transaction and take the inventory.
+    HIC_STAGE=initialization
+    HIC_ATTEMPT_ID=0 HIC_EVIDENCE_VALID=true HIC_STOP= HIC_SUMMARY= HIC_SCHEMA_SUCCESS=false
     mkdir -p "$HIC_OUT/relations" "$HIC_OUT/indexes" "$HIC_OUT/attempts" "$HIC_OUT/plans" || return 2
     : > "$HIC_OUT/run-errors.csv" || return 2
     hic_csv "$HIC_OUT/run-errors.csv" stage sqlstate message || return 2
-    HIC_STAGE=initialization
     hic_install || return
     hic_start || return
     HIC_STAGE=inventory
     hic_inventory
 }
+
 hic_check() {
-    local rc stage=initialization
-    HIC_SCHEMA=$1; HIC_EXTERNAL=$2; HIC_EXHAUSTIVE_BOOL=$3
-    hic_initialize; rc=$?
-    if [ "$rc" != 0 ]; then
+    # hic_check SCHEMA INCLUDE_EXTERNAL EXHAUSTIVE (true or false): returns 0
+    # for schema success, 1 for a completed run without it, 2 when incomplete.
+    HIC_SCHEMA=$1 HIC_EXTERNAL=$2 HIC_EXHAUSTIVE_BOOL=$3
+    if ! hic_initialize; then
         hic_parse_error "$HIC_S" || :
-        hic_run_error "${HIC_STAGE:-$stage}" "${HIC_ERR_CODE:-}" "${HIC_STOP:-${HIC_ERR_MESSAGE:-initialization or inventory failed}}" || :
+        hic_run_error "$HIC_STAGE" "${HIC_ERR_CODE:-}" \
+            "${HIC_STOP:-${HIC_ERR_MESSAGE:-initialization or inventory failed}}" || :
         hic_sql "$HIC_S" 'ROLLBACK /* wiki_hic12_abandon_start */;' || :
         return 2
     fi
-    hic_attempt_loop; rc=$?
-    if [ "$rc" != 0 ]; then
-        HIC_EVIDENCE_VALID=false; HIC_STOP=${HIC_STOP:-attempt loop interrupted}
+    if ! hic_attempt_loop; then
+        HIC_EVIDENCE_VALID=false HIC_STOP=${HIC_STOP:-attempt loop interrupted}
         hic_run_error snapshot "${HIC_SQLSTATE:-}" "$HIC_STOP" || :
         hic_sql "$HIC_S" 'ROLLBACK /* wiki_hic12_abandon */;' || :
         return 2
@@ -1662,15 +1870,26 @@ hic_check() {
     hic_finish || { HIC_STOP=${HIC_STOP:-report or commit failed}; return 2; }
     [ "$HIC_SCHEMA_SUCCESS" = true ]
 }
+
 hic_main() {
-    local external exhaustive rc
+    local external exhaustive rc completed=false
     set -u -o pipefail
     umask 077
-    case "${1:-}" in -h|--help) sed -n '1,13p' "${BASH_SOURCE[0]}"; return 0 ;; '') ;; *) return 64 ;; esac
+    case ${1:-} in
+        -h|--help) sed -n '/^#/!q;p' "${BASH_SOURCE[0]}"; return 0 ;;   # the header comment
+        '') ;;
+        *) hic_warn "unexpected argument: $1"; return 64 ;;
+    esac
     [ -n "${HIC_SCHEMA:-}" ] || { hic_warn 'set HIC_SCHEMA'; return 64; }
     [ "${HIC_DDL_STABLE:-}" = yes ] || { hic_warn 'set HIC_DDL_STABLE=yes'; return 64; }
-    case "${HIC_INCLUDE_EXTERNAL_PARTITIONS:-no}" in yes) external=true ;; no) external=false ;; *) return 64 ;; esac
-    case "${HIC_EXHAUSTIVE:-no}" in yes) exhaustive=true ;; no) exhaustive=false ;; *) return 64 ;; esac
+    case ${HIC_INCLUDE_EXTERNAL_PARTITIONS:-no} in
+        yes) external=true ;; no) external=false ;;
+        *) hic_warn 'HIC_INCLUDE_EXTERNAL_PARTITIONS must be yes or no'; return 64 ;;
+    esac
+    case ${HIC_EXHAUSTIVE:-no} in
+        yes) exhaustive=true ;; no) exhaustive=false ;;
+        *) hic_warn 'HIC_EXHAUSTIVE must be yes or no'; return 64 ;;
+    esac
     : "${HIC_OUT:=hic12-run-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
     mkdir -m 700 "$HIC_OUT" || return 64
     export PGAPPNAME="${PGAPPNAME:-hic12-check}"
@@ -1678,25 +1897,27 @@ hic_main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     HIC_STOP= HIC_SUMMARY=
-    if hic_open main 7 8; then
+    if ! hic_open main 7 8; then
+        HIC_STOP='psql session did not start' rc=2
+    else
         if [ -n "${HIC_ROLE:-}" ]; then
             hic_literal "$HIC_ROLE"
             hic_sql main "SET /* wiki_hic12_role */ ROLE $HIC_LITERAL;" || HIC_STOP='SET ROLE failed'
         fi
-        if [ -z "$HIC_STOP" ]; then hic_check "$HIC_SCHEMA" "$external" "$exhaustive"; rc=$?; else rc=2; fi
+        rc=2
+        if [ -z "$HIC_STOP" ]; then hic_check "$HIC_SCHEMA" "$external" "$exhaustive"; rc=$?; fi
         hic_close main || rc=2
-    else HIC_STOP='psql session did not start'; rc=2; fi
+    fi
     trap - EXIT
-    case $rc in 0|1) ;; *) HIC_SUMMARY= ;; esac
-    if ! {
-        printf 'exit_status=%s\n' "$rc"
-        case $rc in 0|1) printf 'completed=true\n' ;; *) printf 'completed=false\n' ;; esac
-        printf 'stop_reason=%s\n' "${HIC_STOP:-}"
+    case $rc in 0|1) completed=true ;; *) HIC_SUMMARY= ;; esac
+    {
+        printf 'exit_status=%s\ncompleted=%s\nstop_reason=%s\n' "$rc" "$completed" "${HIC_STOP:-}"
         printf '%s\n' "${HIC_SUMMARY:-}" | tr ' ' '\n'
-    } > "$HIC_OUT/summary.txt"; then rc=2; fi
+    } > "$HIC_OUT/summary.txt" || rc=2
     hic_say "exit $rc ${HIC_SUMMARY:-${HIC_STOP:-}} (reports in $HIC_OUT)"
     return "$rc"
 }
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then hic_main "$@"; exit; fi
 ```
 
@@ -1726,10 +1947,10 @@ bash .wiki-runtime/hic12-measure.sh
 | Prerequisites | Bash with `/dev/tcp`, Git, POSIX utilities including `ps`, `paste`, `cmp`, `mkfifo`; GNU make, C99 compiler, Bison/Flex and Perl required by a Git-source build. No network or extra extension. ([installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97), [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318)) |
 | Build | `--without-readline --without-zlib`, private install prefix; omits optional interactive editing/compression facilities, not visibility/planning behavior ([installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)) |
 | Output | `.wiki-runtime/tmp/hic12/suite-current.log`, `platform.txt`, `platform-sql.txt`, `build-options.txt`, then `results/<unique-db>/<case>/`; `last-test-output` names the latest result directory |
-| Runtime | Final fresh build: 124s; verification: 75s from fresh data and 75s with the build retained. A single fresh build/verify run is about 3.5 minutes; a retained-build verify is about 75s. These correctness-fixture timings do not predict production scan cost |
+| Runtime | Last fresh build: 123s; verification: 70s from fresh data and 72s with the build retained. A single fresh build/verify run is about 3.5 minutes; a retained-build verify is about 72s. These correctness-fixture timings do not predict production scan cost |
 | Teardown | Each invocation stops its owned server on exit. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup |
 
-**Last run:** 2026-10-23, unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0, 64-bit, GNU Bash 5.3.20 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. The final published text ran stages `prepare build init verify verify cleanup` from an absent sandbox. Both verifications passed all 132 assertions; build 124s, init 1s, each verify 75s, cleanup 2s. The second verify reused the existing build and running cluster, created a new disposable database, and started new checker transactions rather than reusing any earlier baseline. Cleanup stopped and removed the owned sandbox. Earlier dated implementation measurements remain historical.
+**Last run:** 2026-10-23 America/Toronto (2026-10-24 00:07 to 00:18 UTC), after the runner's readability revision. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0, 64-bit, GNU Bash 5.3.20 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. The current published text ran in two invocations from an absent sandbox: `prepare build init verify` (build 123s, init 2s, verify 70s), then `verify cleanup` with the build retained (verify 72s, which restarted the stopped owned cluster; cleanup 1s). Both verifications passed all 132 assertions. Each verify created a new disposable database and started new checker transactions rather than reusing any earlier baseline. Cleanup stopped and removed the owned sandbox. Earlier dated implementation measurements remain historical.
 
 Non-default behavior is intentional. The [settings table](#settings-and-query-shapes) gives the checker profiles, their defaults, mechanisms and transaction/session scope. These additional fixture changes supply specific test conditions:
 
@@ -2371,9 +2592,19 @@ hic_request main "$work/validator-tests.sql" || fail units
 [ "$HIC_FAILED" = false ] || fail "unit setup: $(cat "$(sfile stderr.last)")"
 hic_data "$HIC_OUT/unit-list" "SELECT /* wiki_hic12_unit_list */ 'x'||encode(convert_to(label,'UTF8'),'hex'),phase,expected FROM hic_unit_cases ORDER BY label;" || fail list
 HIC_ATTEMPT_ID=1
-hic_encode pg_temp_test; HIC_CAPTURE_SCHEMA=$HIC_HEX
-hic_encode fixture; HIC_REL_SCHEMA=$HIC_HEX
-hic_encode target; HIC_REL_NAME=$HIC_HEX
+# Hex-encode ASCII text the way the runner's SQL transport does.
+ascii_hex() {
+    local s=$1 c n
+    HEX=x
+    while [ -n "$s" ]; do
+        c=${s:0:1} s=${s:1}
+        printf -v n '%02x' "'$c"
+        HEX=$HEX$n
+    done
+}
+ascii_hex pg_temp_test; HIC_CAPTURE_SCHEMA=$HEX
+ascii_hex fixture; HIC_REL_SCHEMA=$HEX
+ascii_hex target; HIC_REL_NAME=$HEX
 while IFS='|' read -r label HIC_PHASE expected; do
     hic_decode "$label" || fail unit_label
     label=$HIC_TEXT; hic_literal "$label"
