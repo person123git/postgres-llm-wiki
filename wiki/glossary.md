@@ -1380,11 +1380,14 @@ Related: [PlannedStmt](#plannedstmt), [Append and MergeAppend](#append-and-merge
 
 ### Equivalence class
 
-**Aliases:** `EquivalenceClass`, EC, `ec_members`, equivalence-derived clause, `generate_join_implied_equalities()`. **Checked on:** PostgreSQL 17.
+**Aliases:** `EquivalenceClass`, EC, `ec_members`, equivalence-derived clause, `generate_join_implied_equalities()`. **Checked on:** PostgreSQL 12, 17.
 
 An equivalence class is the [planner](#planner)'s record that several expressions are known to be equal. When it finds a mergejoinable equality `A = B` that is not an outer-join clause, it puts `A` and `B` in one `EquivalenceClass`; a later `B = C` adds `C` to the same class, merging classes where needed. "Equal" means equal under the B-tree operator families in `ec_opfamilies` and the collation in `ec_collation` ([pathnodes.h#EquivalenceClass-comment](../raw/postgres-17/src/include/nodes/pathnodes.h#L1327-L1343), [pathnodes.h#EquivalenceClass](../raw/postgres-17/src/include/nodes/pathnodes.h#L1380-L1400)).
 
 This matters when reading planner code because the original equality clauses leave the normal flow of [quals](#qual). The planner generates the comparisons it needs from each class instead, which can produce a join clause such as `A = C` that the query never wrote; a class that contains a constant yields a restriction such as `A = 42` for every member ([optimizer/README#EquivalenceClasses](../raw/postgres-17/src/backend/optimizer/README#L693-L721)). Code that proves facts about one relation uses these derived clauses too: `check_index_predicates()` adds the equivalence-derivable join clauses to the clauses it tests against a [partial index](#partial-index)'s predicate ([indxpath.c#check_index_predicates-ec-clauses](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L3293-L3315)). Every [pathkey](#pathkey) points at an equivalence class, so orderings by equal expressions count as the same ordering ([pathnodes.h#EquivalenceClass-pathkeys](../raw/postgres-17/src/include/nodes/pathnodes.h#L1357-L1360)).
+
+**Version notes:**
+- PostgreSQL 12: The structure and the pathkey link hold. `EquivalenceClass` keeps the B-tree operator families, the collation and the member list, and a sort key that equals no other expression gets a single-member class ([pathnodes.h#EquivalenceClass](../raw/postgres-12/src/include/nodes/pathnodes.h#L924-L943), [pathnodes.h#pathkey-classes](../raw/postgres-12/src/include/nodes/pathnodes.h#L902-L906)). A class that contains a constant and is not below an outer join makes every pathkey that depends on it redundant, because the key has only one possible value ([pathnodes.h#EC_MUST_BE_REDUNDANT](../raw/postgres-12/src/include/nodes/pathnodes.h#L945-L950)). The derived-clause and `check_index_predicates()` details above are checked on PostgreSQL 17 only.
 
 Related: [Pathkey](#pathkey), [Planner](#planner), [Qual](#qual), [Partial index](#partial-index), [Path](#path)
 
@@ -2904,11 +2907,14 @@ Related: [RelOptInfo](#reloptinfo), [Cost](#cost), [Planner](#planner), [Planned
 
 ### Pathkey
 
-**Aliases:** `PathKey`, `pathkeys`, sort order of a path. **Checked on:** PostgreSQL 17.
+**Aliases:** `PathKey`, `pathkeys`, sort order of a path. **Checked on:** PostgreSQL 12, 17.
 
 A pathkey describes one sort key of the rows a [path](#path) produces. A path's `pathkeys` field is a list of `PathKey` nodes: the first is the primary sort key, the next the secondary one, and an empty list means no known order ([pathnodes.h#PathKey](../raw/postgres-17/src/include/nodes/pathnodes.h#L1447-L1475), [pathnodes.h:1668](../raw/postgres-17/src/include/nodes/pathnodes.h#L1668)). Each `PathKey` names the value through an [equivalence class](#equivalence-class), plus a B-tree operator family, a direction and a nulls-first flag, so a path sorted by any member of the class counts as sorted by all of them ([optimizer/README#PathKeys](../raw/postgres-17/src/backend/optimizer/README#L904-L921)).
 
 This is how the planner decides whether a path already satisfies an `ORDER BY` or a merge join without an explicit sort. An index scan's pathkeys describe the index's order; a [sequential scan](#sequential-scan), a [bitmap scan](#bitmap-scan) and a scan of an index type that cannot return ordered results all have none ([optimizer/README#PathKeys-scans](../raw/postgres-17/src/backend/optimizer/README#L923-L939)).
+
+**Version notes:**
+- PostgreSQL 12: The structure holds. A path's order is a list of `PathKey` nodes, each linking an equivalence class with a B-tree operator family, a strategy (less-than for ascending, greater-than for descending) and a nulls-first flag ([pathnodes.h#PathKey](../raw/postgres-12/src/include/nodes/pathnodes.h#L986-L1011)). `pathkey_is_redundant()` drops a key whose class must be redundant, so a constant sort key adds no ordering ([pathkeys.c#pathkey_is_redundant](../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L132-L140)). The scan-type summary above is checked on PostgreSQL 17 only.
 
 Related: [Path](#path), [Equivalence class](#equivalence-class), [Planner](#planner), [Index scan](#index-scan), [Operator class](#operator-class)
 
@@ -5047,7 +5053,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (412 files):
+**PostgreSQL 12** (413 files):
 
 - [nbtutils.c#_bt_killitems](../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812)
 - [genam.c#RelationGetIndexScan](../raw/postgres-12/src/backend/access/index/genam.c#L108-L119)
@@ -5237,6 +5243,7 @@ One representative citation per cited source file, grouped by version:
 - [indxpath.c:1972](../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L1972)
 - [joinpath.c#hash-gate](../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L301-L308)
 - [joinrels.c:1374-1386](../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L1374-L1386)
+- [pathkeys.c#pathkey_is_redundant](../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L132-L140)
 - [analyzejoins.c:325](../raw/postgres-12/src/backend/optimizer/plan/analyzejoins.c#L325)
 - [createplan.c#order_qual_clauses](../raw/postgres-12/src/backend/optimizer/plan/createplan.c#L4919-L4929)
 - [planner.c#planner](../raw/postgres-12/src/backend/optimizer/plan/planner.c#L268-L273)
