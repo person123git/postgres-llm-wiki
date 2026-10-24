@@ -223,6 +223,14 @@ Scope choice: Fix and re-run.
 
 > Scope: the review found a shared-buffer blind spot, false identity drift for mapped catalogs, damage-hiding settings checked only at the start, an ambiguous unresolved-TID total, an over-broad interpolation guard and several documentation contradictions. The fixes keep the checking contract: they re-check those settings with every count, pin `client_min_messages`, read a mapped catalog's file number from the relation mapper, guard only ordering text, count unavailable TID signals, and add harness cases, including a cached-damage leg and a `pg_catalog` run.
 
+Follow-up (2026-10-24):
+
+Follow AGENTS.md. In PostgreSQL 12, review the question page "SQL Heap and Index Visible-Count Checker in PostgreSQL 12 (unverified)".
+
+Scope choice: Fix and re-run.
+
+> Scope: fix the unchecked evidence-list reads, qualify killed-index-tuple hinting, and correct the statistics-socket startup explanation. Extend the existing harness and rerun its measurements.
+
 ## Answer
 
 ### Feasibility and execution contract
@@ -419,7 +427,7 @@ The runner reads five server settings it never sets. It refuses the run, with ex
 |---|---|---|
 | `zero_damaged_pages` | `off`; `superuser` [guc.c#damage-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1133-L1162) | A page that fails verification is zeroed into a valid buffer, with a WARNING. A retry reads that cached buffer without verification and succeeds, and a read past the end of a file returns zeros with no report at all. [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) [bufmgr.c#valid-buffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L956) [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L763-L793) [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L631) |
 | `ignore_checksum_failure`, for [data checksums](../../../glossary.md#data-checksums) | `off`; `superuser` [guc.c#damage-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1133-L1162) | A page that fails its checksum but has a sane header is used. The only report is a WARNING with SQLSTATE 01000, because `PageIsVerified()` passes `ERRCODE_DATA_CORRUPTED` without `errcode()` and a WARNING defaults to 01000. [bufpage.c#checksum-warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L161) [elog.c#default-sqlstate](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388) |
-| `track_counts` | `on`; `superuser` [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1393-L1399) | Off leaves relations without statistics counters, so the fetched difference cannot equal a nonzero count and the runner leaves the unresolved-TID signal empty. A statistics collector without a working socket has the same effect with `track_counts` on; `summary.txt` counts such relations as `unresolved_tids_unavailable`. [pgstat.c#initstats-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1751-L1772) |
+| `track_counts` | `on`; `superuser` [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1393-L1399) | Off leaves relations without statistics counters, so the runner refuses the run. Failure to initialize the statistics socket also forces this setting off with `PGC_S_OVERRIDE`; that startup failure therefore reaches the same refusal, rather than a completed report with an unavailable signal. Independently, an accepted index count whose fetched-counter difference does not equal its exact row count leaves its signal empty; `summary.txt` counts relations with no usable accepted signal as `unresolved_tids_unavailable`. [pgstat.c#initstats-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1751-L1772) [pgstat.c#socket-startup-failure](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L614-L631) |
 | `old_snapshot_threshold` | `-1`, disabled; `postmaster`, restart [guc.c#old_snapshot_threshold](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3041-L3049) | Enabled, [pruning](../../../glossary.md#pruning) can remove rows `S` still sees. Sequential-scan page reads test for that and raise "snapshot too old", but the index-path heap fetch never tests, so an index count can come out silently low. [heapam.c#seqscan-old-snapshot](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L402-L405) [bufmgr.h#TestForOldSnapshot](../../../../raw/postgres-12/src/include/storage/bufmgr.h#L264-L275) [heapam_handler.c#index-fetch](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L115-L167) |
 
 A superuser can change the first three for one session, per role or database, or in the configuration file with a reload; the last needs a restart. Separately, a count statement that prints a class-01 report fails its attempt, so such a warning never accompanies an accepted count. The server sends a warning to psql only when `client_min_messages` is at `warning` or below, so a role or database value of `error` would hide it; the runner therefore sets the default, `notice`, for its own session. [elog.c#client-output](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L301-L305) [guc.c#client_min_messages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4231-L4240)
@@ -595,7 +603,16 @@ The signal is evidence to diagnose, not proof, and it never changes a status:
 | Its heap row is gone: zeroed page, unused line pointer | Yes |
 | An earlier index scan already marked it dead | No: the scan skips it |
 
-An index scan marks an entry dead, a [killed index tuple](../../../glossary.md#killed-index-tuple), when the heap search finds no live chain member, which includes a TID that reaches no tuple at all. Later scans outside recovery skip such entries. [heapam.c#all-dead](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1540) [indexam.c#kill-prior-tuple](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L589) [nbtree.c#remember-killed](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L253-L269) [nbtutils.c#_bt_killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812) [genam.c#ignore-killed](../../../../raw/postgres-12/src/backend/access/index/genam.c#L108-L119) [nbtsearch.c#skip-killed](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1476-L1486) So the first index scan that meets a lost row, by the checker or by an application, also hides it from every later scan: the measured deleted-row fixture reports 10 on its first run and 0 on the next. Only a physical census of index pages, which this runner does not perform, sees entries that are already marked.
+An index scan asks the access method to mark an entry dead, a [killed index tuple](../../../glossary.md#killed-index-tuple), when the heap search finds no live chain member, which includes a TID that reaches no tuple at all. B-tree remembers the entry and attempts to mark it when leaving the page. Later scans outside recovery skip entries carrying that hint. [heapam.c#all-dead](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1540) [indexam.c#kill-prior-tuple](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L589) [nbtree.c#remember-killed](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L253-L269) [nbtutils.c#_bt_killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812) [genam.c#ignore-killed](../../../../raw/postgres-12/src/backend/access/index/genam.c#L108-L119) [nbtsearch.c#skip-killed](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L1476-L1486)
+
+The marking is best effort. An ordinary MVCC scan of an index logged in [WAL](../../../glossary.md#wal) releases the page pin while processing its saved TIDs. `_bt_killitems()` reacquires the page and compares its [LSN](../../../glossary.md#lsn) with the saved value. [nbtsearch.c#release-page-pin](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsearch.c#L43-L67)
+
+| Page state when hinting resumes | Result |
+|---|---|
+| The LSN still matches | Find matching entries and mark them dead; later scans outside recovery can skip those entries. [nbtutils.c#matching-hints](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1760-L1812) |
+| Another operation changed the LSN while the page was unpinned | Release the page and return without marking; a later scan can encounter the same unresolved entries again. [nbtutils.c#hint-abandoned-after-change](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1760-L1768) |
+
+The measured deleted-row fixture reports 10 on its first run and 0 on the next; it does not establish guaranteed suppression after every first scan. A physical census of index pages, which this runner does not perform, can still see entries carrying the hint.
 
 ### Stronger SQL diagnostics and pageinspect
 
@@ -773,7 +790,7 @@ The matrix below is the **design-level test target**, including cases broader th
 | Unavailable TID counters | Counted under `unresolved_tids_unavailable`, never added to the total as zero |
 | TRUNCATE, REFRESH, drop and re-create, or an index-name swap after the snapshot | Relation `ERROR` with identity drift, never a stale PASS |
 | Deleted rows not yet vacuumed; a zeroed heap block | The unresolved-TID count equals the entries without a visible row, on the first scan only |
-| A key column named `?column?`; a value ending in the dollar-quote tag; a role-level idle timeout; an unreadable evidence file | Correct ordering, literal round trip, surviving session, and exit 2 respectively |
+| A key column named `?column?`; a value ending in the dollar-quote tag; a role-level idle timeout; missing or unreadable scalar and list evidence | Correct ordering, literal round trip, surviving session, and exit 2 respectively |
 
 Tests of deliberately corrupted on-disk indexes are a separate boundary. Ordinary SQL DML maintains indexes, and pageinspect only exposes page contents; this plan does not establish a supported SQL-only method to create arbitrary missing/duplicate physical index entries. Use synthetic count/plan/bag records to test the verdict evaluator, clearly labelled as unit tests. A real corruption campaign would require a separately approved fault-injection capability or supplied damaged disposable database; synthetic evaluator tests must not be reported as physical corruption detection coverage. At the asker's request in the 2026-10-24 follow-up, the harness now has one such physical leg: it stops the owned server, zeroes one heap block of a disposable table and fills one heap block of another with 0xFF bytes, then restarts. Damaged index pages and other corruption shapes remain outside the suite.
 
@@ -783,7 +800,7 @@ The acceptance gate is that all positive fixtures produce a count only from vali
 
 ### Measured coverage and remaining test gaps
 
-The current Bash-owned implementation passed **253 assertions** in the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
+The current Bash-owned implementation passed **263 assertions** in the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
 
 | Exercised case | Result |
 |---|---|
@@ -810,12 +827,12 @@ The current Bash-owned implementation passed **253 assertions** in the published
 | Identity drift after the snapshot | A second session's TRUNCATE, REFRESH, drop and re-create and index-name swap each make that relation ERROR with recorded drift (storage drift for TRUNCATE, name drift for the swap); the unchanged table passes |
 | Edge schema | A `"?column?"` key column passes with 3 rows; ten deleted rows' entries give `unresolved_index_tids=10`, and 0 on the next run because the first scan marked them dead |
 | Idle timeout | A 1-second session `idle_in_transaction_session_timeout` and a 2-second pause inside the checking transaction do not end the run |
-| Unreadable evidence | Replacing a relation's `scope` file with a directory makes reporting exit 2 instead of dropping the relation |
+| Missing or unreadable evidence | A directory replacing a scalar `scope` file makes reporting exit 2. Missing-file and directory substitutions for `relation-ids`, `partitions.raw`, `index-ids` and `attempt-ids` also return 2; restoring the lists restores successful reporting. `hic_finish()` propagates a missing `partitions.raw` failure instead of completing the run |
 | Dollar quoting and warnings | A value ending in `$hic12_q0` gets the next tag and round-trips; a class-01 report is found by the warning pattern, never as an error, and counts as a storage-class code |
 | Physical leg, zeroed block | 58 of 300 rows lost; PASS with heap 242, and `unresolved_index_tids=58` |
 | Physical leg, invalid header | Both heap attempts fail with `XX001`; relation ERROR with 2 storage errors; a CLI run with `zero_damaged_pages=on` is refused |
 | Physical leg, cached copy | Block 1 of a third table zeroed under the running server after `VACUUM (FREEZE)` and `CHECKPOINT`: `PASS` with 300 rows and `unresolved_index_tids=0`; after the restart the same table gives `PASS` with 242 rows and 58 unresolved TIDs |
-| Mapped catalogs | `pg_catalog`, checked as superuser: 63 physical catalogs pass, including `pg_class`, `pg_attribute`, `pg_proc`, `pg_type` and `pg_database`, none with drift; 117 eligible indexes, 63 checked, 54 untested; 1539 unresolved index TIDs, which never change a status |
+| Mapped catalogs | `pg_catalog`, checked as superuser: 63 physical catalogs pass, including `pg_class`, `pg_attribute`, `pg_proc`, `pg_type` and `pg_database`, none with drift; 117 eligible indexes, 63 checked, 54 untested. Unresolved index TIDs: 1454 in the fresh-build run and 1836 in the retained-build run; this signal never changes a status |
 | Guarded names | The table `odd:'name:` passes with 3 rows |
 | Message level | A plain psql session with `client_min_messages=error` prints no warning for `ROLLBACK` outside a transaction; the runner's session reads `notice` and receives the `25P01` warning |
 | Unavailable signal, synthetic report input | Blanking the accepted index attempt's signal gives `unresolved_index_tids=0` and `unresolved_tids_unavailable=1` |
@@ -832,7 +849,7 @@ The implemented Bash runner is the user's authorized orchestration and checking-
 
 ### Runner script
 
-The script reads top to bottom in sections: small helpers, the psql session layer, setup, inventory, plan validation, attempts, verdicts, reports and the driver. Each catalog fact line is read into named variables (`r_*` for relations, `i_*` for indexes), and each attempt, relation or index keeps its evidence as one-value files (`hic_put` and `hic_get` handle one value, `hic_save` and `hic_load` several). The [measurement harness](#measurement-script) sources this file and calls its functions directly, so those function names and evidence files are part of its test interface. Since the false-negative fixes, `hic_server_guard` refuses damage-hiding settings, `hic_identity` checks names and relfilenodes after the heap attempt, `hic_tid_counters` and `hic_unresolved_tids` derive the unresolved-TID count, and every evidence read in the verdict and report functions stops the run when it fails. Since the second 2026-10-24 review, `hic_read_count` runs that guard again on the settings each count row records, the inventory takes a mapped catalog's file number from the relation mapper, the interpolation guard reads only the ordering text, and the reports count relations whose unresolved-TID signal is unavailable.
+The script reads top to bottom in sections: small helpers, the psql session layer, setup, inventory, plan validation, attempts, verdicts, reports and the driver. Each catalog fact line is read into named variables (`r_*` for relations, `i_*` for indexes), and each attempt, relation or index keeps its evidence as one-value files (`hic_put` and `hic_get` handle one value, `hic_save` and `hic_load` several). The [measurement harness](#measurement-script) sources this file and calls its functions directly, so those function names and evidence files are part of its test interface. `hic_server_guard` refuses damage-hiding settings; `hic_read_count` repeats that guard on every count row's recorded settings. `hic_identity` checks names and relfilenodes, using the relation mapper for mapped catalogs. `hic_tid_counters` and `hic_unresolved_tids` derive the unresolved-TID count, and reports count relations whose signal is unavailable. The third 2026-10-24 review fixes evidence-list handling: verdicts and reports read each list completely with `hic_get` before iterating over its captured contents, `hic_contains` distinguishes a read failure from an absent set member, and line counts check command status. A failed read stops the run instead of becoming an empty list or a changed verdict.
 
 ```bash
 # hic12-check.sh: self-contained Bash checker for PostgreSQL 12.2
@@ -954,7 +971,18 @@ hic_load() {
         printf -v "$_var" '%s' "$HIC_VALUE"
     done
 }
-hic_add_line() { grep -F -x -q "$2" "$1" || printf '%s\n' "$2" >> "$1"; }  # add LINE to a set FILE
+hic_contains() {
+    # hic_contains DIR NAME LINE: read the complete set, then set HIC_FOUND.
+    # Read failure is distinct from a successfully read set without LINE.
+    hic_get "$1" "$2" || return 2
+    HIC_FOUND=false
+    case $'\n'"$HIC_VALUE"$'\n' in *$'\n'"$3"$'\n'*) HIC_FOUND=true ;; esac
+}
+hic_add_line() {
+    # hic_add_line FILE LINE: add LINE only after the existing set was read.
+    hic_contains "${1%/*}" "${1##*/}" "$2" || return 2
+    [ "$HIC_FOUND" = true ] || printf '%s\n' "$2" >> "$1"
+}
 
 # ---- session layer: one psql process per named session ------------------------
 # Bash 3.2 has no associative arrays, so session NAME keeps its state in
@@ -1873,20 +1901,26 @@ hic_evaluate() {
     local mismatch_count=0 error_count=0 storage_errors=0 uncovered=0 match= unresolved_index_tids=
     : > "$dir/checked" && : > "$dir/matching" || return 2
     hic_load "$dir" scope permission drift || return 2
+    hic_get "$dir" index-ids || return 2
     while IFS= read -r iid; do
+        [ -n "$iid" ] || continue
         hic_get "$HIC_OUT/indexes/$iid" eligible || return 2
         [ "$HIC_VALUE" != true ] || eligible=$((eligible + 1))
-    done < "$dir/index-ids"
+    done <<< "$HIC_VALUE"
     # Pass 1: the accepted heap baseline. Two different accepted counts conflict.
+    hic_get "$dir" attempt-ids || return 2
     while IFS= read -r aid; do
+        [ -n "$aid" ] || continue
         hic_load "$HIC_OUT/attempts/$aid" phase status count || return 2
         [ "$phase:$status" = heap:accepted ] || continue
         hic_uint "$count" || return 2
         if [ -n "$heap" ] && [ "$heap" != "$count" ]; then conflicting=true; fi
         heap=$count
-    done < "$dir/attempt-ids"
+    done <<< "$HIC_VALUE"
     # Pass 2: accepted index counts, credited to the index that actually ran.
+    hic_get "$dir" attempt-ids || return 2
     while IFS= read -r aid; do
+        [ -n "$aid" ] || continue
         hic_load "$HIC_OUT/attempts/$aid" phase status count actual reasons unresolved || return 2
         if [ "$status" = error ]; then error_count=$((error_count + 1)); fi
         case ,$reasons, in *,actual_index_identity_changed,*) drift=${drift:-index_identity_changed} ;; esac
@@ -1903,24 +1937,29 @@ hic_evaluate() {
         else
             mismatch_count=$((mismatch_count + 1))
         fi
-    done < "$dir/attempt-ids"
+    done <<< "$HIC_VALUE"
     # Pass 3: errors not replaced by an accepted heap count or intended index.
     # A storage-class error (XX, 58, or a warning while counting) is never
     # replaced: a retry can succeed on a page the failed read zeroed.
+    hic_get "$dir" attempt-ids || return 2
     while IFS= read -r aid; do
+        [ -n "$aid" ] || continue
         hic_load "$HIC_OUT/attempts/$aid" status phase intended sqlstate || return 2
         [ "$status" = error ] || continue
         if [[ $sqlstate =~ $HIC_STORAGE_CODE ]]; then
             storage_errors=$((storage_errors + 1)) uncovered=$((uncovered + 1))
         elif [ "$phase" = heap ]; then
             [ -n "$heap" ] || uncovered=$((uncovered + 1))
-        elif ! grep -F -x -q "$intended" "$dir/checked"; then
-            uncovered=$((uncovered + 1))
+        else
+            hic_contains "$dir" checked "$intended" || return 2
+            [ "$HIC_FOUND" = true ] || uncovered=$((uncovered + 1))
         fi
-    done < "$dir/attempt-ids"
+    done <<< "$HIC_VALUE"
     anomalies=$((mismatch_count + storage_errors))
-    checked_count=$(($(wc -l < "$dir/checked")))        # $((...)) drops BSD wc's padding
-    matching_count=$(($(wc -l < "$dir/matching")))
+    checked_count=$(wc -l < "$dir/checked") || return 2
+    matching_count=$(wc -l < "$dir/matching") || return 2
+    checked_count=$((checked_count))                  # drop BSD wc's padding
+    matching_count=$((matching_count))
     if [ "$scope" != true ]; then verdict=NOT_APPLICABLE
     elif [ "${HIC_EVIDENCE_VALID:-true}" != true ] || [ -n "$permission" ] || [ "$conflicting" = true ] \
         || [ -n "$drift" ]; then verdict=ERROR
@@ -1942,7 +1981,9 @@ hic_attempt_loop() {
     # attempts per index until one matches (or every index is tried, in
     # exhaustive mode).
     local oid dir iid scope permission eligible
+    hic_get "$HIC_OUT" relation-ids || return 2
     while IFS= read -r oid; do
+        [ -n "$oid" ] || continue
         dir="$HIC_OUT/relations/$oid"
         hic_evaluate "$oid" || return
         hic_load "$dir" scope permission eligible || return 2
@@ -1960,7 +2001,9 @@ hic_attempt_loop() {
         hic_evaluate "$oid" || return
         [ -z "$HIC_DRIFT" ] || continue
         HIC_PHASE=index
+        hic_get "$dir" index-ids || return 2
         while IFS= read -r iid; do
+            [ -n "$iid" ] || continue
             hic_get "$HIC_OUT/indexes/$iid" eligible || return 2
             [ "$HIC_VALUE" = true ] || continue
             hic_get "$HIC_OUT/indexes/$iid" generation || return 2
@@ -1970,13 +2013,14 @@ hic_attempt_loop() {
                 if hic_matched "$HIC_STATUS" && [ "$HIC_EXHAUSTIVE_BOOL" = false ]; then break; fi
                 [ -z "$HIC_DRIFT" ] || break
                 # An attempt intended for another index may already have used this one.
-                if grep -F -x -q "$iid" "$dir/checked"; then break; fi
+                hic_contains "$dir" checked "$iid" || return 2
+                if [ "$HIC_FOUND" = true ]; then break; fi
                 HIC_INTENDED=$iid
                 hic_attempt_once || return
             done
-        done < "$dir/index-ids"
+        done <<< "$HIC_VALUE"
         hic_evaluate "$oid" || return
-    done < "$HIC_OUT/relation-ids"
+    done <<< "$HIC_VALUE"
 }
 
 # ---- reports: CSV escaping and every aggregation rule live in Bash ------------
@@ -2034,17 +2078,22 @@ hic_report_candidates() {
     local oid=$1 dir="$HIC_OUT/relations/$1" iid idir aid status drift attempted actual untested usability
     local eligible reason generation schema_name index_name
     hic_load "$dir" status drift || return 2
+    hic_get "$dir" index-ids || return 2
     while IFS= read -r iid; do
+        [ -n "$iid" ] || continue
         idir="$HIC_OUT/indexes/$iid"
         hic_read_index < "$idir/facts" || return 2
         hic_load "$idir" eligible reason generation || return 2
         attempted=0
+        hic_get "$dir" attempt-ids || return 2
         while IFS= read -r aid; do
+            [ -n "$aid" ] || continue
             hic_get "$HIC_OUT/attempts/$aid" intended || return 2
             [ "$HIC_VALUE" != "$iid" ] || attempted=$((attempted + 1))
-        done < "$dir/attempt-ids"
+        done <<< "$HIC_VALUE"
         actual=false usability=not_established
-        if grep -F -x -q "$iid" "$dir/checked"; then actual=true usability=accepted_by_executed_plan
+        hic_contains "$dir" checked "$iid" || return 2
+        if [ "$HIC_FOUND" = true ]; then actual=true usability=accepted_by_executed_plan
         elif [ "$eligible" = true ] && [ "$i_checkxmin" = t ]; then usability=indcheckxmin_unresolved
         fi
         if [ "$eligible" != true ]; then untested=$reason
@@ -2059,7 +2108,7 @@ hic_report_candidates() {
         hic_decode "$i_name" || return 2; index_name=$HIC_TEXT
         hic_csv "$HIC_OUT/candidates.csv" "$iid" "$oid" "$schema_name" "$index_name" "$eligible" "$reason" \
             "$generation" "$i_checkxmin" "$i_xmin" "$actual" "$attempted" "$untested" "$usability" || return 2
-    done < "$dir/index-ids"
+    done <<< "$HIC_VALUE"
 }
 
 hic_report_attempts() {
@@ -2068,7 +2117,9 @@ hic_report_attempts() {
     local phase intended actual variant status count reasons stage sqlstate message detail hint
     local execution_ms started captured tids_returned unresolved
     hic_get "$dir" heap || return 2; heap=$HIC_VALUE
+    hic_get "$dir" attempt-ids || return 2
     while IFS= read -r aid; do
+        [ -n "$aid" ] || continue
         hic_load "$HIC_OUT/attempts/$aid" phase intended actual variant status count reasons stage \
             sqlstate message detail hint execution_ms started captured tids_returned unresolved || return 2
         delta=
@@ -2077,7 +2128,7 @@ hic_report_attempts() {
             "$count" "$delta" "$reasons" "$stage" "$sqlstate" "$message" "$detail" "$hint" \
             "plans/attempt-$aid.json" "$execution_ms" "$started" "$captured" "$tids_returned" "$unresolved" \
             || return 2
-    done < "$dir/attempt-ids"
+    done <<< "$HIC_VALUE"
 }
 
 hic_report_parent() {
@@ -2088,6 +2139,7 @@ hic_report_parent() {
     local descendants=0 outside=0 leaves=0 all_in_scope=true all_supported=true subtree=true
     hic_read_relation < "$HIC_OUT/relations/$oid/facts" || return 2
     [ "$r_kind" = p ] || return 0
+    hic_get "$HIC_OUT" partitions.raw || return 2
     while IFS='|' read -r parent child kind ns am schema_hex name_hex; do
         [ "$parent" = "$oid" ] || continue
         descendants=$((descendants + 1))
@@ -2100,7 +2152,7 @@ hic_report_parent() {
             hic_evaluate "$child" || return 2
             [ "$HIC_STATUS" = PASS ] || subtree=false
         fi
-    done < "$HIC_OUT/partitions.raw"
+    done <<< "$HIC_VALUE"
     if [ "$descendants" = 0 ]; then all_in_scope=false all_supported=false; fi
     [ "$leaves" -gt 0 ] || subtree=false
     [ "$subtree" = true ] || incomplete_subtrees=$((incomplete_subtrees + 1))
@@ -2122,12 +2174,14 @@ hic_reports() {
     hic_csv "$HIC_OUT/candidates.csv" index_oid relation_oid schema_name index_name eligible exclusion_reason generation_reason indcheckxmin catalog_xmin actually_checked intended_attempts untested_reason snapshot_usability || return 2
     hic_csv "$HIC_OUT/attempts.csv" attempt_id relation_oid phase intended_index_oid actual_index_oid variant status row_count delta rejection_reasons error_stage sqlstate message detail hint plan_file execution_ms started captured index_tids_returned unresolved_index_tids || return 2
     hic_csv "$HIC_OUT/parents.csv" relation_oid descendants outside_schema_descendants all_descendants_in_scope all_descendants_supported physical_children subtree_success || return 2
+    hic_get "$HIC_OUT" relation-ids || return 2
     while IFS= read -r oid; do
+        [ -n "$oid" ] || continue
         hic_report_relation "$oid" || return 2
         hic_report_candidates "$oid" || return 2
         hic_report_attempts "$oid" || return 2
         hic_report_parent "$oid" || return 2
-    done < "$HIC_OUT/relation-ids"
+    done <<< "$HIC_VALUE"
     HIC_SCHEMA_SUCCESS=false HIC_HEAP_ALL_PASS=false
     if [ "$physical" -gt 0 ] && [ "$physical" -eq "$passed" ] && [ "$HIC_EVIDENCE_VALID" = true ]; then
         HIC_HEAP_ALL_PASS=true
@@ -2272,10 +2326,10 @@ bash .wiki-runtime/hic12-measure.sh
 | Prerequisites | Bash with `/dev/tcp`, Git, POSIX utilities including `ps`, `paste`, `cmp`, `mkfifo`, `dd`, `tr` and `sleep`; GNU make, a C compiler that accepts `-std=gnu99`, Bison/Flex and Perl required by a Git-source build. Run it from the repository root; the extraction command and `prepare` create `.wiki-runtime/tmp/` when it is missing. No network or extra extension. ([installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97), [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318)) |
 | Build | `--without-readline --without-zlib`, `CFLAGS='-O2 -std=gnu99'` and a private install prefix. The two `--without` options omit optional interactive editing/compression facilities, not visibility/planning behavior ([installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)). Without `CFLAGS`, configure uses `-O2` and the compiler's default language mode ([configure.in#default-cflags](../../../../raw/postgres-12/configure.in#L408-L415)). With GCC 15.2 that build stopped at `c.h:308`, `typedef unsigned char bool`, with "'bool' cannot be defined via 'typedef'" and GCC's note that `bool` is a keyword from `-std=c23` on ([c.h#bool-typedef](../../../../raw/postgres-12/src/include/c.h#L302-L309)). PostgreSQL 12 asks for a C99 compiler ([installation.sgml#C99](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L93-L94)), so the flag selects that mode and keeps `-O2` |
 | Output | `.wiki-runtime/tmp/hic12/suite-current.log`, `platform.txt`, `platform-sql.txt`, `build-options.txt`, then `results/<unique-db>/<case>/`; `last-test-output` names the latest result directory |
-| Runtime | Fresh build with `JOBS=16`: 35s; verification: 292s right after that build and 185s with the build retained, including the `pg_catalog` run and the physical leg's stop and restart. A fresh build plus verification takes about 5 to 6 minutes; a retained-build verification about 3 to 5 minutes. These correctness-fixture timings do not predict production scan cost |
+| Runtime | Fresh build with `JOBS=16`: 34s; verification: 229s right after that build and 228s with the build retained, including the `pg_catalog` run and the physical leg's stop and restart. This fresh build plus verification took about 4½ minutes; retained-build verification took about 4 minutes. These correctness-fixture timings do not predict production scan cost |
 | Teardown | Each invocation stops only a server it started. A persistent sandbox marker identifies retained artifacts, not startup ownership. The `verify` stage stops and restarts its own server once, for the physical leg. A pre-existing running server is refused and left running, including on an early error. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup. The mid-run leg resets `zero_damaged_pages` with `ALTER SYSTEM RESET` and a reload right after its loop |
 
-**Last run:** 2026-10-24, after the second review's fixes. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, built with GCC 15.2.0 (`CFLAGS='-O2 -std=gnu99'`) on Linux 6.18.54.1-microsoft-standard-WSL2 x86_64, GNU Bash 5.3.9 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. From an absent sandbox, `prepare build` with `JOBS=16` (build 35s) and then `init verify` (verify 292s) passed all 253 assertions. A second `verify` with the build retained (15:42:16 to 15:45:21 UTC, 185s) passed all 253 again, and `cleanup` (under 1s) confirmed PID/process/socket/port teardown and deleted the sandbox including its build and results. In the retained-build verify, the zeroed block and the cached block each held 58 of 300 rows of a 6-block heap. The runner and harness blocks on this page were byte-identical to the files that ran. Earlier dated measurements, including the Darwin runs, remain historical.
+**Last run:** 2026-10-24, after the third review's fixes. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, built with GCC 15.2.0 (`CFLAGS='-O2 -std=gnu99'`) on Linux 6.18.54.1-microsoft-standard-WSL2 x86_64, GNU Bash 5.3.9 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. From an absent sandbox, `prepare build` with `JOBS=16` (build 34s) and then `init verify` (19:38:47 to 19:42:36 UTC, 229s) passed all 263 assertions. A second `verify` with the build retained (19:42:43 to 19:46:31 UTC, 228s) passed all 263 again, and `cleanup` (under 1s) confirmed PID/process/socket/port teardown and deleted the sandbox including its build and results. In both runs, the zeroed block and the cached block each held 58 of 300 rows of a 6-block heap. The runner and harness blocks on this page were byte-identical to the files that ran. Earlier dated measurements, including the Darwin runs, remain historical.
 
 Non-default behavior is intentional. The [settings table](#settings-and-query-shapes) gives the checker profiles, their defaults, mechanisms and transaction/session scope. These additional fixture changes supply specific test conditions:
 
@@ -3334,6 +3388,31 @@ hic_finish; rc=$?
 [ "$rc" = 2 ] || fail "unreadable evidence returned $rc"
 ok unreadable_evidence_incomplete
 close_case
+# List-file failures must not become an empty inventory or a harmless
+# partition-subtree gap. Read errors include a missing file and a directory
+# in place of a file; the scalar evidence test above covers neither case.
+open_case evidence_lists
+start_run hic_positive false false
+run_loop
+relation nulls_duplicates
+for list in "$HIC_OUT/relation-ids" "$HIC_OUT/partitions.raw" "$REL_DIR/index-ids" "$REL_DIR/attempt-ids"; do
+    mv "$list" "$list.saved" || fail list_fixture
+    hic_reports; rc=$?
+    [ "$rc" = 2 ] || fail "missing list $list returned $rc"
+    ok "missing_${list##*/}_incomplete"
+    mkdir "$list" || fail list_directory
+    hic_reports; rc=$?
+    [ "$rc" = 2 ] || fail "unreadable list $list returned $rc"
+    ok "unreadable_${list##*/}_incomplete"
+    rmdir "$list" && mv "$list.saved" "$list" || fail restore_list
+done
+hic_reports || fail restored_reports
+sum_is schema_success true
+rm "$HIC_OUT/partitions.raw" || fail missing_partitions
+hic_finish; rc=$?
+[ "$rc" = 2 ] || fail "missing partitions finish returned $rc"
+ok missing_partitions_finish_incomplete
+close_case
 # Quoted names with psql's :' form and a trailing colon are counted: psql
 # never substitutes inside a quoted identifier, so only ordering text is guarded.
 check_case guard_names hic_guard_names false false
@@ -3500,6 +3579,7 @@ done
 - 2026-10-24 false-negative review and fixes: index heap fetch of TIDs that reach no row, killed-tuple hints, per-transaction statistics counters and their flush point, `zero_damaged_pages`, `ignore_checksum_failure` and `old_snapshot_threshold` paths, default SQLSTATEs of warnings, syscache-based name and relfilenode lookup, lock levels of index rename and `REINDEX CONCURRENTLY`, subtransaction lock release, `REFRESH` frozen inserts and `ORDER BY` output-name matching.
 - Verification: the single published harness exercises the runner and its fixtures. The run record is under Measurement Script above and teardown is in the task log; no application cluster, raw source edit, network fetch, subagent, commit or push is part of this work.
 - 2026-10-24 second review and fixes: buffer hits versus verified reads, the relation mapper behind a 0 `relfilenode`, configuration reload between statements, warning delivery under `client_min_messages`, psql's quoted-identifier state and `quote_identifier()`, the shutdown checkpoint, and the C99 language mode that a GCC 15 build of this pin needs.
+- 2026-10-24 third review and fixes: complete evidence-list reads and checked membership/count operations in verdicts and reports; missing-file and directory-substitution regressions; `_bt_killitems()` abandoning hints after a page LSN change; and statistics-socket startup failure forcing `track_counts` off. The hint race and socket-startup explanation are source-derived, not new PostgreSQL measurement cases.
 
 ## Evidence Map
 
@@ -3531,6 +3611,7 @@ done
 | Refused damage-hiding settings | [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925), [bufpage.c#checksum-warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L161), [elog.c#default-sqlstate](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388) | Guard units, CLI refusals and the invalid-header leg |
 | Identity drift after the snapshot | [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904), [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968), [tablecmds.c#index-rename-lock](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L3305-L3312) | [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702); drift fixtures |
 | An empty inner select list avoids ORDER BY output-name capture | [parse_clause.c#SQL92-name-rule](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1865-L1930), [gram.y#empty-target-list](../../../../raw/postgres-12/src/backend/parser/gram.y#L14633-L14634) | `?column?` fixture |
+| Missing evidence cannot become a completed report | Bash reads complete evidence lists with `hic_get()` before iteration; membership tests distinguish read failure from absence, and line counts check command status | Missing-file and directory substitutions for the relation list, partition facts, index list and attempt list; `hic_finish()` propagates the missing partition-facts failure |
 | Native decoding and UTF-8/hex transport, with Bash acceptance | [jsonfuncs.c#array-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1976-L2014), [jsonfuncs.c#object-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1655-L1695), [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69), [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432) | Typed malformed-plan units, text/CSV and complete local-value round trips, four executed multiline-ordering fixtures and two unusual AM-name classifications in the published harness |
 | Damage under a cached copy reads as intact | [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L763-L793), [bufmgr.c#verify-after-read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925) | Cached-damage leg: 300 rows before the restart, 242 after |
 | A mapped catalog's file number comes from the relation mapper | [pg_class.dat#mapped-catalogs](../../../../raw/postgres-12/src/include/catalog/pg_class.dat#L24-L55), [dbsize.c#mapper-lookup](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L885-L889) | `pg_catalog` run: 63 physical catalogs pass, none with drift |
