@@ -199,7 +199,13 @@ Follow-up (2026-10-23):
 
 Review the "Runner script" section and make its code more readable and simpler.
 
-> Scope: a readability revision of the same runner. The checking contract is unchanged; its SQL differs only by one redundant join removed from the plan-decoding query.
+> Scope of that readability revision: the checking contract stayed the same; its SQL differed only by one redundant join removed from the plan-decoding query.
+
+Follow-up (2026-10-24):
+
+Fix all issues.
+
+> Scope: fix every finding from the PostgreSQL 12 review, including the runner, measurement harness and affected descriptions, and rerun the measurements. This adds complete multiline-value handling, consistent text encoding and per-invocation server ownership to the same checking contract.
 
 ## Answer
 
@@ -308,7 +314,7 @@ Non-partial status is insufficient across [access methods](../../../glossary.md#
 For each structural B-tree candidate, generate an ordering specification as follows:
 
 1. Walk key positions `1..indnkeyatts`, not all `indnatts`. Included columns do not define index order. The deparser resolves `indkey`; the Bash generator reads `indclass`, `indcollation`, and `indoption` at their corresponding zero-based vector positions. [pg_index.h#key-metadata](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L32-L57) [pathkeys.c#INCLUDE-exclusion](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L487-L492) [ruleutils.c#index-keys](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1304-L1350)
-2. Obtain each column or [expression](../../../glossary.md#expression-index) with `pg_get_indexdef(index_oid, position, false)`. On this pin the positive-position form requests only the variable/expression and suppresses index decorations. It also wraps any key that is not a bare function call in parentheses. Do not split `pg_get_expr(indexprs, ...)` at commas or paste a full `CREATE INDEX` key specification into `ORDER BY`. Expressions themselves can contain commas, and an opclass name is not an `ORDER BY` suffix. [ruleutils.c#column-deparse](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1085-L1131) [ruleutils.c#expression-and-decoration](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1331-L1399)
+2. Obtain each column or [expression](../../../glossary.md#expression-index) with `pg_get_indexdef(index_oid, position, false)`. On this pin the positive-position form requests only the variable/expression and suppresses index decorations. A simple column is printed as an identifier, quoted when needed; an expression key receives parentheses unless it is a bare function call. Do not split `pg_get_expr(indexprs, ...)` at commas or paste a full `CREATE INDEX` key specification into `ORDER BY`. Expressions themselves can contain commas, and an opclass name is not an `ORDER BY` suffix. [ruleutils.c#column-deparse](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1085-L1131) [ruleutils.c#expression-and-decoration](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1331-L1399)
 
    Wrap each deparsed key in another pair of parentheses, except a key that deparses to a bare numeric literal, such as an index on `(2)`. Parentheses do not protect such a key. With the default `operator_precedence_warning = off`, the grammar discards redundant parentheses, and a SELECT's `ORDER BY` follows SQL92 rules: a bare integer constant names an output column by position, and any other bare constant is an error. `pg_get_indexdef()` prints a non-negative `integer` constant, and a `numeric` constant with a decimal point, without a type label. The Bash generator therefore emits such a key as `CAST(<key> AS <its type>)`. The parser returns a same-type cast of a constant as the constant itself, so the sort key still equals the index expression. [ruleutils.c#get_const_expr-bare-numbers](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L9554-L9585) [gram.y#parenthesized-expression](../../../../raw/postgres-12/src/backend/parser/gram.y#L13464-L13497) [guc.c#operator_precedence_warning](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1806-L1814) [analyze.c#SQL92-order-by](../../../../raw/postgres-12/src/backend/parser/analyze.c#L1252-L1256) [parse_clause.c#integer-constant](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1931-L1966) [parse_coerce.c#same-type-no-op](../../../../raw/postgres-12/src/backend/parser/parse_coerce.c#L156-L169)
 3. Append the exact indexed [collation](../../../glossary.md#collation) when `indcollation` is nonzero. Qualify its namespace and quote identifiers. Generate and execute under the same controlled `search_path` so deparsed expression names resolve consistently. [ruleutils.c#index-collation](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1372-L1381) [pathkeys.c#sort-identity](../../../../raw/postgres-12/src/backend/optimizer/path/pathkeys.c#L512-L522)
@@ -575,6 +581,15 @@ The transport reads until that unique marker, preserving stdout and the request'
 
 SQL's `convert_to(...,'UTF8')` produces encoded bytes and `encode(...,'hex')` serializes them. Empty fields stay explicit, so tabs, pipes, quotes, backslashes, newlines and non-ASCII names cannot become field delimiters. JSON decoding emits types and child shapes as well as values; it does not disguise malformed required fields as absent ones. [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432) [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69)
 
+The [runner](#runner-script) carries arbitrary text through four steps:
+
+1. SQL returns a hex-encoded catalog field. Access-method names and server-quoted collation names use this same transport.
+2. Bash decodes the field into a complete value.
+3. Local evidence files retain the complete value, including embedded and trailing newlines.
+4. Bash reloads the complete value and writes the generated query file.
+
+This matters even for ordinary expression indexes: `pg_get_indexdef(..., false)` retains indentation, and deparsing `CASE` inserts newlines. Quoted identifiers also preserve embedded newlines. The runner therefore never reads generated ordering text as a single line. [ruleutils.c#index-pretty-flags](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1117-L1131) [ruleutils.c#CASE-newlines](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L7741-L7755) [ruleutils.c#CASE-expression](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L8309-L8315) [ruleutils.c#quoted-identifier-bytes](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10703-L10716)
+
 Bash dollar-quotes every arbitrary SQL value it sends, choosing a delimiter absent from that value. Both lexers preserve dollar-quoted content without interpolation. The runner never passes catalog text to `eval`; its only `eval` calls open and close the numbered file descriptors of its psql sessions. [syntax.sgml#dollar-quoting](../../../../raw/postgres-12/doc/src/sgml/syntax.sgml#L563-L621) [psqlscan.l#dollar-quotes](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L551-L588)
 
 Deparsed expressions require an additional guard. Outside quotes psql substitutes `:name`, `:'name'` and `:"name"`; it defines variables such as `ERROR` itself. The deparser can print an array slice as `a[1:"ERROR"]`, which psql would rewrite. The runner conservatively refuses count text with a colon not preceded by another colon and followed by a quote or brace. It records an execution error without sending that count. A similar sequence inside a literal is refused too; that conservatism remains a coverage limitation. Typecasts `::` are lexed separately. [psqlscan.l#substitution](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L708-L762) [psqlscan.l#typecast](../../../../raw/postgres-12/src/fe_utils/psqlscan.l#L301) [ruleutils.c#printSubscripts](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10614-L10637)
@@ -671,7 +686,7 @@ The acceptance gate is that all positive fixtures produce a count only from vali
 
 ### Measured coverage and remaining test gaps
 
-The current Bash-owned implementation passed **132 assertions** in the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
+The current Bash-owned implementation passed **160 assertions** in the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
 
 | Exercised case | Result |
 |---|---|
@@ -689,6 +704,10 @@ The current Bash-owned implementation passed **132 assertions** in the published
 | Disconnect and output failure | Terminated backend ends the next request as incomplete; an unusable report filename fails reporting |
 | Client/program boundary | CLI exits 0, 1, 2 and 64; no attestation refuses before connecting; seven reports emitted for a completed positive run |
 | Text transport | UTF-8, quotes, pipes, tabs, newlines and backslashes round-trip; CSV quote escaping matches expected bytes |
+| Multiline orderings, ordinary restricted reader | Four targets pass through four actual indexes: a `CASE` expression, a newline-containing column name, a newline-containing collation name and a newline-containing expression literal; each baseline is 4 |
+| Unusual index-AM names | Two custom AM identities using the stock hash handler have pipe/newline names; both remain explicit `unsupported_index_am` candidates and the table is NO_ELIGIBLE_INDEX |
+| Local evidence values | Empty values, embedded/trailing newlines and a literal sentinel character survive both single-value and multi-value save/load paths |
+| Harness startup ownership | Child `prepare`, `build`, `init`, `cleanup` and unknown-stage invocations refuse or fail without stopping the parent invocation's running server; it still accepts queries |
 | Installation contract | Completed sourced cases confirm exactly two temporary tables and no temporary functions/views |
 
 The concurrent fixture's derived arithmetic is `100 - 6 + 1 = 95`, while both accepted checker scans retain the earlier 100-row population. Repeatable read retains its snapshot, and ordinary index fetching checks heap visibility against it. [snapmgr.c#retained-snapshot](../../../../raw/postgres-12/src/backend/utils/time/snapmgr.c#L339-L370) [indexam.c#visible-fetch](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L625-L632)
@@ -733,6 +752,7 @@ HIC_GUARD="(^|[^:]):['\"{]"
 HIC_FIRST_USER_OID=16384            # FirstNormalObjectId
 HIC_CATALOG_NS=11                   # pg_catalog
 HIC_HEAP_HEX=x68656170              # "heap" in the hex transport
+HIC_BTREE_HEX=x6274726565           # "btree" in the hex transport
 HIC_COUNT_HEX=x6869635f636f756e74   # "hic_count" in the hex transport
 
 # ---- small helpers -----------------------------------------------------------
@@ -746,7 +766,7 @@ hic_one() { [[ $1 =~ ^1([.]0+)?$ ]]; }
 hic_zero() { [[ $1 =~ ^0([.]0+)?$ ]]; }
 hic_user_oid() { [ "$1" -ge "$HIC_FIRST_USER_OID" ]; }
 hic_heap_am() { [ "$1" = 2 ] && [ "$2" = "$HIC_HEAP_HEX" ] && [ "$3" = t ]; }  # relam, hex amname, amtype
-hic_btree_am() { [ "$1" = 403 ] && [ "$2" = btree ] && [ "$3" = i ]; }         # relam, amname, amtype
+hic_btree_am() { [ "$1" = 403 ] && [ "$2" = "$HIC_BTREE_HEX" ] && [ "$3" = i ]; } # relam, hex amname, amtype
 
 hic_literal() {
     # hic_literal TEXT: set HIC_LITERAL to TEXT dollar-quoted with an unused tag.
@@ -786,9 +806,15 @@ hic_csv() {
     printf '%s\n' "$row" >> "$file"
 }
 
-# Local evidence is one value per file: DIR/NAME holds one line.
+# Local evidence is one complete value per file, followed by one newline.
 hic_put() { printf '%s\n' "$3" > "$1/$2"; }                    # hic_put DIR NAME VALUE
-hic_get() { HIC_VALUE=; IFS= read -r HIC_VALUE < "$1/$2"; }    # hic_get DIR NAME
+hic_get() {
+    # A sentinel protects trailing newlines from command substitution. Remove
+    # that sentinel and only the one newline hic_put appended to the value.
+    HIC_VALUE=$(cat "$1/$2" && printf '.') || return 2
+    HIC_VALUE=${HIC_VALUE%.}
+    HIC_VALUE=${HIC_VALUE%$'\n'}
+}
 hic_save() {
     # hic_save DIR VAR...: write each variable VAR to DIR/VAR.
     local _dir=$1 _var
@@ -802,8 +828,8 @@ hic_load() {
     local _dir=$1 _var
     shift
     for _var in "$@"; do
-        printf -v "$_var" '%s' ''
-        IFS= read -r "$_var" < "$_dir/$_var" || :
+        hic_get "$_dir" "$_var" || return 2
+        printf -v "$_var" '%s' "$HIC_VALUE"
     done
 }
 hic_add_line() { grep -F -x -q "$2" "$1" || printf '%s\n' "$2" >> "$1"; }  # add LINE to a set FILE
@@ -961,9 +987,10 @@ hic_parse_error() {
 # ---- setup: temporary tables, checking transaction, planner profiles ---------
 
 hic_profiles() {
-    # hic_profiles heap|index|control: heap allows only sequential scans;
-    # index allows only ordinary index scans, and its second variant also
-    # disables sorting; control turns every scan method and sorting back on.
+    # hic_profiles heap|index|control: discourage competing scan methods;
+    # the index profile's second variant also penalizes sorting. Index-only
+    # paths are disabled; executed-plan validation enforces the scan contract.
+    # control turns every scan method and sorting back on.
     local seq=on idx=on sort=on only=on bitmap=on
     case $1 in
         heap) idx=off only=off bitmap=off ;;
@@ -1155,7 +1182,7 @@ hic_indexes() {
  'x'||encode(convert_to(n.nspname::text,'UTF8'),'hex'),
  'x'||encode(convert_to(c.relname::text,'UTF8'),'hex'),
  'x'||encode(convert_to(quote_ident(c.relname),'UTF8'),'hex'),
- c.relkind, c.relam, am.amname, am.amtype, i.indpred IS NOT NULL,
+ c.relkind, c.relam, 'x'||encode(convert_to(am.amname::text,'UTF8'),'hex'), am.amtype, i.indpred IS NOT NULL,
  i.indisvalid,i.indisready,i.indislive,i.indcheckxmin,i.xmin::text,i.indnkeyatts,
  'x'||encode(convert_to(COALESCE(i.indpred::text,''),'UTF8'),'hex')
 FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid
@@ -1271,9 +1298,10 @@ WHERE i.indexrelid=$iid ORDER BY k.n;" || return
         if [ "$coll" != 0 ]; then
             [ "$coll_ns_hex" != x ] && [ "$coll_name_hex" != x ] || why=ordering_not_represented_by_generator
             # Quote identifiers with the server, not with shell substitutions.
-            hic_sql "$HIC_S" "SELECT /* wiki_hic12_quote_collation */ quote_ident(n.nspname)||'.'||quote_ident(c.collname)
+            hic_sql "$HIC_S" "SELECT /* wiki_hic12_quote_collation */ 'x'||encode(convert_to(quote_ident(n.nspname)||'.'||quote_ident(c.collname),'UTF8'),'hex')
 FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE c.oid=$coll;" || return
-            part="$part COLLATE $HIC_VALUE"
+            hic_decode "$HIC_VALUE" || return 1
+            part="$part COLLATE $HIC_TEXT"
         fi
         hic_decode "$op_name_hex" || return 1; opname=$HIC_TEXT
         hic_decode "$op_schema_hex" || return 1; opschema=$HIC_TEXT
@@ -1439,7 +1467,7 @@ hic_prepare_attempt() {
     source="ONLY $HIC_TEXT"
     if [ "$HIC_PHASE" = index ]; then
         # An inner ORDER BY in the index's key order invites a full index scan.
-        hic_get "$HIC_OUT/indexes/$HIC_INTENDED" order
+        hic_get "$HIC_OUT/indexes/$HIC_INTENDED" order || return 2
         source="(SELECT /* wiki_hic12_full_order */ 1 FROM $source ORDER BY $HIC_VALUE) AS ordered_rows"
     fi
     printf '%s\n' "EXPLAIN /* wiki_hic12_executed_count */ (ANALYZE, VERBOSE, BUFFERS, SETTINGS, TIMING OFF, SUMMARY ON, FORMAT JSON)
@@ -1938,8 +1966,8 @@ bash .wiki-runtime/hic12-measure.sh
 |---|---|
 | Purpose | Reproduce the current [measured coverage](#measured-coverage-and-remaining-test-gaps), including Bash validation/evaluation, database fixtures and client failures |
 | Default stages | `prepare build init verify cleanup`; stages are selectable, e.g. `bash .wiki-runtime/hic12-measure.sh verify` for a retained build |
-| `prepare` | Confirm exact pin and unchanged tracked raw source; leave untracked Finder metadata untouched; materialize runner/fixtures/tests under the owned sandbox |
-| `build` | Prepare and stop an owned running server if necessary; configure/build/install out of tree, reusing the build if present |
+| `prepare` | Confirm exact pin and unchanged tracked raw source; refuse a running server this invocation did not start; materialize runner/fixtures/tests under the owned sandbox |
+| `build` | Prepare and stop a server started by this invocation if necessary; configure/build/install out of tree, reusing the build if present |
 | `init` | Initialize UTF-8/C-locale disposable data if absent; start the owned socket-only server and confirm its data directory |
 | `verify` | Record platform/configuration, create a unique disposable database, and run the whole suite |
 | `cleanup` | Fast-stop the owned server, confirm PID/process/socket/port teardown, then delete the sandbox including build/results |
@@ -1947,10 +1975,10 @@ bash .wiki-runtime/hic12-measure.sh
 | Prerequisites | Bash with `/dev/tcp`, Git, POSIX utilities including `ps`, `paste`, `cmp`, `mkfifo`; GNU make, C99 compiler, Bison/Flex and Perl required by a Git-source build. No network or extra extension. ([installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97), [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318)) |
 | Build | `--without-readline --without-zlib`, private install prefix; omits optional interactive editing/compression facilities, not visibility/planning behavior ([installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)) |
 | Output | `.wiki-runtime/tmp/hic12/suite-current.log`, `platform.txt`, `platform-sql.txt`, `build-options.txt`, then `results/<unique-db>/<case>/`; `last-test-output` names the latest result directory |
-| Runtime | Last fresh build: 123s; verification: 70s from fresh data and 72s with the build retained. A single fresh build/verify run is about 3.5 minutes; a retained-build verify is about 72s. These correctness-fixture timings do not predict production scan cost |
-| Teardown | Each invocation stops its owned server on exit. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup |
+| Runtime | Fresh build: 117s; expanded verification with the build retained: 126s. A fresh build plus verification is about 4 minutes; a retained-build verification is about 2 minutes. These correctness-fixture timings do not predict production scan cost |
+| Teardown | Each invocation stops only a server it started. A persistent sandbox marker identifies retained artifacts, not startup ownership. A pre-existing running server is refused and left running, including on an early error. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup |
 
-**Last run:** 2026-10-23 America/Toronto (2026-10-24 00:07 to 00:18 UTC), after the runner's readability revision. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0, 64-bit, GNU Bash 5.3.20 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. The current published text ran in two invocations from an absent sandbox: `prepare build init verify` (build 123s, init 2s, verify 70s), then `verify cleanup` with the build retained (verify 72s, which restarted the stopped owned cluster; cleanup 1s). Both verifications passed all 132 assertions. Each verify created a new disposable database and started new checker transactions rather than reusing any earlier baseline. Cleanup stopped and removed the owned sandbox. Earlier dated implementation measurements remain historical.
+**Last run:** 2026-10-24 America/Toronto (successful verification 10:57 to 10:59 UTC), after the corrective review. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0, 64-bit, GNU Bash 5.3.20 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. The server was built out of tree from an absent sandbox (`prepare build`, build 117s). The final `verify` invocation used that build and a new disposable database, passed all 160 assertions in 126s, and stopped its server on exit. The multiline cases exercised four accepted actual indexes; both unusual AM names remained classified as unsupported. Child invocations left the parent server running. The final `cleanup` stage took 2s, confirmed PID/process/socket/port teardown and deleted the sandbox including its build and results. Earlier dated measurements remain historical.
 
 Non-default behavior is intentional. The [settings table](#settings-and-query-shapes) gives the checker profiles, their defaults, mechanisms and transaction/session scope. These additional fixture changes supply specific test conditions:
 
@@ -1964,6 +1992,9 @@ Non-default behavior is intentional. The [settings table](#settings-and-query-sh
 | Heap fillfactor | Default 100 → 50 on concurrent/horizon tables; CREATE TABLE storage parameter | Reserves same-page space; HOT/non-HOT writer assertions and late-index horizon fixture depend on this ([rel.h#heap-fillfactor](../../../../raw/postgres-12/src/include/utils/rel.h#L278-L279), [hio.c#reserved-space](../../../../raw/postgres-12/src/backend/access/heap/hio.c#L348-L350), [heapam.c#HOT-decision](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L3591-L3601)) |
 | Old horizon and late index build | New indexes normally start indcheckxmin false → retained old transaction and broken-HOT-chain nonconcurrent build | Sets the flag; planner skips until catalog xmin precedes TransactionXmin. New checking transaction passes after holder ends; flag need not clear. old_snapshot_threshold stays default -1 ([index.c#initial-flag](../../../../raw/postgres-12/src/backend/catalog/index.c#L609-L615), [index.c#broken-chain-gate](../../../../raw/postgres-12/src/backend/catalog/index.c#L2921-L2971), [plancat.c#horizon](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L222-L234)) |
 | Forced RLS | New relation flags false → ENABLE/FORCE policy and owner role | row_security off errors for owner; superuser bypass passes ([heap.c#security-flags](../../../../raw/postgres-12/src/backend/catalog/heap.c#L916-L919), [rls.c#forced-owner](../../../../raw/postgres-12/src/backend/utils/misc/rls.c#L80-L132)) |
+| Multiline key text | Ordinary column names/literals → explicitly quoted newline names and a literal containing newlines; a stock `CASE` expression also produces newlines without a special setting | Quoting preserves identifier bytes, and `CASE` deparsing adds indentation even with `pretty=false`; these fixtures exercise complete local-value reads and generated-query execution ([ruleutils.c#identifier-bytes](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10703-L10716), [ruleutils.c#pretty-flags](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1117-L1131), [ruleutils.c#CASE-formatting](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L8309-L8315)) |
+| Collation name | Stock `C` collation → a copy with a newline in its name | `CREATE COLLATION ... FROM` copies the source locale/provider properties; this changes the name, not the comparison semantics, and exercises encoded server-quoted collation transport ([collationcmds.c#from-properties](../../../../raw/postgres-12/src/backend/commands/collationcmds.c#L119-L145)) |
+| Custom index-AM identities | Built-in hash OID 405/name `hash` → two new AM OIDs with pipe/newline names, stock `hashhandler` and integer hash support | `CREATE ACCESS METHOD` stores the supplied name and handler under a new OID. The checker's explicit built-in identity policy classifies both as unsupported before ordering generation; the fixture tests inventory framing, not broader AM completeness ([pg_am.dat#hash-identity](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L21-L23), [amcmds.c#new-name-and-handler](../../../../raw/postgres-12/src/backend/commands/amcmds.c#L74-L95)) |
 | Lock/error/output fixtures | No blocker/truncation/termination/output obstacle by default → explicit second-session lock, cut JSON, terminated backend, report filename directory | Exercises 55P03, JSON parse failure, connection loss and local I/O failure; no default-leg measurement is claimed ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095), [json.c#parse-error](../../../../raw/postgres-12/src/backend/utils/adt/json.c#L1126-L1137), [signalfuncs.c#termination](../../../../raw/postgres-12/src/backend/storage/ipc/signalfuncs.c#L128-L137)) |
 
 All CREATE/ALTER/INSERT/UPDATE/DELETE/DROP statements in this harness are **disposable fixtures**, confined to its owned cluster and test databases. Plan and evaluator units are synthetic evidence, not damaged-index experiments. The driver and its expected-error probes use only Bash and SQL, with the same `\echo` synchronization as the checker.
@@ -1981,6 +2012,7 @@ socket="$work/socket"
 page="$root/wiki/v12/questions/indexing/sql-heap-index-visible-count-checker-plan.md"
 pin=45b88269a353ad93744772791feb6d01bc7e1e42
 jobs=${JOBS:-2}
+started_here=false
 case "$root" in *[!a-zA-Z0-9_./-]*) printf '%s\n' 'Use a short repository path without whitespace or shell metacharacters.' >&2; exit 1;; esac
 case "$jobs" in ''|*[!0-9]*|0) printf '%s\n' 'JOBS must be a positive integer.' >&2; exit 1;; esac
 [ "${#socket}" -le 80 ]
@@ -1994,6 +2026,12 @@ owned() {
     [ -f "$work/.hic12-owned" ] || return 1
     IFS= read -r owner < "$work/.hic12-owned"
     [ "$owner" = postgres-llm-wiki-hic12-v1 ]
+}
+refuse_unowned_server() {
+    if [ -f "$data/postmaster.pid" ] && [ "$started_here" != true ]; then
+        printf 'Refusing running server not started by this invocation: %s\n' "$data" >&2
+        return 1
+    fi
 }
 same_server() {
     local actual
@@ -2021,9 +2059,11 @@ port_free() {
 }
 stop_owned() {
     owned || return 1
+    refuse_unowned_server || return 1
     if [ -f "$data/postmaster.pid" ]; then
         same_server || return 1
         "$bin/pg_ctl" -D "$data" -m fast -w stop
+        started_here=false
     fi
     [ ! -e "$data/postmaster.pid" ]
     ps -A -o pid= -o args= > "$work/processes.txt"
@@ -2035,7 +2075,7 @@ stop_owned() {
 on_exit() {
     local rc=$?
     trap - EXIT
-    if owned && [ -f "$data/postmaster.pid" ]; then
+    if [ "$started_here" = true ]; then
         stop_owned || rc=1
     fi
     exit "$rc"
@@ -2049,6 +2089,7 @@ prepare() {
     ls -ld "$root/.wiki-runtime/tmp"
     if [ -e "$work" ]; then
         owned
+        refuse_unowned_server
     else
         mkdir -m 700 "$work"
         printf '%s\n' postgres-llm-wiki-hic12-v1 > "$work/.hic12-owned"
@@ -2078,6 +2119,9 @@ init() {
     fi
     if [ ! -f "$data/postmaster.pid" ]; then
         port_free
+        # Preflight excluded any pre-existing server. Own even a partially
+        # successful startup so the EXIT trap can clean it up on failure.
+        started_here=true
         "$bin/pg_ctl" -D "$data" -l "$work/postgres.log" \
             -o "-p 55447 -c listen_addresses='' -c unix_socket_directories='$socket' -c unix_socket_permissions=0700" \
             -w start
@@ -2129,6 +2173,10 @@ materialize() {
     IFS= read -r first_line < "$work/hic12-check.sh"
     [ "$first_line" = '# hic12-check.sh: self-contained Bash checker for PostgreSQL 12.2' ]
     bash -n "$work/hic12-check.sh"
+    sed -n '/^## Measurement Script$/,/^## Context Reviewed$/p' "$page" |
+        sed -n "/^${fence}bash$/,/^${fence}$/p" |
+        sed '1d;$d' > "$work/hic12-measure.sh"
+    bash -n "$work/hic12-measure.sh"
     cat > "$work/fixtures.sql" <<'HIC_FIXTURES_SQL'
 SET /* wiki_hic12_fixture_timeout */ statement_timeout = '60s';
 SET /* wiki_hic12_fixture_lock_timeout */ lock_timeout = '2s';
@@ -2142,6 +2190,52 @@ CREATE /* wiki_hic12_namespace_schema */ SCHEMA hic_namespace_denied;
 CREATE /* wiki_hic12_concurrent_schema */ SCHEMA hic_concurrent;
 CREATE /* wiki_hic12_gate_schema */ SCHEMA hic_gate;
 CREATE /* wiki_hic12_empty_schema */ SCHEMA hic_empty_scope;
+CREATE /* wiki_hic12_multiline_schema */ SCHEMA hic_multiline;
+CREATE /* wiki_hic12_am_names_schema */ SCHEMA hic_am_names;
+
+-- Disposable regressions: deparser formatting and quoted text must survive
+-- catalog transport, local storage, query assembly and actual index execution.
+CREATE /* wiki_hic12_case_table */ TABLE hic_multiline.case_key(k integer);
+INSERT /* wiki_hic12_case_rows */ INTO hic_multiline.case_key VALUES (1), (2), (NULL), (-1);
+CREATE /* wiki_hic12_case_index */ INDEX case_idx ON hic_multiline.case_key
+((CASE WHEN k < 2 THEN k ELSE -k END));
+CREATE /* wiki_hic12_newline_column */ TABLE hic_multiline.column_key("key
+name" integer);
+INSERT /* wiki_hic12_newline_column_rows */ INTO hic_multiline.column_key VALUES (1), (2), (NULL), (-1);
+CREATE /* wiki_hic12_newline_column_index */ INDEX column_idx ON hic_multiline.column_key("key
+name");
+CREATE /* wiki_hic12_newline_collation */ COLLATION hic_multiline."C
+copy" FROM pg_catalog."C";
+CREATE /* wiki_hic12_newline_collation_table */ TABLE hic_multiline.collation_key(k text);
+INSERT /* wiki_hic12_newline_collation_rows */ INTO hic_multiline.collation_key VALUES ('a'), ('z'), (NULL), ('A');
+CREATE /* wiki_hic12_newline_collation_index */ INDEX collation_idx ON hic_multiline.collation_key(k COLLATE hic_multiline."C
+copy");
+CREATE /* wiki_hic12_newline_literal_table */ TABLE hic_multiline.literal_key(k text);
+INSERT /* wiki_hic12_newline_literal_rows */ INTO hic_multiline.literal_key VALUES ('a'), ('z'), (NULL), ('A');
+CREATE /* wiki_hic12_newline_literal_index */ INDEX literal_idx ON hic_multiline.literal_key
+((coalesce(k, 'line
+end
+')));
+GRANT /* wiki_hic12_multiline_usage */ USAGE ON SCHEMA hic_multiline TO hic_reader;
+GRANT /* wiki_hic12_multiline_select */ SELECT ON ALL TABLES IN SCHEMA hic_multiline TO hic_reader;
+
+-- These custom index AM identities reuse only the stock hash handler and
+-- integer equality/hash function. The checker must classify them as unsupported.
+CREATE /* wiki_hic12_pipe_am */ ACCESS METHOD "pipe|am" TYPE INDEX HANDLER pg_catalog.hashhandler;
+CREATE /* wiki_hic12_pipe_opclass */ OPERATOR CLASS hic_am_names.pipe_ops
+DEFAULT FOR TYPE integer USING "pipe|am" AS
+OPERATOR 1 = (integer,integer), FUNCTION 1 pg_catalog.hashint4(integer);
+CREATE /* wiki_hic12_newline_am */ ACCESS METHOD "line
+am" TYPE INDEX HANDLER pg_catalog.hashhandler;
+CREATE /* wiki_hic12_newline_opclass */ OPERATOR CLASS hic_am_names.newline_ops
+DEFAULT FOR TYPE integer USING "line
+am" AS
+OPERATOR 1 = (integer,integer), FUNCTION 1 pg_catalog.hashint4(integer);
+CREATE /* wiki_hic12_am_name_table */ TABLE hic_am_names.t(k integer);
+INSERT /* wiki_hic12_am_name_rows */ INTO hic_am_names.t VALUES (1), (NULL);
+CREATE /* wiki_hic12_pipe_am_index */ INDEX pipe_idx ON hic_am_names.t USING "pipe|am"(k);
+CREATE /* wiki_hic12_newline_am_index */ INDEX newline_idx ON hic_am_names.t USING "line
+am"(k);
 
 CREATE /* wiki_hic12_empty_table */ TABLE hic_positive.empty_table(id integer);
 CREATE /* wiki_hic12_empty_index */ INDEX empty_idx ON hic_positive.empty_table(id);
@@ -2491,6 +2585,17 @@ hic_sql main "SELECT /* wiki_hic12_reader_exists */ count(*) FROM pg_catalog.pg_
 hic_request main "$work/fixtures.sql" || fail fixtures
 [ "$HIC_FAILED" = false ] || fail "fixtures: $(cat "$(sfile stderr.last)")"
 ok fixtures_created
+# A child invocation must not adopt or stop this invocation's running server,
+# even when it fails before prepare or exits through the EXIT trap.
+server_pid=$(head -n 1 "$work/data/postmaster.pid")
+for stage in prepare build init cleanup unknown_stage; do
+    bash "$work/hic12-measure.sh" "$stage" > "$out/ownership-$stage.log" 2>&1
+    rc=$?
+    [ "$rc" = 1 ] || fail "pre-existing server: $stage returned $rc"
+    [ "$(head -n 1 "$work/data/postmaster.pid")" = "$server_pid" ] || fail "$stage stopped pre-existing server"
+    ok "preexisting_server_${stage}_preserved"
+done
+expect server_still_accepts_queries 'SELECT /* wiki_hic12_server_survived */ true;'
 expect_error positional_order_probe 42P10 'SELECT /* wiki_hic12_position_probe */ count(*) FROM (SELECT /* wiki_hic12_position_inner */ 1 FROM ONLY hic_negative.constant_literals ORDER BY ((2)) USING OPERATOR(pg_catalog.<) NULLS LAST) probe;'
 expect_error decimal_order_probe 42601 'SELECT /* wiki_hic12_decimal_probe */ count(*) FROM (SELECT /* wiki_hic12_decimal_inner */ 1 FROM ONLY hic_negative.constant_literals ORDER BY ((1.5)) USING OPERATOR(pg_catalog.<) NULLS LAST) probe;'
 expect cast_order_probe 'SELECT /* wiki_hic12_cast_probe */ count(*)=2 FROM (SELECT /* wiki_hic12_cast_inner */ 1 FROM ONLY hic_negative.constant_literals ORDER BY CAST((2) AS integer) USING OPERATOR(pg_catalog.<) NULLS LAST) probe;'
@@ -2509,6 +2614,29 @@ cli cli_unattested 64 HIC_SCHEMA=hic_positive
 [ ! -e "$out/cli_unattested" ] || fail unexpected_output
 ok no_connect_before_attestation
 cli cli_bad_option 64 HIC_SCHEMA=hic_positive HIC_DDL_STABLE=yes HIC_EXHAUSTIVE=maybe
+check_case multiline hic_multiline false false hic_reader
+sum_is physical_relations 4
+sum_is passed 4
+sum_is checked_indexes 4
+sum_is attempt_errors 0
+for name in case_key column_key collation_key literal_key; do
+    relation "$name"; field_is status PASS; field_is heap 4
+done
+close_case
+check_case am_names hic_am_names false false
+sum_is physical_relations 1
+sum_is no_eligible_index 1
+sum_is error 0
+relation t
+for iid in $(cat "$REL_DIR/index-ids"); do
+    hic_read_index < "$HIC_OUT/indexes/$iid/facts" || fail am_facts
+    [ -z "$i_extra" ] && hic_decode "$i_amname" || fail am_name_decode
+    case $HIC_TEXT in 'pipe|am'|$'line\nam') ;; *) fail "unexpected AM name $HIC_TEXT";; esac
+    hic_get "$HIC_OUT/indexes/$iid" reason
+    [ "$HIC_VALUE" = unsupported_index_am ] || fail "AM reason $HIC_VALUE"
+    ok am_name_preserved_and_classified
+done
+close_case
 check_case positive hic_positive false false hic_reader
 sum_is physical_relations 13
 sum_is passed 13
@@ -2721,6 +2849,18 @@ hic_csv "$HIC_OUT/escaped.csv" "$HIC_TEXT" 'last' || fail csv
 printf '%s\n' $'"line\npipe|tab\tquote""slash\\é","last"' > "$HIC_OUT/expected.csv"
 cmp "$HIC_OUT/escaped.csv" "$HIC_OUT/expected.csv" || fail csv_roundtrip
 ok csv_roundtrip
+# Local evidence must also preserve empty values and trailing newlines.
+for local_value in '' $'first\nsecond\n\n' '.'; do
+    hic_put "$HIC_OUT" local_value "$local_value" || fail local_put
+    hic_get "$HIC_OUT" local_value || fail local_get
+    [ "$HIC_VALUE" = "$local_value" ] || fail local_roundtrip
+    loaded=$local_value
+    hic_save "$HIC_OUT" loaded || fail local_save
+    loaded=discarded
+    hic_load "$HIC_OUT" loaded || fail local_load
+    [ "$loaded" = "$local_value" ] || fail saved_roundtrip
+    ok local_value_roundtrip
+done
 close_case
 
 printf '%s\n' "$out" > "$work/last-test-output"
@@ -2777,8 +2917,7 @@ done
 | Recovery only while the attempt savepoint exists | [xact.c#savepoint-states](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L4140-L4308) | [rollback_to.sgml#savepoint](../../../../raw/postgres-12/doc/src/sgml/ref/rollback_to.sgml#L29-L55); measured capture retry and truncated-plan retry |
 | Lost session and closed input end the run without a commit | [common.c#CheckConnection](../../../../raw/postgres-12/src/bin/psql/common.c#L386-L397), [postgres.c#client-EOF](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L4433-L4455), [postinit.c#ShutdownPostgres](../../../../raw/postgres-12/src/backend/utils/init/postinit.c#L1189-L1193) | [psql-ref.sgml#exit-status](../../../../raw/postgres-12/doc/src/sgml/ref/psql-ref.sgml#L635-L643); measured `pg_terminate_backend()` case |
 | Duplicate-sensitive visible-identity comparison | [heaptuple.c](../../../../raw/postgres-12/src/backend/access/common/heaptuple.c#L636-L640), [heapam_handler.c](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L148-L167) | [select.sgml#EXCEPT-ALL](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L1281-L1294), [ddl.sgml#ctid](../../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L1198-L1205) |
-
-| Native decoding and UTF-8/hex transport, with Bash acceptance | [jsonfuncs.c#array-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1976-L2014), [jsonfuncs.c#object-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1655-L1695), [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69), [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432) | Typed malformed-plan units and text/CSV round trips in the published harness |
+| Native decoding and UTF-8/hex transport, with Bash acceptance | [jsonfuncs.c#array-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1976-L2014), [jsonfuncs.c#object-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1655-L1695), [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69), [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432) | Typed malformed-plan units, text/CSV and complete local-value round trips, four executed multiline-ordering fixtures and two unusual AM-name classifications in the published harness |
 
 
 ## Open Questions
@@ -2916,6 +3055,12 @@ done
 - [jsonfuncs.c#jsonb-expansion](../../../../raw/postgres-12/src/backend/utils/adt/jsonfuncs.c#L1655-L1695)
 - [encode.c#binary_encode](../../../../raw/postgres-12/src/backend/utils/adt/encode.c#L36-L69)
 - [mbutils.c#pg_convert_to](../../../../raw/postgres-12/src/backend/utils/mb/mbutils.c#L414-L432)
+- [ruleutils.c#index-pretty-flags](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L1117-L1131)
+- [ruleutils.c#CASE-newlines](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L7741-L7755)
+- [ruleutils.c#CASE-expression](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L8309-L8315)
+- [ruleutils.c#quoted-identifier-bytes](../../../../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L10703-L10716)
+- [collationcmds.c#from-properties](../../../../raw/postgres-12/src/backend/commands/collationcmds.c#L119-L145)
+- [amcmds.c#new-name-and-handler](../../../../raw/postgres-12/src/backend/commands/amcmds.c#L74-L95)
 
 
 ## Navigation
