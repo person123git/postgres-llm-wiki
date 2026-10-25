@@ -1050,3 +1050,13 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Measurement re-run on Darwin 27.0.0 arm64, Apple clang 21.0.0: `build verify interrupt` passed all 39 checks plus both startup-interruption tests (build 38 s, verify 6 s, interrupt 1 s); last-run record updated. `cleanup` stopped the clusters, confirmed teardown (no PID file, no matching process) and deleted `.wiki-runtime/tmp/amr12/`; the extracted runner was removed.
 - Glossary reviewed; no change needed.
 - Lint: 61 errors / 2 warnings, unchanged baseline (v19 pages and absent v19 pin; warnings are untracked `.DS_Store` in raw/postgres-12 and raw/postgres-14). None on this page.
+
+## [2026-10-25] file v12 | data checksums and amcheck detection coverage
+
+- Filed `v12/questions/storage-and-vacuum/checksums-and-amcheck-detection-coverage.md` (source-only, `verified_by_agent: not yet`). Category: storage-and-vacuum, because most citations are buffer/page/storage and WAL code rather than amcheck alone.
+- Premise conflict stated in the Answer: `pg_amcheck` and `pg_verifybackup` do not exist at the v12 pin, and amcheck has no heap checker.
+- Prompt hygiene: pasted prompt restated verbatim; no corrections were needed.
+- Glossary reviewed (amcheck, data checksums, torn page, full-page image, WAL, base backup, TOAST, Bloom filter, hot standby, shared_buffers): existing entries cover the page; no glossary change.
+- Contradiction check: compared the page with itself, the linked v12 amcheck page's checksum and amcheck limit tables, and the cited source. 0 found. One uncited replication sentence was removed before filing rather than kept as a claim.
+- No measurement run; no service started; nothing to tear down. Updated `wiki/index.md` and `wiki/v12/index.md`.
+- Lint: 61 errors, 2 warnings, unchanged from the baseline (all in three v19 pages plus the absent v19 pin); none on the new page or the edited indexes. The raw/postgres-12 warning is untracked `.DS_Store` files only.
