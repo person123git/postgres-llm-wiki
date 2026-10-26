@@ -30,6 +30,8 @@ verified_by_agent: not yet
   - [Checking a non-temporary physical table](#checking-a-non-temporary-physical-table)
   - [Build boundary and tests](#build-boundary-and-tests)
   - [Causal summary](#causal-summary)
+  - [Follow-up: why vanished heap rows go unreported](#follow-up-why-vanished-heap-rows-go-unreported)
+  - [Follow-up: checking for dangling index entries](#follow-up-checking-for-dangling-index-entries)
 - [Measurement Script](#measurement-script)
   - [Results and last run](#results-and-last-run)
   - [Usage](#usage)
@@ -45,6 +47,12 @@ verified_by_agent: not yet
 
 Follow AGENTS.md. In PostgreSQL 12, explain how amcheck works for indexes and tables. Also explain in detail what issues it finds, what its limitations are, and how having data checksums enabled or not reduces amcheck's limitations.
 
+Follow-up (2026-10-26):
+
+Using amcheck, are index entries whose heap rows vanished not reported? Why not? Is there a way to perform this check?
+
+> Prompt note: corrected from "using amcheck index entries whose heap rows vanished are not reported? why not? is there a way to perform this check?" Corrections: capitalized each sentence, added the comma after the introductory phrase, and turned the first statement-with-question-mark into a question.
+
 ## Answer
 
 ### Short answer
@@ -59,7 +67,7 @@ It finds three kinds of problems:
 - **Index entries that the operator class no longer orders the same way**, for example after an operating-system collation change. [amcheck.sgml#collation](../../../../raw/postgres-12/doc/src/sgml/amcheck.sgml#L222-L250)
 - **[Heap](../../../glossary.md#heap) rows that lack a matching index entry**, including rows whose indexed bytes were damaged, and some HOT-chain and TOAST damage met along the way. [verify_nbtree.c#callback-rationale](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1837-L1891)
 
-Its main limits follow from that design. It reads only the index pages its tree walk reaches, and only the heap rows its scan returns. It never asks the reverse question, whether every index entry still has a heap row. Its row test is probabilistic. It sees pages as they sit in [shared buffers](../../../glossary.md#shared_buffers), and it stops at the first error. [verify_nbtree.c#root-to-leaf-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L521-L551) [bloomfilter.c#membership](../../../../raw/postgres-12/src/backend/lib/bloomfilter.c#L6-L10) [amcheck.sgml#shared-buffers](../../../../raw/postgres-12/doc/src/sgml/amcheck.sgml#L280-L293)
+Its main limits follow from that design. It reads only the index pages its tree walk reaches, and only the heap rows its scan returns. It never asks the reverse question, whether every index entry still has a heap row; see [why](#follow-up-why-vanished-heap-rows-go-unreported) and [a `pageinspect` check that does](#follow-up-checking-for-dangling-index-entries). Its row test is probabilistic. It sees pages as they sit in [shared buffers](../../../glossary.md#shared_buffers), and it stops at the first error. [verify_nbtree.c#root-to-leaf-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L521-L551) [bloomfilter.c#membership](../../../../raw/postgres-12/src/backend/lib/bloomfilter.c#L6-L10) [amcheck.sgml#shared-buffers](../../../../raw/postgres-12/doc/src/sgml/amcheck.sgml#L280-L293)
 
 [Data checksums](../../../glossary.md#data-checksums) cover a different gap. They are off by default. When a cluster has them, an initialized page that amcheck causes to be **read from disk** gets a checksum comparison before amcheck sees it. A mismatch raises an error unless a superuser has turned on `ignore_checksum_failure` (the page is accepted) or `zero_damaged_pages` (the page is zeroed with only a warning); both are off by default (see [Non-default settings](#non-default-settings-and-special-cases)). Random damage can also match the 16-bit checksum by chance (see [the checksum section](#how-data-checksums-work-in-postgresql-12)). That can catch damage in bytes amcheck never interprets, such as non-indexed columns, row headers and free space. Checksums do not help with pages already in shared buffers, pages amcheck never reads, [all-zero pages](../../../glossary.md#all-zero-page), truncated files, or damage that existed in memory before an initialized page was written with a valid checksum. [initdb.c:144](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L144) [bufmgr.c#read-verify](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897-L925) [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L81-L162)
 
@@ -274,7 +282,7 @@ The docs state that no corruption error from amcheck should ever be a false posi
 |---|---|---|
 | No dedicated table checker | Only `verify_nbtree.c` is built; tables are rejected. [Makefile#amcheck](../../../../raw/postgres-12/contrib/amcheck/Makefile#L3-L4) [indexam.c#index_open](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L126-L140) | No comprehensive validation of heap row headers, [line pointers](../../../glossary.md#line-pointer) or arbitrary column values. The heap/TOAST checks described above can still find errors incidentally. |
 | B-tree only | The same target test rejects GiST, GIN, hash, BRIN and SP-GiST. [check_btree.sql#brin-rejection](../../../../raw/postgres-12/contrib/amcheck/sql/check_btree.sql#L49-L53) | Other index types get no check at all. |
-| One-way table comparison | The callback probes only for rows the scan returns. [verify_nbtree.c#bt_tuple_present_callback](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1892-L1926) | An index entry whose heap row vanished is not reported. Rows lost from the heap go unnoticed; see [the zeroed-segment page](amcheck-zeroed-relation-segments.md). |
+| One-way table comparison | The callback probes only for rows the scan returns. [verify_nbtree.c#bt_tuple_present_callback](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1892-L1926) | An index entry whose heap row vanished is not reported. Rows lost from the heap go unnoticed; see [the zeroed-segment page](amcheck-zeroed-relation-segments.md), [why](#follow-up-why-vanished-heap-rows-go-unreported) and [a separate check](#follow-up-checking-for-dangling-index-entries). |
 | Probabilistic row test | A Bloom filter can say "possibly present" for an absent entry. [bloomfilter.c#membership](../../../../raw/postgres-12/src/backend/lib/bloomfilter.c#L6-L10) | Each missing entry escapes with a small probability; the docs give no more than 2% at about 2 bytes per row. See the [worked example](#bloom-filter-sizing-worked-example). [amcheck.sgml#bloom-memory](../../../../raw/postgres-12/doc/src/sgml/amcheck.sgml#L195-L207) |
 | Additional parent checks are incomplete | Downlink presence uses a second Bloom filter; `rootdescend` can recover by moving right. [verify_nbtree.c#downlink-probe](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1714-L1719) [verify_nbtree.c#rootdescend-limitation](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2070-L2079) | A successful stronger check still does not prove every downlink is present or correct. |
 | Only reachable index pages | The walk follows links. [verify_nbtree.c#root-to-leaf-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L521-L551) | Unlinked blocks, such as deleted pages, are never read. |
@@ -455,11 +463,182 @@ The module's regression test covers permissions, table and BRIN rejection, both 
 
 **Index pages reached by links → read through shared buffers (checksum-verified only on a disk read, when the cluster has checksums) → structural and ordering invariants, plus parent/child checks under `ShareLock` → optional fingerprint of leaf entries → optional heap scan that probes the fingerprint for each row that belongs in the index → first violation raises `ERROR`, otherwise silence.** Checksums widen what that same read path catches to every byte of every initialized page read from disk, unless the damage happens to match the 16-bit checksum or a superuser has turned on `ignore_checksum_failure` or `zero_damaged_pages`, both off by default. [bufmgr.c#read-verify](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L924) [bufpage.c:148-158](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L148-L158) They cannot reach cached pages, unread pages, all-zero pages, truncated files or damage written with a valid checksum. amcheck in turn catches ordering, cross-structure and in-memory damage that checksums can never see.
 
+### Follow-up: why vanished heap rows go unreported
+
+**Yes: in PostgreSQL 12, amcheck never reports an index entry whose heap row has vanished, with any function or option.** This section calls such an entry a *dangling index entry*: a B-tree leaf entry whose heap [TID](../../../glossary.md#tid) names a block past the end of the table, a [line pointer](../../../glossary.md#line-pointer) number the heap page does not have, or an unused line pointer. Three design facts cause the blind spot. The comparison runs only from heap to index. The fingerprint cannot be asked which of its entries went unmatched. And an index entry without a matching scanned row is often legitimate, so "unmatched" would not mean "corrupt". [verify_nbtree.c#header](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L11-L14) [bloomfilter.h#API](../../../../raw/postgres-12/src/include/lib/bloomfilter.h#L18-L25) [README.HOT#dead-root](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L116-L120)
+
+The [measurement script](#measurement-script) shows the result. After a stopped-server fault zeroed one heap page (26 rows) and cut the heap file to 3 blocks (522 more rows), both `bt_index_check(idx, true)` and `bt_index_parent_check(idx, true, true)` passed with checksums off and on, while a sequential count fell from 598 to 50 rows. The index still held 548 dangling entries. See [Results and last run](#results-and-last-run).
+
+**Values that matter:**
+
+| Value | Meaning | Source | Live or stored | Later use |
+|---|---|---|---|---|
+| Leaf entry heap TID | The (block, line pointer) of the heap row the entry indexes | Stored in the index tuple's `t_tid` [itup.h#IndexTupleData](../../../../raw/postgres-12/src/include/access/itup.h#L35-L50) | Stored in the index | amcheck uses it as an ordering tiebreaker, in error details and as bytes hashed into the fingerprint. It never fetches the heap row it names. [verify_nbtree.c#fingerprint](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1072-L1083) [verify_nbtree.c#BTreeTupleGetHeapTIDCareful](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2559-L2573) |
+| Fingerprint bits | A Bloom filter of normalized leaf entries | `bloom_add_element()` during the index walk [verify_nbtree.c#fingerprint](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1072-L1083) | Live, in memory for one call | Probed only by rows the heap scan finds. [verify_nbtree.c#bt_tuple_present_callback](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1892-L1926) |
+| Heap block count | How far the heap scan reads | Measured when the scan starts [heapam.c#heapgetpage](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L351-L379) [heapam_handler.c#scan-loop](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1306-L1309) | Live file size | Blocks past it are never read, so their lost rows probe nothing. |
+| Heap line pointer state | `LP_UNUSED`, `LP_NORMAL`, `LP_REDIRECT` or `LP_DEAD` | The heap page's line pointer array [itemid.h#LP_states](../../../../raw/postgres-12/src/include/storage/itemid.h#L38-L41) | Stored on the heap page | Decides whether an index entry's TID still names a slot that may legitimately hold its row, a link or a dead stub. |
+
+**Logic map of what `heapallindexed` compares:**
+
+```text
+INDEX WALK   each leaf data entry not marked LP_DEAD
+               -> normalize -> bloom_add_element(bits)          (the entry's identity is not kept)   [1]
+HEAP SCAN    blocks 0 .. nblocks-1, nblocks measured at scan start                                  [2]
+               block past end of file ......... never read -> its lost rows probe nothing
+               all-zero page .................. 0 line pointers -> no rows -> no probe                [3]
+               each qualifying row -> form its index entry -> bloom_lacks_element()?                [4]
+                    yes -> ERROR XX001 "heap tuple ... lacks matching index tuple"
+                    no  -> next row
+END          return. No step asks which fingerprinted entries no row probed;
+             the Bloom API has no enumeration or removal.                                           [5]
+```
+
+- **[1]** [verify_nbtree.c#fingerprint](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1072-L1083), [bloomfilter.c#membership](../../../../raw/postgres-12/src/backend/lib/bloomfilter.c#L6-L12)
+- **[2]** [verify_nbtree.c#heap-scan](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L579-L614), [heapam.c#heapgetpage](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L351-L379)
+- **[3]** [bufpage.c#all-zero](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L122-L142), [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360)
+- **[4]** [verify_nbtree.c#bt_tuple_present_callback](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1892-L1926)
+- **[5]** [bloomfilter.h#API](../../../../raw/postgres-12/src/include/lib/bloomfilter.h#L18-L25)
+
+**Why the reverse question is not asked:**
+
+1. **The check is defined as a subset test in one direction.** The docs state the principle: a new index equivalent to the target "must only have entries that can be found in the existing structure". The header comment says the heap scan verifies "that every visible heap tuple has a matching index tuple". Nothing in that principle requires every existing entry to be produced again. [amcheck.sgml#heapallindexed](../../../../raw/postgres-12/doc/src/sgml/amcheck.sgml#L171-L187) [verify_nbtree.c#header](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L11-L14)
+2. **The fingerprint cannot answer the reverse question.** A [Bloom filter](../../../glossary.md#bloom-filter) stores only bits. Its whole interface is create, add, test for absence, report the fraction of set bits, and free. Elements "can be added to the set, but not removed". A matching heap row therefore cannot tick an entry off, and after the scan nothing can list the entries that no row matched. [bloomfilter.c#membership](../../../../raw/postgres-12/src/backend/lib/bloomfilter.c#L6-L16) [bloomfilter.h#API](../../../../raw/postgres-12/src/include/lib/bloomfilter.h#L18-L25)
+3. **An unmatched index entry is normally legitimate.** Many entries have no row in amcheck's scan in a healthy table, as the table below shows. An exact reverse count would therefore have to fetch each entry's heap TID and inspect the line pointer it names. amcheck's heap phase never fetches a TID; it is a sequential build scan. [verify_nbtree.c#heap-scan](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L579-L614)
+4. **amcheck checks a TID's format, not its target.** Leaf data items must not carry the pivot `INDEX_ALT_TID_MASK` flag, and version-4 tiebreaker comparisons require a heap TID to be present. No check compares the block number with the table's size or the offset with a heap page. [nbtutils.c#_bt_check_natts](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2408-L2427) [verify_nbtree.c#BTreeTupleGetHeapTIDCareful](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2559-L2573)
+
+**Index entries with no row in amcheck's scan, in a healthy table:**
+
+| Index entry | What its heap TID names | Why it is legitimate |
+|---|---|---|
+| Entry for a deleted or updated-away row not yet pruned | An `LP_NORMAL` [dead tuple](../../../glossary.md#dead-tuple) | [VACUUM](../../../glossary.md#vacuum) removes index entries in its own pass, before its second heap pass frees the slots, "because we cannot remove the tuples until we've removed their index entries". The parent check's scan skips `HEAPTUPLE_DEAD` rows; `bt_index_check`'s [MVCC](../../../glossary.md#mvcc) scan returns only rows its snapshot sees. [vacuumlazy.c#index-then-heap](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L764-L785) [vacuumlazy.c#lazy_vacuum_heap](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1515-L1524) [heapam_handler.c#dead-skip](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1389-L1393) [verify_nbtree.c#snapshot](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L435-L469) |
+| Entry for a row that [pruning](../../../glossary.md#pruning) removed | An `LP_DEAD` stub with no tuple | Pruning marks the root line pointer dead when the whole chain is dead; "the next regular VACUUM pass can reclaim the index entries pointing at the line pointer and then the line pointer itself". [pruneheap.c#heap_prune_chain](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L335-L338) [README.HOT#dead-root](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L116-L120) |
+| Entry for a [HOT](../../../glossary.md#hot) chain whose root version was pruned | An `LP_REDIRECT` link to a later chain member | The root line pointer stays "since the index still links to that line pointer". The scan reaches the live member, and the build scan pairs it with the root TID. [README.HOT#redirect](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L74-L79) [heapam_handler.c#predicate-values-hot](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1604-L1666) |
+| Entry kept by `VACUUM (INDEX_CLEANUP FALSE)` or `vacuum_index_cleanup = false` | An `LP_DEAD` stub that VACUUM leaves in place | **Default:** index cleanup is on; the storage parameter defaults to true and the option's documented default follows it. **Cause:** the option or storage parameter set to false. **Mechanism:** `useindex` becomes false, so `lazy_scan_heap()` forgets the dead items instead of vacuuming the heap page, and the index entries remain. [reloptions.c#vacuum_index_cleanup](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L143-L150) [vacuum.sgml#INDEX_CLEANUP](../../../../raw/postgres-12/doc/src/sgml/ref/vacuum.sgml#L187-L204) [vacuumlazy.c#useindex](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L285-L286) [vacuumlazy.c#forget-dead](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1243-L1265) |
+
+The measurement's control fixture builds the last three states: two `LP_REDIRECT` and two `LP_DEAD` line pointers whose 600 index entries all remain. amcheck passed and the dangling-entry check below reported nothing.
+
+**A further obstacle, by inference.** `bt_index_check` holds only `AccessShareLock`, which does not conflict with the `ShareUpdateExclusiveLock` that VACUUM takes. VACUUM could therefore delete an entry and free its heap slot between amcheck's copy of a leaf page and a later heap fetch, so a reverse probe under that lock could raise a false alarm. The source does not give this as amcheck's reason; it follows from the lock table and VACUUM's index-then-heap order. [verify_nbtree.c#lock-choice](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L232-L263) [lock.c#ShareUpdateExclusiveLock](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L81) [vacuum.c#vacuum_rel-lock](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1676-L1681)
+
+### Follow-up: checking for dangling index entries
+
+**There is no amcheck option for it in PostgreSQL 12, but a superuser can run the check with [`pageinspect`](../../../glossary.md#pageinspect).** The idea is to read every leaf entry's heap TID from the index pages and look up the line pointer it names on the heap page, while a table lock keeps VACUUM and writers out. An ordinary index scan finds only part of the problem.
+
+| Method | Finds | Misses | Needs |
+|---|---|---|---|
+| amcheck, any function or option | None of these | Every dangling entry; measured 548 of 548 | — |
+| Ordinary index scan forced over the whole key range | An entry whose block is past the end of the file: `ERROR` `XX001`, `could not read block ... read only 0 of 8192 bytes` | Entries naming a missing or unused line pointer, or a heap-only tuple: skipped without a message; measured 0 rows and no error for the 26 keys on the zeroed page | Only the ordinary right to read the table; the scan stops at the first short read |
+| Per-index counters `tuples_returned` minus `tuples_fetched` | A count of TIDs that reached no visible row | Cannot tell dangling entries from legitimate dead entries | See the [visible-count checker's unresolved-TID signal](sql-heap-index-visible-count-checker-plan.md#heap-side-loss-and-the-unresolved-tid-signal) |
+| The `pageinspect` statement below | Block past end, no such line pointer, unused line pointer, and an entry that names a heap-only tuple | An entry that names a valid slot holding a different row; wrong key values; non-B-tree indexes | Superuser, and a `SHARE` lock on the table for the whole run |
+
+Why the index scan silently skips most cases: `heap_hot_search_buffer()` stops at a "bogus TID" whose offset exceeds the page's line pointers, at an unused or dead line pointer, and at a heap-only tuple at chain start, and returns "not found". `index_getnext_slot()` then takes the next TID. A block past the end fails earlier, in `mdread()`'s short-read check, because the buffer manager must read the block before the search. The index scan also asks B-tree to mark such entries [killed](../../../glossary.md#killed-index-tuple), so later scans may skip them; the `pageinspect` statement still reads them, because it reads raw items. [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1555-L1590) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L624-L632) [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630) [indexam.c#index_fetch_heap](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L588) [btreefuncs.c#bt_page_print_tuples](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L269-L280)
+
+**Logic map of the `pageinspect` check:**
+
+```text
+BEGIN; LOCK TABLE t IN SHARE MODE   -> no INSERT/UPDATE/DELETE, no VACUUM until COMMIT          [A]
+target: index, its table, index blocks, heap blocks (pg_relation_size / block_size)               [B]
+for index blocks 1 .. N-1:  bt_page_stats -> keep type 'l' (live leaf; skips 'd','e','i','r')     [C]
+   bt_page_items -> drop item 1 when btpo_next <> 0 (the high key) -> heap TID (block, offset)   [D]
+   heap block >= heap blocks? ------------------------------------------> 'block past end of heap'
+   else get_raw_page(heap block) -> heap_page_items -> line pointer lp = offset?                  [E]
+        no such lp (includes every lp of an all-zero page) -----------> 'no such line pointer'
+        lp_flags 0 (LP_UNUSED) ---------------------------------------> 'unused line pointer'
+        lp_flags 1 with HEAP_ONLY_TUPLE ------------------------------> 'heap-only tuple'
+        lp_flags 1 otherwise, 2 (LP_REDIRECT), 3 (LP_DEAD) -----------> legitimate, not reported  [F]
+COMMIT
+```
+
+- **[A]** `ShareLock` conflicts with `RowExclusiveLock` and `ShareUpdateExclusiveLock`; VACUUM takes the latter. `LOCK TABLE` holds the lock until the transaction ends. [lock.c#ShareLock](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) [vacuum.c#vacuum_rel-lock](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1676-L1681) [lock.sgml#share-mode](../../../../raw/postgres-12/doc/src/sgml/ref/lock.sgml#L61-L67)
+- **[B]** `get_raw_page()` rejects a block at or past the fork's size, so only in-range blocks may reach it. [rawpage.c#block-range](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L148-L152)
+- **[C]** `bt_page_stats()` reports `d` deleted, `e` half-dead, then `l` leaf before `r` root, so a one-page index's root leaf counts as `l`; block 0 is the metapage and is rejected. [btreefuncs.c#page-type](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L108-L122) [btreefuncs.c#metapage-reject](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L197-L199)
+- **[D]** On a page that is not rightmost (`btpo_next` is not `P_NONE`, 0), item 1 is the high key, which points at no heap row. `bt_page_items()` prints each item's `t_tid` as `(block,offset)` without validating it. [nbtree.h#P_RIGHTMOST](../../../../raw/postgres-12/src/include/access/nbtree.h#L181-L188) [nbtree.h#P_HIKEY](../../../../raw/postgres-12/src/include/access/nbtree.h#L217-L219) [btreefuncs.c#bt_page_print_tuples](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L269-L280)
+- **[E]** `heap_page_items()` returns one row per line pointer up to `PageGetMaxOffsetNumber()`, which is 0 for an all-zero page. It reports `t_infomask2` only for a line pointer with plausible storage. [heapfuncs.c#heap_page_items](../../../../raw/postgres-12/contrib/pageinspect/heapfuncs.c#L166-L206) [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360)
+- **[F]** Line pointer values and the heap-only flag `0x8000` (32768): [itemid.h#LP_states](../../../../raw/postgres-12/src/include/storage/itemid.h#L38-L41), [htup_details.h#HEAP_ONLY_TUPLE](../../../../raw/postgres-12/src/include/access/htup_details.h#L281). An index entry points to a chain's root, never to a heap-only member. [README.HOT#heap-only](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L64-L66)
+
+**The statement.** Replace `public.my_table` and `public.my_table_pkey`, and run it as a superuser in a session that needs no other work. The [measurement script](#script) runs the same text with its fixture's names.
+
+```sql
+BEGIN;
+SET LOCAL /* wiki_dangling_statement_timeout */ statement_timeout = '30min';
+SET LOCAL /* wiki_dangling_lock_timeout */ lock_timeout = '5s';
+LOCK /* wiki_dangling_block_writers_and_vacuum */ TABLE public.my_table IN SHARE MODE;
+WITH /* wiki_dangling_index_entries */ target AS MATERIALIZED (
+    SELECT i.indexrelid::regclass AS ix, i.indrelid::regclass AS tbl,
+           pg_relation_size(i.indexrelid) / current_setting('block_size')::bigint AS index_blocks,
+           pg_relation_size(i.indrelid) / current_setting('block_size')::bigint AS heap_blocks
+    FROM pg_index i
+    WHERE i.indexrelid = 'public.my_table_pkey'::regclass
+), leaf AS MATERIALIZED (
+    SELECT b.blk, s.btpo_next
+    FROM target t
+    CROSS JOIN LATERAL generate_series(1, t.index_blocks - 1) AS b(blk)
+    CROSS JOIN LATERAL bt_page_stats(t.ix::text, b.blk::integer) AS s
+    WHERE s.type = 'l'
+), entries AS MATERIALIZED (
+    SELECT l.blk AS index_block, e.itemoffset, e.ctid AS heap_tid,
+           split_part(btrim(e.ctid::text, '()'), ',', 1)::bigint AS heap_block,
+           split_part(btrim(e.ctid::text, '()'), ',', 2)::integer AS heap_offset
+    FROM target t
+    CROSS JOIN leaf l
+    CROSS JOIN LATERAL bt_page_items(t.ix::text, l.blk::integer) AS e
+    WHERE NOT (l.btpo_next <> 0 AND e.itemoffset = 1)
+), heap_blocks AS MATERIALIZED (
+    SELECT DISTINCT e.heap_block
+    FROM entries e
+    CROSS JOIN target t
+    WHERE e.heap_block < t.heap_blocks
+), heap_items AS MATERIALIZED (
+    SELECT hb.heap_block, h.lp, h.lp_flags, h.t_infomask2
+    FROM target t
+    CROSS JOIN heap_blocks hb
+    CROSS JOIN LATERAL heap_page_items(get_raw_page(t.tbl::text, hb.heap_block::integer)) AS h
+)
+SELECT e.index_block, e.itemoffset, e.heap_tid,
+       CASE WHEN e.heap_block >= t.heap_blocks THEN 'block past end of heap'
+            WHEN h.lp IS NULL THEN 'no such line pointer'
+            WHEN h.lp_flags = 0 THEN 'unused line pointer'
+            ELSE 'heap-only tuple'
+       END AS problem
+FROM entries e
+CROSS JOIN target t
+LEFT JOIN heap_items h ON h.heap_block = e.heap_block AND h.lp = e.heap_offset
+WHERE e.heap_block >= t.heap_blocks
+   OR h.lp IS NULL
+   OR h.lp_flags = 0
+   OR (h.lp_flags = 1 AND (h.t_infomask2 & 32768) <> 0)
+ORDER BY e.index_block, e.itemoffset;
+COMMIT;
+```
+
+An empty result means that no leaf entry names a missing block, a missing or unused line pointer, or a heap-only tuple. Each output row names the index block and item, the heap TID and the problem.
+
+How the statement's parts work:
+
+- **Settings.** `statement_timeout` and `lock_timeout` have context `user`; `SET LOCAL` limits them to this transaction. [guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2396)
+- **The lock.** Without a lock, VACUUM could free a slot after its index entry was read, and inserts could split pages mid-run. The `SHARE` lock blocks both, as `bt_index_parent_check` does, so writers to the table wait until `COMMIT`. On-access [pruning](../../../glossary.md#pruning) still runs, but it only turns roots into `LP_DEAD` or `LP_REDIRECT` and frees heap-only members, which no index entry names. [pruneheap.c#heap_prune_chain](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L335-L347) [README.HOT#heap-only-reclaim](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L99-L102)
+- **`MATERIALIZED`.** It is accepted at this pin and keeps each `WITH` query from being folded into the main query, so `get_raw_page()` is called only for the in-range blocks that `heap_blocks` kept. [gram.y#opt_materialized](../../../../raw/postgres-12/src/backend/parser/gram.y#L11425-L11428) [select.sgml#materialized](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L320-L325)
+- **TID decoding.** `btrim()` removes the parentheses and `split_part()` takes the block and the offset. [func.sgml#btrim](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L1726-L1737) [func.sgml#split_part](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L2336-L2346)
+- **Catalog columns.** `pg_index.indexrelid` and `indrelid` exist at the pin, and `pageinspect` 1.7 provides the four functions with the columns used. [pg_index.h#columns](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L31-L42) [pageinspect.control](../../../../raw/postgres-12/contrib/pageinspect/pageinspect.control#L1-L5) [pageinspect--1.5.sql#heap_page_items](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L38-L55) [pageinspect--1.5.sql#bt_page_stats](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L162-L175) [pageinspect--1.5.sql#bt_page_items](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L180-L189)
+
+**Cases and limits:**
+
+| Condition | Behavior | Consequence |
+|---|---|---|
+| Caller is not a superuser | Each of the four functions raises `must be superuser ...` | Grant nothing; run as a superuser. [btreefuncs.c#stats-superuser](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L176-L179) [btreefuncs.c#items-superuser](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L320-L323) [rawpage.c#superuser](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L103-L106) [heapfuncs.c#superuser](../../../../raw/postgres-12/contrib/pageinspect/heapfuncs.c#L135-L138) |
+| Another session holds a conflicting lock for longer than 5 s | `LOCK` fails with a lock timeout | Nothing was checked; retry later. |
+| Index pages are themselves damaged | `bt_page_stats()` or `bt_page_items()` may error, or report garbage TIDs | Run amcheck first; this check assumes a structurally sound index. [btreefuncs.c#bt_page_print_tuples](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L271-L272) |
+| An entry names an `LP_NORMAL` slot that holds some other row | Not reported | The statement checks that the slot exists, not that its row matches the key. amcheck's `heapallindexed` probe checks the opposite direction only. |
+| Other session's temporary table | Rejected with `cannot access temporary tables of other sessions` | Run it from the owning session. [btreefuncs.c#other-temp](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L342-L350) |
+| Partitioned table, or a non-B-tree index | `bt_page_stats()` accepts only a physical B-tree index | Run once per leaf partition's B-tree index. [btreefuncs.c#IS_BTREE](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L48-L49) |
+| Large index | `entries` holds one row per leaf entry; each index page is read twice and each referenced heap page once, through shared buffers | Expect a full pass over the index and much of the heap while writes wait. Reads are verified against checksums only on disk reads, as for amcheck. |
+
+**Causal summary.** A heap row vanishes (zeroed page, cut file, freed slot) → its index entry still holds the old TID → amcheck's heap scan finds no row there, so nothing probes the fingerprint for it → the Bloom filter can only answer probes and cannot list unmatched entries → amcheck returns without error. Reading each leaf entry's TID with `pageinspect` and testing the line pointer it names, under a `SHARE` lock that keeps VACUUM from changing that relationship, reports exactly the entries whose target slot is gone.
+
 ## Measurement Script
 
 ### Results and last run
 
-**Last successful run:** 2026-10-25, PostgreSQL 12.2, pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0 with `CFLAGS='-O2 -std=gnu99'`. Both clusters used 8192-byte blocks, maximum alignment 8, UTF-8, C locale, session TimeZone UTC, `shared_buffers = 128MB` and `maintenance_work_mem = 64MB`. One cluster used the default checksums-off state; the other used `initdb -k`. The successful `verify` run completed in 6 seconds and passed all **39 recorded checks**. The fresh core/extension build took 38 seconds. The separate `interrupt` stage passed both startup-shutdown tests in 1 second. These are measurements of this host and these small fixtures, not performance estimates for production indexes.
+**Last successful run:** 2026-10-26, PostgreSQL 12.2, pin `45b88269a353ad93744772791feb6d01bc7e1e42`, Darwin 27.0.0 arm64, Apple clang 21.0.0 with `CFLAGS='-O2 -std=gnu99'`. Both clusters used 8192-byte blocks, maximum alignment 8, UTF-8, C locale, session TimeZone UTC, `shared_buffers = 128MB` and `maintenance_work_mem = 64MB`. One cluster used the default checksums-off state; the other used `initdb -k`. The successful `verify` run completed in 6 seconds and passed all **67 recorded checks**, 28 of them from the dangling-entry fixture added for the follow-up. The fresh core/extension build took 38 seconds. The separate `interrupt` stage passed both startup-shutdown tests in 2 seconds. These are measurements of this host and these small fixtures, not performance estimates for production indexes.
 
 | Fixture / condition | Measured outcome | Source interpretation |
 |---|---|---|
@@ -472,6 +651,8 @@ The module's regression test covers permissions, table and BRIN rejection, both 
 | Base backup with exactly that one checksum-mismatching page | Backup failed; the client reported `checksum error occurred`. The database counter remained 1, its value from the earlier backend read | This pin sends a file's backup mismatch count to the collector only when it exceeds 1. The backend still errors for one mismatch; the client translates that checksum failure. [basebackup.c#per-file-report](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1611-L1622) [basebackup.c#final-error](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L621-L635) [pg_basebackup.c#checksum-error](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L2025-L2036) |
 | Restore that page, then damage the free byte of another heap's first page and append one byte while stopped | The 8,193-byte file was copied by a successful base backup, with `could not verify checksum ... read buffer size 8193 and page size 8192 differ` | The unaligned read disables verification before testing even the complete first page in that read. Success with this warning does not establish checksum coverage or a sound backup. The fixture is not a restore test. [basebackup.c#unaligned-read](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1454-L1466) |
 | Include a populated `UNLOGGED` table in that successful backup's source cluster | Its live main fork was absent from the backup; its init fork was present | File selection excludes non-init unlogged forks before checksum verification. This establishes the file exclusion, not detection of damage in the excluded heap. [basebackup.c#unlogged-exclusion](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1152) |
+| `vanish_probe`: 600 rows with `fillfactor = 80`; HOT-update ids 1-2 and delete ids 3-4 on heap block 0, then `VACUUM (INDEX_CLEANUP FALSE)` | Block 0 had 2 `LP_REDIRECT` and 2 `LP_DEAD` line pointers; 600 leaf entries remained; `bt_index_parent_check(..., true, true)` passed; the dangling-entry statement returned 0 rows. Same in both clusters | Index entries that name redirect and dead stubs are legitimate and are not reported. [README.HOT#redirect](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L74-L79) [vacuumlazy.c#forget-dead](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1243-L1265) |
+| Stop the server, zero heap block 1 of `vanish_probe` (26 rows, ids 27-52) and cut the file to 3 blocks (removing 522 rows on blocks 3-23) | File 24,576 bytes. `bt_index_check(..., true)` and `bt_index_parent_check(..., true, true)` both passed. Sequential count 50 of 598. A forced index scan of ids 27-52 returned 0 rows without error. A forced index scan of all ids failed with `XX001`, `could not read block 3 ... read only 0 of 8192 bytes`. The dangling-entry statement returned 548 rows: 522 `block past end of heap` and 26 `no such line pointer`. Same in both clusters | amcheck's one-way probe never sees the 548 dangling entries. The executor skips TIDs that name no line pointer and fails only on a block past the end. Checksums change nothing here: an all-zero page skips verification and a short read fails first. [verify_nbtree.c#bt_tuple_present_callback](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1892-L1926) [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1555-L1590) [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630) [bufpage.c#all-zero](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L122-L142) |
 | Signal the runner after `pg_ctl start` returns but before `owned=1`, once with `TERM` and once with `INT` | Child exit codes were 143 and 130; both left no PID file, data-directory process, private socket/lock file or occupied port | The deterministic signal hook exercises the pending-ownership boundary. The EXIT trap reconciles that state and stops the newly launched server; this does not test every possible startup failure |
 
 The final verification leg restores the second file and confirms that the original checksum fixture passes again. Each fault is applied only while the owned server is stopped; subsequent starts discard shared-buffer state, so these results do not measure cached-page masking. The script stops each cluster before returning from `verify`. The following `interrupt` stage replaces the disposable cluster for each signal test and stops each launched server through its EXIT trap. The task then ran `cleanup`, confirmed no PID file, data-directory process or socket and a free port, and deleted the sandbox, including the build.
@@ -510,12 +691,15 @@ The pending flag matters because `pg_ctl` starts a separate postmaster and, wher
 |---|---|---|
 | Checksums off → on with `initdb -k` in the second fresh cluster | Cluster creation; `data_checksums` is internal, not settable with `SET`. The first leg measures the default. [initdb.c#default](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L144) [guc.c#data_checksums](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1827-L1835) | Free-space-damage rejection, counters and checksum-verifying backups |
 | No installed extension → amcheck and pageinspect in each disposable database | The fixture explicitly installs both; amcheck provides checks, pageinspect observes dead items and validates the fault's free-space offset. [amcheck.control](../../../../raw/postgres-12/contrib/amcheck/amcheck.control#L1-L5) [pageinspect--1.5.sql#page_header](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L20-L33) [pageinspect--1.5.sql#bt_page_stats](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L160-L175) | All amcheck/inspection results |
-| `autovacuum` on → off | `sighup` setting supplied in the fresh server configuration; keeps the deleted entry available for inspection. Manual deletion and the index scan create the measured `LP_DEAD` state. [guc.c#autovacuum](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1426-L1433) [nbtutils.c#killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1781-L1811) | Dead-item count and valid-dead-item check |
-| `enable_seqscan`, `enable_bitmapscan`, `enable_indexonlyscan` on → off in the killed-entry probe session | All `user` settings; session `SET` directs the probe through an ordinary index scan so heap liveness can request a killed-entry hint. The other sessions use defaults. [guc.c#scan-switches](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L884-L921) [indexam.c#index_fetch_heap](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L588) | Dead-item fixture only |
+| `autovacuum` on → off | `sighup` setting supplied in the fresh server configuration; keeps the deleted entry available for inspection, and keeps an automatic VACUUM from cleaning `vanish_probe`'s stubs and their index entries. Manual deletion and the index scan create the measured `LP_DEAD` state. [guc.c#autovacuum](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1426-L1433) [nbtutils.c#killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1781-L1811) | Dead-item count and valid-dead-item check; `vanish_probe` control stubs |
+| `enable_seqscan`, `enable_bitmapscan`, `enable_indexonlyscan` on → off in the killed-entry probe session and the two `vanish_probe` index-scan sessions | All `user` settings; session `SET` directs each probe through an ordinary index scan, so heap liveness can request a killed-entry hint and every scanned TID is fetched from the heap. The other sessions use defaults. [guc.c#scan-switches](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L884-L921) [indexam.c#index_fetch_heap](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L588) | Dead-item fixture; zeroed-block and past-end index-scan results |
+| Heap `fillfactor` 100 → 80 on `vanish_probe` | Storage parameter (`ShareUpdateExclusiveLock`, later inserts only). It leaves room on block 0 so the two updates of the non-indexed `note` column stay on the page as HOT updates. [rel.h#HEAP_DEFAULT_FILLFACTOR](../../../../raw/postgres-12/src/include/utils/rel.h#L278-L279) [reloptions.c#fillfactor](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L166-L176) | The `LP_REDIRECT` control stubs and the row layout (26 rows per page) |
+| `VACUUM` index cleanup on → `VACUUM (INDEX_CLEANUP FALSE) vanish_probe` | Command option; `vacuum_index_cleanup` defaults to true. With it false, VACUUM prunes block 0 but forgets the dead items instead of removing their index entries, so the stubs remain referenced. [reloptions.c#vacuum_index_cleanup](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L143-L150) [vacuumlazy.c#forget-dead](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1243-L1265) | Control: 2 redirect and 2 dead stubs, 600 leaf entries, 0 dangling rows |
+| No table lock → `LOCK TABLE vanish_probe IN SHARE MODE` inside the dangling-entry transaction | Transaction scope; blocks writers and VACUUM while the statement reads index and heap pages one at a time. [lock.c#ShareLock](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86) | Stability of the dangling-entry counts; no concurrent sessions exist in the fixture |
 | `track_counts` on → off for one failing read | `superuser` session setting; disables reporting without suppressing the checksum error. [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1393-L1399) [pgstat.c#report-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1532-L1556) | Counter remains unchanged in the off leg |
 | Text's normal extended storage → `STORAGE EXTERNAL` for `toast_probe.payload` | Column storage option; forces this large, compressible fixture out of line instead of allowing inline compression. The predicate must then fetch its chunks. [tuptoaster.c#compression-and-external-storage](../../../../raw/postgres-12/src/backend/access/heap/tuptoaster.c#L718-L800) | TOAST-predicate result |
 | Permanent table → `CREATE UNLOGGED TABLE unlogged_probe` | Default persistence is permanent. The explicit option creates an init fork; backup file selection excludes the other forks when that init file exists. [gram.y#persistence-default](../../../../raw/postgres-12/src/backend/parser/gram.y#L3282-L3283) [heapam_handler.c#unlogged-init](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624) [basebackup.c#unlogged-exclusion](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1152) | Successful backup contains the init fork but no live main fork for this table |
-| Intact files → stopped-server truncation, free-byte overwrite or appended partial block | Deliberate corruption fixtures; ordinary SQL maintains the index/heap and page-format invariants. Restart makes subsequent reads cold. [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L796) [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630) [basebackup.c#unaligned-read](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1454-L1466) | TOAST, checksum and backup fault cases; these are not normal table states |
+| Intact files → stopped-server truncation, free-byte overwrite, appended partial block, or a zeroed heap block plus a cut to 3 blocks | Deliberate corruption fixtures; ordinary SQL maintains the index/heap and page-format invariants. Restart makes subsequent reads cold. [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L796) [md.c#short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630) [basebackup.c#unaligned-read](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1454-L1466) | TOAST, checksum and backup fault cases; these are not normal table states |
 | `statement_timeout = 0`, `lock_timeout = 0` → `2min`, `5s` | `user` session settings supplied on every SQL connection; bound individual statements and lock waits. No measured check hit either limit. [guc.c#timeouts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2396) | SQL failure bounds |
 | `listen_addresses = 'localhost'` → `''`, `unix_socket_directories = '/tmp'` → private `$work/s`, `unix_socket_permissions = 0777` → `0700`, `port = 5432` → `55448`, `TimeZone` (boot `'GMT'`; `initdb` writes the host zone into `postgresql.conf`) → `'UTC'`, plus `initdb`'s `128MB` `shared_buffers` override (boot default `1024` blocks = 8 MB) | Listener, socket, port and `shared_buffers` settings are `postmaster` settings chosen before start; `TimeZone` is a `user` setting appended to `postgresql.conf` for new sessions. They isolate the fixtures and format time consistently. [guc.c#shared_buffers-and-port](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2155-L2199) [guc.c#timezone-and-listeners](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3905-L3960) [pg_config_manual.h#DEFAULT_PGSOCKET_DIR](../../../../raw/postgres-12/src/include/pg_config_manual.h#L182) [configure.in#default_port](../../../../raw/postgres-12/configure.in#L149-L164) [initdb.c#shared_buffers-and-timezone](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1018-L1102) [initdb.c#timezone-config](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1165-L1173) | Connection isolation and platform record; not detection semantics |
 | Base-backup command uses `-X none -c fast -N` | No WAL transfer, fast [checkpoint](../../../glossary.md#checkpoint), no destination sync wait. These speed a disposable verification probe; the result is not a restore-ready backup. None requests `NOVERIFY_CHECKSUMS`. [pg_basebackup.c#options](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L330-L353) | Both backup tests |
@@ -740,6 +924,13 @@ CREATE /* wiki_amr_fixture_parent */ TABLE parent_probe(id integer) PARTITION BY
 CREATE /* wiki_amr_fixture_leaf */ TABLE leaf_probe PARTITION OF parent_probe
 FOR VALUES FROM (0) TO (100);
 CREATE /* wiki_amr_fixture_parent_index */ INDEX parent_probe_idx ON parent_probe(id);
+CREATE /* wiki_amr_fixture_vanish */ TABLE vanish_probe(id integer PRIMARY KEY, note integer, pad text)
+WITH (fillfactor = 80);
+INSERT /* wiki_amr_fixture_vanish_rows */ INTO vanish_probe
+SELECT g, 0, repeat('v',200) FROM generate_series(1,600) g;
+UPDATE /* wiki_amr_fixture_vanish_hot */ vanish_probe SET note = 1 WHERE id IN (1,2);
+DELETE /* wiki_amr_fixture_vanish_dead */ FROM vanish_probe WHERE id IN (3,4);
+VACUUM /* wiki_amr_fixture_vanish_prune */ (INDEX_CLEANUP FALSE) vanish_probe;
 SQL
     test "$?" -eq 0 || die "Fixture creation failed"
     sql -c "SELECT /* wiki_amr_platform */ version(), current_setting('block_size'),
@@ -791,10 +982,135 @@ SQL
         die "Cannot verify fault offset"
     expect "$mode-fault-offset-is-free-space" t "$value"
 }
+# The same dangling-entry statement as the Answer, with the fixture's names.
+dangling_sql() {
+    cat <<'SQL'
+BEGIN;
+SET LOCAL /* wiki_dangling_statement_timeout */ statement_timeout = '30min';
+SET LOCAL /* wiki_dangling_lock_timeout */ lock_timeout = '5s';
+LOCK /* wiki_dangling_block_writers_and_vacuum */ TABLE vanish_probe IN SHARE MODE;
+WITH /* wiki_dangling_index_entries */ target AS MATERIALIZED (
+    SELECT i.indexrelid::regclass AS ix, i.indrelid::regclass AS tbl,
+           pg_relation_size(i.indexrelid) / current_setting('block_size')::bigint AS index_blocks,
+           pg_relation_size(i.indrelid) / current_setting('block_size')::bigint AS heap_blocks
+    FROM pg_index i
+    WHERE i.indexrelid = 'vanish_probe_pkey'::regclass
+), leaf AS MATERIALIZED (
+    SELECT b.blk, s.btpo_next
+    FROM target t
+    CROSS JOIN LATERAL generate_series(1, t.index_blocks - 1) AS b(blk)
+    CROSS JOIN LATERAL bt_page_stats(t.ix::text, b.blk::integer) AS s
+    WHERE s.type = 'l'
+), entries AS MATERIALIZED (
+    SELECT l.blk AS index_block, e.itemoffset, e.ctid AS heap_tid,
+           split_part(btrim(e.ctid::text, '()'), ',', 1)::bigint AS heap_block,
+           split_part(btrim(e.ctid::text, '()'), ',', 2)::integer AS heap_offset
+    FROM target t
+    CROSS JOIN leaf l
+    CROSS JOIN LATERAL bt_page_items(t.ix::text, l.blk::integer) AS e
+    WHERE NOT (l.btpo_next <> 0 AND e.itemoffset = 1)
+), heap_blocks AS MATERIALIZED (
+    SELECT DISTINCT e.heap_block
+    FROM entries e
+    CROSS JOIN target t
+    WHERE e.heap_block < t.heap_blocks
+), heap_items AS MATERIALIZED (
+    SELECT hb.heap_block, h.lp, h.lp_flags, h.t_infomask2
+    FROM target t
+    CROSS JOIN heap_blocks hb
+    CROSS JOIN LATERAL heap_page_items(get_raw_page(t.tbl::text, hb.heap_block::integer)) AS h
+)
+SELECT e.index_block, e.itemoffset, e.heap_tid,
+       CASE WHEN e.heap_block >= t.heap_blocks THEN 'block past end of heap'
+            WHEN h.lp IS NULL THEN 'no such line pointer'
+            WHEN h.lp_flags = 0 THEN 'unused line pointer'
+            ELSE 'heap-only tuple'
+       END AS problem
+FROM entries e
+CROSS JOIN target t
+LEFT JOIN heap_items h ON h.heap_block = e.heap_block AND h.lp = e.heap_offset
+WHERE e.heap_block >= t.heap_blocks
+   OR h.lp IS NULL
+   OR h.lp_flags = 0
+   OR (h.lp_flags = 1 AND (h.t_infomask2 & 32768) <> 0)
+ORDER BY e.index_block, e.itemoffset;
+COMMIT;
+SQL
+}
+dangling() {
+    dangling_sql | sql > "$work/$1.out" 2> "$work/$1.err" ||
+        die "$1 failed; see its .err file"
+}
+vanish_before() {
+    local mode=$1 value
+    value=$(sql -c "SELECT /* wiki_amr_vanish_stubs */ count(*) FILTER (WHERE lp_flags=2)
+        || ',' || count(*) FILTER (WHERE lp_flags=3)
+        FROM heap_page_items(get_raw_page('vanish_probe',0))") || die "Stub query failed"
+    expect "$mode-vanish-block0-redirect-dead-stubs" 2,2 "$value"
+    value=$(sql -c "SELECT /* wiki_amr_vanish_leaf_entries */ count(*)
+        FROM generate_series(1, pg_relation_size('vanish_probe_pkey')/8192 - 1) b(blk),
+        LATERAL bt_page_stats('vanish_probe_pkey', blk::integer) s,
+        LATERAL bt_page_items('vanish_probe_pkey', blk::integer) e
+        WHERE s.type='l' AND NOT (s.btpo_next<>0 AND e.itemoffset=1)") ||
+        die "Leaf entry query failed"
+    expect "$mode-vanish-leaf-entries" 600 "$value"
+    ok "$mode-vanish-control-amcheck" "SELECT /* wiki_amr_vanish_control */ bt_index_parent_check('vanish_probe_pkey',true,true)"
+    dangling "$mode-dangling-control"
+    value=$(wc -l < "$work/$mode-dangling-control.out" | tr -d ' ')
+    expect "$mode-dangling-control-rows" 0 "$value"
+    sql -c "SELECT /* wiki_amr_vanish_layout */ count(*) FILTER (WHERE b=1),
+        count(*) FILTER (WHERE b>=3), min(id) FILTER (WHERE b=1),
+        max(id) FILTER (WHERE b=1), count(*)
+        FROM (SELECT id, split_part(btrim(ctid::text,'()'),',',1)::integer AS b
+              FROM vanish_probe) s" > "$work/$mode-vanish-layout.txt" ||
+        die "Layout query failed"
+}
+vanish_fault() {
+    dd if=/dev/zero of="$1" bs=8192 seek=1 count=1 conv=notrunc 2>/dev/null &&
+    dd if=/dev/null of="$1" bs=8192 seek=3 2>/dev/null ||
+        die "Vanish fault injection failed"
+}
+vanish_after() {
+    local mode=$1 file=$2 layout n1 n3 lo hi total value
+    layout=$(cat "$work/$mode-vanish-layout.txt") || die "Missing layout"
+    n1=$(printf '%s\n' "$layout" | cut -d'|' -f1)
+    n3=$(printf '%s\n' "$layout" | cut -d'|' -f2)
+    lo=$(printf '%s\n' "$layout" | cut -d'|' -f3)
+    hi=$(printf '%s\n' "$layout" | cut -d'|' -f4)
+    total=$(printf '%s\n' "$layout" | cut -d'|' -f5)
+    record "$mode-vanish-layout=block1:$n1,blocks3plus:$n3,ids:$lo-$hi,rows:$total"
+    value=$(wc -c < "$file" | tr -d ' ') || die "Cannot read heap size"
+    expect "$mode-vanish-heap-bytes" 24576 "$value"
+    ok "$mode-vanish-parent-check-passes" "SELECT /* wiki_amr_vanish_parent */ bt_index_parent_check('vanish_probe_pkey',true,true)"
+    ok "$mode-vanish-index-check-passes" "SELECT /* wiki_amr_vanish_check */ bt_index_check('vanish_probe_pkey',true)"
+    value=$(sql -c "SELECT /* wiki_amr_vanish_seq */ count(*) FROM vanish_probe") ||
+        die "Sequential count failed"
+    expect "$mode-vanish-seq-count" "$((total - n1 - n3))" "$value"
+    value=$(sql -c "SET /* wiki_amr_vanish_noseq */ enable_seqscan=off" \
+        -c "SET /* wiki_amr_vanish_nobitmap */ enable_bitmapscan=off" \
+        -c "SET /* wiki_amr_vanish_noios */ enable_indexonlyscan=off" \
+        -c "SELECT /* wiki_amr_vanish_zeroed_ids */ count(*) FROM vanish_probe WHERE id BETWEEN $lo AND $hi") ||
+        die "Zeroed-block index scan failed"
+    expect "$mode-vanish-index-scan-zeroed-block-rows" 0 "$value"
+    bad "$mode-vanish-index-scan-past-end-error" 'XX001:.*could not read block' \
+        "SET /* wiki_amr_vanish_noseq */ enable_seqscan=off;
+         SET /* wiki_amr_vanish_nobitmap */ enable_bitmapscan=off;
+         SET /* wiki_amr_vanish_noios */ enable_indexonlyscan=off;
+         SELECT /* wiki_amr_vanish_all_ids */ count(*) FROM vanish_probe WHERE id > 0"
+    dangling "$mode-dangling-fault"
+    value=$(grep -c 'block past end of heap' "$work/$mode-dangling-fault.out")
+    expect "$mode-dangling-block-past-end" "$n3" "$value"
+    value=$(grep -c 'no such line pointer' "$work/$mode-dangling-fault.out")
+    expect "$mode-dangling-no-line-pointer" "$n1" "$value"
+    value=$(wc -l < "$work/$mode-dangling-fault.out" | tr -d ' ')
+    expect "$mode-dangling-total" "$((n1 + n3))" "$value"
+}
 verify_mode() {
-    local mode=$1 checksumfile partialfile unloggedfile toastrel toastfile value
+    local mode=$1 checksumfile partialfile unloggedfile toastrel toastfile vanishfile value
     init_cluster "$mode"
     common_checks "$mode"
+    vanish_before "$mode"
+    vanishfile=$(relation_path vanish_probe) || die "Missing vanish path"
     checksumfile=$(relation_path checksum_probe) || die "Missing checksum path"
     partialfile=$(relation_path partial_probe) || die "Missing partial path"
     unloggedfile=$(relation_path unlogged_probe) || die "Missing unlogged path"
@@ -806,7 +1122,9 @@ verify_mode() {
     cp "$partialfile" "$work/partial.good" || die "Cannot save clean images"
     flip_free_byte "$checksumfile"
     : > "$toastfile" || die "Cannot truncate fixture TOAST heap"
+    vanish_fault "$vanishfile"
     start
+    vanish_after "$mode" "$vanishfile"
     ok "$mode-index-without-heap" "SELECT /* wiki_amr_index_only_check */ bt_index_check('checksum_probe_pkey')"
     ok "$mode-toast-unrelated-index" "SELECT /* wiki_amr_plain_check */ bt_index_check('toast_probe_pkey',true)"
     bad "$mode-toast-predicate-error" 'XX001:.*could not read block' \
@@ -919,8 +1237,9 @@ done
 - Settings and SQL: `maintenance_work_mem`, `statement_timeout`, `lock_timeout`, `default_transaction_isolation`, `STRICT` semantics, extension `superuser` default, catalog columns and the `oid`-to-`regclass` cast.
 - Build/generated headers: `BLCKSZ` and `MAXIMUM_ALIGNOF` from `configure.in`; no generated header is specific to amcheck.
 - History: the checkout is a shallow clone, so no history claim is made.
-- Measurement: the complete script above, its 39-check result record, two startup-interruption results and both platform records; expected API errors in the upstream regression output; pageinspect's header and B-tree statistics fields; `pg_ctl` launch, detachment and startup-timeout paths.
-- Comparison set for the contradiction check: the whole page including the script and results; the [zeroed-segment amcheck page](amcheck-zeroed-relation-segments.md), the [corruption-log page](../observability/corruption-log-messages-with-checksums-disabled.md), the [post-drop health page](../server-administration/health-after-zeroed-schema-drop.md), the [database-health checklist](../server-administration/database-health-checklist.md), related heap/visible-count and zeroed-file claims found by symbol searches, and the B-tree bloat page's contrib-boundary statement; the glossary entries linked here; this page's index entries and the v12 manifest row. The hint-bit comparison also found the separate leaf-density issue recorded below. PostgreSQL 12 has no common-concept pages.
+- Follow-up on dangling index entries: the amcheck header comment and docs principle, the fingerprint and callback, `BTreeTupleGetHeapTIDCareful()` and `_bt_check_natts()`'s TID-format checks, the Bloom filter API header, `heap_hot_search_buffer()`, `index_getnext_slot()`, `mdread()`'s short-read path, `heap_prune_chain()`, `README.HOT` on redirects, dead roots and heap-only tuples, `lazy_scan_heap()`'s index-cleanup-disabled branch, `lazy_vacuum_heap()`'s ordering comment, `vacuum_rel()`'s lock mode, the lock conflict table, `vacuum_index_cleanup` and `fillfactor` reloptions, `pageinspect`'s `bt_page_stats()`, `bt_page_items()`, `heap_page_items()`, `get_raw_page()` privilege and range checks and SQL declarations, `MATERIALIZED` grammar and docs, `btrim()`/`split_part()` docs, `LOCK TABLE` docs, and the [visible-count checker's unresolved-TID section](sql-heap-index-visible-count-checker-plan.md#heap-side-loss-and-the-unresolved-tid-signal).
+- Measurement: the complete script above, its 67-check result record, two startup-interruption results and both platform records; expected API errors in the upstream regression output; pageinspect's header and B-tree statistics fields; `pg_ctl` launch, detachment and startup-timeout paths.
+- Comparison set for the contradiction check: the whole page including the script and results; the [zeroed-segment amcheck page](amcheck-zeroed-relation-segments.md), the [corruption-log page](../observability/corruption-log-messages-with-checksums-disabled.md), the [post-drop health page](../server-administration/health-after-zeroed-schema-drop.md), the [database-health checklist](../server-administration/database-health-checklist.md), related heap/visible-count and zeroed-file claims found by symbol searches, and the B-tree bloat page's contrib-boundary statement; for the follow-up, the [visible-count checker](sql-heap-index-visible-count-checker-plan.md), the [coverage page](../storage-and-vacuum/checksums-and-amcheck-detection-coverage.md) and the [emptied-segment page](amcheck-emptied-segments-with-checksums.md), found by searching for one-way, dangling, vanished and unresolved-TID claims; the glossary entries linked here; this page's index entries and the v12 manifest row. The hint-bit comparison also found the separate leaf-density issue recorded below. PostgreSQL 12 has no common-concept pages.
 
 ## Evidence Map
 
@@ -945,6 +1264,9 @@ done
 | Hint-update FPI conditions | [MarkBufferDirtyHint](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3422-L3510), [XLogSaveBufferForHint](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L895-L957); source-only |
 | Backup excludes unlogged non-init forks and temporary relations before checking pages | [sendDir](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1162); unlogged main/init selection measured in the checksums-on backup leg |
 | Startup cleanup must account for a server before ownership confirmation | [pg_ctl launch](../../../../raw/postgres-12/src/bin/pg_ctl/pg_ctl.c#L449-L486), [startup timeout](../../../../raw/postgres-12/src/bin/pg_ctl/pg_ctl.c#L887-L924); two deterministic interruption tests in the published script |
+| No amcheck report for dangling index entries; why | [header](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L11-L14), [Bloom API](../../../../raw/postgres-12/src/include/lib/bloomfilter.h#L18-L25), [README.HOT](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L64-L120), [vacuumlazy.c:764-785](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L764-L785), [vacuumlazy.c:1243-1265](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1243-L1265); measured 548 unreported entries in both legs |
+| Index scans skip TIDs with no line pointer and fail on blocks past the end | [heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1555-L1590), [index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L624-L632), [mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630); measured in both legs |
+| `pageinspect` dangling-entry check | [btreefuncs.c](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L108-L122), [btreefuncs.c:269-280](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L269-L280), [heapfuncs.c:166-206](../../../../raw/postgres-12/contrib/pageinspect/heapfuncs.c#L166-L206), [rawpage.c:148-152](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L148-L152), [lock.c:83-86](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L83-L86); measured 0 rows on the control and 548 on the fault in both legs |
 | `zero_damaged_pages`, `ignore_checksum_failure`, hot standby behavior | [guc.c:1135-1161](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1135-L1161), [bufmgr.c:908-924](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L908-L924), [lock.c:758-766](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L758-L766) |
 
 ## Open Questions
@@ -953,7 +1275,7 @@ done
 - **Docs wording on which heap tuples are checked.** `amcheck.sgml` says `bt_index_check` verifies "the presence of all heap tuples as index tuples". The source checks only rows visible to its MVCC snapshot under `bt_index_check`, only rows satisfying a partial index's predicate, and under the parent check excludes HOT-updated recently dead rows. Source wins; the docs sentence is broader than the code. [amcheck.sgml#bt_index_check](../../../../raw/postgres-12/doc/src/sgml/amcheck.sgml#L100-L104) [heapam_handler.c#vacuum-visibility](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1402-L1428) [heapam_handler.c#predicate-values-hot](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L1611-L1615)
 - **Exact miss probability below 2 bytes per row.** The docs and the source comment bound the rate at about 2% for about 2 bytes per row, but the pinned tree does not compute it for less memory, as in calculation B. The rate there is left unstated.
 - **Docs versus source on checksum counters.** The monitoring description does not name the `track_counts` gate or this pin's single-mismatch base-backup exception. The source wins, and the measurement reproduces both exclusions. [monitoring.sgml#checksum_failures](../../../../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2600-L2612) [pgstat.c#report-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1532-L1556) [basebackup.c#per-file-report](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1611-L1622)
-- **Limits of this measurement.** The script does not inject downlink corruption, estimate Bloom miss rates, exercise malformed `pd_upper == 0` pages, measure hint-update FPIs, test `zero_damaged_pages`, test standby short reads, measure temporary-relation backup exclusion, or restore the malformed backup. Those explanations remain source deductions, not measured outcomes. The shutdown tests inject signals at the pending-ownership boundary after launch; they do not reproduce a real startup timeout or every signal timing. No source/measurement disagreement remains: truncating the TOAST heap fails at the earlier short-read check, and the backup client translates the server's checksum error as documented by their separate source paths.
+- **Limits of this measurement.** The script does not inject downlink corruption, estimate Bloom miss rates, exercise malformed `pd_upper == 0` pages, measure hint-update FPIs, test `zero_damaged_pages`, test standby short reads, measure temporary-relation backup exclusion, or restore the malformed backup. The dangling-entry fixture injects only an all-zero page and a cut file; it does not inject an `LP_UNUSED` line pointer or an index entry that names a heap-only tuple, and it runs no concurrent writer or VACUUM against the `SHARE` lock. Those explanations remain source deductions, not measured outcomes. The shutdown tests inject signals at the pending-ownership boundary after launch; they do not reproduce a real startup timeout or every signal timing. No source/measurement disagreement remains: truncating the TOAST heap fails at the earlier short-read check, and the backup client translates the server's checksum error as documented by their separate source paths.
 - **Contradiction outside this task's edit scope.** The [leaf-density/fragmentation page](leaf-density-vs-fragmentation-index-scan-io.md#reproduction) says `synchronous_commit = off` prevents the first VACUUM from setting committed hint bits. The [Hint bits glossary entry](../../../glossary.md#hint-bits) correctly makes this conditional. In this pin, `SetHintBits()` refuses only when the buffer is permanent, the commit LSN still needs flushing, and the page LSN is older. The source supports the glossary; the other page's measured outcome does not establish its unconditional explanation. That page was reported but not edited. [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L113-L131)
 - **Another contradiction outside this task's edit scope.** The [database-health checklist](../server-administration/database-health-checklist.md#observability-prerequisites) says offline `pg_checksums` “verifies every file,” following `pg_checksums.sgml`'s statement that every file in the cluster is scanned or rewritten. This page's tool table instead names its exclusions. The source supports the bounded scope: the `skip[]` list, `pgsql_tmp` temporary-entry exclusions and optional `-f` filenode filtering limit files, and `PageIsNew()` pages bypass comparison. The checklist was reported but not edited, and the documentation's unqualified "every file" wording is recorded here as a docs-versus-source discrepancy. [pg_checksums.sgml#operation](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L48-L52) [pg_checksums.c#skip-list](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L95-L110) [pg_checksums.c#temporary-exclusions](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L301-L311) [pg_checksums.c#filenode-filter](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L353-L355) [pg_checksums.c#new-page-skip](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L210-L213)
 - **No common-concept pages.** PostgreSQL 12 has no common-concept page for B-tree integrity checking or for data checksums and page verification. Both would be useful separate pages; neither was created as part of this answer.
@@ -973,6 +1295,7 @@ done
 - [indexam.c#index_open](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L126-L140), [indexam.c#index_fetch_heap](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L588), [nbtutils.c#killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1781-L1811), [nbtutils.c#_bt_check_natts](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L2382-L2474), [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L113-L131).
 - [xloginsert.c#XLogSaveBufferForHint](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L895-L957), [elog.c#default-errcode](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L382-L388), [pgstat.c#checksum-reporting](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1532-L1556).
 - [like.c#textlike](../../../../raw/postgres-12/src/backend/utils/adt/like.c#L284-L300), [fmgr.h#detoast-macros](../../../../raw/postgres-12/src/include/fmgr.h#L283-L303), [check_btree.out#target-errors](../../../../raw/postgres-12/contrib/amcheck/expected/check_btree.out#L46-L61), [pageinspect--1.5.sql#page_header](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L20-L33), [pageinspect--1.5.sql#bt_page_stats](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L160-L175).
+- Follow-up: [bloomfilter.h](../../../../raw/postgres-12/src/include/lib/bloomfilter.h#L18-L25), [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1525-L1590), [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635), [pruneheap.c#heap_prune_chain](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L326-L347), [README.HOT](../../../../raw/postgres-12/src/backend/access/heap/README.HOT#L60-L122), [vacuumlazy.c](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L285-L286), [vacuumlazy.c:764-785](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L764-L785), [vacuumlazy.c:1243-1265](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1243-L1265), [vacuumlazy.c:1515-1524](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1515-L1524), [vacuum.c#vacuum_rel](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1676-L1681), [vacuum.sgml#INDEX_CLEANUP](../../../../raw/postgres-12/doc/src/sgml/ref/vacuum.sgml#L187-L204), [reloptions.c](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L143-L176), [rel.h](../../../../raw/postgres-12/src/include/utils/rel.h#L278-L279), [lock.c:78-86](../../../../raw/postgres-12/src/backend/storage/lmgr/lock.c#L78-L86), [lock.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/lock.sgml#L61-L67), [htup_details.h:281](../../../../raw/postgres-12/src/include/access/htup_details.h#L281), [itemid.h:38-41](../../../../raw/postgres-12/src/include/storage/itemid.h#L38-L41), [bufpage.h:357-360](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360), [nbtree.h:181-219](../../../../raw/postgres-12/src/include/access/nbtree.h#L181-L219), [btreefuncs.c](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L48-L350), [heapfuncs.c](../../../../raw/postgres-12/contrib/pageinspect/heapfuncs.c#L135-L206), [rawpage.c](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L103-L152), [pageinspect.control](../../../../raw/postgres-12/contrib/pageinspect/pageinspect.control#L1-L5), [pageinspect--1.5.sql](../../../../raw/postgres-12/contrib/pageinspect/pageinspect--1.5.sql#L38-L189), [gram.y#opt_materialized](../../../../raw/postgres-12/src/backend/parser/gram.y#L11425-L11428), [select.sgml](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L320-L325), [func.sgml#btrim](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L1726-L1737), [func.sgml#split_part](../../../../raw/postgres-12/doc/src/sgml/func.sgml#L2336-L2346).
 - [pg_basebackup.c#options](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L330-L353), [pg_basebackup.c#checksum-error](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L2025-L2036), [installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L151), [installation.sgml#git-build](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318).
 - [gram.y#persistence-default](../../../../raw/postgres-12/src/backend/parser/gram.y#L3282-L3283), [heapam_handler.c#unlogged-init](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624), [basebackup.c#relation-exclusions](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1162), [xlog.c#InRecovery](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L189-L200).
 - [pg_ctl.c#detached-launch](../../../../raw/postgres-12/src/bin/pg_ctl/pg_ctl.c#L449-L486), [pg_ctl.c#startup-timeout](../../../../raw/postgres-12/src/bin/pg_ctl/pg_ctl.c#L887-L924).
