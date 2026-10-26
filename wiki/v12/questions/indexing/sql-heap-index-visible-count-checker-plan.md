@@ -247,7 +247,7 @@ The checker guarantees neither a particular index choice nor complete candidate 
 
 **Count equality cannot detect heap-side data loss.** Both scans read the same heap, and an index scan silently skips an index entry whose heap row is gone, so lost rows drop out of both counts equally. A table whose heap blocks were all zeroed would pass with 0 = 0; the measured zeroed-block fixture loses 58 of 300 rows and still passes. The runner reports each accepted index scan's TIDs that reached no visible row, `unresolved_index_tids`, as a best-effort signal that never changes a status. The [heap-side loss](#heap-side-loss-and-the-unresolved-tid-signal) walkthrough gives the mechanism. [heapam.c#unresolved-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1590) [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635)
 
-Three more rules keep positive evidence of damage from reading as success. A relation with a matching index gets the added status `PASS_WITH_ANOMALY` when another index's accepted count differs or an attempt failed with a storage-class [SQLSTATE](../../../glossary.md#sqlstate); without a match, such an error makes it `ERROR`. The run stops when a server setting that zeroes or accepts damaged pages, or that turns off the statistics counters, is in effect at its start or in the settings recorded with any count. And a TRUNCATE, rewrite, refresh, re-creation or index rename committed after the snapshot, before the checker first locks the relation, makes the relation `ERROR` instead of a stale PASS.
+Three more rules keep positive evidence of damage from reading as success. A relation with a matching index gets the added status `PASS_WITH_ANOMALY` when another index's accepted count differs or an attempt failed with a storage-class [SQLSTATE](../../../glossary.md#sqlstate); without a match, such an error makes it `ERROR`. The run stops when a server setting that zeroes or accepts damaged pages, or that turns off the statistics counters, is in effect at its start or in the settings recorded with any count. Its [identity checks](#snapshot-permissions-and-ddl-coordination) also make detected name or file-number drift `ERROR`, rather than accepting a stale match. They are not a complete post-snapshot DDL detector: in particular, a mapped catalog's file number is sampled live during inventory, so a preceding map change is not detected by comparing that number later.
 
 **The scans see pages as the [buffer manager](../../../glossary.md#buffer-manager) supplies them, not the bytes on disk.** A block already in shared buffers is used without verification; verification runs only when the block is read from the file. Damage on disk under a clean cached copy therefore reads as intact until that copy is evicted or the server restarts. The measured cached-damage leg passes with all 300 rows before a restart and loses the zeroed block's 58 rows after it. [bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L763-L793) [bufmgr.c#verify-after-read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925)
 
@@ -393,7 +393,9 @@ Coordinate a DDL-stable window **before the first snapshot-acquiring statement a
 
 **The runner detects identity drift itself.** After a relation's accepted heap attempt, the planner's `ACCESS SHARE` locks on the table and all of its indexes last until COMMIT, because a released savepoint passes its locks to the transaction. [plancat.c#index-locks](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L170-L196) [resowner.c#subtransaction-locks](../../../../raw/postgres-12/src/backend/utils/resowner/resowner.c#L594-L603)
 
-The runner then compares, for the table and each index, the snapshot-time name and [file number](../../../glossary.md#relfilenumber) with the current catalog. `to_regclass()` and `pg_relation_filenode()` look names and rows up in the [system caches](../../../glossary.md#syscache) rather than with the snapshot. Once a backend is granted a lock it did not already hold, it processes pending invalidations. The heap attempt takes the checking transaction's first lock on the target, so the caches then reflect every commit up to that lock. For a mapped catalog the inventory's number already came from `pg_relation_filenode()`, so both sides read the relation mapper. A difference saves the relation's `identity_drift` and makes it `ERROR`; no index attempt follows. [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968) [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904) [lmgr.c#invalidations-after-new-lock](../../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L116-L138)
+The runner then compares, for the table and each index, the retained name and [file number](../../../glossary.md#relfilenumber) with the current catalog. Names and nonzero `pg_class.relfilenode` values come from the inventory's snapshot; a mapped catalog's zero field instead requires a live mapper lookup. `to_regclass()` and `pg_relation_filenode()` look names and rows up in the [system caches](../../../glossary.md#syscache) rather than with the snapshot. Once a backend is granted a lock it did not already hold, it processes pending invalidations. For a mapped catalog the inventory's number already came from `pg_relation_filenode()`, so both samples read the relation mapper. A difference saves the relation's `identity_drift` and makes it `ERROR`; no index attempt follows. [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968) [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904) [lmgr.c#invalidations-after-new-lock](../../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L116-L138)
+
+**Mapped file numbers are not snapshot-time identity evidence.** If a mapped relation is rewritten after `S` but before its inventory lookup, both the inventory and later check can see the replacement file number, leaving `identity_drift` empty. The mapper has no `S` argument: it reads the backend's currently known map, refreshed by invalidation, rather than retaining a map version for `S`. A scalar lookup alone need not absorb a pending invalidation; acquiring a new relation lock provides an invalidation-processing point. A mapped rewrite changes the map rather than a nonzero `pg_class.relfilenode`. Detection for such a file compares against the inventory's mapper sample, not an `S`-era file identity. The operator's DDL-stable window must still begin before `S`. The harness rewrites `pg_type` between `hic_start()` and `hic_inventory()`, obtains the replacement number from a separate session, then checks what inventory and the normal identity comparison observe. [relmapper.c#known-maps](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L103-L110) [relmapper.c#current-map](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L147-L196) [relmapper.c#map-invalidation](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L393-L415) [lmgr.c#invalidations-after-new-lock](../../../../raw/postgres-12/src/backend/storage/lmgr/lmgr.c#L116-L138) [cluster.c#mapped-swap](../../../../raw/postgres-12/src/backend/commands/cluster.c#L1064-L1110)
 
 | Change committed after `S`, before the lock | Effect without the check | What the check sees |
 |---|---|---|
@@ -591,7 +593,7 @@ The first and third rows follow the snapshot lifecycle; savepoint rollback is th
 
 ### Heap-side loss and the unresolved-TID signal
 
-The count comparison detects an index that misses visible rows or returns one twice. It cannot detect heap rows that are gone:
+The count comparison detects a net cardinality difference between the two accepted executions. A missing visible row and a duplicate result can cancel, as in the [equal-cardinality example](#values-and-decision-flow); the count transition increments a counter rather than comparing row identities. It also cannot detect heap rows that are gone from both observations. [pg_aggregate.dat#count](../../../../raw/postgres-12/src/include/catalog/pg_aggregate.dat#L217-L219) [int8.c#count-increment](../../../../raw/postgres-12/src/backend/utils/adt/int8.c#L695-L706)
 
 1. A zeroed heap page, an [all-zero page](../../../glossary.md#all-zero-page), has no [line pointers](../../../glossary.md#line-pointer), so the sequential scan returns nothing from it. [bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360) [heapam.c:405](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L405)
 2. The index still holds entries for the lost rows. For each one, `heap_hot_search_buffer()` returns no row when the offset is past the page's line pointers, the line pointer is not normal, or the TID names a heap-only tuple at chain start. [heapam.c#unresolved-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1590)
@@ -709,14 +711,15 @@ Deparsed expressions require an additional guard. Outside quotes psql substitute
 | Missing schema/DDL attestation, invalid yes/no option or unusable output directory | Refuse before connecting | Exit 64 |
 | Installation, initialization or inventory fails | Record a run error where possible; roll back and end the session | Exit 2; no completed report |
 | A [refused server setting](#settings-and-query-shapes) is in effect at the start, or a count row records one after a reload | Record the stop reason; roll back | Exit 2; no count taken under it is accepted |
-| Count execution, plan import or inspection errors, or a warning while counting | Recover inside the attempt savepoint; record stage/SQLSTATE/message/detail/hint | No coverage; same-snapshot bounded retry remains possible; an XX, 58 or 01 error is an anomaly and never covered |
-| Name or `relfilenode` changed after the snapshot | Record identity drift after the accepted heap attempt, or reject an attempt whose executed index name moved | Relation `ERROR`; no further index attempts |
+| SQL errors during count execution, plan import or inspection, or a warning while counting | Recover inside the attempt savepoint; record stage/SQLSTATE/message/detail/hint | No coverage; same-snapshot bounded retry remains possible; an XX, 58 or 01 error is an anomaly and never covered |
+| An identity comparison establishes a changed name or file number | Record identity drift after the accepted heap attempt or executed-index resolution; mapped file numbers are compared from their live inventory sample | Relation `ERROR`; no further index attempts |
 | Executed plan fails acceptance gates | Retain rejection and reasons after releasing savepoint | No coverage; candidate may remain untested |
 | Valid attempt | Release savepoint, then publish accepted count and actual-index identity | May establish baseline, coverage or PASS |
 | Savepoint recovery or connection fails | Invalidate the run; do not reconnect | Exit 2 |
 | No candidate can be accepted | Apply the defined status precedence | Completed non-success exits 1 |
 | Final context differs from retained transaction/snapshot/backend/role | End as incomplete | Exit 2 |
 | COMMIT, report writing or session close fails, or a local evidence file cannot be read | Keep partial audit output, omit a successful completion marker | Exit 2 |
+| Executed-plan file missing, empty or unreadable; plan/inspection response cannot be saved | Stop rather than turning a local I/O failure into a recoverable attempt | Exit 2; a later retry cannot cover the missing evidence |
 | Complete inventory, checking, commit and reporting succeed | Write seven reports and `summary.txt` | Exit 0 for schema success, otherwise 1; `PASS_WITH_ANOMALY` is not success |
 
 | Event | Database state | Local evidence state |
@@ -782,6 +785,8 @@ The matrix below is the **design-level test target**, including cases broader th
 | Populated, empty-populated and unpopulated materialized views | Stored heap rows are counted when populated; unpopulated is NOT_APPLICABLE; no unsupported `LOCK TABLE` command is generated |
 | RLS owner, forced RLS owner, BYPASSRLS role and ordinary restricted role | Off is a guard: filtered roles error; bypass requires the role and ordinary object privileges |
 | Missing schema USAGE, table SELECT, database TEMP or function EXECUTE | An explicit ERROR; denied objects remain in the inventory |
+| A missing, empty or unreadable saved plan; a failed plan/inspection response copy | Fatal local I/O failure, not an ordinary attempt error that a later accepted count can cover |
+| A mapped-catalog rewrite after `S`, before inventory | Inventory samples the replacement map; matching later identity does not establish absence of an earlier rewrite |
 | A deferred custom constant-expression index, with function EXECUTE allowed or denied | Deferral does not suppress planner evaluation: denied EXECUTE fails the heap baseline; the allowed companion can pass through a separate ordinary column index |
 | Only partial indexes; only unsupported AMs; invalid/not-ready/not-live indexes | NO_ELIGIBLE_INDEX only when eligibility is completely settled; record all exclusion reasons |
 | `indcheckxmin` true with older/newer checking horizons, and a new transaction retry | Do not reject by flag alone or integer-xmin comparison; credit only actual accepted use; never carry `H` across snapshot changes |
@@ -809,7 +814,7 @@ The acceptance gate is that all positive fixtures produce a count only from vali
 
 ### Measured coverage and remaining test gaps
 
-The current Bash-owned implementation passed **276 assertions** in each of two runs of the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
+The current Bash-owned implementation passed **298 assertions** in each of two runs of the published reproduction suite. The last-run record under [Measurement Script](#measurement-script) identifies the platform and runs. These measurements establish the exercised outcomes, not physical corruption-detection rates.
 
 | Exercised case | Result |
 |---|---|
@@ -824,6 +829,7 @@ The current Bash-owned implementation passed **276 assertions** in each of two r
 | Plan-shape units | 41 assertions: valid heap/index/backward plans and malformed, restricted, parallel, wrongly typed, missing, grouped, extra-branch, wrong-marker and unknown-node shapes |
 | Synthetic evaluator | 14 cases cover partial versus complete mismatch coverage, recovered/optional errors, conflicting baselines, invalid evidence and exact comparison at signed-bigint maximum. Two mismatches then a match, an XX001 error plus a match, and a warning-class heap error followed by an accepted retry each give `PASS_WITH_ANOMALY`; a rejected attempt whose executed index name moved, and saved drift, each give ERROR |
 | Truncated plan and rollback | `22P02` with DETAIL; count row is absent after savepoint rollback; same-snapshot retry passes and retains 1 failed attempt |
+| Plan-evidence I/O | 15 added assertions: missing/directory/empty plans and a simulated read error after complete output return 2; restoring the file permits import and rollback. Plan-copy, inspection-response-copy and plan-destination-directory failures stop full checking runs with 2, invalidate evidence, roll back captured counts and produce no success report |
 | Held ACCESS EXCLUSIVE lock | Two heap attempts time out with `55P03`; relation ERROR, never an empty-table pass |
 | Disconnect and output failure | Terminated backend ends the next request as incomplete; an unusable report filename fails reporting |
 | Client/program boundary | CLI exits 0, 1, 2 and 64; no attestation refuses before connecting; seven reports emitted for a completed positive run |
@@ -842,7 +848,8 @@ The current Bash-owned implementation passed **276 assertions** in each of two r
 | Physical leg, zeroed block | 58 of 300 rows lost; PASS with heap 242, and `unresolved_index_tids=58` |
 | Physical leg, invalid header | Both heap attempts fail with `XX001`; relation ERROR with 2 storage errors; a CLI run with `zero_damaged_pages=on` is refused |
 | Physical leg, cached copy | Block 1 of a third table zeroed under the running server after `VACUUM (FREEZE)` and `CHECKPOINT`: `PASS` with 300 rows and `unresolved_index_tids=0`; after the restart the same table gives `PASS` with 242 rows and 58 unresolved TIDs |
-| Mapped catalogs | `pg_catalog`, checked as superuser: 63 physical catalogs pass, including `pg_class`, `pg_attribute`, `pg_proc`, `pg_type` and `pg_database`, none with drift; 117 eligible indexes, 63 checked, 54 untested. Unresolved index TIDs: 3947 in the fresh-build run and 1482 in the retained-build run; this signal never changes a status |
+| Mapped catalogs | `pg_catalog`, checked as superuser: 63 physical catalogs pass, including `pg_class`, `pg_attribute`, `pg_proc`, `pg_type` and `pg_database`, none with drift; 117 eligible indexes, 63 checked, 54 untested. Unresolved index TIDs: 1586 in the fresh-build run and 1513 in the retained-build run; this signal never changes a status |
+| Mapped rewrite between `S` and inventory | 7 added assertions: a separate-session `VACUUM FULL pg_type` changes its mapped file number while the checker retains `S`; inventory captures the replacement number. All 63 catalog targets pass, including `pg_type` with empty drift. This confirms the sampling limit, not a guarantee that no rewrite occurred |
 | Guarded names | The table `odd:'name:` passes with 3 rows |
 | Message level | A plain psql session with `client_min_messages=error` prints no warning for `ROLLBACK` outside a transaction; the runner's session reads `notice` and receives the `25P01` warning |
 | Unavailable signal, synthetic report input | Blanking the accepted index attempt's signal gives `unresolved_index_tids=0` and `unresolved_tids_unavailable=1` |
@@ -1116,7 +1123,8 @@ hic_data() {
     local s_dir s_in s_out s_pid s_seq
     hic_session "$HIC_S" || return 2
     hic_sql "$HIC_S" "$2" || return
-    cp "$s_dir/response" "$1"
+    [ ! -d "$1" ] && cp "$s_dir/response" "$1" \
+        || { HIC_STOP='could not save query response'; return 2; }
 }
 
 hic_parse_error() {
@@ -1743,15 +1751,12 @@ FROM pg_temp.hic_count WHERE attempt_id=$HIC_ATTEMPT_ID;" || return
 
 hic_attempt_import() {
     # Import the saved plan into pg_temp.hic_plan as a dollar-quoted literal.
-    local json="$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json" tag n=0
-    [ -s "$json" ] || { HIC_ERR_MESSAGE='missing executed plan'; return 1; }
-    while grep -F -q -e "\$hic12_plan$n\$" "$json"; do n=$((n + 1)); done
-    tag="\$hic12_plan$n\$"
-    {
-        printf 'INSERT /* wiki_hic12_import_plan */ INTO pg_temp.hic_plan(attempt_id,document) VALUES (%s,%s' "$HIC_ATTEMPT_ID" "$tag"
-        cat "$json"
-        printf '%s::jsonb);\n' "$tag"
-    } > "$HIC_A/import.sql" || return 2
+    hic_get "$HIC_OUT/plans" "attempt-$HIC_ATTEMPT_ID.json" \
+        || { HIC_STOP='could not read executed plan'; return 2; }
+    [ -n "$HIC_VALUE" ] || { HIC_STOP='empty executed plan'; return 2; }
+    hic_literal "$HIC_VALUE"
+    printf 'INSERT /* wiki_hic12_import_plan */ INTO pg_temp.hic_plan(attempt_id,document) VALUES (%s,%s::jsonb);\n' \
+        "$HIC_ATTEMPT_ID" "$HIC_LITERAL" > "$HIC_A/import.sql" || return 2
     hic_request "$HIC_S" "$HIC_A/import.sql" || return 2
     [ "$HIC_FAILED" = false ]
 }
@@ -1806,7 +1811,7 @@ hic_attempt_run() {
     # Execute, save, import and inspect, setting hic_attempt_once's stage.
     # Returns 0 when inspected, 1 for an error the savepoint can recover
     # (HIC_ERR_* describe it), 2 when the run cannot continue.
-    local rc s_dir s_in s_out s_pid s_seq
+    local rc s_dir s_in s_out s_pid s_seq json="$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json"
     HIC_ERR_CODE= HIC_ERR_MESSAGE= HIC_ERR_DETAIL= HIC_ERR_HINT=
     stage=execution
     if [ "$HIC_PHASE" = index ] && grep -E -q "$HIC_GUARD" "$HIC_OUT/indexes/$HIC_INTENDED/order"; then
@@ -1824,8 +1829,8 @@ hic_attempt_run() {
     fi
 
     stage=capture
-    cp "$s_dir/response" "$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json" \
-        || { HIC_ERR_MESSAGE='could not save executed plan'; return 1; }
+    [ ! -d "$json" ] && cp "$s_dir/response" "$json" \
+        || { HIC_STOP='could not save executed plan'; return 2; }
     hic_profiles control || return 2
     hic_attempt_import; rc=$?
     [ "$rc" != 2 ] || return 2
@@ -1870,9 +1875,9 @@ hic_attempt_once() {
 hic_identity() {
     # hic_identity OID: after the accepted heap attempt, the planner's locks on
     # the table and every index last until COMMIT. Compare each one's
-    # snapshot-time name and relfilenode with the current catalog. TRUNCATE, a
-    # rewrite, a refresh, a drop and re-create or an index rename committed
-    # after the snapshot changes one of them; save that as drift.
+    # inventory name and file number with the current catalog. Mapped file
+    # numbers are sampled live during inventory, not at the snapshot: earlier
+    # map changes are not detected. Save a difference between samples as drift.
     local oid=$1 dir="$HIC_OUT/relations/$1" rows iid nsp id now_oid now_node want drift=
     hic_read_relation < "$dir/facts" || return 2
     hic_decode "$r_qualified" || return 1
@@ -2336,10 +2341,12 @@ bash .wiki-runtime/hic12-measure.sh
 | Prerequisites | Bash with `/dev/tcp`, Git, POSIX utilities including `ps`, `paste`, `cmp`, `mkfifo`, `dd`, `tr` and `sleep`; GNU make, a C compiler that accepts `-std=gnu99`, Bison/Flex and Perl required by a Git-source build. Run it from the repository root; the extraction command and `prepare` create `.wiki-runtime/tmp/` when it is missing. No network or extra extension. ([installation.sgml#build-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L80-L97), [installation.sgml#git-checkout-tools](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L300-L318)) |
 | Build | `--without-readline --without-zlib`, `CFLAGS='-O2 -std=gnu99'` and a private install prefix. The two `--without` options omit optional interactive editing/compression facilities, not visibility/planning behavior ([installation.sgml#optional-libraries](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L118-L151)). Without `CFLAGS`, configure uses `-O2` and the compiler's default language mode ([configure.in#default-cflags](../../../../raw/postgres-12/configure.in#L408-L415)). With GCC 15.2 that build stopped at `c.h:308`, `typedef unsigned char bool`, with "'bool' cannot be defined via 'typedef'" and GCC's note that `bool` is a keyword from `-std=c23` on ([c.h#bool-typedef](../../../../raw/postgres-12/src/include/c.h#L302-L309)). PostgreSQL 12 asks for a C99 compiler ([installation.sgml#C99](../../../../raw/postgres-12/doc/src/sgml/installation.sgml#L93-L94)), so the flag selects that mode and keeps `-O2` |
 | Output | `.wiki-runtime/tmp/hic12/suite-current.log`, `platform.txt`, `platform-sql.txt`, `build-options.txt`, then `results/<unique-db>/<case>/`; `last-test-output` names the latest result directory |
-| Runtime | Fresh build with `JOBS=8`: 51s; verification: 154s right after that build and 175s with the build retained, including the planning-permission fixture, `pg_catalog` run and physical leg's stop and restart. The fresh `prepare build init verify` invocation took 206s; retained-build verification took 175s. These correctness-fixture timings do not predict production scan cost |
+| Runtime | Fresh build with `JOBS=8`: 51s; verification: 226s right after that build and 225s with the build retained, including the plan-I/O fixtures, both catalog runs and the physical leg's stop and restart. The fresh `prepare build init verify` invocation took 277s. These correctness-fixture timings do not predict production scan cost |
 | Teardown | Each invocation stops only a server it started. A persistent sandbox marker identifies retained artifacts, not startup ownership. The `verify` stage stops and restarts its own server once, for the physical leg. A pre-existing running server is refused and left running, including on an early error. Omitting cleanup retains stopped build/results; the cleanup stage deletes them. Save any desired results before cleanup. The mid-run leg resets `zero_damaged_pages` with `ALTER SYSTEM RESET` and a reload right after its loop |
 
-**Last run:** 2026-10-26, after the planning-policy and contradiction review. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, built with GCC 13.3.0 (`CFLAGS='-O2 -std=gnu99'`) on Linux 6.18.54.1-microsoft-standard-WSL2 x86_64, GNU Bash 5.2.21 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. From an absent sandbox, `JOBS=8 bash .wiki-runtime/tmp/hic12-review-measure.sh prepare build init verify` ran from 15:23:38 to 15:27:04 UTC: build 51s, init 1s and verification 154s, passing all 276 assertions. A second `verify` with the build retained ran from 15:27:15 to 15:30:10 UTC, 175s, and passed all 276 again. Both invocations fast-stopped their owned server. Independent checks confirmed no PID file or data-directory process, an empty socket directory and a free port 55447 on both loopback families; `cleanup` then took 1s and deleted the sandbox including its build and results. In both runs, the zeroed block and the cached block each held 58 of 300 rows of a 6-block heap. The published runner and harness blocks matched the files that ran; the production runner was unchanged by this review. Earlier dated measurements, including the GCC 15 and Darwin runs, remain historical.
+**Last run:** 2026-10-26, after the second review's plan-I/O and identity-window fixes. Unchanged PostgreSQL 12.2 pin `45b88269a353ad93744772791feb6d01bc7e1e42`, built with GCC 13.3.0 (`CFLAGS='-O2 -std=gnu99'`) on Linux 6.18.54.1-microsoft-standard-WSL2 x86_64, GNU Bash 5.2.21 and pinned psql. Block size 8192, maximum alignment 8, UTF-8, C collation/ctype/lc_messages, server TimeZone America/Toronto, checksums disabled. From an absent sandbox, `JOBS=8 bash .wiki-runtime/tmp/hic12-second-review.sh prepare build init verify` ran from 15:58:21 to 16:02:58 UTC: build 51s, init under 1s and verification 226s, passing all 298 assertions. A second `verify` with the build retained ran from 16:48:54 to 16:52:39 UTC, 225s, and passed all 298 again. Both invocations fast-stopped their owned server. Independent checks confirmed no PID file or data-directory process, an empty socket directory and a free port 55447 on both loopback families; `cleanup` then took 1s and deleted the sandbox including its build and results. In both runs, the zeroed block and cached block each held 58 of 300 rows of a 6-block heap. The mapped-window fixture changed `pg_type`'s file number from 1247 to 17740 in the fresh run and to 19221 in the retained run; inventory recorded the respective replacement, and later checking passed with no drift. The published runner and harness blocks matched the files that ran.
+
+An initial development run stopped at the mapped-window fixture because its checking-session scalar lookup still returned the old cached map value. The fixture was corrected to obtain the replacement number from a separate session and then test inventory's observation; the invalidation mechanism is explained above. That invocation stopped its server, and its sandbox was removed before the successful fresh build. Earlier dated measurements, including the 276-assertion, GCC 15 and Darwin runs, remain historical.
 
 Non-default behavior is intentional. The [settings table](#settings-and-query-shapes) gives the checker profiles, their defaults, mechanisms and transaction/session scope. These additional fixture changes supply specific test conditions:
 
@@ -2368,6 +2375,10 @@ Non-default behavior is intentional. The [settings table](#settings-and-query-sh
 | Lock/error/output fixtures | No blocker/truncation/termination/output obstacle by default → explicit second-session lock, cut JSON, terminated backend, report filename directory | Exercises 55P03, JSON parse failure, connection loss and local I/O failure; no default-leg measurement is claimed ([postgres.c#timeout-errors](../../../../raw/postgres-12/src/backend/tcop/postgres.c#L3082-L3095), [json.c#parse-error](../../../../raw/postgres-12/src/backend/utils/adt/json.c#L1126-L1137), [signalfuncs.c#termination](../../../../raw/postgres-12/src/backend/storage/ipc/signalfuncs.c#L128-L137)) |
 
 The planning fixture adds two SQL functions explicitly declared `IMMUTABLE` instead of the function-creation default `VOLATILE`, each returning its integer argument plus one, and indexes their constant calls alongside ordinary column indexes. The immutable declaration makes constant pre-evaluation possible. New functions normally grant `EXECUTE` to PUBLIC; the fixture revokes that default for only `hic_planning.denied(integer)`, while leaving the checking role's schema and table read privileges intact. This isolates a planning-time function-permission error from relation access failures. The allowed companion retains the default permission. [functioncmds.c#volatility-default](../../../../raw/postgres-12/src/backend/commands/functioncmds.c#L965-L976) [acl.c#function-default](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L776-L780) [clauses.c#constant-function-evaluation](../../../../raw/postgres-12/src/backend/optimizer/util/clauses.c#L4333-L4370) [execExpr.c#function-permission](../../../../raw/postgres-12/src/backend/executor/execExpr.c#L2159-L2163)
+
+The plan-evidence fixtures remove a saved plan, replace it with a directory or an empty file, simulate `cat` returning an error after emitting the complete file, and simulate failures copying the plan or decoded inspection response. They also replace the plan destination with a directory. These are controlled local I/O failures, not PostgreSQL corruption or SQL errors. They must stop the affected operation or run with status 2; the full-run cases check rollback and absence of a success report. The existing nonempty malformed-JSON fixture remains a recoverable server `22P02` case.
+
+The mapped-window fixture deliberately violates the DDL-stability prerequisite in its disposable database: normal operation would keep the window stable before `S`, whereas this test commits `VACUUM (FULL) pg_catalog.pg_type` from a second session after `hic_start()` and before `hic_inventory()`. It checks that the mapper's file number changes, the transaction snapshot remains the same, and inventory captures the replacement number. This tests a detection limit, not a newly supported concurrent-DDL mode. A mapped rewrite swaps relation mappings, and a later lookup reads the current map rather than a snapshot-era file number. [cluster.c#mapped-swap](../../../../raw/postgres-12/src/backend/commands/cluster.c#L1064-L1110) [relmapper.c#current-map](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L147-L196)
 
 All CREATE/ALTER/INSERT/UPDATE/DELETE/DROP statements in this harness are **disposable fixtures**, confined to its owned cluster and test databases. Plan and evaluator units are synthetic evidence, not damaged-index experiments. The driver and its expected-error probes use only Bash and SQL, with the same `\echo` synchronization as the checker.
 
@@ -3291,6 +3302,62 @@ hic_put "$REL_DIR" drift storage_1; eval_is ERROR relation_drift; hic_put "$REL_
 eval_is PASS drift_cleared
 hic_sql main 'ROLLBACK /* wiki_hic12_synthetic_end */;' || fail rollback
 close_case
+open_case plan_evidence
+start_run hic_concurrent false false
+relation t
+HIC_RELATION=$REL_OID HIC_REL_SCHEMA=${HIC_R[2]} HIC_REL_NAME=${HIC_R[3]} HIC_REL_QUALIFIED=${HIC_R[4]}
+HIC_PHASE=heap HIC_INTENDED= HIC_VARIANT=1
+hic_prepare_attempt || fail plan_evidence_prepare
+hic_request main "$HIC_A/count.sql" || fail plan_evidence_execute
+[ "$HIC_FAILED" = false ] || fail plan_evidence_count
+plan_file="$HIC_OUT/plans/attempt-$HIC_ATTEMPT_ID.json"
+cp "$(sfile response)" "$plan_file.saved" || fail plan_evidence_save
+hic_profiles control || fail plan_evidence_profile
+for fault in missing directory empty read_error; do
+    case $fault in
+        missing) ;;
+        directory) mkdir "$plan_file" || fail plan_directory ;;
+        empty) : > "$plan_file" || fail plan_empty ;;
+        read_error)
+            cp "$plan_file.saved" "$plan_file" || fail plan_restore
+            cat() { command cat "$@"; [ "$1" != "$plan_file" ]; } ;;
+    esac
+    hic_attempt_import; rc=$?
+    [ "$fault" != read_error ] || unset -f cat
+    [ "$rc" = 2 ] || fail "plan $fault returned $rc"
+    ok "plan_${fault}_fatal"
+    case $fault in directory) rmdir "$plan_file" || fail plan_remove_directory ;;
+        empty|read_error) rm "$plan_file" || fail plan_remove_file ;; esac
+done
+mv "$plan_file.saved" "$plan_file" || fail plan_restore
+hic_attempt_import || fail plan_import_restored
+ok plan_import_restored
+hic_recover || fail plan_evidence_recover
+expect plan_evidence_rollback 'SELECT /* wiki_hic12_plan_evidence_rollback */
+ (SELECT count(*)=0 FROM pg_temp.hic_count) AND (SELECT count(*)=0 FROM pg_temp.hic_plan);'
+hic_sql main 'ROLLBACK /* wiki_hic12_plan_evidence_end */;' || fail plan_evidence_end
+close_case
+for copy_fault in plan facts plan_directory; do
+    open_case "copy_$copy_fault"
+    cp() {
+        case $copy_fault:$2 in
+            plan:"$HIC_OUT"/plans/*|facts:"$HIC_OUT"/attempts/*/plan-facts) return 1 ;;
+        esac
+        command cp "$@"
+    }
+    if [ "$copy_fault" = plan_directory ]; then
+        mkdir -p "$HIC_OUT/plans/attempt-1.json" || fail plan_destination_directory
+    fi
+    hic_check hic_lock false false; rc=$?
+    unset -f cp
+    [ "$rc" = 2 ] || fail "copy $copy_fault returned $rc"
+    ok "copy_${copy_fault}_run_incomplete"
+    [ "$HIC_EVIDENCE_VALID" = false ] && [ "$HIC_SCHEMA_SUCCESS" = false ] \
+        && [ ! -e "$HIC_OUT/schema.csv" ] || fail copy_failure_success
+    ok "copy_${copy_fault}_no_success_report"
+    expect "copy_${copy_fault}_rollback" 'SELECT /* wiki_hic12_copy_failure_rollback */ count(*)=0 FROM pg_temp.hic_count;'
+    close_case
+done
 # Truncated JSON and count rollback: retry in the same snapshot.
 open_case retry
 start_run hic_concurrent false false
@@ -3547,6 +3614,33 @@ for name in pg_class pg_attribute pg_proc pg_type pg_database; do
     relation "$name"; field_is status PASS; field_is drift ''
 done
 close_case
+open_case mapped_window
+HIC_SCHEMA=pg_catalog HIC_EXTERNAL=false HIC_EXHAUSTIVE_BOOL=false
+HIC_ATTEMPT_ID=0 HIC_EVIDENCE_VALID=true HIC_STOP= HIC_SUMMARY= HIC_SCHEMA_SUCCESS=false
+mkdir -p "$HIC_OUT/relations" "$HIC_OUT/indexes" "$HIC_OUT/attempts" "$HIC_OUT/plans" || fail mapped_directories
+hic_install || fail mapped_install
+hic_start || fail mapped_start
+hic_sql main "SELECT /* wiki_hic12_mapped_before */ pg_relation_filenode('pg_catalog.pg_type'::regclass);" || fail mapped_before
+mapped_before=$HIC_VALUE
+"$bin/psql" -X -q -v ON_ERROR_STOP=1 -c "SET /* wiki_hic12_mapped_timeout */ statement_timeout='60s'" \
+    -c "SET /* wiki_hic12_mapped_lock */ lock_timeout='2s'" \
+    -c "VACUUM /* wiki_hic12_mapped_rewrite */ (FULL) pg_catalog.pg_type" > "$HIC_OUT/rewrite.log" 2>&1 || fail mapped_rewrite
+mapped_after=$("$bin/psql" -X -qAt -v ON_ERROR_STOP=1 \
+    -c "SELECT /* wiki_hic12_mapped_after */ pg_relation_filenode('pg_catalog.pg_type'::regclass);") || fail mapped_after
+hic_uint "$mapped_before" && hic_uint "$mapped_after" && [ "$mapped_before" != "$mapped_after" ] || fail mapped_file_unchanged
+ok mapped_file_changed_after_snapshot
+hic_inventory || fail mapped_inventory
+hic_literal "$HIC_SNAPSHOT"
+expect mapped_snapshot_retained "SELECT /* wiki_hic12_mapped_snapshot */ txid_current_snapshot()::text=$HIC_LITERAL;"
+relation pg_type
+hic_read_relation < "$REL_DIR/facts" || fail mapped_relation_facts
+[ "$r_filenode" = "$mapped_after" ] || fail mapped_inventory_not_current
+ok mapped_inventory_has_replacement_file
+run_loop; finish_case
+sum_is passed 63
+relation pg_type; field_is status PASS; field_is drift ''
+printf 'before=%s\nafter=%s\ninventory=%s\n' "$mapped_before" "$mapped_after" "$mapped_after" > "$HIC_OUT/map-values.txt"
+close_case
 # Physical fault leg: a fast stop writes every dirty buffer, so no later write
 # can cover the injected bytes, and the restart empties shared buffers, so the
 # first read of each damaged block comes from the file and is verified. Block
@@ -3637,7 +3731,8 @@ done
 - Verification: the single published harness exercises the runner and its fixtures. The run record is under Measurement Script above and teardown is in the task log; no application cluster, raw source edit, network fetch, subagent, commit or push is part of this work.
 - 2026-10-24 second review and fixes: buffer hits versus verified reads, the relation mapper behind a 0 `relfilenode`, configuration reload between statements, warning delivery under `client_min_messages`, psql's quoted-identifier state and `quote_identifier()`, the shutdown checkpoint, and the C99 language mode that a GCC 15 build of this pin needs.
 - 2026-10-24 third review and fixes: complete evidence-list reads and checked membership/count operations in verdicts and reports; missing-file and directory-substitution regressions; `_bt_killitems()` abandoning hints after a page LSN change; and statistics-socket startup failure forcing `track_counts` off. The hint race and socket-startup explanation are source-derived, not new PostgreSQL measurement cases.
-- 2026-10-26 review and fixes: followed baseline planning through `get_relation_info()`, relcache expression/predicate simplification, `evaluate_function()`, `evaluate_expr()` and function ACL checks. The added fixture demonstrates that generation deferral is not planner isolation. Qualified the shared-visibility explanation for the sequential `PD_ALL_VISIBLE` branch and the test matrix for best-effort killed-item hints; corrected the linked glossary's PostgreSQL 12 old-snapshot note. Both complete runs passed 276 assertions; the visibility-metadata and hint-race qualifications remain source-derived rather than new physical fixtures.
+- 2026-10-26 first review and fixes: followed baseline planning through `get_relation_info()`, relcache expression/predicate simplification, `evaluate_function()`, `evaluate_expr()` and function ACL checks. The added fixture demonstrates that generation deferral is not planner isolation. Qualified the shared-visibility explanation for the sequential `PD_ALL_VISIBLE` branch and the test matrix for best-effort killed-item hints; corrected the linked glossary's PostgreSQL 12 old-snapshot note. Both complete runs of that harness revision passed 276 assertions; the visibility-metadata and hint-race qualifications remain source-derived rather than new physical fixtures.
+- 2026-10-26 second review and fixes: traced local plan-read/copy failures through attempt recovery and verdict aggregation, made those I/O failures fatal, and retained recoverability for readable malformed JSON. Qualified mapped-file sampling against the mapper's backend-local state, invalidation and rewrite paths, and replaced the blanket missing/duplicate-row detection claim with net cardinality. Added 22 assertions; both complete runs passed 298. The mapped-window case confirms that a rewrite before the inventory sample can leave no detected drift; it does not remove the DDL-stability prerequisite.
 
 ## Evidence Map
 
@@ -3667,6 +3762,7 @@ done
 | Duplicate-sensitive visible-identity comparison | [heaptuple.c](../../../../raw/postgres-12/src/backend/access/common/heaptuple.c#L636-L640), [heapam_handler.c](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L148-L167) | [select.sgml#EXCEPT-ALL](../../../../raw/postgres-12/doc/src/sgml/ref/select.sgml#L1281-L1294), [ddl.sgml#ctid](../../../../raw/postgres-12/doc/src/sgml/ddl.sgml#L1198-L1205) |
 | Heap-side loss is invisible to both counts | [heapam.c#unresolved-tid](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1538-L1590), [indexam.c#index_getnext_slot](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L607-L635) | Physical zeroed-block leg in the published measurement script |
 | Unresolved-TID counters and killed-tuple hints | [pgstatfuncs.c#xact-tuple-counters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1683-L1711), [indexam.c#kill-prior-tuple](../../../../raw/postgres-12/src/backend/access/index/indexam.c#L566-L589), [nbtutils.c#_bt_killitems](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1718-L1812) | Deleted-row fixture: 10, then 0 |
+| Mapped identity has a later sampling boundary than `S` | [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904), [relmapper.c#current-map](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L147-L196), [cluster.c#mapped-swap](../../../../raw/postgres-12/src/backend/commands/cluster.c#L1064-L1110) | Mapped-window fixture rewrites `pg_type` between snapshot acquisition and inventory and checks the replacement file number and subsequent verdict |
 | Refused damage-hiding settings | [bufmgr.c#zero-damaged-pages](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L925), [bufpage.c#checksum-warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L161), [elog.c#default-sqlstate](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388) | Guard units, CLI refusals and the invalid-header leg |
 | Identity drift after the snapshot | [dbsize.c#pg_relation_filenode](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L864-L904), [regproc.c#to_regclass](../../../../raw/postgres-12/src/backend/utils/adt/regproc.c#L947-L968), [tablecmds.c#index-rename-lock](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L3305-L3312) | [mvcc.sgml#DDL-caveat](../../../../raw/postgres-12/doc/src/sgml/mvcc.sgml#L1689-L1702); drift fixtures |
 | An empty inner select list avoids ORDER BY output-name capture | [parse_clause.c#SQL92-name-rule](../../../../raw/postgres-12/src/backend/parser/parse_clause.c#L1865-L1930), [gram.y#empty-target-list](../../../../raw/postgres-12/src/backend/parser/gram.y#L14633-L14634) | `?column?` fixture |
@@ -3683,6 +3779,7 @@ done
 
 - Compatibility beyond exact 12.2, alternate psql releases, planner/EXPLAIN hooks and arbitrary custom types/opclasses/locale combinations remains unverified. A version number check does not prove binary provenance.
 - The generator's custom-code deferral is not a planner-execution sandbox. Planning a baseline can evaluate another index's constant expression or predicate. The operator must trust code reachable during relation planning; a relation-wide enforcement gate is not implemented. The constant-expression permission fixture tests this boundary, not arbitrary custom-code containment.
+- Identity checks do not replace the operator's DDL freeze. In particular, a mapped file number first sampled after a rewrite cannot reveal that the rewrite happened after `S`; the mapped-window fixture tests this sampling limit. Detection of an earlier map version would require a different coordination or observation mechanism.
 - Complete candidate coverage remains best effort: equivalent/constant orderings, planner choice, unsafe expressions and snapshot usability may leave an eligible index untested.
 - Pinned documentation says enable_indexscan enables/disables paths, but implementation adds a cost penalty. Source wins; acceptance requires the executed path, not the setting. [config.sgml#indexscan-wording](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4449-L4462) [costsize.c#indexscan-penalty](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L525-L535)
 - The interpolation guard deliberately refuses some harmless ordering text too, including literals and quoted identifiers inside an ordering. It records errors and provides no coverage for refused candidates. Schema and table names are not guarded, because psql never substitutes inside a quoted identifier.
@@ -3697,6 +3794,7 @@ done
 - [configure.in#version](../../../../raw/postgres-12/configure.in#L19-L34)
 - [clauses.c#evaluate_function](../../../../raw/postgres-12/src/backend/optimizer/util/clauses.c#L4333-L4370) and [clauses.c#evaluate_expr](../../../../raw/postgres-12/src/backend/optimizer/util/clauses.c#L4791-L4829) - planning-time execution of constant function calls.
 - [functioncmds.c#volatility-default](../../../../raw/postgres-12/src/backend/commands/functioncmds.c#L965-L976) and [acl.c#function-default](../../../../raw/postgres-12/src/backend/utils/adt/acl.c#L776-L780) - defaults overridden by the planning-permission fixture.
+- [relmapper.c#current-map](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L147-L196), [relmapper.c#map-invalidation](../../../../raw/postgres-12/src/backend/utils/cache/relmapper.c#L393-L415) and [cluster.c#mapped-swap](../../../../raw/postgres-12/src/backend/commands/cluster.c#L1064-L1110) - mapped-file identity is sampled live, not from the checking snapshot.
 - [pg_class.h#relation-fields](../../../../raw/postgres-12/src/include/catalog/pg_class.h#L30-L63)
 - [pg_index.h#index-fields](../../../../raw/postgres-12/src/include/catalog/pg_index.h#L29-L76)
 - [pg_am.dat#access-methods](../../../../raw/postgres-12/src/include/catalog/pg_am.dat#L15-L35)
