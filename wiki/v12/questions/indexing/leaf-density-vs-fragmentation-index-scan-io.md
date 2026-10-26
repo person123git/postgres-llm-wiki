@@ -277,7 +277,11 @@ These are the statements that produce every figure in the previous section. Most
 
 Server settings: `shared_buffers = 512MB`, `autovacuum = off`, `synchronous_commit = on`, `max_parallel_workers_per_gather = 2`, everything else default.
 
-`synchronous_commit = on` is load-bearing, not incidental. With it off, the first `VACUUM` after a bulk insert cannot set the tuples' `xmin`-committed hint bits, because a hint bit may only be set once the commit record is flushed. Pages therefore stay out of the visibility map, `pg_class.relallvisible` stays 0, and every "index-only" scan below silently becomes an index scan plus a heap fetch per tuple. Measured on this server, that turned the 90 percent full scan from 2736 buffers and `Heap Fetches: 0` into 7161 buffers and `Heap Fetches: 1000000`. Gate every fixture on the catalog before measuring:
+The fixture retains the default `synchronous_commit = on`. Changing this `user`-context setting to `off` allows [asynchronous commit](../../../glossary.md#asynchronous-commit): the ordinary commit path can return without flushing its WAL, instead notifying the WAL writer of the commit LSN. It does **not** categorically prevent the next VACUUM from setting committed [hint bits](../../../glossary.md#hint-bits). `SetHintBits()` defers a committed hint only when the buffer is permanent, `XLogNeedsFlush()` is true for the LSN returned by `TransactionIdGetCommitLSN()`, and the page LSN is older than that LSN. A completed flush or a sufficiently recent page LSN removes that gate. The returned LSN can be that of a later transaction in the same commit-log group, not necessarily the tuple inserter's exact commit record. [guc.c#synchronous_commit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L4353-L4361) [xact.c#commit-flush-choice](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1367-L1401) [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L81-L131) [transam.c#commit-LSN-bound](../../../../raw/postgres-12/src/backend/access/transam/transam.c#L386-L400)
+
+If the committed hint is still absent when VACUUM examines a live tuple, VACUUM cannot mark that page all-visible on that pass. An `Index Only Scan` then performs heap fetches for TIDs on pages without the visibility-map bit; it remains an index-only plan node, not an ordinary `Index Scan`. Thus `off` can leave this fixture short of full all-visible coverage, but does not imply `relallvisible = 0` or one heap fetch per tuple in every run. [vacuumlazy.c#committed-hint-gate](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1097-L1114) [nodeIndexonlyscan.c#visibility-map-check](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L118-L170)
+
+In the recorded `off` run, the 90 percent full scan used 7161 buffers and `Heap Fetches: 1000000`, versus 2736 buffers and `Heap Fetches: 0` in the all-visible control. Those are the previously recorded outcomes of that run, not a deterministic consequence of `off`; this explanation correction does not change the fixture SQL or remeasure those numbers. Gate every fixture on the catalog before measuring:
 
 ```sql
 SELECT relname, relpages, relallvisible FROM pg_class WHERE relname = 'ld_a90';
@@ -492,6 +496,7 @@ No test in the pinned checkout links either column to scan I/O. The measurements
 
 ## Context Reviewed
 
+- Hint-bit correction: the default and session scope of `synchronous_commit`, `RecordTransactionCommit()`'s flush choice, `SetHintBits()`'s permanent-buffer/flush/page-LSN conjunction, the commit-log LSN bound, VACUUM's committed-hint gate and the index-only executor's visibility-map fallback. Compared the corresponding amcheck discussion and the Hint bits/Asynchronous commit glossary notes. This was a source-backed explanation correction, not a new measurement run.
 - Required wiki navigation: [versions](../../../versions.md), [wiki index](../../../index.md), [v12/index](../../index.md), and recent [log](../../../log.md).
 - PostgreSQL 12 diagnostic sources: `contrib/pgstattuple/pgstatindex.c`, `contrib/pgstattuple/pgstattuple--1.4--1.5.sql`, `doc/src/sgml/pgstattuple.sgml`, `src/backend/storage/page/bufpage.c`, and `src/include/access/nbtree.h`.
 - PostgreSQL 12 B-tree scan and maintenance sources: `nbtsearch.c`, `nbtinsert.c`, `nbtsplitloc.c`, `nbtpage.c`, `nbtutils.c`, `nbtree.c`, and `src/backend/access/nbtree/README`.
@@ -505,6 +510,7 @@ No test in the pinned checkout links either column to scan I/O. The measurements
 
 | Claim | Evidence |
 |---|---|
+| Asynchronous commit can delay committed hints and all-visible marking, but does not always do so; an index-only plan can perform heap fetches | [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L113-L131), [vacuumlazy.c#committed-hint-gate](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1097-L1114), [nodeIndexonlyscan.c#heap-fallback](../../../../raw/postgres-12/src/backend/executor/nodeIndexonlyscan.c#L159-L170) |
 | `avg_leaf_density` is computed from live-leaf free space over per-page available capacity | [pgstatindex.c#leaf-page-accounting](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L292-L300), [pgstatindex.c#avg_leaf_density](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L347-L351), [bufpage.c#PageGetFreeSpace](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L572-L597) |
 | `leaf_fragmentation` counts live leaf pages whose right link points backward in physical block order, and the docs define it no further | [pgstatindex.c#fragmentation-count](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L302-L307), [pgstatindex.c#leaf_fragmentation](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L352-L356), [nbtree.h#BTPageOpaqueData](../../../../raw/postgres-12/src/include/access/nbtree.h#L55-L68), [pgstattuple.sgml#leaf_fragmentation-column](../../../../raw/postgres-12/doc/src/sgml/pgstattuple.sgml#L257-L261) |
 | Reading either column costs a full physical index read under `BAS_BULKREAD`, is restricted to `relkind = 'i'` B-tree indexes, rejects other sessions' temporary relations, and is gated on `pg_stat_scan_tables` | [pgstatindex.c:222](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L222), [pgstatindex.c#full-block-scan](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L266-L315), [pgstatindex.c#relkind-am-macros](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L70-L71), [pgstatindex.c#relation-checks](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L224-L238), [pgstattuple--1.4--1.5.sql#pgstatindex-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92) |
@@ -540,6 +546,9 @@ No test in the pinned checkout links either column to scan I/O. The measurements
 
 ## Source References
 
+- [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L81-L131)
+- [xact.c#commit-flush-choice](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1367-L1401)
+- [transam.c#commit-LSN-bound](../../../../raw/postgres-12/src/backend/access/transam/transam.c#L386-L400)
 - [pgstatindex.c#relkind-am-macros](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L70-L71)
 - [pgstatindex.c#pgstatindex_impl](../../../../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L215-L365)
 - [pgstattuple--1.4--1.5.sql#pgstatindex-grants](../../../../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L77-L92)
