@@ -3210,11 +3210,14 @@ Related: [pgstatindex](#pgstatindex), [Tuple](#tuple), [Bloat](#bloat), [Contrib
 
 ### Pivot tuple
 
-**Aliases:** pivot, separator key, downlink, non-pivot tuple (contrast), `BTreeTupleIsPivot()`. **Checked on:** PostgreSQL 17.
+**Aliases:** pivot, separator key, downlink, negative-infinity item, non-pivot tuple (contrast), `BTreeTupleIsPivot()`. **Checked on:** PostgreSQL 12, 17.
 
 A pivot tuple is a [B-tree](#b-tree) tuple that points at no table row and exists only to steer searches. Every tuple on an internal page is a pivot tuple, and so is the [high key](#leaf-page) of a leaf page. A pivot tuple holds a separator key and a downlink to a child page, only a separator key, or only a downlink ([nbtree/README#pivot-tuples](../raw/postgres-17/src/backend/access/nbtree/README#L31-L40)). Because it only records where the key space divides, it can keep key values copied from rows that VACUUM removed long ago (same lines).
 
 Every B-tree with more than one level has pivot tuples, since searches descend through them. They need not carry every key column: [suffix truncation](#suffix-truncation) can drop trailing columns, which then count as "minus infinity" ([nbtree.h#pivot-tuples](../raw/postgres-17/src/include/access/nbtree.h#L389-L400)).
+
+**Version notes:**
+- PostgreSQL 12: The same navigation role applies: every internal-page item and every leaf high key is a pivot, which can carry a separator, a downlink, or both ([nbtree/README#pivot-tuples](../raw/postgres-12/src/backend/access/nbtree/README#L31-L40)). The first data item on an internal page is the negative-infinity pivot. Its key attributes are truncated away, leaving a downlink; the bound is relative to that page's subtree, and only the leftmost internal pages represent global negative infinity. This matters for amcheck because it skips that item in separator comparisons ([verify_nbtree.c#offset_is_negative_infinity](../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2119-L2143), [verify_nbtree.c#relative-bound](../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L1619-L1632), [verify_nbtree.c#skip-negative-infinity](../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L988-L993)). Other trailing attributes can also be truncated, representing minus infinity for searches ([nbtree.h#pivot-representation](../raw/postgres-12/src/include/access/nbtree.h#L241-L285)).
 
 Related: [B-tree](#b-tree), [Leaf page](#leaf-page), [Suffix truncation](#suffix-truncation), [Page split](#page-split), [Sibling link](#sibling-link)
 
