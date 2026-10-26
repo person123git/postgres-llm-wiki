@@ -40,9 +40,9 @@ Follow AGENTS.md. In PostgreSQL 12, on a database with data checksums enabled an
 
 ### Short answer
 
-**For the heap, no. For the index, yes.** This holds whether the emptied file is a middle segment or the last segment. Data checksums were on and played no part in any of the four outcomes: no checksum comparison ran on a lost block, and `pg_checksums` found nothing. That checksums-off would give the same outcomes is a source reading, because the script ran no checksums-off leg; see [Why data checksums do not help](#why-data-checksums-do-not-help).
+**In the four measured fixtures: heap loss went undetected; index loss was detected.** Both index fixtures retained links that made amcheck request a block in the emptied segment. This is not a guarantee for every emptied index segment: fully deleted pages have no parent or sibling links, and a tail containing only such pages need not be visited by the tree walk. [verify_nbtree.c#root-to-leaf-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L521-L551) [verify_nbtree.c#deleted-pages-unlinked](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L685-L697) Data checksums were on and played no part in any of the four measured outcomes: no checksum comparison ran on a lost block, and `pg_checksums` found nothing. That checksums-off would give the same fixture outcomes is a source reading, because the script ran no checksums-off leg; see [Why data checksums do not help](#why-data-checksums-do-not-help).
 
-| Emptied file | `bt_index_check` / `bt_index_parent_check`, with or without `heapallindexed` | Detected? |
+| Emptied file in the measured fixture | `bt_index_check` / `bt_index_parent_check`, with or without `heapallindexed` | Detected in this run? |
 |---|---|---|
 | Middle heap segment | All three calls succeed | **No** |
 | Last heap segment | All three calls succeed | **No** |
@@ -88,8 +88,8 @@ amcheck on index I of table T  (new backend, nothing cached)
 ├─ 0. heapallindexed = true only: mdnblocks(I) sizes the Bloom filter [J]
 │     └─ opens I's segments up to the first short one; no error
 │
-├─ 1. Walk I from the metapage: every level, left to right [A]
-│     └─ each block: ReadBuffer -> smgrread -> mdread [B]
+├─ 1. Walk I from the metapage: reachable pages, level by level [A]
+│     └─ each requested block: ReadBuffer -> smgrread -> mdread [B]
 │          ├─ block's segment empty  -> short read -> ERROR XX001 [C]
 │          ├─ block beyond an empty earlier segment
 │          │                        -> ERROR "previous segment is only N blocks" [D]
@@ -131,7 +131,7 @@ The damage is still reachable from outside amcheck. An index scan that fetches a
 
 ### Why the index scenarios fail
 
-amcheck walks every level of the B-tree from the true root, then follows right-links across each level ([verify_nbtree.c#root-and-levels](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L502-L551), [verify_nbtree.c#level-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L650-L833)). Every page it reaches is read through `ReadBufferExtended()` in normal mode ([verify_nbtree.c#palloc_btree_page](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2335-L2351)). Because a healthy index has links to pages in every segment, the walk is bound to ask for a block in the emptied file or beyond it. Both measured fixtures hit a block inside it first; a block beyond it gives a different error, listed under [Branches and limits](#branches-and-limits).
+amcheck walks every level of the B-tree from the true root, then follows right-links across each level ([verify_nbtree.c#root-and-levels](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L502-L551), [verify_nbtree.c#level-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L650-L833)). Every page it reaches is read through `ReadBufferExtended()` in normal mode ([verify_nbtree.c#palloc_btree_page](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2335-L2351)). Both measured fixtures retained a link that led into the emptied file; a requested block beyond it would give a different error, listed under [Branches and limits](#branches-and-limits). A healthy index does not necessarily have links into every physical segment: after [B-tree page deletion](../../../glossary.md#b-tree-page-deletion), fully deleted pages have no parent or sibling links. The walk is not a physical scan of every allocated block, so an emptied tail consisting only of those unlinked pages need not be visited. This limit is source-derived, not another measured fixture. [verify_nbtree.c#deleted-pages-unlinked](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L685-L697)
 
 The two `heapallindexed` calls do one thing before the walk. They size the Bloom filter from `RelationGetNumberOfBlocks()` on the index ([verify_nbtree.c#bloom-sizing](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L426-L432)). That `mdnblocks()` call opens the index segments up to the emptied one and stops there without error, so it reports 128 blocks for `i_mid` and 384 for `i_last` ([md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L725-L755)). The filter is therefore sized from a smaller count. That does not matter here, because the walk fails before the filter is used.
 
@@ -159,6 +159,7 @@ Checksums are a non-default cluster state in PostgreSQL 12. By default `initdb` 
 
 | Condition / state | Behavior | Consequence |
 |---|---|---|
+| Emptied index tail contains only fully deleted, unlinked pages | Fully deleted pages have no parent or sibling links; the tree walk follows links rather than enumerating every allocated block. [verify_nbtree.c#root-to-leaf-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L521-L551) [verify_nbtree.c#deleted-pages-unlinked](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L685-L697) | No blanket detection guarantee. Such a tail need not be requested; the two measured index fixtures instead requested blocks in their emptied segments. This deleted-page-tail case was not measured. |
 | Index walk needs a block beyond an empty earlier segment before any block inside it | `_mdfd_getseg()` raises "previous segment is only N blocks" through `errcode_for_file_access()` ([md.c#_mdfd_getseg](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L1179-L1204)). No system call failed, so the SQLSTATE comes from a leftover `errno`, and anything outside the mapped values becomes `XX000` ([elog.c#errcode_for_file_access](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L593-L650)) | Still detected, with a different message. Not seen in this run. The same-version [zeroed relation file page](../storage-and-vacuum/zeroed-relation-file.md) measured `XX000` for this error. |
 | `zero_damaged_pages = on` (default off, `PGC_SUSET`: superuser, session or transaction scope with `SET`) | `mdread()` fills the buffer with zeros instead of failing on the short read ([md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L615-L630), [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1161)). `PageIsVerified()` accepts an all-zero page without a warning ([bufpage.c#all-zero](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L122-L142)) | Index cases: still detected, but with a different error. `palloc_btree_page()` calls `_bt_checkpage()`, which rejects the zero page with `XX002` "contains unexpected zero page" ([verify_nbtree.c:2355](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2355), [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L692-L708)). The "previous segment" error does not depend on the setting. Heap cases: amcheck is unchanged, because `mdnblocks()` does not read pages. The lost-row index fetch silently returns no row instead of `XX001`, because a zero page has no [line pointers](../../../glossary.md#line-pointer) ([bufpage.h#PageGetMaxOffsetNumber](../../../../raw/postgres-12/src/include/storage/bufpage.h#L357-L360), [heapam.c#heap_hot_search_buffer](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L1543-L1557)). These are source readings; this run did not measure them. |
 | File emptied while the server runs, with its pages in [shared buffers](../../../glossary.md#buffer-manager) or segments already open | A buffer hit returns the old page without a disk read; an open-segment list can make `mdnblocks()` trust a short segment as full ([bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L795), [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L705-L755)) | Results can differ. The script avoided this by truncating while stopped. |
@@ -170,7 +171,7 @@ Checksums are a non-default cluster state in PostgreSQL 12. By default `initdb` 
 Clean stop → one segment truncated to 0 bytes → restart, so nothing is cached.
 
 - **Heap emptied:** `mdnblocks()` stops at the first short segment, so the heap seems to end there. The `heapallindexed` scan reads only the remaining blocks, and every tuple it finds is in the index, so amcheck **passes**. Checksums are never consulted because no lost page is read. Only an index fetch of a lost row reveals the damage, with `XX001`.
-- **Index emptied:** the B-tree walk follows a stored link into the empty segment. `mdread()` gets a short read and raises `XX001`, so amcheck **fails**, in all three call forms. The error comes from the short read, not from a checksum.
+- **Index emptied, measured linked-page fixtures:** the B-tree walk follows a stored link into the empty segment. `mdread()` gets a short read and raises `XX001`, so amcheck **fails**, in all three call forms. The error comes from the short read, not from a checksum. An unlinked deleted-page tail need not be visited, so the measured failures are not a guarantee for every physical segment. [verify_nbtree.c#deleted-pages-unlinked](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L685-L697)
 
 ## Measurement Script
 
@@ -487,6 +488,7 @@ done
 
 ## Context Reviewed
 
+- Follow-up qualification: compared the lead, fixture table, logic map, causal summary and Open Questions with the amcheck tutorial's reachable-page limit and the pinned fully-deleted-page branch. The existing script and measured results are unchanged; no deleted-page-tail fixture was added or claimed.
 - amcheck entry points, target eligibility, the level-by-level walk, page reads through `palloc_btree_page()`, the `heapallindexed` heap scan and its membership callback.
 - Storage path below both: `RelationGetNumberOfBlocks()` and `initscan()`, `mdnblocks()`, `_mdfd_getseg()`, `mdread()` and its short-read branch, the segment-layout comment, and `ERRCODE_DATA_CORRUPTED`.
 - Checksum path: `ReadBuffer_common()`'s call to `PageIsVerified()`, `PageIsNew()`, the all-zero branch, `initdb -k`, the `data_checksums` GUC, and `pg_checksums`'s `scan_file()` end-of-file rule.
@@ -499,6 +501,7 @@ done
 
 | Claim | Evidence |
 |---|---|
+| Emptied-index detection depends on a requested block; deleted pages can be unlinked | [verify_nbtree.c#root-to-leaf-walk](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L521-L551), [verify_nbtree.c#deleted-pages-unlinked](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L685-L697); the two measured index fixtures requested blocks 155 and 395 |
 | amcheck in 12 has only B-tree checks | [Makefile:4](../../../../raw/postgres-12/contrib/amcheck/Makefile#L4), [verify_nbtree.c#btree_index_checkable](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L315-L338) |
 | Heap scan length comes from `mdnblocks()`, which stops at the first short segment | [heapam.c#initscan](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L226-L231), [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L725-L755) |
 | A zero-length segment is a legitimate layout | [md.c#segment-layout](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L52-L66) |
@@ -516,7 +519,8 @@ done
 
 ## Open Questions
 
-- The script did not record whether blocks 155 (`i_mid`) and 395 (`i_last`) were leaf or internal pages, or where the root was. Recording that would need `pageinspect`. The detection result does not depend on it, because the walk reads every non-deleted page.
+- The script did not record whether blocks 155 (`i_mid`) and 395 (`i_last`) were leaf or internal pages, or where the root was. Recording that would need `pageinspect`. The observed failures establish that those blocks were requested, regardless of their former page type; they do not establish that every physical segment must be visited.
+- No fixture emptied a tail containing only fully deleted, unlinked pages. The absence of a general detection guarantee follows from the linked-page walk and deleted-page state, not from a new measurement. [verify_nbtree.c#deleted-pages-unlinked](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L685-L697)
 - No leg emptied a file while the server was running, or with `zero_damaged_pages = on`. [Branches and limits](#branches-and-limits) gives the source reading for both, including the `XX002` index error and the silent heap fetch under `zero_damaged_pages`, but neither outcome was measured.
 - No checksums-off leg was run. The source shows that neither detection path compares a checksum, so the outcomes should be the same, but that is a source reading, not a measurement.
 - The emptied segment was always segment `.1` or the last one. Emptying segment `.0` was not tested.
