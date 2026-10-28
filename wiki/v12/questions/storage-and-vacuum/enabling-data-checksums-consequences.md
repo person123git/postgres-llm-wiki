@@ -1,0 +1,348 @@
+---
+type: question
+version: 12
+pinned_commit: 45b88269a353ad93744772791feb6d01bc7e1e42
+verified: false
+verified_by_agent: not yet
+---
+
+# Consequences of Enabling Data Checksums in PostgreSQL 12 (unverified)
+
+## Contents
+
+- [Question](#question)
+- [Answer](#answer)
+  - [Main consequences](#main-consequences)
+  - [Values and verification flow](#values-and-verification-flow)
+  - [Runtime cost and additional WAL](#runtime-cost-and-additional-wal)
+  - [Newly reachable errors and warning-only paths](#newly-reachable-errors-and-warning-only-paths)
+  - [Effects on SQL operations and maintenance](#effects-on-sql-operations-and-maintenance)
+  - [Enabling, disabling and offline checking](#enabling-disabling-and-offline-checking)
+  - [Physical backups](#physical-backups)
+  - [Replication, rewind and upgrades](#replication-rewind-and-upgrades)
+  - [Monitoring and inspection tools](#monitoring-and-inspection-tools)
+  - [Protection boundaries](#protection-boundaries)
+- [Context Reviewed](#context-reviewed)
+- [Evidence Map](#evidence-map)
+- [Open Questions](#open-questions)
+- [Source References](#source-references)
+- [Navigation](#navigation)
+
+## Question
+
+In PostgreSQL 12, what are the consequences of enabling data checksums? What are the new error paths and effects on any PostgreSQL features or tools?
+
+## Answer
+
+### Main consequences
+
+**Enabling [data checksums](../../../glossary.md#data-checksums) adds detection of damaged relation pages, CPU and memory-copy work, and additional [WAL](../../../glossary.md#wal) for some page changes. It can make queries, maintenance and physical backups fail on damage that previously passed the page-header checks. It does not repair that damage or prove that all data is present and correct.** The server checks eligible pages when reading them from storage and calculates their checksums when writing them. [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L65-L162) [bufpage.c#checksum-writes](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1155-L1205) [xlog.h#XLogHintBitIsNeeded](../../../../raw/postgres-12/src/include/access/xlog.h#L183-L192) [basebackup.c#final-error](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L621-L635).
+
+This answer uses the repository's **PostgreSQL 12.2** pin. A new cluster defaults to checksums **off**. `initdb -k` / `--data-checksums` enables them at creation; an existing cluster can be converted with offline `pg_checksums --enable`. The choice applies to the whole cluster. `data_checksums` is an internal, read-only setting: a session `SET`, configuration reload or restart alone does not convert existing pages. [initdb.c#default](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L144) [initdb.c#option](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L3146-L3148) [pg_checksums.c#conversion](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L511-L606) [xlog.c#DataChecksumsEnabled](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4818-L4826) [guc.c#data_checksums](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1826-L1835).
+
+| Consequence | Operational meaning |
+|---|---|
+| More damaged pages are rejected | An initialized page with a sane header can now fail its checksum. Ordinary reads then error unless a specifically described override or read mode applies. [bufpage.c#verification](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L92-L162) [bufmgr.c#invalid-page](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L926) |
+| Additional work during I/O | Eligible reads calculate a checksum; shared-buffer writes copy and checksum the page. The existing page header already contains the checksum field, so enabling does not add another per-row field or enlarge the page. [bufpage.c#read](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L95-L103) [bufpage.c#write](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1169-L1205) [bufpage.h#PageHeaderData](../../../../raw/postgres-12/src/include/storage/bufpage.h#L151-L169) |
+| Additional WAL | Eligible hint updates and some [VACUUM](../../../glossary.md#vacuum)/map operations take checksum-protection paths. This can happen during a read-only query that sets hints. [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3422-L3553) [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L111-L135) [heapam.c#log_heap_visible](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L7260-L7294) |
+| New utility outcomes | `pg_basebackup` verifies by default and can fail; `pg_checksums --check` becomes usable; `pg_upgrade` requires matching checksum states; checksums satisfy one prerequisite for `pg_rewind`. [basebackup.c#verification-gate](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1413-L1426) [pg_checksums.c#disabled-refusal](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L523-L528) [controldata.c#upgrade-match](../../../../raw/postgres-12/src/bin/pg_upgrade/controldata.c#L660-L671) [pg_rewind.c#target-gate](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L422-L429) |
+
+### Values and verification flow
+
+A [page](../../../glossary.md#page) is a fixed-size unit of relation storage. The [buffer manager](../../../glossary.md#buffer-manager) holds pages in memory; the checksum describes a stored image, not every subsequent in-memory change. The checksum includes the page bytes and block number, but no relation identity. [bufpage.h#page-layout](../../../../raw/postgres-12/src/include/storage/bufpage.h#L107-L135) [checksum_impl.h#pg_checksum_page](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L176-L214) [bufpage.c#PageSetChecksumCopy](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1155-L1189).
+
+| Value | Origin and lifetime | Consumer |
+|---|---|---|
+| `ControlFileData.data_checksum_version` | Stored in the cluster [control file](../../../glossary.md#control-file); zero means disabled. Creation, offline conversion and replacement with source control state during physical-copy operations can establish it. | `DataChecksumsEnabled()` gates backend checks and writes. [pg_control.h#field](../../../../raw/postgres-12/src/include/catalog/pg_control.h#L221-L222) [xlog.c#gate](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4818-L4826) [pg_rewind.c#control-copy](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L368-L392) |
+| `pd_checksum` | A `uint16` in the page header, calculated for an initialized page when it is written with checksums enabled. It need not match the current cached bytes. | A later eligible disk read recomputes and compares it. [bufpage.h#header](../../../../raw/postgres-12/src/include/storage/bufpage.h#L151-L169) [bufpage.c#write-and-read](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L92-L103) [bufpage.c#write-copy](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1169-L1205) |
+| `pd_upper` / `PageIsNew()` | `PageIsNew()` tests whether `pd_upper` is zero. This is a header test, not an inspection of every byte. | Writers and offline/backup checkers skip such pages; the backend reader separately accepts an entirely zero page. [bufpage.h#PageIsNew](../../../../raw/postgres-12/src/include/storage/bufpage.h#L225-L229) [bufpage.c#all-zero-test](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L92-L162) [pg_checksums.c#skip](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L211-L215) |
+| Page [LSN](../../../glossary.md#lsn), [checkpoint](../../../glossary.md#checkpoint) redo position, backup start position | WAL positions used by different consumers. They do not themselves certify a page's contents. | Hint logging compares page LSN with the redo position; backup checking compares it with backup start. [xloginsert.c#hint-LSN](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L905-L956) [basebackup.c#backup-LSN](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1482) |
+
+The normal read path has the following branches:
+
+```text
+Request a relation block
+  ├─ valid buffer already cached → use it; no new checksum comparison [A]
+  └─ storage read required
+       ├─ read fails or is short → storage-manager rules apply [B]
+       └─ complete page available
+            ├─ initialized + checksums on → compare computed/stored checksum [C]
+            ├─ header sane and no mismatch → accept [C]
+            ├─ entire page zero → accept [C]
+            └─ otherwise
+                 ├─ checksum mismatch → warning + attempt statistics report [C]
+                 │    └─ sane header + ignore_checksum_failure=on → accept
+                 └─ rejected page
+                      ├─ RBM_ZERO_ON_ERROR or zero_damaged_pages=on
+                      │    → warning + zero the in-memory page [D]
+                      └─ ordinary read → invalid-page ERROR [D]
+```
+
+- **[A]** [bufmgr.c#cached-buffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L796).
+- **[B]** [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L592-L632). `zero_damaged_pages` defaults off; short reads instead supply zeros when it is on or when the reading process has `InRecovery` set. The latter is the WAL-replaying startup process, not every client on a standby. [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1161) [xlog.c#InRecovery](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L189-L200).
+- **[C]** [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L162). `ignore_checksum_failure` defaults off. [guc.c#ignore_checksum_failure](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1147).
+- **[D]** [bufmgr.c#rejected-page](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L926).
+
+For writes, `FlushBuffer()` first honors the WAL-before-data rule for permanent buffers. It then calls `PageSetChecksumCopy()`, which copies an initialized page to private memory, calculates the checksum on that copy, and passes the copy to the storage write. This avoids a concurrent hint update changing the bytes after their checksum was calculated. Local-buffer and private-page writers can use the in-place variant. [bufmgr.c#FlushBuffer](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2716-L2762) [bufpage.c#write-copy](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1155-L1205) [localbuf.c#write](../../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L201-L222).
+
+### Runtime cost and additional WAL
+
+**The cost depends on actual page reads, writes and hint changes; there is no source-supported universal slowdown percentage.** Reads served from PostgreSQL's buffer cache bypass verification, while a read satisfied by the operating system's cache still follows PostgreSQL's storage-read verification path. The checksum implementation explicitly identifies workloads fitting in the OS cache but not shared buffers as a potential checksum bottleneck. Shared-buffer writes add a full-page copy and calculation; repeated modifications before a write do not each recalculate the stored checksum. [bufmgr.c#hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L796) [bufmgr.c#read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897-L908) [checksum_impl.h#performance](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L18-L23) [bufpage.c#write-time-work](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1169-L1205).
+
+[Hint bits](../../../glossary.md#hint-bits) cache facts such as a tuple's committed status. A hint change can modify page bytes even when the user only reads rows. With both checksums and `wal_log_hints` off, that does not take the checksum-protection WAL branch. Enabling checksums makes `XLogHintBitIsNeeded()` true regardless of `wal_log_hints`, whose default remains off. It does not turn the displayed `wal_log_hints` setting on. [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L111-L135) [xlog.h#predicate](../../../../raw/postgres-12/src/include/access/xlog.h#L183-L192) [guc.c#wal_log_hints](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1177-L1185).
+
+```text
+Hint update calls MarkBufferDirtyHint
+  ├─ local buffer → local dirtying, no hint WAL here
+  └─ shared buffer
+       ├─ BM_DIRTY and BM_JUST_DIRTIED already set → fast return
+       └─ consider dirtying
+            ├─ permanent + (checksums on OR wal_log_hints on)
+            │    ├─ recovery in progress → do not dirty merely for this hint
+            │    └─ outside recovery
+            │         → delay checkpoint completion
+            │         → if page LSN <= redo position, log forced page image
+            │         → mark dirty and install returned LSN when newly dirtied
+            │         → release checkpoint delay
+            └─ otherwise → ordinary hint dirtying
+```
+
+The map follows [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3422-L3553) and [xloginsert.c#XLogSaveBufferForHint](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L893-L957). The image is a [full-page image](../../../glossary.md#full-page-image), with unused space omitted when the page layout permits. `REGBUF_FORCE_IMAGE` makes this hint image independent of `full_page_writes`; that GUC defaults on and still matters for other crash-recovery protection. Concurrent hint setters can log more than one image, so “exactly one image per page per checkpoint” is too strong. [xloginsert.c#hint-image](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L875-L957) [xloginsert.c#image-choice](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L539-L555) [guc.c#full_page_writes](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1163-L1175).
+
+| Interaction | What enabling changes |
+|---|---|
+| Read-only queries and index hint changes | Callers of `MarkBufferDirtyHint()` can now generate WAL under the preceding gates; checksum work is not limited to user `INSERT`/`UPDATE`/`DELETE`. [B-tree](../../../glossary.md#b-tree) killed-item marking is another caller. [heapam_visibility.c#hint-call](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L111-L135) [nbtutils.c#index-hints](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1785-L1811) [bufmgr.c#hint-path](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3422-L3553) |
+| VACUUM making a heap page all-visible | `log_heap_visible()` no longer marks the heap buffer `REGBUF_NO_IMAGE` when hint protection is needed. The normal WAL image rules can therefore include its image, and `visibilitymap_set()` updates the heap page LSN as well as the map LSN. [heapam.c#log_heap_visible](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L7260-L7294) [visibilitymap.c#set](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L274-L304) |
+| Truncating the [free space map](../../../glossary.md#free-space-map) or [visibility map](../../../glossary.md#visibility-map) | If truncation edits the retained partial map page, a WAL-logged relation outside recovery adds `log_newpage_buffer()` when hint protection is needed. This protects that page before the higher-level truncation record is durable. [freespace.c#truncate](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L278-L310) [visibilitymap.c#truncate](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L505-L523) |
+| Checkpoints and buffer writes | Hint logging briefly delays checkpoint completion; a permanent buffer's write can require WAL flush through its page LSN. `BufferGetLSNAtomic()` also takes the buffer-header lock when hint protection is needed for a shared buffer. [bufmgr.c#checkpoint-delay](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3499-L3545) [bufmgr.c#WAL-flush](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2716-L2750) [bufmgr.c#BufferGetLSNAtomic](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2874-L2896) |
+| An installation already using `wal_log_hints = on` | That non-default, restart-required setting already makes the shared hint-protection predicate true. Enabling checksums still adds page calculation and verification, but does not newly activate those same hint branches. [guc.c#default-and-context](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1177-L1185) [xlog.h#predicate](../../../../raw/postgres-12/src/include/access/xlog.h#L183-L192) |
+
+Additional WAL must pass through WAL storage and, where configured, archiving and physical replication; the amount and any resulting latency are workload questions, not measured here. Segment completion notifies the archiver when archiving is active, and physical sending copies WAL bytes without filtering hint records. [Logical decoding](../../../glossary.md#logical-decoding) explicitly ignores `XLOG_FPI_FOR_HINT` and `XLOG_FPI` as logical changes, so these images do not become extra row-change events. [xloginsert.c#hint-record](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L945-L954) [xlog.c#segment-completion](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2531-L2541) [walsender.c#physical-send](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2752-L2782) [decode.c#DecodeXLogOp](../../../../raw/postgres-12/src/backend/replication/logical/decode.c#L169-L205).
+
+### Newly reachable errors and warning-only paths
+
+These are **additional causes of reaching existing error machinery**, not all newly defined [SQLSTATEs](../../../glossary.md#sqlstate). A malformed header could already produce `invalid page` with checksums off; enabling adds rejection of pages whose headers pass but whose checksum does not. [bufpage.c#header-and-checksum](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L92-L162).
+
+| Path and conditions | Message / result | Consequence |
+|---|---|---|
+| Ordinary complete disk read; checksum mismatch; both overrides at default off | `WARNING: page verification failed, calculated checksum ... but expected ...`, followed by `ERROR: invalid page in block ... of relation ...` (`XX001` for the error). | The SQL operation errors and its transaction cannot continue normally. The warning itself uses default `01000` at this pin because the call omits `errcode()` around `ERRCODE_DATA_CORRUPTED`. [bufpage.c#warning](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L162) [bufmgr.c#error](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L926) [elog.c#default-code](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388) [guc.c#transaction-effect](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1161) |
+| `ignore_checksum_failure = on`, sane header | The checksum warning remains; `PageIsVerified()` returns true. | The operation may use damaged bytes. An invalid header is not waived. Default is off; this is a superuser session/transaction setting, not a repair. [guc.c#override](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1147) [bufpage.c#acceptance](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L149-L162) |
+| A rejected page with `zero_damaged_pages = on` | `WARNING: invalid page ...; zeroing out page` (`XX001`); zero the buffer instead of erroring. | For a heap page this discards its rows from that read. Default is off; superuser session/transaction scope. If the sane-header ignore override already accepted the page, this branch is not reached. [guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1161) [bufmgr.c#zero-branch](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L926) |
+| A caller requests `RBM_ZERO_ON_ERROR`, even with both GUCs off | Same zeroing warning and in-memory replacement. | Normal FSM and VM readers request this mode, then initialize the cleared map page. Therefore not every checksum mismatch aborts a query. This is a caller-selected recovery path, not a cluster-wide override. [freespace.c#fsm_readbuf](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L598-L605) [visibilitymap.c#vm_readbuf](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L608-L617) [bufmgr.c#mode-test](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L926) |
+| `RelationCopyStorage()` reads a checksum-bad page | The checksum warning, then `invalid page ...` / `XX001` if verification still rejects it. | Relation tablespace copying can fail. This direct caller does not implement the buffer manager's `zero_damaged_pages` replacement branch for a complete rejected page; the sane-header ignore override still acts inside `PageIsVerified()`. [storage.c#RelationCopyStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L333-L358) [tablecmds.c#copy-callers](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12790-L12810) |
+| Recovery needs an existing page through an ordinary read | The same local page verification can reject it and prevent replay from advancing. | There is no unconditional “WAL will fix it” promise. Conversely, an applicable WAL image uses a zero-and-lock buffer and replaces the page without checking the old disk image. [xlogutils.c#redo-branches](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L345-L407) [bufmgr.c#zero-and-lock](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L880-L926) |
+| Physical backup confirms at least one mismatch | Warnings while copying, then `ERROR: checksum verification failure during base backup` / `XX001`. | `pg_basebackup` exits unsuccessfully and retains the received directories for this checksum-failure case. Details and exceptions follow below. [basebackup.c#final-error](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L621-L635) [pg_basebackup.c#exit](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L2025-L2042) [pg_basebackup.c#cleanup-gate](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L157-L205) |
+| Offline checking finds a mismatch | `checksum verification failed in file ...`, accumulated bad-block count, exit status 1. | This is a frontend utility failure, not a server transaction error. Short reads, read/write/seek failures and incompatible cluster state have their own failures. [pg_checksums.c#scan-errors](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L181-L251) [pg_checksums.c#preconditions](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L489-L541) [pg_checksums.c#result](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L569-L578) |
+
+The FSM/VM exception matters for performance too: zeroed map bits stop asserting known free space or known visibility. The VM is deliberately conservative when bits are clear, so this is loss of map information rather than permission to treat all tuples as visible. [freespace.c#new-map-page](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L598-L614) [visibilitymap.c#conservative-bits](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L24-L34) [visibilitymap.c#new-map-page](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L608-L617).
+
+The error's process context still matters. The general error machinery promotes an `ERROR` to `FATAL` when no exception handler is available, and to `PANIC` inside a [critical section](../../../glossary.md#critical-section). Enabling checksums does not add a special rule that every mismatch crashes the cluster; the normal client-read, map-reader, copying and replay branches above must be distinguished. [elog.c#severity-promotion](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L242-L269).
+
+Additional hint WAL also exposes its callers to existing WAL insertion and I/O failure paths. Insertion can require writing an old WAL buffer before reusing it; a failed WAL write reports `PANIC: could not write to log file ...`. That is a WAL-storage failure, not another kind of checksum mismatch. The new connection is that a query taking the hint-image branch now generates WAL under the gates described above. [xloginsert.c#hint-insertion](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L945-L954) [xloginsert.c#insert-record](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L459-L463) [xlog.c#WAL-buffer-reuse](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2153-L2165) [xlog.c#write-failure](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L2494-L2510).
+
+### Effects on SQL operations and maintenance
+
+Checksums sit below ordinary table and index operations. The useful question is which pages an operation actually reads or writes, and which buffer read mode it chooses. For example, a heap scan calls `ReadBufferExtended(..., RBM_NORMAL, ...)`, so it inherits ordinary checksum failures on cache misses. [heapam.c#heapgetpage](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L347-L379) [bufmgr.c#read-verification](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897-L926).
+
+| Feature or tool | Effect and boundary |
+|---|---|
+| Queries, DML, catalog access and index access | Operations using the core buffer manager acquire verification on eligible page reads and checksums on writes. A hit does not recheck disk. A query that never visits the damaged page need not fail. [bufmgr.c#hit-and-read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L796) [bufmgr.c#read](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L880-L926) [bufmgr.c#write](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2743-L2762) |
+| VACUUM / autovacuum | In addition to eligible read failures, the all-visible and map-truncation WAL changes above apply. Enabling does not turn VACUUM into an unconditional physical scrub: visibility information still allows page skipping. [visibilitymap.c#skip-and-WAL](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L39-L57) [heapam.c#visible-WAL](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L7260-L7294) |
+| Heap rewrites and B-tree builds | Direct output writers explicitly set checksums, so bypassing shared-buffer output does not imply unchecked output. A rewrite or rebuild creates checksums for the bytes it produces; it is not a general recovery of lost source data. [rewriteheap.c#output](../../../../raw/postgres-12/src/backend/access/heap/rewriteheap.c#L330-L345) [nbtsort.c#output](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L658-L690) |
+| [Unlogged relations](../../../glossary.md#unlogged-relation) and temporary tables | The checksum-write helper has no permanent-relation restriction; shared writes use it, and temporary tables' local-buffer eviction also uses it. The hint-WAL path separately requires a permanent shared buffer. Thus “unlogged” and “temporary” do not mean “no data-page checksums.” This says nothing about arbitrary sort/hash spill files, which are not these relation-page paths. [bufmgr.c#shared-write](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2716-L2762) [localbuf.c#local-write](../../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L201-L222) [bufmgr.c#hint-gates](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3431-L3472) |
+| `pg_dump` and logical export | Ordinary table data dumping issues `COPY ... TO stdout`; server read errors can therefore fail a dump. It copies logical rows rather than page checksums and checks the final COPY status. A successful dump does not establish that every index, fork or historical row was checked. [pg_dump.c#COPY](../../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1812-L1843) [pg_dump.c#failure](../../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1902-L1921) [heapam.c#scan-read](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L347-L379) |
+| Relation tablespace move versus database directory copy | A relation move uses `RelationCopyStorage()` and verifies each page it reads. `CREATE DATABASE`'s directory copy uses `copydir()` / `copy_file()`, a byte read/write loop without `PageIsVerified()`. Enabling does not make every physical file-copy operation a checksum scrub. [tablecmds.c#relation-copy](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12790-L12810) [storage.c#verify-copy](../../../../raw/postgres-12/src/backend/catalog/storage.c#L333-L358) [dbcommands.c#directory-copy](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L630-L640) [copydir.c#file-dispatch](../../../../raw/postgres-12/src/backend/storage/file/copydir.c#L69-L77) [copydir.c#byte-copy](../../../../raw/postgres-12/src/backend/storage/file/copydir.c#L189-L209) |
+| [amcheck](../../../glossary.md#amcheck) | Its B-tree reads use `RBM_NORMAL`, so checksum errors can stop the call before structural checks. Checksums supplement its invariants; enabling them does not broaden this version's accepted index AMs beyond B-tree. See the separate [amcheck tutorial](../indexing/amcheck-indexes-tables-and-data-checksums.md). [verify_nbtree.c#B-tree-gate](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L314-L338) [verify_nbtree.c#read](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2348-L2360) |
+
+### Enabling, disabling and offline checking
+
+`pg_checksums` is an offline utility. It requires a valid compatible control file, matching compiled block size, and clean shutdown state, including clean shutdown in recovery. Its state check does not prevent another process starting the cluster concurrently. [pg_checksums.c#preconditions](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L489-L521).
+
+| Event | Stored state before → after | Work and consequence |
+|---|---|---|
+| `initdb -k` | New cluster → checksum version 1 | Passes `-k` to bootstrap, which selects `PG_DATA_CHECKSUM_VERSION`; that value is stored in control state. Without the option the default is zero. [initdb.c#default](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L144) [initdb.c#bootstrap-command](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L1445-L1454) [bootstrap.c#option](../../../../raw/postgres-12/src/backend/bootstrap/bootstrap.c#L255-L257) [xlog.c#initial-control](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L5256) [bufpage.h#version](../../../../raw/postgres-12/src/include/storage/bufpage.h#L200) |
+| `pg_checksums --enable` | Disabled → enabled | Scans selected files, reads each block and rewrites every non-`PageIsNew()` block with its calculated checksum. By default it syncs data before publishing the control-file switch. This requires downtime and substantial read/write I/O. [pg_checksums.c#write](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L181-L251) [pg_checksums.c#sync-default](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L40) [pg_checksums.c#publish](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L544-L606) |
+| `pg_checksums --check` (the default mode) | Enabled → unchanged | Reads selected files and reports mismatches; refuses a disabled cluster. It does not write repaired pages. [pg_checksums.c#default-mode](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L61) [pg_checksums.c#check-branch](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L217-L227) [pg_checksums.c#disabled-check](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L523-L528) |
+| `pg_checksums --disable` | Enabled → zero | Skips the relation scan and updates control state, with syncing by default. It does not erase every old checksum; later writes no longer maintain those values. [pg_checksums.c#scan-and-switch](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L544-L606) [bufpage.c#disabled-write](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1169-L1205) |
+
+**Enabling checksums over existing bytes is not an integrity certification.** The enable branch computes and stores a checksum; it does not first establish that the old bytes describe correct tuples or indexes. Corruption already present in an initialized page can therefore acquire a valid checksum. Nor should disabling/re-enabling be interpreted as repairing the original corruption. [pg_checksums.c#enable-versus-check](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L211-L242).
+
+The scan roots are `global`, `base` and `pg_tblspc`, with recursion through tablespace links. The tool excludes its control/metadata skip list and `pgsql_tmp` names; `--filenode` further narrows checking and is forbidden for enabling/disabling. It skips pages with `pd_upper == 0`, and zero-byte EOF ends a file without an error. It can therefore check pages a query never reaches, but cannot verify missing historical pages from their absent checksums. [pg_checksums.c#skip-list](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L94-L109) [pg_checksums.c#EOF-and-new](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L192-L215) [pg_checksums.c#directory-selection](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L297-L371) [pg_checksums.c#filter-restriction](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L480-L487) [pg_checksums.c#roots](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L559-L561).
+
+Keep all processes that could write the data directory stopped throughout conversion. The utility normally syncs; `--no-sync` explicitly skips durability and is documented for testing, not production conversion. If enabling stops during the page-rewrite phase, it has not yet published the enabled control state. The rewrite can be rerun while the cluster remains stopped and the recorded state remains disabled; a completed switch instead makes a repeated enable request report “already enabled.” This is not a promise about durability after bypassing sync or an I/O failure during final control-file publication. [pg_checksums.sgml#no-sync](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L115-L125) [pg_checksums.sgml#conversion-notes](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L204-L225) [pg_checksums.c#state-gate](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L537-L541) [pg_checksums.c#publication-order](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L582-L606).
+
+### Physical backups
+
+`pg_basebackup` defaults to requesting checksum verification. The backend activates it only when the source cluster has checksums enabled and the request does not include `NOVERIFY_CHECKSUMS`. The user's session `ignore_checksum_failure` setting does not replace this separate backup verification loop. [pg_basebackup.c#default](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L107) [pg_basebackup.c#request](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L1871-L1880) [basebackup.c#gate](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1413-L1426) [basebackup.c#comparison](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1558).
+
+```text
+Backup selects a file
+  ├─ not eligible for checksumming, or verification disabled → copy [A]
+  └─ eligible
+       ├─ read length not a multiple of page size
+       │    → warn; disable checks for this read and rest of this file [B]
+       └─ for each page
+            ├─ PageIsNew or page LSN >= backup start → skip comparison [C]
+            └─ compute checksum
+                 ├─ match → continue
+                 └─ mismatch → reread once and reevaluate
+                      └─ still eligible and mismatching → count and warn [C]
+After copying: any counted mismatches → fail the backup [D]
+```
+
+- **[A]** Temporary relations and unlogged non-init forks are excluded from the backup; selected files also face a checksum-specific metadata skip list. [basebackup.c#relation-exclusions](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1162) [basebackup.c#noChecksumFiles](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L203-L218) [basebackup.c#file-eligibility](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1337-L1362).
+- **[B]** This warning does not itself increment the mismatch count or fail the backup. [basebackup.c#unaligned-read](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1454-L1462).
+- **[C]** Pages modified since backup start may be observed during a write, and recovery WAL is expected to reconstruct them. The retry handles a concurrent page write; retry seek/read failures have their own errors, while retry EOF follows concurrent-truncation handling. [basebackup.c#skip-retry-errors](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1558).
+- **[D]** Confirmed mismatches are counted even after the per-file warning limit is reached. A single mismatch is enough for the final error. [basebackup.c#warnings](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1543-L1558) [basebackup.c#aggregate](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1611-L1622) [basebackup.c#final-error](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L621-L635).
+
+The command-line `--no-verify-checksums` option disables these checks, changing the default verification request. It permits copying bytes that this verifier would reject; it does not fix them. A checksum-failed backup command retains its received data directories, but the command still failed. Treat those files as investigation material rather than a verified successful backup. [pg_basebackup.c#option](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L2363-L2365) [pg_basebackup.c#request](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L1871-L1880) [pg_basebackup.c#checksum-failure](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L2025-L2042) [pg_basebackup.c#cleanup](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L157-L205).
+
+### Replication, rewind and upgrades
+
+Ordinary physical replay and raw file/block copying have different boundaries. A WAL full-page image is restored into a buffer; later writes use the receiving node's local checksum state. WAL records have their own CRC validation, independent of data checksums. A raw copy may instead bring along stale checksum bytes or replace the control-file state. [xlogutils.c#restore-and-redo](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L356-L407) [bufmgr.c#local-write](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2743-L2762) [xlogreader.c#WAL-CRC](../../../../raw/postgres-12/src/backend/access/transam/xlogreader.c#L707-L726) [pg_rewind.c#source-control](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L368-L392).
+
+| Feature | Consequence |
+|---|---|
+| Physical standby | An enabled node checks its own eligible disk reads and computes its own write checksums. On a recovering server, the permanent-buffer hint path does not dirty merely for hints when WAL protection would be needed. It does not originate matching hint WAL from standby reads. [bufpage.c#local-checks](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L92-L103) [bufpage.c#local-writes](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1169-L1205) [bufmgr.c#recovery-hints](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3470-L3483) |
+| Mismatched physical nodes | A valid clone converted offline can replay with its local state; receiver startup checks identity and timeline rather than negotiating checksum state. This does not make raw block exchange safe. Keep topology settings consistent for copying/rewind workflows; the [dedicated mismatch answer](../replication-and-wal/physical-replication-mismatched-data-checksums.md) covers both directions. [walreceiver.c#identity](../../../../raw/postgres-12/src/backend/replication/walreceiver.c#L311-L334) [libpqwalreceiver.c#start-request](../../../../raw/postgres-12/src/backend/replication/libpqwalreceiver/libpqwalreceiver.c#L382-L429) [xlogutils.c#replay](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L356-L407) [pg_checksums.sgml#topology](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L209-L219) |
+| `pg_rewind` target eligibility | Checksums satisfy the target's “checksums OR `wal_log_hints`” gate. Without either, it errors: `target server needs to use either data checksums or "wal_log_hints = on"`. Checksums must protect the relevant history; enabling now does not retroactively supply missing hint WAL. The docs also require `full_page_writes = on` (its default). [pg_rewind.c#gate](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L422-L429) [xloginsert.c#hint-record](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L893-L957) [pg_rewind.sgml#requirements](../../../../raw/postgres-12/doc/src/sgml/ref/pg_rewind.sgml#L92-L99) |
+| `pg_rewind` checksum compatibility | Passing eligibility does not perform whole-cluster checksum conversion. Rewind selectively keeps/copies pages and publishes source control state. A checksums-off target using `wal_log_hints = on` can therefore pass eligibility yet retain invalid checksum bytes when rewound from an enabled source. [filemap.c#retained-pages](../../../../raw/postgres-12/src/bin/pg_rewind/filemap.c#L261-L291) [pg_rewind.c#publish-source-control](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L368-L392) [bufpage.c#disabled-write](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1169-L1205) |
+| `pg_upgrade` | Old and new checksum settings must match. It refuses off→on, on→off, or unequal checksum versions, with distinct fatal messages. Consequently, an enabled source needs an enabled destination for upgrade; `pg_upgrade` is not the checksum-conversion tool. [controldata.c#checksum-compatibility](../../../../raw/postgres-12/src/bin/pg_upgrade/controldata.c#L660-L671) |
+| Logical change decoding | Hint FPIs are consumed as WAL but ignored as logical changes. Data-page errors can still affect ordinary reads made by related operations; checksum protection does not turn logical change output into page-level verification. [decode.c#ignored-records](../../../../raw/postgres-12/src/backend/replication/logical/decode.c#L169-L205) [bufmgr.c#verification](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L897-L926) |
+
+### Monitoring and inspection tools
+
+`pg_stat_database` exposes `checksum_failures` and `checksum_last_failure`. With checksums disabled both getters return NULL. With checksums enabled, the count is the collected count (zero if no entry exists); the timestamp stays NULL until a recorded failure exists. `PageIsVerified()` attempts to report a mismatch even if `ignore_checksum_failure` subsequently allows the page. [system_views.sql#database-counters](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L878-L879) [pgstatfuncs.c#checksum-getters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1529-L1567) [bufpage.c#report-before-override](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L149-L158).
+
+These counters are not a complete audit. Reporting requires a working statistics socket and `track_counts` in the reporting process. `track_counts` defaults on and has superuser session scope; turning it off suppresses new reports rather than clearing accumulated history. This pin's base-backup path reports a file's failures to statistics only when that file has **more than one** mismatch, although one still fails the backup. Offline `pg_checksums` counts its own failures and does not use that server reporting path. [guc.c#track_counts](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1392-L1400) [pgstat.c#report-gate](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1526-L1557) [pgstatfuncs.c#stored-count](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1529-L1545) [basebackup.c#per-file-counter](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1611-L1622) [pg_checksums.c#badblocks](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L217-L225).
+
+| Tool / observation | Interpretation |
+|---|---|
+| `SHOW data_checksums`, `pg_controldata` | They expose cluster state, not a completed integrity scan. The server derives the GUC from control state; the utility prints the stored checksum version. [xlog.c#reported-state](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4783-L4785) [pg_controldata.c#checksum-version](../../../../raw/postgres-12/src/bin/pg_controldata/pg_controldata.c#L343-L344) |
+| SQL `pg_control_init()` | Its `data_page_checksum_version` output reports the control-file field. It validates control-file CRC, not all relation-page checksums. [pg_controldata.c#SQL-field-and-CRC](../../../../raw/postgres-12/src/backend/utils/misc/pg_controldata.c#L301-L310) [pg_controldata.c#SQL-value](../../../../raw/postgres-12/src/backend/utils/misc/pg_controldata.c#L344-L345) |
+| `pg_resetwal` | Displays the checksum version but resets WAL/control state, not relation-page contents; it is not a checksum repair. If it cannot read usable control state, `GuessControlValues()` starts from zeros and leaves checksum version zero. That guessed-state operation is refused without explicit force, unlike the normal readable-control path. This is another reason to inspect state rather than assume an emergency reset preserved checksum protection. [pg_resetwal.c#read-or-guess](../../../../raw/postgres-12/src/bin/pg_resetwal/pg_resetwal.c#L393-L397) [pg_resetwal.c#force-gate-and-operation](../../../../raw/postgres-12/src/bin/pg_resetwal/pg_resetwal.c#L483-L516) [pg_resetwal.c#guessed-values](../../../../raw/postgres-12/src/bin/pg_resetwal/pg_resetwal.c#L665-L739) [pg_resetwal.c#checksum-display](../../../../raw/postgres-12/src/bin/pg_resetwal/pg_resetwal.c#L824-L825) [pg_resetwal.c#control-rewrite](../../../../raw/postgres-12/src/bin/pg_resetwal/pg_resetwal.c#L905-L940) |
+| [pageinspect](../../../glossary.md#pageinspect) `get_raw_page()` / `page_checksum()` | `get_raw_page()` copies a buffer obtained through `RBM_NORMAL`, so a cache miss may fail checksum verification before inspection. The bytes returned may be a modified cached image; recomputing its checksum and comparing with `pd_checksum` is not a reliable independent disk-corruption test. `page_checksum()` calculates a value, not a logical-page validation. [rawpage.c#buffer-copy](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L155-L172) [rawpage.c#page_checksum](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L290-L323) [bufpage.c#write-time-checksum](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1155-L1189) |
+| Buffer I/O timing | In the inspected read/write paths, checksum calculation is outside the timed `smgrread()` / `smgrwrite()` intervals. Extra checksum CPU therefore need not appear as increased block I/O time. [bufmgr.c#read-timing](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L890-L908) [bufmgr.c#write-timing](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L2743-L2771) |
+
+### Protection boundaries
+
+The checksum is a 16-bit reduction of a page hash mixed with its block number. It can detect changed bytes without knowing their SQL meaning. It cannot establish freshness, completeness, or whether a value was intended. [checksum_impl.h#algorithm-and-input](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L176-L214).
+
+| Case | Why enabling is insufficient |
+|---|---|
+| Entirely zero page, absent tail, unread page, or cached page | A zero page is accepted; a checker ends at EOF; a cached hit bypasses a fresh comparison. There is no checksum for an absent historical page to compare. [bufpage.c#zero-acceptance](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L119-L142) [pg_checksums.c#EOF](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L192-L198) [bufmgr.c#cached-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L762-L796) |
+| Old but internally intact page or a page copied from another relation at the same block number | There is no expected age or relation identity in the checksum calculation. Such bytes can retain a matching checksum. [checksum_impl.h#inputs](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L176-L214) |
+| Wrong initialized bytes in memory, or pre-existing corruption during enable | A later checksum can be calculated over those wrong bytes. A match does not validate tuples, index relationships or application rules. [bufpage.c#checksum-at-write](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L1186-L1189) [pg_checksums.c#enable](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L211-L242) |
+| Hash collision | The function has only 65,535 possible nonzero outputs. Different contents can match; no universal miss probability is claimed for a particular damage pattern. [checksum_impl.h#reduction](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L205-L214) |
+| WAL, control metadata, or arbitrary extension files | Data-page checksum enabling does not replace those formats' own validation. WAL uses its separate CRC; `pg_checksums` validates control-file CRC before scanning but excludes the control file from page checking. Arbitrary third-party storage must be reviewed on its own access paths. [xlogreader.c#WAL-CRC](../../../../raw/postgres-12/src/backend/access/transam/xlogreader.c#L707-L726) [pg_checksums.c#control-CRC](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L489-L501) [pg_checksums.c#skip-list](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L94-L109) |
+
+For a wider corruption-detection comparison, see [What Data Checksums and amcheck Detect, and What They Miss](checksums-and-amcheck-detection-coverage.md). Checksums provide a useful additional failure signal; recovery still depends on an appropriate intact page image, usable source data, or backup rather than on the checksum itself. [bufpage.c#detect-without-repair](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L143-L162) [xlogutils.c#image-restoration](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L356-L385).
+
+## Context Reviewed
+
+- Evidence base: PostgreSQL 12.2 commit `45b88269a353ad93744772791feb6d01bc7e1e42`, confirmed from the checkout. This is a source-only answer; no PostgreSQL measurements or performance tests were run.
+- Claim inventory and causal map: control state → read/write gates; cached versus storage reads; complete-page validation versus short reads; mismatch/header/override/read-mode outcomes; hint dirtiness and redo-LSN gates; VM/FSM changes; offline scan/publication; backup file/page/retry gates; rewind/upgrade requirements; statistics exclusions and protection limits.
+- Tree-wide symbol searches: `DataChecksumsEnabled`, `XLogHintBitIsNeeded`, `PageIsVerified`, `PageSetChecksumCopy`, `PageSetChecksumInplace`, `pg_checksum_page`, `data_checksum_version`, `ignore_checksum_failure`. Inspected direct readers/writers, heap scans, heap/B-tree output, relation and directory copying, control initialization, GUC declarations, statistics functions/view, replay and logical decode boundaries.
+- Build and generated-header boundary: core page code builds `bufpage.o` and `checksum.o`, with vector optimization flags for the checksum object. The backend and offline utility share `checksum_impl.h`; the latter includes it directly. `c.h` includes generated `pg_config.h`, whose template supplies `BLCKSZ` and `RELSEG_SIZE`. The tool rejects a mismatched block size. Error-code headers are generated from `errcodes.txt`; no new parser or catalog definition is needed to enable this existing storage feature. [page/Makefile#objects](../../../../raw/postgres-12/src/backend/storage/page/Makefile#L10-L19) [checksum.c#shared-implementation](../../../../raw/postgres-12/src/backend/storage/page/checksum.c#L14-L23) [pg_checksums.c#includes](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L22-L31) [c.h#configuration](../../../../raw/postgres-12/src/include/c.h#L51-L55) [pg_config.h.in#block-size](../../../../raw/postgres-12/src/include/pg_config.h.in#L35-L43) [pg_config.h.in#segment-size](../../../../raw/postgres-12/src/include/pg_config.h.in#L853-L864) [pg_checksums.c#block-size-check](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L503-L509) [utils/Makefile#error-generation](../../../../raw/postgres-12/src/backend/utils/Makefile#L41-L42).
+- Extension boundary: amcheck and pageinspect are bundled contrib consumers of core reads. Their checks do not define the coverage of arbitrary external access methods or external backup products. [verify_nbtree.c#read](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2348-L2360) [rawpage.c#read](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L155-L172).
+- Tests read, not executed: `pg_checksums` TAP actions cover enabling/disabling, control-state reporting, corruption and tablespaces, empty/temporary files, online refusal and invalid options; `pg_basebackup` TAP corrupts relation data, expects backup failure, and exercises `--no-verify-checksums`. The rewind harness's streaming setup uses `wal_log_hints = on`; pageinspect has a basic checksum-function test. These do not provide a measured checksum overhead for the user's workload. [002_actions.pl#corruption](../../../../raw/postgres-12/src/bin/pg_checksums/t/002_actions.pl#L11-L86) [002_actions.pl#actions](../../../../raw/postgres-12/src/bin/pg_checksums/t/002_actions.pl#L89-L177) [010_pg_basebackup.pl#checksum-tests](../../../../raw/postgres-12/src/bin/pg_basebackup/t/010_pg_basebackup.pl#L482-L556) [PostgresNode.pm#streaming-setup](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L462-L478) [page.sql#checksum-test](../../../../raw/postgres-12/contrib/pageinspect/sql/page.sql#L27).
+- Glossary reviewed: Data checksums, Page, Buffer manager, Hint bits, WAL, Full-page image, Control file, LSN, Free space map, Visibility map, Unlogged relation, amcheck and pageinspect, including matching-version notes. No definition change was needed. No v12 common-concept pages exist for these mechanisms.
+- Contradiction comparison: assembled page, linked glossary, own indexes and version manifest, and matching-version checksum, amcheck, emptied-segment, corruption-log, database-health, vacuum-I/O and replication pages. External discrepancies are recorded below.
+
+## Evidence Map
+
+| Claim family | Primary source / boundary |
+|---|---|
+| Defaults and cluster state | `initdb.c`, bootstrap option, `ControlFileData`, `DataChecksumsEnabled()`, internal `data_checksums` GUC |
+| What gets checked and written | `PageHeaderData`, `pg_checksum_page()`, `PageIsVerified()`, `ReadBuffer_common()`, `FlushBuffer()`, local-buffer eviction |
+| Error versus warning versus overwrite | `PageIsVerified()` → buffer read mode; separate `RelationCopyStorage()` caller; FSM/VM `RBM_ZERO_ON_ERROR`; redo image/ordinary branches |
+| CPU/copy work and hint WAL | Checksum implementation; `MarkBufferDirtyHint()` → `XLogSaveBufferForHint()`; dirty flags, permanent flag, recovery state and page/redo LSN |
+| VACUUM and maps | `log_heap_visible()`, `visibilitymap_set()`, retained-page map truncation |
+| Conversion and utility failures | `pg_checksums` scanner, compatibility/shutdown gates, sync and control-file publication |
+| Backup outcome and omissions | `sendDir()`, `is_checksummed_file()`, `sendFile()` skip/retry/count branches, final error and client cleanup gate |
+| Replication, rewind and upgrade | Replay buffer modes, logical decode skip cases, rewind target gate/selective file map/control copy, upgrade checksum comparison |
+| Monitoring and limits | Statistics report gates/getters, backup's per-file threshold, pageinspect buffer copy, checksum inputs/EOF/cache boundaries |
+
+Inline citations bind these families to exact ranges; the source inventory follows.
+
+## Open Questions
+
+- No workload-specific performance number, conversion duration, WAL-volume increase or archive/replication delay was measured. Those depend on the user's cache residency, page-write rate, checkpoint cycle, hint state and hardware. The page identifies source paths rather than supplying a guessed percentage.
+- Same-checkout documentation discrepancy: [storage/page/README](../../../../raw/postgres-12/src/backend/storage/page/README#L12) says enabling is required at `initdb` time, whereas [pg_checksums.c#enable](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L211-L242) and [control publication](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L582-L606) implement later offline conversion. The implementation supports the conversion described here.
+- Same-checkout documentation discrepancy: [pg_checksums.sgml#description](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L48-L51) says “every file” is scanned or rewritten. The [skip list](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L94-L109), [directory selection](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L297-L371), [scan roots](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L559-L561) and [new-page skip](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L211-L213) limit that claim. The implementation wins.
+- Same-checkout test-comment discrepancy: [RewindTest.pm#setup](../../../../raw/postgres-12/src/bin/pg_rewind/t/RewindTest.pm#L120-L135) says checksums are mandatory. The setup uses the streaming harness, which sets [wal_log_hints](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L462-L478), and [pg_rewind.c#target-gate](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L422-L429) accepts either. Checksums are one way to meet the gate.
+- Outside this page's edit scope: the `data_checksum_version` row in [amcheck's mental model](../indexing/amcheck-indexes-tables-and-data-checksums.md#mental-model) says its state “changes only at `initdb` or with offline `pg_checksums`.” This page's lifecycle explanation also includes replacement with source control state by rewind, supported by [pg_rewind.c#control-copy](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L368-L392). The sibling's “only” needs qualification; it was not changed.
+- Outside this page's edit scope: the “Torn page / partial write” row in the [detection coverage table](checksums-and-amcheck-detection-coverage.md#coverage-comparison-table) says repair “needs `full_page_writes` ... and replay.” That is too broad for checksum-protected hint updates: this page's hint-WAL section follows `REGBUF_FORCE_IMAGE`, which can supply a replayable image even with that GUC off. This does not justify disabling the GUC for ordinary updates. The [forced hint image](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L945-L954), [image-selection precedence](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L539-L555) and [image replay](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L356-L385) support the qualified statement; the sibling row was not changed.
+- Same-checkout header-comment discrepancy: [bufpage.h#pd_checksum-comment](../../../../raw/postgres-12/src/include/storage/bufpage.h#L124-L129) calls zero a valid checksum value. The implemented calculation returns `(checksum % 65535) + 1`, so zero is not an output of this checksum algorithm. Zero can still occupy the field on an unchecksummed/new page; the page's algorithm claim follows [checksum_impl.h#return-range](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L205-L214).
+- No matching PostgreSQL 12 common-concept page exists for page-checksum and hint-WAL mechanics. A separate concept page would provide the reusable explanation; none was created during this question task.
+- Third-party tools and storage extensions are outside the pinned checkout's evidence. Their own copy, checksum and repair guarantees cannot be established from these core paths.
+
+## Source References
+
+- [initdb.c#checksum-option](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L3146-L3148)
+- [bootstrap.c#checksum-version](../../../../raw/postgres-12/src/backend/bootstrap/bootstrap.c#L255-L257)
+- [pg_control.h#checksum-state](../../../../raw/postgres-12/src/include/catalog/pg_control.h#L221-L222)
+- [xlog.c#DataChecksumsEnabled](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L4818-L4826)
+- [guc.c#checksum-overrides-and-WAL](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1134-L1185)
+- [bufpage.h#page-header](../../../../raw/postgres-12/src/include/storage/bufpage.h#L107-L169)
+- [bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L65-L162)
+- [checksum_impl.h#pg_checksum_page](../../../../raw/postgres-12/src/include/storage/checksum_impl.h#L176-L214)
+- [bufmgr.c#MarkBufferDirtyHint](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L3422-L3553)
+- [localbuf.c#write](../../../../raw/postgres-12/src/backend/storage/buffer/localbuf.c#L201-L222)
+- [md.c#mdread](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L592-L632)
+- [xlog.h#XLogHintBitIsNeeded](../../../../raw/postgres-12/src/include/access/xlog.h#L183-L192)
+- [xloginsert.c#XLogSaveBufferForHint](../../../../raw/postgres-12/src/backend/access/transam/xloginsert.c#L875-L957)
+- [heapam_visibility.c#SetHintBits](../../../../raw/postgres-12/src/backend/access/heap/heapam_visibility.c#L111-L135)
+- [heapam.c#log_heap_visible](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L7260-L7294)
+- [visibilitymap.c#map-truncation](../../../../raw/postgres-12/src/backend/access/heap/visibilitymap.c#L505-L523)
+- [freespace.c#map-truncation](../../../../raw/postgres-12/src/backend/storage/freespace/freespace.c#L278-L310)
+- [storage.c#RelationCopyStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L333-L358)
+- [tablecmds.c#relation-tablespace-copy](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L12790-L12810)
+- [dbcommands.c#database-copy](../../../../raw/postgres-12/src/backend/commands/dbcommands.c#L630-L640)
+- [copydir.c#copy_file](../../../../raw/postgres-12/src/backend/storage/file/copydir.c#L189-L209)
+- [rewriteheap.c#output](../../../../raw/postgres-12/src/backend/access/heap/rewriteheap.c#L330-L345)
+- [nbtsort.c#output](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L658-L690)
+- [nbtutils.c#index-hint-dirtying](../../../../raw/postgres-12/src/backend/access/nbtree/nbtutils.c#L1785-L1811)
+- [elog.c#default-SQLSTATE](../../../../raw/postgres-12/src/backend/utils/error/elog.c#L381-L388)
+- [xlogutils.c#redo-branches](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L345-L407)
+- [xlogreader.c#WAL-validation](../../../../raw/postgres-12/src/backend/access/transam/xlogreader.c#L707-L726)
+- [decode.c#DecodeXLogOp](../../../../raw/postgres-12/src/backend/replication/logical/decode.c#L169-L205)
+- [basebackup.c#sendFile](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1413-L1558)
+- [pg_basebackup.c#checksum-failure](../../../../raw/postgres-12/src/bin/pg_basebackup/pg_basebackup.c#L2025-L2042)
+- [pg_checksums.c#scan-and-publication](../../../../raw/postgres-12/src/bin/pg_checksums/pg_checksums.c#L489-L606)
+- [pg_checksums.sgml#conversion-notes](../../../../raw/postgres-12/doc/src/sgml/ref/pg_checksums.sgml#L204-L225)
+- [pg_dump.c#dumpTableData_copy](../../../../raw/postgres-12/src/bin/pg_dump/pg_dump.c#L1812-L1843)
+- [walreceiver.c#identity](../../../../raw/postgres-12/src/backend/replication/walreceiver.c#L311-L334)
+- [walsender.c#physical-WAL-send](../../../../raw/postgres-12/src/backend/replication/walsender.c#L2752-L2782)
+- [libpqwalreceiver.c#start-request](../../../../raw/postgres-12/src/backend/replication/libpqwalreceiver/libpqwalreceiver.c#L382-L429)
+- [pg_rewind.c#target-gate](../../../../raw/postgres-12/src/bin/pg_rewind/pg_rewind.c#L422-L429)
+- [filemap.c#retained-pages](../../../../raw/postgres-12/src/bin/pg_rewind/filemap.c#L261-L291)
+- [pg_rewind.sgml#requirements](../../../../raw/postgres-12/doc/src/sgml/ref/pg_rewind.sgml#L92-L99)
+- [controldata.c#upgrade-compatibility](../../../../raw/postgres-12/src/bin/pg_upgrade/controldata.c#L660-L671)
+- [pgstat.c#checksum-reporting](../../../../raw/postgres-12/src/backend/postmaster/pgstat.c#L1526-L1557)
+- [pgstatfuncs.c#checksum-getters](../../../../raw/postgres-12/src/backend/utils/adt/pgstatfuncs.c#L1529-L1567)
+- [system_views.sql#checksum-columns](../../../../raw/postgres-12/src/backend/catalog/system_views.sql#L878-L879)
+- [pg_controldata.c#checksum-version](../../../../raw/postgres-12/src/bin/pg_controldata/pg_controldata.c#L343-L344)
+- [pg_controldata.c#SQL-control-state](../../../../raw/postgres-12/src/backend/utils/misc/pg_controldata.c#L301-L310)
+- [pg_resetwal.c#control-rewrite](../../../../raw/postgres-12/src/bin/pg_resetwal/pg_resetwal.c#L905-L940)
+- [verify_nbtree.c#page-read](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L2348-L2360)
+- [rawpage.c#page_checksum](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L290-L323)
+- [page.sql#checksum-test](../../../../raw/postgres-12/contrib/pageinspect/sql/page.sql#L27)
+- [page/Makefile#objects](../../../../raw/postgres-12/src/backend/storage/page/Makefile#L10-L19)
+- [checksum.c#shared-implementation](../../../../raw/postgres-12/src/backend/storage/page/checksum.c#L14-L23)
+- [c.h#generated-configuration](../../../../raw/postgres-12/src/include/c.h#L51-L55)
+- [pg_config.h.in#segment-size](../../../../raw/postgres-12/src/include/pg_config.h.in#L853-L864)
+- [utils/Makefile#error-codes](../../../../raw/postgres-12/src/backend/utils/Makefile#L41-L42)
+- [002_actions.pl#checksum-tool-tests](../../../../raw/postgres-12/src/bin/pg_checksums/t/002_actions.pl#L89-L177)
+- [010_pg_basebackup.pl#checksum-tests](../../../../raw/postgres-12/src/bin/pg_basebackup/t/010_pg_basebackup.pl#L482-L556)
+- [RewindTest.pm#setup-comment](../../../../raw/postgres-12/src/bin/pg_rewind/t/RewindTest.pm#L120-L135)
+- [PostgresNode.pm#wal_log_hints](../../../../raw/postgres-12/src/test/perl/PostgresNode.pm#L462-L478)
+- [storage/page/README#stale-initdb-restriction](../../../../raw/postgres-12/src/backend/storage/page/README#L12)
+
+## Navigation
+
+- [PostgreSQL 12 index](../../index.md)
+- [Wiki index](../../../index.md)
+- [Wiki Glossary (unverified)](../../../glossary.md)
+- [Checksum and amcheck detection coverage](checksums-and-amcheck-detection-coverage.md)
+- [Physical replication with mismatched checksum settings](../replication-and-wal/physical-replication-mismatched-data-checksums.md)
