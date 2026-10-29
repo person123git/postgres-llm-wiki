@@ -123,6 +123,7 @@ verified_by_agent: not yet
   - [Hash splitpoint](#hash-splitpoint)
   - [Heap](#heap)
   - [Heavyweight lock](#heavyweight-lock)
+  - [High key](#high-key)
   - [Hint bits](#hint-bits)
   - [Hook](#hook)
   - [HOT](#hot)
@@ -261,6 +262,7 @@ verified_by_agent: not yet
   - [REINDEX](#reindex)
   - [Relation](#relation)
   - [Relation mapper](#relation-mapper)
+  - [Relation segment](#relation-segment)
   - [Relation size functions](#relation-size-functions)
   - [Relcache](#relcache)
   - [Relfilenumber](#relfilenumber)
@@ -1875,6 +1877,14 @@ A heavyweight lock, also called a regular lock, is a lock taken through the lock
 - PostgreSQL 19: Holds. It still has eight table-driven modes, deadlock detection, release at transaction end by default and session-level locks, and `LockRelationOid()` still calls `LockAcquireExtended()`, which takes the `logLockFailure` argument as in 18 ([lmgr/README:20-35](../raw/postgres-19/src/backend/storage/lmgr/README#L20-L35), [lockdefs.h:34-48](../raw/postgres-19/src/include/storage/lockdefs.h#L34-L48), [lock.c#LockConflicts](../raw/postgres-19/src/backend/storage/lmgr/lock.c#L68-L108), [lmgr.c#LockRelationOid](../raw/postgres-19/src/backend/storage/lmgr/lmgr.c#L107-L116), [lock.c#LockAcquireExtended](../raw/postgres-19/src/backend/storage/lmgr/lock.c#L865-L871), [lmgr.c#LockRelationIdForSession](../raw/postgres-19/src/backend/storage/lmgr/lmgr.c#L378-L384)). `LOCKTAG` moved from `lock.h` to a new header, `locktag.h` ([locktag.h#LOCKTAG](../raw/postgres-19/src/include/storage/locktag.h#L64-L72)).
 
 Related: [AccessExclusiveLock](#accessexclusivelock), [ShareUpdateExclusiveLock](#shareupdateexclusivelock), [LWLock](#lwlock), [Session-level lock](#session-level-lock), [Virtual transaction ID](#virtual-transaction-id)
+
+### High key
+
+**Aliases:** `P_HIKEY`, B-tree high key. **Checked on:** PostgreSQL 12.
+
+A high key is the upper bound stored on every non-rightmost [B-tree](#b-tree) page: no key on that page may be greater than it ([nbtree/README:15-20](../raw/postgres-12/src/backend/access/nbtree/README#L15-L20)). It lets a reader detect a concurrent page split and move right. It matters when reading leaf items with [pageinspect](#pageinspect), because the high key is a pivot tuple rather than a pointer to a heap row: on a non-rightmost page it occupies item 1 and data items start at item 2, while a rightmost page has no high key ([nbtree.h:199-219](../raw/postgres-12/src/include/access/nbtree.h#L199-L219)). "Rightmost" means `btpo_next` is `P_NONE` ([nbtree.h:188](../raw/postgres-12/src/include/access/nbtree.h#L188)).
+
+Related: [B-tree](#b-tree), [pageinspect](#pageinspect), [TID](#tid)
 
 ### Hint bits
 
@@ -3645,6 +3655,14 @@ In PostgreSQL 12, the relation mapper records the data file numbers of the catal
 A mapped catalog has 0 in `pg_class.relfilenode`. SQL that needs its file therefore has to ask the mapper, as `pg_relation_filenode()` and `pg_relation_filepath()` do ([dbsize.c#pg_relation_filenode](../raw/postgres-12/src/backend/utils/adt/dbsize.c#L865-L904), [dbsize.c#pg_relation_filepath](../raw/postgres-12/src/backend/utils/adt/dbsize.c#L940-L1022)).
 
 Related: [Relfilenumber](#relfilenumber), [pg_class](#pg_class), [Catalog](#catalog), [Relcache](#relcache), [Tablespace](#tablespace)
+
+### Relation segment
+
+**Aliases:** segment file, `RELSEG_SIZE`, `<filenode>.N`. **Checked on:** PostgreSQL 12.
+
+A relation segment is one of the numbered files a relation [fork](#fork) is split into so that no single file exceeds an operating-system size limit. Each file holds at most `RELSEG_SIZE` blocks, a build-time constant ([md.c:43-50](../raw/postgres-12/src/backend/storage/smgr/md.c#L43-L50), [pg_config.h.in#RELSEG_SIZE](../raw/postgres-12/src/include/pg_config.h.in#L853-L864)). The first file is named for the [relfilenode](#relfilenumber) and later ones `<filenode>.1`, `<filenode>.2`, and so on; the default segment is 1 GB, and the free space map and visibility map forks follow the same rule ([storage.sgml#segments](../raw/postgres-12/doc/src/sgml/storage.sgml#L233-L243)). The [storage manager](#storage-manager) requires zero or more full segments, then exactly one partial segment (possibly empty), then optionally zero-length inactive segments that `mdtruncate()` left behind ([md.c:52-66](../raw/postgres-12/src/backend/storage/smgr/md.c#L52-L66)). That is why a relation's length is computed by walking segments until the first short one, not by adding file sizes ([md.c#mdnblocks](../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755)).
+
+Related: [Fork](#fork), [Relfilenumber](#relfilenumber), [Storage manager](#storage-manager), [Relation size functions](#relation-size-functions)
 
 ### Relation size functions
 
