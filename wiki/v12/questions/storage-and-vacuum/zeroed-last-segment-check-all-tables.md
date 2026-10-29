@@ -22,7 +22,7 @@ verified_by_agent: not yet
   - [Catalog tables](#catalog-tables)
   - [The tail and witness check](#the-tail-and-witness-check)
   - [Orphan files](#orphan-files)
-  - [Index TID witness](#index-tid-witness)
+  - [Index TID witness query](#index-tid-witness-query)
   - [Privileges, locks and cost](#privileges-locks-and-cost)
   - [Measured results](#measured-results)
   - [Branches, limits and false positives](#branches-limits-and-false-positives)
@@ -532,7 +532,7 @@ ORDER BY first_segment_bytes DESC NULLS LAST, f.path;
 
 An orphan is not always damage; see [Branches, limits and false positives](#branches-limits-and-false-positives). A zero-length orphan is usually a dropped relation's first segment, which `mdunlink()` empties and keeps until the next [checkpoint](../../../glossary.md#checkpoint). [md.c#mdunlink](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L215-L262)
 
-### Index TID witness
+### Index TID witness query
 
 Use it on tables the first query flags, or on tables whose small size or missing forks make the fork witnesses blind. It reads each B-tree index of the table in full through shared buffers, so its cost is the size of those indexes. The heap size comes from the first short segment, matching a storage manager with fresh segment-open state rather than `pg_relation_size()`; `t_mid` in the measurement checks this distinction. A warm backend with later segments already open may use a larger bound. [md.c#mdnblocks](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L706-L755) [dbsize.c#calculate_relation_size](../../../../raw/postgres-12/src/backend/utils/adt/dbsize.c#L266-L307)
 
@@ -619,7 +619,7 @@ ORDER BY 1;
   | Concurrent command | Lock it needs | Effect while the `pageinspect` query runs |
   |---|---|---|
   | `DROP TABLE` | `AccessExclusiveLock` on each index, because dropping the table drops its indexes [dependency.c#AcquireDeletionLock](../../../../raw/postgres-12/src/backend/catalog/dependency.c#L1533-L1548) [index.c#index_drop](../../../../raw/postgres-12/src/backend/catalog/index.c#L2047-L2050) | Waits only for the function call in progress. The query's next call on that index then queues behind the drop and fails, either at the 5-second `lock_timeout` or because the index is gone. |
-  | `REINDEX`, or a rewrite that rebuilds the indexes | `AccessExclusiveLock` on each index in `reindex_index()` [index.c:3466-3470](../../../../raw/postgres-12/src/backend/catalog/index.c#L3466-L3470) | Waits only for the call in progress. Later calls can read the rebuilt index, so one result can mix old and new index pages. |
+  | `REINDEX`, or a rewrite that rebuilds the indexes | `AccessExclusiveLock` on each index in `reindex_index()` [index.c:3466-3470](../../../../raw/postgres-12/src/backend/catalog/index.c#L3466-L3470) | Waits only for the call in progress. Later calls read the rebuilt index, so one result can mix old and new index pages. The query took each index's page range from `pg_relation_size()` before the scan, so a smaller rebuilt index makes a later `bt_page_stats()` call fail with `block number out of range`, and a larger one leaves its extra pages unread. [btreefuncs.c:52-54](../../../../raw/postgres-12/contrib/pageinspect/btreefuncs.c#L52-L54) |
   | Ordinary `TRUNCATE` | A new heap file, then the same index rebuild through `reindex_relation()` [tablecmds.c:1836-1840](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L1836-L1840) | As for `REINDEX`. |
   | VACUUM truncation of the heap | `AccessExclusiveLock` on the heap only [vacuumlazy.c:1902](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1902) | Does not wait. The query reads the heap size once, from the files. |
 
@@ -717,7 +717,7 @@ bash .wiki-runtime/tmp/zt12-run.sh
 
 ### Last run
 
-On 2026-10-29 the final published script text was extracted with the command above and run five times from an empty sandbox on Linux 6.18.54.1-microsoft-standard-WSL2 x86_64 against PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`, the last after the fourth review of that day (72 s, then 17 s for the re-run), each run followed by a re-run of every later stage while the build was present. All stages and all 25 assertions passed on every run, and every number matched the earlier 2026-10-21 run on Darwin 27.0.0 arm64. The server reported `RELSEG_SIZE 1024`, `segment_size` 8 MB, `block_size` 8192, maximum data alignment 8, `data_checksums` off and `shared_buffers` 128 MB. The main check returned the eight fixture findings in [Measured results](#measured-results), the B-tree query reported `t_mid` at 1,024 logical heap blocks with a reference to block 2,499, the catalog orphan query returned 3,376 rows, and the synthetic two-segment FSM check reported 1,025 pages. The latter is an artificial file-enumeration test, not a PostgreSQL-written FSM. The cluster was stopped and the sandbox deleted with `stop clean`.
+On 2026-10-29 the final published script text was extracted with the command above and run six times from an empty sandbox on Linux 6.18.54.1-microsoft-standard-WSL2 x86_64 against PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`, the last after the fifth review of that day edited the script's header comment (72 s, then 19 s for the re-run), each run followed by a re-run of every later stage while the build was present. All stages and all 25 assertions passed on every run, and every number matched the earlier 2026-10-21 run on Darwin 27.0.0 arm64. The server reported `RELSEG_SIZE 1024`, `segment_size` 8 MB, `block_size` 8192, maximum data alignment 8, `data_checksums` off and `shared_buffers` 128 MB. The main check returned the eight fixture findings in [Measured results](#measured-results), the B-tree query reported `t_mid` at 1,024 logical heap blocks with a reference to block 2,499, the catalog orphan query returned 3,376 rows, and the synthetic two-segment FSM check reported 1,025 pages. The latter is an artificial file-enumeration test, not a PostgreSQL-written FSM. The cluster was stopped and the sandbox deleted with `stop clean`.
 
 ### Stages
 
@@ -769,12 +769,15 @@ Every fixture object is disposable. The script creates and drops databases `zt` 
 # runs the three SQL checks published on the page.  The SQL is extracted from
 # the page itself, so the measured SQL is the filed SQL.
 #
-# The build is NON-DEFAULT in one compile-time knob: RELSEG_SIZE is patched
-# from the pin's default 131072 blocks (1 GB) to 1024 blocks (8 MB) in the
-# generated pg_config.h of the out-of-tree build, because configure's
-# --with-segsize accepts only whole gigabytes in PostgreSQL 12.  The checks
-# read the segment size from the control file (pg_control_init), and the
-# free-space-map and visibility-map geometry they test does not depend on it.
+# The build has one NON-DEFAULT compile-time knob that results depend on:
+# RELSEG_SIZE is patched from the pin's default 131072 blocks (1 GB) to 1024
+# blocks (8 MB) in the generated pg_config.h of the out-of-tree build, because
+# configure's --with-segsize accepts only whole gigabytes in PostgreSQL 12.
+# The checks read the segment size from the control file (pg_control_init),
+# and the free-space-map and visibility-map geometry they test does not
+# depend on it.  --enable-debug and CFLAGS="-O2 -g" are also non-default
+# build options; they add debug symbols and fix the optimization level, and
+# no measured result depends on them.
 #
 # Every fixture object is disposable.  The script creates and drops its own
 # databases zt and zc; do not point it at a database anyone cares about.
