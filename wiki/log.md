@@ -1579,3 +1579,18 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: appended an eighth-review note to both index entries and a coverage note to `versions.md`. Human `verified:` and `verified_by_agent: not yet` preserved. No headings changed, so Contents is unchanged.
 - Isolation and teardown: no service was started; nothing was running.
 - Validation: every new citation range was read at the pin. `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors and 0 warnings, run after this entry.
+
+## [2026-10-29] ninth review and fix v12 | Checking every table for a zeroed last segment
+
+- Prompt hygiene: "review again" needed no correction. The filed `## Question` is unchanged.
+- Scope: the review named no scope, so the findings were reported before any edit (MANDATORY Review Requests). The user then chose "Fix in place, commit".
+- Fixes on [the page](v12/questions/storage-and-vacuum/zeroed-last-segment-check-all-tables.md), at unchanged pin `45b88269a353ad93744772791feb6d01bc7e1e42`:
+  1. Contradiction: the eighth round's orphan table said "three different states leave a zero-length orphan". Rewrites are a fourth: `RelationSetNewRelfilenode()` schedules the old file for deletion at commit (`relcache.c:3446-3448`, used by `TRUNCATE` and `REINDEX`), and `VACUUM FULL` / `CLUSTER` drop the transient heap holding the old file (`cluster.c:1449-1458`, `heap.c:1951`), both through `RelationDropStorage()` (`storage.c:148-170`) and then `mdunlink()`. Added the row and changed the count, here and in the Evidence Map.
+  2. Missing condition: the re-check said "run `CHECKPOINT`" although the page offers a non-superuser grant path, and `CHECKPOINT` is superuser-only in 12 (`utility.c:757-760`). It now says so, and gives the alternative of waiting for the next checkpoint the server performs, scheduled by `checkpoint_timeout` (boot value 300 s, `PGC_SIGHUP`, `guc.c:2567-2573`). A first draft said "at least every `checkpoint_timeout`"; that was softened before filing, because a timed checkpoint can be skipped when no WAL was written.
+  - Source References and Context Reviewed now cover `utility.c`, `cluster.c:1449-1458` and `heap.c:1951`.
+- Measurement: none. The script and every reported number are unchanged, and the user chose no re-run.
+- Glossary: reviewed the linked entries, including Checkpoint and TRUNCATE, for 12 scope. No change needed; no glossary edit.
+- Contradiction check: compared the whole page with itself, the script, the pinned source, the linked glossary entries, both index entries, and the v12 `versions.md` row and notes. Also checked by script that Contents lists every `##` and `###` heading in order and that every linked glossary anchor exists. Found 2 contradictions (the three-cause count against `RelationSetNewRelfilenode()` and `finish_heap_swap()`, and the unconditioned `CHECKPOINT` instruction against the non-superuser path). Counts: 2 fixed, 0 reported without change, 0 withdrawn. The new row was checked against the State changes rewrite row and the Non-default catalog-fixture row; no conflict.
+- Bookkeeping: appended a ninth-review note to both index entries and a coverage note to `versions.md`. Human `verified:` and `verified_by_agent: not yet` preserved. No headings changed, so Contents is unchanged.
+- Isolation and teardown: no service was started; nothing was running.
+- Validation: every new citation range was read at the pin. `.wiki-runtime/venv/bin/python scripts/wiki_lint` reports 0 errors and 0 warnings, run after this entry.
