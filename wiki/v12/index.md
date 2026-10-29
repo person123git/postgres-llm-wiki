@@ -73,6 +73,7 @@ Behavioral claims cite the matching pinned checkout under `raw/postgres-12/`.
 
 - [Corruption Indicators in PostgreSQL 12 Logs With Data Checksums Disabled (unverified)](questions/observability/corruption-log-messages-with-checksums-disabled.md) - Source-based message catalog for checksum-disabled clusters: page/index/TOAST, freezing and catalog checks, transaction files, storage failures, WAL and control-file validation, explicit amcheck diagnostics, logging defaults, and contextual cases such as the local end of WAL. Includes a detection decision tree and state lifecycle; no runtime measurements.
 - [EXPLAIN ANALYZE BUFFERS Output in PostgreSQL 12 (unverified)](questions/observability/explain-analyze-buffers-output.md)
+- [Metrics for Hint Bits Set and Pages Dirtied as Hints in PostgreSQL 12 (unverified)](questions/observability/hint-bit-and-dirtied-page-metrics.md) - No view counts hint bits set or hint-dirtied pages; maps the all-cause dirtied counters (`EXPLAIN (BUFFERS)`, `pg_stat_statements`, `auto_explain`, autovacuum log), `FPI_FOR_HINT` counts via `pg_waldump --stats=record` on checksum or `wal_log_hints` clusters, and point-in-time `pageinspect`/`pg_buffercache` inspection, with counting windows and edge cases.
 - [How pg_stat_statements Works and Which Settings Affect It in PostgreSQL 12 (unverified)](questions/observability/pg-stat-statements.md)
 
 ### Server Administration
