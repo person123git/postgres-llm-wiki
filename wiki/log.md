@@ -1820,3 +1820,15 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: the index entries are unchanged because their summary still holds. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: no server, cluster, sandbox or subagent was used.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] fifth review and fix v12 | Planner factors that produce plans that over-fetch tuples
+
+- Prompt hygiene: " commit and review again". Only the leading space was dropped; the meaning is unchanged. There was nothing new to commit, because `7015646` already held the fourth-round fixes. The push failed again: `git fetch` returned `Permission denied (publickey)`, so local `master` stayed 6 commits ahead of `origin/master`. The user then chose "Fix and re-measure". The page has no measurement script, so nothing could be re-measured.
+- Review: a static re-read of the factor sections. It checked claims earlier rounds had not verified, including the F11 pruning path (partprune.c:663, 676-681, 729), how constraint exclusion treats partitions when pruning is off (plancat.c:1261-1263, 1441-1458), the CTE command-type test (subselect.c:839, 893) and the `LIMIT` route under a cursor. It reported 2 findings, both fixed on [the page](v12/questions/query-planning/plans-that-over-fetch-tuples.md):
+  1. The F11 non-default note named `get_matching_partitions` for the early return at partprune.c:680-681. That return is in `prune_append_rel_partitions()` (partprune.c:663), which returns before any pruning steps are built for `get_matching_partitions()`.
+  2. The F9 `LIMIT` route row and the sentence after the table said the top-level `get_cheapest_fractional_path()` call always receives 0. For a `DECLARE CURSOR` with a `LIMIT` it receives `cursor_tuple_fraction` (planner.c:377-397, 411). Both now state the cursor case.
+- Glossary: reviewed the linked entries, including Tuple fraction; its 12 note already states the cursor condition. No change.
+- Contradiction check: compared the assembled page with itself, its sources, its glossary entries, its index entries and the v12 partitioning page. That page uses `get_matching_partitions` correctly. Found 0 contradictions and 2 inaccurate statements; both fixed, with no copies left. 0 reported without a change, 0 withdrawn.
+- Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no server, cluster, sandbox or subagent was used.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
