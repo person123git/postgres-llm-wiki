@@ -2003,3 +2003,30 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: index entries and the versions.md note unchanged; their summaries still hold.
 - Isolation and teardown: the `measure` stage started and stopped one cluster under `.wiki-runtime/tmp/qs12/data` on port 55461 in each run. The final `stop clean` found no `postmaster.pid`, no process naming the data directory, an empty socket directory and no listener, then deleted `.wiki-runtime/tmp/qs12/` with its build; `pgrep -f` and a `/dev/tcp` probe confirmed it afterwards. The extracted script and logs were deleted. Other clusters already running on the host were left alone.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] third review, fix and re-measure v12 | Query planner statistics sources
+
+- Prompt hygiene: original wording "commit and review again", sent twice. No corrections. Nothing was uncommitted when the request arrived; the push still fails (`Permission denied (publickey)`). The review stated no scope, so it reported first. After the report the user chose "Fix and re-measure".
+- Review: a fresh independent subagent, run on the same model (Opus) and limited to reporting, fully checked the sections the second review had sampled, the recent edits, and the whole page for contradictions. The orchestrator confirmed the main findings in `raw/postgres-12/` at `45b88269a353ad93744772791feb6d01bc7e1e42`. 16 findings, all fixed:
+  1. The TRUNCATE in-place exception (added by the second review) was wrong for tables with indexes: `heap_truncate_one_rel` → `RelationTruncateIndexes` → `index_build` rewrites the heap row (heap.c:3272-3275, 3196-3202; index.c:2980-2982). Split into two events-table rows.
+  2. CHECK-constraint exclusion lacked its `constraint_exclusion` condition: the default is `partition`, `PGC_USERSET` (guc.c:4243-4251; plancat.c:1410-1473).
+  3. Auto-analyze exceptions now include temporary tables (autovacuum.c:2075-2093) and `pg_statistic` itself (3093-3095); the final summary was updated.
+  4. The CLUSTER/VACUUM FULL row now records the `relallvisible` swap to 0 (cluster.c:1136-1147) and the index-rebuild rewrite; an `ALTER TABLE` rewrite row was added (tablecmds.c:4654, 4672; cluster.c:1130-1147, 1410). A new heap starts at 0/0/0 (heap.c:978-996).
+  5. Contradiction: Open Questions opened with "None unresolved" above unresolved items; the lead was replaced.
+  6. The call-path diagram now shows `add_other_rels_to_query`/`expand_inherited_rtentry` (planmain.c:250, 266; initsplan.c:144-168) and group-count estimation in `get_number_of_groups` (planner.c:3678-3760).
+  7. Events table: added `ALTER COLUMN TYPE` (tablecmds.c:11102-11105, statscmds.c:510-530) and `DROP COLUMN` (heap.c:1713-1714).
+  8. Contradiction with the glossary's syscache note: Context Reviewed and the Evidence Map called the syscache definitions generated; they are hand-written and use generated macros.
+  9. The index-build row said "no index row" before; that is wrong for REINDEX.
+  10. Script: the `_before` estimates are now asserted exactly (6000, 3000).
+  11. Script: the auto-analyze wait now also requires the committed inherited row, because `last_autoanalyze` is reported before the inherited pass (analyze.c:266-268, 638-640).
+  12. Worked calculation: added the restriction-scaling skip (selfuncs.c:3298-3302) and the input-rows cap (3356-3361).
+  13. Cited the analyze threshold defaults (guc.c:2957-2964, 3404-3411; autovacuum.c:3067).
+  14. Filed the analyze.sgml discrepancies (two passes for any parent; inserts/updates only) under Open Questions (analyze.c:255-261; pgstat.c:2153-2156, 5986).
+  15. Fixed citation ranges: pg_type.h typanalyze, ltree_op.c ltreeparentsel, index_update_stats, extended_stats.c build-and-store, stats.sql, planmain.c query_planner, the nullfrac read (selfuncs.c:305-315), relcache opclass load, lsyscache opfamily lookups, acquire_sample_rows; reworded the "mandatory" `GetForeignRelSize` claim to the unconditional call.
+  16. Mental-model row 71 now names the 10-page floor.
+- Measurement: the edited script was extracted from the page and run from an empty sandbox (55 s, `JOBS=22`), then `measure report` re-run with the build present (11 s). Both passed all 16 assertions, with results identical to each other and to every earlier run. Last run and Runtime rows updated.
+- Glossary: reviewed the linked entries' PostgreSQL 12 notes (syscache, reltuples and relpages, truncate, cluster, vacuum-full, autovacuum, extended statistics, pg_statistic); no change needed. The page was the one in error on syscaches.
+- Contradiction check: compared the assembled page with itself, the pinned source, the linked glossary notes, its index entries and versions.md note, and other v12 pages (10-page floor, TRUNCATE, `constraint_exclusion`, temporary-table autovacuum, inherited and partitioned extended statistics). Found 2 contradictions (findings 5 and 8), both fixed. No new conflict on other pages; the known `btree-index-bloat-core-sql-only.md:567` issue remains reported and unchanged.
+- Bookkeeping: index entries and the versions.md note unchanged; their summaries still hold.
+- Isolation and teardown: the `measure` stage started and stopped one cluster under `.wiki-runtime/tmp/qs12/data` on port 55461 in each run. The final `stop clean` found no `postmaster.pid`, no process naming the data directory, an empty socket directory and no listener, then deleted `.wiki-runtime/tmp/qs12/` with its build; `pgrep -f` and a `/dev/tcp` probe confirmed it afterwards. The extracted script and logs were deleted. Other clusters already running on the host were left alone.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
