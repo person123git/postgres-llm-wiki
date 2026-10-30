@@ -2062,3 +2062,22 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Contradiction check: compared the changed statements with the rest of the page (lines 236, 425, 567-575, 586, 664, Evidence Map, Open Questions), with its index entries and the versions.md note (no writer claim), with the `reltuples and relpages` glossary note, and with the v12 query-planner-statistics-sources page. Resolved the 1 reported contradiction; found no new one.
 - Bookkeeping: index entries and the versions.md note unchanged; they make no claim about writers. No service started.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] fifth review and fix v12 | Query planner statistics sources
+
+- Prompt hygiene: the review followed "commit and review again". No corrections. Nothing was uncommitted; the push still fails (`Permission denied (publickey)`). The review stated no scope, so it reported first. After the report the user chose "Fix, no re-measure".
+- Review: a fresh independent subagent, run on the same model (Opus) and limited to reporting, checked the fourth round's outer-join addition and ran the whole-page contradiction check. The orchestrator confirmed the medium findings in `raw/postgres-12/` at `45b88269a353ad93744772791feb6d01bc7e1e42`. 8 findings, all fixed:
+  1. Contradiction: seven summaries (direct answer, mental-model row, comparison table, cases row, final summary step 4, Evidence Map, Open Question) and the glossary's Extended statistics 12 note dropped two conditions of the outer-join path. The path needs the inherited table on the non-nullable side (initsplan.c:1776-1818) and every clause in the ON list on that table alone (clausesel.c:457-491, 84-97). The body now states both as a numbered list and names the result a "qualifying outer-join clause list"; every summary and the glossary note now use that term or its conditions.
+  2. The 600,000 derivation now shows why it is exact: all 100 MCV items are kept (mcv.c:150-165, 215-222, 248-255; analyze.c:1658-1659), frequencies are 0.01 (mcv.c:312), `mcv_totalsel` is 1.0 (mcv.c:1817-1827), so `other_sel` clamps to 0 (extended_stats.c:1150-1164). It also says the "before" product comes from sampled inherited statistics, and cites clausesel.c for it.
+  3. "Join clauses reach the same data" was narrowed to some outer-join clauses. Semi- and anti-join selectivity is noted as the same path, from the source only (costsize.c:4157-4192; nodes.h:740-745).
+  4. The Open Question now lists the `clauselist_selectivity()` callers reviewed and the two left untraced (`cost_agg`/`cost_group` quals, `get_parameterized_baserel_size`).
+  5. `indxpath.c:2081` relabelled as semijoin loop-count adjustment; the caller list is marked as not exhaustive, and `postgres_fdw.c:2898` was added.
+  6. Non-default notes: the `lj_*` results now depend on the inheritance fixture; the `ONLY ih` default join estimate is derived from source (3000 raised to 30,000); `lt` was added to the fixture-size row.
+  7. The latest Last run record no longer says the prose reports all eleven facts, and it cites the Gather row behaviour (planner.c:7193-7194; costsize.c:371-376).
+  8. Context Reviewed and Source References now list the outer-join and MCV reading; the Evidence Map row lists its citations before the measurement note.
+  Also fixed one broken citation path introduced in the fourth round (`postgres_fdw.c:2898` lacked `raw/postgres-12/`).
+- Measurement: none. No finding changed the script or a measured number; the fourth-review run still backs every number.
+- Glossary: [Extended statistics](glossary.md#extended-statistics) 12 note now carries the two outer-join conditions with initsplan.c citations. `verified_by_agent` stays `not yet`.
+- Contradiction check: compared the assembled page with itself, the pinned source, the linked glossary notes, its index entries and versions.md note (accurate for the measured case; unchanged), and other v12 pages. Found 1 contradiction (finding 1, on the page and in the glossary), fixed.
+- Isolation and teardown: no service started.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
