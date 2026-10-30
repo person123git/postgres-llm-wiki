@@ -1832,3 +1832,18 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: no server, cluster, sandbox or subagent was used.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] sixth review and fix v12 | Planner factors that produce plans that over-fetch tuples
+
+- Prompt hygiene: " commit and review again". Only the leading space was dropped; the meaning is unchanged. There was nothing new to commit, because `1a6f036` already held the fifth-round fixes. The push failed again: `git fetch` returned `Permission denied (publickey)`, so local `master` stayed 7 commits ahead of `origin/master`. The user then chose "Fix and re-measure". The page has no measurement script, so nothing could be re-measured.
+- Review: a static re-read that checked citations earlier rounds had not verified: the visibility-bit clearing in `heapam.c`, `vacuumlazy.c` and `analyze.c` statistics updates, the autovacuum analyze threshold, `constraint_exclusion` in `plancat.c`, the hash join empty-outer shortcut, correlation costing, the EXPLAIN scan counters, the cost GUC definitions and `cost.h` defaults, the build rules and the cited tests. It reported 5 findings, all fixed on [the page](v12/questions/query-planning/plans-that-over-fetch-tuples.md):
+  1. F5 listed only `INSERT`, `UPDATE` and `DELETE` as clearing all-visible bits. `heap_multi_insert()`, the multi-row insert that `COPY` uses, clears them too (heapam.c:2208-2215). Each citation is now labelled with its function.
+  2. The discard table's bitmap recheck row printed `Rows Removed by Index Recheck` without a citation. It now cites explain.c:1617-1619.
+  3. The `constraint_exclusion` settings row cited plancat.c:1433-1452, which stops before the appendrel-member test. It now cites 1433-1458.
+  4. F12 and the Evidence Map cited guc.c:3207-3262 for the cost settings, a range that runs into the `parallel_tuple_cost` entry. Both now cite 3206-3260.
+  5. Logic-map step [5] said "cursor = 10%" without the condition that this is the `cursor_tuple_fraction` default. It now reads "cursor = cursor_tuple_fraction (default 10%)", which matches F9 and the settings table.
+- Glossary: reviewed the linked entries, including Visibility map and Tuple fraction. No change was needed, because the Visibility map entry does not list the operations that clear bits.
+- Contradiction check: compared the assembled page with itself, its sources, its glossary entries, its index entries and the other v12 pages that mention `cursor_tuple_fraction`, `constraint_exclusion` or `relallvisible` (the partitioning and statistics-sources pages). Found 1 contradiction (finding 5: the logic map dropped the default condition that F9 and the settings table state), 1 incomplete statement and 3 citation defects; all fixed, with every copy corrected. 0 reported without a change, 0 withdrawn.
+- Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no server, cluster, sandbox or subagent was used.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
