@@ -1859,3 +1859,14 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: no server, cluster, sandbox or subagent was used.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] eighth review and fix v12 | Planner factors that produce plans that over-fetch tuples
+
+- Prompt hygiene: " commit and review again". Only the leading space was dropped; the meaning is unchanged. There was nothing new to commit, because `73e77d6` already held the seventh-round fixes. The push failed again: `git fetch` asked for an SSH key passphrase and stopped (`ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`), so local `master` stayed 9 commits ahead of `origin/master`. The user then chose "Fix and re-measure". The page has no measurement script, so nothing could be re-measured.
+- Review: a static re-read that checked citations earlier rounds had not verified: the equality-selectivity entry points (selfuncs.c:256-277, 415-426), the index-matching tests (indxpath.c:2262-2300, 2590-2621), the B-tree required-key comment (nbtutils.c:685-699), the join single-match rule, unique-inner detection (joinpath.c:146-190), the `JoinType` comments, nested-loop costing and the `plan_cache_mode` definition. It reported 1 finding, fixed on [the page](v12/questions/query-planning/plans-that-over-fetch-tuples.md):
+  1. F6's non-unique-inner row covers hash joins but cited only the hash join's run-time check (nodeHashjoin.c:486-491), and the note below the table described the single-match rule for `ExecNestLoop()` only. The row, the note and the Evidence Map now cite where the hash join sets `single_match` (nodeHashjoin.c:682-683).
+- Glossary: reviewed the linked entries, including Hash join, Nested loop join and Semi join and anti join. No change was needed.
+- Contradiction check: compared the assembled page with itself, its sources, its glossary entries and its index entries. Found 0 contradictions and 1 incomplete statement, fixed. 0 reported without a change, 0 withdrawn.
+- Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no server, cluster, sandbox or subagent was used.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
