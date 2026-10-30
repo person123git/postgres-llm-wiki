@@ -1847,3 +1847,15 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: no server, cluster, sandbox or subagent was used.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] seventh review and fix v12 | Planner factors that produce plans that over-fetch tuples
+
+- Prompt hygiene: " commit and review again". Only the leading space was dropped; the meaning is unchanged. There was nothing new to commit, because `0a243ae` already held the sixth-round fixes. The push failed again: `git fetch` asked for an SSH key passphrase and stopped (`ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`), so local `master` stayed 8 commits ahead of `origin/master`. The user then chose "Fix and re-measure". The page has no measurement script, so nothing could be re-measured.
+- Review: a static re-read that checked citations earlier rounds had not verified: the extension and catalog boundaries (`pg_operator.dat`, `restriction_selectivity()`, the three hook headers, `prorows` defaults), the security-barrier pushdown checks, the `OFFSET` loop, the CTE scan's on-demand reads, the function-scan tuplestore, set-returning-function pull-up, and the `heapam_estimate_rel_size()` and `allvisfrac` ranges. It reported 2 findings, both fixed on [the page](v12/questions/query-planning/plans-that-over-fetch-tuples.md):
+  1. F8 said `check_enable_rls()` decides whether row-level security applies, but cited only its call site (rowsecurity.c:134). It now also cites the function (rls.c:52-133). Context Reviewed names `rls.c`.
+  2. F7 and the boundaries section cited plancat.c:2000-2011 for the support-function row estimate, a range that starts in the middle of the support-function call. Both now cite plancat.c:1986-2011.
+- Glossary: reviewed the linked entries, including Row-level security and the `pg_proc` entry. No change was needed.
+- Contradiction check: compared the assembled page with itself, its sources, its glossary entries, its index entries and the v12 statistics-sources page, which describes `prorows` and `prosupport` the same way. Found 0 contradictions and 2 citation defects, both fixed. 0 reported without a change, 0 withdrawn.
+- Bookkeeping: the index entries are unchanged. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no server, cluster, sandbox or subagent was used.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
