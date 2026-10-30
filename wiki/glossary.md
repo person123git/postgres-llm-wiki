@@ -15,12 +15,14 @@ verified_by_agent: not yet
   - [Access method](#access-method)
   - [AccessExclusiveLock](#accessexclusivelock)
   - [Aggressive VACUUM](#aggressive-vacuum)
-  - [All-zero page](#all-zero-page)
   - [Alignment](#alignment)
   - [allequalimage](#allequalimage)
+  - [All-zero page](#all-zero-page)
+  - [AlternativeSubPlan](#alternativesubplan)
   - [amcheck](#amcheck)
   - [Append and MergeAppend](#append-and-mergeappend)
   - [Apply worker](#apply-worker)
+  - [Arbiter index](#arbiter-index)
   - [Asynchronous commit](#asynchronous-commit)
   - [Asynchronous I/O](#asynchronous-io)
   - [auto_explain](#auto_explain)
@@ -83,6 +85,7 @@ verified_by_agent: not yet
   - [Dependency](#dependency)
   - [Dirty buffer](#dirty-buffer)
   - [disable_cost](#disable_cost)
+  - [DISTINCT ON](#distinct-on)
   - [Dollar quoting](#dollar-quoting)
   - [Dynamic shared memory](#dynamic-shared-memory)
   - [effective_cache_size](#effective_cache_size)
@@ -119,6 +122,7 @@ verified_by_agent: not yet
   - [Grouping sets](#grouping-sets)
   - [GUC](#guc)
   - [GUC context](#guc-context)
+  - [Hash aggregation](#hash-aggregation)
   - [Hash index](#hash-index)
   - [Hash join](#hash-join)
   - [Hash splitpoint](#hash-splitpoint)
@@ -137,8 +141,8 @@ verified_by_agent: not yet
   - [Index page recycling](#index-page-recycling)
   - [Index scan](#index-scan)
   - [Index vacuuming](#index-vacuuming)
-  - [INDEX_CLEANUP](#index_cleanup)
   - [IndexClause](#indexclause)
+  - [INDEX_CLEANUP](#index_cleanup)
   - [Index-only scan](#index-only-scan)
   - [IndexOptInfo](#indexoptinfo)
   - [Inheritance](#inheritance)
@@ -149,6 +153,7 @@ verified_by_agent: not yet
   - [Isolation level](#isolation-level)
   - [Isolation test](#isolation-test)
   - [JIT compilation](#jit-compilation)
+  - [Join domain](#join-domain)
   - [Join order search](#join-order-search)
   - [Join removal](#join-removal)
   - [Killed index tuple](#killed-index-tuple)
@@ -195,6 +200,7 @@ verified_by_agent: not yet
   - [Parallel index build](#parallel-index-build)
   - [Parallel query](#parallel-query)
   - [Parallel vacuum](#parallel-vacuum)
+  - [parallel_setup_cost and parallel_tuple_cost](#parallel_setup_cost-and-parallel_tuple_cost)
   - [Param](#param)
   - [Parameterized path](#parameterized-path)
   - [Parse tree](#parse-tree)
@@ -219,19 +225,20 @@ verified_by_agent: not yet
   - [pg_node_tree](#pg_node_tree)
   - [pg_plan_advice](#pg_plan_advice)
   - [pg_proc](#pg_proc)
+  - [pgs_mask](#pgs_mask)
   - [pg_stat_activity](#pg_stat_activity)
   - [pg_stat_all_tables](#pg_stat_all_tables)
+  - [pgstatindex](#pgstatindex)
   - [pg_stat_io](#pg_stat_io)
-  - [pg_stat_statements](#pg_stat_statements)
   - [pg_statistic](#pg_statistic)
+  - [pg_stat_statements](#pg_stat_statements)
+  - [pgstattuple](#pgstattuple)
   - [PG_TEST_EXTRA](#pg_test_extra)
   - [pg_upgrade](#pg_upgrade)
   - [pg_waldump](#pg_waldump)
-  - [pgs_mask](#pgs_mask)
-  - [pgstatindex](#pgstatindex)
-  - [pgstattuple](#pgstattuple)
   - [Pivot tuple](#pivot-tuple)
   - [PlaceHolderVar](#placeholdervar)
+  - [Plan cache](#plan-cache)
   - [Plan cache mode](#plan-cache-mode)
   - [Plan node instrumentation](#plan-node-instrumentation)
   - [Plan tree](#plan-tree)
@@ -247,13 +254,14 @@ verified_by_agent: not yet
   - [Predicate lock](#predicate-lock)
   - [Prefetch](#prefetch)
   - [Prepared statement](#prepared-statement)
-  - [PROC_IN_SAFE_IC](#proc_in_safe_ic)
   - [ProcArray](#procarray)
+  - [PROC_IN_SAFE_IC](#proc_in_safe_ic)
   - [ProcSignal barrier](#procsignal-barrier)
   - [Progress reporting](#progress-reporting)
   - [ProjectSet](#projectset)
   - [Promotion](#promotion)
   - [Pruning](#pruning)
+  - [Pseudoconstant qual](#pseudoconstant-qual)
   - [psql](#psql)
   - [Publication](#publication)
   - [Qual](#qual)
@@ -298,8 +306,8 @@ verified_by_agent: not yet
   - [Set operation](#set-operation)
   - [set_plan_references](#set_plan_references)
   - [shared_buffers](#shared_buffers)
-  - [shared_preload_libraries](#shared_preload_libraries)
   - [Shared-memory statistics](#shared-memory-statistics)
+  - [shared_preload_libraries](#shared_preload_libraries)
   - [ShareUpdateExclusiveLock](#shareupdateexclusivelock)
   - [Sibling link](#sibling-link)
   - [Simple index deletion](#simple-index-deletion)
@@ -333,6 +341,7 @@ verified_by_agent: not yet
   - [TAP test](#tap-test)
   - [Temporary file](#temporary-file)
   - [TID](#tid)
+  - [TID scan and TID range scan](#tid-scan-and-tid-range-scan)
   - [Timeline](#timeline)
   - [TOAST](#toast)
   - [Torn page](#torn-page)
@@ -388,6 +397,7 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - As of 2026-09-23, every entry was checked against all five pinned checkouts below: PostgreSQL 12, 14, 17, 18 and 19. The [GEQO](#geqo) entry, added on 2026-09-24, was checked on 17, 18 and 19 only. Ten entries added the same day for the v19 online data checksums history page were checked on 19 only. Eight of them still are, and their main paragraphs open by naming 19: [Buildfarm](#buildfarm), [Catalog version](#catalog-version), [Control file](#control-file), [PG_TEST_EXTRA](#pg_test_extra), [ProcSignal barrier](#procsignal-barrier), [Promotion](#promotion), [Resource manager](#resource-manager) and [XLOG_PAGE_MAGIC](#xlog_page_magic). Two were also checked on 17 later that day, so their main paragraphs now cite 17 and a 19 note carries the 19 evidence: [Base backup](#base-backup), for the v17 GIN waste page's standby stage, and [Back-patch](#back-patch), for the v17 non-B-tree COMMENT-baseline maintenance heuristic page. Two entries added on 2026-09-24 for a PostgreSQL 17 question page were checked on 17 only: [Command tag](#command-tag) and [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout). Four more, added the same day for another PostgreSQL 17 question page, were also checked on 17 only: [BRIN summarization](#brin-summarization), [Hash splitpoint](#hash-splitpoint), [Index page recycling](#index-page-recycling) and [SP-GiST placeholder](#sp-gist-placeholder). One more, [Isolation level](#isolation-level), added the same day for a third PostgreSQL 17 question page, was checked on 17 only too, and on 2026-10-22 the PostgreSQL 12 DROP SCHEMA review checked it on 12 as well. On 2026-10-08 the PostgreSQL 12 database health checklist review checked [transaction_timeout and idle_in_transaction_session_timeout](#transaction_timeout-and-idle_in_transaction_session_timeout) on 12 as well, as recorded in its 12 note. Seven more, added on 2026-09-25 for the PostgreSQL 17 planner-penalties page, were checked on 17 only: [BitmapAnd](#bitmapand), [Mackert-Lohman formula](#mackert-lohman-formula), [Nested loop join](#nested-loop-join), [Partial path](#partial-path), [Planner support function](#planner-support-function), [ScalarArrayOpExpr](#scalararrayopexpr) and [Summarizing index](#summarizing-index). Thirteen more, added later on 2026-09-25 while that page was revised, were also checked on 17 only: [Equivalence class](#equivalence-class), [HOT-blocking column](#hot-blocking-column), [Hypothetical index](#hypothetical-index), [indcheckxmin](#indcheckxmin), [IndexClause](#indexclause), [Nondeterministic collation](#nondeterministic-collation), [Pathkey](#pathkey), [Pivot tuple](#pivot-tuple), [SnapshotNonVacuumable](#snapshotnonvacuumable), [Subtransaction](#subtransaction), [Suffix truncation](#suffix-truncation), [TransactionXmin](#transactionxmin) and [Transient plan](#transient-plan). Thirty-nine more, added on 2026-09-26 for the PostgreSQL 17 query planner tutorial, were checked on 17 only: [Append and MergeAppend](#append-and-mergeappend), [Constant folding](#constant-folding), [Custom scan](#custom-scan), [disable_cost](#disable_cost), [Grouping sets](#grouping-sets), [Hash join](#hash-join), [Incremental sort](#incremental-sort), [Join order search](#join-order-search), [Join removal](#join-removal), [LATERAL](#lateral), [Materialize node](#materialize-node), [Merge join](#merge-join), [ModifyTable](#modifytable), [Node support functions](#node-support-functions), [Nullingrels](#nullingrels), [One-shot plan](#one-shot-plan), [Outer join](#outer-join), [Param](#param), [Parameterized path](#parameterized-path), [Partial aggregation](#partial-aggregation), [Partitionwise aggregation](#partitionwise-aggregation), [PathTarget](#pathtarget), [PlaceHolderVar](#placeholdervar), [Plan tree](#plan-tree), [PlannerInfo](#plannerinfo), [ProjectSet](#projectset), [Recursive CTE](#recursive-cte), [Relids](#relids), [Row mark](#row-mark), [Sample scan](#sample-scan), [Semi join and anti join](#semi-join-and-anti-join), [Set operation](#set-operation), [set_plan_references](#set_plan_references), [SpecialJoinInfo](#specialjoininfo), [Subquery pull-up](#subquery-pull-up), [Transition table](#transition-table), [Tuple fraction](#tuple-fraction), [Upper relation](#upper-relation), [Window function](#window-function). Two more, added on 2026-09-30 during the third review of that tutorial, were checked on 17 only: [pg_statistic](#pg_statistic) and [Speculative insertion](#speculative-insertion). Eight more, added on 2026-10-07 for the PostgreSQL 17 `CREATE INDEX CONCURRENTLY` page, were checked on 17 only: [Bulk writer](#bulk-writer), [commit_delay](#commit_delay), [Parallel index build](#parallel-index-build), [PROC_IN_SAFE_IC](#proc_in_safe_ic), [Session-level lock](#session-level-lock), [Synchronized scan](#synchronized-scan), [Temporary file](#temporary-file) and [Virtual transaction ID](#virtual-transaction-id); the last two were also checked on 12 on 2026-10-08, as recorded in their 12 notes. Three more, added on 2026-10-08 for the PostgreSQL 17 `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` tutorial, were checked on 17 only: [EXPLAIN SETTINGS](#explain-settings), [Plan node instrumentation](#plan-node-instrumentation) and [seq_page_cost and random_page_cost](#seq_page_cost-and-random_page_cost). Two more, added on 2026-10-08 for the PostgreSQL 12 database health checklist, were checked on 12 only, and their main paragraphs open by naming 12: [Default roles](#default-roles) and [WAL archiving](#wal-archiving). On 2026-09-24 the v19 citations and notes were re-checked for the repin to `dae3463fa96`. A second review the same day re-read every citation claim by claim, corrected what it found and added six entries. [Open Questions](#open-questions) records how deep that check went. On 2026-10-09 the v19 citations were re-checked for the repin to `1ecc48b9bcc`, and [Open Questions](#open-questions) records that check too. The same day, [ElidedNode](#elidednode) was added for the v19 `pg_plan_advice` page and checked on 19 only, so its main paragraph opens by naming 19. For the same page, [Append and MergeAppend](#append-and-mergeappend), [Hash join](#hash-join), [Merge join](#merge-join), [Nested loop join](#nested-loop-join) and [Semi join and anti join](#semi-join-and-anti-join) were also checked on 19, as recorded in their 19 notes. Later that day the page's second review added [ABI](#abi) and [EvalPlanQual](#evalplanqual), checked on 19 only, so their main paragraphs open by naming 19. It also checked [Join order search](#join-order-search), [Materialize node](#materialize-node), [Outer join](#outer-join), [Partitionwise aggregation](#partitionwise-aggregation), [PlannerInfo](#plannerinfo), [set_plan_references](#set_plan_references) and [TransactionXmin](#transactionxmin) on 19, as recorded in their 19 notes. Three more, added on 2026-10-13 for the recommended `VACUUM` completeness procedure on the PostgreSQL 17 bloat-test common concept pages, were checked on 17 only: [Aggressive VACUUM](#aggressive-vacuum), [Missed dead tuple](#missed-dead-tuple) and [VACUUM VERBOSE](#vacuum-verbose). The same day, the heap-VACUUM wait condition in [Buffer pin](#buffer-pin) was made precise and re-checked on all five versions, as recorded in its notes. One more, added on 2026-10-14 for the PostgreSQL 17 COMMENT-stored B-tree maintenance heuristic page, was checked on 17 only: [All-zero page](#all-zero-page). The same day, [Cumulative statistics](#cumulative-statistics) gained its flush-interval, forced-flush and late-count sentences, checked on 17 in its main paragraph and on 12 in its 12 note; its 14, 18 and 19 notes were not re-checked for them. Also on 2026-10-14, the second review of the PostgreSQL 12 database health checklist checked [Aggressive VACUUM](#aggressive-vacuum) on 12, as recorded in its 12 note.
 - A glossary link supplies vocabulary, not proof. A page that links a term still needs its own matching-version source citations.
 - Deeper, version-local explanations belong on `wiki/vNN/common-concepts/` pages, which entries link when one exists.
+- Terms are sorted by heading text, ignoring letter case and punctuation such as `_`, `-`, `.`, `/`, backticks and parentheses. A space sorts before any digit or letter, and digits sort before letters. The Contents list follows the same order.
 
 - On 2026-10-15, the PostgreSQL 12 corruption-log reference added [Log severity](#log-severity) and [SQLSTATE](#sqlstate), checked on 12 only, and narrow PostgreSQL 12 notes for [All-zero page](#all-zero-page) and [Control file](#control-file). The latter notes do not extend the PostgreSQL 17 bulk-extension sizing and catalog-counter discussion or PostgreSQL 19 control-file layout to 12. The glossary has 343 terms.
 - On 2026-10-21, the PostgreSQL 12 relation-tail check page added [Relation mapper](#relation-mapper), checked on 12 only, and PostgreSQL 12 notes on page and segment geometry for [All-zero page](#all-zero-page), [Free space map](#free-space-map), [Visibility map](#visibility-map) and [Storage manager](#storage-manager). The glossary has 344 terms.
@@ -407,6 +417,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-24, the same page's false-negative fixes added [Killed index tuple](#killed-index-tuple), checked on PostgreSQL 12 only, and qualified the PostgreSQL 12 note of [Data checksums](#data-checksums) for `zero_damaged_pages`, recovery and `ignore_checksum_failure`. There are 356 terms.
 
 - On 2026-10-25, the PostgreSQL 12 amcheck and data-checksums question added [Bloom filter](#bloom-filter), checked on PostgreSQL 12 only, added a PostgreSQL 12 note to [Base backup](#base-backup), which is now checked on 12, 17 and 19, and extended the PostgreSQL 12 note of [Data checksums](#data-checksums) with the block-number mixing, write-time computation and buffer-hit behavior. There are 357 terms.
+
+- On 2026-10-30, the review fixes for the PostgreSQL 17 planner tutorial added [AlternativeSubPlan](#alternativesubplan), [Arbiter index](#arbiter-index), [DISTINCT ON](#distinct-on), [Hash aggregation](#hash-aggregation), [Join domain](#join-domain), [parallel_setup_cost and parallel_tuple_cost](#parallel_setup_cost-and-parallel_tuple_cost), [Plan cache](#plan-cache), [Pseudoconstant qual](#pseudoconstant-qual) and [TID scan and TID range scan](#tid-scan-and-tid-range-scan), checked on PostgreSQL 17 only. [EvalPlanQual](#evalplanqual) gained a PostgreSQL 17 note, [EXPLAIN](#explain) now rejects only the turned-on forms of `WAL`, `TIMING` and `SERIALIZE` without `ANALYZE`, and [Hash join](#hash-join) names the join-relation conditions of a partial hash join. Six headings were moved so that the list follows the sort rule above. There are 371 terms.
 
 ## Source Pins
 
@@ -470,19 +482,6 @@ The first shortcut it gives up is skipping all-visible pages: it skips only the 
 
 Related: [Freezing](#freezing), [Missed dead tuple](#missed-dead-tuple), [Vacuum failsafe](#vacuum-failsafe), [VACUUM VERBOSE](#vacuum-verbose), [Visibility map](#visibility-map)
 
-### All-zero page
-
-**Aliases:** new page, uninitialized page, `PageIsNew`, never-initialized page. **Checked on:** PostgreSQL 12, 17.
-
-An all-zero page is a [page](#page) whose bytes, header included, are entirely zero. In PostgreSQL 12, `PageIsVerified()` recognizes that byte pattern without establishing its origin; relation extension followed by a crash is one legitimate way to leave it on disk ([bufpage.c#PageIsVerified](../raw/postgres-12/src/backend/storage/page/bufpage.c#L64-L142)). `PageIsNew()` recognizes one by its `pd_upper` field reading 0, which an initialized page never has ([bufpage.h#PageIsNew](../raw/postgres-17/src/include/storage/bufpage.h#L226-L235)). In PostgreSQL 17 a [heap](#heap) gets such pages mostly from bulk extension. An insert that carries a bulk-insert state, as `CREATE TABLE AS` does, extends the file by several pages at a time, up to 64, and keeps the spare pages for the inserts that follow, so the pages still unused when the load ends stay all-zero ([hio.c#RelationAddBlocks](../raw/postgres-17/src/backend/access/heap/hio.c#L237-L308), [createas.c:561](../raw/postgres-17/src/backend/commands/createas.c#L561)). A backend that crashes after extending a file by one page can also leave one ([vacuumlazy.c#lazy_scan_new_or_empty](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1290-L1297)).
-
-[VACUUM](#vacuum) treats an all-zero page as free space. It records the page in the [free space map](#free-space-map) and deliberately leaves it out of the [visibility map](#visibility-map), so every later VACUUM visits it again ([vacuumlazy.c#lazy_scan_new_or_empty](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1290-L1321)). Both VACUUM and `ANALYZE` set `pg_class.relallvisible` from the visibility map's count ([vacuumlazy.c:559-573](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L559-L573), [analyze.c:625-640](../raw/postgres-17/src/backend/commands/analyze.c#L625-L640)). So after a VACUUM that left nothing else unfinished, `relallvisible` is still short of `relpages` by exactly the table's all-zero pages. [Truncation](#truncation) can give such pages at the end of the table back to the operating system. The [pageinspect](#pageinspect) function `page_header()` shows an all-zero page as `upper = 0` ([rawpage.c#page_header](../raw/postgres-17/contrib/pageinspect/rawpage.c#L246-L327)).
-
-**Version notes:**
-- PostgreSQL 12: Differs in verifier name and scope checked here: `PageIsNew()` tests only whether `pd_upper` is zero, while `PageIsVerified()` separately scans the entire page before accepting its all-zero case. The verifier permits all-zero pages because a crash after relation extension can leave one. Heap VACUUM ensures space is recorded in the free space map and leaves the page out of the visibility map ([bufpage.h#PageIsNew](../raw/postgres-12/src/include/storage/bufpage.h#L225-L229), [bufpage.c#PageIsVerified](../raw/postgres-12/src/backend/storage/page/bufpage.c#L64-L142), [vacuumlazy.c#new-page-handling](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L885-L927)). In 12, bulk extension also leaves such pages without any crash: `RelationAddExtraBlocks()` adds up to 512 pages per call, records each in the free space map, and deliberately leaves it uninitialized, so all-zero pages at a heap's end can be normal ([hio.c#RelationAddExtraBlocks](../raw/postgres-12/src/backend/access/heap/hio.c#L186-L261)). The bulk-extension sizing and catalog-counter calculation above are checked on PostgreSQL 17 only.
-
-Related: [Page](#page), [Heap](#heap), [Free space map](#free-space-map), [Visibility map](#visibility-map), [VACUUM](#vacuum), [Truncation](#truncation)
-
 ### Alignment
 
 **Aliases:** `MAXALIGN`, `TYPEALIGN`, `typalign`, `MAXIMUM_ALIGNOF`, alignment padding. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -510,6 +509,29 @@ Related: [Page](#page), [Tuple](#tuple), [Line pointer](#line-pointer), [BLCKSZ]
 - PostgreSQL 19: Holds. `btm_allequalimage` is still a metapage field computed by `_bt_allequalimage()` at build time and refused to `INCLUDE` indexes, `_bt_upgrademetapage()` still forces it false, and the header still says `pg_upgrade` cannot set it ([nbtree.h#BTMetaPageData](../raw/postgres-19/src/include/access/nbtree.h#L104-L120), [nbtutils.c#_bt_allequalimage](../raw/postgres-19/src/backend/access/nbtree/nbtutils.c#L1165-L1175), [nbtutils.c:1179-1182](../raw/postgres-19/src/backend/access/nbtree/nbtutils.c#L1179-L1182), [nbtpage.c#_bt_upgrademetapage](../raw/postgres-19/src/backend/access/nbtree/nbtpage.c#L100-L127), [nbtree.h:136-142](../raw/postgres-19/src/include/access/nbtree.h#L136-L142)).
 
 Related: [Deduplication](#deduplication), [Metapage](#metapage), [pg_upgrade](#pg_upgrade), [REINDEX](#reindex)
+
+### All-zero page
+
+**Aliases:** new page, uninitialized page, `PageIsNew`, never-initialized page. **Checked on:** PostgreSQL 12, 17.
+
+An all-zero page is a [page](#page) whose bytes, header included, are entirely zero. In PostgreSQL 12, `PageIsVerified()` recognizes that byte pattern without establishing its origin; relation extension followed by a crash is one legitimate way to leave it on disk ([bufpage.c#PageIsVerified](../raw/postgres-12/src/backend/storage/page/bufpage.c#L64-L142)). `PageIsNew()` recognizes one by its `pd_upper` field reading 0, which an initialized page never has ([bufpage.h#PageIsNew](../raw/postgres-17/src/include/storage/bufpage.h#L226-L235)). In PostgreSQL 17 a [heap](#heap) gets such pages mostly from bulk extension. An insert that carries a bulk-insert state, as `CREATE TABLE AS` does, extends the file by several pages at a time, up to 64, and keeps the spare pages for the inserts that follow, so the pages still unused when the load ends stay all-zero ([hio.c#RelationAddBlocks](../raw/postgres-17/src/backend/access/heap/hio.c#L237-L308), [createas.c:561](../raw/postgres-17/src/backend/commands/createas.c#L561)). A backend that crashes after extending a file by one page can also leave one ([vacuumlazy.c#lazy_scan_new_or_empty](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1290-L1297)).
+
+[VACUUM](#vacuum) treats an all-zero page as free space. It records the page in the [free space map](#free-space-map) and deliberately leaves it out of the [visibility map](#visibility-map), so every later VACUUM visits it again ([vacuumlazy.c#lazy_scan_new_or_empty](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L1290-L1321)). Both VACUUM and `ANALYZE` set `pg_class.relallvisible` from the visibility map's count ([vacuumlazy.c:559-573](../raw/postgres-17/src/backend/access/heap/vacuumlazy.c#L559-L573), [analyze.c:625-640](../raw/postgres-17/src/backend/commands/analyze.c#L625-L640)). So after a VACUUM that left nothing else unfinished, `relallvisible` is still short of `relpages` by exactly the table's all-zero pages. [Truncation](#truncation) can give such pages at the end of the table back to the operating system. The [pageinspect](#pageinspect) function `page_header()` shows an all-zero page as `upper = 0` ([rawpage.c#page_header](../raw/postgres-17/contrib/pageinspect/rawpage.c#L246-L327)).
+
+**Version notes:**
+- PostgreSQL 12: Differs in verifier name and scope checked here: `PageIsNew()` tests only whether `pd_upper` is zero, while `PageIsVerified()` separately scans the entire page before accepting its all-zero case. The verifier permits all-zero pages because a crash after relation extension can leave one. Heap VACUUM ensures space is recorded in the free space map and leaves the page out of the visibility map ([bufpage.h#PageIsNew](../raw/postgres-12/src/include/storage/bufpage.h#L225-L229), [bufpage.c#PageIsVerified](../raw/postgres-12/src/backend/storage/page/bufpage.c#L64-L142), [vacuumlazy.c#new-page-handling](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L885-L927)). In 12, bulk extension also leaves such pages without any crash: `RelationAddExtraBlocks()` adds up to 512 pages per call, records each in the free space map, and deliberately leaves it uninitialized, so all-zero pages at a heap's end can be normal ([hio.c#RelationAddExtraBlocks](../raw/postgres-12/src/backend/access/heap/hio.c#L186-L261)). The bulk-extension sizing and catalog-counter calculation above are checked on PostgreSQL 17 only.
+
+Related: [Page](#page), [Heap](#heap), [Free space map](#free-space-map), [Visibility map](#visibility-map), [VACUUM](#vacuum), [Truncation](#truncation)
+
+### AlternativeSubPlan
+
+**Aliases:** `AlternativeSubPlan`, hashed versus per-row SubPlan, `fix_alternative_subplan()`. **Checked on:** PostgreSQL 17.
+
+An `AlternativeSubPlan` is a planning-time expression node that holds two equivalent [SubPlans](#subplan) for the same sub-select, so that the final choice can wait until the planner knows how often the expression will run. It never reaches the executor, and there are always exactly two alternatives, the first being the fast-start one ([primnodes.h#AlternativeSubPlan](../raw/postgres-17/src/include/nodes/primnodes.h#L1096-L1114)).
+
+`make_subplan()` builds one for a correlated `EXISTS` whose sub-select it can rewrite as an `IN`-style test: the first alternative runs the sub-select once per outer row, and the second is a hashed SubPlan, built only when the rewritten sub-select's result is expected to fit in hash memory ([subselect.c#make_subplan-alternative](../raw/postgres-17/src/backend/optimizer/plan/subselect.c#L243-L306)). `set_plan_references()` later calls `fix_alternative_subplan()`, which keeps the alternative with the lower `startup_cost + num_exec * per_call_cost`, preferring the later (hashed) one on a tie ([setrefs.c#fix_alternative_subplan](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L2092-L2134)). `num_exec` is the parent plan node's row estimate for a target-list expression and twice that for a qual ([setrefs.c:115-116](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L115-L116)). So `EXPLAIN` shows only the chosen SubPlan.
+
+Related: [SubPlan](#subplan), [SubLink](#sublink), [set_plan_references](#set_plan_references), [Hash aggregation](#hash-aggregation)
 
 ### amcheck
 
@@ -552,6 +574,16 @@ An apply worker is the subscriber-side process that receives a subscription's ch
 - PostgreSQL 19: Holds, except that 19 adds a fourth worker type, the sequencesync worker, with entry point `SequenceSyncWorkerMain`. The apply worker starts it, as it starts tablesync workers, through `launch_sync_worker()` ([worker_internal.h#LogicalRepWorkerType](../raw/postgres-19/src/include/replication/worker_internal.h#L27-L35), [launcher.c#logicalrep_worker_launch](../raw/postgres-19/src/backend/replication/logical/launcher.c#L531-L544), [sequencesync.c:91-99](../raw/postgres-19/src/backend/replication/logical/sequencesync.c#L91-L99), [syncutils.c:141](../raw/postgres-19/src/backend/replication/logical/syncutils.c#L141)). The launcher starts one apply worker per enabled subscription with entry point `ApplyWorkerMain`, `run_apply_worker()` sets up the origin before streaming, and `apply_dispatch()` routes messages ([worker.c:10-16](../raw/postgres-19/src/backend/replication/logical/worker.c#L10-L16), [launcher.c#logicalrep_worker_launch](../raw/postgres-19/src/backend/replication/logical/launcher.c#L511-L519), [launcher.c:1382](../raw/postgres-19/src/backend/replication/logical/launcher.c#L1382), [worker.c#run_apply_worker](../raw/postgres-19/src/backend/replication/logical/worker.c#L5728-L5757), [worker.c#apply_dispatch](../raw/postgres-19/src/backend/replication/logical/worker.c#L3829-L3832)).
 
 Related: [Background worker](#background-worker), [Logical replication](#logical-replication), [Replication origin](#replication-origin), [Subscription](#subscription)
+
+### Arbiter index
+
+**Aliases:** arbiter, `arbiterIndexes`, `infer_arbiter_indexes()`, `ON CONFLICT` inference. **Checked on:** PostgreSQL 17.
+
+An arbiter index is a unique index, or the index behind an exclusion constraint, that `INSERT ... ON CONFLICT` uses to decide whether a new row conflicts with an existing one. The planner picks the arbiters in `infer_arbiter_indexes()`, and `make_modifytable()` stores their OIDs in the [ModifyTable](#modifytable) node's `arbiterIndexes` list ([createplan.c:7100](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L7100), [plancat.c#infer_arbiter_indexes](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L683-L710)). Inference needs an exact match of the conflict target's columns or expressions, in any order, and accepts a partial unique index when the target's `WHERE` predicate restricts the insert to rows the index covers (same comment). It skips an index that is not valid ([plancat.c:821-822](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L821-L822)).
+
+Three cases matter when reading the source. `ON CONFLICT DO NOTHING` with neither a conflict target nor a constraint name infers no arbiter at all ([plancat.c:730-737](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L730-L737)); the executor then treats a violation of any unique or exclusion index as a conflict, because an empty `arbiterIndexes` list makes it check every such index ([execIndexing.c#ExecCheckIndexConstraints](../raw/postgres-17/src/backend/executor/execIndexing.c#L517-L518), [execIndexing.c:585-588](../raw/postgres-17/src/backend/executor/execIndexing.c#L585-L588)). A named target or constraint that matches no index is an error ([plancat.c:946-950](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L946-L950)). And `ON CONSTRAINT` naming an exclusion constraint is rejected for `DO UPDATE` ([plancat.c:835-840](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L835-L840)).
+
+Related: [Speculative insertion](#speculative-insertion), [ModifyTable](#modifytable), [Invalid index](#invalid-index)
 
 ### Asynchronous commit
 
@@ -1349,6 +1381,16 @@ The penalty applies to index scans, bitmap scans, TID scans, explicit sorts, has
 
 Related: [Cost](#cost), [Path](#path), [GUC](#guc), [Sequential scan](#sequential-scan), [Memoize](#memoize), [Planner](#planner)
 
+### DISTINCT ON
+
+**Aliases:** `SELECT DISTINCT ON`, `hasDistinctOn`. **Checked on:** PostgreSQL 17.
+
+`SELECT DISTINCT ON (expressions)` keeps only the first row of each group of rows whose listed expressions are equal; which row is first is decided by `ORDER BY`, and is unpredictable without it ([ref/select.sgml#DISTINCT-ON](../raw/postgres-17/doc/src/sgml/ref/select.sgml#L1202-L1220)). The expressions must match the leftmost `ORDER BY` expressions, and the parser raises "SELECT DISTINCT ON expressions must match initial ORDER BY expressions" otherwise ([ref/select.sgml:1224-1227](../raw/postgres-17/doc/src/sgml/ref/select.sgml#L1224-L1227), [parse_clause.c#transformDistinctOnClause](../raw/postgres-17/src/backend/parser/parse_clause.c#L3100-L3118)). The parser records the form in `Query.hasDistinctOn` ([parsenodes.h:154](../raw/postgres-17/src/include/nodes/parsenodes.h#L154)).
+
+The flag narrows the [planner](#planner)'s choices for `DISTINCT`. A sorted plan sorts by the longer of the `DISTINCT` and `ORDER BY` key lists, so that the first row of each group is the wanted one ([planner.c#create_final_distinct_paths-distinct-on](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L5144-L5160)). Hashing is refused while any other path exists, because a hash table does not keep the first row ([planner.c#create_final_distinct_paths-hash](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L5250-L5267)), and no partial (parallel) `DISTINCT` is built ([planner.c:4917-4919](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L4917-L4919)).
+
+Related: [Hash aggregation](#hash-aggregation), [Incremental sort](#incremental-sort), [Planner](#planner)
+
 ### Dollar quoting
 
 **Aliases:** dollar-quoted string, `$tag$...$tag$`, `$$`, `dolqdelim`. **Checked on:** PostgreSQL 12.
@@ -1436,9 +1478,12 @@ Related: [Critical section](#critical-section), [Memory context](#memory-context
 
 ### EvalPlanQual
 
-**Aliases:** EPQ, EPQ recheck, `EvalPlanQual()`, `EPQState`, `fdw_recheck_quals`. **Checked on:** PostgreSQL 19.
+**Aliases:** EPQ, EPQ recheck, `EvalPlanQual()`, `EPQState`, `fdw_recheck_quals`. **Checked on:** PostgreSQL 17, 19.
 
 In PostgreSQL 19, EvalPlanQual (EPQ) is the executor's recheck of a row that a concurrent transaction has updated. Under READ COMMITTED, the executor takes the newest version of the row and re-evaluates the query's conditions on it to decide whether to process it ([execMain.c#EvalPlanQual](../raw/postgres-19/src/backend/executor/execMain.c#L2651-L2678)). The recheck can happen in an `UPDATE`, a `DELETE`, or a query with row marks such as `SELECT ... FOR UPDATE` ([postgres_fdw.c#epq-path](../raw/postgres-19/contrib/postgres_fdw/postgres_fdw.c#L7221-L7243)). Foreign scans must support it too. A `ForeignScan` keeps the conditions it checked remotely in `fdw_recheck_quals` for this purpose ([plannodes.h#ForeignScan-recheck](../raw/postgres-19/src/include/nodes/plannodes.h#L870-L873)). For a join pushed down to a remote server, `postgres_fdw` needs a local join path that can rebuild the joined row from the base relations, and gives up the push-down when none exists (same `postgres_fdw.c` lines). [pg_plan_advice](#pg_plan_advice)'s plan walker does not descend into that recheck subtree ([pgpa_walker.c#foreignscan-no-descend](../raw/postgres-19/contrib/pg_plan_advice/pgpa_walker.c#L397-L418)).
+
+**Version notes:**
+- PostgreSQL 17: Holds, except that 17 has no `pg_plan_advice` module. `EvalPlanQual()` re-checks the newest version of an updated row against the query's conditions under READ COMMITTED ([execMain.c#EvalPlanQual](../raw/postgres-17/src/backend/executor/execMain.c#L2492-L2515)). `ExecUpdate()` calls it after locking the latest row version ([nodeModifyTable.c:2438-2444](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2438-L2444)), and `LockRows` re-checks the rows of `SELECT ... FOR UPDATE` the same way ([nodeLockRows.c:254-275](../raw/postgres-17/src/backend/executor/nodeLockRows.c#L254-L275)). A `ForeignScan` keeps the remotely checked conditions in `fdw_recheck_quals` for the recheck ([plannodes.h:689-692](../raw/postgres-17/src/include/nodes/plannodes.h#L689-L692)), and `postgres_fdw` gives up a join push-down when no local join path suitable for the recheck exists ([postgres_fdw.c:6402-6407](../raw/postgres-17/contrib/postgres_fdw/postgres_fdw.c#L6402-L6407)).
 
 Related: [Row mark](#row-mark), [Foreign data wrapper](#foreign-data-wrapper), [Isolation level](#isolation-level), [Executor](#executor)
 
@@ -1488,7 +1533,7 @@ Related: [Executor](#executor), [PlannedStmt](#plannedstmt), [Snapshot](#snapsho
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-`EXPLAIN` shows the plan the [planner](#planner) chose, with its estimated costs and row counts. With `ANALYZE`, it also runs the statement and reports what actually happened ([explain.c:691-702](../raw/postgres-17/src/backend/commands/explain.c#L691-L702)). `ExplainQuery()` parses the option list into an `ExplainState` ([explain.c#ExplainQuery](../raw/postgres-17/src/backend/commands/explain.c#L178-L207)). It rejects `WAL`, `TIMING` and `SERIALIZE` without `ANALYZE`, and it rejects `GENERIC_PLAN` combined with `ANALYZE` ([explain.c:278-305](../raw/postgres-17/src/backend/commands/explain.c#L278-L305)). `NewExplainState()` turns only `COSTS` on by default; `TIMING` and `SUMMARY` then default to the `ANALYZE` setting ([explain.c#NewExplainState](../raw/postgres-17/src/backend/commands/explain.c#L370-L377), [explain.c:284-285](../raw/postgres-17/src/backend/commands/explain.c#L284-L285), [explain.c:305-306](../raw/postgres-17/src/backend/commands/explain.c#L305-L306)).
+`EXPLAIN` shows the plan the [planner](#planner) chose, with its estimated costs and row counts. With `ANALYZE`, it also runs the statement and reports what actually happened ([explain.c:691-702](../raw/postgres-17/src/backend/commands/explain.c#L691-L702)). `ExplainQuery()` parses the option list into an `ExplainState` ([explain.c#ExplainQuery](../raw/postgres-17/src/backend/commands/explain.c#L178-L207)). It rejects `WAL`, `TIMING` or `SERIALIZE` turned on without `ANALYZE`; the turned-off forms, such as `TIMING OFF`, are accepted without it ([explain.c:278-297](../raw/postgres-17/src/backend/commands/explain.c#L278-L297)). It also rejects `GENERIC_PLAN` combined with `ANALYZE` ([explain.c:278-305](../raw/postgres-17/src/backend/commands/explain.c#L278-L305)). `NewExplainState()` turns only `COSTS` on by default; `TIMING` and `SUMMARY` then default to the `ANALYZE` setting ([explain.c#NewExplainState](../raw/postgres-17/src/backend/commands/explain.c#L370-L377), [explain.c:284-285](../raw/postgres-17/src/backend/commands/explain.c#L284-L285), [explain.c:305-306](../raw/postgres-17/src/backend/commands/explain.c#L305-L306)).
 
 **Version notes:**
 - PostgreSQL 12: Differs: `ExplainQuery()` accepts `ANALYZE`, `VERBOSE`, `COSTS`, `BUFFERS`, `SETTINGS`, `TIMING`, `SUMMARY` and `FORMAT`; 12 has no `SERIALIZE`, `GENERIC_PLAN`, `WAL` or `MEMORY` ([explain.c#ExplainQuery](../raw/postgres-12/src/backend/commands/explain.c#L159-L201)). It rejects `BUFFERS` and `TIMING` without `ANALYZE` ([explain.c:206-218](../raw/postgres-12/src/backend/commands/explain.c#L206-L218)). `NewExplainState()` turns only `COSTS` on ([explain.c#NewExplainState](../raw/postgres-12/src/backend/commands/explain.c#L286-L296)).
@@ -1825,6 +1870,18 @@ A GUC's context says when, and by whom, a [GUC](#guc) setting can be changed. Th
 
 Related: [GUC](#guc), [Postmaster](#postmaster)
 
+### Hash aggregation
+
+**Aliases:** `HashAggregate`, hashed grouping, `AGG_HASHED`, `AGG_MIXED`, hash aggregate spill, `enable_hashagg`, `hash_mem_multiplier`. **Checked on:** PostgreSQL 17.
+
+Hash aggregation groups rows by putting each group in an in-memory hash table instead of sorting the input first. `EXPLAIN` shows it as `HashAggregate` ([explain.c:1562](../raw/postgres-17/src/backend/commands/explain.c#L1562)). The [planner](#planner) prices it in `cost_agg()` under the `AGG_HASHED` strategy ([costsize.c#cost_agg](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2650-L2665)).
+
+Its memory budget is `work_mem` times `hash_mem_multiplier`, whose boot value is 2.0 ([nodeHash.c#get_hash_memory_limit](../raw/postgres-17/src/backend/executor/nodeHash.c#L3601-L3613), [guc_tables.c#hash_mem_multiplier](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3833-L3842)). When the estimated groups do not fit, `hash_agg_set_limits()` lowers the limit to leave room for spill partitions ([nodeAgg.c#hash_agg_set_limits](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1798-L1846)). `cost_agg()` then charges the predicted spill: spilled pages written at `random_page_cost` (in the startup cost too) and read back at `seq_page_cost`, both doubled as a generic I/O penalty, plus a CPU charge per spilled tuple ([costsize.c#cost_agg-spill](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2742-L2812)). While running, the executor enters spill mode once the table's memory or group count passes the limit; rows of new groups are then written to disk and processed in later batches ([nodeAgg.c#hash_agg_check_limits](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1856-L1874), [nodeAgg.c#hash_agg_enter_spill_mode](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1876-L1886)).
+
+`enable_hashagg = off` does not remove the path: `cost_agg()` adds [disable_cost](#disable_cost) to hashed and mixed aggregation ([costsize.c#cost_agg-disable](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2708-L2727), [guc_tables.c#enable_hashagg](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L854-L862)).
+
+Related: [work_mem](#work_mem), [Grouping sets](#grouping-sets), [Partial aggregation](#partial-aggregation), [Hash join](#hash-join), [DISTINCT ON](#distinct-on)
+
 ### Hash index
 
 **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -1845,7 +1902,7 @@ Related: [Access method](#access-method), [Metapage](#metapage)
 
 A hash join reads its inner input once, builds an in-memory hash table on the join key, and then probes that table with each row of the outer input. PostgreSQL's version is a hybrid hash join ([nodeHashjoin.c:15-16](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L15-L16)). It needs an equality condition whose operator is hashjoinable and that contains no volatile functions ([initsplan.c#check_hashjoinable](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L3402-L3430)). The [planner](#planner) builds hash join paths in `hash_inner_and_outer()` ([joinpath.c#hash_inner_and_outer](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L2082-L2092)), and EXPLAIN shows a `Hash Join` over a `Hash` node ([explain.c:1444-1445](../raw/postgres-17/src/backend/commands/explain.c#L1444-L1445), [explain.c:1619-1620](../raw/postgres-17/src/backend/commands/explain.c#L1619-L1620)).
 
-The table may use `work_mem` times `hash_mem_multiplier` ([nodeHash.c#get_hash_memory_limit](../raw/postgres-17/src/backend/executor/nodeHash.c#L3601-L3613)). A larger inner input is split into batches that are processed one at a time. The planner estimates the batch count and charges the extra sequential I/O ([costsize.c#initial_cost_hashjoin-batches](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L4129-L4155)); the executor measures the real size and doubles the batch count when the table grows too large ([nodeHashjoin.c:26-36](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L26-L36)). Inner rows whose hash value matches one of the outer side's most common values go into a small skew table, handled with the first batch, that never spills ([hashjoin.h:95-121](../raw/postgres-17/src/include/executor/hashjoin.h#L95-L121)). With Parallel Hash, workers build one shared table when both inputs have [partial paths](#partial-path) and `enable_parallel_hash` is on ([joinpath.c:2280-2292](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L2280-L2292)).
+The table may use `work_mem` times `hash_mem_multiplier` ([nodeHash.c#get_hash_memory_limit](../raw/postgres-17/src/backend/executor/nodeHash.c#L3601-L3613)). A larger inner input is split into batches that are processed one at a time. The planner estimates the batch count and charges the extra sequential I/O ([costsize.c#initial_cost_hashjoin-batches](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L4129-L4155)); the executor measures the real size and doubles the batch count when the table grows too large ([nodeHashjoin.c:26-36](../raw/postgres-17/src/backend/executor/nodeHashjoin.c#L26-L36)). Inner rows whose hash value matches one of the outer side's most common values go into a small skew table, handled with the first batch, that never spills ([hashjoin.h:95-121](../raw/postgres-17/src/include/executor/hashjoin.h#L95-L121)). With Parallel Hash, workers build one shared table when both inputs have [partial paths](#partial-path) and `enable_parallel_hash` is on ([joinpath.c:2280-2292](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L2280-L2292)). Any partial hash join also needs a parallel-safe join relation with no lateral references and a join type other than `JOIN_UNIQUE_OUTER`, and the shared table further excludes `JOIN_UNIQUE_INNER` ([joinpath.c:2258-2292](../raw/postgres-17/src/backend/optimizer/path/joinpath.c#L2258-L2292)).
 
 **Version notes:**
 - PostgreSQL 12: Differs in the memory budget: the target hash table size is `work_mem` alone, and 12 has no `hash_mem_multiplier`; Parallel Hash first tries the combined `work_mem` of all participants ([nodeHash.c:700-712](../raw/postgres-12/src/backend/executor/nodeHash.c#L700-L712)). The parts checked on 12 hold: the executor implements a hybrid hash join ([nodeHashjoin.c:152-154](../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L152-L154)); the Hash node reads every inner row into the table before probing ([nodeHash.c#MultiExecPrivateHash](../raw/postgres-12/src/backend/executor/nodeHash.c#L139-L175)); a join clause is hashable only when its operator is hashjoinable and it has no volatile function ([initsplan.c#check_hashjoinable](../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2619-L2638)); paths come from `hash_inner_and_outer()` ([joinpath.c:1677](../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1677)); EXPLAIN labels it `Hash Join` ([explain.c:1126](../raw/postgres-12/src/backend/commands/explain.c#L1126)); `enable_hashjoin` has `user` context ([guc.c#enable_hashjoin](../raw/postgres-12/src/backend/utils/misc/guc.c#L984-L992)). Batching, the skew table and the Parallel Hash path conditions were not re-checked on 12.
@@ -2054,6 +2111,16 @@ Index vacuuming is the part of [VACUUM](#vacuum) that removes index entries poin
 
 Related: [VACUUM](#vacuum), [INDEX_CLEANUP](#index_cleanup), [Access method](#access-method), [B-tree page deletion](#b-tree-page-deletion), [maintenance_work_mem](#maintenance_work_mem)
 
+### IndexClause
+
+**Aliases:** `IndexClause`, `indexclauses`, `indexquals`, index clause. **Checked on:** PostgreSQL 17.
+
+An `IndexClause` is the [planner](#planner)'s note that one condition of the query can be applied to one column of one index. It points at the original `WHERE` or join condition and lists the index conditions derived from it, `indexquals`. Its `lossy` flag says whether those are weaker than the original, as when `x LIKE 'foo%bar'` yields the range `x >= 'foo' AND x < 'fop'` ([pathnodes.h#IndexClause](../raw/postgres-17/src/include/nodes/pathnodes.h#L1722-L1766)). An index [path](#path) holds its list as `indexclauses`, and an empty list means a full index scan ([pathnodes.h#indexclauses](../raw/postgres-17/src/include/nodes/pathnodes.h#L1683-L1685)).
+
+`match_clause_to_indexcol()` builds one when a condition matches an index column. Normally that needs an `indexkey op constant` comparison, in either order, whose operator is in the column's [operator family](#operator-class) and whose collation matches the index; otherwise the function returns NULL, and the condition can never become an index condition on that index ([indxpath.c#match_clause_to_indexcol](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2138-L2203)). A [planner support function](#planner-support-function) can derive index conditions from a condition that does not match directly ([pathnodes.h#IndexClause](../raw/postgres-17/src/include/nodes/pathnodes.h#L1722-L1766)).
+
+Related: [Qual](#qual), [Index scan](#index-scan), [Operator class](#operator-class), [Planner support function](#planner-support-function), [Path](#path), [ScalarArrayOpExpr](#scalararrayopexpr)
+
 ### INDEX_CLEANUP
 
 **Aliases:** `VACUUM (INDEX_CLEANUP ...)`, `vacuum_index_cleanup` storage parameter, `VACOPTVALUE_AUTO`, index vacuuming bypass. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -2067,16 +2134,6 @@ Related: [VACUUM](#vacuum), [INDEX_CLEANUP](#index_cleanup), [Access method](#ac
 - PostgreSQL 19: Holds ([ref/vacuum.sgml:33](../raw/postgres-19/doc/src/sgml/ref/vacuum.sgml#L33), [vacuumlazy.c:732-737](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L732-L737), [vacuumlazy.c:187](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L187), [vacuumlazy.c:2449-2451](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L2449-L2451), [vacuumlazy.c:1372](../raw/postgres-19/src/backend/access/heap/vacuumlazy.c#L1372), [vacuum.c:2186](../raw/postgres-19/src/backend/commands/vacuum.c#L2186), [reloptions.c:555](../raw/postgres-19/src/backend/access/common/reloptions.c#L555)).
 
 Related: [VACUUM](#vacuum), [Index vacuuming](#index-vacuuming), [Storage parameter](#storage-parameter), [Line pointer](#line-pointer)
-
-### IndexClause
-
-**Aliases:** `IndexClause`, `indexclauses`, `indexquals`, index clause. **Checked on:** PostgreSQL 17.
-
-An `IndexClause` is the [planner](#planner)'s note that one condition of the query can be applied to one column of one index. It points at the original `WHERE` or join condition and lists the index conditions derived from it, `indexquals`. Its `lossy` flag says whether those are weaker than the original, as when `x LIKE 'foo%bar'` yields the range `x >= 'foo' AND x < 'fop'` ([pathnodes.h#IndexClause](../raw/postgres-17/src/include/nodes/pathnodes.h#L1722-L1766)). An index [path](#path) holds its list as `indexclauses`, and an empty list means a full index scan ([pathnodes.h#indexclauses](../raw/postgres-17/src/include/nodes/pathnodes.h#L1683-L1685)).
-
-`match_clause_to_indexcol()` builds one when a condition matches an index column. Normally that needs an `indexkey op constant` comparison, in either order, whose operator is in the column's [operator family](#operator-class) and whose collation matches the index; otherwise the function returns NULL, and the condition can never become an index condition on that index ([indxpath.c#match_clause_to_indexcol](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L2138-L2203)). A [planner support function](#planner-support-function) can derive index conditions from a condition that does not match directly ([pathnodes.h#IndexClause](../raw/postgres-17/src/include/nodes/pathnodes.h#L1722-L1766)).
-
-Related: [Qual](#qual), [Index scan](#index-scan), [Operator class](#operator-class), [Planner support function](#planner-support-function), [Path](#path), [ScalarArrayOpExpr](#scalararrayopexpr)
 
 ### Index-only scan
 
@@ -2214,6 +2271,16 @@ JIT compilation turns generic, interpreted work, such as evaluating a `WHERE` ex
 - PostgreSQL 19: Differs: `jit` defaults to off. Its context, the contexts of `jit_above_cost` and `jit_provider`, the provider library and the planner rule are unchanged ([guc_parameters.dat#jit](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1444-L1449), [guc_parameters.dat:1451](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1451), [guc_parameters.dat:1515](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1515), [jit/README:79-80](../raw/postgres-19/src/backend/jit/README#L79-L80), [planner.c#standard_planner-jit](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L710-L723)). The optimize and inline thresholds also retain their 500000 defaults, negative disabling values and user context ([guc_parameters.dat#jit-optimize-and-inline](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1485-L1504)).
 
 Related: [Executor](#executor), [PlannedStmt](#plannedstmt), [Cost](#cost), [GUC context](#guc-context)
+
+### Join domain
+
+**Aliases:** `JoinDomain`, `jd_relids`, `root->join_domains`. **Checked on:** PostgreSQL 17.
+
+A join domain is a set of relations that are inner-joined together, inside which an equality the planner deduced through an [equivalence class](#equivalence-class) can be enforced or expected to hold. The topmost domain covers the whole query. Each [outer join](#outer-join) starts a new domain made of the relations on its nullable side, and a `FULL JOIN` starts one for each side ([pathnodes.h#JoinDomains](../raw/postgres-17/src/include/nodes/pathnodes.h#L1292-L1316)). The struct holds only `jd_relids`; `deconstruct_jointree()` builds the domains, and `PlannerInfo.join_domains` lists them with higher ones first ([pathnodes.h#JoinDomain](../raw/postgres-17/src/include/nodes/pathnodes.h#L1318-L1325), [pathnodes.h:310](../raw/postgres-17/src/include/nodes/pathnodes.h#L310)).
+
+Join domains matter when reading qual placement. A [pseudoconstant qual](#pseudoconstant-qual) found in the topmost domain is lifted to the top of the plan, while one inside a lower domain stays at its original syntactic level, so that a later reordering of outer joins cannot move it to the wrong side ([initsplan.c#distribute_qual_to_rels-pseudoconstant](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L2300-L2318)).
+
+Related: [Equivalence class](#equivalence-class), [Outer join](#outer-join), [Pseudoconstant qual](#pseudoconstant-qual)
 
 ### Join order search
 
@@ -2799,6 +2866,16 @@ Parallel vacuum lets VACUUM hand whole indexes to parallel worker processes duri
 
 Related: [VACUUM](#vacuum), [Autovacuum](#autovacuum), [Parallel query](#parallel-query), [maintenance_work_mem](#maintenance_work_mem)
 
+### parallel_setup_cost and parallel_tuple_cost
+
+**Aliases:** `parallel_setup_cost`, `parallel_tuple_cost`, `DEFAULT_PARALLEL_SETUP_COST`, `DEFAULT_PARALLEL_TUPLE_COST`. **Checked on:** PostgreSQL 17.
+
+These two settings are the [planner](#planner)'s price for using [parallel query](#parallel-query). `parallel_setup_cost` is the cost of starting worker processes, with a boot value of 1000; `parallel_tuple_cost` is the cost of passing one row from a worker to the leader, with a boot value of 0.1 ([cost.h:29-30](../raw/postgres-17/src/include/optimizer/cost.h#L29-L30), [guc_tables.c#parallel_tuple_cost](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3731-L3752)). Both have `user` context, so a session can change them with `SET` (same lines).
+
+`cost_gather()` adds `parallel_setup_cost` once to a Gather node's startup cost and `parallel_tuple_cost` for every row it returns ([costsize.c#cost_gather](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L456-L457)). `cost_gather_merge()` does the same, with the per-row charge raised by 5 % for the merge's extra work ([costsize.c#cost_gather_merge](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L523-L524)). So a parallel plan must save more than these charges over its serial alternative before it can win.
+
+Related: [Parallel query](#parallel-query), [Partial path](#partial-path), [Cost](#cost)
+
 ### Param
 
 **Aliases:** `Param` node, `ParamKind`, `PARAM_EXTERN`, `PARAM_EXEC`, `PARAM_SUBLINK`, `PARAM_MULTIEXPR`, `$1`, `paramExecTypes`, `paramassign.c`. **Checked on:** PostgreSQL 17.
@@ -3116,6 +3193,20 @@ Related: [pgs_mask](#pgs_mask), [Planner](#planner), [Hook](#hook), [Contrib](#c
 
 Related: [Catalog](#catalog), [Syscache](#syscache), [fmgr](#fmgr), [pg_node_tree](#pg_node_tree), [Parallel query](#parallel-query)
 
+### pgs_mask
+
+**Aliases:** path generation strategy mask, `PGS_*` flags, `default_pgs_mask`, `PGS_CONSIDER_PARTITIONWISE`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+In PostgreSQL 19, `pgs_mask` is a 64-bit set of `PGS_*` bits that tells the planner which path strategies it may use, such as sequential scan, index scan, hash join or nested loop with memoize ([pathnodes.h#PGS_SEQSCAN](../raw/postgres-19/src/include/nodes/pathnodes.h#L25-L84), [pathnodes.h:1039](../raw/postgres-19/src/include/nodes/pathnodes.h#L1039)). The planner builds `PlannerGlobal.default_pgs_mask` from the `enable_*` settings, then offers `planner_setup_hook` a chance to change it ([planner.c:504-540](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L504-L540)). Each new base, join and upper [relation](#relation) copies the default into its own `RelOptInfo.pgs_mask` ([relnode.c:234](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L234), [relnode.c:847](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L847), [relnode.c:1054](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L1054), [relnode.c:1648](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L1648)). Extensions can then edit it per relation through two hooks: `build_simple_rel_hook` for a base relation and `joinrel_setup_hook` for a join relation ([relnode.c:400-409](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L400-L409), [relnode.c:985-990](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L985-L990)). In most cases a cleared strategy only marks the matching paths disabled. `cost_seqscan()`, for example, sets `disabled_nodes` when the relation's mask lacks the needed bits ([pathnodes.h:38-45](../raw/postgres-19/src/include/nodes/pathnodes.h#L38-L45), [costsize.c#cost_seqscan](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L330-L336)). Some bits, such as `PGS_CONSIDER_PARTITIONWISE`, stop path generation outright ([pathnodes.h:47-57](../raw/postgres-19/src/include/nodes/pathnodes.h#L47-L57)). When reading v19 planner code, look for tests of `pgs_mask` bits where older versions read the `enable_*` variables directly.
+
+**Version notes:**
+- PostgreSQL 12: Not present in PostgreSQL 12. `RelOptInfo` has no strategy mask ([pathnodes.h#RelOptInfo](../raw/postgres-12/src/include/nodes/pathnodes.h#L645-L649)). Most `enable_*` settings that are off add `disable_cost` to the path instead ([costsize.c:231-232](../raw/postgres-12/src/backend/optimizer/path/costsize.c#L231-L232)). A few stop path generation instead, such as `enable_partitionwise_join` and `enable_indexonlyscan` ([relnode.c:1621-1622](../raw/postgres-12/src/backend/optimizer/util/relnode.c#L1621-L1622), [indxpath.c:1906-1907](../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L1906-L1907)).
+- PostgreSQL 14: Not present in PostgreSQL 14 ([pathnodes.h#RelOptInfo](../raw/postgres-14/src/include/nodes/pathnodes.h#L687-L691)). Most off `enable_*` settings add `disable_cost` ([costsize.c:246-247](../raw/postgres-14/src/backend/optimizer/path/costsize.c#L246-L247)). `enable_partitionwise_join` and `enable_indexonlyscan` stop path generation instead ([relnode.c:1662-1663](../raw/postgres-14/src/backend/optimizer/util/relnode.c#L1662-L1663), [indxpath.c:1815-1816](../raw/postgres-14/src/backend/optimizer/path/indxpath.c#L1815-L1816)).
+- PostgreSQL 17: Not present in PostgreSQL 17 ([pathnodes.h#RelOptInfo](../raw/postgres-17/src/include/nodes/pathnodes.h#L876-L881)). Most off `enable_*` settings add `disable_cost` ([costsize.c:304-305](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L304-L305)). `enable_partitionwise_join` and `enable_indexonlyscan` stop path generation instead ([relnode.c:2024-2025](../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2024-L2025), [indxpath.c:1739-1740](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1739-L1740)).
+- PostgreSQL 18: Not present in PostgreSQL 18 ([pathnodes.h#RelOptInfo](../raw/postgres-18/src/include/nodes/pathnodes.h#L906-L911)). New in 18, each path carries a `disabled_nodes` count, and `cost_seqscan()` sets it straight from `enable_seqscan` instead of adding `disable_cost` ([pathnodes.h:1795](../raw/postgres-18/src/include/nodes/pathnodes.h#L1795), [costsize.c:357](../raw/postgres-18/src/backend/optimizer/path/costsize.c#L357)).
+
+Related: [pg_plan_advice](#pg_plan_advice), [Planner](#planner), [Path](#path), [RelOptInfo](#reloptinfo), [Partitionwise join](#partitionwise-join), [Hook](#hook)
+
 ### pg_stat_activity
 
 **Aliases:** `pg_stat_activity` view, `PgBackendStatus`, `pg_stat_get_activity()`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3144,6 +3235,20 @@ Related: [Cumulative statistics](#cumulative-statistics), [Wait event](#wait-eve
 
 Related: [Cumulative statistics](#cumulative-statistics), [Autovacuum](#autovacuum), [VACUUM](#vacuum), [Index scan](#index-scan), [Sequential scan](#sequential-scan)
 
+### pgstatindex
+
+**Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+`pgstatindex` is a [pgstattuple](#pgstattuple) function that summarizes a [B-tree](#b-tree) index's shape and space use. It rejects any other index type and any index that is not valid ([pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L216-L250)). It reads the [metapage](#metapage) (block 0), then every remaining block, and counts deleted, half-dead ("empty"), leaf and internal pages ([pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L252-L326)). `avg_leaf_density` is 100 minus leaf free space as a percentage of leaf capacity. `leaf_fragmentation` is the share of leaves whose right sibling sits at a lower block number ([pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L310-L322), [pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L349-L372)). The install scripts grant it to `pg_stat_scan_tables` ([pgstattuple--1.4--1.5.sql:36-37](../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L36-L37)). All of this lives in `pgstatindex_impl()`, so that function is where to check how a reported number was computed.
+
+**Version notes:**
+- PostgreSQL 12: Differs: it rejects non-B-tree indexes but has no `indisvalid` check, so 12 will read an invalid index ([pgstatindex.c#pgstatindex_impl](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L238)). It reads the metapage, then every remaining block, counts deleted, half-dead, leaf and internal pages, and computes density and fragmentation the same way ([pgstatindex.c#pgstatindex_impl](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L240-L309), [pgstatindex.c:349-354](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L349-L354)). It is granted to `pg_stat_scan_tables` ([pgstattuple--1.4--1.5.sql:37](../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
+- PostgreSQL 14: Holds. It rejects non-B-tree and invalid indexes, counts deleted, half-dead, leaf and internal pages, and computes `avg_leaf_density` and `leaf_fragmentation` the same way; version 1.5 grants it to `pg_stat_scan_tables` ([pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L224-L250), [pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L252-L326), [pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L355-L371), [pgstattuple--1.4--1.5.sql:37](../raw/postgres-14/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
+- PostgreSQL 18: Holds, except that leaf free space is summed with `PageGetExactFreeSpace()` instead of `PageGetFreeSpace()`, new in 18. It no longer subtracts one line pointer per page, so `avg_leaf_density` can read slightly lower than in 17 for the same page ([pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L297-L324)). The rejection rules, the density formula, and the grant are unchanged ([pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L213-L247), [pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L346-L369), [pgstattuple--1.4--1.5.sql:36-37](../raw/postgres-18/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L36-L37)).
+- PostgreSQL 19: Holds, except that, as in 18, leaf free space is summed with `PageGetExactFreeSpace()` ([pgstatindex.c:331](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L331)). New in 19, it reads the blocks after the metapage through a [read stream](#read-stream) ([pgstatindex.c:280-309](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L280-L309)). It still rejects non-B-tree and invalid indexes, still counts deleted, half-dead, leaf and internal pages, computes `avg_leaf_density` and `leaf_fragmentation` with the same formulas, and is still granted to `pg_stat_scan_tables` ([pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L214-L250), [pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L301-L345), [pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L381-L392), [pgstattuple--1.4--1.5.sql:37](../raw/postgres-19/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
+
+Related: [pgstattuple](#pgstattuple), [B-tree](#b-tree), [Metapage](#metapage), [Bloat](#bloat), [Invalid index](#invalid-index), [Sibling link](#sibling-link)
+
 ### pg_stat_io
 
 **Aliases:** I/O statistics view, `pg_stat_get_io()`, `pgstat_io.c`, `IOObject`, `IOContext`, `IOOp`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3157,6 +3262,19 @@ Related: [Cumulative statistics](#cumulative-statistics), [Autovacuum](#autovacu
 - PostgreSQL 19: Differs, as in 18: the view reports `read_bytes`, `write_bytes` and `extend_bytes` instead of `op_bytes`, WAL is an I/O object, and there is an `init` context ([system_views.sql#pg_stat_io](../raw/postgres-19/src/backend/catalog/system_views.sql#L1261-L1283), [pgstat.h#IOObject](../raw/postgres-19/src/include/pgstat.h#L281-L286), [pgstat.h:292](../raw/postgres-19/src/include/pgstat.h#L292)).
 
 Related: [Cumulative statistics](#cumulative-statistics), [Buffer manager](#buffer-manager), [Ring buffer](#ring-buffer), [Background writer](#background-writer)
+
+### pg_statistic
+
+**Aliases:** `Form_pg_statistic`, `stanullfrac`, `stawidth`, `stadistinct`, statistics slot, `stakindN`, `STATRELATTINH`, `pg_stats`. **Checked on:** PostgreSQL 12, 17.
+
+`pg_statistic` is the system [catalog](#catalog) in which `ANALYZE` stores its per-column [statistics](#statistics). Each row belongs to one column of one relation, and a flag says whether inheritance children were included; those three values form the row's unique key ([pg_statistic.h:29-35](../raw/postgres-17/src/include/catalog/pg_statistic.h#L29-L35), [pg_statistic.h:139-141](../raw/postgres-17/src/include/catalog/pg_statistic.h#L139-L141)). A row holds the fraction of NULLs, the average width and the estimated number of distinct values ([pg_statistic.h:37-69](../raw/postgres-17/src/include/catalog/pg_statistic.h#L37-L69)). It also has five slots. A kind code says what each slot holds, for example a [most-common-values list or a histogram](#most-common-values-and-histogram) or the physical [correlation](#correlation) ([pg_statistic.h:88-127](../raw/postgres-17/src/include/catalog/pg_statistic.h#L88-L127), [pg_statistic.h:190-222](../raw/postgres-17/src/include/catalog/pg_statistic.h#L190-L222)).
+
+`ANALYZE` replaces or inserts the row of every column it computed ([analyze.c#update_attstats](../raw/postgres-17/src/backend/commands/analyze.c#L1609-L1735)). The planner's estimators fetch the row through the `STATRELATTINH` [syscache](#syscache) ([selfuncs.c#examine_simple_variable](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5388-L5396)) and unpack one slot with `get_attstatsslot()` ([lsyscache.c#get_attstatsslot](../raw/postgres-17/src/backend/utils/cache/lsyscache.c#L3300-L3350)). When the user may not read every row of the column, only a [leakproof](#leakproof-function) operator may see the slot values; the null fraction is still used ([selfuncs.c#examine_simple_variable-acl](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5398-L5419), [selfuncs.c#statistic_proc_security_check](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5818-L5833), [selfuncs.c#var_eq_const-nullfrac](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L312-L320)). Ordinary users cannot read the catalog itself. The `pg_stats` view shows the rows of the columns they may `SELECT` ([system_views.sql#pg_stats](../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L275)). [Extended statistics](#extended-statistics) are kept in other catalogs.
+
+**Version notes:**
+- PostgreSQL 12: Holds. The row key is `(starelid, staattnum, stainherit)`, and a row holds the null fraction, width, distinct estimate and five kind-coded slots ([pg_statistic.h#FormData_pg_statistic](../raw/postgres-12/src/include/catalog/pg_statistic.h#L29-L126), [pg_statistic.h:136-178](../raw/postgres-12/src/include/catalog/pg_statistic.h#L136-L178)). `update_attstats()` replaces or inserts the rows ([analyze.c#update_attstats](../raw/postgres-12/src/backend/commands/analyze.c#L1394-L1547)). `examine_simple_variable()` fetches a row through `STATRELATTINH`, with the scan's `inh` flag as the third key, and `get_attstatsslot()` unpacks a slot ([selfuncs.c#examine_simple_variable](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4724-L4737), [lsyscache.c#get_attstatsslot](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L2895-L2965)). The access check and the leakproof rule match 17. The null fraction, the distinct count and the average width are still used, because `get_variable_numdistinct()` and `get_attavgwidth()` read them without the check ([selfuncs.c:5011-5019](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5011-L5019), [lsyscache.c:2881-2890](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L2881-L2890), [selfuncs.c#examine_simple_variable-acl](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4739-L4838), [selfuncs.c#statistic_proc_security_check](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4961-L4982), [selfuncs.c#var_eq_const-nullfrac](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L307-L315)). `pg_stats` filters on column privilege and active row security ([system_views.sql#pg_stats](../raw/postgres-12/src/backend/catalog/system_views.sql#L189-L252)). An expression index stores its expression columns' rows under the index's own OID ([analyze.c:560-574](../raw/postgres-12/src/backend/commands/analyze.c#L560-L574)).
+
+Related: [Statistics](#statistics), [Most common values and histogram](#most-common-values-and-histogram), [Selectivity](#selectivity), [Catalog](#catalog), [Extended statistics](#extended-statistics)
 
 ### pg_stat_statements
 
@@ -3172,18 +3290,19 @@ Related: [Cumulative statistics](#cumulative-statistics), [Buffer manager](#buff
 
 Related: [Query jumbling](#query-jumbling), [Contrib](#contrib), [Extension](#extension), [Cumulative statistics](#cumulative-statistics)
 
-### pg_statistic
+### pgstattuple
 
-**Aliases:** `Form_pg_statistic`, `stanullfrac`, `stawidth`, `stadistinct`, statistics slot, `stakindN`, `STATRELATTINH`, `pg_stats`. **Checked on:** PostgreSQL 12, 17.
+**Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-`pg_statistic` is the system [catalog](#catalog) in which `ANALYZE` stores its per-column [statistics](#statistics). Each row belongs to one column of one relation, and a flag says whether inheritance children were included; those three values form the row's unique key ([pg_statistic.h:29-35](../raw/postgres-17/src/include/catalog/pg_statistic.h#L29-L35), [pg_statistic.h:139-141](../raw/postgres-17/src/include/catalog/pg_statistic.h#L139-L141)). A row holds the fraction of NULLs, the average width and the estimated number of distinct values ([pg_statistic.h:37-69](../raw/postgres-17/src/include/catalog/pg_statistic.h#L37-L69)). It also has five slots. A kind code says what each slot holds, for example a [most-common-values list or a histogram](#most-common-values-and-histogram) or the physical [correlation](#correlation) ([pg_statistic.h:88-127](../raw/postgres-17/src/include/catalog/pg_statistic.h#L88-L127), [pg_statistic.h:190-222](../raw/postgres-17/src/include/catalog/pg_statistic.h#L190-L222)).
-
-`ANALYZE` replaces or inserts the row of every column it computed ([analyze.c#update_attstats](../raw/postgres-17/src/backend/commands/analyze.c#L1609-L1735)). The planner's estimators fetch the row through the `STATRELATTINH` [syscache](#syscache) ([selfuncs.c#examine_simple_variable](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5388-L5396)) and unpack one slot with `get_attstatsslot()` ([lsyscache.c#get_attstatsslot](../raw/postgres-17/src/backend/utils/cache/lsyscache.c#L3300-L3350)). When the user may not read every row of the column, only a [leakproof](#leakproof-function) operator may see the slot values; the null fraction is still used ([selfuncs.c#examine_simple_variable-acl](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5398-L5419), [selfuncs.c#statistic_proc_security_check](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L5818-L5833), [selfuncs.c#var_eq_const-nullfrac](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L312-L320)). Ordinary users cannot read the catalog itself. The `pg_stats` view shows the rows of the columns they may `SELECT` ([system_views.sql#pg_stats](../raw/postgres-17/src/backend/catalog/system_views.sql#L189-L275)). [Extended statistics](#extended-statistics) are kept in other catalogs.
+`pgstattuple` is a [contrib](#contrib) extension that scans a [relation](#relation) and reports tuple-level space use: live and dead tuple counts and bytes, plus free space ([pgstattuple.control:1-2](../raw/postgres-17/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstattuple_type](../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L55-L63)). `pgstat_relation()` sends tables and sequences to `pgstat_heap()`. It handles B-tree, hash and GiST indexes itself, and rejects GIN, SP-GiST and BRIN indexes and any index that is not valid ([pgstattuple.c#pgstat_relation](../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L255-L298)). The same extension provides [pgstatindex](#pgstatindex), `pgstatginindex`, `pgstathashindex` and `pgstattuple_approx` ([pgstatindex.c#pgstatginindex](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L485-L507), [pgstatindex.c:586](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L586), [pgstatapprox.c:227](../raw/postgres-17/contrib/pgstattuple/pgstatapprox.c#L227)). `pgstattuple_approx` does not sample. It skips pages that the [visibility map](#visibility-map) marks all-visible, estimates their free space from the [free space map](#free-space-map), and counts the other pages exactly ([pgstatapprox.c#statapprox_heap](../raw/postgres-17/contrib/pgstattuple/pgstatapprox.c#L55-L62)).
 
 **Version notes:**
-- PostgreSQL 12: Holds. The row key is `(starelid, staattnum, stainherit)`, and a row holds the null fraction, width, distinct estimate and five kind-coded slots ([pg_statistic.h#FormData_pg_statistic](../raw/postgres-12/src/include/catalog/pg_statistic.h#L29-L126), [pg_statistic.h:136-178](../raw/postgres-12/src/include/catalog/pg_statistic.h#L136-L178)). `update_attstats()` replaces or inserts the rows ([analyze.c#update_attstats](../raw/postgres-12/src/backend/commands/analyze.c#L1394-L1547)). `examine_simple_variable()` fetches a row through `STATRELATTINH`, with the scan's `inh` flag as the third key, and `get_attstatsslot()` unpacks a slot ([selfuncs.c#examine_simple_variable](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4724-L4737), [lsyscache.c#get_attstatsslot](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L2895-L2965)). The access check and the leakproof rule match 17. The null fraction, the distinct count and the average width are still used, because `get_variable_numdistinct()` and `get_attavgwidth()` read them without the check ([selfuncs.c:5011-5019](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5011-L5019), [lsyscache.c:2881-2890](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L2881-L2890), [selfuncs.c#examine_simple_variable-acl](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4739-L4838), [selfuncs.c#statistic_proc_security_check](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4961-L4982), [selfuncs.c#var_eq_const-nullfrac](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L307-L315)). `pg_stats` filters on column privilege and active row security ([system_views.sql#pg_stats](../raw/postgres-12/src/backend/catalog/system_views.sql#L189-L252)). An expression index stores its expression columns' rows under the index's own OID ([analyze.c:560-574](../raw/postgres-12/src/backend/commands/analyze.c#L560-L574)).
+- PostgreSQL 12: Differs: `pgstat_relation()` has no `indisvalid` check, so 12 reads an invalid index. It still reports live and dead counts and free space, routes heaps to `pgstat_heap()`, handles B-tree, hash and GiST indexes and rejects GIN, SP-GiST and BRIN ([pgstattuple.c#pgstattuple_type](../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L55-L63), [pgstattuple.c#pgstat_relation](../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L241-L300)). It ships `pgstatginindex`, `pgstathashindex` and a `pgstattuple_approx` that skips all-visible pages the same way ([pgstatindex.c:488](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L488), [pgstatindex.c:582](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L582), [pgstatapprox.c:224](../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L224), [pgstatapprox.c#statapprox_heap](../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L55-L62)).
+- PostgreSQL 14: Holds. `pgstat_relation()` rejects invalid indexes, handles B-tree, hash and GiST indexes and rejects GIN, SP-GiST and BRIN, and the extension also ships `pgstatginindex`, `pgstathashindex` and the same `pgstattuple_approx` ([pgstattuple.control:1-2](../raw/postgres-14/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstat_relation](../raw/postgres-14/contrib/pgstattuple/pgstattuple.c#L255-L292), [pgstatindex.c:504](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L504), [pgstatindex.c:605](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L605), [pgstatapprox.c:227](../raw/postgres-14/contrib/pgstattuple/pgstatapprox.c#L227), [pgstatapprox.c#statapprox_heap](../raw/postgres-14/contrib/pgstattuple/pgstatapprox.c#L55-L62)).
+- PostgreSQL 18: Holds ([pgstattuple.c#pgstattuple_type](../raw/postgres-18/contrib/pgstattuple/pgstattuple.c#L57-L65), [pgstattuple.c#pgstat_relation](../raw/postgres-18/contrib/pgstattuple/pgstattuple.c#L257-L300), [pgstatapprox.c:214](../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L214), [pgstatapprox.c#statapprox_heap](../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L49-L56)).
+- PostgreSQL 19: Holds. It still reports live and dead tuple counts and bytes plus free space, `pgstat_relation()` still sends tables to `pgstat_heap()`, handles B-tree, hash and GiST itself and rejects GIN, SP-GiST, BRIN and invalid indexes, and the extension still ships `pgstatindex`, `pgstatginindex`, `pgstathashindex` and `pgstattuple_approx` ([pgstattuple.control:1-2](../raw/postgres-19/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstattuple_type](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L57-L65), [pgstattuple.c#pgstat_relation](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L243-L293), [pgstatindex.c:503](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L503), [pgstatindex.c:608](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L608), [pgstatapprox.c:279](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L279), [pgstatapprox.c#statapprox_heap](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L106-L113)).
 
-Related: [Statistics](#statistics), [Most common values and histogram](#most-common-values-and-histogram), [Selectivity](#selectivity), [Catalog](#catalog), [Extended statistics](#extended-statistics)
+Related: [pgstatindex](#pgstatindex), [Tuple](#tuple), [Bloat](#bloat), [Contrib](#contrib)
 
 ### PG_TEST_EXTRA
 
@@ -3218,48 +3337,6 @@ Related: [Relfilenumber](#relfilenumber), [OID](#oid), [allequalimage](#allequal
 
 Related: [WAL](#wal), [Full-page image](#full-page-image), [Hint bits](#hint-bits)
 
-### pgs_mask
-
-**Aliases:** path generation strategy mask, `PGS_*` flags, `default_pgs_mask`, `PGS_CONSIDER_PARTITIONWISE`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
-
-In PostgreSQL 19, `pgs_mask` is a 64-bit set of `PGS_*` bits that tells the planner which path strategies it may use, such as sequential scan, index scan, hash join or nested loop with memoize ([pathnodes.h#PGS_SEQSCAN](../raw/postgres-19/src/include/nodes/pathnodes.h#L25-L84), [pathnodes.h:1039](../raw/postgres-19/src/include/nodes/pathnodes.h#L1039)). The planner builds `PlannerGlobal.default_pgs_mask` from the `enable_*` settings, then offers `planner_setup_hook` a chance to change it ([planner.c:504-540](../raw/postgres-19/src/backend/optimizer/plan/planner.c#L504-L540)). Each new base, join and upper [relation](#relation) copies the default into its own `RelOptInfo.pgs_mask` ([relnode.c:234](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L234), [relnode.c:847](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L847), [relnode.c:1054](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L1054), [relnode.c:1648](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L1648)). Extensions can then edit it per relation through two hooks: `build_simple_rel_hook` for a base relation and `joinrel_setup_hook` for a join relation ([relnode.c:400-409](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L400-L409), [relnode.c:985-990](../raw/postgres-19/src/backend/optimizer/util/relnode.c#L985-L990)). In most cases a cleared strategy only marks the matching paths disabled. `cost_seqscan()`, for example, sets `disabled_nodes` when the relation's mask lacks the needed bits ([pathnodes.h:38-45](../raw/postgres-19/src/include/nodes/pathnodes.h#L38-L45), [costsize.c#cost_seqscan](../raw/postgres-19/src/backend/optimizer/path/costsize.c#L330-L336)). Some bits, such as `PGS_CONSIDER_PARTITIONWISE`, stop path generation outright ([pathnodes.h:47-57](../raw/postgres-19/src/include/nodes/pathnodes.h#L47-L57)). When reading v19 planner code, look for tests of `pgs_mask` bits where older versions read the `enable_*` variables directly.
-
-**Version notes:**
-- PostgreSQL 12: Not present in PostgreSQL 12. `RelOptInfo` has no strategy mask ([pathnodes.h#RelOptInfo](../raw/postgres-12/src/include/nodes/pathnodes.h#L645-L649)). Most `enable_*` settings that are off add `disable_cost` to the path instead ([costsize.c:231-232](../raw/postgres-12/src/backend/optimizer/path/costsize.c#L231-L232)). A few stop path generation instead, such as `enable_partitionwise_join` and `enable_indexonlyscan` ([relnode.c:1621-1622](../raw/postgres-12/src/backend/optimizer/util/relnode.c#L1621-L1622), [indxpath.c:1906-1907](../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L1906-L1907)).
-- PostgreSQL 14: Not present in PostgreSQL 14 ([pathnodes.h#RelOptInfo](../raw/postgres-14/src/include/nodes/pathnodes.h#L687-L691)). Most off `enable_*` settings add `disable_cost` ([costsize.c:246-247](../raw/postgres-14/src/backend/optimizer/path/costsize.c#L246-L247)). `enable_partitionwise_join` and `enable_indexonlyscan` stop path generation instead ([relnode.c:1662-1663](../raw/postgres-14/src/backend/optimizer/util/relnode.c#L1662-L1663), [indxpath.c:1815-1816](../raw/postgres-14/src/backend/optimizer/path/indxpath.c#L1815-L1816)).
-- PostgreSQL 17: Not present in PostgreSQL 17 ([pathnodes.h#RelOptInfo](../raw/postgres-17/src/include/nodes/pathnodes.h#L876-L881)). Most off `enable_*` settings add `disable_cost` ([costsize.c:304-305](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L304-L305)). `enable_partitionwise_join` and `enable_indexonlyscan` stop path generation instead ([relnode.c:2024-2025](../raw/postgres-17/src/backend/optimizer/util/relnode.c#L2024-L2025), [indxpath.c:1739-1740](../raw/postgres-17/src/backend/optimizer/path/indxpath.c#L1739-L1740)).
-- PostgreSQL 18: Not present in PostgreSQL 18 ([pathnodes.h#RelOptInfo](../raw/postgres-18/src/include/nodes/pathnodes.h#L906-L911)). New in 18, each path carries a `disabled_nodes` count, and `cost_seqscan()` sets it straight from `enable_seqscan` instead of adding `disable_cost` ([pathnodes.h:1795](../raw/postgres-18/src/include/nodes/pathnodes.h#L1795), [costsize.c:357](../raw/postgres-18/src/backend/optimizer/path/costsize.c#L357)).
-
-Related: [pg_plan_advice](#pg_plan_advice), [Planner](#planner), [Path](#path), [RelOptInfo](#reloptinfo), [Partitionwise join](#partitionwise-join), [Hook](#hook)
-
-### pgstatindex
-
-**Checked on:** PostgreSQL 12, 14, 17, 18, 19.
-
-`pgstatindex` is a [pgstattuple](#pgstattuple) function that summarizes a [B-tree](#b-tree) index's shape and space use. It rejects any other index type and any index that is not valid ([pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L216-L250)). It reads the [metapage](#metapage) (block 0), then every remaining block, and counts deleted, half-dead ("empty"), leaf and internal pages ([pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L252-L326)). `avg_leaf_density` is 100 minus leaf free space as a percentage of leaf capacity. `leaf_fragmentation` is the share of leaves whose right sibling sits at a lower block number ([pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L310-L322), [pgstatindex.c#pgstatindex_impl](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L349-L372)). The install scripts grant it to `pg_stat_scan_tables` ([pgstattuple--1.4--1.5.sql:36-37](../raw/postgres-17/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L36-L37)). All of this lives in `pgstatindex_impl()`, so that function is where to check how a reported number was computed.
-
-**Version notes:**
-- PostgreSQL 12: Differs: it rejects non-B-tree indexes but has no `indisvalid` check, so 12 will read an invalid index ([pgstatindex.c#pgstatindex_impl](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L216-L238)). It reads the metapage, then every remaining block, counts deleted, half-dead, leaf and internal pages, and computes density and fragmentation the same way ([pgstatindex.c#pgstatindex_impl](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L240-L309), [pgstatindex.c:349-354](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L349-L354)). It is granted to `pg_stat_scan_tables` ([pgstattuple--1.4--1.5.sql:37](../raw/postgres-12/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
-- PostgreSQL 14: Holds. It rejects non-B-tree and invalid indexes, counts deleted, half-dead, leaf and internal pages, and computes `avg_leaf_density` and `leaf_fragmentation` the same way; version 1.5 grants it to `pg_stat_scan_tables` ([pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L224-L250), [pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L252-L326), [pgstatindex.c#pgstatindex_impl](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L355-L371), [pgstattuple--1.4--1.5.sql:37](../raw/postgres-14/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
-- PostgreSQL 18: Holds, except that leaf free space is summed with `PageGetExactFreeSpace()` instead of `PageGetFreeSpace()`, new in 18. It no longer subtracts one line pointer per page, so `avg_leaf_density` can read slightly lower than in 17 for the same page ([pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L297-L324)). The rejection rules, the density formula, and the grant are unchanged ([pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L213-L247), [pgstatindex.c#pgstatindex_impl](../raw/postgres-18/contrib/pgstattuple/pgstatindex.c#L346-L369), [pgstattuple--1.4--1.5.sql:36-37](../raw/postgres-18/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L36-L37)).
-- PostgreSQL 19: Holds, except that, as in 18, leaf free space is summed with `PageGetExactFreeSpace()` ([pgstatindex.c:331](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L331)). New in 19, it reads the blocks after the metapage through a [read stream](#read-stream) ([pgstatindex.c:280-309](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L280-L309)). It still rejects non-B-tree and invalid indexes, still counts deleted, half-dead, leaf and internal pages, computes `avg_leaf_density` and `leaf_fragmentation` with the same formulas, and is still granted to `pg_stat_scan_tables` ([pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L214-L250), [pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L301-L345), [pgstatindex.c#pgstatindex_impl](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L381-L392), [pgstattuple--1.4--1.5.sql:37](../raw/postgres-19/contrib/pgstattuple/pgstattuple--1.4--1.5.sql#L37)).
-
-Related: [pgstattuple](#pgstattuple), [B-tree](#b-tree), [Metapage](#metapage), [Bloat](#bloat), [Invalid index](#invalid-index), [Sibling link](#sibling-link)
-
-### pgstattuple
-
-**Checked on:** PostgreSQL 12, 14, 17, 18, 19.
-
-`pgstattuple` is a [contrib](#contrib) extension that scans a [relation](#relation) and reports tuple-level space use: live and dead tuple counts and bytes, plus free space ([pgstattuple.control:1-2](../raw/postgres-17/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstattuple_type](../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L55-L63)). `pgstat_relation()` sends tables and sequences to `pgstat_heap()`. It handles B-tree, hash and GiST indexes itself, and rejects GIN, SP-GiST and BRIN indexes and any index that is not valid ([pgstattuple.c#pgstat_relation](../raw/postgres-17/contrib/pgstattuple/pgstattuple.c#L255-L298)). The same extension provides [pgstatindex](#pgstatindex), `pgstatginindex`, `pgstathashindex` and `pgstattuple_approx` ([pgstatindex.c#pgstatginindex](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L485-L507), [pgstatindex.c:586](../raw/postgres-17/contrib/pgstattuple/pgstatindex.c#L586), [pgstatapprox.c:227](../raw/postgres-17/contrib/pgstattuple/pgstatapprox.c#L227)). `pgstattuple_approx` does not sample. It skips pages that the [visibility map](#visibility-map) marks all-visible, estimates their free space from the [free space map](#free-space-map), and counts the other pages exactly ([pgstatapprox.c#statapprox_heap](../raw/postgres-17/contrib/pgstattuple/pgstatapprox.c#L55-L62)).
-
-**Version notes:**
-- PostgreSQL 12: Differs: `pgstat_relation()` has no `indisvalid` check, so 12 reads an invalid index. It still reports live and dead counts and free space, routes heaps to `pgstat_heap()`, handles B-tree, hash and GiST indexes and rejects GIN, SP-GiST and BRIN ([pgstattuple.c#pgstattuple_type](../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L55-L63), [pgstattuple.c#pgstat_relation](../raw/postgres-12/contrib/pgstattuple/pgstattuple.c#L241-L300)). It ships `pgstatginindex`, `pgstathashindex` and a `pgstattuple_approx` that skips all-visible pages the same way ([pgstatindex.c:488](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L488), [pgstatindex.c:582](../raw/postgres-12/contrib/pgstattuple/pgstatindex.c#L582), [pgstatapprox.c:224](../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L224), [pgstatapprox.c#statapprox_heap](../raw/postgres-12/contrib/pgstattuple/pgstatapprox.c#L55-L62)).
-- PostgreSQL 14: Holds. `pgstat_relation()` rejects invalid indexes, handles B-tree, hash and GiST indexes and rejects GIN, SP-GiST and BRIN, and the extension also ships `pgstatginindex`, `pgstathashindex` and the same `pgstattuple_approx` ([pgstattuple.control:1-2](../raw/postgres-14/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstat_relation](../raw/postgres-14/contrib/pgstattuple/pgstattuple.c#L255-L292), [pgstatindex.c:504](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L504), [pgstatindex.c:605](../raw/postgres-14/contrib/pgstattuple/pgstatindex.c#L605), [pgstatapprox.c:227](../raw/postgres-14/contrib/pgstattuple/pgstatapprox.c#L227), [pgstatapprox.c#statapprox_heap](../raw/postgres-14/contrib/pgstattuple/pgstatapprox.c#L55-L62)).
-- PostgreSQL 18: Holds ([pgstattuple.c#pgstattuple_type](../raw/postgres-18/contrib/pgstattuple/pgstattuple.c#L57-L65), [pgstattuple.c#pgstat_relation](../raw/postgres-18/contrib/pgstattuple/pgstattuple.c#L257-L300), [pgstatapprox.c:214](../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L214), [pgstatapprox.c#statapprox_heap](../raw/postgres-18/contrib/pgstattuple/pgstatapprox.c#L49-L56)).
-- PostgreSQL 19: Holds. It still reports live and dead tuple counts and bytes plus free space, `pgstat_relation()` still sends tables to `pgstat_heap()`, handles B-tree, hash and GiST itself and rejects GIN, SP-GiST, BRIN and invalid indexes, and the extension still ships `pgstatindex`, `pgstatginindex`, `pgstathashindex` and `pgstattuple_approx` ([pgstattuple.control:1-2](../raw/postgres-19/contrib/pgstattuple/pgstattuple.control#L1-L2), [pgstattuple.c#pgstattuple_type](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L57-L65), [pgstattuple.c#pgstat_relation](../raw/postgres-19/contrib/pgstattuple/pgstattuple.c#L243-L293), [pgstatindex.c:503](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L503), [pgstatindex.c:608](../raw/postgres-19/contrib/pgstattuple/pgstatindex.c#L608), [pgstatapprox.c:279](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L279), [pgstatapprox.c#statapprox_heap](../raw/postgres-19/contrib/pgstattuple/pgstatapprox.c#L106-L113)).
-
-Related: [pgstatindex](#pgstatindex), [Tuple](#tuple), [Bloat](#bloat), [Contrib](#contrib)
-
 ### Pivot tuple
 
 **Aliases:** pivot, separator key, downlink, negative-infinity item, non-pivot tuple (contrast), `BTreeTupleIsPivot()`. **Checked on:** PostgreSQL 12, 17.
@@ -3282,6 +3359,18 @@ A `PlaceHolderVar` is a planner-only wrapper around an expression that must be c
 It usually appears when [subquery pull-up](#subquery-pull-up) flattens a subquery that sits on the nullable side of an outer join. A pulled-up output is wrapped unless it is a plain column, or a strict expression over the subquery's own columns ([prepjointree.c#pullup_replace_vars_callback-need_phv](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2494-L2500), [prepjointree.c#pullup_replace_vars_callback-simple-var](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2591-L2610), [prepjointree.c#pullup_replace_vars_callback-strict](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L2629-L2683)). Grouping sets and `UNION ALL` members force wrapping of every non-column output ([prepjointree.c#pull_up_simple_subquery-wrap](../raw/postgres-17/src/backend/optimizer/prep/prepjointree.c#L1304-L1324)). A matching `PlaceHolderInfo` records `ph_eval_at`, the lowest join level that can compute the value, and that level can constrain join order ([pathnodes.h#PlaceHolderInfo](../raw/postgres-17/src/include/nodes/pathnodes.h#L3058-L3068)). At scan level, `set_plan_references()` replaces the wrapper by the expression it holds ([setrefs.c#fix_scan_expr_mutator-phv](../raw/postgres-17/src/backend/optimizer/plan/setrefs.c#L2242-L2249)).
 
 Related: [Outer join](#outer-join), [Nullingrels](#nullingrels), [Subquery pull-up](#subquery-pull-up), [Relids](#relids), [set_plan_references](#set_plan_references)
+
+### Plan cache
+
+**Aliases:** `plancache.c`, `CachedPlanSource`, `CachedPlan`, saved plan, `saved_plan_list`, `GetCachedPlan()`. **Checked on:** PostgreSQL 17.
+
+The plan cache keeps analyzed queries and their plans so that prepared statements, SPI and PL/pgSQL do not have to plan the same statement again on every execution. It has two jobs: choosing between a generic plan and a custom plan for the given parameter values, and noticing when a cached plan has become invalid because an object it depends on changed ([plancache.c:6-12](../raw/postgres-17/src/backend/utils/cache/plancache.c#L6-L12)).
+
+A `CachedPlanSource` holds the raw parse tree, the query text, the analyzed and rewritten query list and the bookkeeping for the custom-versus-generic choice; a `CachedPlan` holds the planned statements of one plan built from it ([plancache.h#CachedPlanSource](../raw/postgres-17/src/include/utils/plancache.h#L96-L135), [plancache.h#CachedPlan](../raw/postgres-17/src/include/utils/plancache.h#L147-L161)). `SaveCachedPlan()` moves a source onto `saved_plan_list`, the list the invalidation callbacks scan ([plancache.c:99](../raw/postgres-17/src/backend/utils/cache/plancache.c#L99), [plancache.c#PlanCacheRelCallback](../raw/postgres-17/src/backend/utils/cache/plancache.c#L1993-L1997), [plancache.c#SaveCachedPlan](../raw/postgres-17/src/backend/utils/cache/plancache.c#L490-L520)). `GetCachedPlan()` revalidates the source and then asks `choose_custom_plan()` which kind of plan to use ([plancache.c#GetCachedPlan](../raw/postgres-17/src/backend/utils/cache/plancache.c#L1191-L1194), [plancache.c#choose_custom_plan](../raw/postgres-17/src/backend/utils/cache/plancache.c#L1054)).
+
+Invalidation follows [invalidation messages](#invalidation-message). `InitPlanCache()` registers callbacks for relcache events, for `pg_proc` and `pg_type` changes, for a set of catalogs whose change invalidates every plan, and for role and database changes that can alter row-level security ([plancache.c#InitPlanCache](../raw/postgres-17/src/backend/utils/cache/plancache.c#L160-L173)). A matching source is only marked invalid; parse analysis, rewriting and planning are redone on the next demand ([plancache.c:14-21](../raw/postgres-17/src/backend/utils/cache/plancache.c#L14-L21)).
+
+Related: [Custom and generic plan](#custom-and-generic-plan), [Plan cache mode](#plan-cache-mode), [One-shot plan](#one-shot-plan), [Prepared statement](#prepared-statement), [Relcache](#relcache)
 
 ### Plan cache mode
 
@@ -3475,18 +3564,6 @@ A prepared statement is a statement that is parsed and analyzed once, saved (usu
 
 Related: [Custom and generic plan](#custom-and-generic-plan), [Plan cache mode](#plan-cache-mode), [Portal](#portal), [Planner](#planner)
 
-### PROC_IN_SAFE_IC
-
-**Aliases:** safe concurrent index build, `statusFlags`, `set_indexsafe_procflags`, `PROC_XMIN_FLAGS`. **Checked on:** PostgreSQL 17.
-
-`PROC_IN_SAFE_IC` is a per-backend status flag. It says that the backend is running `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` on an index that has no expression column and no predicate ([proc.h:54-62](../raw/postgres-17/src/include/storage/proc.h#L54-L62)). Such a build cannot run code that reads another table. Other concurrent index builds therefore do not need to wait for its [snapshot](#snapshot), which saves pointless waits and avoids some [deadlocks](#deadlock) ([indexcmds.c#set_indexsafe_procflags](../raw/postgres-17/src/backend/commands/indexcmds.c#L4473-L4505)). The flag is one bit of `PGPROC.statusFlags`, mirrored in the `ProcGlobal->statusFlags` array that [ProcArray](#procarray) scans read ([indexcmds.c:4501-4504](../raw/postgres-17/src/backend/commands/indexcmds.c#L4501-L4504)).
-
-`DefineIndex()` computes whether the index qualifies. It then calls `set_indexsafe_procflags()` right after it starts each later transaction of the build ([indexcmds.c:1144-1146](../raw/postgres-17/src/backend/commands/indexcmds.c#L1144-L1146), [indexcmds.c:1621-1623](../raw/postgres-17/src/backend/commands/indexcmds.c#L1621-L1623), [indexcmds.c:1693-1695](../raw/postgres-17/src/backend/commands/indexcmds.c#L1693-L1695), [indexcmds.c:1753-1755](../raw/postgres-17/src/backend/commands/indexcmds.c#L1753-L1755)). It must set the flag again each time because the flag is cleared at transaction end, and it must do so before the transaction has an xid or an xmin ([proc.h:70-72](../raw/postgres-17/src/include/storage/proc.h#L70-L72), [procarray.c:711-721](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L711-L721), [indexcmds.c:4488-4499](../raw/postgres-17/src/backend/commands/indexcmds.c#L4488-L4499)). `REINDEX CONCURRENTLY` applies the same test to each index it rebuilds ([indexcmds.c:3808-3810](../raw/postgres-17/src/backend/commands/indexcmds.c#L3808-L3810), [indexcmds.c:3990-3992](../raw/postgres-17/src/backend/commands/indexcmds.c#L3990-L3992)).
-
-The reader is `WaitForOlderSnapshots()`. It passes the flag in the exclusion mask of `GetCurrentVirtualXIDs()`, which skips every backend whose status flags intersect the mask ([indexcmds.c:412-442](../raw/postgres-17/src/backend/commands/indexcmds.c#L412-L442), [procarray.c:3342-3348](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L3342-L3348)). So the flag describes the backend that is skipped, not the backend that waits. In 17 the flag does not change what `VACUUM` may remove: `ComputeXidHorizons()` skips only backends flagged `PROC_IN_VACUUM` or `PROC_IN_LOGICAL_DECODING` ([procarray.c:1826-1832](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1826-L1832)). A parallel worker copies the flag from its leader when it installs the leader's snapshot, because the flag is one of the `PROC_XMIN_FLAGS` ([proc.h:74-78](../raw/postgres-17/src/include/storage/proc.h#L74-L78), [procarray.c#ProcArrayInstallRestoredXmin](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2606-L2659), [parallel.c:1485-1490](../raw/postgres-17/src/backend/access/transam/parallel.c#L1485-L1490), [nbtsort.c:1761-1766](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1761-L1766)).
-
-Related: [CONCURRENTLY](#concurrently), [ProcArray](#procarray), [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Expression index](#expression-index), [Partial index](#partial-index), [REINDEX](#reindex), [Virtual transaction ID](#virtual-transaction-id), [Parallel index build](#parallel-index-build)
-
 ### ProcArray
 
 **Aliases:** process array, `procarray.c`, `ProcArrayStruct`, `ProcArrayLock`, `PGPROC`, `ProcGlobal`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3500,6 +3577,18 @@ The ProcArray is the shared-memory list of every running [backend](#backend)'s `
 - PostgreSQL 19: Holds ([procarray.c:7-20](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L7-L20), [procarray.c#ProcArrayStruct](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L76-L105), [proc.h#PROC_HDR](../raw/postgres-19/src/include/storage/proc.h#L444-L462), [procarray.c#GetSnapshotData](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L2081-L2114), [procarray.c#TransactionIdIsInProgress](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L1366-L1393), [procarray.c:1617-1623](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L1617-L1623), [procarray.c:119-139](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L119-L139), [procarray.c:2178](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L2178), [procarray.c:472](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L472)). New in 19, `GlobalVisTestIsRemovableXid()` takes an extra `allow_update` argument ([procarray.c:4281-4283](../raw/postgres-19/src/backend/storage/ipc/procarray.c#L4281-L4283)).
 
 Related: [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Transaction ID](#transaction-id), [Two-phase commit](#two-phase-commit), [LWLock](#lwlock), [MVCC](#mvcc)
+
+### PROC_IN_SAFE_IC
+
+**Aliases:** safe concurrent index build, `statusFlags`, `set_indexsafe_procflags`, `PROC_XMIN_FLAGS`. **Checked on:** PostgreSQL 17.
+
+`PROC_IN_SAFE_IC` is a per-backend status flag. It says that the backend is running `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` on an index that has no expression column and no predicate ([proc.h:54-62](../raw/postgres-17/src/include/storage/proc.h#L54-L62)). Such a build cannot run code that reads another table. Other concurrent index builds therefore do not need to wait for its [snapshot](#snapshot), which saves pointless waits and avoids some [deadlocks](#deadlock) ([indexcmds.c#set_indexsafe_procflags](../raw/postgres-17/src/backend/commands/indexcmds.c#L4473-L4505)). The flag is one bit of `PGPROC.statusFlags`, mirrored in the `ProcGlobal->statusFlags` array that [ProcArray](#procarray) scans read ([indexcmds.c:4501-4504](../raw/postgres-17/src/backend/commands/indexcmds.c#L4501-L4504)).
+
+`DefineIndex()` computes whether the index qualifies. It then calls `set_indexsafe_procflags()` right after it starts each later transaction of the build ([indexcmds.c:1144-1146](../raw/postgres-17/src/backend/commands/indexcmds.c#L1144-L1146), [indexcmds.c:1621-1623](../raw/postgres-17/src/backend/commands/indexcmds.c#L1621-L1623), [indexcmds.c:1693-1695](../raw/postgres-17/src/backend/commands/indexcmds.c#L1693-L1695), [indexcmds.c:1753-1755](../raw/postgres-17/src/backend/commands/indexcmds.c#L1753-L1755)). It must set the flag again each time because the flag is cleared at transaction end, and it must do so before the transaction has an xid or an xmin ([proc.h:70-72](../raw/postgres-17/src/include/storage/proc.h#L70-L72), [procarray.c:711-721](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L711-L721), [indexcmds.c:4488-4499](../raw/postgres-17/src/backend/commands/indexcmds.c#L4488-L4499)). `REINDEX CONCURRENTLY` applies the same test to each index it rebuilds ([indexcmds.c:3808-3810](../raw/postgres-17/src/backend/commands/indexcmds.c#L3808-L3810), [indexcmds.c:3990-3992](../raw/postgres-17/src/backend/commands/indexcmds.c#L3990-L3992)).
+
+The reader is `WaitForOlderSnapshots()`. It passes the flag in the exclusion mask of `GetCurrentVirtualXIDs()`, which skips every backend whose status flags intersect the mask ([indexcmds.c:412-442](../raw/postgres-17/src/backend/commands/indexcmds.c#L412-L442), [procarray.c:3342-3348](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L3342-L3348)). So the flag describes the backend that is skipped, not the backend that waits. In 17 the flag does not change what `VACUUM` may remove: `ComputeXidHorizons()` skips only backends flagged `PROC_IN_VACUUM` or `PROC_IN_LOGICAL_DECODING` ([procarray.c:1826-1832](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L1826-L1832)). A parallel worker copies the flag from its leader when it installs the leader's snapshot, because the flag is one of the `PROC_XMIN_FLAGS` ([proc.h:74-78](../raw/postgres-17/src/include/storage/proc.h#L74-L78), [procarray.c#ProcArrayInstallRestoredXmin](../raw/postgres-17/src/backend/storage/ipc/procarray.c#L2606-L2659), [parallel.c:1485-1490](../raw/postgres-17/src/backend/access/transam/parallel.c#L1485-L1490), [nbtsort.c:1761-1766](../raw/postgres-17/src/backend/access/nbtree/nbtsort.c#L1761-L1766)).
+
+Related: [CONCURRENTLY](#concurrently), [ProcArray](#procarray), [Snapshot](#snapshot), [xmin horizon](#xmin-horizon), [Expression index](#expression-index), [Partial index](#partial-index), [REINDEX](#reindex), [Virtual transaction ID](#virtual-transaction-id), [Parallel index build](#parallel-index-build)
 
 ### ProcSignal barrier
 
@@ -3554,6 +3643,16 @@ Pruning removes dead tuples from one heap page and shortens [HOT](#hot) chains w
 - PostgreSQL 19: Holds, except for two changes to on-access pruning, both new in 19. It takes a visibility-map buffer and, for a scan the planner marked read-only, can also set the page all-visible in the VM. And `pd_prune_xid` now also marks pages with recent inserts of unfrozen tuples, so such pages get this chance too ([heapam.c:2097-2098](../raw/postgres-19/src/backend/access/heap/heapam.c#L2097-L2098), [heapam.c:2501-2502](../raw/postgres-19/src/backend/access/heap/heapam.c#L2501-L2502), [pruneheap.c:255-262](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L255-L262), [pruneheap.c:288-296](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L288-L296), [pruneheap.c:364-366](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L364-L366)). The definition, the early returns, the free-space trigger, `heap_page_prune_and_freeze()` on both paths and the root line pointer rule are unchanged ([README.HOT#Pruning](../raw/postgres-19/src/backend/access/heap/README.HOT#L199-L219), [heapam.c:639](../raw/postgres-19/src/backend/access/heap/heapam.c#L639), [pruneheap.c#heap_page_prune_opt](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L272-L325), [pruneheap.c:368](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L368), [pruneheap.c#heap_page_prune_and_freeze](../raw/postgres-19/src/backend/access/heap/pruneheap.c#L1124-L1147), [README.HOT:124-128](../raw/postgres-19/src/backend/access/heap/README.HOT#L124-L128)).
 
 Related: [Freezing](#freezing), [HOT](#hot), [Line pointer](#line-pointer), [VACUUM](#vacuum)
+
+### Pseudoconstant qual
+
+**Aliases:** pseudoconstant clause, gating qual, gating `Result`, one-time filter, `One-Time Filter`, `RestrictInfo.pseudoconstant`, `hasPseudoConstantQuals`. **Checked on:** PostgreSQL 17.
+
+A pseudoconstant qual is a `WHERE` or `ON` condition that contains no variables of the current query level and no volatile function, so its value cannot change during one execution of the plan ([pathnodes.h#RestrictInfo-pseudoconstant](../raw/postgres-17/src/include/nodes/pathnodes.h#L2531-L2540)). An example is a comparison of two parameters, or of an outer query's value with a constant.
+
+`distribute_qual_to_rels()` marks such a qual when it mentions no relation and does not belong to an outer join's `ON` clause; a variable-free qual with a volatile function stays at its syntactic level instead ([initsplan.c#distribute_qual_to_rels-varfree](../raw/postgres-17/src/backend/optimizer/plan/initsplan.c#L2266-L2318)). The qual stays in the ordinary qual lists until `create_plan()` pulls it out and puts a gating `Result` node above the plan node it was assigned to ([createplan.c#get_gating_quals](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1005-L1014), [createplan.c#create_gating_plan](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L1016-L1053)). The `Result` evaluates the qual once and returns nothing if it is false; `EXPLAIN` shows it as `One-Time Filter` ([explain.c:2237-2239](../raw/postgres-17/src/backend/commands/explain.c#L2237-L2239)). Where the gate goes depends on the [join domain](#join-domain).
+
+Related: [Join domain](#join-domain), [Constant folding](#constant-folding), [Function volatility](#function-volatility)
 
 ### psql
 
@@ -4123,20 +4222,6 @@ Related: [Plan tree](#plan-tree), [PlannedStmt](#plannedstmt), [Range table](#ra
 
 Related: [Buffer manager](#buffer-manager), [Clock sweep](#clock-sweep), [Huge pages](#huge-pages)
 
-### shared_preload_libraries
-
-**Aliases:** preload library, `process_shared_preload_libraries`, `_PG_init` at postmaster start. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
-
-`shared_preload_libraries` lists shared libraries that the [postmaster](#postmaster) loads at server start, before any backend exists. If a listed library is missing, the server fails to start ([config.sgml#guc-shared-preload-libraries](../raw/postgres-17/doc/src/sgml/config.sgml#L10412-L10421)). On Windows hosts, each new server process loads the libraries again ([config.sgml#guc-shared-preload-libraries](../raw/postgres-17/doc/src/sgml/config.sgml#L10443-L10450)). A library must be listed here if it has to act at postmaster start: reserving fixed shared memory or named LWLock tranches, which is allowed only inside `shmem_request_hook`, or registering a static [background worker](#background-worker) ([config.sgml#guc-shared-preload-libraries](../raw/postgres-17/doc/src/sgml/config.sgml#L10423-L10429), [ipci.c:77-78](../raw/postgres-17/src/backend/storage/ipc/ipci.c#L77-L78), [lwlock.c:676-677](../raw/postgres-17/src/backend/storage/lmgr/lwlock.c#L676-L677), [bgworker.c#RegisterBackgroundWorker](../raw/postgres-17/src/backend/postmaster/bgworker.c#L868-L890)). A library loaded later can still get shared memory from the DSM registry, and can start dynamic background workers ([dsm_registry.c:6-9](../raw/postgres-17/src/backend/storage/ipc/dsm_registry.c#L6-L9), [bgworker.c:970](../raw/postgres-17/src/backend/postmaster/bgworker.c#L970)). In source, `PostmasterMain` calls `process_shared_preload_libraries()`, which loads each library while `process_shared_preload_libraries_in_progress` is true. `PostmasterMain` then calls `process_shmem_requests()`, which runs `shmem_request_hook` so the preloaded libraries can reserve space ([postmaster.c:916-938](../raw/postgres-17/src/backend/postmaster/postmaster.c#L916-L938), [miscinit.c#process_shared_preload_libraries](../raw/postgres-17/src/backend/utils/init/miscinit.c#L1894-L1907), [miscinit.c#process_shmem_requests](../raw/postgres-17/src/backend/utils/init/miscinit.c#L1922-L1932)). The GUC has context `postmaster`, so changing it needs a restart ([guc_tables.c#shared_preload_libraries](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4257-L4266)).
-
-**Version notes:**
-- PostgreSQL 12: Differs: 12 has no `shmem_request_hook` and no DSM registry; it declares only `shmem_startup_hook` ([ipc.h:77](../raw/postgres-12/src/include/storage/ipc.h#L77)). A library reserves shared memory or named LWLocks by calling `RequestAddinShmemSpace()` or `RequestNamedLWLockTranche()` straight from `_PG_init()`, and the requests take effect only while the postmaster preloads it ([ipci.c#RequestAddinShmemSpace](../raw/postgres-12/src/backend/storage/ipc/ipci.c#L58-L73), [lwlock.c:643-644](../raw/postgres-12/src/backend/storage/lmgr/lwlock.c#L643-L644)). The rest holds: context `postmaster` (restart), the preload loop, and static workers that need preloading ([guc.c#shared_preload_libraries](../raw/postgres-12/src/backend/utils/misc/guc.c#L3767-L3776), [miscinit.c#process_shared_preload_libraries](../raw/postgres-12/src/backend/utils/init/miscinit.c#L1583-L1590), [bgworker.c:863](../raw/postgres-12/src/backend/postmaster/bgworker.c#L863)).
-- PostgreSQL 14: Differs in the same way as 12: no `shmem_request_hook` and no DSM registry, and `RequestAddinShmemSpace()` or `RequestNamedLWLockTranche()` take effect only when called from `_PG_init()` during preload ([ipci.c#RequestAddinShmemSpace](../raw/postgres-14/src/backend/storage/ipc/ipci.c#L59-L74), [lwlock.c:704-705](../raw/postgres-14/src/backend/storage/lmgr/lwlock.c#L704-L705)). The rest holds ([guc.c#shared_preload_libraries](../raw/postgres-14/src/backend/utils/misc/guc.c#L4149-L4158), [miscinit.c#process_shared_preload_libraries](../raw/postgres-14/src/backend/utils/init/miscinit.c#L1716-L1723), [bgworker.c:904](../raw/postgres-14/src/backend/postmaster/bgworker.c#L904)).
-- PostgreSQL 18: Holds ([guc_tables.c#shared_preload_libraries](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L4486-L4495), [miscinit.c#process_shared_preload_libraries](../raw/postgres-18/src/backend/utils/init/miscinit.c#L1903-L1910), [postmaster.c:933](../raw/postgres-18/src/backend/postmaster/postmaster.c#L933), [postmaster.c:962](../raw/postgres-18/src/backend/postmaster/postmaster.c#L962), [ipci.c:77](../raw/postgres-18/src/backend/storage/ipc/ipci.c#L77)).
-- PostgreSQL 19: Holds; the GUC is now defined in `guc_parameters.dat`, still `PGC_POSTMASTER` (restart) ([guc_parameters.dat#shared_preload_libraries](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2746-L2751), [miscinit.c#process_shared_preload_libraries](../raw/postgres-19/src/backend/utils/init/miscinit.c#L1852-L1859), [postmaster.c:935](../raw/postgres-19/src/backend/postmaster/postmaster.c#L935), [postmaster.c:969](../raw/postgres-19/src/backend/postmaster/postmaster.c#L969), [ipci.c:48](../raw/postgres-19/src/backend/storage/ipc/ipci.c#L48)).
-
-Related: [Extension](#extension), [Hook](#hook), [Background worker](#background-worker), [Postmaster](#postmaster), [GUC context](#guc-context)
-
 ### Shared-memory statistics
 
 **Aliases:** shared memory stats, `pgstat_shmem.c`, `PgStatShared_*`, stats collector (PostgreSQL 12 and 14), `pg_stat` directory. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -4150,6 +4235,20 @@ This entry is about where the [cumulative statistics](#cumulative-statistics) co
 - PostgreSQL 19: Holds, except that, as in 18, a kind's stats are written only if the kind allows it, and extensions can register their own kinds ([pgstat.c:12-16](../raw/postgres-19/src/backend/utils/activity/pgstat.c#L12-L16), [pgstat.c:1508](../raw/postgres-19/src/backend/utils/activity/pgstat.c#L1508), [pgstat.h:36](../raw/postgres-19/src/include/pgstat.h#L36), [xlog.c:5798-5800](../raw/postgres-19/src/backend/access/transam/xlog.c#L5798-L5800)).
 
 Related: [Cumulative statistics](#cumulative-statistics), [Dynamic shared memory](#dynamic-shared-memory), [Checkpoint](#checkpoint)
+
+### shared_preload_libraries
+
+**Aliases:** preload library, `process_shared_preload_libraries`, `_PG_init` at postmaster start. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+
+`shared_preload_libraries` lists shared libraries that the [postmaster](#postmaster) loads at server start, before any backend exists. If a listed library is missing, the server fails to start ([config.sgml#guc-shared-preload-libraries](../raw/postgres-17/doc/src/sgml/config.sgml#L10412-L10421)). On Windows hosts, each new server process loads the libraries again ([config.sgml#guc-shared-preload-libraries](../raw/postgres-17/doc/src/sgml/config.sgml#L10443-L10450)). A library must be listed here if it has to act at postmaster start: reserving fixed shared memory or named LWLock tranches, which is allowed only inside `shmem_request_hook`, or registering a static [background worker](#background-worker) ([config.sgml#guc-shared-preload-libraries](../raw/postgres-17/doc/src/sgml/config.sgml#L10423-L10429), [ipci.c:77-78](../raw/postgres-17/src/backend/storage/ipc/ipci.c#L77-L78), [lwlock.c:676-677](../raw/postgres-17/src/backend/storage/lmgr/lwlock.c#L676-L677), [bgworker.c#RegisterBackgroundWorker](../raw/postgres-17/src/backend/postmaster/bgworker.c#L868-L890)). A library loaded later can still get shared memory from the DSM registry, and can start dynamic background workers ([dsm_registry.c:6-9](../raw/postgres-17/src/backend/storage/ipc/dsm_registry.c#L6-L9), [bgworker.c:970](../raw/postgres-17/src/backend/postmaster/bgworker.c#L970)). In source, `PostmasterMain` calls `process_shared_preload_libraries()`, which loads each library while `process_shared_preload_libraries_in_progress` is true. `PostmasterMain` then calls `process_shmem_requests()`, which runs `shmem_request_hook` so the preloaded libraries can reserve space ([postmaster.c:916-938](../raw/postgres-17/src/backend/postmaster/postmaster.c#L916-L938), [miscinit.c#process_shared_preload_libraries](../raw/postgres-17/src/backend/utils/init/miscinit.c#L1894-L1907), [miscinit.c#process_shmem_requests](../raw/postgres-17/src/backend/utils/init/miscinit.c#L1922-L1932)). The GUC has context `postmaster`, so changing it needs a restart ([guc_tables.c#shared_preload_libraries](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4257-L4266)).
+
+**Version notes:**
+- PostgreSQL 12: Differs: 12 has no `shmem_request_hook` and no DSM registry; it declares only `shmem_startup_hook` ([ipc.h:77](../raw/postgres-12/src/include/storage/ipc.h#L77)). A library reserves shared memory or named LWLocks by calling `RequestAddinShmemSpace()` or `RequestNamedLWLockTranche()` straight from `_PG_init()`, and the requests take effect only while the postmaster preloads it ([ipci.c#RequestAddinShmemSpace](../raw/postgres-12/src/backend/storage/ipc/ipci.c#L58-L73), [lwlock.c:643-644](../raw/postgres-12/src/backend/storage/lmgr/lwlock.c#L643-L644)). The rest holds: context `postmaster` (restart), the preload loop, and static workers that need preloading ([guc.c#shared_preload_libraries](../raw/postgres-12/src/backend/utils/misc/guc.c#L3767-L3776), [miscinit.c#process_shared_preload_libraries](../raw/postgres-12/src/backend/utils/init/miscinit.c#L1583-L1590), [bgworker.c:863](../raw/postgres-12/src/backend/postmaster/bgworker.c#L863)).
+- PostgreSQL 14: Differs in the same way as 12: no `shmem_request_hook` and no DSM registry, and `RequestAddinShmemSpace()` or `RequestNamedLWLockTranche()` take effect only when called from `_PG_init()` during preload ([ipci.c#RequestAddinShmemSpace](../raw/postgres-14/src/backend/storage/ipc/ipci.c#L59-L74), [lwlock.c:704-705](../raw/postgres-14/src/backend/storage/lmgr/lwlock.c#L704-L705)). The rest holds ([guc.c#shared_preload_libraries](../raw/postgres-14/src/backend/utils/misc/guc.c#L4149-L4158), [miscinit.c#process_shared_preload_libraries](../raw/postgres-14/src/backend/utils/init/miscinit.c#L1716-L1723), [bgworker.c:904](../raw/postgres-14/src/backend/postmaster/bgworker.c#L904)).
+- PostgreSQL 18: Holds ([guc_tables.c#shared_preload_libraries](../raw/postgres-18/src/backend/utils/misc/guc_tables.c#L4486-L4495), [miscinit.c#process_shared_preload_libraries](../raw/postgres-18/src/backend/utils/init/miscinit.c#L1903-L1910), [postmaster.c:933](../raw/postgres-18/src/backend/postmaster/postmaster.c#L933), [postmaster.c:962](../raw/postgres-18/src/backend/postmaster/postmaster.c#L962), [ipci.c:77](../raw/postgres-18/src/backend/storage/ipc/ipci.c#L77)).
+- PostgreSQL 19: Holds; the GUC is now defined in `guc_parameters.dat`, still `PGC_POSTMASTER` (restart) ([guc_parameters.dat#shared_preload_libraries](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L2746-L2751), [miscinit.c#process_shared_preload_libraries](../raw/postgres-19/src/backend/utils/init/miscinit.c#L1852-L1859), [postmaster.c:935](../raw/postgres-19/src/backend/postmaster/postmaster.c#L935), [postmaster.c:969](../raw/postgres-19/src/backend/postmaster/postmaster.c#L969), [ipci.c:48](../raw/postgres-19/src/backend/storage/ipc/ipci.c#L48)).
+
+Related: [Extension](#extension), [Hook](#hook), [Background worker](#background-worker), [Postmaster](#postmaster), [GUC context](#guc-context)
 
 ### ShareUpdateExclusiveLock
 
@@ -4570,6 +4669,16 @@ A TID (tuple identifier) is the physical address of a [tuple](#tuple): a block n
 - PostgreSQL 19: Holds. `ItemPointerData` is still a block id plus an offset, `t_ctid` still points to the tuple itself or its newer version, and SQL still shows it as `ctid` ([itemptr.h#ItemPointerData](../raw/postgres-19/src/include/storage/itemptr.h#L20-L45), [htup_details.h#t_ctid](../raw/postgres-19/src/include/access/htup_details.h#L86-L100), [heap.c:144-148](../raw/postgres-19/src/backend/catalog/heap.c#L144-L148)).
 
 Related: [Block](#block), [HOT](#hot), [Line pointer](#line-pointer), [Tuple](#tuple)
+
+### TID scan and TID range scan
+
+**Aliases:** `Tid Scan`, `Tid Range Scan`, `TidPath`, `TidRangePath`, `tidpath.c`, `enable_tidscan`, `WHERE CURRENT OF`. **Checked on:** PostgreSQL 17.
+
+A TID scan fetches rows directly by their [TID](#tid), the `ctid` that names a heap page and line pointer, instead of reading the table or an index. The planner builds one for conditions of the form `ctid = pseudoconstant`, for `OR`s of them and for `ctid = ANY(array)`, and also for `WHERE CURRENT OF cursor`; a TID range scan serves `ctid` compared with `<`, `<=`, `>` or `>=` ([tidpath.c:7-28](../raw/postgres-17/src/backend/optimizer/path/tidpath.c#L7-L28)). `create_tidscan_paths()` adds one path of each kind when matching quals exist ([tidpath.c#create_tidscan_paths](../raw/postgres-17/src/backend/optimizer/path/tidpath.c#L481-L528)). `EXPLAIN` names them `Tid Scan` and `Tid Range Scan` ([explain.c:1472-1475](../raw/postgres-17/src/backend/commands/explain.c#L1472-L1475)).
+
+`enable_tidscan = off` adds [disable_cost](#disable_cost) to both paths rather than removing them, except that a `WHERE CURRENT OF` scan is never penalized, because only the TID scan executes that condition ([costsize.c#cost_tidscan-disable](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1300-L1314), [costsize.c#cost_tidrangescan-disable](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L1402-L1403), [guc_tables.c#enable_tidscan](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L824-L832)).
+
+Related: [TID](#tid), [disable_cost](#disable_cost), [Pseudoconstant qual](#pseudoconstant-qual)
 
 ### Timeline
 
@@ -5943,7 +6052,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (527 files):
+**PostgreSQL 17** (532 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -6472,6 +6581,11 @@ One representative citation per cited source file, grouped by version:
 - [030_origin.pl:24-75](../raw/postgres-17/src/test/subscription/t/030_origin.pl#L24-L75)
 - [RELEASE_CHANGES:86-99](../raw/postgres-17/src/tools/RELEASE_CHANGES#L86-L99)
 - [git_changelog:8-19](../raw/postgres-17/src/tools/git_changelog#L8-L19)
+- [ref/select.sgml#DISTINCT-ON](../raw/postgres-17/doc/src/sgml/ref/select.sgml#L1202-L1220)
+- [nodeAgg.c#hash_agg_set_limits](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1798-L1846)
+- [nodeLockRows.c:254-275](../raw/postgres-17/src/backend/executor/nodeLockRows.c#L254-L275)
+- [tidpath.c#create_tidscan_paths](../raw/postgres-17/src/backend/optimizer/path/tidpath.c#L481-L528)
+- [parse_clause.c#transformDistinctOnClause](../raw/postgres-17/src/backend/parser/parse_clause.c#L3100-L3118)
 
 **PostgreSQL 18** (364 files):
 
