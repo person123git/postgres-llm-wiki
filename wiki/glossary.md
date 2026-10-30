@@ -23,6 +23,7 @@ verified_by_agent: not yet
   - [Apply worker](#apply-worker)
   - [Asynchronous commit](#asynchronous-commit)
   - [Asynchronous I/O](#asynchronous-io)
+  - [auto_explain](#auto_explain)
   - [Autovacuum](#autovacuum)
   - [Backend](#backend)
   - [Background worker](#background-worker)
@@ -210,6 +211,7 @@ verified_by_agent: not yet
   - [PathTarget](#pathtarget)
   - [Pending list](#pending-list)
   - [pg_attribute](#pg_attribute)
+  - [pg_buffercache](#pg_buffercache)
   - [pg_cast](#pg_cast)
   - [pg_class](#pg_class)
   - [pg_freespacemap](#pg_freespacemap)
@@ -224,6 +226,7 @@ verified_by_agent: not yet
   - [pg_statistic](#pg_statistic)
   - [PG_TEST_EXTRA](#pg_test_extra)
   - [pg_upgrade](#pg_upgrade)
+  - [pg_waldump](#pg_waldump)
   - [pgs_mask](#pgs_mask)
   - [pgstatindex](#pgstatindex)
   - [pgstattuple](#pgstattuple)
@@ -577,6 +580,17 @@ In PostgreSQL 18, asynchronous I/O (AIO) lets a backend start a read, keep worki
 - PostgreSQL 19: Holds, except that `io_workers` is replaced by `io_min_workers` (default 2) and `io_max_workers` (default 8), both `sighup` (reload). `io_method` is still `postmaster` context (restart) and still defaults to `worker` ([guc_parameters.dat#io_max_workers](../raw/postgres-19/src/backend/utils/misc/guc_parameters.dat#L1393-L1415), [aio.h#DEFAULT_IO_METHOD](../raw/postgres-19/src/include/storage/aio.h#L34-L42)).
 
 Related: [Buffer manager](#buffer-manager), [Read stream](#read-stream), [shared_buffers](#shared_buffers)
+
+### auto_explain
+
+**Checked on:** PostgreSQL 12.
+
+`auto_explain` is a [contrib](#contrib) module that logs the execution plans of slow statements automatically, without running `EXPLAIN` by hand ([auto-explain.sgml:11-16](../raw/postgres-12/doc/src/sgml/auto-explain.sgml#L11-L16)). It has no SQL functions and works once loaded into a session or preloaded ([auto-explain.sgml:20-30](../raw/postgres-12/doc/src/sgml/auto-explain.sgml#L20-L30)). It logs nothing by default, because `auto_explain.log_min_duration` starts at `-1` ([auto_explain.c:95-105](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L95-L105)).
+
+**Version notes:**
+- PostgreSQL 12: Holds. Buffer counts appear only with both `log_analyze` and `log_buffers` on ([auto_explain.c:273-282](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L273-L282)).
+
+Related: [Contrib](#contrib), [EXPLAIN BUFFERS](#explain-buffers), [Plan node instrumentation](#plan-node-instrumentation)
 
 ### Autovacuum
 
@@ -2990,6 +3004,17 @@ Related: [GIN](#gin), [Metapage](#metapage), [VACUUM](#vacuum), [GUC context](#g
 
 Related: [Catalog](#catalog), [pg_class](#pg_class), [Alignment](#alignment), [Tuple](#tuple)
 
+### pg_buffercache
+
+**Checked on:** PostgreSQL 12.
+
+`pg_buffercache` is a [contrib](#contrib) extension for examining the [shared buffer](#buffer-manager) cache in real time ([pgbuffercache.sgml:10-13](../raw/postgres-12/doc/src/sgml/pgbuffercache.sgml#L10-L13)). Its view returns one row per buffer. The `isdirty` column shows whether the buffer is a [dirty buffer](#dirty-buffer) now ([pg_buffercache_pages.c:164-167](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L164-L167)). It shows the current state only, not why or when the buffer became dirty.
+
+**Version notes:**
+- PostgreSQL 12: Holds. Access is revoked from `PUBLIC` and granted to `pg_monitor` ([pg_buffercache--1.2.sql:20-21](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache--1.2.sql#L20-L21), [pg_buffercache--1.2--1.3.sql:6-7](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache--1.2--1.3.sql#L6-L7)).
+
+Related: [Contrib](#contrib), [Buffer manager](#buffer-manager), [Dirty buffer](#dirty-buffer)
+
 ### pg_cast
 
 **Aliases:** cast, binary-coercible, `castmethod`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3175,6 +3200,17 @@ Related: [TAP test](#tap-test), [Regression test](#regression-test), [Buildfarm]
 - PostgreSQL 19: Holds, except that, as in 18, there is a fifth transfer mode, `--swap`, and most optimizer statistics are carried over unless `--no-statistics` is given ([pg_upgrade.h#transferMode](../raw/postgres-19/src/bin/pg_upgrade/pg_upgrade.h#L266-L273), [pgupgrade.sgml:328-337](../raw/postgres-19/doc/src/sgml/ref/pgupgrade.sgml#L328-L337), [pgupgrade.sgml:833-840](../raw/postgres-19/doc/src/sgml/ref/pgupgrade.sgml#L833-L840)). It still creates new catalogs and reuses user data files, and it still forces matching OIDs and relfilenumbers ([pgupgrade.sgml:39-58](../raw/postgres-19/doc/src/sgml/ref/pgupgrade.sgml#L39-L58), [pg_upgrade.c:9-21](../raw/postgres-19/src/bin/pg_upgrade/pg_upgrade.c#L9-L21)).
 
 Related: [Relfilenumber](#relfilenumber), [OID](#oid), [allequalimage](#allequalimage), [Catalog](#catalog)
+
+### pg_waldump
+
+**Checked on:** PostgreSQL 12.
+
+`pg_waldump` is a command-line program that displays the [WAL](#wal) of a cluster in human-readable form ([pg_waldump.sgml:19](../raw/postgres-12/doc/src/sgml/ref/pg_waldump.sgml#L19)). With `--stats=record` it prints a summary per record type instead of each record ([pg_waldump.sgml:183-191](../raw/postgres-12/doc/src/sgml/ref/pg_waldump.sgml#L183-L191)). That summary is how a reader counts `XLOG_FPI_FOR_HINT` records, because no statistics view does.
+
+**Version notes:**
+- PostgreSQL 12: Holds. The option is parsed in `main()` and each row is named from the resource manager and record type ([pg_waldump.c:971-983](../raw/postgres-12/src/bin/pg_waldump/pg_waldump.c#L971-L983), [pg_waldump.c:729-751](../raw/postgres-12/src/bin/pg_waldump/pg_waldump.c#L729-L751)).
+
+Related: [WAL](#wal), [Full-page image](#full-page-image), [Hint bits](#hint-bits)
 
 ### pgs_mask
 
@@ -5098,8 +5134,12 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (417 files):
+**PostgreSQL 12** (421 files):
 
+- [auto_explain.c:95-105](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L95-L105)
+- [pg_buffercache_pages.c:164-167](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L164-L167)
+- [pgbuffercache.sgml:10-13](../raw/postgres-12/doc/src/sgml/pgbuffercache.sgml#L10-L13)
+- [pg_waldump.sgml:19](../raw/postgres-12/doc/src/sgml/ref/pg_waldump.sgml#L19)
 - [bloom.control:1-2](../raw/postgres-12/contrib/bloom/bloom.control#L1-L2)
 - [protocol.sgml:2569-2577](../raw/postgres-12/doc/src/sgml/protocol.sgml#L2569-L2577)
 - [pg_basebackup.sgml:40-46](../raw/postgres-12/doc/src/sgml/ref/pg_basebackup.sgml#L40-L46)
