@@ -1772,3 +1772,17 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: index entries unchanged because their summary still holds. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: no server, cluster or sandbox was started, and no subagent was used. One malformed shell command invoked host `python3` with an empty script, which AGENTS.md permits only for creating the venv; it edited nothing, and the edit was redone with the Edit tool.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] second review and fix v12 | Planner factors that produce plans that over-fetch tuples
+
+- Prompt hygiene: "fix all , commit and review again". Only the stray space before the comma was dropped; the meaning is unchanged.
+- Review: a report-only static re-read of the page fixed in the previous entry. It found 4 findings, which the user then asked to fix:
+  1. The F7 set-returning-function row now adds the result-type checks to its inlining conditions: the declared type without changes to the select list, a whole-row result for composites, and the column list for `record` (clauses.c:5076-5117). The Evidence Map row matches.
+  2. The mental-model "Selectivity defaults" row no longer says a fixed guess is used whenever a constant is missing; equality against an unknown value is averaged over the distinct values (selfuncs.c:478-505). The row now agrees with F1 and F10.
+  3. The F1 "Missing statistics" row and the logic-map key now cite that an inequality without statistics returns 1/3, except for `ctid` (selfuncs.c:567-645).
+  4. F10 adds that transaction-control statements also always use the generic plan (plancache.c:1027-1029).
+- Glossary: reviewed the 39 linked entries again; no change needed.
+- Contradiction check: compared the assembled page with itself, its sources, its linked glossary entries, its index entries and the v12 plan-cache-mode and statistics-sources pages. The check also confirmed that v12's merge-join range probe is compiled out (selfuncs.c:5146-5149), so the page's "only live correction" statement holds. Found 1 contradiction (item 2) and 3 incomplete statements; all fixed, with no copies left. 0 were reported without a change and 0 withdrawn.
+- Bookkeeping: index entries unchanged because their summary still holds. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no server, cluster, sandbox or subagent was used.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
