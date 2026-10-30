@@ -2081,3 +2081,20 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Contradiction check: compared the assembled page with itself, the pinned source, the linked glossary notes, its index entries and versions.md note (accurate for the measured case; unchanged), and other v12 pages. Found 1 contradiction (finding 1, on the page and in the glossary), fixed.
 - Isolation and teardown: no service started.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-10-30] sixth review and fix v12 | Query planner statistics sources
+
+- Prompt hygiene: original wording "follow agents.md, in postgresql 12 , review question: # Query Planner Statistics Sources in PostgreSQL 12 (unverified)". Only the space before the comma was dropped; the meaning is unchanged. The review stated no scope, so it reported first. After the report the user chose "Fix, no re-measure".
+- Review: the orchestrator (Opus, no subagent) re-read [the page](v12/questions/query-planning/query-planner-statistics-sources.md) against `raw/postgres-12/` at `45b88269a353ad93744772791feb6d01bc7e1e42`, focusing on the outer, semi- and anti-join material, the `ANALYZE` write path, the auto-analyze table, the size path, the group-count clamp, the MCV calculation, the endpoint probe, `constraint_exclusion`, `ALTER COLUMN TYPE` and the script's assertions. 6 findings, all fixed:
+  1. Wrong statement and contradiction: the page said the two outer-join conditions also apply to semi joins (body and Open Questions). A semi join has no non-nullable side (initsplan.c:903-915), so a single-table ON clause is pushed down (initsplan.c:1812-1818; nodes.h:733-738), which also contradicted the page's own pushdown rule. The body now splits anti joins (conditions apply, left side non-nullable, initsplan.c:888-901) from semi joins (never qualify); the Open Question was corrected to match.
+  2. The TRUNCATE events row dropped the 10-page floor's no-children condition (heapam_handler.c:2115-2118); added.
+  3. The sample-size sentence now names index expression columns and the 100-row minimum (analyze.c:470-491).
+  4. The non-default settings row now gives 1,000 rows for each analyzed `aa_*` table, and none for the partitioned `aa_part`.
+  5. "Maintenance commands" as the only `relpages`/`reltuples` writers (three copies: mental-model paragraph, join_hash note, summary step 1) now names `VACUUM`, `ANALYZE` and the index-building, rewriting or truncating DDL.
+  6. The latest Last run record no longer says `ih_m_built` appears only in `facts.txt`; the prose states it.
+- Measurement: none. No finding changed the script or a measured number; the fourth-review run still backs every number.
+- Glossary: reviewed the linked entries; every linked anchor resolves. The Extended statistics 12 note mentions only outer joins, so it carries no copy of finding 1. No change; `verified_by_agent` stays `not yet`.
+- Contradiction check: compared the page with itself, the pinned source, the linked glossary notes, its index entries and versions.md note, and other v12 pages mentioning semi joins. Found 1 contradiction (finding 1), fixed; none on other pages.
+- Bookkeeping: the v12 index entry now says "Reviewed six times"; `wiki/index.md` and the versions.md note need no change.
+- Isolation and teardown: no service started.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
