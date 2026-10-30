@@ -34,7 +34,14 @@ verified_by_agent: not yet
   - [How to see over-fetching in EXPLAIN](#how-to-see-over-fetching-in-explain)
   - [Build, catalog and extension boundaries](#build-catalog-and-extension-boundaries)
   - [Tests](#tests)
+  - [Measured example: row-level security and the estimates](#measured-example-row-level-security-and-the-estimates)
   - [Final causal summary](#final-causal-summary)
+- [Measurement Script](#measurement-script)
+  - [Usage](#usage)
+  - [Last run](#last-run)
+  - [Stages](#stages)
+  - [Non-default settings in the measurement](#non-default-settings-in-the-measurement)
+  - [The script](#the-script)
 - [Context Reviewed](#context-reviewed)
 - [Evidence Map](#evidence-map)
 - [Open Questions](#open-questions)
@@ -172,7 +179,7 @@ Every later decision uses `rel->rows`. The planner computes it as the table's es
 | Missing statistics | An equality condition on a column with a single-column unique index, partial only if its predicate is proven, gets `1 / rows`, one expected match, before any distinct-count guess ([plancat.c#has_unique_index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L2031-L2054), [selfuncs.c:4468](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4468)). Any other equality condition gets `1 / n_distinct`, where `n_distinct` is 2 for a boolean, the row count for `ctid` and for a `VALUES` column, 1 for `tableoid`, the row count for a table under 200 rows, and otherwise the default 200, so 0.005. An inequality against a constant gets the default 1/3, unless the column is `ctid`, which is estimated from the table size instead. The header also defines 0.005 for pattern matches and for range pairs | [selfuncs.c:324-327](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L324-L327), [selfuncs.c:417-425](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L417-L425), [selfuncs.c:5030-5057](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5030-L5057), [selfuncs.c:567-645](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L567-L645), [selfuncs.c#get_variable_numdistinct](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L5019-L5116), [selfuncs.h:32-49](../../../../raw/postgres-12/src/include/utils/selfuncs.h#L32-L49) |
 | A comparison value unknown at plan time, such as a parameter in a generic plan | An equality condition is averaged over all distinct values: `(1 − null fraction) / n_distinct`, capped by the most common value's frequency; a column with a single-column unique index gets `1 / rows` instead; see [F10](#f10-generic-cached-plans). An inequality gets the default 1/3. Equality falls back to the fixed 0.005 only when the condition does not compare an expression in one table's columns with something that contains none of them, for example `a = b + 1` with columns on both sides | [selfuncs.c:269-276](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L269-L276), [selfuncs.c:469-472](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L469-L472), [selfuncs.c:478-505](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L478-L505), [selfuncs.c:1174-1185](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L1174-L1185), [selfuncs.c:258-262](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L258-L262), [selfuncs.c#get_restriction_variable](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4292-L4313) |
 | Several conditions on one table | Their selectivities are multiplied, which assumes they are independent; only [extended statistics](../../../glossary.md#extended-statistics) created with `CREATE STATISTICS` correct for correlated columns. `ANALYZE` builds those only for a table's own rows: 12 accepts a statistics object on a partitioned table, but `ANALYZE` runs only its inheritance-tree pass, which never builds extended statistics, so such an object stays empty and the object must be created on each partition instead | [clausesel.c#clauselist_selectivity](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L55-L105), [clausesel.c:119-122](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L119-L122), [statscmds.c:122-125](../../../../raw/postgres-12/src/backend/commands/statscmds.c#L122-L125), [analyze.c:255-268](../../../../raw/postgres-12/src/backend/commands/analyze.c#L255-L268), [analyze.c:578-584](../../../../raw/postgres-12/src/backend/commands/analyze.c#L578-L584) |
-| Statistics hidden by row-level security | When the table carries row-level security conditions, the planner may read a column's common values and histogram only through a `LEAKPROOF` operator. For any other operator, such as `textlike` behind `LIKE`, the equality estimate skips the common values and divides by the distinct count, and an inequality gets half of the non-null rows; see [F8](#f8-security-barriers-and-non-leakproof-conditions) | [selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756), [selfuncs.c#statistic_proc_security_check](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4968-L4983), [selfuncs.c:328-330](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L328-L330), [selfuncs.c:417-425](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L417-L425), [selfuncs.c:673-686](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L673-L686) |
+| Statistics hidden by row-level security | When the table carries row-level security conditions, the planner may read a column's common values and histogram only through a `LEAKPROOF` operator. For any other operator, such as `textlike` behind `LIKE` or the `numeric` comparisons, the equality estimate skips the common values and divides by the distinct count, a one-sided inequality gets half of the non-null rows, and a range with both bounds collapses to 1 row; see [F8](#f8-security-barriers-and-non-leakproof-conditions) and the [measured example](#measured-example-row-level-security-and-the-estimates) | [selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756), [selfuncs.c#statistic_proc_security_check](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4968-L4983), [selfuncs.c:328-330](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L328-L330), [selfuncs.c:417-425](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L417-L425), [selfuncs.c:673-686](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L673-L686) |
 | Statistics sample size | `ANALYZE` samples 300 rows per unit of the statistics target, whose default is 100; values outside the sample are estimated, not counted | [analyze.c:1700](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1700), [guc.c#default_statistics_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1986-L1994) |
 | Statistics older than the data | Column statistics change only when `ANALYZE` runs; the table size is scaled from live pages, but the per-column fractions are not. The one live correction is an inequality reaching a histogram end, which is re-read from a B-tree index when one qualifies: non-partial, on the column as its first column, with a matching sort operator; see the [mental model](#mental-model-the-values-the-planner-relies-on) | [heapam_handler.c:2131-2157](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2131-L2157), [analyze.c#update_attstats](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1417-L1430), [selfuncs.c:888-935](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L888-L935) |
 | `relpages = 0` | With `relpages = 0`, fewer than 10 current pages and no inheritance children, the planner assumes 10 pages, so that a newly created table is not assumed to stay small. `relpages = 0` stands in for "never vacuumed", so the rule also fires on a table that was vacuumed or analyzed while empty. With `relpages = 0`, the density comes from the column widths, not from stored counts | [heapam_handler.c:2090-2118](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2090-L2118), [heapam_handler.c:2132-2157](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2132-L2157) |
@@ -258,7 +265,22 @@ A materialized CTE is read on demand, not all at once: `CteScanNext()` asks the 
 
 Either way, the scan reads the rows the security condition admits, and only then applies the user's condition as a filter.
 
-Row-level security also degrades the estimate. `examine_variable()` allows a column's statistics to be used freely only when the table's range-table entry has no security conditions and the user can read the column ([selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756)). Otherwise `statistic_proc_security_check()` passes only a `LEAKPROOF` operator ([selfuncs.c#statistic_proc_security_check](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4968-L4983)). `texteq` and `text_lt` are leakproof, but `textlike` is not ([pg_proc.dat:155](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L155), [pg_proc.dat:1429](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L1429), [pg_proc.dat:1641](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L1641)). For a non-leakproof operator, the common-value and histogram code is skipped ([selfuncs.c:328-330](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L328-L330), [selfuncs.c:719-720](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L719-L720), [selfuncs.c:867-868](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L867-L868)). An equality then divides by the distinct count, and an inequality takes half of the non-null rows ([selfuncs.c:417-425](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L417-L425), [selfuncs.c:673-686](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L673-L686)). So a protected table can get a row estimate far from the real count, and F1's consequences follow.
+Row-level security also degrades the row estimate. It does so in four steps:
+
+1. The rewriter attaches the policy conditions to the table's range-table entry as its `securityQuals` list ([rewriteHandler.c:2043-2045](../../../../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L2043-L2045), [rewriteHandler.c:2097-2098](../../../../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L2097-L2098)).
+2. `examine_variable()` sets `acl_ok` only when that list is empty and the user can read the column ([selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756)).
+3. With `acl_ok` false, `statistic_proc_security_check()` lets only a `LEAKPROOF` operator function read the most common values and the histogram ([selfuncs.c#statistic_proc_security_check](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4968-L4983)). `int4lt`, `texteq` and `text_lt` are leakproof; `numeric_eq`, `numeric_lt` and `textlike` are not ([pg_proc.dat:152](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L152), [pg_proc.dat:155](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L155), [pg_proc.dat:1429](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L1429), [pg_proc.dat:4152](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L4152), [pg_proc.dat:4164](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L4164), [pg_proc.dat:1641](../../../../raw/postgres-12/src/include/catalog/pg_proc.dat#L1641)).
+4. For a non-leakproof operator, the estimator skips those lists ([selfuncs.c:328-330](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L328-L330), [selfuncs.c:719-720](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L719-L720), [selfuncs.c:867-868](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L867-L868)) and falls back as the table shows.
+
+| Condition with a non-leakproof operator | Estimate | Source |
+|---|---|---|
+| `col = value` | `1 / n_distinct`; the stored frequencies of the most common values are ignored | [selfuncs.c:417-425](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L417-L425) |
+| `col < value` or `col > value` | Half of the non-null rows: `0.5 × (1 − null fraction)` | [selfuncs.c:673-686](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L673-L686) |
+| `col BETWEEN a AND b`, or a lower and an upper bound on the same column | 1 row. Each bound is `0.5 × (1 − null fraction)`, which is not the default 1/3 that `clauselist_selectivity()` treats as a guess. So it computes `hi + lo − 1 + null fraction`, which is 0, and replaces a result between −0.01 and 0 with `1.0e-10` as rounding error. `clamp_row_est()` then raises the estimate to 1 row | [clausesel.c:294-305](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L294-L305), [clausesel.c:315-332](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L315-L332), [costsize.c#clamp_row_est](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L187-L200) |
+
+So a protected table can get a row estimate far from the real count, and F1's consequences follow: a range that the planner expects to return 1 row makes a nested loop over it look cheap. The [measured example](#measured-example-row-level-security-and-the-estimates) shows all three rows on a `numeric` column.
+
+A partitioned table behaves the same way, with one condition. Each partition's range-table entry gets an empty `securityQuals` list, because only the parent's policies apply ([inherit.c:425-450](../../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L425-L450)). When the user can read the partition itself, its statistics are therefore used. When the user can read only the parent, `examine_variable()` repeats the check on the parent, whose list is not empty, so the statistics stay hidden ([selfuncs.c:4768-4838](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4768-L4838)).
 
 **Non-default cause.** Default: a table has no row-level security and a view has no `security_barrier` flag, so every user condition is at the lowest security level. Cause: row-level security enabled on the table for the querying role, which `check_enable_rls()` decides ([rls.c#check_enable_rls](../../../../raw/postgres-12/src/backend/utils/misc/rls.c#L52-L133), called at [rowsecurity.c:134](../../../../raw/postgres-12/src/backend/rewrite/rowsecurity.c#L134)), or a view created with `security_barrier`. Mechanism: the security conditions take lower `security_level` values, so the promotability test above fails for a non-leakproof user condition. For the estimate, the cause is the non-empty `securityQuals` list that row-level security puts on the table's range-table entry; `acl_ok` is then false, so only leakproof operators see the statistics.
 
@@ -379,7 +401,7 @@ RESET /* wiki_overfetch_check */ lock_timeout;
 
 `EXPLAIN ANALYZE` executes the statement, so run a data-modifying statement inside `BEGIN; ... ROLLBACK;`. Read the output in this order:
 
-1. Compare each node's estimated `rows` with the actual `rows`. A large gap points to F1, F9 or F10.
+1. Compare each node's estimated `rows` with the actual `rows`. A large gap points to F1, F8, F9 or F10.
 2. Look for `Rows Removed by Filter`, `Rows Removed by Index Recheck`, `Rows Removed by Join Filter` and `Heap Fetches`. They point to F2, F4, F6 and F5.
 3. Multiply the inner side's actual `rows` by `loops` to see how many rows a nested loop read in total (F6).
 4. Look for `CTE Scan`, `Subquery Scan` or `Function Scan` nodes that carry a `Filter` (F7).
@@ -404,9 +426,355 @@ The regression suite tests the individual mechanisms, not over-fetching as such.
 
 **Non-default setting in the lossy-bitmap test.** Default: `work_mem` is 4096 kB ([guc.c#work_mem](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2231-L2241)). Cause: the test runs `set work_mem = 64`, the minimum, in its session ([bitmapops.sql:29-30](../../../../raw/postgres-12/src/test/regress/sql/bitmapops.sql#L29-L30)). Mechanism: the bitmap index scan sizes its TID bitmap from `work_mem` ([nodeBitmapIndexscan.c:93-95](../../../../raw/postgres-12/src/backend/executor/nodeBitmapIndexscan.c#L93-L95)), so at 64 kB the bitmap runs out of room and stores whole pages, which forces the recheck described in [F4](#f4-lossy-index-results-and-lossy-bitmaps).
 
+### Measured example: row-level security and the estimates
+
+This example backs the F8 table with numbers from a 12.2 server built from the pin; the [Measurement Script](#measurement-script) produced them. Three tables hold the same 30,000 rows: `id int` and `n numeric` both run from 1 to 30,000, and `k numeric` is 0 on the first 15,000 rows and `id % 1000 + 1` on the rest. `mp` has no row-level security. `mr` has row-level security with one policy, `USING (true)`, that admits every row. `pm` is `mr` split into two range partitions, with the policy on the parent. One non-superuser role, `alice`, runs every query, so the only difference between `mp` and `mr` is the policy.
+
+| Case | Table | Condition | Estimated rows | Actual rows |
+|---|---|---|---|---|
+| `plain_n_range` | `mp` | `n BETWEEN 1000 AND 1999` | 1000 | 1000 |
+| `rls_n_range` | `mr` | `n BETWEEN 1000 AND 1999` | 1 | 1000 |
+| `plain_n_lt` | `mp` | `n < 1000` | 999 | 999 |
+| `rls_n_lt` | `mr` | `n < 1000` | 15000 | 999 |
+| `plain_k_eq` | `mp` | `k = 0` | 15000 | 15000 |
+| `rls_k_eq` | `mr` | `k = 0` | 30 | 15000 |
+| `plain_id_range` | `mp` | `id BETWEEN 1000 AND 1999` | 1000 | 1000 |
+| `rls_id_range` | `mr` | `id BETWEEN 1000 AND 1999` | 1000 | 1000 |
+| `part_parent_grant` | `pm` | `n BETWEEN 1000 AND 1999`, `SELECT` granted on the parent only | 2 | 1000 |
+| `part_child_grant` | `pm` | the same, after `SELECT` is also granted on both partitions | 1001 | 1000 |
+
+The server reported `proleakproof` false for `numeric_eq`, `numeric_lt`, `numeric_ge` and `numeric_le`, and true for `int4lt`, `int4ge` and `int4le`. `BETWEEN` becomes a `>=` and a `<=` condition, as the plan's `Filter: ((n >= '1000'::numeric) AND (n <= '1999'::numeric))` shows. Each `mr` estimate follows from the F8 table. These are derived values; only the estimates in the table above were measured:
+
+| Case | Inputs | Calculation | Result |
+|---|---|---|---|
+| `rls_k_eq` | 30,000 rows; `k` has 1,001 distinct values by construction (0 and 1 to 1000); no nulls | 30,000 / 1,001 = 29.97, rounded by `clamp_row_est()` | 30, against 15,000 actual, because the stored frequency of 0 (one half) is ignored |
+| `rls_n_lt` | 30,000 rows; no nulls | 0.5 × 30,000 | 15,000, against 999 actual |
+| `rls_n_range` | Each bound 0.5 | 0.5 + 0.5 − 1 + 0 = 0, replaced by `1.0e-10`; 30,000 × `1.0e-10` rounded up | 1, against 1,000 actual |
+
+The `int4` range on `mr` gets the same estimate as on `mp`, because `int4ge` and `int4le` are leakproof, so the statistics stay visible. The scan itself is the same in every case: a sequential scan with `Rows Removed by Filter`, which shows that the policy did not change what was read here, only what the planner expected. The partitioned case shows the condition in F8: each partition is estimated at 1 row (`rows=2` on the `Append`) until `alice` can read the partitions directly.
+
+**Non-default state in the example.** Default: a table has no row-level security, so `examine_variable()` sets `acl_ok` for a user who can read the column, and every estimator sees the statistics ([selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756)). Cause: `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` and a policy on `mr` and `pm`, queried by a role that is neither superuser, nor `BYPASSRLS`, nor the owner. `check_enable_rls()` exempts all three of those, so the script cannot measure as the superuser that owns the tables ([rls.c:87-117](../../../../raw/postgres-12/src/backend/utils/misc/rls.c#L87-L117), [aclchk.c#has_bypassrls_privilege](../../../../raw/postgres-12/src/backend/catalog/aclchk.c#L5399-L5415)). Mechanism: the policy puts a non-empty `securityQuals` list on the range-table entry, so `acl_ok` is false and only leakproof operators read the statistics, as F8 describes. The `mp` rows are the default leg.
+
 ### Final causal summary
 
 Stored statistics and fixed defaults, with only the histogram ends re-read from a B-tree index for inequality estimates → row estimates (F1, F10), with the common values and histogram hidden from non-leakproof operators under row-level security (F8) → the planner prices each path, including partial fetches under LIMIT, EXISTS and cursors (F9), lossy bitmaps (F4), visibility-map heap visits (F5), join rescans and hash builds (F6), and cost parameters (F12) → the planner places each condition as an index condition, a bound, a filter, or above a fence (F2, F3, F7, F8, F11) → it chooses the cheapest plan → the executor reads live data, and every row the estimates or the condition placement did not exclude is fetched and then discarded → `ANALYZE` and `VACUUM` refresh the stored inputs, and only plans made after them see the change.
+
+## Measurement Script
+
+### Usage
+
+| Item | Value |
+|---|---|
+| Purpose | Measures the planner's row estimates for the same conditions on the same data with and without row-level security. It backs every number in [Measured example: row-level security and the estimates](#measured-example-row-level-security-and-the-estimates) and the 1-row range claim in F8. It measures estimates and actual row counts only, not timings. |
+| Invocation | From the repository root, extract the Bash fence below to `.wiki-runtime/tmp/of12-run.sh` with the command after this table, then run `bash .wiki-runtime/tmp/of12-run.sh [stage ...]`. Every build, data, socket and output file stays under `.wiki-runtime/tmp/of12/`. |
+| Stages | Default order: `build rls report`. `stop` and `clean` tear down and are not in the default order. See [Stages](#stages). |
+| Environment | `PORT12` (default `55447`) is the isolated port and `JOBS` (default `8`) the parallel build jobs. The checkout, pin, sandbox path and the 30,000-row fixture size are fixed in the script. |
+| Prerequisites | A C toolchain, GNU make, bison and flex; readline and zlib development headers, because 12's `configure` enables both by default ([configure.in:867-868](../../../../raw/postgres-12/configure.in#L867-L868), [configure.in:966-967](../../../../raw/postgres-12/configure.in#L966-L967)); the pinned checkout at `raw/postgres-12/`; about 500 MB of free disk. Locale `C`, encoding `UTF8`, set by the script. No extension is needed. |
+| Output | Files under `.wiki-runtime/tmp/of12/out/`. Read `results.txt` first: one line per case with `case|table|condition|estimated_rows|actual_rows`. Then `platform.txt`, `<case>.explain` and `server.log`. |
+| Runtime | About 50 seconds from an empty sandbox, nearly all of it the build (47 to 49 s on the 2026-10-30 host, Linux x86_64, 22 threads, `JOBS=22`). Re-running `rls report` while the build is present takes about 3 seconds. |
+| Cleanup | Run `bash .wiki-runtime/tmp/of12-run.sh stop clean` from the repository root. It stops the cluster if it is still running, checks that no `postmaster.pid`, process naming the data directory, socket or listener on `PORT12` remains, and deletes `.wiki-runtime/tmp/of12/` with its build. Remove the extracted `.wiki-runtime/tmp/of12-run.sh` afterwards. The `rls` stage already stops its cluster at the end. |
+
+To extract the published script without editing it, run this from the repository root:
+
+```sh
+sed -n '/^```bash$/,/^```$/p' wiki/v12/questions/query-planning/plans-that-over-fetch-tuples.md | sed '1d;$d' > .wiki-runtime/tmp/of12-run.sh
+bash -n .wiki-runtime/tmp/of12-run.sh
+bash .wiki-runtime/tmp/of12-run.sh
+```
+
+### Last run
+
+**2026-10-30, eleventh review.** The script ran from an empty sandbox in 47 s with `JOBS=22`, then `rls report` was re-run with the build present in 3 s. Both runs passed all 13 assertions and printed identical results. An earlier run the same day, before the script also recorded the `int4ge`, `int4le`, `numeric_ge` and `numeric_le` flags, gave the same ten estimates and actual counts. The host was Linux 6.18.54.1-microsoft-standard-WSL2 x86_64, with PostgreSQL 12.2 at `45b88269a353ad93744772791feb6d01bc7e1e42`, built with default configure options. `platform.txt` recorded `block_size=8192`, `default_statistics_target=100`, `autovacuum=off`, `shared_buffers=128MB` (chosen by `initdb`) and `max_data_alignment=8`. The estimates do not depend on the block size or the alignment, because each estimate is a fraction of a row count that `ANALYZE` stored from a full read of the table. `stop clean` then confirmed that no PID file, process, socket or listener remained, and deleted the sandbox with its build.
+
+### Stages
+
+| Stage | What it does | Needs |
+|---|---|---|
+| `build` | Checks the pin, then configures 12.2 out of tree with default options under `$SANDBOX/build`, builds, and installs it. Skipped when a matching build exists. | nothing |
+| `rls` | Runs `initdb`, starts the cluster, creates the role and fixtures, runs `ANALYZE`, runs the ten cases as `alice`, stops the cluster, then checks its assertions | `build` |
+| `report` | Prints `results.txt` | `rls` |
+| `stop` | Stops the cluster if it is still running and checks that no PID file, process, socket or listener remains | none |
+| `clean` | Runs `stop`, then deletes `$SANDBOX` | none |
+
+The `rls` stage is idempotent: it deletes and re-creates its data directory and `results.txt`. Inside it, the cases run in a fixed order, because the last case depends on the `GRANT` made just before it. Every role, table and database is disposable and exists only in the sandbox cluster.
+
+### Non-default settings in the measurement
+
+| Setting or state | Default at the pin | Value in the script, why, and which results depend on it |
+|---|---|---|
+| Row-level security on `mr` and `pm`, queried by `alice` | No row-level security; the default leg is `mp` | Every `rls_*` and `part_*` estimate depends on it; see the non-default note under the [measured example](#measured-example-row-level-security-and-the-estimates). The `plain_*` cases measure the default on the same data. |
+| `SELECT` on `pm1` and `pm2` granted to `alice` before `part_child_grant` | `alice` holds only the grant on the parent | Lets the child-level permission check succeed, so the partition statistics become visible ([selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756), [inherit.c:425-450](../../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L425-L450)). Only `part_child_grant` depends on it. |
+| 30,000 rows per table | — | `ANALYZE` samples 300 × the statistics target rows, 30,000 at the default 100 ([analyze.c:1700](../../../../raw/postgres-12/src/backend/commands/analyze.c#L1700), [guc.c#default_statistics_target](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1986-L1994)). At this size it reads every row, so the statistics and every estimate are the same on each run. A larger table would give estimates that vary slightly from run to run. |
+| `autovacuum` | `on`, context `PGC_SIGHUP` ([guc.c#autovacuum](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1424-L1434)) | `off` in `postgresql.conf` before the first start, so no auto-analyze runs between the script's own `ANALYZE` and the cases. With full-table samples, a second analyze would store the same statistics, so no result is expected to depend on it. |
+| `initdb -U postgres -A trust --locale=C --encoding=UTF8` | Without these, `initdb` names the superuser after the operating-system user ([initdb.c:3286-3288](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L3286-L3288)) and takes locale and encoding from the environment ([initdb.c#setlocales](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L2300-L2330)) | Fixed so the run does not depend on the host. No result depends on them: the conditions compare `numeric` and `int4` values, which do not use collation. |
+| `listen_addresses = ''`, `unix_socket_directories`, `port = 55447` | `localhost`, `/tmp`, `5432`; all `PGC_POSTMASTER` ([guc.c#socket-settings](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3936-L3958), [guc.c#port](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2177-L2184)) | Socket-only access in the sandbox on a non-default port, so no other cluster is touched. No result depends on them. |
+| `statement_timeout`, `lock_timeout` | `0`, disabled; `PGC_USERSET` ([guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2377-L2386), [guc.c#lock_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2388-L2397)) | 5 minutes and 5 seconds for every session, through `PGOPTIONS`. They only bound a runaway statement. |
+
+### The script
+
+```bash
+#!/usr/bin/env bash
+#
+# of12-run.sh - the measurement script for the wiki page
+# wiki/v12/questions/query-planning/plans-that-over-fetch-tuples.md
+#
+# Builds the pinned PostgreSQL 12 checkout out of tree with default configure
+# options, starts one isolated cluster, and compares the planner's row
+# estimates for the same data in three tables, queried by the same
+# non-superuser role:
+#   mp  plain table, no row-level security
+#   mr  the same rows, row-level security enabled with one permissive policy
+#   pm  the same rows in a range-partitioned table with row-level security on
+#       the parent; queried before and after SELECT is granted on the partitions
+# Every table holds 30000 rows, which is the ANALYZE sample size at the default
+# statistics target (300 x 100), so ANALYZE reads every row and the stored
+# statistics, and therefore the estimates, are the same on every run.
+#
+# Every role, table and database is disposable and lives only in this sandbox.
+#
+# Usage, from the repository root:
+#   bash .wiki-runtime/tmp/of12-run.sh [stage ...]
+# Stages: build rls report stop clean
+# Default: build rls report
+
+set -uo pipefail
+set -e
+
+WIKI_ROOT="$PWD"
+SRC12="$WIKI_ROOT/raw/postgres-12"
+SANDBOX="$WIKI_ROOT/.wiki-runtime/tmp/of12"
+PIN12=45b88269a353ad93744772791feb6d01bc7e1e42
+PORT12="${PORT12:-55447}"
+JOBS="${JOBS:-8}"
+ROWS=30000
+
+BUILD="$SANDBOX/build"; INST="$SANDBOX/install"; BIN="$INST/bin"
+OUT="$SANDBOX/out"; SOCK="$SANDBOX/sock"; DATA="$SANDBOX/data"
+export PGPORT="$PORT12" PGHOST="$SOCK"
+# Session-scoped bounds for every statement this script sends (user context).
+export PGOPTIONS="-c statement_timeout=5min -c lock_timeout=5s"
+
+STARTED=""
+
+say()  { printf '\n== %s\n' "$*" >&2; }
+note() { printf '   %s\n' "$*" >&2; }
+die()  { printf '!! %s\n' "$*" >&2; exit 1; }
+
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [ "$rc" -ne 0 ] && [ -n "$STARTED" ] && [ -f "$DATA/postmaster.pid" ]; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop >&2 || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+
+own_sandbox() {
+  case "$WIKI_ROOT" in
+    */postgres-llm-wiki) ;;
+    *) die "run from the postgres-llm-wiki repository root" ;;
+  esac
+  [ -f "$WIKI_ROOT/AGENTS.md" ] || die "repository root not found"
+  [ -f "$SANDBOX/.of12-owned" ] || die "sandbox is not owned by this script: $SANDBOX"
+  [ "$(cat "$SANDBOX/.of12-owned")" = "$PIN12 $WIKI_ROOT" ] || die "sandbox owner/pin mismatch"
+  export TMPDIR="$SANDBOX/tmp"
+  mkdir -p "$TMPDIR" "$OUT" "$SOCK"
+}
+source_pin() {
+  [ "$(git --no-optional-locks -C "$SRC12" rev-parse HEAD)" = "$PIN12" ] \
+    || die "PostgreSQL 12 checkout is not at $PIN12"
+  [ -z "$(git --no-optional-locks -C "$SRC12" status --porcelain --untracked-files=no)" ] \
+    || die "PostgreSQL 12 checkout has tracked changes"
+}
+
+# Add the inline tag comment after each statement's leading verb.
+tag_sql() {
+  printf '%s\n' "$1" | sed -E 's/(^|;[[:space:]]*)(SELECT|INSERT|CREATE|ALTER|GRANT|ANALYZE|EXPLAIN|SHOW)([[:space:]]|;|$)/\1\2 \/\* wiki_of12_fixture \*\/\3/g'
+}
+q() { # q <user> <sql>: run, discard output
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -U "$1" -d of -c "$(tag_sql "$2")" > /dev/null \
+    || die "failed as $1: $2"
+}
+s() { # s <user> <sql>: one unaligned result
+  "$BIN/psql" -X -At -q -v ON_ERROR_STOP=1 -U "$1" -d of -c "$(tag_sql "$2")" \
+    || die "failed as $1: $2"
+}
+
+verify_stopped() {
+  [ ! -f "$DATA/postmaster.pid" ] || die "postmaster.pid still present in $DATA"
+  if pgrep -f -- "$DATA" > /dev/null 2>&1; then die "a process still names $DATA"; fi
+}
+verify_free() {
+  [ -z "$(ls -A "$SOCK" 2>/dev/null)" ] || die "socket directory $SOCK is not empty"
+  if "$BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT12"; then die "port $PORT12 is occupied"; fi
+}
+
+stage_build() {
+  say "build 12.2 out of tree from $SRC12 (default configure options)"
+  source_pin
+  if [ ! -e "$SANDBOX" ]; then
+    mkdir -p "$SANDBOX" || die "could not create sandbox"
+    printf '%s %s\n' "$PIN12" "$WIKI_ROOT" > "$SANDBOX/.of12-owned"
+  fi
+  own_sandbox
+  mkdir -p "$BUILD"
+  if [ -x "$BIN/postgres" ] && [ -x "$BIN/psql" ]; then
+    [ "$(cat "$SANDBOX/.build-spec" 2>/dev/null)" = "$PIN12 default" ] \
+      || die "existing build has a different specification"
+    note "matching build already present"
+    return 0
+  fi
+  ( cd "$BUILD" && "$SRC12/configure" --prefix="$INST" > configure.log 2>&1 ) \
+    || { cp "$BUILD/configure.log" "$OUT/"; die "configure failed, see $OUT/configure.log"; }
+  ( cd "$BUILD" && make -j"$JOBS" > make.log 2>&1 && make install > install.log 2>&1 ) \
+    || { cp "$BUILD/make.log" "$OUT/" 2>/dev/null; grep 'error:' "$BUILD/make.log" | head -n 3 >&2
+         die "make failed, see $OUT/make.log"; }
+  printf '%s default\n' "$PIN12" > "$SANDBOX/.build-spec"
+  note "$("$BIN/postgres" --version)"
+}
+
+# measure <case> <table> <where>: EXPLAIN ANALYZE as role alice, record the
+# top plan node's estimated rows and actual rows.
+measure() {
+  local case=$1 tbl=$2 cond=$3 f est act
+  f="$OUT/$case.explain"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -U alice -d of \
+      -c "$(tag_sql "EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM $tbl WHERE $cond")" \
+      > "$f" 2>&1 || { cat "$f" >&2; die "EXPLAIN failed for $case"; }
+  est=$(sed -n 's/.*cost=[^ ]* rows=\([0-9]*\) width=.*/\1/p' "$f" | head -n 1)
+  act=$(sed -n 's/.*(actual rows=\([0-9]*\) loops=.*/\1/p' "$f" | head -n 1)
+  [ -n "$est" ] && [ -n "$act" ] || die "could not parse $f"
+  printf '%s|%s|%s|%s|%s\n' "$case" "$tbl" "$cond" "$est" "$act" >> "$OUT/results.txt"
+  note "$case: $tbl WHERE $cond: estimated rows=$est actual rows=$act"
+}
+field() { grep -E "^$1\|" "$OUT/results.txt" | tail -n 1 | cut -d'|' -f"$2"; }
+expect_range() { # expect_range <case> <field-name> <field-number> <min> <max>
+  local got
+  got=$(field "$1" "$3")
+  [ "$got" -ge "$4" ] && [ "$got" -le "$5" ] || die "$1: $2 = $got, expected $4..$5"
+  note "ok: $1: $2 = $got (expected $4..$5)"
+}
+
+stage_rls() {
+  say "row-level security and the planner's statistics"
+  own_sandbox
+  source_pin
+  [ "$(cat "$SANDBOX/.build-spec" 2>/dev/null)" = "$PIN12 default" ] || die "run the build stage first"
+  if [ -f "$DATA/postmaster.pid" ]; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop > /dev/null 2>&1 || die "pg_ctl stop failed"
+  fi
+  verify_free
+  rm -rf "$DATA"
+  : > "$OUT/results.txt"
+  "$BIN/initdb" -D "$DATA" -U postgres -A trust --locale=C --encoding=UTF8 \
+    > "$OUT/initdb.log" 2>&1 || die "initdb failed, see $OUT/initdb.log"
+  {
+    printf "listen_addresses = ''\n"
+    printf "unix_socket_directories = '%s'\n" "$SOCK"
+    printf "port = %s\n" "$PORT12"
+    printf "autovacuum = off\n"
+  } >> "$DATA/postgresql.conf"
+  STARTED=yes
+  "$BIN/pg_ctl" -D "$DATA" -l "$OUT/server.log" -w -t 60 start > /dev/null 2>&1 \
+    || die "pg_ctl start failed, see $OUT/server.log"
+  "$BIN/psql" -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres \
+    -c "CREATE /* wiki_of12_fixture */ DATABASE of" > /dev/null || die "CREATE DATABASE failed"
+  {
+    uname -srm
+    "$BIN/postgres" --version
+    for g in block_size default_statistics_target autovacuum shared_buffers; do
+      s postgres "SELECT '$g=' || current_setting('$g')"
+    done
+    s postgres "SELECT 'max_data_alignment=' || max_data_alignment FROM pg_control_init()"
+    for fn in int4lt int4ge int4le numeric_lt numeric_ge numeric_le numeric_eq; do
+      s postgres "SELECT '$fn.proleakproof=' || proleakproof FROM pg_proc WHERE proname = '$fn'"
+    done
+  } > "$OUT/platform.txt"
+  cat "$OUT/platform.txt" >&2
+
+  # Fixtures (disposable).  n is unique; k is 0 on half the rows.
+  q postgres "CREATE ROLE alice LOGIN NOSUPERUSER NOBYPASSRLS"
+  q postgres "CREATE TABLE mp (id int, n numeric, k numeric)"
+  q postgres "INSERT INTO mp SELECT g, g, CASE WHEN g <= $ROWS / 2 THEN 0 ELSE g % 1000 + 1 END FROM generate_series(1, $ROWS) g"
+  q postgres "CREATE TABLE mr (LIKE mp); INSERT INTO mr SELECT * FROM mp"
+  q postgres "ALTER TABLE mr ENABLE ROW LEVEL SECURITY; CREATE POLICY p_all ON mr FOR SELECT TO alice USING (true)"
+  q postgres "CREATE TABLE pm (LIKE mp) PARTITION BY RANGE (id)"
+  q postgres "CREATE TABLE pm1 PARTITION OF pm FOR VALUES FROM (1) TO ($ROWS / 2 + 1)"
+  q postgres "CREATE TABLE pm2 PARTITION OF pm FOR VALUES FROM ($ROWS / 2 + 1) TO ($ROWS + 1)"
+  q postgres "INSERT INTO pm SELECT * FROM mp"
+  q postgres "ALTER TABLE pm ENABLE ROW LEVEL SECURITY; CREATE POLICY p_all ON pm FOR SELECT TO alice USING (true)"
+  q postgres "GRANT SELECT ON mp, mr, pm TO alice"
+  q postgres "ANALYZE"
+
+  # The same four conditions on the plain and the row-level-security table.
+  measure plain_n_range  mp "n BETWEEN 1000 AND 1999"
+  measure rls_n_range    mr "n BETWEEN 1000 AND 1999"
+  measure plain_n_lt     mp "n < 1000"
+  measure rls_n_lt       mr "n < 1000"
+  measure plain_k_eq     mp "k = 0"
+  measure rls_k_eq       mr "k = 0"
+  measure plain_id_range mp "id BETWEEN 1000 AND 1999"
+  measure rls_id_range   mr "id BETWEEN 1000 AND 1999"
+  # Partitioned table: SELECT granted on the parent only, then on the partitions.
+  measure part_parent_grant   pm "n BETWEEN 1000 AND 1999"
+  q postgres "GRANT SELECT ON pm1, pm2 TO alice"
+  measure part_child_grant    pm "n BETWEEN 1000 AND 1999"
+
+  "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop > /dev/null 2>&1 || die "pg_ctl stop failed"
+  STARTED=""
+  verify_stopped
+
+  # Assertions.  Actual counts are fixed by the data.
+  expect_range plain_n_range actual 5 1000 1000
+  expect_range rls_n_range actual 5 1000 1000
+  expect_range plain_n_range estimate 4 900 1100
+  expect_range rls_n_range estimate 4 1 1
+  expect_range plain_n_lt estimate 4 900 1100
+  expect_range rls_n_lt estimate 4 14900 15100
+  expect_range plain_k_eq estimate 4 14000 16000
+  expect_range rls_k_eq estimate 4 1 100
+  expect_range rls_k_eq actual 5 15000 15000
+  expect_range plain_id_range estimate 4 900 1100
+  [ "$(field plain_id_range 4)" = "$(field rls_id_range 4)" ] \
+    || die "int4 range estimate differs between mp and mr"
+  note "ok: int4 range estimate is the same on mp and mr"
+  expect_range part_parent_grant estimate 4 1 2
+  expect_range part_child_grant estimate 4 900 1100
+}
+
+stage_report() {
+  own_sandbox
+  say "results ($OUT/results.txt)"
+  printf 'case|table|condition|estimated_rows|actual_rows\n' >&2
+  cat "$OUT/results.txt" >&2
+}
+
+stage_stop() {
+  [ -d "$SANDBOX" ] || { note "no sandbox"; return 0; }
+  own_sandbox
+  if [ -f "$DATA/postmaster.pid" ]; then
+    "$BIN/pg_ctl" -D "$DATA" -m fast -w -t 60 stop > /dev/null 2>&1 || die "could not stop the cluster"
+  fi
+  verify_stopped
+  verify_free
+  note "no server, socket or listener left"
+}
+stage_clean() {
+  [ -d "$SANDBOX" ] || { note "no sandbox"; return 0; }
+  stage_stop
+  rm -rf "$SANDBOX"
+  note "deleted $SANDBOX"
+}
+
+[ "$#" -gt 0 ] || set -- build rls report
+for st in "$@"; do
+  case "$st" in
+    build|rls|report|stop|clean) "stage_$st" ;;
+    *) die "unknown stage: $st" ;;
+  esac
+done
+```
 
 ## Context Reviewed
 
@@ -414,7 +782,7 @@ Stored statistics and fixed defaults, with only the histogram ends re-read from 
 - Costing: `costsize.c` header, `clamp_row_est()`, `cost_index()`, `initial_cost_nestloop()`, `set_baserel_size_estimates()`, `compute_bitmap_pages()`; `pathnode.c` fractional comparison, `create_limit_path()` and `adjust_limit_rows_costs()`; `consider_startup` in `relnode.c`; the `Limit` path loop in `grouping_planner()`; `cost.h`.
 - Selectivity: `clausesel.c`, `selfuncs.c` (`eqsel_internal`, `var_eq_const`, `var_eq_non_const`, `get_restriction_variable`, `get_variable_numdistinct`, `examine_variable`, `statistic_proc_security_check`, `scalarineqsel`, `scalarineqsel_wrapper`, `ineq_histogram_selectivity`, `get_actual_variable_range`, `btcostestimate`), `selfuncs.h`, the `RestrictInfo` pseudoconstant comment in `pathnodes.h`, `plancat.c` (`estimate_rel_size`, `restriction_selectivity`, `has_unique_index`, function rows), `heapam_estimate_rel_size()`.
 - Index matching and plan construction: `indxpath.c` (including the `match_clause_to_indexcol()` dispatch), `restrictinfo.c`, `createplan.c`, `nbtutils.c`.
-- Pushdown: `allpaths.c` subquery pushdown rules and security barrier handling; `rowsecurity.c` and `check_enable_rls()` in `rls.c`.
+- Pushdown: `allpaths.c` subquery pushdown rules and security barrier handling; `rowsecurity.c` and `check_enable_rls()` in `rls.c`. The rewriter's `fireRIRrules()` step that attaches policy conditions to `rte->securityQuals` in `rewriteHandler.c`; `has_bypassrls_privilege()` in `aclchk.c`; the child-RTE `securityQuals` reset in `inherit.c`; the parent permission fallback in `examine_variable()`; the range-pair combination in `clauselist_selectivity()`.
 - Sub-select and function pull-up: `pull_up_sublinks()` and `inline_set_returning_functions()` in `prepjointree.c`; `convert_EXISTS_sublink_to_join()` in `subselect.c`; `inline_set_returning_function()` in `clauses.c`; the `JoinType` comments in `nodes.h`.
 - Executor: `execScan.c`, `indexam.c`, `nodeIndexscan.c`, `nodeIndexonlyscan.c`, `nodeBitmapHeapscan.c`, `nodeNestloop.c`, `nodeHashjoin.c`, `nodeHash.c`, `nodeLimit.c`, `nodeCtescan.c`, `nodeFunctionscan.c`, `execSRF.c`; the `tidbitmap.c` recheck flag; the EXPLAIN join-node counters in `explain.c`.
 - Plan cache: `plancache.c` `choose_custom_plan()`; the `CURSOR_OPT_GENERIC_PLAN` and `CURSOR_OPT_CUSTOM_PLAN` flags in `parsenodes.h`, with a search of `src/`, `contrib/` and `src/pl/` for code that sets them.
@@ -424,6 +792,7 @@ Stored statistics and fixed defaults, with only the histogram ends re-read from 
 - GUC definitions in `guc.c`; docs `perform.sgml`, `config.sgml`, `ref/explain.sgml`.
 - Catalog and extension boundaries: `pg_operator.dat`, `pg_proc.dat` (`proleakproof` of `texteq`, `text_lt`, `textlike`), `catalog/Makefile`, `parser/Makefile`, `Makefile.global.in`, `functioncmds.c`, hook headers.
 - Tests: `subselect.out`, `join.out`, `bitmapops.sql`, `select_parallel.out`.
+- Measurement: a 12.2 server built from the pin with default configure options, one cluster, and `EXPLAIN (ANALYZE, TIMING OFF)` for ten cases run as a non-superuser role against a plain table, a row-level-security table and a partitioned row-level-security table; see [Measurement Script](#measurement-script). For the setting defaults it relies on, also `guc.c` (`autovacuum`, socket settings, timeouts) and `initdb.c`.
 - Wiki pages linked for depth: [plan_cache_mode](plan-cache-mode.md), [partitioning](partitioning-planning-execution-optimizations.md), [statistics sources](query-planner-statistics-sources.md), [EXPLAIN BUFFERS](../observability/explain-analyze-buffers-output.md). No v12 common concept pages exist.
 
 ## Evidence Map
@@ -450,6 +819,7 @@ Stored statistics and fixed defaults, with only the histogram ends re-read from 
 | Inlinable SQL set-returning functions become subqueries | [prepjointree.c:620-640](../../../../raw/postgres-12/src/backend/optimizer/prep/prepjointree.c#L620-L640), [clauses.c:4911-4982](../../../../raw/postgres-12/src/backend/optimizer/util/clauses.c#L4911-L4982), [clauses.c:5065-5074](../../../../raw/postgres-12/src/backend/optimizer/util/clauses.c#L5065-L5074), [clauses.c:5076-5117](../../../../raw/postgres-12/src/backend/optimizer/util/clauses.c#L5076-L5117) |
 | Function scan materializes; 1000-row default | [nodeFunctionscan.c:85-100](../../../../raw/postgres-12/src/backend/executor/nodeFunctionscan.c#L85-L100), [functioncmds.c:1134-1140](../../../../raw/postgres-12/src/backend/commands/functioncmds.c#L1134-L1140) |
 | Security promotability; statistics hidden from non-leakproof operators under row-level security | [selfuncs.c:4743-4756](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4743-L4756), [selfuncs.c:4968-4983](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4968-L4983), [selfuncs.c:673-686](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L673-L686), [restrictinfo.c:376-388](../../../../raw/postgres-12/src/backend/optimizer/util/restrictinfo.c#L376-L388), [allpaths.c:2221-2227](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L2221-L2227) |
+| Under row-level security, a non-leakproof range with both bounds is estimated at 1 row; a partition's statistics are visible when the user can read it directly; the rewriter attaches policy conditions to the range-table entry; measured on 12.2 | [clausesel.c:294-305](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L294-L305), [clausesel.c:315-332](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L315-L332), [inherit.c:425-450](../../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L425-L450), [selfuncs.c:4768-4838](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4768-L4838), [rewriteHandler.c:2043-2045](../../../../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L2043-L2045), [rewriteHandler.c:2097-2098](../../../../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L2097-L2098), [rls.c:87-117](../../../../raw/postgres-12/src/backend/utils/misc/rls.c#L87-L117), [Measurement Script](#measurement-script) |
 | Tuple fractions for LIMIT, EXISTS and ANY SubPlans, cursors; pulled-up sub-selects become semi joins | [planner.c:2876-2932](../../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L2876-L2932), [subselect.c:208-214](../../../../raw/postgres-12/src/backend/optimizer/plan/subselect.c#L208-L214), [prepjointree.c:168-186](../../../../raw/postgres-12/src/backend/optimizer/prep/prepjointree.c#L168-L186), [planner.c:377-403](../../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L377-L403), [gram.y:11137](../../../../raw/postgres-12/src/backend/parser/gram.y#L11137) |
 | Fractional cost interpolation | [costsize.c:37-51](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L37-L51), [pathnode.c:118-134](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L118-L134), [pathnode.c:3623-3670](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670) |
 | OFFSET rows fetched and discarded | [nodeLimit.c:90-108](../../../../raw/postgres-12/src/backend/executor/nodeLimit.c#L90-L108) |
@@ -463,7 +833,8 @@ Stored statistics and fixed defaults, with only the histogram ends re-read from 
 ## Open Questions
 
 - The `lossy_pages = heap_pages - maxentries / 2` estimate is called a "crude approximation" in the source ([costsize.c:5582-5589](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L5582-L5589)). This page does not quantify how far it can be from the real number of lossy pages; that would need a measurement.
-- The worked calculation in F9 uses illustrative costs, not output from a 12.2 server. A measured example would need a `## Measurement Script`.
+- The worked calculation in F9 uses illustrative costs, not output from a 12.2 server. The page's measurement script does not cover it; a measured example would need a new stage in that script.
+- The measured example shows only the estimates under row-level security, not a plan change that follows from them. The claim that a 1-row range estimate makes a nested loop look cheap rests on the nested-loop costing in F6 ([costsize.c:2442-2471](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2442-L2471)); the script does not measure a join.
 - The interpretation of "over-fetch" is this page's: rows read by a node and not passed up. If the question meant another quantity, such as heap pages read, F3 and F12 matter more and the counters differ.
 - No v12 common concept page exists for row estimation or join methods; the page explains what it needs inline.
 
@@ -492,6 +863,9 @@ Stored statistics and fixed defaults, with only the histogram ends re-read from 
 - [plancache.c#choose_custom_plan](../../../../raw/postgres-12/src/backend/utils/cache/plancache.c#L1016-L1063)
 - [selfuncs.c#statistic_proc_security_check](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L4968-L4983)
 - [analyze.c#analyze_rel](../../../../raw/postgres-12/src/backend/commands/analyze.c#L255-L268)
+- [clausesel.c#range-pair](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L294-L332)
+- [rewriteHandler.c#fireRIRrules-securityQuals](../../../../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L2043-L2098)
+- [inherit.c#expand_single_inheritance_child](../../../../raw/postgres-12/src/backend/optimizer/util/inherit.c#L425-L450)
 - [pathnode.c#adjust_limit_rows_costs](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670)
 - [relnode.c:201](../../../../raw/postgres-12/src/backend/optimizer/util/relnode.c#L201)
 - [tidbitmap.c#PagetableEntry](../../../../raw/postgres-12/src/backend/nodes/tidbitmap.c#L95-L104)
