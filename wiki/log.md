@@ -2186,3 +2186,12 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: `wiki/index.md`, `wiki/v12/index.md` and the `wiki/versions.md` coverage notes updated. `verified_by_agent` stays `not yet`, because Open Questions remain.
 - Isolation and teardown: one cluster ran under `.wiki-runtime/tmp/jm12/data` on port 55448, in three invocations. Each `stop` confirmed no `postmaster.pid`, process or socket. `clean` deleted the sandbox and build, and nothing was kept. The extracted script and helpers were removed too.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 61 errors and 2 warnings, the known baseline. All 61 errors are in three v19 pages plus the absent `raw/postgres-19` pin, and neither warning is in a file this task touched.
+
+## [2026-10-31] glossary fix | Hash join skew table eviction
+
+- Scope: the user asked to "check the still open" items from the join methods work. No prompt corrections were needed. No rule conflict arose. No subagent ran.
+- Glossary: the Hash join entry's shared text said the skew table "never spills", which its own v17 citation does not support once a bucket is evicted. Corrected it with v17 evidence, and shortened the v12 note to match. No term added, so the count stays 357. Eviction also appears in the v14 and v18 checkouts at their pins. The v19 note was not changed: `raw/postgres-19` sits at `dae3463fa96`, not the pin `1ecc48b9bcc`, so that checkout shows eviction but cannot confirm it at the pin.
+- Citations: read the join methods page's remaining ranges line by line, including `ExecNestLoop()`, `standard_join_search()`, `MultiExecPrivateHash()`, `ExecHashJoinNewBatch()`, `add_path()`, the plan-creation and path structures, and the `pg_operator.dat` rows. None contradicts the page. The page was not edited.
+- Contradiction check: compared the changed glossary statements with the entry, the v12 and v17 sources, and a search of `wiki/` for the claim; 1 found and fixed, 0 reported without a change, 0 withdrawn.
+- Isolation and teardown: no service ran, and nothing was left behind.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 61 errors and 2 warnings, the known baseline; neither warning is in a file this task touched.
