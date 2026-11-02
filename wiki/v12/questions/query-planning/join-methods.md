@@ -53,6 +53,12 @@ When explaining why a join method is chosen, explain it by giving a didactic and
 
 > Prompt note: corrected from "when explaining why a join method is chosen explain it giving a didatical and simple example". Corrections: capitalized the first word, added a comma after the introductory clause, changed "giving" to "by giving", corrected "didatical" to "didactic", and added the final period. The meaning is unchanged.
 
+Follow-up (2026-11-02):
+
+For the examples, use more human-friendly table and column names, drawn from real-life scenarios, not a, b.
+
+> Prompt note: corrected from "for the example use table and column names more human frendly like more real life scenarios not a,b". Corrections: capitalized the first word, changed "the example" to "the examples" because the page has several, added a comma after the introductory phrase, reordered "table and column names more human frendly" to "more human-friendly table and column names", corrected "frendly" to "friendly" and hyphenated it, changed "like more real life scenarios" to "drawn from real-life scenarios", added a space after the comma in "a, b", and added the final period. The meaning is unchanged. The renaming applies to the script's fixtures as well, so the examples quote the statements that ran; see [Last run](#last-run) for the old-to-new name map.
+
 ## Answer
 
 ### Main idea
@@ -67,12 +73,12 @@ PostgreSQL 12 has three join methods: [nested loop](../../../glossary.md#nested-
 | Merge join | Walk two sorted inputs together | Both inputs are already sorted, in a one-process plan. With [parallel](../../../glossary.md#parallel-query) workers, Parallel Hash beat it in the measured `wide` case |
 | Hash join | Load one side into a hash table, probe it with the other | Large unsorted inputs joined on equality, at the default `work_mem` |
 
-On this page's measurements, the winner changed from case to case. A 100-row lookup ran about 90 times faster with a nested loop than with a hash join. An unindexed 20,000-row join ran about 2,400 times faster with a hash join than with a nested loop. See [the measured results](#which-is-faster-measured-results).
+On this page's measurements, the winner changed from case to case. A 100-row lookup ran about 100 times faster with a nested loop than with a hash join. An unindexed 20,000-row join ran about 2,300 times faster with a hash join than with a nested loop. See [the measured results](#which-is-faster-measured-results).
 
 The [planner](../../../glossary.md#planner) does not choose by rule. It prices the legal methods with estimated row counts and keeps the cheapest ([optimizer/README:40-42](../../../../raw/postgres-12/src/backend/optimizer/README#L40-L42), [joinpath.c#add_paths_to_joinrel](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L116-L327)). Two results follow, and both surprise people:
 
-- A wrong row estimate can pick a slow method. With parallelism off, one measured query took about 5.8 seconds instead of 95 ms. "Parallelism off" here means `max_parallel_workers_per_gather = 0`, set by the script; the default is 2. See [non-default settings](#non-default-settings-in-the-measurement).
-- The lowest [cost](../../../glossary.md#cost) is not always the shortest time. In one measured join with parallelism off, the planner preferred a hash join that ran 1.8 to 2.7 times as long as the merge join it rejected, on two legs of that plan.
+- A wrong row estimate can pick a slow method. With parallelism off, one measured query took about 5.8 seconds instead of 90 ms. "Parallelism off" here means `max_parallel_workers_per_gather = 0`, set by the script; the default is 2. See [non-default settings](#non-default-settings-in-the-measurement).
+- The lowest [cost](../../../glossary.md#cost) is not always the shortest time. In one measured join with parallelism off, the planner preferred a hash join that ran about 1.7 times as long as the merge join it rejected, on two legs of that plan.
 
 ### Mental model: the values that decide the choice
 
@@ -253,14 +259,26 @@ Common sense picks a different strategy for each job:
 - With a huge unsorted pile and no tabs, use the bins. Each folder is handled once and each invoice once.
 - If you need only the 10 lowest customer numbers, walk in order and stop after 10.
 
-The planner reaches the same conclusions, but with numbers. The three examples below show each case on this page's fixtures, with run 14's medians from [the script](#the-script).
+The planner reaches the same conclusions, but with numbers. The three examples below show each case on this page's fixtures, with run 15's medians from [the script](#the-script).
+
+The fixtures borrow their names from an online shop, but [the script](#the-script) generates every row, so the data is synthetic. The examples use these tables:
+
+| Table | Rows | Columns the examples use | Index on the join key |
+|---|---|---|---|
+| `invoices_10000`, `payments_10000` | 10,000 each | `customer_ref`, an unordered reference code; `amount` | None |
+| `todays_orders` | 100 | `customer_id`: 10,000, 20,000, … 1,000,000 | None |
+| `customers`, `loyalty_accounts` | 1,000,000 each | `customer_id` from 1 to 1,000,000; `visits`, `points` | Primary key on `customer_id` |
+| `addresses` | 1,000,000 | `city_id`, `zip_id` and `state_id`, always equal; `store_id`, `parcel_no` | None |
+| `deliveries` | 1,000,000 | `store_id`, `parcel_no`, `fee` | `deliveries_store_id` on `store_id` |
 
 #### Example 1: no index, 10,000 rows on each side, so the hash join wins
 
-The query is the `sweep10000` statement. The key `k` has no index and its values are in no particular order:
+The query is the `sweep10000` statement. It matches 10,000 invoices with 10,000 payments for the same customer reference. Neither table has an index on `customer_ref`, and its values are in no particular order:
 
 ```sql
-SELECT count(*), sum(a.v + b.v) FROM sa_10000 a JOIN sb_10000 b ON a.k = b.k;
+SELECT count(*), sum(i.amount + p.amount)
+FROM invoices_10000 i
+JOIN payments_10000 p ON i.customer_ref = p.customer_ref;
 ```
 
 Count the work each method must do:
@@ -276,7 +294,7 @@ The nested loop **multiplies** the two sizes, because it tests every pair ([cost
 | | Nested loop | Merge join | Hash join |
 |---|---|---|---|
 | Planner's price ([cost](../../../glossary.md#cost) units) | 1,500,335.00 | 1,838.77 | **572.50** |
-| Measured median | 2,179 ms | 4.22 ms | **1.79 ms** |
+| Measured median | 2,249 ms | 4.16 ms | **1.95 ms** |
 
 The hash join has the lowest price, so it is the method the planner would keep, with parallelism off as in these legs. The line-by-line arithmetic behind the three prices is under [the worked calculation](#worked-calculation-the-same-join-priced-three-ways). Here the price ranking and the time ranking agree.
 
@@ -284,37 +302,43 @@ This scenario ran only forced legs, so no leg recorded the planner's own choice.
 
 #### Example 2: 100 rows against an indexed million-row table, so the nested loop wins
 
-Now change two facts, on a different pair of tables: one side has only 100 rows, and the other side, 1,000,000 rows, has an index on the join key. This is the `lookup` statement. `js` holds 100 rows, and `jb.id` is `jb`'s primary key:
+Now change two facts, on a different pair of tables: one side has only 100 rows, and the other side, 1,000,000 rows, has an index on the join key. This is the `lookup` statement. It finds the loyalty account of each of today's 100 orders. `todays_orders` holds 100 rows, and `customer_id` is the primary key of `loyalty_accounts`:
 
 ```sql
-SELECT count(*), sum(b.v) FROM js a JOIN jb b ON a.bid = b.id;
+SELECT count(*), sum(la.points)
+FROM todays_orders o
+JOIN loyalty_accounts la ON o.customer_id = la.customer_id;
 ```
 
 The nested loop no longer tests every pair. For each of the 100 outer rows, it runs one index search for that row's key, as a [parameterized path](../../../glossary.md#parameterized-path) ([optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741)). So its work is 100 small searches.
 
 In this query, the other two methods cannot use the index to skip rows. (A merge join can stop early at the high end of the key range, as [Merge join](#merge-join) explains, but here the last outer key is also the last inner key.) What each one does instead:
 
-- The hash join reads its whole inner side to build the table, and reads its outer side to the end while probing ([nodeHash.c#MultiExecPrivateHash](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L139-L175), [nodeHashjoin.c:345-440](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L345-L440)). Whichever side it hashes, it reads all 1,000,000 `jb` rows. The empty-input shortcuts under [Hash join](#hash-join) do not apply, because neither side is empty.
-- The merge join walks `jb`'s index from its first entry, and reads past every key below the next match ([nodeMergejoin.c:1174](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1174), [nodeMergejoin.c:1270](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1270)). The largest outer key, 1,000,000, is also `jb`'s last key, so it walks the whole index.
+- The hash join reads its whole inner side to build the table, and reads its outer side to the end while probing ([nodeHash.c#MultiExecPrivateHash](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L139-L175), [nodeHashjoin.c:345-440](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L345-L440)). Whichever side it hashes, it reads all 1,000,000 `loyalty_accounts` rows. The empty-input shortcuts under [Hash join](#hash-join) do not apply, because neither side is empty.
+- The merge join walks the `loyalty_accounts` primary key index from its first entry, and reads past every key below the next match ([nodeMergejoin.c:1174](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1174), [nodeMergejoin.c:1270](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1270)). The largest `customer_id` in today's orders, 1,000,000, is also the last key in `loyalty_accounts`, so it walks the whole index.
 
 | | Nested loop | Merge join | Hash join |
 |---|---|---|---|
 | Buffers touched | **401** | 13,050 | 10,314 |
-| Measured median | **0.441 ms** | 66.5 ms | 40.4 ms |
+| Measured median | **0.423 ms** | 71.8 ms | 43.7 ms |
 
-The planner's own choice, at the default `max_parallel_workers_per_gather`, was the same nested loop plan, at 0.316 ms. Compare Example 1: the winner differs because the row count and the index changed, not because a rule names a method. One measurement condition also differs. Example 1's winner is derived from forced legs run with parallelism off (`max_parallel_workers_per_gather = 0`), while this choice was measured at the default of 2; the script did not plan the `sweep10000` statement at the default. See [non-default settings](#non-default-settings-in-the-measurement).
+The planner's own choice, at the default `max_parallel_workers_per_gather`, was the same nested loop plan, at 0.396 ms. Compare Example 1: the winner differs because the row count and the index changed, not because a rule names a method. One measurement condition also differs. Example 1's winner is derived from forced legs run with parallelism off (`max_parallel_workers_per_gather = 0`), while this choice was measured at the default of 2; the script did not plan the `sweep10000` statement at the default. See [non-default settings](#non-default-settings-in-the-measurement).
 
 #### Example 3: only the first 10 rows in key order, so the planner picks the merge join
 
-Now take two tables of 1,000,000 rows each, `ja` and `jb`, but ask for only the first 10 rows in `id` order. Both `id` columns are primary keys, so their indexes return rows in `id` order. This is the `topn` statement:
+Now take two tables of 1,000,000 rows each, `customers` and `loyalty_accounts`, but ask for only the first 10 customers in `customer_id` order, with their points. Both `customer_id` columns are primary keys, so their indexes return rows in `customer_id` order. This is the `topn` statement:
 
 ```sql
-SELECT a.id, b.v FROM ja a JOIN jb b ON a.id = b.id ORDER BY a.id LIMIT 10;
+SELECT c.customer_id, la.points
+FROM customers c
+JOIN loyalty_accounts la ON c.customer_id = la.customer_id
+ORDER BY c.customer_id
+LIMIT 10;
 ```
 
 The order fact now decides:
 
-- A merge join over the two indexes produces rows already sorted on `id` ([joinpath.c:1027-1029](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1027-L1029)). It can stop after 10 output rows.
+- A merge join over the two indexes produces rows already sorted on `customer_id` ([joinpath.c:1027-1029](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1027-L1029)). It can stop after 10 output rows.
 - An indexed nested loop keeps the outer side's order ([optimizer/README:596-605](../../../../raw/postgres-12/src/backend/optimizer/README#L596-L605)), so it can also stop after 10.
 - A hash join promises no order ([optimizer/README:605-608](../../../../raw/postgres-12/src/backend/optimizer/README#L605-L608)). A Sort above it must collect all 1,000,000 joined rows before it can return the first one ([nodeSort.c#ExecSort](../../../../raw/postgres-12/src/backend/executor/nodeSort.c#L40-L118)).
 
@@ -322,18 +346,25 @@ The planner sees this through the `LIMIT`. Each final path gets a Limit whose co
 
 | | Nested loop | Merge join | Hash join |
 |---|---|---|---|
-| Measured median | 0.153 ms | 0.150 ms | 374 ms |
+| Measured median | 0.107 ms | 0.133 ms | 372 ms |
 
-The planner chose the merge join, which took 0.160 ms. The nested loop and merge join ranges overlap (0.115 to 0.173 against 0.130 to 0.231 ms), so neither is clearly faster; both are more than 2,000 times faster than the hash join here.
+The planner chose the merge join, which took 0.150 ms. The nested loop and merge join ranges overlap (0.096 to 0.137 against 0.118 to 0.221 ms), so neither is clearly faster; both are more than 2,000 times faster than the hash join here.
 
 #### When the guess is wrong
 
-All three examples worked because the planner's row estimates were right. The planner compares only estimated numbers, so a wrong estimate picks the wrong method. The measured `misest` case shows it, with the legs at `max_parallel_workers_per_gather = 0`:
+All three examples worked because the planner's row estimates were right. The planner compares only estimated numbers, so a wrong estimate picks the wrong method. The measured `misest` case shows it, with the legs at `max_parallel_workers_per_gather = 0`. It looks up the deliveries for the addresses in one city, ZIP code and state:
 
-1. The fixture makes three filter columns always equal. The planner multiplies their [selectivities](../../../glossary.md#selectivity) as if they were independent ([clausesel.c:120-121](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L120-L121), [clausesel.c:336](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L336)), so it expects 1 outer row instead of 10,000. See [non-default settings](#non-default-settings-in-the-measurement) for that fixture state.
+```sql
+SELECT count(*), sum(d.fee)
+FROM addresses ad
+JOIN deliveries d ON ad.store_id = d.store_id AND ad.parcel_no = d.parcel_no
+WHERE ad.city_id = 1 AND ad.zip_id = 1 AND ad.state_id = 1;
+```
+
+1. The fixture makes `city_id`, `zip_id` and `state_id` always equal, much as a real ZIP code fixes its city and state. The planner multiplies their [selectivities](../../../glossary.md#selectivity) as if they were independent ([clausesel.c:120-121](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L120-L121), [clausesel.c:336](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L336)), so it expects 1 outer row instead of 10,000. See [non-default settings](#non-default-settings-in-the-measurement) for that fixture state.
 2. With 1 outer row, the nested loop needs one inner scan and is priced at 26,902, below the hash join's 52,734. The planner picks the nested loop.
-3. At run time, 10,000 outer rows arrive. The nested loop runs its inner scan once per outer row ([nodeNestloop.c:100-202](../../../../raw/postgres-12/src/backend/executor/nodeNestloop.c#L100-L202)), 10,000 times. It took 5,848 ms.
-4. After `CREATE STATISTICS ... (dependencies)` and `ANALYZE`, the estimate became 10,300 rows, and the planner chose the hash join on its own. It took 95.3 ms.
+3. At run time, 10,000 outer rows arrive. The nested loop runs its inner scan once per outer row ([nodeNestloop.c:100-202](../../../../raw/postgres-12/src/backend/executor/nodeNestloop.c#L100-L202)), 10,000 times. It took 5,775 ms.
+4. After `CREATE STATISTICS ... (dependencies)` and `ANALYZE`, the estimate became 11,267 rows, and the planner chose the hash join on its own. It took 90.4 ms.
 
 In the analogy, the planner was told there was one invoice and decided to look it up by hand; ten thousand invoices then arrived. The full numbers are under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time).
 
@@ -374,7 +405,7 @@ For a merge join, `skip_mark_restore` has three effects:
 
 So merge gets cheaper only in three cases. Repeated outer keys would otherwise be charged for re-reads. Or the inner input cannot mark and restore and would otherwise need a Material node ([costsize.c:3109-3111](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3109-L3111)). Or, with `enable_material` on, the inner input needs a sort expected to exceed `work_mem`, which would otherwise force a Material node ([costsize.c:3124-3128](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3124-L3128)). In `wide` none of these applies: `rescannedtuples` is already about 0 when keys are distinct, and the inner index scan supports mark and restore and needs no sort, so no Material node was needed.
 
-The row "One key holds too much of the inner side" is a special case and needs its default stated. By default a hash join carries no penalty. The cause is a most common inner value whose rows alone would exceed `work_mem`. `final_cost_hashjoin()` tests that size and adds `disable_cost`, 1.0e10, to the startup cost, because batching cannot separate equal keys ([costsize.c:3495-3506](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3495-L3506), [costsize.c:120](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L120)). The path stays available, so it can still win if nothing else exists. The measured `sk` fixture shows it: the same hash join costs 10,000,015,628.00 more at 4 MB than at 256 MB. Of that, 1.0e10 is the penalty and 15,628 is batch I/O. Runs 12 to 14 gave the same gap, and run 9 gave 10,000,015,627.99, and that 0.01 is rounding in numbers this large ([`skew` legs](#which-is-faster-measured-results)).
+The row "One key holds too much of the inner side" is a special case and needs its default stated. By default a hash join carries no penalty. The cause is a most common inner value whose rows alone would exceed `work_mem`. `final_cost_hashjoin()` tests that size and adds `disable_cost`, 1.0e10, to the startup cost, because batching cannot separate equal keys ([costsize.c:3495-3506](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3495-L3506), [costsize.c:120](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L120)). The path stays available, so it can still win if nothing else exists. The measured `page_views` fixture shows it. One visitor, as a crawler might, accounts for half of its 1,000,000 rows, and the `skew` legs join the table to itself on `visitor_id`: the same hash join costs 10,000,015,627.99 more at 4 MB than at 256 MB in run 15. Of that, 1.0e10 is the penalty and 15,628 is batch I/O, and the missing 0.01 is rounding in numbers this large. Runs 12 to 14 gave exactly 10,000,015,628.00, and run 9 also gave 10,000,015,627.99 ([`skew` legs](#which-is-faster-measured-results)).
 
 ### Which methods are possible at all
 
@@ -384,14 +415,14 @@ Cost only ranks what is legal. These conditions decide what is legal:
 |---|---|---|---|---|
 | Equality, normal types | Yes | Yes | Yes | [initsplan.c#check_mergejoinable](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2582-L2607), [initsplan.c#check_hashjoinable](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2619-L2638) |
 | `<`, `>`, `<>`, `LIKE` and similar | Yes | No | No | Same |
-| Equality that does not separate the inputs, such as `a.k = b.k + a.v` | Yes | No | No | [restrictinfo.c:157](../../../../raw/postgres-12/src/backend/optimizer/util/restrictinfo.c#L157), [joinpath.c:1707-1716](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1707-L1716) |
+| Equality that does not separate the inputs, such as `i.customer_ref = p.customer_ref + i.amount` | Yes | No | No | [restrictinfo.c:157](../../../../raw/postgres-12/src/backend/optimizer/util/restrictinfo.c#L157), [joinpath.c:1707-1716](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1707-L1716) |
 | Inner side parameterized by the outer side, such as a [LATERAL](../../../glossary.md#lateral) subquery that cannot be flattened | Yes | No | No | [joinpath.c:918-920](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L918-L920), [joinpath.c:1380-1386](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1380-L1386), [joinpath.c:1824](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1824) |
 | No join condition (cross join) | Yes | No, except a `FULL JOIN` with no clause or only constants, such as `ON true` or `ON false` | No | [joinpath.c:1115-1127](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1115-L1127), [joinpath.c:1963-1969](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1963-L1969), [joinpath.c:1721-1722](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1721-L1722) |
 | Volatile function in the clause | Yes | No | No | [initsplan.c:2598-2600](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2598-L2600), [initsplan.c:2635-2637](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2635-L2637) |
 | Operator is hash-only, such as `xid`, `cid`, `aclitem` | Yes | No | Yes | [pg_operator.dat:180](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L180), [pg_operator.dat:202](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L202), [pg_operator.dat:1130](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L1130) |
 | Operator is merge-only, such as `bit`, `varbit`, `money`, `tsvector` | Yes | Yes | No | [pg_operator.dat:2082](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L2082), [pg_operator.dat:2143](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L2143), [pg_operator.dat:1041](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L1041), [pg_operator.dat:2898](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L2898) |
 | Operator has neither flag, such as `box`, `circle`, `line`, `lseg`, `path` | Yes | No | No | [pg_operator.dat:365](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L365), [pg_operator.dat:970](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L970), [pg_operator.dat:1585](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L1585), [pg_operator.dat:1717](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L1717), [pg_operator.dat:1824](../../../../raw/postgres-12/src/include/catalog/pg_operator.dat#L1824) |
-| `FULL JOIN` whose condition is neither mergeable nor hashable, such as `a.k < b.k` | Not available | Not available | Not available; the statement fails with an error | [joinrels.c:825-833](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L825-L833) |
+| `FULL JOIN` whose condition is neither mergeable nor hashable, such as `i.customer_ref < p.customer_ref` | Not available | Not available | Not available; the statement fails with an error | [joinrels.c:825-833](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L825-L833) |
 
 The measured [`pg_operator`](../../../glossary.md#pg_operator) catalog of this build has 61 `=` operators with typed operands on both sides: 40 support both, 12 only merge, 3 only hash, and 6 neither. `pg_operator.dat` gives the same counts. The flags are not the whole test: array equality, and record equality for merge, are decided per type by `op_mergejoinable()` and `op_hashjoinable()` through the type cache ([lsyscache.c:1205-1216](../../../../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1205-L1216), [lsyscache.c:1252](../../../../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1252)). A set merge flag is also only a hint: if the operator is in no [B-tree](../../../glossary.md#b-tree) [operator family](../../../glossary.md#operator-class), the clause is not mergejoinable ([initsplan.c:2602-2606](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2602-L2606)). A set hash flag is not checked this way; see [Build, catalog and extension boundaries](#build-catalog-and-extension-boundaries).
 
@@ -400,7 +431,7 @@ The measured [`pg_operator`](../../../glossary.md#pg_operator) catalog of this b
 - By default all three settings are on.
 - `enable_nestloop = off` keeps the paths and adds `disable_cost` ([costsize.c:2531-2532](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2531-L2532)).
 - `enable_mergejoin = off` and `enable_hashjoin = off` skip generating those paths, but a `FULL JOIN` overrides that check, because it may have no alternative. Such a path then carries `disable_cost` ([joinpath.c:193-205](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L193-L205), [joinpath.c:301-308](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L301-L308), [costsize.c:2977-2978](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2977-L2978), [costsize.c:3407-3408](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3407-L3408)). In the script's `eligibility` stage, which runs `EXPLAIN` only, an equality `FULL JOIN` with both off was still planned as a `Hash Full Join`.
-- Nested loops cannot be fully suppressed ([config.sgml#guc-enable-nestloop](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4512-L4525)). In the same `EXPLAIN`-only stage, an `a.k < b.k` join with `enable_nestloop = off` was still planned as a nested loop, priced above 1.0e10, as were an `xid` equality with `enable_nestloop` and `enable_hashjoin` off, an `a.k = b.k + a.v` join and a `LATERAL` subquery with `enable_nestloop` off.
+- Nested loops cannot be fully suppressed ([config.sgml#guc-enable-nestloop](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L4512-L4525)). In the same `EXPLAIN`-only stage, an `i.customer_ref < p.customer_ref` join with `enable_nestloop = off` was still planned as a nested loop, priced above 1.0e10, as were an `xid` equality with `enable_nestloop` and `enable_hashjoin` off, an `i.customer_ref = p.customer_ref + i.amount` join and a `LATERAL` subquery with `enable_nestloop` off.
 
 ### The cost formulas
 
@@ -451,7 +482,7 @@ Inputs, from the measured `sweep10000` plans: two tables of 10,000 rows and 55 p
 
 The three totals match the measured plans exactly. Two details were inferred from those totals, not read from statistics: the merge input fractions round to the full inputs, and the bucket charge uses one row per bucket.
 
-The nested loop is priced about 2,600 times the hash join. Measured time agrees on the order of magnitude: 2,179 ms against 1.79 ms, a factor of about 1,220.
+The nested loop is priced about 2,600 times the hash join. Measured time agrees on the order of magnitude: 2,249 ms against 1.95 ms, a factor of about 1,160.
 
 ### Which is faster: measured results
 
@@ -459,53 +490,53 @@ All numbers below are medians in milliseconds of five timed runs, or three for t
 
 | Case | Nested loop | Merge | Hash | Planner's pick |
 |---|---|---|---|---|
-| `lookup`: 100 outer rows, 1,000,000 indexed inner rows | **0.441** | 66.5 | 40.4 | Nested loop, 0.316 |
-| `wide`: 1,000,000 × 1,000,000 on two primary keys | 707 | **205** | 369 (16 batches), 365 (256 MB, one batch) | Parallel Hash Join, 197; with parallelism off, Hash Join, 546 |
-| `unindexed`: 1,000,000 × 1,000,000, no index, unordered key | not run; cost 1.89e10 | 658, or 669 at 256 MB | **399**, or **584** at 256 MB | Parallel Hash Join, 148; with parallelism off, Hash Join, 391 |
-| `topn`: first 10 rows in key order | 0.153 | 0.150 | 374 | Merge join, 0.160 |
-| `misest`: estimate 1 outer row, actual 10,000 | 5,524 | 669 | **93.5** | Nested loop, 5,848; after `CREATE STATISTICS`, Hash Join, 95.3 |
+| `lookup`: 100 outer rows, 1,000,000 indexed inner rows | **0.423** | 71.8 | 43.7 | Nested loop, 0.396 |
+| `wide`: 1,000,000 × 1,000,000 on two primary keys | 745 | **222** | 381 (16 batches), 452 (256 MB, one batch) | Parallel Hash Join, 156; with parallelism off, Hash Join, 379 |
+| `unindexed`: 1,000,000 × 1,000,000, no index, unordered key | not run; cost 1.89e10 | 680, or 691 at 256 MB | **411**, or **642** at 256 MB | Parallel Hash Join, 155; with parallelism off, Hash Join, 401 |
+| `topn`: first 10 rows in key order | 0.107 | 0.133 | 372 | Merge join, 0.150 |
+| `misest`: estimate 1 outer row, actual 10,000 | 5,480 | 659 | **93.3** | Nested loop, 5,775; after `CREATE STATISTICS`, Hash Join, 90.4 |
 
-Bold marks the fastest forced method at that memory setting. `topn` has no bold entry: the nested loop and merge ranges overlap (0.115 to 0.173 against 0.130 to 0.231), and their medians differ by 0.003 ms. The single `EXPLAIN ANALYZE` runs of the forced legs took 0.081 and 0.045 ms of execution time.
+Bold marks the fastest forced method at that memory setting. `topn` has no bold entry: the nested loop and merge ranges overlap (0.096 to 0.137 against 0.118 to 0.221), and their medians differ by 0.026 ms. The single `EXPLAIN ANALYZE` runs of the forced legs took 0.072 and 0.048 ms of execution time.
 
 The same plan can differ between legs of one run:
 
-| Pair, same plan and cost | Run 14 medians, ms | Run 14 ranges, ms | Run 13 ranges, ms | Run 12 ranges, ms |
-|---|---|---|---|---|
-| `misest` `nl` and planner's pick | 5,524 and 5,848 | 5,491 to 5,652, and 5,656 to 5,890: no overlap | 5,357 to 5,762, and 5,775 to 5,924: no overlap | 5,828 to 6,027, and 5,906 to 6,351 |
-| `wide` `hash` and planner's pick with parallelism off | 369 and 546 | 362 to 377, and 399 to 551: no overlap | 379 to 397, and 394 to 433 | 481 to 570, and 472 to 497 |
-| `unindexed` `hash` and planner's pick with parallelism off | 399 and 391 | 388 to 414, and 382 to 414 | 386 to 418, and 403 to 425 | 484 to 522, and 493 to 535 |
+| Pair, same plan and cost | Run 15 medians, ms | Run 15 ranges, ms | Run 14 ranges, ms | Run 13 ranges, ms | Run 12 ranges, ms |
+|---|---|---|---|---|---|
+| `misest` `nl` and planner's pick | 5,480 and 5,775 | 5,454 to 5,573, and 5,610 to 5,870: no overlap | 5,491 to 5,652, and 5,656 to 5,890: no overlap | 5,357 to 5,762, and 5,775 to 5,924: no overlap | 5,828 to 6,027, and 5,906 to 6,351 |
+| `wide` `hash` and planner's pick with parallelism off | 381 and 379 | 366 to 396, and 372 to 398 | 362 to 377, and 399 to 551: no overlap | 379 to 397, and 394 to 433 | 481 to 570, and 472 to 497 |
+| `unindexed` `hash` and planner's pick with parallelism off | 411 and 401 | 378 to 423, and 397 to 428 | 388 to 414, and 382 to 414 | 386 to 418, and 403 to 425 | 484 to 522, and 493 to 535 |
 
-Both legs of each pair run the same plan, so a gap between them is not a plan effect. Yet the gaps can be large: in run 14 the `wide` planner's-pick leg ran from 399 to 551 ms, while the forced leg of the same plan stayed between 362 and 377 ms. The `misest` pair did not overlap in runs 13 and 14, nor in run 6, at 6,079 and 6,452 ms (6,005 to 6,103 against 6,209 to 6,494, as filed with run 6 in commit `6b65180`). For the other pairs in runs 5 to 11 this page keeps only medians, so whether their ranges overlapped is not recorded. The cause of such gaps is open. See [Open Questions](#open-questions).
+Both legs of each pair run the same plan, so a gap between them is not a plan effect. Yet the gaps can be large: in run 14 the `wide` planner's-pick leg ran from 399 to 551 ms, while the forced leg of the same plan stayed between 362 and 377 ms. The `misest` pair did not overlap in runs 13 to 15, nor in run 6, at 6,079 and 6,452 ms (6,005 to 6,103 against 6,209 to 6,494, as filed with run 6 in commit `6b65180`). For the other pairs in runs 5 to 11 this page keeps only medians, so whether their ranges overlapped is not recorded. The cause of such gaps is open. See [Open Questions](#open-questions).
 
 Growth with input size, both sides the same size, no index:
 
 | Rows per side | Nested loop | Merge | Hash |
 |---|---|---|---|
-| 5,000 | 566 | 2.11 | 0.968 |
-| 10,000 | 2,179 | 4.22 | 1.79 |
-| 20,000 | 8,856 | 10.57 | 3.74 |
-| Growth per doubling | 3.85×, 4.06× | 2.00×, 2.50× | 1.85×, 2.09× |
+| 5,000 | 571 | 2.79 | 0.927 |
+| 10,000 | 2,249 | 4.16 | 1.95 |
+| 20,000 | 8,822 | 9.64 | 3.91 |
+| Growth per doubling | 3.94×, 3.92× | 1.49×, 2.32× | 2.10×, 2.01× |
 
-Each growth factor divides a median, as shown in the table, by the median one row above it, so it is derived from the timings, not measured separately. The same rule gives every factor this page quotes for earlier runs, from the medians under [Last run](#last-run). The sweep times each leg only three times, so one or two slow runs move a median more than in the five-run cases. In run 12, the 5,000-row merge leg took 3.18, 4.94 and 5.44 ms, so its median sat above that run's 10,000-row median of 4.62 ms and its first merge factor was 0.94×. In run 8, the 20,000-row merge leg took 9.15, 12.78 and 24.17 ms, which gave a growth factor of 2.92×.
+Each growth factor divides a median, as shown in the table, by the median one row above it, so it is derived from the timings, not measured separately. The same rule gives every factor this page quotes for earlier runs, from the medians under [Last run](#last-run). The sweep times each leg only three times, so one or two slow runs move a median more than in the five-run cases. In run 15, the 5,000-row merge leg took 2.00, 2.79 and 3.00 ms, which gave a low first merge factor of 1.49×. In run 12, the 5,000-row merge leg took 3.18, 4.94 and 5.44 ms, so its median sat above that run's 10,000-row median of 4.62 ms and its first merge factor was 0.94×. In run 8, the 20,000-row merge leg took 9.15, 12.78 and 24.17 ms, which gave a growth factor of 2.92×.
 
 The `skew` legs are plans only, with one value in half the rows of a 1,000,000-row table joined to itself:
 
 | Leg | Plan | Cost |
 |---|---|---|
-| Planner's pick, 4 MB | Merge Join | 4,433,353,712.80 |
-| Forced hash, 4 MB | Hash Join | 13,795,677,833.80 |
-| Forced nested loop, 4 MB | Nested Loop | 19,540,330,021.17 |
-| Planner's pick, 256 MB | Hash Join | 3,795,662,205.80 |
+| Planner's pick, 4 MB | Merge Join | 4,442,165,653.75 |
+| Forced hash, 4 MB | Hash Join | 13,802,597,077.33 |
+| Forced nested loop, 4 MB | Nested Loop | 19,541,588,869.88 |
+| Planner's pick, 256 MB | Hash Join | 3,802,581,449.34 |
 
 What these numbers show:
 
 - **The indexed nested loop has no rival for a small lookup.** It touched 401 buffers. The hash join read the 1,000,000-row table through a sequential scan (10,314 buffers), and the merge join touched 13,050 buffers. It read the whole index from its first entry, because a merge join skips rows below the first match by reading them ([nodeMergejoin.c:1174](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1174), [nodeMergejoin.c:1270](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1270)). The last outer key, 1,000,000, is also the last inner key, so it read to the end. An index scan fetches the table row of every entry it returns, and reads a new buffer only when the table block changes ([heapam_handler.c:130-137](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L130-L137), [bufmgr.c:1533-1536](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L1533-L1536)). So it visited every table page as well, which is why it touched more buffers than the sequential scan.
-- **The plain nested loop is quadratic.** Its cost quadruples with each doubling, because the row pairs do: the three plans' top-node costs are 375,206, 1,500,410 and 6,000,818. Measured time grew 3.85 and 4.06 times per doubling in run 14, 4.03 and 3.80 in run 13, 3.95 and 4.04 in run 12, 3.83 and 3.91 in run 11, 4.03 and 3.84 in run 10, 4.09 and 3.69 in run 9, 4.12 and 3.79 in run 8, 3.97 and 4.00 in run 7 and 3.49 and 3.83 in run 6 on the same host, and 4.01 and 4.05 in run 5 on the earlier host. So the measured factor varies by run, between 3.49 and 4.12. Extrapolating the run 14 20,000-row median by the square of 50 to 1,000,000 rows per side gives about 6.2 hours. That figure is derived, not measured.
-- **The ranking among the fast methods depends on existing order, and the gap depends on `work_mem`.** Merge beat hash on sorted primary keys. When both inputs had to be sorted, hash beat merge at 4 MB (399 against 658). At 256 MB the sorts stayed in memory, yet merge did not speed up (669 ms) and the hash join slowed down, so hash still led at 584 against 669. On the earlier Darwin arm64 host, merge won at 256 MB (714 against 888); see [Last run](#last-run). So this ranking depends on the host as well.
-- **A hash join delivers nothing before its build, and an `ORDER BY` makes it deliver everything first.** With no `ORDER BY`, `LIMIT 10` took 120 ms: the whole build, then only 126 outer rows read. Not all of them were probed: when the join uses batches, as the same forced hash join did in `wide` at 4 MB, an outer row whose hash belongs to a later batch is written to that batch's file instead ([nodeHashjoin.c:386-411](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L386-L411)). With `ORDER BY`, `topn` took 374 ms, because a Sort above the join needed the join's whole output. The other two methods needed under 0.2 ms.
-- **The misestimate cost about 61 times.** The planner estimated 1 outer row and got 10,000, so a plan that looked like one [bitmap scan](../../../glossary.md#bitmap-scan) ran 10,000 of them over 10,064,370 buffer hits. Correlated columns caused it, because the planner multiplies their [selectivities](../../../glossary.md#selectivity) ([clausesel.c:120-121](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L120-L121), [clausesel.c:336](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L336)). After `CREATE STATISTICS ... (dependencies)` and `ANALYZE`, the estimate for `me` became 10,300, and the planner chose a hash join on its own. See [extended statistics](../../../glossary.md#extended-statistics).
-- **More memory is not always faster.** On the primary-key join, one batch at 256 MB had a slightly lower median in run 14, with overlapping ranges (365, range 341 to 408, against 369, range 362 to 377). In run 13 it was slower with no overlap (439, range 435 to 460, against 393, range 379 to 397), and in runs 6 to 11 its median was also higher at 256 MB, by 5 to 59 ms (largest in run 9, 471 against 412). Run 12 had the lower median at 256 MB (463, range 424 to 495, against 515, range 481 to 570), with overlapping ranges. On the earlier Mac host the result is inconclusive: 493 ms at 256 MB against 615 and 463 ms on two 4 MB legs that ran the same plan. On the unordered key the hash join was slower with no overlap (584, range 569 to 604, against 399, range 388 to 414), and its median was higher at 256 MB in every run on both hosts. The merge join did not reliably gain from in-memory sorts either. In run 14 it was slower at 256 MB with no overlap (669, range 666 to 694, against 658, range 652 to 661). In run 13 it took 661 against 685 ms, with overlapping ranges (649 to 697 against 668 to 711); in run 12 it took 740 against 708 ms, also overlapping (703 to 749 against 693 to 717). Its 256 MB median was higher in runs 6, 8 to 12 and 14, by up to 79 ms (792 against 713 in run 8). It was lower in runs 7 and 13 (708 against 711, and 661 against 685) and on the earlier Mac host (714 against 800). For runs before 12 this page keeps only medians, so it does not say whether those runs' ranges overlapped. This disagrees with the intuition that avoiding temp files always helps, and [the cause is an open question](#open-questions).
-- **Parallelism changes the comparison.** A Parallel Hash Join, planned for the leader plus up to two workers at the default `max_parallel_workers_per_gather` of 2 ([guc.c#max_parallel_workers_per_gather](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3008-L3016)), took 197 ms, faster than one process running a merge join at 205 ms. Its `EXPLAIN ANALYZE` run launched both planned workers, so three processes ran the join.
+- **The plain nested loop is quadratic.** Its cost quadruples with each doubling, because the row pairs do: the three plans' top-node costs are 375,206, 1,500,410 and 6,000,818. Measured time grew 3.94 and 3.92 times per doubling in run 15, 3.85 and 4.06 in run 14, 4.03 and 3.80 in run 13, 3.95 and 4.04 in run 12, 3.83 and 3.91 in run 11, 4.03 and 3.84 in run 10, 4.09 and 3.69 in run 9, 4.12 and 3.79 in run 8, 3.97 and 4.00 in run 7 and 3.49 and 3.83 in run 6 on the same host, and 4.01 and 4.05 in run 5 on the earlier host. So the measured factor varies by run, between 3.49 and 4.12. Extrapolating the run 15 20,000-row median by the square of 50 to 1,000,000 rows per side gives about 6.1 hours. That figure is derived, not measured.
+- **The ranking among the fast methods depends on existing order, and the gap depends on `work_mem`.** Merge beat hash on sorted primary keys. When both inputs had to be sorted, hash beat merge at 4 MB (411 against 680). At 256 MB the sorts stayed in memory, yet merge did not speed up (691 ms) and the hash join slowed down, so hash still led at 642 against 691. On the earlier Darwin arm64 host, merge won at 256 MB (714 against 888); see [Last run](#last-run). So this ranking depends on the host as well.
+- **A hash join delivers nothing before its build, and an `ORDER BY` makes it deliver everything first.** With no `ORDER BY`, `LIMIT 10` took 122 ms: the whole build, then only 126 outer rows read. Not all of them were probed: when the join uses batches, as the same forced hash join did in `wide` at 4 MB, an outer row whose hash belongs to a later batch is written to that batch's file instead ([nodeHashjoin.c:386-411](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L386-L411)). With `ORDER BY`, `topn` took 372 ms, because a Sort above the join needed the join's whole output. The other two methods needed under 0.2 ms.
+- **The misestimate cost about 64 times.** The planner estimated 1 outer row and got 10,000, so a plan that looked like one [bitmap scan](../../../glossary.md#bitmap-scan) ran 10,000 of them over 10,064,370 buffer hits. Correlated columns caused it, because the planner multiplies their [selectivities](../../../glossary.md#selectivity) ([clausesel.c:120-121](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L120-L121), [clausesel.c:336](../../../../raw/postgres-12/src/backend/optimizer/path/clausesel.c#L336)). After `CREATE STATISTICS ... (dependencies)` and `ANALYZE`, the estimate for `addresses` became 11,267, and the planner chose a hash join on its own. See [extended statistics](../../../glossary.md#extended-statistics).
+- **More memory is not always faster.** On the primary-key join, one batch at 256 MB was slower in run 15, with no overlap (452, range 432 to 454, against 381, range 366 to 396). In run 14 it had a slightly lower median, with overlapping ranges (365, range 341 to 408, against 369, range 362 to 377). In run 13 it was slower with no overlap (439, range 435 to 460, against 393, range 379 to 397), and in runs 6 to 11 its median was also higher at 256 MB, by 5 to 59 ms (largest in run 9, 471 against 412). Run 12 had the lower median at 256 MB (463, range 424 to 495, against 515, range 481 to 570), with overlapping ranges. On the earlier Mac host the result is inconclusive: 493 ms at 256 MB against 615 and 463 ms on two 4 MB legs that ran the same plan. On the unordered key the hash join was slower with no overlap (642, range 638 to 756, against 411, range 378 to 423, in run 15), and its median was higher at 256 MB in every run on both hosts. The merge join did not reliably gain from in-memory sorts either. In run 15 it took 691 against 680 ms, with overlapping ranges (685 to 704 against 669 to 713). In run 14 it was slower at 256 MB with no overlap (669, range 666 to 694, against 658, range 652 to 661). In run 13 it took 661 against 685 ms, with overlapping ranges (649 to 697 against 668 to 711); in run 12 it took 740 against 708 ms, also overlapping (703 to 749 against 693 to 717). Its 256 MB median was higher in runs 6, 8 to 12, 14 and 15, by up to 79 ms (792 against 713 in run 8). It was lower in runs 7 and 13 (708 against 711, and 661 against 685) and on the earlier Mac host (714 against 800). For runs before 12 this page keeps only medians, so it does not say whether those runs' ranges overlapped. This disagrees with the intuition that avoiding temp files always helps, and [the cause is an open question](#open-questions).
+- **Parallelism changes the comparison.** A Parallel Hash Join, planned for the leader plus up to two workers at the default `max_parallel_workers_per_gather` of 2 ([guc.c#max_parallel_workers_per_gather](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3008-L3016)), took 156 ms, faster than one process running a merge join at 222 ms. Its `EXPLAIN ANALYZE` run launched both planned workers, so three processes ran the join.
 
 These are in-memory results. Nothing here measures disk reads, where index-driven random access could rank differently. See [Open Questions](#open-questions).
 
@@ -513,25 +544,25 @@ These are in-memory results. Nothing here measures disk reads, where index-drive
 
 Two measured cases rank the methods differently in cost and in time.
 
-**The `wide` case.** With parallelism off, the planner priced the hash join's aggregate at 78,873 and the merge join's at 95,087, so it chose the hash join. The merge join then ran in 205 ms against 546 ms for that hash plan, and 369 ms on a second leg of the same plan. Each charge can be read from the plans and the source:
+**The `wide` case.** With parallelism off, the planner priced the hash join's aggregate at 78,873 and the merge join's at 95,083, so it chose the hash join. The merge join then ran in 222 ms against 379 ms for that hash plan, and 381 ms on a second leg of the same plan. Each charge can be read from the plans and the source:
 
 | Charge | Hash join | Merge join |
 |---|---|---|
-| Inputs | 40,620.00 (two sequential scans at 20,310) | 72,586.58: the join total less the compare and output charges; each index scan costs 36,293.43, and the 0.28 difference is an [open question](#open-questions) |
+| Inputs | 40,620.00 (two sequential scans at 20,310) | 72,583.48: the join total less the compare and output charges; each index scan costs 36,293.43, and the 3.38 difference is an [open question](#open-questions) |
 | Build | 12,500 | none |
 | Probe or compare | 2,500 + 125 | 5,000.00, the full-scan value; an estimated partial scan would lower it slightly |
 | Batch I/O | 15,628 | none |
 | Output rows | 0.01 | 10,000 |
 | Aggregate above the join | 7,500.01 | 7,500.01 |
-| **Total** | **78,873.02** | **95,086.59** |
+| **Total** | **78,873.02** | **95,083.49** |
 
-The merge join starts 31,967 units behind on its inputs. The hash join gives back 25,753 of that through its build, batch and probe charges, less merge's compare charge, which leaves merge about 6,214 behind. The output row adds the other 10,000. The plan shows `rows=1000000` for the hash join, yet the join is charged for one output row.
+The merge join starts 31,963 units behind on its inputs. The hash join gives back 25,753 of that through its build, batch and probe charges, less merge's compare charge, which leaves merge about 6,210 behind. The output row adds the other 10,000. The plan shows `rows=1000000` for the hash join, yet the join is charged for one output row.
 
-- **Default.** A hash join with a non-unique inner side charges `cpu_tuple_cost` for every estimated output row and the full bucket charge. The fixture proves it: `ua` and `ub` are copies of `ja` and `jb` with no primary key, and the same forced hash join costs 89,998.01, which is 11,125 more.
-- **Cause.** `jb.id` is a primary key, so `inner_unique` is true ([joinpath.c:181-188](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L181-L188)), and `final_cost_hashjoin()` takes its early-stop branch. That branch scales both charges by `outer_match_frac`, the share of outer rows expected to match ([costsize.c:3519-3567](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3519-L3567)).
+- **Default.** A hash join with a non-unique inner side charges `cpu_tuple_cost` for every estimated output row and the full bucket charge. The fixture proves it: `customers_nopk` and `loyalty_accounts_nopk` are copies of `customers` and `loyalty_accounts` with no primary key, and the same forced hash join costs 89,998.01, which is 11,125 more.
+- **Cause.** `loyalty_accounts.customer_id` is a primary key, so `inner_unique` is true ([joinpath.c:181-188](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L181-L188)), and `final_cost_hashjoin()` takes its early-stop branch. That branch scales both charges by `outer_match_frac`, the share of outer rows expected to match ([costsize.c:3519-3567](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3519-L3567)).
 - **Mechanism.** `compute_semi_anti_join_factors()` asks for the `JOIN_SEMI` selectivity, but it passes the `sjinfo` that `make_join_rel()` built with `jointype = JOIN_INNER` ([costsize.c:4187-4191](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L4187-L4191), [joinpath.c:212-214](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L212-L214), [joinrels.c:710](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L710)). `eqjoinsel()` switches on `sjinfo->jointype`, so it returns the inner-join selectivity, about 1/1,000,000 ([selfuncs.c:2064](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L2064)). `outer_matched_rows` therefore rounds to 1, although every outer row matches. Only 1 row gets the output and bucket charges. The other 999,999 get the unmatched-row charge: `cpu_operator_cost` times the average bucket size, here 1, times a factor of 0.05, so 0.000125 each and 125 in total, the 125 above ([costsize.c:3558-3560](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3558-L3560)).
 
-The merge join counts its output with `approx_tuple_count()`, not with these factors, so it pays the full 10,000 ([costsize.c:3008](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3008)). The fixture confirms that uniqueness does not help it here: the forced merge join on `ua` and `ub`, through non-unique indexes, costs 95,085.81 against 95,086.59 on the primary keys. A gap that small is the movement of `ANALYZE`'s sample, not a charge. Hash would still win here without this effect, at 89,998 against 95,087, but 11,125 of its 16,214 lead comes from it. Beyond that, the cost constants are fixed at their defaults and are not calibrated to this machine, so the two rankings can differ.
+The merge join counts its output with `approx_tuple_count()`, not with these factors, so it pays the full 10,000 ([costsize.c:3008](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3008)). The fixture confirms that uniqueness does not help it here: the forced merge join on `customers_nopk` and `loyalty_accounts_nopk`, through non-unique indexes, costs 95,085.70 against 95,083.49 on the primary keys. A gap that small is the movement of `ANALYZE`'s sample, not a charge. Hash would still win here without this effect, at 89,998 against 95,083, but 11,125 of its 16,210 lead comes from it. Beyond that, the cost constants are fixed at their defaults and are not calibrated to this machine, so the two rankings can differ.
 
 **The `misest` case.** Here the formula was reasonable but its input was wrong. The nested loop's cost of 26,902 assumed one outer row. Multiplying by the true 10,000 outer rows moves the inner side's cost alone to over 30 million, far above the hash join's 52,734. The hash join's cost barely depends on that estimate, which is why it is the safer plan when estimates are unreliable. The planner does not reason about that risk. It compares only the estimated numbers.
 
@@ -543,7 +574,7 @@ So component A, the cost model, ranks plans by estimated rows and fixed constant
 |---|---|---|---|
 | [`VACUUM`](../../../glossary.md#vacuum) | Old [`relpages`, `reltuples`](../../../glossary.md#reltuples-and-relpages) | New stored size and density ([vacuumlazy.c:341-363](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L341-L363)). Exception: a `VACUUM` that counted tuples on no page, as when the visibility map let it skip every page, writes the old `relpages` and `reltuples` back ([vacuumlazy.c:343-351](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L343-L351)) | Later row estimates start from the stored density, new unless that exception applied |
 | `ANALYZE` | Old row counts and value statistics | New statistics | Row estimates and hash bucket and MCV estimates change ([selfuncs.c:3412](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L3412)). See [the statistics sources page](query-planner-statistics-sources.md) |
-| `CREATE STATISTICS`, then `ANALYZE` | Columns treated as independent | Dependencies known | Measured with parallelism off: `me` estimate 1 → 10,300 in run 14, nested loop → hash join |
+| `CREATE STATISTICS`, then `ANALYZE` | Columns treated as independent | Dependencies known | Measured with parallelism off: `addresses` estimate 1 → 11,267 in run 15, nested loop → hash join |
 | `CREATE INDEX` on the join key | No parameterized inner path | New inner and ordered paths | Parameterized nested loop and presorted merge become candidates ([optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741)) |
 | `SET work_mem` | Old budget | New budget | Measured: skew plan moved from merge to hash at 256 MB, and batch charges disappeared in `wide` |
 | A new `LIMIT` | Cheapest total wins | `root->tuple_fraction` above 0 keeps fast-start paths, and each path's Limit is priced for the rows it reads | Fast-start plans gain ([planner.c:1840-1855](../../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L1840-L1855), [relnode.c:602](../../../../raw/postgres-12/src/backend/optimizer/util/relnode.c#L602), [pathnode.c#adjust_limit_rows_costs](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670)) |
@@ -589,7 +620,7 @@ Version 12 has no [Memoize](../../../glossary.md#memoize) node and no `hash_mem_
 
 Statistics give estimated rows → the planner builds every legal nested loop, merge and hash path for each pair of inputs, in each legal direction → the cost formulas multiply for a plain nested loop, charge `N log N` for sorts, and add for a hash join → paths that lose on cost and offer no useful order are dropped → the cheapest plan, or the best fast-start plan under a `LIMIT`, runs → the executor spends real time on real rows, so a wrong estimate or an uncalibrated cost constant can make the chosen method slower than a rejected one → `ANALYZE`, `CREATE STATISTICS`, a new index or a new `work_mem` changes the inputs for the next planning cycle.
 
-As a working rule on this evidence: a nested loop with an index is fastest for small lookups; a hash join is fastest for large unsorted equality joins at the default `work_mem`; a merge join is fastest in a one-process plan when the order already exists, though Parallel Hash can beat it with workers; when a `LIMIT` query needs that order, an ordered merge join or an indexed nested loop finishes in under 0.2 ms (0.153 and 0.150 ms forced, and 0.160 ms for the planner's merge join, the same plan as the forced one); and a plain nested loop is by far the slowest whenever both inputs are large, but it is the only option for non-equality joins.
+As a working rule on this evidence: a nested loop with an index is fastest for small lookups; a hash join is fastest for large unsorted equality joins at the default `work_mem`; a merge join is fastest in a one-process plan when the order already exists, though Parallel Hash can beat it with workers; when a `LIMIT` query needs that order, an ordered merge join or an indexed nested loop finishes in under 0.2 ms (0.107 and 0.133 ms forced, and 0.150 ms for the planner's merge join, the same plan as the forced one); and a plain nested loop is by far the slowest whenever both inputs are large, but it is the only option for non-equality joins.
 
 ## Measurement Script
 
@@ -597,13 +628,13 @@ As a working rule on this evidence: a nested loop with an index is fastest for s
 
 | Item | What to give |
 |---|---|
-| Purpose | Times all three join methods on the same fixtures. Backs every number under [Which is faster](#which-is-faster-measured-results), the charges under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time), including the unique-side legs, the `sweep10000` plans in the [worked calculation](#worked-calculation-the-same-join-priced-three-ways), the batch and `disable_cost` arithmetic, the catalog counts and the `EXPLAIN`-only plans under [Which methods are possible](#which-methods-are-possible-at-all), the ratios in the [Main idea](#main-idea), the 1.89e10 nested loop breakdown, the `misest.hash` bucket line, the 63,245.02 one-batch plan cost, and the prices, buffer counts and medians quoted in the [simple-example follow-up](#follow-up-why-one-method-is-chosen-by-simple-example), all from run 14. |
+| Purpose | Times all three join methods on the same fixtures. Backs every number under [Which is faster](#which-is-faster-measured-results), the charges under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time), including the unique-side legs, the `sweep10000` plans in the [worked calculation](#worked-calculation-the-same-join-priced-three-ways), the batch and `disable_cost` arithmetic, the catalog counts and the `EXPLAIN`-only plans under [Which methods are possible](#which-methods-are-possible-at-all), the ratios in the [Main idea](#main-idea), the 1.89e10 nested loop breakdown, the `misest.hash` bucket line, the 63,245.02 one-batch plan cost, and the prices, buffer counts and medians quoted in the [simple-example follow-up](#follow-up-why-one-method-is-chosen-by-simple-example), all from run 15. |
 | Invocation | From the repository root, extract the script with the command below, then run `bash .wiki-runtime/tmp/jm12-run.sh [stage ...]`. |
 | Stages | See [Stages](#stages). The default runs every stage from `build` through `stop`, except `start`. |
 | Environment | `PORT12` (default 55448), `JOBS` (default 8, parallel make jobs), `REPS` (default 5, timed runs per leg; the `sweep` stage always uses 3). Keep `REPS` odd: the script takes the middle sorted value as the median, so an even count reports the lower of the two middle values. |
 | Prerequisites | A C toolchain, `make`, `bison`, `flex` and `perl`; a git checkout runs Perl programs such as `genbki.pl` during the build. The script itself uses no Perl. The default `configure` options need `readline` or `libedit`, and `zlib`. No extensions. The cluster uses `--no-locale` and UTF8. The repository directory must be named `postgres-llm-wiki`, because the script refuses to run from any other root. |
 | Output | Under `.wiki-runtime/tmp/jm12/out/`. Read `results.tsv` first: scenario, leg, join node, serial or parallel, top-node cost, median, minimum and maximum ms, buffers, hash batch line, sort methods, and the planning and execution times of the one `EXPLAIN ANALYZE` run. Also `*.plan`, `eligibility.txt`, `assertions.txt`, `platform.txt` and `relations.txt`. The `report` stage prints `platform.txt`, `relations.txt`, `results.tsv`, `eligibility.txt` and every `*.plan`, then only the pass and fail counts from `assertions.txt`; read that file for the assertion names. |
-| Runtime | From an empty sandbox, 4 min 0 s to 4 min 26 s on the Linux host with `JOBS=16` (runs 6 to 14), and 5 min 23 s on the earlier Mac with the default `JOBS` (run 5). The measuring stages take about 4 min, so a re-run with the build present takes about 4 min. |
+| Runtime | From an empty sandbox, 4 min 0 s to 4 min 26 s on the Linux host with `JOBS=16` (runs 6 to 15), and 5 min 23 s on the earlier Mac with the default `JOBS` (run 5). The measuring stages take about 4 min, so a re-run with the build present takes about 4 min. |
 | Cleanup | The `stop` stage stops the server and checks teardown. The `clean` stage deletes the sandbox. Run `clean` yourself: the default run keeps the sandbox. |
 
 Extract the script from this page, from the repository root. The command builds the Markdown fence at run time, so that it contains no literal fence itself:
@@ -645,25 +676,51 @@ Every invocation checks the pin before its first stage other than `stop` or `cle
 |---|---|---|---|---|---|
 | `shared_buffers` | 1 GB, command line | Boot value 8 MB ([guc.c#shared_buffers](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2155-L2162)); `initdb` writes up to 128 MB ([initdb.c:959-963](../../../../raw/postgres-12/src/bin/initdb/initdb.c#L959-L963)) | `postmaster`: restart | Keeps all fixtures cached, so runs measure CPU and memory | All timings. At the default, part of the data would need reads through the operating system. No default leg ran. |
 | `autovacuum` | off, command line | on ([guc.c#autovacuum](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1426-L1433)) | `sighup`: reload | Stops background `ANALYZE` changing estimates between legs | The stable estimates. Autovacuum would not change the mechanism. |
-| `max_parallel_workers_per_gather` | 0 by `SET` on every leg except the `auto` legs: the timed legs other than `auto`, the `skew` legs, and the plan-only `unique` and `unindexed` `nl-plan` legs. The `auto` legs, timed in `lookup`, `wide`, `unindexed` and `topn`, and the `eligibility` plans do not set it, so they plan at the default | 2 ([guc.c#max_parallel_workers_per_gather](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3008-L3016)) | `user`: session | Compares one process per method | Every forced column; the "with parallelism off" planner's picks (546 and 391 ms); all `misest` legs; every `skew` plan and cost; the `unique` costs; and the 78,873 and 95,087 costs under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time). At 0, `standard_planner()` leaves `parallelModeOK` false, so no [partial path](../../../glossary.md#partial-path) is built ([planner.c:339-349](../../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L339-L349)). The `auto` legs show the default, which uses Parallel Hash Join for `wide` and `unindexed`. |
+| `max_parallel_workers_per_gather` | 0 by `SET` on every leg except the `auto` legs: the timed legs other than `auto`, the `skew` legs, and the plan-only `unique` and `unindexed` `nl-plan` legs. The `auto` legs, timed in `lookup`, `wide`, `unindexed` and `topn`, and the `eligibility` plans do not set it, so they plan at the default | 2 ([guc.c#max_parallel_workers_per_gather](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3008-L3016)) | `user`: session | Compares one process per method | Every forced column; the "with parallelism off" planner's picks (379 and 401 ms); all `misest` legs; every `skew` plan and cost; the `unique` costs; and the 78,873 and 95,083 costs under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time). At 0, `standard_planner()` leaves `parallelModeOK` false, so no [partial path](../../../glossary.md#partial-path) is built ([planner.c:339-349](../../../../raw/postgres-12/src/backend/optimizer/plan/planner.c#L339-L349)). The `auto` legs show the default, which uses Parallel Hash Join for `wide` and `unindexed`. |
 | `enable_nestloop`, `enable_mergejoin`, `enable_hashjoin` | Two of three off per forced leg, by `SET`; in `eligibility`, one or two off per plan, as each plan is labeled | on | `user`: session | Forces the method. The planner reads each one as described under [Which methods are possible](#which-methods-are-possible-at-all) | Every forced leg, and the `eligibility` plans. By default the planner picks only the cheapest method; the planner's-pick column shows that choice. |
 | `work_mem` | 256 MB on legs so named, by `SET` | 4 MB | `user`: session | Compares batched and in-memory runs | Those legs. At the default, `wide` and `unindexed` hash joins used 16 batches, and the sorts in `unindexed` used disk. |
 | `enable_seqscan`, and `enable_hashjoin`, `enable_mergejoin` | off for one warm-up statement list, by `SET` | on ([guc.c#enable_seqscan](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L884-L892)) | `user`: session | Makes the warm-up read the indexes, including the internal pages that a walk of the leaf pages skips | None directly: it warms the buffer pool and affects no timed leg. |
 | `statement_timeout`, `lock_timeout` | 5 min, 5 s, through `PGOPTIONS` | 0, 0 ([guc.c#statement_timeout](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378-L2395)) | `user`: session | Bounds every statement | None. |
 | `--no-locale`, UTF8 | At `initdb` | Locale from the environment | Fixed at `initdb` | Removes locale effects | None: all join keys are integers or `xid`. |
-| Correlated fixture columns in `me` | `c1 = c2 = c3` by construction | Independence is the planner's default assumption | Fixture state | Produces the misestimate on purpose | The `misest` legs. Without correlation the estimate would be right, and the planner would not choose this nested loop. |
-| Half the `sk` rows hold one value | Fixture state | No such skew | Fixture state | Triggers the `disable_cost` branch | The `skew` legs. |
-| `ua`, `ub` have no primary key, only non-unique indexes on `id` | Fixture state, copies of `ja`, `jb` | Not applicable: `ja` and `jb` are the measured pair | Fixture state | Turns off `inner_unique` while keeping the same pages, rows and ordered index paths | The `unique` legs: hash 89,998.01, merge 95,085.81. |
+| Correlated fixture columns in `addresses` | `city_id = zip_id = state_id` by construction | Independence is the planner's default assumption | Fixture state | Produces the misestimate on purpose | The `misest` legs. Without correlation the estimate would be right, and the planner would not choose this nested loop. |
+| Half the `page_views` rows hold one `visitor_id` | Fixture state | No such skew | Fixture state | Triggers the `disable_cost` branch | The `skew` legs. |
+| `customers_nopk`, `loyalty_accounts_nopk` have no primary key, only non-unique indexes on `customer_id` | Fixture state, copies of `customers`, `loyalty_accounts` | Not applicable: `customers` and `loyalty_accounts` are the measured pair | Fixture state | Turns off `inner_unique` while keeping the same pages, rows and ordered index paths | The `unique` legs: hash 89,998.01, merge 95,085.70. |
 
 These runs compile no expressions, although the [`jit`](../../../glossary.md#jit-compilation) setting shows `on`, its default ([guc.c#jit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1869-L1876)). The cause is the default build: LLVM support is off unless `configure` gets `--with-llvm` ([configure.in:382-385](../../../../raw/postgres-12/configure.in#L382-L385)), so this install holds no JIT provider library. The mechanism: before loading the provider, the server checks that its library file exists, and when it does not, it disables JIT for the session ([jit.c:95-100](../../../../raw/postgres-12/src/backend/jit/jit.c#L95-L100)). Also, `CREATE STATISTICS` in the `misestimate` stage is dropped at the end of that stage.
 
 ### Last run
 
-**Filed numbers: 2026-11-02, run 14, after the fixes from the second review of the simple-example follow-up.** PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`, built with default `configure` options. The script recorded `x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0` from `version()`, `Linux x86_64` from `uname`, 22 CPUs, `block_size` 8192, `Maximum data alignment` 8, `shared_buffers` 1 GB and `work_mem` 4 MB. The CPU count comes from `getconf _NPROCESSORS_ONLN`, a variable POSIX does not specify, so another platform may record `unknown`. Three facts were read outside the script: the kernel is WSL2 (`6.18.54.1-microsoft-standard-WSL2`), the host has 31 GB of memory, and the sandbox, including temp files, sits on an ext4 file system. The script was extracted from this page, byte-identical to the run 5 text, and run with `JOBS=16` and no stage arguments from an empty sandbox: 4 min 0 s, 103 of 103 assertions, including that every leg of a scenario returned the same result and that every timed leg found its shared blocks in the buffer pool. The `stop` stage confirmed teardown, and `clean` then deleted the sandbox.
+**Filed numbers: 2026-11-02, run 15, after the fixtures were renamed for the human-friendly-names follow-up.** PostgreSQL 12.2 at pin `45b88269a353ad93744772791feb6d01bc7e1e42`, built with default `configure` options. The script recorded `x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0` from `version()`, `Linux x86_64` from `uname`, 22 CPUs, `block_size` 8192, `Maximum data alignment` 8, `shared_buffers` 1 GB and `work_mem` 4 MB. The CPU count comes from `getconf _NPROCESSORS_ONLN`, a variable POSIX does not specify, so another platform may record `unknown`. Three facts were read outside the script: the kernel is WSL2 (`6.18.54.1-microsoft-standard-WSL2`), the host has 31 GB of memory, and the sandbox, including temp files, sits on an ext4 file system. The script was extracted from this page with its renamed fixtures and run with `JOBS=16` and no stage arguments from an empty sandbox: 4 min 0 s, 103 of 103 assertions, including that every leg of a scenario returned the same result and that every timed leg found its shared blocks in the buffer pool. The `stop` stage confirmed teardown, and `clean` then deleted the sandbox.
 
-**Earlier runs.** Runs 6 to 13 ran on the same Linux host earlier on 2026-11-02, with the same script text, and each passed 103 of 103, in 4 min 24 s, 4 min 18 s, 4 min 26 s, 4 min 21 s, 4 min 20 s, 4 min 20 s, 4 min 24 s and 4 min 5 s. Runs 1 to 5 ran on another host, Darwin arm64, with Apple clang 21, 10 CPUs and 17 GB of memory. Runs 1 to 3, on 2026-10-30, passed 62, 62 and 67 assertions. Run 4, on 2026-10-31, used the new buffer check and passed 101 of 103. The two failures were `lookup.auto` with 8 blocks read and `misest.serial` with 9, each the first leg to probe its index. The warm-up had walked only the leaf pages, so it was changed to probe across the key range as well. Run 5, on 2026-10-31 with that text, passed 103 of 103 in 5 min 23 s. All fourteen runs chose the same join nodes on every shared leg.
+**Renamed fixtures.** Run 15 is the first run with the current names. The rename changed only identifiers: every table keeps its row count, types, generated values and indexes, and every statement keeps its shape. Run 15 chose the same join node on every leg as run 14, and every cost that does not depend on `ANALYZE`'s sample was unchanged, including the `sweep`, `wide` hash, one-batch hash, `unique` hash, `misest` nested loop and hash, and 1.89e10 nested loop costs. Runs 1 to 14, `wiki/log.md` entries before this rename, and commits before it use the old names:
 
-Run 13's medians on the same host, in ms, for comparison with the tables above:
+| Old name (runs 1 to 14) | Current name |
+|---|---|
+| `ja` (`id`, `k`, `v`, `pad`) | `customers` (`customer_id`, `crm_ref`, `visits`, `notes`) |
+| `jb` (`id`, `k`, `v`, `pad`) | `loyalty_accounts` (`customer_id`, `crm_ref`, `points`, `notes`) |
+| `js` (`id`, `bid`) | `todays_orders` (`order_id`, `customer_id`) |
+| `me` (`id`, `c1`, `c2`, `c3`, `g`, `h`) | `addresses` (`address_id`, `city_id`, `zip_id`, `state_id`, `store_id`, `parcel_no`) |
+| `jd` (`id`, `g`, `h`, `v`, `pad`), index `jd_g` | `deliveries` (`delivery_id`, `store_id`, `parcel_no`, `fee`, `notes`), index `deliveries_store_id` |
+| `sk` (`id`, `k`) | `page_views` (`view_id`, `visitor_id`) |
+| `xa`, `xb` (`x`) | `audit_log`, `audit_archive` (`txid`) |
+| `ua`, `ub`, indexes `ua_id`, `ub_id` | `customers_nopk`, `loyalty_accounts_nopk`, indexes `customers_nopk_id`, `loyalty_accounts_nopk_id` |
+| `sa_N`, `sb_N` (`id`, `k`, `v`) | `invoices_N` (`invoice_id`, `customer_ref`, `amount`), `payments_N` (`payment_id`, `customer_ref`, `amount`) |
+| statistics `me_dep` | statistics `addresses_dep` |
+
+**Earlier runs.** Run 14 ran on the same Linux host earlier on 2026-11-02, with the script text that runs 5 to 13 also used, and passed 103 of 103 in 4 min 0 s. Runs 6 to 13 ran on the same host, and each passed 103 of 103, in 4 min 24 s, 4 min 18 s, 4 min 26 s, 4 min 21 s, 4 min 20 s, 4 min 20 s, 4 min 24 s and 4 min 5 s. Runs 1 to 5 ran on another host, Darwin arm64, with Apple clang 21, 10 CPUs and 17 GB of memory. Runs 1 to 3, on 2026-10-30, passed 62, 62 and 67 assertions. Run 4, on 2026-10-31, used the new buffer check and passed 101 of 103. The two failures were `lookup.auto` with 8 blocks read and `misest.serial` with 9, each the first leg to probe its index. The warm-up had walked only the leaf pages, so it was changed to probe across the key range as well. Run 5, on 2026-10-31 with that text, passed 103 of 103 in 5 min 23 s. All fifteen runs chose the same join nodes on every shared leg.
+
+Run 14's medians on the same host, in ms, for comparison with the tables above:
+
+| Case | Nested loop | Merge | Hash | Planner's pick |
+|---|---|---|---|---|
+| `lookup` | 0.441 | 66.5 | 40.4 | 0.316 |
+| `wide` | 707 | 205 | 369, or 365 at 256 MB | Parallel 197; serial 546 |
+| `unindexed` | not run | 658, or 669 at 256 MB | 399, or 584 at 256 MB | Parallel 148; serial 391 |
+| `topn` | 0.153 | 0.150 | 374 | 0.160 |
+| `misest` | 5,524 | 669 | 93.5 | 5,848; fixed 95.3 |
+| `sweep` 5,000 / 10,000 / 20,000 | 566 / 2,179 / 8,856 | 2.11 / 4.22 / 10.57 | 0.968 / 1.79 / 3.74 | not run |
+
+Run 13's medians on the same host, in ms:
 
 | Case | Nested loop | Merge | Hash | Planner's pick |
 |---|---|---|---|---|
@@ -762,9 +819,9 @@ Run 5's medians on the earlier host, in ms:
 | `misest` | 4,567 | 817 | 137 | 4,569; fixed 138 |
 | `sweep` 5,000 / 10,000 / 20,000 | 778 / 3,122 / 12,630 | 2.43 / 5.10 / 10.75 | 1.30 / 2.58 / 5.03 | not run |
 
-The two hosts agree on every forced-method ranking except one: `unindexed` at 256 MB, where merge won on the Mac (714 against 888) and hash won on the Linux host (584 against 669 in run 14, 581 against 661 in run 13, 690 against 740 in run 12, 635 against 703 in run 11, 634 against 721 in run 10, 628 against 720 in run 9, 643 against 792 in run 8, 629 against 708 in run 7, 640 against 713 in run 6). `unindexed` hash at 256 MB had the higher median in all fourteen runs (866, 803, 826, 907, 888, 640, 629, 643, 628, 634, 635, 690, 581 and 584 ms against 486, 495, 498, 487, 503, 401, 428, 485, 438, 435, 406, 489, 390 and 399 ms).
+The two hosts agree on every forced-method ranking except one: `unindexed` at 256 MB, where merge won on the Mac (714 against 888) and hash won on the Linux host (642 against 691 in run 15, 584 against 669 in run 14, 581 against 661 in run 13, 690 against 740 in run 12, 635 against 703 in run 11, 634 against 721 in run 10, 628 against 720 in run 9, 643 against 792 in run 8, 629 against 708 in run 7, 640 against 713 in run 6). `unindexed` hash at 256 MB had the higher median in all fifteen runs (866, 803, 826, 907, 888, 640, 629, 643, 628, 634, 635, 690, 581, 584 and 642 ms against 486, 495, 498, 487, 503, 401, 428, 485, 438, 435, 406, 489, 390, 399 and 411 ms).
 
-Estimated costs that depend on `ANALYZE`'s sample move slightly between runs: `wide` merge was 95,086, 95,083, 95,086, 95,084, 95,086, 95,085, 95,084, 95,086, 95,083, 95,086, 95,078, 95,087, 95,084 and 95,087, the merge `topn` limit cost was 4.13, 1.86, 3.25, 2.75, 2.94, 3.68, 2.79, 1.79, 2.65, 2.40, 3.82, 2.48, 2.14 and 4.26, the `skew` plan costs moved by up to 4%, and the `me` estimate after `CREATE STATISTICS` was 9,367 in run 5, 9,000 in run 6, 9,967 in run 7, 10,733 in run 8, 10,667 in run 9, 9,133 in run 10, 9,533 in run 11, 9,400 in run 12, 10,033 in run 13 and 10,300 in run 14. The `wide` hash, `sweep` and batch costs were unchanged, and the `skew` hash gap stayed at 10,000,015,628 to within 0.01. The tables above use run 14.
+Estimated costs that depend on `ANALYZE`'s sample move slightly between runs: `wide` merge was 95,086, 95,083, 95,086, 95,084, 95,086, 95,085, 95,084, 95,086, 95,083, 95,086, 95,078, 95,087, 95,084, 95,087 and 95,083, the merge `topn` limit cost was 4.13, 1.86, 3.25, 2.75, 2.94, 3.68, 2.79, 1.79, 2.65, 2.40, 3.82, 2.48, 2.14, 4.26 and 3.80, the `skew` plan costs moved by up to 4%, and the `addresses` estimate (`me` before run 15) after `CREATE STATISTICS` was 9,367 in run 5, 9,000 in run 6, 9,967 in run 7, 10,733 in run 8, 10,667 in run 9, 9,133 in run 10, 9,533 in run 11, 9,400 in run 12, 10,033 in run 13, 10,300 in run 14 and 11,267 in run 15. The `wide` hash, `sweep` and batch costs were unchanged, and the `skew` hash gap stayed at 10,000,015,628 to within 0.01. The tables above use run 15.
 
 **Re-run check.** After run 5, the sandbox was re-run with `start fixture lookup unique report stop`, which confirmed that the stages can repeat: `results.tsv` kept 44 rows and `assertions.txt` kept 103 passing lines. The `unique` hash cost was unchanged and the merge cost moved to 95,084.57, because `fixture` runs a new `ANALYZE`. Those medians are not filed.
 
@@ -983,47 +1040,60 @@ stage_start() {
 stage_fixture() {
   say "disposable fixture tables"
   own_sandbox
-  sql "DROP /* wiki_jm12_fixture */ TABLE IF EXISTS ja, jb, js, me, jd, sk, xa, xb, ua, ub,
-       sa_5000, sb_5000, sa_10000, sb_10000, sa_20000, sb_20000;" 2> /dev/null
+  sql "DROP /* wiki_jm12_fixture */ TABLE IF EXISTS customers, loyalty_accounts, todays_orders,
+       addresses, deliveries, page_views, audit_log, audit_archive,
+       customers_nopk, loyalty_accounts_nopk, invoices_5000, payments_5000,
+       invoices_10000, payments_10000, invoices_20000, payments_20000;" 2> /dev/null
+  # An online shop. customer_id is each big table's key; crm_ref is an
+  # unindexed reference code whose values come in no particular order.
   sql "
-CREATE /* wiki_jm12_fixture */ TABLE ja (id int, k int, v int, pad text);
-INSERT /* wiki_jm12_fixture */ INTO ja
+CREATE /* wiki_jm12_fixture */ TABLE customers
+  (customer_id int, crm_ref int, visits int, notes text);
+INSERT /* wiki_jm12_fixture */ INTO customers
   SELECT i, (i::bigint * 7919 % 1000003)::int, i % 1000, repeat('a', 40)
   FROM generate_series(1, 1000000) i;
-ALTER /* wiki_jm12_fixture */ TABLE ja ADD PRIMARY KEY (id);
-CREATE /* wiki_jm12_fixture */ TABLE jb (id int, k int, v int, pad text);
-INSERT /* wiki_jm12_fixture */ INTO jb
+ALTER /* wiki_jm12_fixture */ TABLE customers ADD PRIMARY KEY (customer_id);
+CREATE /* wiki_jm12_fixture */ TABLE loyalty_accounts
+  (customer_id int, crm_ref int, points int, notes text);
+INSERT /* wiki_jm12_fixture */ INTO loyalty_accounts
   SELECT i, (i::bigint * 104729 % 1000003)::int, i % 1000, repeat('b', 40)
   FROM generate_series(1, 1000000) i;
-ALTER /* wiki_jm12_fixture */ TABLE jb ADD PRIMARY KEY (id);
-CREATE /* wiki_jm12_fixture */ TABLE js (id int, bid int);
-INSERT /* wiki_jm12_fixture */ INTO js SELECT i, i * 10000 FROM generate_series(1, 100) i;
-CREATE /* wiki_jm12_fixture */ TABLE me (id int, c1 int, c2 int, c3 int, g int, h int);
-INSERT /* wiki_jm12_fixture */ INTO me
+ALTER /* wiki_jm12_fixture */ TABLE loyalty_accounts ADD PRIMARY KEY (customer_id);
+CREATE /* wiki_jm12_fixture */ TABLE todays_orders (order_id int, customer_id int);
+INSERT /* wiki_jm12_fixture */ INTO todays_orders
+  SELECT i, i * 10000 FROM generate_series(1, 100) i;
+CREATE /* wiki_jm12_fixture */ TABLE addresses
+  (address_id int, city_id int, zip_id int, state_id int, store_id int, parcel_no int);
+INSERT /* wiki_jm12_fixture */ INTO addresses
   SELECT i, i % 100, i % 100, i % 100, i % 1000, i FROM generate_series(1, 1000000) i;
-CREATE /* wiki_jm12_fixture */ TABLE jd (id int, g int, h int, v int, pad text);
-INSERT /* wiki_jm12_fixture */ INTO jd
+CREATE /* wiki_jm12_fixture */ TABLE deliveries
+  (delivery_id int, store_id int, parcel_no int, fee int, notes text);
+INSERT /* wiki_jm12_fixture */ INTO deliveries
   SELECT i, i % 1000, i, i % 1000, repeat('d', 40) FROM generate_series(1, 1000000) i;
-CREATE /* wiki_jm12_fixture */ INDEX jd_g ON jd (g);
-CREATE /* wiki_jm12_fixture */ TABLE sk (id int, k int);
-INSERT /* wiki_jm12_fixture */ INTO sk
+CREATE /* wiki_jm12_fixture */ INDEX deliveries_store_id ON deliveries (store_id);
+CREATE /* wiki_jm12_fixture */ TABLE page_views (view_id int, visitor_id int);
+INSERT /* wiki_jm12_fixture */ INTO page_views
   SELECT i, CASE WHEN i % 2 = 0 THEN 1 ELSE i END FROM generate_series(1, 1000000) i;
-CREATE /* wiki_jm12_fixture */ TABLE xa (x xid);
-INSERT /* wiki_jm12_fixture */ INTO xa SELECT i::text::xid FROM generate_series(1, 1000) i;
-CREATE /* wiki_jm12_fixture */ TABLE xb (x xid);
-INSERT /* wiki_jm12_fixture */ INTO xb SELECT i::text::xid FROM generate_series(1, 1000) i;
-CREATE /* wiki_jm12_fixture */ TABLE ua AS SELECT * FROM ja;
-CREATE /* wiki_jm12_fixture */ TABLE ub AS SELECT * FROM jb;
-CREATE /* wiki_jm12_fixture */ INDEX ua_id ON ua (id);
-CREATE /* wiki_jm12_fixture */ INDEX ub_id ON ub (id);
+CREATE /* wiki_jm12_fixture */ TABLE audit_log (txid xid);
+INSERT /* wiki_jm12_fixture */ INTO audit_log
+  SELECT i::text::xid FROM generate_series(1, 1000) i;
+CREATE /* wiki_jm12_fixture */ TABLE audit_archive (txid xid);
+INSERT /* wiki_jm12_fixture */ INTO audit_archive
+  SELECT i::text::xid FROM generate_series(1, 1000) i;
+CREATE /* wiki_jm12_fixture */ TABLE customers_nopk AS SELECT * FROM customers;
+CREATE /* wiki_jm12_fixture */ TABLE loyalty_accounts_nopk AS SELECT * FROM loyalty_accounts;
+CREATE /* wiki_jm12_fixture */ INDEX customers_nopk_id ON customers_nopk (customer_id);
+CREATE /* wiki_jm12_fixture */ INDEX loyalty_accounts_nopk_id ON loyalty_accounts_nopk (customer_id);
 "
   for pair in 5000:5003 10000:10007 20000:20011; do
     n="${pair%:*}"; p="${pair#*:}"
     sql "
-CREATE /* wiki_jm12_fixture */ TABLE sa_$n AS
-  SELECT i AS id, (i::bigint * 7919 % $p)::int AS k, i AS v FROM generate_series(1, $n) i;
-CREATE /* wiki_jm12_fixture */ TABLE sb_$n AS
-  SELECT i AS id, (i::bigint * 104729 % $p)::int AS k, i AS v FROM generate_series(1, $n) i;
+CREATE /* wiki_jm12_fixture */ TABLE invoices_$n AS
+  SELECT i AS invoice_id, (i::bigint * 7919 % $p)::int AS customer_ref, i AS amount
+  FROM generate_series(1, $n) i;
+CREATE /* wiki_jm12_fixture */ TABLE payments_$n AS
+  SELECT i AS payment_id, (i::bigint * 104729 % $p)::int AS customer_ref, i AS amount
+  FROM generate_series(1, $n) i;
 "
   done
   sql "VACUUM /* wiki_jm12_fixture */ ANALYZE;"
@@ -1035,30 +1105,37 @@ CREATE /* wiki_jm12_fixture */ TABLE sb_$n AS
   # bring those indexes in. A full index scan walks the leaf pages but descends
   # only once, so the nested loops probe across the key range to read the
   # internal pages too; enable_hashjoin and enable_mergejoin (user, same list)
-  # force those probes. ua_id and ub_id serve only a plan leg.
+  # force those probes. customers_nopk_id and loyalty_accounts_nopk_id serve
+  # only a plan leg.
   sql "
 SET /* wiki_jm12 */ enable_seqscan = off;
-SELECT /* wiki_jm12 */ count(id) FROM ja;
-SELECT /* wiki_jm12 */ count(id) FROM jb;
-SELECT /* wiki_jm12 */ count(g) FROM jd WHERE g >= 0;
+SELECT /* wiki_jm12 */ count(customer_id) FROM customers;
+SELECT /* wiki_jm12 */ count(customer_id) FROM loyalty_accounts;
+SELECT /* wiki_jm12 */ count(store_id) FROM deliveries WHERE store_id >= 0;
 SET /* wiki_jm12 */ enable_hashjoin = off;
 SET /* wiki_jm12 */ enable_mergejoin = off;
-SELECT /* wiki_jm12 */ count(*) FROM generate_series(1, 1000000, 100) s JOIN ja x ON x.id = s;
-SELECT /* wiki_jm12 */ count(*) FROM generate_series(1, 1000000, 100) s JOIN jb x ON x.id = s;
-SELECT /* wiki_jm12 */ count(*) FROM generate_series(0, 999) s JOIN jd x ON x.g = s;
+SELECT /* wiki_jm12 */ count(*) FROM generate_series(1, 1000000, 100) s
+  JOIN customers c ON c.customer_id = s;
+SELECT /* wiki_jm12 */ count(*) FROM generate_series(1, 1000000, 100) s
+  JOIN loyalty_accounts la ON la.customer_id = s;
+SELECT /* wiki_jm12 */ count(*) FROM generate_series(0, 999) s
+  JOIN deliveries d ON d.store_id = s;
 " > /dev/null
-  for t in ja jb js me jd sk xa xb ua ub sa_5000 sb_5000 sa_10000 sb_10000 sa_20000 sb_20000; do
+  for t in customers loyalty_accounts todays_orders addresses deliveries page_views \
+           audit_log audit_archive customers_nopk loyalty_accounts_nopk \
+           invoices_5000 payments_5000 invoices_10000 payments_10000 \
+           invoices_20000 payments_20000; do
     sql "SELECT /* wiki_jm12 */ count(*) FROM $t;" > /dev/null
   done
 }
 
-Q_LOOKUP="SELECT count(*), sum(b.v) FROM js a JOIN jb b ON a.bid = b.id"
-Q_WIDE="SELECT count(*), sum(a.v + b.v) FROM ja a JOIN jb b ON a.id = b.id"
-Q_UNIDX="SELECT count(*), sum(a.v + b.v) FROM ja a JOIN jb b ON a.k = b.k"
-Q_TOPN="SELECT a.id, b.v FROM ja a JOIN jb b ON a.id = b.id ORDER BY a.id LIMIT 10"
-Q_FIRST="SELECT a.id, b.v FROM ja a JOIN jb b ON a.id = b.id LIMIT 10"
-Q_NOUNIQ="SELECT count(*), sum(a.v + b.v) FROM ua a JOIN ub b ON a.id = b.id"
-Q_MIS="SELECT count(*), sum(d.v) FROM me m JOIN jd d ON m.g = d.g AND m.h = d.h WHERE m.c1 = 1 AND m.c2 = 1 AND m.c3 = 1"
+Q_LOOKUP="SELECT count(*), sum(la.points) FROM todays_orders o JOIN loyalty_accounts la ON o.customer_id = la.customer_id"
+Q_WIDE="SELECT count(*), sum(c.visits + la.points) FROM customers c JOIN loyalty_accounts la ON c.customer_id = la.customer_id"
+Q_UNIDX="SELECT count(*), sum(c.visits + la.points) FROM customers c JOIN loyalty_accounts la ON c.crm_ref = la.crm_ref"
+Q_TOPN="SELECT c.customer_id, la.points FROM customers c JOIN loyalty_accounts la ON c.customer_id = la.customer_id ORDER BY c.customer_id LIMIT 10"
+Q_FIRST="SELECT c.customer_id, la.points FROM customers c JOIN loyalty_accounts la ON c.customer_id = la.customer_id LIMIT 10"
+Q_NOUNIQ="SELECT count(*), sum(c.visits + la.points) FROM customers_nopk c JOIN loyalty_accounts_nopk la ON c.customer_id = la.customer_id"
+Q_MIS="SELECT count(*), sum(d.fee) FROM addresses ad JOIN deliveries d ON ad.store_id = d.store_id AND ad.parcel_no = d.parcel_no WHERE ad.city_id = 1 AND ad.zip_id = 1 AND ad.state_id = 1"
 BIGMEM="SET /* wiki_jm12 */ work_mem = '256MB';"
 
 stage_lookup() {
@@ -1099,7 +1176,7 @@ stage_sweep() {
   local saved="$REPS"; REPS=3
   for n in 5000 10000 20000; do
     clear_scenario "sweep$n"
-    q="SELECT count(*), sum(a.v + b.v) FROM sa_$n a JOIN sb_$n b ON a.k = b.k"
+    q="SELECT count(*), sum(i.amount + p.amount) FROM invoices_$n i JOIN payments_$n p ON i.customer_ref = p.customer_ref"
     leg "sweep$n" nl nl "" "$q"
     leg "sweep$n" merge merge "" "$q"
     leg "sweep$n" hash hash "" "$q"
@@ -1127,13 +1204,13 @@ stage_eligibility() {
   : > "$f"
   p="$OUT/elig.ineq.plan"
   sql "SET /* wiki_jm12 */ enable_nestloop = off;
-EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM sa_5000 a JOIN sb_5000 b ON a.k < b.k;" > "$p"
+EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM invoices_5000 i JOIN payments_5000 p ON i.customer_ref < p.customer_ref;" > "$p"
   chk "eligibility.inequality join stays a nested loop with enable_nestloop off" grep -q 'Nested Loop' "$p"
   { echo '-- inequality, enable_nestloop = off'; cat "$p"; } >> "$f"
 
   p="$OUT/elig.fullineq.err"
   rc=0
-  sql "SELECT /* wiki_jm12 */ count(*) FROM sa_5000 a FULL JOIN sb_5000 b ON a.k < b.k;" \
+  sql "SELECT /* wiki_jm12 */ count(*) FROM invoices_5000 i FULL JOIN payments_5000 p ON i.customer_ref < p.customer_ref;" \
     > /dev/null 2> "$p" || rc=$?
   chk "eligibility.FULL JOIN on an inequality fails with psql status 3" [ "$rc" = 3 ]
   chk "eligibility.FULL JOIN on an inequality reports the source error text" \
@@ -1143,7 +1220,7 @@ EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM sa_5000 a JOIN sb_5000 b ON a.k < b
   p="$OUT/elig.fulleq.plan"
   sql "SET /* wiki_jm12 */ enable_hashjoin = off;
 SET /* wiki_jm12 */ enable_mergejoin = off;
-EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM sa_5000 a FULL JOIN sb_5000 b ON a.k = b.k;" > "$p"
+EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM invoices_5000 i FULL JOIN payments_5000 p ON i.customer_ref = p.customer_ref;" > "$p"
   chk "eligibility.equality FULL JOIN stays hash or merge with both disabled" \
     grep -E -q 'Hash Full Join|Merge Full Join' "$p"
   { echo '-- equality FULL JOIN, enable_hashjoin and enable_mergejoin off'; cat "$p"; } >> "$f"
@@ -1151,22 +1228,22 @@ EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM sa_5000 a FULL JOIN sb_5000 b ON a.
   p="$OUT/elig.xid.plan"
   sql "SET /* wiki_jm12 */ enable_hashjoin = off;
 SET /* wiki_jm12 */ enable_nestloop = off;
-EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM xa a JOIN xb b ON a.x = b.x;" > "$p"
+EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM audit_log al JOIN audit_archive aa ON al.txid = aa.txid;" > "$p"
   chk "eligibility.xid equality cannot merge: hash and nestloop off still gives a nested loop" \
     grep -q 'Nested Loop' "$p"
   { echo '-- xid equality, enable_hashjoin and enable_nestloop off'; cat "$p"; } >> "$f"
 
   p="$OUT/elig.mixed.plan"
   sql "SET /* wiki_jm12 */ enable_nestloop = off;
-EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM sa_5000 a JOIN sb_5000 b ON a.k = b.k + a.v;" > "$p"
+EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM invoices_5000 i JOIN payments_5000 p ON i.customer_ref = p.customer_ref + i.amount;" > "$p"
   chk "eligibility.equality with outer columns on both sides stays a nested loop" \
     grep -q 'Nested Loop' "$p"
   { echo '-- equality that mixes the inputs on one side, enable_nestloop = off'; cat "$p"; } >> "$f"
 
   p="$OUT/elig.lateral.plan"
   sql "SET /* wiki_jm12 */ enable_nestloop = off;
-EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM sa_5000 a,
-  LATERAL (SELECT b.v FROM sb_5000 b WHERE b.k = a.k OFFSET 0) s;" > "$p"
+EXPLAIN /* wiki_jm12 */ SELECT count(*) FROM invoices_5000 i,
+  LATERAL (SELECT p.amount FROM payments_5000 p WHERE p.customer_ref = i.customer_ref OFFSET 0) s;" > "$p"
   chk "eligibility.LATERAL subquery stays a nested loop" grep -q 'Nested Loop' "$p"
   { echo '-- LATERAL subquery with OFFSET 0, enable_nestloop = off'; cat "$p"; } >> "$f"
 
@@ -1182,7 +1259,7 @@ stage_skew() {
   say "one value in half the inner rows"
   own_sandbox
   clear_scenario skew
-  q="SELECT count(*) FROM sk a JOIN sk b ON a.k = b.k"
+  q="SELECT count(*) FROM page_views v1 JOIN page_views v2 ON v1.visitor_id = v2.visitor_id"
   leg skew serial serial "" "$q" plan
   leg skew hash hash "" "$q" plan
   leg skew nl nl "" "$q" plan
@@ -1194,16 +1271,16 @@ stage_misestimate() {
   say "a one-row estimate that is really 10,000 rows"
   own_sandbox
   clear_scenario misest
-  sql "DROP /* wiki_jm12_fixture */ STATISTICS IF EXISTS me_dep;" 2> /dev/null
+  sql "DROP /* wiki_jm12_fixture */ STATISTICS IF EXISTS addresses_dep;" 2> /dev/null
   leg misest serial serial "" "$Q_MIS"
   leg misest nl nl "" "$Q_MIS"
   leg misest merge merge "" "$Q_MIS"
   leg misest hash hash "" "$Q_MIS"
-  sql "CREATE /* wiki_jm12_fixture */ STATISTICS me_dep (dependencies) ON c1, c2, c3 FROM me;
-ANALYZE /* wiki_jm12_fixture */ me;"
+  sql "CREATE /* wiki_jm12_fixture */ STATISTICS addresses_dep (dependencies) ON city_id, zip_id, state_id FROM addresses;
+ANALYZE /* wiki_jm12_fixture */ addresses;"
   leg misest fixed serial "" "$Q_MIS"
-  sql "DROP /* wiki_jm12_fixture */ STATISTICS me_dep;
-ANALYZE /* wiki_jm12_fixture */ me;"
+  sql "DROP /* wiki_jm12_fixture */ STATISTICS addresses_dep;
+ANALYZE /* wiki_jm12_fixture */ addresses;"
 }
 stage_unique() {
   say "the wide join on non-unique copies, plan only"
@@ -1273,6 +1350,7 @@ done
 - Second review of the follow-up and run 14, 2026-11-02: the `config.sgml` line that holds the `runtime-config-query-constants` ID, the `misest.fixed` plan, in which `me` is the hashed side, and run 14's `results.tsv` and plans.
 - Review of the follow-up and run 13, 2026-11-02: `clauselist_selectivity()` and `clauselist_selectivity_simple()` in `clausesel.c`, the unique-inner branches of `final_cost_nestloop()` and `final_cost_hashjoin()`, the `config.sgml` section ID for the planner cost constants, and run 13's `results.tsv` and plans.
 - Sixth review, 2026-11-02: `set_base_rel_consider_startup()` in `allpaths.c`, the `tuple_fraction` handling in `make_subplan()` (`subselect.c`) and in `prepunion.c`, and the merge join startup charges in `initial_cost_mergejoin()` and `final_cost_mergejoin()`.
+- Human-friendly-names follow-up and run 15, 2026-11-02: the fixture and query definitions in [the script](#the-script), renamed identifier by identifier with no change to data, types, indexes or statement shape; run 15's `results.tsv`, `relations.txt`, `eligibility.txt` and plans, compared with the run 14 figures this page held.
 
 ## Evidence Map
 
@@ -1288,20 +1366,20 @@ done
 | Hash batching and growth | [nodeHash.c#ExecChooseHashTableSize](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L667-L845), [nodeHash.c#ExecHashIncreaseNumBatches](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L888-L906) |
 | Unique-inner hash charges | [costsize.c:3519-3567](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3519-L3567), [selfuncs.c:2064](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L2064), [joinrels.c:710](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L710); the `unique` legs confirm the 11,125 hash gap and no merge gain |
 | Which method is faster | This page's script: what the built server did on this fixture and host, not a general law |
-| Simple-example follow-up: multiply versus add, index search versus full read, early stop with order and `LIMIT` | [costsize.c:2465-2471](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2465-L2471), [costsize.c:3289-3291](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3289-L3291), [costsize.c:1774-1775](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L1774-L1775), [optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741), [optimizer/README:596-608](../../../../raw/postgres-12/src/backend/optimizer/README#L596-L608), [pathnode.c#adjust_limit_rows_costs](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670); numbers from run 14 |
+| Simple-example follow-up: multiply versus add, index search versus full read, early stop with order and `LIMIT` | [costsize.c:2465-2471](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2465-L2471), [costsize.c:3289-3291](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3289-L3291), [costsize.c:1774-1775](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L1774-L1775), [optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741), [optimizer/README:596-608](../../../../raw/postgres-12/src/backend/optimizer/README#L596-L608), [pathnode.c#adjust_limit_rows_costs](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670); numbers from run 15 |
 
 ## Open Questions
 
-- **Cost and time disagree.** In `wide`, the planner ranks the hash join (78,873) below the merge join (95,087), while measured time ranks them the other way (546 and 369 ms on two legs of the same plan, against 205 ms, in run 14; run 13 gave 402 and 393 against 221, run 12 gave 485 and 515 against 233, run 11 gave 390 and 398 against 230, run 10 gave 394 and 394 against 217, run 9 413 and 412 against 226, run 8 422 and 416 against 236, run 7 428 and 384 against 222, run 6 399 and 399 against 229, and run 5 on the earlier host 463 and 615 against 240). Both stand. This is the measured-versus-source disagreement `MANDATORY Measurement Script` asks to keep. The source shows how each cost is computed, but it does not establish which real operations account for the time gap. A CPU-level profile would be needed.
-- **More memory did not reliably help.** `unindexed` hash at 256 MB took 584 ms (range 569 to 604) against 399 ms at 4 MB (range 388 to 414) in run 14, while the source charges it less (74,370 against 89,998); every run on both hosts had the higher median at 256 MB. The `wide` hash join had the higher median at 256 MB in runs 6 to 11, by 5 to 59 ms (471 against 412 in run 9), and in run 13 (439 against 393, with no overlap), and the lower one in runs 12 and 14 (463 against 515, and 365 against 369, overlapping ranges); the page keeps ranges only for runs 12 to 14. It is inconclusive on the Mac, where 493 ms at 256 MB sits between two 4 MB legs of one plan at 463 and 615 ms. The merge join on the unordered key, whose sorts fit in memory at 256 MB, was also not reliably faster: 669 against 658 in run 14, with no overlap, 740 against 708 in run 12, 703 against 682 in run 11, 721 against 718 in run 10, 720 against 703 in run 9, 792 against 713 in run 8, 713 against 706 in run 6, but faster in run 7 (708 against 711) and run 13 (661 against 685, overlapping ranges) and on the Mac (714 against 800). The cause is unknown. A plausible but unverified guess is memory-access locality in one large table, and it would need hardware counters to test.
+- **Cost and time disagree.** In `wide`, the planner ranks the hash join (78,873) below the merge join (95,083), while measured time ranks them the other way (379 and 381 ms on two legs of the same plan, against 222 ms, in run 15; run 14 gave 546 and 369 against 205, run 13 gave 402 and 393 against 221, run 12 gave 485 and 515 against 233, run 11 gave 390 and 398 against 230, run 10 gave 394 and 394 against 217, run 9 413 and 412 against 226, run 8 422 and 416 against 236, run 7 428 and 384 against 222, run 6 399 and 399 against 229, and run 5 on the earlier host 463 and 615 against 240). Both stand. This is the measured-versus-source disagreement `MANDATORY Measurement Script` asks to keep. The source shows how each cost is computed, but it does not establish which real operations account for the time gap. A CPU-level profile would be needed.
+- **More memory did not reliably help.** `unindexed` hash at 256 MB took 642 ms (range 638 to 756) against 411 ms at 4 MB (range 378 to 423) in run 15, while the source charges it less (74,370 against 89,998); every run on both hosts had the higher median at 256 MB. The `wide` hash join had the higher median at 256 MB in runs 6 to 11, by 5 to 59 ms (471 against 412 in run 9), and in runs 13 and 15 (439 against 393, and 452 against 381, each with no overlap), and the lower one in runs 12 and 14 (463 against 515, and 365 against 369, overlapping ranges); the page keeps ranges only for runs 12 to 15. It is inconclusive on the Mac, where 493 ms at 256 MB sits between two 4 MB legs of one plan at 463 and 615 ms. The merge join on the unordered key, whose sorts fit in memory at 256 MB, was also not reliably faster: 691 against 680 in run 15, with overlapping ranges, 669 against 658 in run 14, with no overlap, 740 against 708 in run 12, 703 against 682 in run 11, 721 against 718 in run 10, 720 against 703 in run 9, 792 against 713 in run 8, 713 against 706 in run 6, but faster in run 7 (708 against 711) and run 13 (661 against 685, overlapping ranges) and on the Mac (714 against 800). The cause is unknown. A plausible but unverified guess is memory-access locality in one large table, and it would need hardware counters to test.
 - **Disk behavior was not measured.** Every table stayed in `shared_buffers`, and temp files landed in the page cache of each host: an SSD on the Mac, and an ext4 virtual disk under WSL2 on the Linux host. The ranking on cold data, on spinning disks, or with tables bigger than memory is unknown. `random_page_cost` models that case, but the script cannot drop the operating system cache without `sudo`, which `AGENTS.md` forbids.
-- **The timing evidence covers two hosts.** The filed tables come from run 14 on one Linux x86_64 host. [Last run](#last-run) keeps the medians of runs 6 to 13 from the same host and of run 5 from a Darwin arm64 host; the two hosts disagree on one ranking. Other CPUs, memory sizes and row widths can change the ratios, and `wide` used narrow joined columns over short rows. Treat ratios as examples.
+- **The timing evidence covers two hosts.** The filed tables come from run 15 on one Linux x86_64 host. [Last run](#last-run) keeps the medians of runs 6 to 14 from the same host and of run 5 from a Darwin arm64 host; the two hosts disagree on one ranking. Other CPUs, memory sizes and row widths can change the ratios, and `wide` used narrow joined columns over short rows. Treat ratios as examples.
 - **Default-parallel `misest` was not run.** That stage ran with parallelism off, so this page does not show whether the default setting would also choose the nested loop.
-- **Merge input charge in `wide`.** The table under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time) derives merge's input charge, 72,586.58, by subtracting the compare, output and aggregate charges from the total, taking the compare charge at its full-scan value of 5,000. The two index scans cost 36,293.43 each, 72,586.86 together, so 0.28 is unaccounted for, as in run 12; runs 6 to 13 left 1.41, 2.57, 1.21, 3.50, 0.71, 9.36, 0.28 and 2.61, and the gap moves with each `ANALYZE` sample. The source charges each input's run cost only for the fraction between its estimated start and end selectivities, and it counts the compared rows over the same fraction ([costsize.c:2805-2806](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2805-L2806), [costsize.c:3145-3150](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3145-L3150), [costsize.c:2838-2849](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2838-L2849), [costsize.c:2862-2875](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2862-L2875)), which come from `mergejoinscansel()` through `cached_scansel()` ([costsize.c:2761](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2761), [costsize.c:3199](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3199)). An end fraction slightly below 1 would lower both the input and the compare charges, so the gap belongs to the two together, not to the inputs alone. That would explain the gap, but the plans do not print those fractions, so this page does not confirm it.
+- **Merge input charge in `wide`.** The table under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time) derives merge's input charge, 72,583.48, by subtracting the compare, output and aggregate charges from the total, taking the compare charge at its full-scan value of 5,000. The two index scans cost 36,293.43 each, 72,586.86 together, so 3.38 is unaccounted for in run 15; runs 6 to 14 left 1.41, 2.57, 1.21, 3.50, 0.71, 9.36, 0.28, 2.61 and 0.28, and the gap moves with each `ANALYZE` sample. The source charges each input's run cost only for the fraction between its estimated start and end selectivities, and it counts the compared rows over the same fraction ([costsize.c:2805-2806](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2805-L2806), [costsize.c:3145-3150](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3145-L3150), [costsize.c:2838-2849](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2838-L2849), [costsize.c:2862-2875](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2862-L2875)), which come from `mergejoinscansel()` through `cached_scansel()` ([costsize.c:2761](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2761), [costsize.c:3199](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3199)). An end fraction slightly below 1 would lower both the input and the compare charges, so the gap belongs to the two together, not to the inputs alone. That would explain the gap, but the plans do not print those fractions, so this page does not confirm it.
 - **Inferred worked-calculation inputs.** The merge scan fractions and the one-row bucket size were inferred from the totals, as noted there. They were not printed by the server.
-- **Same plan, different time.** The `misest` `serial` and `nl` legs use the same plan and the same cost. They ran at 4,889 and 4,327 ms in run 1, 4,845 and 4,307 ms in run 2, 4,343 and 4,332 ms in run 3, 4,569 and 4,567 ms in run 5, 6,452 and 6,079 ms in run 6, with no overlap between the run 6 ranges (6,209 to 6,494 and 6,005 to 6,103), 6,258 and 5,826 ms in run 7, 6,545 and 6,260 ms in run 8, 6,311 and 5,850 ms in run 9, 6,124 and 6,046 ms in run 10, 6,193 and 6,069 ms in run 11, 6,084 and 5,899 ms in run 12, with overlapping ranges, 5,863 and 5,572 ms in run 13, with no overlap (5,775 to 5,924 and 5,357 to 5,762), and 5,848 and 5,524 ms in run 14, again with no overlap (5,656 to 5,890 and 5,491 to 5,652). In run 5 the `wide` `serial` and `hash` legs, also one plan, ran at 463 and 615 ms, and `unindexed` at 556 and 503 ms; in run 6 they ran at 399 and 399 ms, and 415 and 401 ms; in run 7 at 428 and 384 ms, and 408 and 428 ms; in run 8 at 422 and 416 ms, and 438 and 485 ms; in run 9 at 413 and 412 ms, and 441 and 438 ms; in run 10 at 394 and 394 ms, and 413 and 435 ms; in run 11 at 390 and 398 ms, and 479 and 406 ms; in run 12 at 485 and 515 ms, and 501 and 489 ms; in run 13 at 402 and 393 ms, and 406 and 390 ms, each pair with overlapping ranges in runs 12 and 13; in run 14 at 546 and 369 ms, with no overlap (399 to 551 and 362 to 377), and 391 and 399 ms, overlapping. Only runs 12 to 14 and run 6's `misest` pair have their ranges filed here. So these gaps are not a stable property of a plan. Every leg found its blocks in the buffer pool, so reads do not explain them, and their cause is unknown.
+- **Same plan, different time.** The `misest` `serial` and `nl` legs use the same plan and the same cost. They ran at 4,889 and 4,327 ms in run 1, 4,845 and 4,307 ms in run 2, 4,343 and 4,332 ms in run 3, 4,569 and 4,567 ms in run 5, 6,452 and 6,079 ms in run 6, with no overlap between the run 6 ranges (6,209 to 6,494 and 6,005 to 6,103), 6,258 and 5,826 ms in run 7, 6,545 and 6,260 ms in run 8, 6,311 and 5,850 ms in run 9, 6,124 and 6,046 ms in run 10, 6,193 and 6,069 ms in run 11, 6,084 and 5,899 ms in run 12, with overlapping ranges, 5,863 and 5,572 ms in run 13, with no overlap (5,775 to 5,924 and 5,357 to 5,762), 5,848 and 5,524 ms in run 14, again with no overlap (5,656 to 5,890 and 5,491 to 5,652), and 5,775 and 5,480 ms in run 15, with no overlap (5,610 to 5,870 and 5,454 to 5,573). In run 5 the `wide` `serial` and `hash` legs, also one plan, ran at 463 and 615 ms, and `unindexed` at 556 and 503 ms; in run 6 they ran at 399 and 399 ms, and 415 and 401 ms; in run 7 at 428 and 384 ms, and 408 and 428 ms; in run 8 at 422 and 416 ms, and 438 and 485 ms; in run 9 at 413 and 412 ms, and 441 and 438 ms; in run 10 at 394 and 394 ms, and 413 and 435 ms; in run 11 at 390 and 398 ms, and 479 and 406 ms; in run 12 at 485 and 515 ms, and 501 and 489 ms; in run 13 at 402 and 393 ms, and 406 and 390 ms, each pair with overlapping ranges in runs 12 and 13; in run 14 at 546 and 369 ms, with no overlap (399 to 551 and 362 to 377), and 391 and 399 ms, overlapping; in run 15 at 379 and 381 ms, and 401 and 411 ms, each pair overlapping. Only runs 12 to 15 and run 6's `misest` pair have their ranges filed here. So these gaps are not a stable property of a plan. Every leg found its blocks in the buffer pool, so reads do not explain them, and their cause is unknown.
 - **Is the one-row match estimate intended?** Calling `compute_semi_anti_join_factors()` for a unique inner side is deliberate: its header says a join type other than `JOIN_SEMI` or `JOIN_ANTI` is assumed to be `inner_unique` ([costsize.c:4140](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L4140)). What stays open is the selectivity it gets. It asks `clauselist_selectivity()` for `JOIN_SEMI` ([costsize.c:4187-4191](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L4187-L4191)), but `eqjoinsel()` switches on `sjinfo->jointype` ([selfuncs.c:2064](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L2064)), which `make_join_rel()` set to `JOIN_INNER` for a plain inner join ([joinrels.c:710](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L710)). So `outer_match_frac` receives the inner-join selectivity, although the function's comment describes the fraction of outer rows with a match ([costsize.c:4220-4225](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L4220-L4225)). The source shows what happens, measured here in `wide`, but not whether that routing is deliberate. This page does not measure other row counts or the nested loop's matching branch.
-- **`topn` ranking.** `\timing` put the nested loop first in runs 5 to 13 (0.122 against 0.134 ms in run 13, 0.153 against 0.188 in run 12, 0.130 against 0.141 in run 11, 0.110 against 0.165 in run 10, 0.110 against 0.141 in run 9, 0.105 against 0.132 in run 8, 0.115 against 0.134 in run 7, 0.112 against 0.151 in run 6, 0.082 against 0.097 in run 5) and the merge join first by 0.003 ms in run 14 (0.150 against 0.153), with overlapping ranges, while one `EXPLAIN ANALYZE` run puts the merge join first in every run (0.081 against 0.045 ms of execution time in run 14, 0.070 against 0.060 in run 13, 0.090 against 0.048 in run 12, 0.079 against 0.048 in run 11, 0.081 against 0.046 in run 10, 0.083 against 0.047 in run 9, 0.083 against 0.047 in run 8, 0.083 against 0.048 in run 7, 0.089 against 0.050 in run 6, 0.117 against 0.048 in run 5), and the merge join touched 8 buffers against 35. Runs 13 and 14 compare the two forced legs; the planner's merge leg, the same plan, took 0.048 and 0.047 ms. The entries for earlier runs do not record which merge leg they used. The difference between the two instruments is not explained. `EXPLAIN ANALYZE` adds per-row counting overhead, and `\timing` adds parsing and planning, but the script does not separate them for the timed runs.
+- **`topn` ranking.** `\timing` put the nested loop first in runs 5 to 13 and in run 15 (0.107 against 0.133 ms in run 15, 0.122 against 0.134 ms in run 13, 0.153 against 0.188 in run 12, 0.130 against 0.141 in run 11, 0.110 against 0.165 in run 10, 0.110 against 0.141 in run 9, 0.105 against 0.132 in run 8, 0.115 against 0.134 in run 7, 0.112 against 0.151 in run 6, 0.082 against 0.097 in run 5) and the merge join first by 0.003 ms in run 14 (0.150 against 0.153), with overlapping ranges, while one `EXPLAIN ANALYZE` run puts the merge join first in every run (0.072 against 0.048 ms of execution time in run 15, 0.081 against 0.045 in run 14, 0.070 against 0.060 in run 13, 0.090 against 0.048 in run 12, 0.079 against 0.048 in run 11, 0.081 against 0.046 in run 10, 0.083 against 0.047 in run 9, 0.083 against 0.047 in run 8, 0.083 against 0.048 in run 7, 0.089 against 0.050 in run 6, 0.117 against 0.048 in run 5), and the merge join touched 8 buffers against 35. Runs 13 to 15 compare the two forced legs; the planner's merge leg, the same plan, took 0.048, 0.047 and 0.048 ms. The entries for earlier runs do not record which merge leg they used. The difference between the two instruments is not explained. `EXPLAIN ANALYZE` adds per-row counting overhead, and `\timing` adds parsing and planning, but the script does not separate them for the timed runs.
 - **Common concept pages.** Version 12 has none. A `join-methods` concept page could hold the mechanics for reuse, if wanted.
 
 ## Source References

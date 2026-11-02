@@ -223,6 +223,23 @@ Examples, as written from a question page such as `wiki/v18/questions/observabil
 - Skip filler and setup prose.
 - Cite every example and attach each citation to the exact claim it supports, including claims in diagrams and tables.
 - Never trade citation precision for readability.
+- Name the objects in examples after a real-life scenario; see `MANDATORY Example Names`.
+
+## MANDATORY Example Names
+
+Name the tables, columns, indexes, constraints, statistics objects, and aliases in an example after a real-life scenario the reader recognizes, such as `customers.customer_id`, `orders`, or `invoices.amount`. Do not use placeholder names such as `a`, `b`, `t1`, `t2`, `x`, `k`, `v`, or `foo`.
+
+- Apply this rule wherever an example appears: SQL snippets, worked examples, diagrams, tables, prose, measurement script fixtures and statements, and answers given in chat without filing a page.
+- Choose names that match the role the data plays in the mechanism. Name a key after what it identifies (`customer_id`), give an unindexed, unordered column a name that fits that role (`crm_ref`), and use columns that are correlated in real life for a correlated fixture (`city_id`, `zip_id`, `state_id`).
+- Derive short aliases from the table name, such as `c` for `customers` and `la` for `loyalty_accounts`, never `a` and `b`.
+- When a script generates the data, say so beside the example, because the names describe roles, not real data.
+- Use one set of names across the page. The example, the measurement script, plan excerpts, and the prose that interprets them must agree. Do not rename objects in the prose only: an example that reports measured numbers must quote the statement that ran; see `MANDATORY Measurement Script`.
+- Renaming a fixture or statement in a filed measurement script changes the script text, so re-run the script before filing, as `MANDATORY Measurement Script` requires. Record an old-to-new name map with the last-run record, so that earlier runs, dated log entries, and commits that use the old names stay readable.
+- Avoid names that need quoting or collide with keywords or system objects, such as `user`, `order`, or `table`.
+- Keep the original names in these cases: verbatim excerpts from the pinned source, docs, or regression tests, and plan or error output quoted from them; catalog and system objects, types, and functions, such as `pg_class` or `xid`; and the verbatim `## Question` text.
+- `scripts/wiki_lint` does not check this rule. Check example names by hand before filing.
+
+Migration note: existing pages that use placeholder names remain valid and need not be changed until they are next substantially revised or re-measured, or until the user asks for the change.
 
 ## MANDATORY Technical Explanations
 
@@ -436,6 +453,7 @@ Isolation and safety, on top of `MANDATORY Environment Isolation`:
 - Name the context and apply scope of every GUC the script sets, per `MANDATORY GUC Changes`.
 - Explain what each non-default setting, build option, or fixture state changes and why the script needs it, per `MANDATORY Non-Default Behavior`.
 - Mark fixture statements as disposable. They create and drop objects and are not meant for a database anyone cares about.
+- Name fixture tables, columns, indexes, and statistics objects after a real-life scenario; see `MANDATORY Example Names`.
 - Give the script a cleanup stage that stops the server and deletes the sandbox, and run that stage before your final response. Publishing the stage is not enough; see the teardown bullets in `MANDATORY Environment Isolation`.
 - A script published inside a fenced block must not contain a literal Markdown fence. Assemble one at run time when the script has to read fenced blocks out of the page, e.g. `fence=$(printf '\140\140\140')`.
 
