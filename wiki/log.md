@@ -2389,3 +2389,25 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: both index entries updated to run 13; a dated coverage note added to `wiki/versions.md`. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: the script's `stop` stage stopped the run 13 cluster on port 55448 and confirmed no `postmaster.pid`, no process and an empty socket directory; the `clean` stage then deleted `.wiki-runtime/tmp/jm12/`, and the extracted script and run log were deleted. No process names the sandbox and the port is free. Other sandboxes under `.wiki-runtime/tmp/` were not started by this task and were not touched.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-11-02] second review, fix and re-measure v12 | Join methods: simple-example follow-up and run 14
+
+- Prompt hygiene: the prompt "fix all and re-run , commit" had an extra space before its comma; the meaning is unchanged.
+- Scope: the second post-follow-up review listed two findings; "fix all and re-run" authorized both and a full re-measurement (precedence 1). The prompt did not ask for another review, so none ran. No rule conflict arose. No subagent ran.
+- Commit from the previous step: `a0ba981`; `git fetch origin` failed because `origin` refuses this session's SSH key, so nothing was pushed.
+- Fixes: (1) the `config.sgml` citation labelled `#runtime-config-query-constants` now starts at line 4669, where that ID is. (2) In three places, the `misest` bullet, the events table and the Last run list, "outer estimate" became "the `me` estimate", because in the corrected hash plan `me` is the hashed, inner side.
+- Measurement: run 14, the page's script extracted byte-identical to the previous commit's text, run with `JOBS=16` and no stage arguments from an empty sandbox on the same Linux x86_64 host: 4 min 0 s, 103 of 103 assertions. Run 14 replaced run 13 in every present-tense figure on the page and in both index entries; run 13's medians were added under Last run, and its values stay in the Open Question run lists. The same join nodes were chosen on every shared leg. What changed in substance:
+  - The `wide` merge cost returned to 95,086.59, so the key interaction figures (72,586.58, the 0.28 gap, 31,967, 6,214 and 16,214) match run 12 again.
+  - In the `wide` same-plan pair, the planner's-pick leg ran from 399 to 551 ms against 362 to 377 ms for the forced leg, with no overlap. The opening now says the planner's hash join ran "1.8 to 2.7 times" as long as merge, on two legs of that plan.
+  - The `misest` same-plan pair again did not overlap.
+  - The `topn` nested loop and merge join medians were 0.153 and 0.150 ms, so the `topn` Open Question now says that `\timing` put the nested loop first in runs 5 to 13 and the merge join first by 0.003 ms in run 14.
+  - On the unordered key, the merge join was slower at 256 MB with no overlap.
+  - The `wide` one-batch hash join had a slightly lower median at 256 MB, with overlapping ranges.
+  - The opening ratios are now about 90x, 2,400x and 5.8 s against 95 ms.
+  - Every ranking the page states still holds.
+- Contradiction check: compared every fixed and re-measured statement with the rest of the page, both index entries and the v12 coverage notes. Searched outside Last run and Open Questions for each superseded run 13 value (medians, costs, ratios, the 10,033 estimate, "run 13"); every remaining hit was a citation line number or a dated record, except the follow-up's Context Reviewed note, which now says "later runs replaced those numbers". Two statements that run 14 made false were rewritten rather than updated: "Most pairs overlapped, but the `misest` pair did not in run 13", and "`\timing` puts the nested loop first". Found 0 contradictions from the review; the 2 run-14 conflicts were fixed; 0 reported without a change, 0 withdrawn.
+- Glossary: reviewed Selectivity, Statistics, Hash join, Merge join and Nested loop join; no change needed. Count stays 372.
+- Common concepts: v12 has no `common-concepts/` directory, so none was linked or touched.
+- Bookkeeping: both index entries updated to run 14; a dated coverage note added to `wiki/versions.md`. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: the script's `stop` stage stopped the run 14 cluster on port 55448 and confirmed no `postmaster.pid`, no process and an empty socket directory; `clean` then deleted `.wiki-runtime/tmp/jm12/`, and the extracted script and run log were deleted. No process names the sandbox and the port is free. Other sandboxes under `.wiki-runtime/tmp/` were not started by this task and were not touched.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
